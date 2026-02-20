@@ -442,7 +442,7 @@ async def _execute_repl(
                 generation_ms=primitives.total_generation_ms,
                 predicted_tps=primitives._last_predicted_tps,
                 http_overhead_ms=primitives.total_http_overhead_ms,
-                skills_retrieved=len(routing.skill_ids),
+                skills_retrieved=len(routing.skill_ids) if routing.skill_ids else None,
                 skill_ids=routing.skill_ids,
             )
         except Exception as e:
@@ -728,7 +728,7 @@ async def _execute_repl(
         parallel_tools_used=parallel_tools,
         cache_affinity_bonus=task_state.cache_affinity_bonus,
         # SkillBank integration
-        skills_retrieved=len(routing.skill_ids),
+        skills_retrieved=len(routing.skill_ids) if routing.skill_ids else None,
         skill_ids=routing.skill_ids,
         session_persistence=session_persistence,
         # Context window management (C1/C3)

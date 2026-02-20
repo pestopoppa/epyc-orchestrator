@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 REPL_TAP_PATH = "/mnt/raid0/llm/tmp/repl_tap.log"
 _repl_tap_lock = threading.Lock()
+_IN_PYTEST = bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
 def tap_write_repl_exec(code: str, turn: int) -> None:
     """Write REPL execution input to the REPL tap file."""
+    if _IN_PYTEST:
+        return
     try:
         preview = code[:4000]
         if len(code) > 4000:
@@ -31,6 +35,8 @@ def tap_write_repl_result(
     output: str, error: str | None, is_final: bool, turn: int,
 ) -> None:
     """Write REPL execution result to the REPL tap file."""
+    if _IN_PYTEST:
+        return
     try:
         parts: list[str] = []
         if is_final:

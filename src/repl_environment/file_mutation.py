@@ -80,7 +80,7 @@ class _FileMutationMixin:
     ) -> str:
         """Safely write content to a file with optional backup.
 
-        Only allows writing to /mnt/raid0/ paths.
+        Only allows writing to configured safe paths.
 
         Args:
             path: Absolute path to write to.

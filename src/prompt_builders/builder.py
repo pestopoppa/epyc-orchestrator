@@ -213,7 +213,7 @@ class PromptBuilder:
             rules=self._resolve_rules(),
             state=f"Turn {turn + 1}\n{state}",
             task=original_prompt,
-            instruction="Write Python code. End with FINAL(). See examples above.\n\n# Solution:",
+            instruction="Write Python code. End with FINAL(). See examples above.\n\n```python\n# ",
         )
 
         # Build context section based on last output/error
