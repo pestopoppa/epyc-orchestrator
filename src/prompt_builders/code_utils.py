@@ -173,6 +173,17 @@ def _strip_import_lines(code: str) -> str:
     return "\n".join(filtered).strip()
 
 
+def _is_valid_python(code: str) -> bool:
+    """Check if *code* parses as valid Python (syntax only)."""
+    import ast
+
+    try:
+        ast.parse(code)
+        return True
+    except SyntaxError:
+        return False
+
+
 def extract_code_from_response(response: str) -> str:
     """Extract Python code from an LLM response.
 
@@ -270,7 +281,11 @@ def extract_code_from_response(response: str) -> str:
         code = textwrap.dedent(code).strip()
         # Strip import lines - modules like json are pre-loaded in REPL globals
         code = _strip_import_lines(code)
-        return code
+        # Validate that the extracted text is actually Python, not echoed
+        # prompt text that happened to contain a code_starter keyword.
+        if _is_valid_python(code):
+            return code
+        _log.debug("code_starters extraction failed syntax check, using fallback")
 
     # Fallback: return the whole response, dedented
     import textwrap
