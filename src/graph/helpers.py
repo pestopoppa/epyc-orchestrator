@@ -1235,6 +1235,24 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 final_answer=final_rescue,
             )
 
+    # input() violation nudge: model wrote code using input() which is blocked.
+    # The REPL error hint is too subtle — provide a concrete template so the
+    # model knows exactly how to restructure for competitive programming tasks.
+    if (
+        not result.is_final
+        and result.error
+        and "input() is not available" in (result.error or "")
+    ):
+        nudge = (
+            "STOP using input(). It is blocked in the REPL. For competitive programming:\n"
+            '1. Put your ENTIRE solution in a triple-quoted string: solution = """\\nimport sys\\n'
+            "input = sys.stdin.readline\\n...\\nprint(answer)\\n\"\"\"\n"
+            '2. Test it: CALL("run_python_code", code=solution, stdin_data="<test input>")\n'
+            "3. Submit it: FINAL(solution)\n"
+            "Do NOT use bare input(). Wrap ALL code in a string variable."
+        )
+        return "", None, False, {"_nudge": nudge}
+
     # No-output guard: code ran successfully but produced no output, no error,
     # and no FINAL().  Typical case: model generated a class/function definition
     # that runs silently.  Without feedback the model repeats indefinitely.

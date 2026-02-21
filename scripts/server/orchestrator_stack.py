@@ -1457,11 +1457,8 @@ def cmd_reload(args: argparse.Namespace) -> int:
             continue
 
         elif component == "orchestrator":
-            # Stop existing
-            if "orchestrator" in state:
-                kill_process(state["orchestrator"].pid)
-                time.sleep(2)
-            # Also kill stale listeners by port (state can be stale after parent PID churn)
+            # Stop by authoritative listener port only.
+            # State-file PIDs can go stale and be reused by unrelated processes.
             for pid in _pids_on_port(8000):
                 kill_process(pid)
             time.sleep(1)
@@ -1497,9 +1494,11 @@ def cmd_reload(args: argparse.Namespace) -> int:
                     break
 
             # Stop existing
-            if key in state:
-                kill_process(state[key].pid)
-                time.sleep(2)
+            # Stop by authoritative listener port only.
+            # State-file PIDs can go stale and be reused by unrelated processes.
+            for pid in _pids_on_port(port):
+                kill_process(pid)
+            time.sleep(1)
 
             # Start new
             info = start_server(

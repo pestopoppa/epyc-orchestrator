@@ -106,6 +106,32 @@ cd /mnt/raid0/llm/claude && make gates
 
 ## Benchmarking
 
+### Seed Specialist Routing (3-way, debug TUI)
+
+```bash
+# Default profile is infra-stable (recommended)
+python3 scripts/benchmark/seed_specialist_routing.py \
+  --3way --suites simpleqa --sample-size 50 --seed 123 --debug
+```
+
+```bash
+# Override profile explicitly (same as default)
+python3 scripts/benchmark/seed_specialist_routing.py \
+  --profile infra-stable \
+  --3way --suites simpleqa --sample-size 50 --seed 123 --debug
+```
+
+```bash
+# Baseline profile (for A/B comparison against infra-stable)
+python3 scripts/benchmark/seed_specialist_routing.py \
+  --profile baseline \
+  --3way --suites simpleqa --sample-size 50 --seed 123 --debug
+```
+
+Notes:
+- `infra-stable` defaults: `ORCHESTRATOR_DEFERRED_TOOL_RESULTS=1`, lock timeouts 45s, `ORCHESTRATOR_UVICORN_WORKERS=1`, cooldown 2.0s.
+- `--timeout` and `--cooldown` override profile defaults when provided.
+
 ### Run Full Suite
 
 ```bash

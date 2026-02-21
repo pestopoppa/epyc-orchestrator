@@ -92,7 +92,7 @@ class DelegationConfig:
                 "ORCHESTRATOR_DELEGATION_SPECIALIST_TURN_N_TOKENS_SUMMARY", 192
             ),
             specialist_turn_n_tokens_code=_env_int(
-                "ORCHESTRATOR_DELEGATION_SPECIALIST_TURN_N_TOKENS_CODE", 320
+                "ORCHESTRATOR_DELEGATION_SPECIALIST_TURN_N_TOKENS_CODE", 768
             ),
             specialist_turn_n_tokens_default=_env_int(
                 "ORCHESTRATOR_DELEGATION_SPECIALIST_TURN_N_TOKENS_DEFAULT", 224
@@ -184,6 +184,8 @@ def _delegation_specialist_turn_token_cap(
     coding_signals = (
         "implement", "write code", "class ", "function", "refactor", "patch",
         "multi-file", "api", "middleware", "algorithm",
+        "usaco", "codeforces", "leetcode", "sample input", "input format",
+        "output format", "stdin", "write a python",
     )
     if delegate_to == "worker_summarize" or any(s in q for s in summary_signals):
         base = min(base, cfg.specialist_turn_n_tokens_summary)

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import socket
 import subprocess
 import sys
@@ -557,8 +558,11 @@ class ClaudeDebugger:
             )
             return False
 
+        t0 = time.monotonic()
         reason_str = f" (reason: {reason})" if reason else ""
-        logger.warning(f"[DEBUG] Reloading service '{service_name}'{reason_str}")
+        logger.warning(
+            f"[DEBUG][RELOAD] START service='{service_name}' batch={self.batch_count}{reason_str}"
+        )
 
         try:
             result = subprocess.run(
@@ -569,22 +573,34 @@ class ClaudeDebugger:
                 timeout=120,
             )
             if result.returncode != 0:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
                 logger.error(
-                    f"[DEBUG] Reload of '{service_name}' failed (exit {result.returncode}): "
-                    f"{result.stderr[:300]}"
+                    f"[DEBUG][RELOAD] FAIL service='{service_name}' exit={result.returncode} "
+                    f"elapsed_ms={elapsed_ms} stderr={result.stderr[:300]!r} stdout={result.stdout[:200]!r}"
                 )
                 return False
         except (subprocess.TimeoutExpired, OSError) as e:
-            logger.error(f"[DEBUG] Reload of '{service_name}' failed: {e}")
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            logger.error(
+                f"[DEBUG][RELOAD] EXCEPTION service='{service_name}' elapsed_ms={elapsed_ms} error={e}"
+            )
             return False
 
         # Verify health after reload
         port, path = RELOADABLE_SERVICES[service_name]
-        if _check_service_health(port, path, timeout=5.0):
-            logger.info(f"[DEBUG] Service '{service_name}' healthy after reload")
+        healthy = _check_service_health(port, path, timeout=5.0)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        if healthy:
+            logger.info(
+                f"[DEBUG][RELOAD] OK service='{service_name}' elapsed_ms={elapsed_ms} "
+                f"health=http://localhost:{port}{path}"
+            )
             return True
         else:
-            logger.warning(f"[DEBUG] Service '{service_name}' NOT healthy after reload")
+            logger.warning(
+                f"[DEBUG][RELOAD] UNHEALTHY service='{service_name}' elapsed_ms={elapsed_ms} "
+                f"health=http://localhost:{port}{path}"
+            )
             return False
 
     def _hot_restart_api(self, py_files: list[str]) -> bool:
