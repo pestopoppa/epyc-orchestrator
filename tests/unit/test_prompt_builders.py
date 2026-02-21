@@ -110,6 +110,16 @@ class TestExtractCodeFromResponse:
         # Structural: Should NOT include second block
         assert "second" not in result
 
+    def test_prompt_echo_prose_not_returned_as_code(self):
+        response = "Answer with the letter only. Question: 2+2=? Options: A)3 B)4"
+        result = extract_code_from_response(response)
+        assert result == ""
+
+    def test_salvages_final_line_from_mixed_prose(self):
+        response = "FINAL('B')\nAnswer with the letter only."
+        result = extract_code_from_response(response)
+        assert result == "FINAL('B')"
+
 
 # ── auto_wrap_final ───────────────────────────────────────────────────────
 

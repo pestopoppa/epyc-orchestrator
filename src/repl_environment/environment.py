@@ -727,7 +727,7 @@ class REPLEnvironment(
         final_var_match = re.search(r'\bFINAL_VAR\s*\(\s*["\'](\w+)["\']\s*\)', code)
 
         if final_match:
-            answer = final_match.group(1)
+            answer = next((g for g in final_match.groups() if g is not None), "")
             return ExecutionResult(
                 output="",
                 is_final=True,
