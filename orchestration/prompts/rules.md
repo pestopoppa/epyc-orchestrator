@@ -1,15 +1,43 @@
 Every task ends with FINAL(). Study these examples — they show exactly what to output.
 
-## Example 1: Factual question
+IMPORTANT: Do NOT just guess answers with comments. Use Python computation, web_search, or llm_call to VERIFY your answer. Comment-only reasoning is wrong — you must execute code that produces or validates the answer.
+
+## Example 1: Factual question you're certain about
 Question: "Who won the 2023 Nobel Prize in Physics?"
 ```python
 FINAL("Pierre Agostini, Ferenc Krausz, and Anne L'Huillier")
 ```
 
-## Example 2: Multiple choice (even complex science questions)
-Question: "In quantum mechanics, the uncertainty principle states that certain pairs of physical properties cannot both be known to arbitrary precision. Given a particle confined to a 1D box of length L, which of the following correctly describes the ground state energy? A) E=0 B) E=h²/(8mL²) C) E=h²/(2mL²) D) E=h/(4πmL²)"
+## Example 2: Multiple choice requiring analysis
+Question: "Given a particle confined to a 1D box of length L, which correctly describes the ground state energy? A) E=0 B) E=h²/(8mL²) C) E=h²/(2mL²) D) E=h/(4πmL²)"
 ```python
+import math
+h, m, L = 6.626e-34, 9.109e-31, 1e-9
+E_ground = h**2 / (8 * m * L**2)  # n=1 ground state
+print(f"E = h²/(8mL²) = {E_ground:.3e} J")
+# Matches option B
 FINAL("B")
+```
+
+## Example 2b: Science MCQ you're unsure about → search or escalate
+Question: "Which reagent selectively reduces an ester to an aldehyde? A) LiAlH4 B) DIBAL-H C) NaBH4 D) H2/Pd"
+```python
+import json
+results = json.loads(CALL("web_search", query="reagent selectively reduce ester to aldehyde DIBAL vs LiAlH4"))
+snippets = " ".join(r.get("snippet", "") for r in results[:3] if "snippet" in r)
+print(snippets)
+# DIBAL-H at -78°C stops at aldehyde stage
+FINAL("B")
+```
+
+## Example 2c: Hard science MCQ → delegate to stronger model
+Question: "What is the major product when 4-oxo-2,4-diphenylbutanenitrile undergoes reduction? A) ... B) ... C) ... D) ..."
+```python
+answer = llm_call(
+    "Answer this MCQ. Reason step by step, then give ONLY the answer letter.\n\n" + task,
+    role="architect"
+)
+FINAL(answer.strip())
 ```
 
 ## Example 3: Math with computation
@@ -22,20 +50,18 @@ FINAL(total)
 ## Example 4: Research with web search
 Question: "What is the current population of Tokyo?"
 ```python
-results = CALL("web_search", query="Tokyo population 2026")
 import json
-data = json.loads(results)
-FINAL(data[0]["snippet"])
+results = json.loads(CALL("web_search", query="Tokyo population 2026"))
+FINAL(results[0]["snippet"])
 ```
 
 ## Example 4b: Uncertain factual question (search first, don't guess)
 Question: "At which university did Jurgen Aschoff study medicine?"
 ```python
-# Not confident about the answer → search first
 import json
 results = json.loads(CALL("web_search", query="Jurgen Aschoff study medicine university"))
 snippets = " ".join(r.get("snippet", "") for r in results if "snippet" in r)
-FINAL(snippets if snippets else results[0]["title"] if results else "Unknown")
+FINAL(snippets if snippets else "Unknown")
 ```
 
 ## Example 5: Competitive programming (USACO/Codeforces)
@@ -125,3 +151,4 @@ FINAL(proof)
 - Use list_dir() for files, not os.listdir
 - Output valid Python only — no markdown around code
 - Do not send full context to llm_call — use peek() or grep() first
+- For multiple-choice science questions: COMPUTE the answer or use web_search/llm_call. Never just guess.

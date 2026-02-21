@@ -189,7 +189,7 @@ class TestFrontdoorTokenCap:
 class TestFrontdoorReplNonToolTokenCap:
     def test_default_cap(self, monkeypatch):
         monkeypatch.delenv("ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS", raising=False)
-        assert _frontdoor_repl_non_tool_token_cap() == 256
+        assert _frontdoor_repl_non_tool_token_cap() == 768
 
     def test_floor_applied(self, monkeypatch):
         monkeypatch.setenv("ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS", "12")

@@ -210,6 +210,22 @@ FINAL("done")
         assert result.final_answer == "done"
 
 
+class TestStructuredFinalExtraction:
+    """Regression tests for FINAL extraction in structured mode."""
+
+    def test_structured_final_triple_double_quotes(self):
+        repl = REPLEnvironment(context="test", structured_mode=True)
+        result = repl.execute('FINAL("""line1\\nline2""")')
+        assert result.is_final is True
+        assert result.final_answer == "line1\\nline2"
+
+    def test_structured_final_single_quotes(self):
+        repl = REPLEnvironment(context="test", structured_mode=True)
+        result = repl.execute("FINAL('answer')")
+        assert result.is_final is True
+        assert result.final_answer == "answer"
+
+
 class TestSecuritySandbox:
     """Test security restrictions in the sandbox."""
 

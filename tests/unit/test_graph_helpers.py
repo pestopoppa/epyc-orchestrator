@@ -7,8 +7,10 @@ from src.graph.helpers import (
     _add_evidence,
     _classify_error,
     _detect_role_cycle,
+    _looks_like_prompt_echo,
     _record_mitigation,
     _select_and_broadcast_workspace_delta,
+    _should_attempt_prose_rescue,
     _workspace_prompt_block,
     _update_workspace_from_turn,
 )
@@ -140,3 +142,20 @@ class TestFailureAndHypothesisHooks:
         assert captured["hypothesis_id"] == "task-1"
         assert captured["outcome"] == "success"
         assert captured["source"] == "frontdoor:turn_3"
+
+
+class TestProseRescueGuards:
+    def test_prompt_echo_detected(self):
+        text = "Answer with the letter only. Question: 2+2=? Options: A)3 B)4"
+        assert _looks_like_prompt_echo(text) is True
+
+    def test_short_answer_like_output_allowed(self):
+        assert _should_attempt_prose_rescue("The answer is B", "") is True
+
+    def test_prompt_echo_not_allowed(self):
+        raw = "Answer with the letter only. Question: 2+2=? The answer is B"
+        assert _should_attempt_prose_rescue(raw, "") is False
+
+    def test_code_fence_not_allowed(self):
+        raw = "```python\nprint('x')\n```"
+        assert _should_attempt_prose_rescue(raw, "") is False

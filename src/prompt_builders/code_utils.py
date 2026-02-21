@@ -254,20 +254,56 @@ def extract_code_from_response(response: str) -> str:
         "CALL(",
     ]
 
+    tool_call_starters = (
+        "peek(",
+        "grep(",
+        "list_dir(",
+        "file_info(",
+        "ocr_document(",
+        "analyze_figure(",
+        "extract_figure(",
+        "web_fetch(",
+        "run_shell(",
+        "recall(",
+        "escalate(",
+        "llm_call(",
+        "llm_batch(",
+        "CALL(",
+        "TOOL(",
+    )
+
+    def _looks_like_code_line(
+        raw_line: str, stripped: str, *, already_in_code: bool = False
+    ) -> bool:
+        if not stripped:
+            return already_in_code
+        if stripped.startswith("#"):
+            return True
+        if any(stripped.startswith(kw) for kw in code_starters):
+            return True
+        if stripped.startswith(tool_call_starters):
+            return True
+        if re.match(r"^\w+\s*=\s*(?:CALL|TOOL|peek|grep|llm_call|llm_batch)\s*\(", stripped):
+            return True
+        if ("=" in stripped or "()" in stripped) and not re.match(r"^[A-Z][a-z]+(?:\s+[a-z]+)+", stripped):
+            return True
+        if already_in_code and (
+            raw_line.startswith((" ", "\t"))
+            or stripped.endswith(":")
+            or stripped.startswith((")", "]", "}", "elif ", "else:", "except", "finally:"))
+        ):
+            return True
+        return False
+
     for line in lines:
         stripped = line.strip()
-        if any(stripped.startswith(kw) for kw in code_starters):
-            in_code = True
-
-        if not in_code and ("=" in stripped or "()" in stripped):
-            # Assignment or call expression — treat as code even before
-            # seeing a formal code starter keyword.
+        if _looks_like_code_line(line, stripped, already_in_code=False):
             in_code = True
 
         if in_code:
-            # Once we've seen a code starter, include continuation lines
-            # (comments, assignments, expressions)
-            code_lines.append(line)
+            # Once code starts, keep only lines that still look like code.
+            if _looks_like_code_line(line, stripped, already_in_code=True):
+                code_lines.append(line)
         elif stripped.startswith("#"):
             # Standalone comments before code — include as potential preamble
             code_lines.append(line)
@@ -285,14 +321,31 @@ def extract_code_from_response(response: str) -> str:
         # prompt text that happened to contain a code_starter keyword.
         if _is_valid_python(code):
             return code
-        _log.debug("code_starters extraction failed syntax check, using fallback")
+        # Salvage FINAL()/tool-call lines from mixed prose+code responses.
+        salvage_lines: list[str] = []
+        for ln in code.split("\n"):
+            s = ln.strip()
+            if (
+                "FINAL(" in s
+                or s.startswith(tool_call_starters)
+                or re.match(r"^\w+\s*=\s*(?:CALL|TOOL|peek|grep|llm_call|llm_batch)\s*\(", s)
+            ):
+                salvage_lines.append(ln)
+        if salvage_lines:
+            salvaged = textwrap.dedent("\n".join(salvage_lines)).strip()
+            salvaged = _strip_import_lines(salvaged)
+            if _is_valid_python(salvaged):
+                return salvaged
+        _log.debug("code_starters extraction failed syntax check, using strict fallback")
 
-    # Fallback: return the whole response, dedented
+    # Strict fallback: only return whole response if it parses as Python.
     import textwrap
 
     code = textwrap.dedent(response).strip()
     code = _strip_import_lines(code)
-    return code
+    if _is_valid_python(code):
+        return code
+    return ""
 
 
 def auto_wrap_final(code: str) -> str:

@@ -30,6 +30,7 @@ from src.graph.escalation_helpers import detect_role_cycle as _detect_role_cycle
 from src.graph.repl_tap import tap_write_repl_exec as _tap_write_repl_exec_impl
 from src.graph.repl_tap import tap_write_repl_result as _tap_write_repl_result_impl
 from src.roles import Role
+from src.env_parsing import env_bool as _env_bool
 from src.env_parsing import env_int as _env_int
 
 from src.graph.state import (
@@ -66,13 +67,60 @@ def _frontdoor_turn_token_cap() -> int:
 
 
 def _frontdoor_repl_non_tool_token_cap() -> int:
-    """Default cap for frontdoor REPL turns when tool_required=False."""
-    return max(64, _env_int("ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS", 256))
+    """Default cap for frontdoor REPL turns when tool_required=False.
+
+    Was 256 — too low for code-generation tasks (USACO, LeetCode) routed
+    to REPL mode.  Truncated solutions mid-function, causing the
+    ``repl_no_tools`` anomaly to produce garbage FINAL() submissions.
+    Raised to 768 to match the tool-required cap.  MCQ self-doubt
+    prevention is handled separately in direct_stage._MCQ_MAX_TOKENS.
+    """
+    return max(64, _env_int("ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS", 768))
 
 
 def _frontdoor_trace_enabled() -> bool:
     raw = os.environ.get("ORCHESTRATOR_FRONTDOOR_TRACE", "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _repl_prose_rescue_enabled() -> bool:
+    """Gate raw-prose FINAL rescue behind an env flag for safe rollout."""
+    return _env_bool("ORCHESTRATOR_REPL_PROSE_RESCUE", True)
+
+
+def _looks_like_prompt_echo(text: str) -> bool:
+    """Detect echoed prompt/instruction text that should never be rescued."""
+    hay = (text or "").lower()
+    markers = (
+        "answer with the letter only",
+        "answer with the",
+        "question:",
+        "options:",
+        "choose the correct",
+        "select the best",
+        "respond with",
+        "you are given",
+        "instruction:",
+    )
+    return any(m in hay for m in markers)
+
+
+def _should_attempt_prose_rescue(raw_output: str, extracted_code: str) -> bool:
+    """Allow prose rescue only for short, answer-like outputs."""
+    if not _repl_prose_rescue_enabled():
+        return False
+    if not raw_output or not raw_output.strip():
+        return False
+    if "FINAL(" in extracted_code:
+        return False
+    if "```" in raw_output:
+        return False
+    if _looks_like_prompt_echo(raw_output):
+        return False
+    # Long outputs are usually reasoning/prompt echoes, not concise answers.
+    if len(raw_output) > 220:
+        return False
+    return True
 
 
 def _think_harder_cfg():
@@ -1051,7 +1099,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # Prose answer rescue: model answered in prose (e.g. "The answer is D")
     # without producing FINAL() or code blocks.  Extract the answer from
     # the raw output and synthesize FINAL() to avoid an infinite REPL loop.
-    if "FINAL(" not in code:
+    if "FINAL(" not in code and _should_attempt_prose_rescue(raw_llm_output, code):
         prose_answer = _extract_prose_answer(raw_llm_output)
         if prose_answer is not None:
             log.info(
@@ -1132,6 +1180,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             suspect_count = sum(
                 1 for ln in non_final_lines
                 if ln.strip().startswith(("-", "*", ">"))
+                or ln.strip().startswith("```")
                 or "\\" in ln  # LaTeX escapes
                 or any(c in ln for c in "λθπ≈∈∀∃")  # math Unicode
             )

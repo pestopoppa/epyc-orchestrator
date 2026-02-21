@@ -37,7 +37,14 @@ _MCQ_RE = re.compile(
     r"(?:^|\n)\s*[A-H]\s*[).\]]",
     re.MULTILINE,
 )
-_MCQ_MAX_TOKENS = 256
+_MCQ_MAX_TOKENS = 512
+
+# Detect code-generation tasks to increase token budget and enforce code-only output.
+_CODE_TASK_RE = re.compile(
+    r"(?:Write|Implement|Create|Build) (?:a |an? )?(?:Python|C\+\+|Java|program|solution|function)",
+    re.IGNORECASE,
+)
+_CODE_MAX_TOKENS = 4096
 
 
 def _execute_direct(
@@ -73,7 +80,22 @@ def _execute_direct(
     # Cap token budget for MCQs to prevent self-doubt loops where the
     # model states the correct answer then second-guesses into a wrong one.
     is_mcq = bool(_MCQ_RE.search(request.prompt))
-    default_tokens = _MCQ_MAX_TOKENS if is_mcq else 2048
+    is_code_task = bool(_CODE_TASK_RE.search(request.prompt))
+
+    if is_mcq:
+        default_tokens = _MCQ_MAX_TOKENS
+    elif is_code_task:
+        default_tokens = _CODE_MAX_TOKENS
+    else:
+        default_tokens = 2048
+
+    # Code tasks: prepend code-only instruction to prevent prose rambling
+    if is_code_task and not is_mcq:
+        direct_prompt = (
+            "Respond with ONLY valid Python code. No explanations, no markdown formatting. "
+            "Start directly with imports or function definitions.\n\n"
+            + direct_prompt
+        )
 
     try:
         answer = primitives.llm_call(
