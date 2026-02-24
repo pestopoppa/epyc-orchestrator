@@ -620,22 +620,16 @@ def _context_externalization_path(state: TaskState) -> Path:
     """Return a writable path for context externalization artifacts."""
     candidates: list[Path] = []
 
-    env_tmp = os.environ.get("ORCHESTRATOR_PATHS_TMP_DIR")
-    if env_tmp:
-        candidates.append(Path(env_tmp))
-
-    candidates.extend(
-        [
-            Path("/mnt/raid0/llm/claude/tmp"),
-            Path(tempfile.gettempdir()),
-        ]
-    )
     try:
         from src.config import get_config
 
         candidates.append(Path(get_config().paths.tmp_dir))
     except Exception:
-        pass
+        env_tmp = os.environ.get("ORCHESTRATOR_PATHS_TMP_DIR")
+        if env_tmp:
+            candidates.append(Path(env_tmp))
+
+    candidates.append(Path(tempfile.gettempdir()))
 
     for base in candidates:
         try:

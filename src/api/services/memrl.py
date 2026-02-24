@@ -451,9 +451,12 @@ def ensure_memrl_initialized(state: "AppState") -> bool:
 
                 routing_graph = BipartiteRoutingGraph()
                 gat = LightweightGAT()
-                weights_path = _Path(
-                    "/mnt/raid0/llm/claude/orchestration/repl_memory/graph_router_weights.npz"
-                )
+                try:
+                    from src.config import get_config as _get_config
+                    _proj_root = _get_config().paths.project_root
+                except Exception:
+                    _proj_root = _Path("/mnt/raid0/llm/claude")
+                weights_path = _proj_root / "orchestration/repl_memory/graph_router_weights.npz"
                 if weights_path.exists():
                     gat.load(weights_path)
                 graph_router_predictor = GraphRouterPredictor(
@@ -479,7 +482,7 @@ def ensure_memrl_initialized(state: "AppState") -> bool:
                 skill_db_path = Path(
                     state.episodic_store.db_path
                 ).parent / "skills.db" if hasattr(state.episodic_store, "db_path") else Path(
-                    "/mnt/raid0/llm/claude/orchestration/repl_memory/sessions/skills.db"
+                    str(_proj_root / "orchestration/repl_memory/sessions/skills.db")
                 )
                 faiss_dir = skill_db_path.parent
 

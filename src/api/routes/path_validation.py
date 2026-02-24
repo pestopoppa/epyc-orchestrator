@@ -29,8 +29,12 @@ def _get_allowed_prefixes() -> list[str]:
             tmp_dir if tmp_dir.endswith("/") else f"{tmp_dir}/",
         ]
     except Exception:
-        # Fallback to hardcoded defaults if config unavailable
-        prefixes = ["/mnt/raid0/llm/", "/mnt/raid0/llm/tmp/"]
+        import os as _os
+        llm_root = _os.environ.get("ORCHESTRATOR_PATHS_LLM_ROOT", "/mnt/raid0/llm")
+        prefixes = [
+            f"{llm_root}/" if not llm_root.endswith("/") else llm_root,
+            f"{llm_root}/tmp/",
+        ]
 
     # Always allow system temp directory (for CI and tests)
     sys_tmp = tempfile.gettempdir()

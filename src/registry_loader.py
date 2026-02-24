@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_REGISTRY_PATH = (
     Path(__file__).resolve().parent.parent / "orchestration" / "model_registry.yaml"
 )
+DEFAULT_LEAN_REGISTRY_PATH = (
+    Path(__file__).resolve().parent.parent / "orchestration" / "model_registry_lean.yaml"
+)
 
 
 @dataclass
@@ -207,13 +210,19 @@ class RegistryLoader:
         if registry_path is not None:
             self.registry_path = Path(registry_path)
         else:
-            try:
-                from src.config import get_config
+            import os
+            registry_mode = os.environ.get("ORCHESTRATOR_REGISTRY_MODE", "full")
+            if registry_mode == "lean":
+                self.registry_path = DEFAULT_LEAN_REGISTRY_PATH
+                logger.info("Using lean registry: %s", self.registry_path)
+            else:
+                try:
+                    from src.config import get_config
 
-                self.registry_path = get_config().paths.registry_path
-            except Exception as e:
-                logger.debug("Config unavailable, using default registry path: %s", e)
-                self.registry_path = DEFAULT_REGISTRY_PATH
+                    self.registry_path = get_config().paths.registry_path
+                except Exception as e:
+                    logger.debug("Config unavailable, using default registry path: %s", e)
+                    self.registry_path = DEFAULT_REGISTRY_PATH
         self._raw: dict[str, Any] = {}
         self._roles: dict[str, RoleConfig] = {}
         self._routing_hints: list[RoutingHint] = []

@@ -29,7 +29,18 @@ _ENV_STREAM_MODE = "INFERENCE_TAP_STREAM_MODE"
 
 # Sentinel file written by the TUI so that API workers (separate processes)
 # can discover the tap path without needing the env var.
-_SENTINEL = "/mnt/raid0/llm/tmp/.inference_tap_active"
+_SENTINEL: str | None = None
+
+
+def _get_sentinel() -> str:
+    global _SENTINEL
+    if _SENTINEL is None:
+        try:
+            from src.config import get_config
+            _SENTINEL = str(get_config().paths.tmp_dir / ".inference_tap_active")
+        except Exception:
+            _SENTINEL = "/mnt/raid0/llm/tmp/.inference_tap_active"
+    return _SENTINEL
 
 # Module-level lock for serialising writes across threads
 _write_lock = threading.Lock()
@@ -50,7 +61,7 @@ def _read_sentinel() -> str:
     if now - _sentinel_cache[1] < 5.0:
         return _sentinel_cache[0]
     try:
-        with open(_SENTINEL) as f:
+        with open(_get_sentinel()) as f:
             val = f.read().strip()
     except (FileNotFoundError, OSError):
         val = ""

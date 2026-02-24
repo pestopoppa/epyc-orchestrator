@@ -19,7 +19,18 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-LOG_PATH = Path("/mnt/raid0/llm/claude/logs/debug_changes.jsonl")
+_LOG_PATH: Path | None = None
+
+
+def _get_log_path() -> Path:
+    global _LOG_PATH
+    if _LOG_PATH is None:
+        try:
+            from src.config import get_config
+            _LOG_PATH = get_config().paths.log_dir / "debug_changes.jsonl"
+        except Exception:
+            _LOG_PATH = Path("/mnt/raid0/llm/claude/logs/debug_changes.jsonl")
+    return _LOG_PATH
 
 
 def _extract_modified_files(git_diff: str) -> list[str]:
@@ -135,7 +146,7 @@ class ChangeLog:
     """Audit trail for all debugging changes. Enables rewind and meta-steering."""
 
     def __init__(self, log_path: Path | None = None):
-        self.log_path = log_path or LOG_PATH
+        self.log_path = log_path or _get_log_path()
 
     def record(
         self,

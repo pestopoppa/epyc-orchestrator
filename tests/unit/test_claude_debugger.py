@@ -14,7 +14,7 @@ from src.pipeline_monitor.claude_debugger import ClaudeDebugger
 @pytest.fixture(autouse=True)
 def _isolate_change_log(tmp_path: Path):
     """Prevent tests from writing to the production debug_changes.jsonl."""
-    with patch("src.pipeline_monitor.change_log.LOG_PATH", tmp_path / "debug_changes.jsonl"):
+    with patch("src.pipeline_monitor.change_log._LOG_PATH", tmp_path / "debug_changes.jsonl"):
         yield
 
 
