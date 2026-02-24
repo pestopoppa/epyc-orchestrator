@@ -108,3 +108,4 @@ orchestration/repl_memory/sessions/
 orchestration/repl_memory/sessions/*.bak*
 scripts/benchmark/lookup_question.py
 scripts/setup/download_models.py
+benchmarks/root_workload/ab_tuning/
