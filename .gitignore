@@ -65,7 +65,8 @@ kernel-dev/
 test_images/
 
 # Tool session data
-.claude/
+.claude/*
+!.claude/agent-cost-policy.json
 .aider*
 .devcontainer/
 OPENING_PROMPT.md
