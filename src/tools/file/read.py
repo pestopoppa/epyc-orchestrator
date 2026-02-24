@@ -32,7 +32,9 @@ def _get_allowed_paths() -> list[str]:
             "/tmp/",
         ]
     except Exception:
-        return ["/mnt/raid0/llm/", "/tmp/"]
+        import os as _os
+        llm_root = _os.environ.get("ORCHESTRATOR_PATHS_LLM_ROOT", "/mnt/raid0/llm")
+        return [f"{llm_root}/" if not llm_root.endswith("/") else llm_root, "/tmp/"]
 
 
 # Allowed path prefixes (computed at module load)

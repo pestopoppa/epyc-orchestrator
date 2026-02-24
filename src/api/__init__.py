@@ -171,7 +171,11 @@ async def lifespan(app: FastAPI):
     # Only run in ONE worker to avoid 6× parallel log scans that burn
     # 100% CPU on all workers.  Use a file lock to elect one worker.
     import os as _os
-    _bg_lock_path = "/mnt/raid0/llm/claude/logs/.bg_cleanup.lock"
+    try:
+        from src.config import get_config as _gc
+        _bg_lock_path = str(_gc().paths.log_dir / ".bg_cleanup.lock")
+    except Exception:
+        _bg_lock_path = "/mnt/raid0/llm/claude/logs/.bg_cleanup.lock"
     _is_primary_worker = False
     if f.memrl:
         try:

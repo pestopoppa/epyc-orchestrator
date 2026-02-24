@@ -5,9 +5,20 @@ from __future__ import annotations
 import os
 import threading
 
-REPL_TAP_PATH = "/mnt/raid0/llm/tmp/repl_tap.log"
+_REPL_TAP_PATH: str | None = None
 _repl_tap_lock = threading.Lock()
 _IN_PYTEST = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def _get_repl_tap_path() -> str:
+    global _REPL_TAP_PATH
+    if _REPL_TAP_PATH is None:
+        try:
+            from src.config import get_config
+            _REPL_TAP_PATH = str(get_config().paths.tmp_dir / "repl_tap.log")
+        except Exception:
+            _REPL_TAP_PATH = "/mnt/raid0/llm/tmp/repl_tap.log"
+    return _REPL_TAP_PATH
 
 
 def tap_write_repl_exec(code: str, turn: int) -> None:
@@ -24,7 +35,7 @@ def tap_write_repl_exec(code: str, turn: int) -> None:
             f"CODE\n"
         )
         with _repl_tap_lock:
-            with open(REPL_TAP_PATH, "a") as f:
+            with open(_get_repl_tap_path(), "a") as f:
                 f.write(text)
                 f.flush()
     except Exception:
@@ -56,9 +67,8 @@ def tap_write_repl_result(
         parts.append("")  # trailing newline
         text = "\n".join(parts)
         with _repl_tap_lock:
-            with open(REPL_TAP_PATH, "a") as f:
+            with open(_get_repl_tap_path(), "a") as f:
                 f.write(text)
                 f.flush()
     except Exception:
         pass
-

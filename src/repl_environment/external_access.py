@@ -252,7 +252,11 @@ class _ExternalAccessMixin:
         import tempfile
         import os
 
-        tmp_dir = "/mnt/raid0/llm/tmp"
+        try:
+            from src.config import get_config as _gc
+            tmp_dir = str(_gc().paths.tmp_dir)
+        except Exception:
+            tmp_dir = "/mnt/raid0/llm/tmp"
         os.makedirs(tmp_dir, exist_ok=True)
 
         try:

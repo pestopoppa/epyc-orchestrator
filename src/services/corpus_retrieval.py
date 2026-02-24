@@ -46,8 +46,16 @@ class CorpusConfig:
     """Configuration for corpus retrieval."""
 
     enabled: bool = False
-    index_path: str = "/mnt/raid0/llm/cache/corpus/mvp_index"
+    index_path: str = ""
     max_snippets: int = 3
+
+    def __post_init__(self) -> None:
+        if not self.index_path:
+            try:
+                from src.config import get_config
+                self.index_path = str(get_config().paths.cache_dir / "corpus/mvp_index")
+            except Exception:
+                self.index_path = "/mnt/raid0/llm/cache/corpus/mvp_index"
     max_chars: int = 3000  # ~750 tokens budget
     min_score: float = 0.5
     exact_only: bool = True  # GloVe irrelevant for code

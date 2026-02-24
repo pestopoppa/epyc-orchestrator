@@ -15,7 +15,18 @@ from typing import Any
 
 from src.pipeline_monitor.anomaly import compute_anomaly_signals, anomaly_score
 
-DIAGNOSTICS_PATH = Path("/mnt/raid0/llm/claude/logs/seeding_diagnostics.jsonl")
+_DIAGNOSTICS_PATH: Path | None = None
+
+
+def _get_diagnostics_path() -> Path:
+    global _DIAGNOSTICS_PATH
+    if _DIAGNOSTICS_PATH is None:
+        try:
+            from src.config import get_config
+            _DIAGNOSTICS_PATH = get_config().paths.log_dir / "seeding_diagnostics.jsonl"
+        except Exception:
+            _DIAGNOSTICS_PATH = Path("/mnt/raid0/llm/claude/logs/seeding_diagnostics.jsonl")
+    return _DIAGNOSTICS_PATH
 
 
 def build_diagnostic(
@@ -136,7 +147,7 @@ def append_diagnostic(
     path: Path | None = None,
 ) -> None:
     """Append a diagnostic record to the JSONL file with fcntl locking."""
-    target = path or DIAGNOSTICS_PATH
+    target = path or _get_diagnostics_path()
     target.parent.mkdir(parents=True, exist_ok=True)
 
     line = json.dumps(diag, default=str) + "\n"

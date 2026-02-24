@@ -40,9 +40,46 @@ from src.pipeline_monitor.change_log import (
 
 logger = logging.getLogger(__name__)
 
-STACK_SCRIPT = Path("/mnt/raid0/llm/claude/scripts/server/orchestrator_stack.py")
-_RETRY_QUEUE_PATH = Path("/mnt/raid0/llm/claude/logs/retry_queue.jsonl")
-_PROPOSED_SIGNALS_PATH = Path("/mnt/raid0/llm/claude/logs/proposed_signals.jsonl")
+_STACK_SCRIPT: Path | None = None
+_RETRY_QUEUE_PATH_CACHED: Path | None = None
+_PROPOSED_SIGNALS_PATH_CACHED: Path | None = None
+
+
+def _get_project_root() -> Path:
+    try:
+        from src.config import get_config
+        return get_config().paths.project_root
+    except Exception:
+        return Path("/mnt/raid0/llm/claude")
+
+
+def _get_stack_script() -> Path:
+    global _STACK_SCRIPT
+    if _STACK_SCRIPT is None:
+        _STACK_SCRIPT = _get_project_root() / "scripts/server/orchestrator_stack.py"
+    return _STACK_SCRIPT
+
+
+def _get_retry_queue_path() -> Path:
+    global _RETRY_QUEUE_PATH_CACHED
+    if _RETRY_QUEUE_PATH_CACHED is None:
+        try:
+            from src.config import get_config
+            _RETRY_QUEUE_PATH_CACHED = get_config().paths.log_dir / "retry_queue.jsonl"
+        except Exception:
+            _RETRY_QUEUE_PATH_CACHED = Path("/mnt/raid0/llm/claude/logs/retry_queue.jsonl")
+    return _RETRY_QUEUE_PATH_CACHED
+
+
+def _get_proposed_signals_path() -> Path:
+    global _PROPOSED_SIGNALS_PATH_CACHED
+    if _PROPOSED_SIGNALS_PATH_CACHED is None:
+        try:
+            from src.config import get_config
+            _PROPOSED_SIGNALS_PATH_CACHED = get_config().paths.log_dir / "proposed_signals.jsonl"
+        except Exception:
+            _PROPOSED_SIGNALS_PATH_CACHED = Path("/mnt/raid0/llm/claude/logs/proposed_signals.jsonl")
+    return _PROPOSED_SIGNALS_PATH_CACHED
 
 # Services the debugger is allowed to reload via orchestrator_stack.py.
 # Keys = service names recognized by the stack script.
@@ -53,8 +90,30 @@ RELOADABLE_SERVICES: dict[str, tuple[int, str]] = {
     "nextplaid-docs": (8089, "/health"),
 }
 
-_TAP_PATH = "/mnt/raid0/llm/tmp/inference_tap.log"
-_REPL_TAP_PATH = "/mnt/raid0/llm/tmp/repl_tap.log"
+_TAP_PATH: str | None = None
+_REPL_TAP_PATH: str | None = None
+
+
+def _get_tap_path() -> str:
+    global _TAP_PATH
+    if _TAP_PATH is None:
+        try:
+            from src.config import get_config
+            _TAP_PATH = str(get_config().paths.tmp_dir / "inference_tap.log")
+        except Exception:
+            _TAP_PATH = "/mnt/raid0/llm/tmp/inference_tap.log"
+    return _TAP_PATH
+
+
+def _get_repl_tap_path() -> str:
+    global _REPL_TAP_PATH
+    if _REPL_TAP_PATH is None:
+        try:
+            from src.config import get_config
+            _REPL_TAP_PATH = str(get_config().paths.tmp_dir / "repl_tap.log")
+        except Exception:
+            _REPL_TAP_PATH = "/mnt/raid0/llm/tmp/repl_tap.log"
+    return _REPL_TAP_PATH
 _MAX_TAP_INLINE = 12_000  # chars — ~3000 tokens, fits in Claude's context
 _MAX_REPL_TAP_INLINE = 4_000  # chars — REPL output is more compact
 
@@ -62,7 +121,7 @@ _MAX_REPL_TAP_INLINE = 4_000  # chars — REPL output is more compact
 def _read_tap_inline(offset: int, length: int, path: str | None = None, max_chars: int = _MAX_TAP_INLINE) -> str:
     """Read tap section and truncate if too large."""
     if path is None:
-        path = _TAP_PATH
+        path = _get_tap_path()
     try:
         with open(path, "rb") as f:
             f.seek(offset)
@@ -158,7 +217,7 @@ def _persist_proposed_signals(
     if not proposals:
         return
     from datetime import datetime, timezone
-    target = path or _PROPOSED_SIGNALS_PATH
+    target = path or _get_proposed_signals_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "a") as f:
         for p in proposals:
@@ -566,7 +625,7 @@ class ClaudeDebugger:
 
         try:
             result = subprocess.run(
-                [sys.executable, str(STACK_SCRIPT), "reload", service_name],
+                [sys.executable, str(_get_stack_script()), "reload", service_name],
                 cwd=str(self.project_root),
                 capture_output=True,
                 text=True,
@@ -923,7 +982,7 @@ class ClaudeDebugger:
             repl_off = diag.get("repl_tap_offset_bytes", 0)
             repl_len = diag.get("repl_tap_length_bytes", 0)
             if repl_len > 0:
-                repl_text = _read_tap_inline(repl_off, repl_len, _REPL_TAP_PATH, _MAX_REPL_TAP_INLINE)
+                repl_text = _read_tap_inline(repl_off, repl_len, _get_repl_tap_path(), _MAX_REPL_TAP_INLINE)
                 if repl_text:
                     parts.append(f"\n**REPL execution log** ({repl_len} bytes):\n```\n{repl_text}\n```")
 

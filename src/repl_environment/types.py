@@ -165,8 +165,16 @@ class REPLConfig:
         default_factory=lambda: int(_registry_timeout("repl", "session", 600))
     )
     output_cap: int = 8192
-    spill_dir: str = "/mnt/raid0/llm/tmp/repl_output"
+    spill_dir: str = ""
     max_grep_results: int = 100
+
+    def __post_init__(self) -> None:
+        if not self.spill_dir:
+            try:
+                from src.config import get_config
+                self.spill_dir = str(get_config().paths.tmp_dir / "repl_output")
+            except Exception:
+                self.spill_dir = "/mnt/raid0/llm/tmp/repl_output"
     # Forced exploration validation (prevent premature FINAL)
     # Default False for backwards compatibility - enable for production use
     require_exploration_before_final: bool = False
