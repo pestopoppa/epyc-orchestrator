@@ -56,7 +56,7 @@ def test_rejects_root_path():
 def test_rejects_home_path():
     """Paths under /home/ are rejected."""
     with pytest.raises(HTTPException) as exc_info:
-        validate_api_path("/home/daniele/.bashrc")
+        validate_api_path("/home/user/.bashrc")
     assert exc_info.value.status_code == 403
 
 

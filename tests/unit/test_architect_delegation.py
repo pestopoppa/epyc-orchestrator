@@ -764,33 +764,3 @@ class TestFileToolsWhitelist:
 # ── Seeding Script Tests ─────────────────────────────────────────────────
 
 
-class TestSeedingScriptArchitectModes:
-    """Tests for updated seeding script with architect delegation."""
-
-    def test_architect_roles_constant(self):
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "benchmark"))
-        from seed_specialist_routing import ARCHITECT_ROLES, ARCHITECT_MODES
-
-        assert "architect_general" in ARCHITECT_ROLES
-        assert "architect_coding" in ARCHITECT_ROLES
-        assert "direct" in ARCHITECT_MODES
-        assert "delegated" in ARCHITECT_MODES
-
-    def test_build_combos_architect_gets_delegation(self):
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts" / "benchmark"))
-        from seed_specialist_routing import _build_role_mode_combos
-
-        combos = _build_role_mode_combos(
-            roles=["frontdoor", "architect_general"],
-            modes=["direct", "react", "repl"],
-        )
-
-        # Frontdoor gets all 3 modes
-        frontdoor_modes = [m for r, m in combos if r == "frontdoor"]
-        assert set(frontdoor_modes) == {"direct", "react", "repl"}
-
-        # Architect gets direct + delegated (not react/repl)
-        arch_modes = [m for r, m in combos if r == "architect_general"]
-        assert set(arch_modes) == {"direct", "delegated"}

@@ -1,10 +1,10 @@
 # Getting Started
 
-Welcome to the AMD EPYC 9655 Inference Optimization project.
+Welcome to the epyc-orchestrator project.
 
 ## Prerequisites
 
-- Access to the system (Beelzebub)
+- A Linux system with sufficient RAM for your chosen models
 - Basic familiarity with LLM inference
 - Understanding of llama.cpp
 

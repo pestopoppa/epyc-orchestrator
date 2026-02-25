@@ -26,6 +26,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 import time
 from abc import ABC, abstractmethod
@@ -269,7 +270,7 @@ class LlamaCppBackend(ModelBackend):
         parts = [
             f"timeout {request.timeout}",
             "env OMP_NUM_THREADS=1",
-            "numactl --interleave=all",
+            *(["numactl --interleave=all"] if shutil.which("numactl") else []),
             str(binary_path),
             f"-m {role_config.model.full_path}",
         ]

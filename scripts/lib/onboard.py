@@ -19,6 +19,7 @@ the flow and handles user interaction.
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -553,13 +554,13 @@ def run_health_check(
 
     try:
         for flags in flag_combos:
+            numa = ["numactl", "--interleave=all"] if shutil.which("numactl") else []
             cmd = [
                 "timeout",
                 str(HEALTH_CHECK_TIMEOUT),
                 "env",
                 "OMP_NUM_THREADS=1",
-                "numactl",
-                "--interleave=all",
+                *numa,
                 binary,
                 "-m",
                 model_info.path,
