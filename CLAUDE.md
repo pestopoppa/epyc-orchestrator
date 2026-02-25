@@ -1,5 +1,14 @@
 # epyc-orchestrator
 
+## Related Repositories
+
+This repo is part of a multi-repo project:
+- **epyc-root** — governance, hooks, agents, handoffs ([pestopoppa/epyc-root](https://github.com/pestopoppa/epyc-root))
+- **epyc-inference-research** — benchmarks, research, full model registry ([pestopoppa/epyc-inference-research](https://github.com/pestopoppa/epyc-inference-research))
+- **epyc-llama** — custom llama.cpp fork ([pestopoppa/llama.cpp](https://github.com/pestopoppa/llama.cpp))
+
+Benchmarks, research docs, agent files, and handoffs live in their respective repos — not here.
+
 ## Architecture
 
 ```
