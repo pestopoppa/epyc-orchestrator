@@ -15,12 +15,20 @@ This module is shared with the orchestrator project.
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+
+def _numa_prefix() -> list[str]:
+    """Return numactl interleave prefix if numactl is available, else empty list."""
+    if shutil.which("numactl"):
+        return ["numactl", "--interleave=all"]
+    return []
 
 import requests
 
@@ -229,7 +237,7 @@ class ServerManager:
         ubatch_size = registry.get_ubatch_size(role) if role and registry else 8192
 
         cmd = [
-            "numactl", "--interleave=all",
+            *_numa_prefix(),
             binary,
             "-m", model_path,
             "-t", str(self.threads),
@@ -834,7 +842,7 @@ class Executor:
             # Vision models use llama-mtmd-cli with different invocation
             binary = get_binary("mtmd", self.registry)
             cmd = [
-                "numactl", "--interleave=all",
+                *_numa_prefix(),
                 binary,
                 "-m", model_path,
                 "--mmproj", mmproj_path,
@@ -869,7 +877,7 @@ class Executor:
 
         # Base command with env wrapper
         cmd = [
-            "numactl", "--interleave=all",
+            *_numa_prefix(),
             binary,
             "-m", model_path,
             "-t", str(threads),

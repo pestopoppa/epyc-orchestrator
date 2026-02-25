@@ -1,7 +1,7 @@
 [project]
-name = "hierarchical-orchestrator"
+name = "epyc-orchestrator"
 version = "0.1.0"
-description = "Hierarchical local-agent orchestration for CPU inference"
+description = "Hierarchical multi-model orchestration for local LLM inference"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -26,7 +26,7 @@ dependencies = [
     "scikit-learn>=1.4.0",
     "numpy>=1.26.0",
 
-    # Vector search (MemRL episodic memory)
+    # Vector search (episodic memory)
     "faiss-cpu>=1.7.4",
 
     # Vision pipeline (src/vision/, image handling)
@@ -61,38 +61,9 @@ toon = [
     # Install from git until official PyPI release
     "toon-format @ git+https://github.com/toon-format/toon-python.git",
 ]
-datasets = [
-    # HuggingFace datasets for on-the-fly benchmark sampling
-    "datasets>=2.14.0",
-]
-graph = [
-    # Graph database for MemRL failure/hypothesis graphs
-    "kuzu>=0.8",
-    "cachetools>=5.3",  # TTL cache for graph penalty lookups
-]
 sandbox = [
-    # Python sandboxing for REPL code execution (not yet in use)
+    # Python sandboxing for REPL code execution
     "RestrictedPython>=7.0",
-]
-knowledge = [
-    # Knowledge retrieval tools (src/tools/knowledge.py)
-    "arxiv>=2.0.0",
-    "mwclient>=0.10.0",
-    "semanticscholar>=0.11.0",
-    "google-api-python-client>=2.100.0",
-]
-retrieval = [
-    # Multi-vector code search via NextPLAID (src/repl_environment/code_search.py)
-    "next-plaid-client>=0.2.0",
-]
-tuning = [
-    # Hyperparameter optimization (Phase 7, not yet in use)
-    "optuna>=3.5.0",
-    "optuna-dashboard>=0.15.0",
-]
-ui = [
-    # Web UI (not yet in use)
-    "gradio>=4.44.0",
 ]
 
 [project.scripts]
@@ -100,7 +71,6 @@ orch = "src.cli_orch:main"
 orch-sessions = "src.cli_sessions:main"
 validate-ir = "orchestration.validate_ir:main"
 registry-loader = "src.registry_loader:main"
-orchestrator-ui = "src.gradio_ui:main"
 
 [tool.ruff]
 line-length = 100
@@ -127,10 +97,6 @@ python_functions = ["test_*"]
 addopts = "-v --tb=short -n 8"
 asyncio_mode = "auto"
 timeout = 30
-# WARNING: Do NOT use pytest-xdist with -n auto on this 192-thread machine!
-# Each worker initializes the API which may load models, causing memory exhaustion.
-# -n 8 gives 4x speedup (67s → 17s). Safe limit tested: -n 8.
-# See tests/conftest.py for memory safety guards.
 
 [tool.coverage.run]
 source = ["src"]
@@ -170,14 +136,3 @@ allow-direct-references = true  # For toon-format git install
 
 [tool.hatch.build.targets.wheel]
 packages = ["src", "orchestration"]
-
-[tool.uv]
-# Ensure dependencies are always synced before running
-dev-dependencies = [
-    "ruff>=0.8.0",
-    "mypy>=1.8.0",
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-timeout>=2.2.0",
-    "hypothesis>=6.0.0",
-]

@@ -204,7 +204,7 @@ class CodexTeacher:
     """
 
     # Default binary path (nvm-managed)
-    DEFAULT_BINARY = "/home/daniele/.nvm/versions/node/v22.14.0/bin/codex"
+    DEFAULT_BINARY = "codex"  # Expects codex on PATH
 
     def __init__(
         self,

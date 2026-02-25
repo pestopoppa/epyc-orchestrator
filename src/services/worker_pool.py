@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -301,7 +302,7 @@ class WorkerPoolManager:
                 env["OMP_NUM_THREADS"] = "1"
 
                 instance.process = subprocess.Popen(
-                    ["numactl", "--interleave=all"] + cmd,
+                    ([*["numactl", "--interleave=all"]] if shutil.which("numactl") else []) + cmd,
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     env=env,

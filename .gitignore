@@ -1,3 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.json
+htmlcov/
+
+# Databases
+*.db
+
 # Logs and runtime data
 logs/
 *.log
@@ -6,11 +31,6 @@ logs/
 cache/
 share/
 state/
-__pycache__/
-*.pyc
-
-# Backups
-backups/
 
 # Temporary files
 tmp/
@@ -27,86 +47,21 @@ Thumbs.db
 .idea/
 *.sublime-*
 
-# Claude Code config (contains credentials and session data)
-/config/
-
-# Embedded git repos (cloned research repos)
-research/eagle-official/
-research/frspec/
-research/specmquant/
-*.BAK
+# Environment
+.env
 
 # Orchestration transient files
 orchestration/last_task_ir.json
 orchestration/last_architecture_ir.json
 orchestration/gate_report_*.json
 
-# Python
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-*.egg-info/
-*.db
-
 # Tool plugin settings (per-user configuration)
 src/tool_settings/
 
-# Large MemRL data files (stored locally)
+# MemRL data files (generated at runtime)
 orchestration/repl_memory/embeddings.npy
 orchestration/repl_memory/episodic.db
-
-# Local-only directories (not for GitHub)
-# These contain work-in-progress, internal notes, and session logs
-logs/
-progress/
-handoffs/
-research/
-kernel-dev/
-test_images/
-
-# Tool session data
-.claude/*
-!.claude/agent-cost-policy.json
-.aider*
-.devcontainer/
-OPENING_PROMPT.md
-
-# Raw benchmark data (keep locally, not on GitHub)
-# Human-readable summaries (RESULTS.md, BLIND_RESCORE, summary.csv) stay tracked
-benchmarks/results/runs/
-benchmarks/evidence/
-benchmarks/results/reviews/*.csv
-!benchmarks/results/reviews/summary.csv
-benchmarks/results/orchestrator/
-benchmarks/results/eval/
-benchmarks/results/reviews/backup_*/
-benchmarks/results/timeout_calibration.json
-benchmarks/images/
-
-# Benchmark question pools (reconstructible from public sources — see Ch24)
-# Use wildcard pattern to allow negation of specific files
-benchmarks/prompts/*
-# EXCEPT: Hand-written mode-advantage tasks (custom, not from public benchmarks)
-!benchmarks/prompts/debug/
-benchmarks/prompts/debug/*
-!benchmarks/prompts/debug/mode_advantage_hard.yaml
-
-# Local-only artifacts (not for GitHub)
-.coverage
-coverage.json
-.mcp.json
-.dockerignore
-.env.example
-=0.8
-=1.7.4
-Dockerfile
-Dockerfile.dev
-docker-compose.yml
-flake.nix
-docs/guides/model-sizing.md
-Twyne_V1_Whitepaper_*.json
 orchestration/repl_memory/sessions/
-orchestration/repl_memory/sessions/*.bak*
-scripts/benchmark/lookup_question.py
-scripts/setup/download_models.py
-benchmarks/root_workload/ab_tuning/
+
+# Claude Code config
+.claude/

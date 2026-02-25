@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -143,7 +144,9 @@ NUMA_PREFERRED_MAP: dict[str, str] = {
 
 
 def _numa_prefix(role: str) -> list[str]:
-    """Return numactl prefix for a role: preferred placement or interleaved."""
+    """Return numactl prefix for a role if numactl is available."""
+    if not shutil.which("numactl"):
+        return []
     node = NUMA_PREFERRED_MAP.get(role)
     if node is not None:
         return ["numactl", f"--preferred={node}"]
