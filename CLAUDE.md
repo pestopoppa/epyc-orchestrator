@@ -9,6 +9,10 @@ This repo is part of a multi-repo project:
 
 Benchmarks, research docs, agent files, and handoffs live in their respective repos — not here.
 
+> **Path history note**: Documentation and handoffs dated before 2026-02-25 reference
+> `/mnt/raid0/llm/claude` (the pre-split monorepo). Those paths are no longer valid.
+> This repo's code was extracted from that monorepo.
+
 ## Architecture
 
 ```
