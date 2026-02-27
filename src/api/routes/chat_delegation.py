@@ -939,10 +939,19 @@ def _run_specialist_loop(
         delegate_to=delegate_to,
         cfg=cfg,
     )
+    # Coding tasks (USACO, competitive programming) need more specialist time
+    _q_lower = f"{question}\n{brief}".lower()
+    _coding_time_signals = (
+        "usaco", "codeforces", "leetcode", "sample input", "input format",
+        "output format", "stdin", "write a python", "implement",
+        "algorithm", "write code",
+    )
+    _is_coding = any(s in _q_lower for s in _coding_time_signals)
+    _specialist_cap = cfg.specialist_max_seconds * 2.5 if _is_coding else cfg.specialist_max_seconds
     specialist_time_budget_s = (
-        min(cfg.specialist_max_seconds, float(time_budget_s))
+        min(_specialist_cap, float(time_budget_s))
         if time_budget_s is not None
-        else cfg.specialist_max_seconds
+        else _specialist_cap
     )
     q_for_specialist = _trim_block(question, cfg.specialist_question_chars)
     brief_for_specialist = _trim_block(brief, cfg.specialist_brief_chars)
@@ -1092,7 +1101,11 @@ def _run_specialist_loop(
             # text but omitted FINAL(). For delegation we need a report, not
             # necessarily an executed terminal value. Accept it directly to
             # avoid repeated 30s generation loops that only attempt FINAL().
-            if "FINAL(" not in code:
+            # Exception: don't rescue code containing input() — it's a
+            # competitive programming solution that needs to be rewritten
+            # using CALL("run_python_code", ...) before it can work.
+            _has_blocked_input = "input()" in code and "CALL(" not in code
+            if "FINAL(" not in code and not _has_blocked_input:
                 non_comment_lines = [
                     ln for ln in code.split("\n")
                     if ln.strip() and not ln.strip().startswith("#")
@@ -1285,7 +1298,14 @@ def _architect_delegated_answer_inner(
     cfg = _delegation_config()
     cumulative_delegate_tokens = 0
     orchestration_started = time.perf_counter()
-    total_budget_s = cfg.total_max_seconds
+    # Coding tasks need more total delegation budget to fit longer specialist runs
+    _q_lower = question.lower()
+    _coding_budget_signals = (
+        "usaco", "codeforces", "leetcode", "sample input", "input format",
+        "output format", "stdin", "implement", "algorithm",
+    )
+    _is_coding_task = any(s in _q_lower for s in _coding_budget_signals)
+    total_budget_s = cfg.total_max_seconds * 2.0 if _is_coding_task else cfg.total_max_seconds
     stats.setdefault("report_handles", [])
 
     for loop in range(max_loops + 1):  # +1 for initial decision
