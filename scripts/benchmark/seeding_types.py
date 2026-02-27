@@ -6,6 +6,7 @@ Timeouts are read directly from the model registry YAML (single source of truth)
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,10 +31,13 @@ __all__ = [
 # ── Path constants ────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+RESEARCH_ROOT = Path(os.environ.get(
+    "EPYC_RESEARCH_ROOT", "/mnt/raid0/llm/epyc-inference-research"
+))
 
-EVAL_DIR = PROJECT_ROOT / "benchmarks" / "results" / "eval"
+EVAL_DIR = RESEARCH_ROOT / "benchmarks" / "results" / "eval"
 SEEN_FILE = EVAL_DIR / "seen_questions.jsonl"
-DEBUG_PROMPTS_DIR = PROJECT_ROOT / "benchmarks" / "prompts" / "debug"
+DEBUG_PROMPTS_DIR = RESEARCH_ROOT / "benchmarks" / "prompts" / "debug"
 
 
 # ── Registry timeout reader (no project imports) ──────────────────────
