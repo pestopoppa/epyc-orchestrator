@@ -229,7 +229,7 @@ def score_answer_deterministic(
     Returns:
         True if answer is correct.
     """
-    from benchmark.debug_scorer import score_answer
+    from debug_scorer import score_answer
 
     return score_answer(answer, expected, scoring_method, scoring_config or {})
 
