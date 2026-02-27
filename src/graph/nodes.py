@@ -157,6 +157,16 @@ class FrontdoorNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 log.warning("Max nudges (%d) reached at %s, promoting to error", state.consecutive_nudges, state.current_role)
                 state.consecutive_failures += 1
                 state.consecutive_nudges = 0
+                # Treat promoted nudge like a regular error — check escalation
+                error_cat = _classify_error(nudge)
+                if _should_escalate(ctx, error_cat, Role.CODER_ESCALATION):
+                    state.escalation_count += 1
+                    state.consecutive_failures = 0
+                    from_role = str(state.current_role)
+                    state.record_role(Role.CODER_ESCALATION)
+                    _log_escalation(ctx, from_role, str(Role.CODER_ESCALATION),
+                                    f"Escalating after {MAX_CONSECUTIVE_NUDGES} repeated nudges")
+                    return CoderEscalationNode()
                 return FrontdoorNode()
         else:
             state.consecutive_failures = 0
