@@ -134,11 +134,27 @@ def _wait_for_workers_ready(
 
     start = time.perf_counter()
     settled = 0
+    logged_wait = False
     while time.perf_counter() - start < max_wait:
         children = _children_cpu(parent_pid)
         if not children:
-            time.sleep(2)
-            continue
+            # Single-worker uvicorn (--workers 1) doesn't fork — the parent
+            # IS the worker.  Treat the parent process itself as the sole
+            # worker so we don't loop for 180s waiting for children that
+            # will never appear.
+            try:
+                result = subprocess.run(
+                    ["ps", "-o", "pid=,%cpu=", "-p", parent_pid],
+                    capture_output=True, text=True, timeout=5,
+                )
+                parts = result.stdout.strip().split()
+                if len(parts) == 2:
+                    children = [(parts[0], float(parts[1]))]
+            except Exception:
+                pass
+            if not children:
+                time.sleep(2)
+                continue
         max_cpu = max(cpu for _, cpu in children)
         if max_cpu < cpu_threshold:
             settled += 1
@@ -153,10 +169,12 @@ def _wait_for_workers_ready(
         else:
             settled = 0
             hot = [(pid, cpu) for pid, cpu in children if cpu >= cpu_threshold]
-            logger.info(
-                "  Waiting for workers: %d/%d still hot (max=%.0f%%)",
-                len(hot), len(children), max_cpu,
-            )
+            if not logged_wait:
+                logger.info(
+                    "  Waiting for %d worker(s) to stabilize (CPU < %.0f%%)...",
+                    len(hot), cpu_threshold,
+                )
+                logged_wait = True
         if state.shutdown:
             return
         time.sleep(3)
