@@ -29,7 +29,7 @@ def score_answer_deterministic(
     scoring_config: dict[str, Any] | None = None,
 ) -> bool:
     """Score an answer deterministically."""
-    from benchmark.debug_scorer import score_answer
+    from debug_scorer import score_answer
 
     return score_answer(answer, expected, scoring_method, scoring_config or {})
 
