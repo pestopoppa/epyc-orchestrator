@@ -711,6 +711,13 @@ async def _execute_repl(
                 ],
             })
 
+    # Extract scratchpad insights from task_state (Search-R1 Step 5)
+    scratchpad_insights = [
+        {"turn": e.turn, "category": e.category, "insight": e.insight, "confidence": e.confidence}
+        for e in task_state.scratchpad_entries
+        if hasattr(e, "category")
+    ]
+
     return ChatResponse(
         answer=answer,
         turns=turns,
@@ -753,4 +760,6 @@ async def _execute_repl(
         compaction_tokens_saved=task_state.compaction_tokens_saved,
         # Web research telemetry (Search-R1)
         web_research_results=web_research_results,
+        # Scratchpad insights (Search-R1 Step 5)
+        scratchpad_insights=scratchpad_insights,
     )

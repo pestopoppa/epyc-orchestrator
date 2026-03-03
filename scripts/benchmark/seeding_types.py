@@ -225,6 +225,8 @@ class RoleResult:
     think_harder_expected_roi: float = 0.0
     # Web research telemetry (Search-R1 reward design)
     web_research_results: list[dict] = field(default_factory=list)
+    # Scratchpad insights (Search-R1 Step 5)
+    scratchpad_insights: list[dict] = field(default_factory=list)
 
 
 @dataclass

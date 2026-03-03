@@ -37,6 +37,8 @@ __all__ = [
     "compute_web_research_rewards",
     "aggregate_web_research_reward",
     "score_query_strategy",
+    # Search-R1 Step 5: Scratchpad insight rewards
+    "compute_scratchpad_rewards",
 ]
 
 # Default per-role optimized tokens/second from production benchmarks.
@@ -581,3 +583,73 @@ def score_query_strategy(
     strategy["source_yield"] = len(all_domains) / n_calls if n_calls > 0 else 0.0
 
     return strategy
+
+
+# ── Search-R1 Step 5: Scratchpad insight rewards ─────────────────────
+
+
+_WEB_INSIGHT_KEYWORDS = frozenset(
+    ["search", "found", "source", "website", "page", "url", "article"]
+)
+
+
+def compute_scratchpad_rewards(
+    scratchpad_insights: list[dict],
+    web_research_results: list[dict],
+    answer: str,
+    passed: bool,
+) -> dict[str, float]:
+    """Compute reward dimensions from scratchpad insights.
+
+    Dimensions:
+        sp_insight_count: Raw count of insights (float).
+        sp_web_insight_ratio: Fraction of insights mentioning web-related
+            keywords. Only computed when web_research was used.
+        sp_answer_containment: Fraction of insight keywords that appear
+            in the final answer. Measures whether the model actually USED
+            its extracted insights.
+
+    Returns empty dict if both scratchpad_insights and web_research_results
+    are empty.
+    """
+    if not scratchpad_insights and not web_research_results:
+        return {}
+
+    rewards: dict[str, float] = {}
+
+    insights = [e for e in scratchpad_insights if isinstance(e, dict)]
+    rewards["sp_insight_count"] = float(len(insights))
+
+    # sp_web_insight_ratio: only meaningful when web_research was used
+    if web_research_results and insights:
+        web_related = 0
+        for entry in insights:
+            text = str(entry.get("insight", "")).lower()
+            if any(kw in text for kw in _WEB_INSIGHT_KEYWORDS):
+                web_related += 1
+        rewards["sp_web_insight_ratio"] = web_related / len(insights)
+    elif web_research_results:
+        # Web research used but no insights extracted
+        rewards["sp_web_insight_ratio"] = 0.0
+
+    # sp_answer_containment: do insight keywords appear in the answer?
+    if insights and answer:
+        answer_lower = answer.lower()
+        # Collect meaningful keywords from all insights (length >= 4 to skip noise)
+        insight_keywords: set[str] = set()
+        for entry in insights:
+            text = str(entry.get("insight", ""))
+            for word in text.lower().split():
+                cleaned = word.strip(".,;:!?\"'()-")
+                if len(cleaned) >= 4:
+                    insight_keywords.add(cleaned)
+
+        if insight_keywords:
+            matched = sum(1 for kw in insight_keywords if kw in answer_lower)
+            rewards["sp_answer_containment"] = matched / len(insight_keywords)
+        else:
+            rewards["sp_answer_containment"] = 0.0
+    elif insights:
+        rewards["sp_answer_containment"] = 0.0
+
+    return rewards
