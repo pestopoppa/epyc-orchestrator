@@ -941,17 +941,31 @@ async def _maybe_refresh_session_summary(state: TaskState, deps: TaskDeps) -> No
     turns_since = state.turns - state.session_summary_turn
     if turns_since < _SESSION_LOG_REGEN_INTERVAL and state.session_summary_cache:
         return
+
+    from src.features import features
+    use_scratchpad = features().session_scratchpad
+
     try:
         from src.graph.session_log import (
             summarize_session_with_worker,
             build_session_summary_deterministic,
+            prune_scratchpad,
         )
         if deps.primitives is not None:
-            summary = await summarize_session_with_worker(
+            result = await summarize_session_with_worker(
                 deps.primitives,
                 state.session_log_records,
                 inline=_use_inline_calls_in_tests(),
+                extract_scratchpad=use_scratchpad,
+                current_turn=state.turns,
             )
+            if use_scratchpad:
+                summary, new_entries = result
+                state.scratchpad_entries = prune_scratchpad(
+                    state.scratchpad_entries + new_entries,
+                )
+            else:
+                summary = result
         else:
             summary = build_session_summary_deterministic(state.session_log_records)
         state.session_summary_cache = summary
@@ -970,10 +984,15 @@ def _session_log_prompt_block(state: TaskState) -> str:
     """Return session log block for prompt injection. Empty if not available."""
     if not state.session_summary_cache:
         return ""
-    block = state.session_summary_cache
+    parts: list[str] = []
+    # Prepend scratchpad insights if available
+    if state.scratchpad_entries:
+        bullets = "\n".join(e.to_bullet() for e in state.scratchpad_entries)
+        parts.append(f"[Key Insights]\n{bullets}")
+    parts.append(state.session_summary_cache)
     if state.session_log_path:
-        block += f'\nFull log: peek(99999, file_path="{state.session_log_path}")'
-    return block
+        parts.append(f'Full log: peek(99999, file_path="{state.session_log_path}")')
+    return "\n".join(parts)
 
 
 _FINAL_RE = re.compile(

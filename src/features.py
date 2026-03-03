@@ -193,6 +193,7 @@ class Features:
     content_cache: bool = False  # SHA-256 keyed response cache for LLM calls
     session_compaction: bool = False  # Summarize old context on long conversations
     session_log: bool = False  # Append-only processing journal across REPL turns
+    session_scratchpad: bool = False  # Model-extracted semantic insights from session log
     depth_model_overrides: bool = False  # Map nested llm_call depth to cheaper roles
     resume_tokens: bool = False  # Base64url continuation tokens for crash recovery
     approval_gates: bool = False  # Human approval at escalation boundaries
@@ -298,6 +299,7 @@ class Features:
             "content_cache": self.content_cache,
             "session_compaction": self.session_compaction,
             "session_log": self.session_log,
+            "session_scratchpad": self.session_scratchpad,
             "depth_model_overrides": self.depth_model_overrides,
             "resume_tokens": self.resume_tokens,
             "approval_gates": self.approval_gates,
@@ -401,6 +403,7 @@ def get_features(
             "content_cache": False,  # Enable after cache correctness validation
             "session_compaction": True,  # Low-risk default: compacts long contexts with clear rollback toggle
             "session_log": True,  # Append-only REPL session journal for multi-turn context
+            "session_scratchpad": True,  # Model-extracted semantic insights from session log
             "depth_model_overrides": True,  # Enabled with worker-only + max-depth guardrails
             "resume_tokens": True,  # Validated: PASS -1.1s latency (2026-02-20)
             "approval_gates": True,  # Validated: PASS -20.6s latency (2026-02-20)
@@ -448,6 +451,7 @@ def get_features(
             "content_cache": False,  # Disabled in tests by default
             "session_compaction": False,  # Disabled in tests by default
             "session_log": False,  # Disabled in tests by default
+            "session_scratchpad": False,  # Disabled in tests by default
             "depth_model_overrides": False,  # Disabled in tests by default
             "resume_tokens": False,  # Disabled in tests by default
             "approval_gates": False,  # Disabled in tests by default
@@ -502,6 +506,7 @@ def get_features(
         "content_cache": _feature_flag_bool("CONTENT_CACHE", defaults["content_cache"]),
         "session_compaction": _feature_flag_bool("SESSION_COMPACTION", defaults["session_compaction"]),
         "session_log": _feature_flag_bool("SESSION_LOG", defaults["session_log"]),
+        "session_scratchpad": _feature_flag_bool("SESSION_SCRATCHPAD", defaults["session_scratchpad"]),
         "depth_model_overrides": _feature_flag_bool(
             "DEPTH_MODEL_OVERRIDES", defaults["depth_model_overrides"]
         ),
