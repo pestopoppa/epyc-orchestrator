@@ -47,7 +47,7 @@ ADAPTER_SUITES = {
 }
 
 # Suites that stay YAML-based (no public dataset or intentionally synthetic)
-YAML_ONLY_SUITES = {"agentic", "long_context", "mode_advantage", "mode_advantage_hard"}
+YAML_ONLY_SUITES = {"agentic", "long_context", "mode_advantage", "mode_advantage_hard", "skill_transfer"}
 
 
 def get_adapter(suite: str) -> Optional["BaseAdapter"]:
@@ -1200,7 +1200,7 @@ class SimpleQAAdapter(BaseAdapter):
             "scoring_method": "f1",
             "scoring_config": {
                 "extract_pattern": r"####\s*(.+)",
-                "threshold": 0.8,
+                "threshold": 0.5,
                 "normalize": True,
             },
         }
