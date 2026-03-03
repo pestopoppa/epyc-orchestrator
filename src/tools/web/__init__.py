@@ -25,9 +25,11 @@ def register_web_tools(registry: ToolRegistry) -> int:
         Number of tools registered.
     """
     from src.tools.web.fetch import register_fetch_tool
+    from src.tools.web.research import register_research_tool
     from src.tools.web.search import register_search_tool
 
     count = 0
     count += register_fetch_tool(registry)
     count += register_search_tool(registry)
+    count += register_research_tool(registry)
     return count

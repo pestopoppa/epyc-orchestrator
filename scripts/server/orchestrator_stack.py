@@ -1052,6 +1052,7 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env["ORCHESTRATOR_MOCK_MODE"] = "0"
     env["ORCHESTRATOR_GENERATION_MONITOR"] = "1"
     env["ORCHESTRATOR_REACT_MODE"] = "1"
+    env["ORCHESTRATOR_CASCADING_TOOL_POLICY"] = "1"
     _apply_orchestrator_profile(env, profile)
     # Bound inference-lock waits by default to avoid multi-minute silent stalls
     # during iterative debugging / seeding runs.

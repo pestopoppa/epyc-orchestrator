@@ -132,9 +132,26 @@ def _wait_for_workers_ready(
         except Exception:
             return []
 
+    # Find the DequeHandler (if TUI is active) so we can update a single
+    # log line in-place instead of spamming new entries every 3s.
+    deque_handler = None
+    for h in logging.getLogger().handlers:
+        if type(h).__name__ == "DequeHandler" and hasattr(h, "records"):
+            deque_handler = h
+            break
+
+    def _status_update(msg: str) -> None:
+        """Log msg, reusing the last deque entry in TUI mode."""
+        if deque_handler is not None and deque_handler.records:
+            last = deque_handler.records[-1]
+            # Only overwrite our own status lines (contain "workers")
+            if "workers" in last.lower():
+                deque_handler.records[-1] = msg
+                return
+        logger.info(msg)
+
     start = time.perf_counter()
     settled = 0
-    logged_wait = False
     while time.perf_counter() - start < max_wait:
         children = _children_cpu(parent_pid)
         if not children:
@@ -161,20 +178,18 @@ def _wait_for_workers_ready(
             if settled >= settle_checks:
                 elapsed = time.perf_counter() - start
                 if elapsed > 5.0:
-                    logger.info(
-                        "  Workers stabilized after %.1fs (max CPU=%.1f%%)",
-                        elapsed, max_cpu,
+                    _status_update(
+                        f"  Workers stabilized after {elapsed:.1f}s (max CPU={max_cpu:.1f}%)"
                     )
                 return
         else:
             settled = 0
-            hot = [(pid, cpu) for pid, cpu in children if cpu >= cpu_threshold]
-            if not logged_wait:
-                logger.info(
-                    "  Waiting for %d worker(s) to stabilize (CPU < %.0f%%)...",
-                    len(hot), cpu_threshold,
-                )
-                logged_wait = True
+            elapsed = time.perf_counter() - start
+            hot = [cpu for _, cpu in children if cpu >= cpu_threshold]
+            _status_update(
+                f"  Workers init: {len(hot)}/{len(children)} hot"
+                f" (CPU={max_cpu:.0f}%, {elapsed:.0f}s)"
+            )
         if state.shutdown:
             return
         time.sleep(3)
@@ -251,6 +266,7 @@ def _launch_api_only() -> bool:
     env["ORCHESTRATOR_MEMRL"] = "1"
     env["ORCHESTRATOR_TOOLS"] = "1"
     env["ORCHESTRATOR_GENERATION_MONITOR"] = "1"
+    env["ORCHESTRATOR_CASCADING_TOOL_POLICY"] = "1"
 
     log_file = PROJECT_ROOT / "logs" / "orchestrator_autolaunch.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)

@@ -655,7 +655,7 @@ class REPLEnvironment(
         # Quick patterns that suggest the model tried to call a tool
         _TOOL_PATTERNS = (
             _re.compile(r'"(?:function|name)"\s*:\s*"(\w+)"'),       # JSON tool_call
-            _re.compile(r'\b(web_search|calculator|python|bash)\s*\('),  # direct name()
+            _re.compile(r'\b(web_search|web_research|calculator|python|bash)\s*\('),  # direct name()
             _re.compile(r'tool_call', _re.IGNORECASE),
             _re.compile(r'"type"\s*:\s*"function"'),
         )
