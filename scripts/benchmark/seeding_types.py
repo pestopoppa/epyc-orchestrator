@@ -21,7 +21,7 @@ __all__ = [
     "HealthCheckError", "MODEL_PORTS", "PROJECT_ROOT",
     "ROLE_COST_TIER", "ROLE_PORT", "RoleResult",
     "SEEN_FILE", "STACK_SCRIPT",
-    "VISION_MODES", "VISION_ROLES", "state",
+    "VISION_MODES", "VISION_ROLES", "WebResearchTelemetry", "state",
     # Phase 4: 3-way routing action keys
     "ACTION_SELF_DIRECT", "ACTION_SELF_REPL", "ACTION_ARCHITECT", "ACTION_WORKER",
     "THREE_WAY_ACTIONS", "THREE_WAY_COST_TIER",
@@ -223,6 +223,21 @@ class RoleResult:
     compaction_triggered: bool = False
     compaction_tokens_saved: int = 0
     think_harder_expected_roi: float = 0.0
+    # Web research telemetry (Search-R1 reward design)
+    web_research_results: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class WebResearchTelemetry:
+    """Aggregated telemetry from web_research tool invocations."""
+
+    call_count: int = 0
+    total_pages_fetched: int = 0
+    total_pages_synthesized: int = 0
+    total_elapsed_ms: float = 0.0
+    unique_domains: int = 0
+    queries: list[str] = field(default_factory=list)
+    source_urls: list[str] = field(default_factory=list)
 
 
 @dataclass

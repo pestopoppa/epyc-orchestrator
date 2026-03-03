@@ -132,6 +132,11 @@ class ChatResponse(BaseModel):
     compaction_tokens_saved: int = Field(
         default=0, description="Tokens saved by context compaction"
     )
+    # Web research telemetry (Search-R1 reward design)
+    web_research_results: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Per-call web_research tool result data (query, sources, timing)",
+    )
 
 
 class HealthResponse(BaseModel):

@@ -416,6 +416,13 @@ class QScorer:
                 # Cap bonus contribution to avoid runaway high-speedup artifacts.
                 reward += self.config.teacher_speedup_bonus * min(speedup - 1.0, 1.0)
 
+            # Web research source diversity bonus (Search-R1): small additive
+            # bonus for using diverse sources, gated on accuracy > 0.
+            wr_diversity = float(cost_metrics.get("wr_source_diversity", 0) or 0)
+            wr_accuracy = float(cost_metrics.get("wr_accuracy", 0) or 0)
+            if wr_diversity > 0 and wr_accuracy > 0:
+                reward += 0.05 * wr_diversity
+
         # Final reward (clamped to [-1, 1])
         return max(-1.0, min(1.0, reward))
 

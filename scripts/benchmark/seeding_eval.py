@@ -40,7 +40,10 @@ from seeding_orchestrator import (
 from seeding_infra import _wait_for_heavy_models_idle
 from seeding_rewards import (
     compute_tool_value,
+    extract_web_research_telemetry,
+    compute_web_research_rewards,
     score_delegation_chain,
+    score_query_strategy,
     success_reward,
 )
 
@@ -202,6 +205,8 @@ def _build_role_result(
         compaction_triggered=resp.get("compaction_triggered", False),
         compaction_tokens_saved=resp.get("compaction_tokens_saved", 0),
         think_harder_expected_roi=resp.get("think_harder_expected_roi", 0.0),
+        # Web research telemetry (Search-R1)
+        web_research_results=resp.get("web_research_results", []),
     )
     return rr, error_type
 
@@ -293,14 +298,22 @@ def _eval_single_config(
     # Retry logic for zero-token infra failures on heavy paths
     if error_type == "infrastructure" and resp.get("tokens_generated", 0) == 0:
         error_msg = (resp.get("error") or "").lower()
-        is_timeout = "timed out" in error_msg or "timeout" in error_msg or "readtimeout" in error_msg
+        # Distinguish client socket timeouts (httpx ReadTimeout/ConnectTimeout)
+        # from HTTP 5xx status errors (504 Gateway Timeout, 503 Service Unavailable).
+        # HTTP 5xx are server-side decisions — the backend may have been temporarily
+        # overloaded, and a retry after slot recovery can succeed.
+        # Client timeouts mean the model was genuinely too slow; retrying wastes budget.
+        is_http_status_error = "server error '" in error_msg  # httpx.HTTPStatusError
+        is_client_timeout = not is_http_status_error and (
+            "timed out" in error_msg or "readtimeout" in error_msg or "connecttimeout" in error_msg
+        )
         target_port = ROLE_PORT.get(role, 0)
         if target_port:
             _force_erase_and_verify(target_port)
-        if is_timeout:
-            # Don't retry timeouts — server was processing but too slow;
+        if is_client_timeout:
+            # True client socket timeout — server was processing but too slow;
             # retrying with the same budget just doubles elapsed time.
-            logger.info(f"  [skip-retry] {log_label} timeout — not retrying")
+            logger.info(f"  [skip-retry] {log_label} client timeout — not retrying")
         elif port in HEAVY_PORTS and not did_recover_precheck:
             busy_now = _busy_heavy_ports(timeout_s=2.0)
             if _recover_heavy_ports_if_stuck(url, busy_now):
@@ -447,6 +460,51 @@ def _compute_3way_metadata(
     ]
     metadata["all_infra"] = bool(infra_flags) and all(infra_flags)
 
+    # ── Step 0: Web research baseline metrics ──
+    wr_configs_using: list[str] = []
+    wr_total_calls = 0
+    for config_key, rr in role_results.items():
+        if rr is None:
+            continue
+        wr_count = sum(1 for t in rr.tools_called if t == "web_research")
+        if wr_count > 0:
+            wr_configs_using.append(config_key)
+            wr_total_calls += wr_count
+    metadata["web_research_baseline"] = {
+        "triggered": wr_total_calls > 0,
+        "call_count": wr_total_calls,
+        "configs_using": wr_configs_using,
+    }
+
+    # ── Step 2c: Web research rewards and telemetry per config ──
+    wr_rewards: dict[str, dict] = {}
+    wr_telemetry: dict[str, dict] = {}
+    wr_strategy: dict[str, dict] = {}
+    for config_key, rr in role_results.items():
+        if rr is None or not rr.web_research_results:
+            continue
+        telemetry = extract_web_research_telemetry(rr.web_research_results)
+        if telemetry.call_count == 0:
+            continue
+        dim_rewards = compute_web_research_rewards(telemetry, rr.passed)
+        strategy = score_query_strategy(rr.web_research_results)
+        wr_rewards[config_key] = dim_rewards
+        wr_telemetry[config_key] = {
+            "call_count": telemetry.call_count,
+            "total_pages_fetched": telemetry.total_pages_fetched,
+            "total_pages_synthesized": telemetry.total_pages_synthesized,
+            "total_elapsed_ms": telemetry.total_elapsed_ms,
+            "unique_domains": telemetry.unique_domains,
+            "queries": telemetry.queries,
+        }
+        wr_strategy[config_key] = strategy
+    if wr_rewards:
+        metadata["web_research_rewards"] = wr_rewards
+    if wr_telemetry:
+        metadata["web_research_telemetry"] = wr_telemetry
+    if wr_strategy:
+        metadata["web_research_strategy"] = wr_strategy
+
     return metadata
 
 
@@ -524,11 +582,33 @@ def evaluate_question_3way(
     if cooldown_s > 0:
         time.sleep(cooldown_s)
 
-    # ── Cleanup: ensure port is idle before next strategy ──
+    # ── Cleanup + retry: ensure port is idle before next strategy ──
+    # If SELF:direct hit an infra error, attempt one retry after recovery.
+    # This gives frontdoor:direct the same retry parity that architect configs
+    # get inside _eval_single_config (which only retries non-timeout errors).
     if rr_direct.error_type == "infrastructure" or rr_direct.error:
         direct_port = ROLE_PORT.get(self_role, 0)
         if direct_port in HEAVY_PORTS:
             _force_erase_and_verify(direct_port)
+            # Retry once if the error was an HTTP 5xx (not client socket timeout)
+            direct_error_msg = (rr_direct.error or "").lower()
+            is_http_5xx = "server error '" in direct_error_msg
+            if is_http_5xx:
+                busy_now = _busy_heavy_ports(timeout_s=2.0)
+                if not busy_now or _recover_heavy_ports_if_stuck(url, busy_now):
+                    logger.info(f"  [retry] {ACTION_SELF_DIRECT} retry after 5xx recovery")
+                    rr_direct_retry, _ = _eval_single_config(
+                        prompt, expected, scoring_method, scoring_config,
+                        role=self_role, mode=self_direct_mode,
+                        url=url, timeout=timeout_direct, client=client,
+                        allow_delegation=False, image_path=image_path,
+                        log_label=f"{ACTION_SELF_DIRECT}:retry",
+                        format_fn=format_self_direct,
+                    )
+                    if rr_direct_retry.error_type != "infrastructure":
+                        rr_direct = rr_direct_retry
+                        role_results[f"{self_role}:{self_direct_mode}"] = rr_direct
+                        logger.info(f"  [retry] {ACTION_SELF_DIRECT} retry succeeded")
 
     # ── Configuration 2: SELF:repl ──
     timeout_repl = _adaptive_timeout_s(
