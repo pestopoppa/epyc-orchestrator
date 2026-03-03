@@ -34,6 +34,7 @@ from src.graph.helpers import (  # noqa: F401 — re-exported for backward compa
     MAX_CONSECUTIVE_NUDGES,
     _add_evidence,
     _check_approval_gate,
+    _check_budget_exceeded,
     _classify_error,
     _build_think_harder_config,
     _detect_role_cycle,
@@ -94,6 +95,14 @@ class FrontdoorNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(
                 ctx, f"[Max turns ({state.max_turns}) reached]", False
             )
+
+        budget_reason = _check_budget_exceeded(ctx)
+        if budget_reason:
+            rescued = _rescue_from_last_output(state.last_output)
+            if rescued:
+                log.info("Budget rescue (frontdoor): %s — %r", budget_reason, rescued[:100])
+                return _make_end_result(ctx, rescued, True)
+            return _make_end_result(ctx, f"[{budget_reason}]", False)
 
         output, error, is_final, artifacts = await _execute_turn(ctx, Role.FRONTDOOR)
         state.artifacts.update(artifacts)
@@ -196,6 +205,14 @@ class WorkerNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 ctx, f"[Max turns ({state.max_turns}) reached]", False
             )
 
+        budget_reason = _check_budget_exceeded(ctx)
+        if budget_reason:
+            rescued = _rescue_from_last_output(state.last_output)
+            if rescued:
+                log.info("Budget rescue (worker): %s — %r", budget_reason, rescued[:100])
+                return _make_end_result(ctx, rescued, True)
+            return _make_end_result(ctx, f"[{budget_reason}]", False)
+
         output, error, is_final, artifacts = await _execute_turn(ctx, state.current_role)
         state.artifacts.update(artifacts)
 
@@ -284,6 +301,14 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(
                 ctx, f"[Max turns ({state.max_turns}) reached]", False
             )
+
+        budget_reason = _check_budget_exceeded(ctx)
+        if budget_reason:
+            rescued = _rescue_from_last_output(state.last_output)
+            if rescued:
+                log.info("Budget rescue (coder): %s — %r", budget_reason, rescued[:100])
+                return _make_end_result(ctx, rescued, True)
+            return _make_end_result(ctx, f"[{budget_reason}]", False)
 
         output, error, is_final, artifacts = await _execute_turn(ctx, state.current_role)
         state.artifacts.update(artifacts)
@@ -390,6 +415,14 @@ class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 ctx, f"[Max turns ({state.max_turns}) reached]", False
             )
 
+        budget_reason = _check_budget_exceeded(ctx)
+        if budget_reason:
+            rescued = _rescue_from_last_output(state.last_output)
+            if rescued:
+                log.info("Budget rescue (coder_escalation): %s — %r", budget_reason, rescued[:100])
+                return _make_end_result(ctx, rescued, True)
+            return _make_end_result(ctx, f"[{budget_reason}]", False)
+
         output, error, is_final, artifacts = await _execute_turn(ctx, Role.CODER_ESCALATION)
         state.artifacts.update(artifacts)
 
@@ -480,6 +513,14 @@ class IngestNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(
                 ctx, f"[Max turns ({state.max_turns}) reached]", False
             )
+
+        budget_reason = _check_budget_exceeded(ctx)
+        if budget_reason:
+            rescued = _rescue_from_last_output(state.last_output)
+            if rescued:
+                log.info("Budget rescue (ingest): %s — %r", budget_reason, rescued[:100])
+                return _make_end_result(ctx, rescued, True)
+            return _make_end_result(ctx, f"[{budget_reason}]", False)
 
         output, error, is_final, artifacts = await _execute_turn(
             ctx, Role.INGEST_LONG_CONTEXT
@@ -572,6 +613,14 @@ class ArchitectNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 ctx, f"[Max turns ({state.max_turns}) reached]", False
             )
 
+        budget_reason = _check_budget_exceeded(ctx)
+        if budget_reason:
+            rescued = _rescue_from_last_output(state.last_output)
+            if rescued:
+                log.info("Budget rescue (architect): %s — %r", budget_reason, rescued[:100])
+                return _make_end_result(ctx, rescued, True)
+            return _make_end_result(ctx, f"[{budget_reason}]", False)
+
         output, error, is_final, artifacts = await _execute_turn(
             ctx, Role.ARCHITECT_GENERAL
         )
@@ -648,6 +697,14 @@ class ArchitectCodingNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             return _make_end_result(
                 ctx, f"[Max turns ({state.max_turns}) reached]", False
             )
+
+        budget_reason = _check_budget_exceeded(ctx)
+        if budget_reason:
+            rescued = _rescue_from_last_output(state.last_output)
+            if rescued:
+                log.info("Budget rescue (architect_coding): %s — %r", budget_reason, rescued[:100])
+                return _make_end_result(ctx, rescued, True)
+            return _make_end_result(ctx, f"[{budget_reason}]", False)
 
         output, error, is_final, artifacts = await _execute_turn(
             ctx, Role.ARCHITECT_CODING

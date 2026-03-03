@@ -47,7 +47,7 @@ class GraphConfig:
 
     max_retries: int = 2
     max_escalations: int = 2
-    max_turns: int = 10
+    max_turns: int = 15
     optional_gates: frozenset[str] = field(
         default_factory=lambda: frozenset({"typecheck", "integration", "shellcheck"})
     )
@@ -98,7 +98,7 @@ class TaskState:
     task_ir: dict[str, Any] = field(default_factory=dict)
     task_type: str = "chat"
     turns: int = 0
-    max_turns: int = 10
+    max_turns: int = 15
     gathered_files: list[str] = field(default_factory=list)
     last_failure_id: str | None = None
     anti_pattern_warning: str = ""
@@ -112,6 +112,16 @@ class TaskState:
     compaction_tokens_saved: int = 0
     context_file_paths: list[str] = field(default_factory=list)
     last_compaction_turn: int = 0
+
+    # Session log tracking (append-only processing journal)
+    session_log_path: str = ""
+    session_log_records: list[Any] = field(default_factory=list)
+    session_summary_cache: str = ""
+    session_summary_turn: int = 0
+
+    # Budget controls (Fast-RLM)
+    repl_executions: int = 0       # Total REPL execute() calls across all turns
+    aggregate_tokens: int = 0      # Cumulative completion tokens across all turns
 
     # Resume token for crash recovery (Phase 3B)
     resume_token: str = ""
