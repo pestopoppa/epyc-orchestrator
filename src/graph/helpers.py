@@ -78,6 +78,67 @@ def _frontdoor_repl_non_tool_token_cap() -> int:
     return max(64, _env_int("ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS", 5000))
 
 
+def _worker_call_budget_cap() -> int:
+    """Max REPL executions per task (Fast-RLM budget control)."""
+    return max(0, _env_int("ORCHESTRATOR_WORKER_CALL_BUDGET_CAP", 30))
+
+
+def _task_token_budget_cap() -> int:
+    """Max cumulative completion tokens per task (Fast-RLM budget control)."""
+    return max(0, _env_int("ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP", 200000))
+
+
+def _check_budget_exceeded(ctx: Ctx) -> str | None:
+    """Check whether any Fast-RLM budget limit has been reached.
+
+    Returns a descriptive string if a budget is exceeded, or None.
+    """
+    from src.features import features as _features
+
+    state = ctx.state
+
+    if _features().worker_call_budget:
+        cap = _worker_call_budget_cap()
+        if cap > 0 and state.repl_executions >= cap:
+            return f"Worker call budget exhausted ({state.repl_executions}/{cap} REPL executions)"
+
+    if _features().task_token_budget:
+        cap = _task_token_budget_cap()
+        if cap > 0 and state.aggregate_tokens >= cap:
+            return f"Task token budget exhausted ({state.aggregate_tokens}/{cap} tokens)"
+
+    return None
+
+
+def _budget_pressure_warnings(state: TaskState) -> str:
+    """Return prompt warnings when budget is nearly exhausted."""
+    from src.features import features as _features
+
+    warnings: list[str] = []
+
+    if _features().worker_call_budget:
+        cap = _worker_call_budget_cap()
+        if cap > 0:
+            remaining = cap - state.repl_executions
+            if 0 < remaining <= 3:
+                warnings.append(
+                    f"WARNING: Only {remaining} REPL execution(s) remaining. "
+                    "Wrap up and call FINAL() with your best answer."
+                )
+
+    if _features().task_token_budget:
+        cap = _task_token_budget_cap()
+        if cap > 0:
+            remaining_pct = (cap - state.aggregate_tokens) / cap
+            if 0 < remaining_pct < 0.15:
+                warnings.append(
+                    f"WARNING: Less than 15% of token budget remaining "
+                    f"({state.aggregate_tokens}/{cap}). Finalize your answer now."
+                )
+
+    return "\n".join(warnings)
+
+
 def _frontdoor_trace_enabled() -> bool:
     raw = os.environ.get("ORCHESTRATOR_FRONTDOOR_TRACE", "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
@@ -807,9 +868,124 @@ async def _maybe_compact_context(ctx: Ctx) -> None:
         log.debug("Session compaction failed (non-fatal): %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# Session log helpers (append-only processing journal)
+# ---------------------------------------------------------------------------
+
+_SESSION_LOG_REGEN_INTERVAL = 2  # regenerate summary every N turns
+
+
+def _init_session_log(state: TaskState) -> None:
+    """Initialize session log path on first turn (idempotent)."""
+    if state.session_log_path:
+        return
+    from src.features import features as _get_features
+    if not _get_features().session_log:
+        return
+    if not state.task_id:
+        return
+    from src.graph.session_log import session_log_path
+    state.session_log_path = session_log_path(state.task_id)
+
+
+def _record_session_turn(
+    state: TaskState,
+    *,
+    role: str,
+    code: str = "",
+    output: str = "",
+    error: str | None = None,
+    is_final: bool = False,
+    nudge: str = "",
+    escalation_target: str = "",
+    tool_calls: list[str] | None = None,
+) -> None:
+    """Record a turn to session log (in-memory + disk). Fail-silent."""
+    if not state.session_log_path:
+        return
+    try:
+        from src.graph.session_log import build_turn_record, append_turn_record
+        record = build_turn_record(
+            turn=state.turns,
+            role=role,
+            code=code,
+            output=output,
+            error=error,
+            is_final=is_final,
+            nudge=nudge,
+            escalation_target=escalation_target,
+            tool_calls=tool_calls,
+        )
+        state.session_log_records.append(record)
+        append_turn_record(state.session_log_path, record)
+    except Exception as exc:
+        log.debug("Session log record failed (non-fatal): %s", exc)
+
+
+def _get_exploration_tool_calls(deps: TaskDeps, baseline: int) -> list[str]:
+    """Extract tool call names from exploration log since baseline."""
+    try:
+        if deps.repl is None:
+            return []
+        elog = deps.repl.get_exploration_log()
+        events = elog.events[baseline:]
+        return [e.function for e in events if hasattr(e, "function")]
+    except Exception:
+        return []
+
+
+async def _maybe_refresh_session_summary(state: TaskState, deps: TaskDeps) -> None:
+    """Regenerate session summary if stale by >= _SESSION_LOG_REGEN_INTERVAL turns."""
+    if not state.session_log_path or not state.session_log_records:
+        return
+    turns_since = state.turns - state.session_summary_turn
+    if turns_since < _SESSION_LOG_REGEN_INTERVAL and state.session_summary_cache:
+        return
+    try:
+        from src.graph.session_log import (
+            summarize_session_with_worker,
+            build_session_summary_deterministic,
+        )
+        if deps.primitives is not None:
+            summary = await summarize_session_with_worker(
+                deps.primitives,
+                state.session_log_records,
+                inline=_use_inline_calls_in_tests(),
+            )
+        else:
+            summary = build_session_summary_deterministic(state.session_log_records)
+        state.session_summary_cache = summary
+        state.session_summary_turn = state.turns
+    except Exception as exc:
+        log.debug("Session summary refresh failed (non-fatal): %s", exc)
+        # Keep stale cache if refresh fails
+        if not state.session_summary_cache:
+            from src.graph.session_log import build_session_summary_deterministic
+            state.session_summary_cache = build_session_summary_deterministic(
+                state.session_log_records
+            )
+
+
+def _session_log_prompt_block(state: TaskState) -> str:
+    """Return session log block for prompt injection. Empty if not available."""
+    if not state.session_summary_cache:
+        return ""
+    block = state.session_summary_cache
+    if state.session_log_path:
+        block += f'\nFull log: peek(99999, file_path="{state.session_log_path}")'
+    return block
+
+
 _FINAL_RE = re.compile(
     r"""FINAL\(\s*(?:'{3}(.+?)'{3}|"{3}(.+?)"{3}|["'](.+?)["']|(-?[\d.]+(?:e[+-]?\d+)?|True|False|None))\s*\)""",
     re.DOTALL,
+)
+
+# Matches a completed CALL("tool_name", ...) invocation.  Used as an
+# early-stop signal so the model pauses after writing a tool call and
+# the REPL can execute it before the model continues reasoning.
+_CALL_STOP_RE = re.compile(
+    r'CALL\s*\(\s*"[^"]+"\s*(?:,\s*\w+\s*=\s*(?:"[^"]*"|\'[^\']*\'|\d+|True|False|None))*\s*\)',
 )
 
 
@@ -916,6 +1092,9 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     state.turns += 1
     log.debug("_execute_turn: turn=%d, role=%s", state.turns, role)
 
+    # Initialize session log on first turn
+    _init_session_log(state)
+
     # Clear stale tool outputs before compaction (C3)
     tool_tokens_freed = _clear_stale_tool_outputs(state)
     if tool_tokens_freed > 0:
@@ -925,6 +1104,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     await _maybe_compact_context(ctx)
 
     if deps.primitives is None or deps.repl is None:
+        _record_session_turn(state, role=str(role), error="No LLM primitives or REPL configured")
         return "", "No LLM primitives or REPL configured", False, {}
 
     # Attach per-request task tracking context for tool invocations.
@@ -979,6 +1159,17 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         if gathered_context:
             prompt += "\n\n[Auto Gathered Context]\n" + gathered_context
         prompt += "\n\n" + _workspace_prompt_block(state)
+
+    # Inject session log summary (processing history across turns)
+    await _maybe_refresh_session_summary(state, deps)
+    session_block = _session_log_prompt_block(state)
+    if session_block:
+        prompt += "\n\n" + session_block
+
+    # Budget pressure warnings (Fast-RLM)
+    budget_warnings = _budget_pressure_warnings(state)
+    if budget_warnings:
+        prompt += "\n\n" + budget_warnings
 
     # Graduated FINAL() nudge: midpoint soft reminder, then hard deadline.
     remaining = state.max_turns - state.turns
@@ -1041,10 +1232,13 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # LLM call — stop at first code block close to prevent repetition loops.
     # REPL expects one action per turn; without this, the model can generate
     # FINAL("X") then repeat the same code block hundreds of tokens.
-    # Early-stop streaming: abort generation the moment FINAL(...) is
-    # detected so the model doesn't keep reasoning after the answer.
+    # Early-stop streaming: abort generation the moment FINAL(...) or a
+    # completed CALL(...) is detected.  For CALL, this lets the REPL
+    # execute the tool and feed results back before the model continues.
     if deps.primitives is not None:
-        deps.primitives._early_stop_check = lambda text: bool(_FINAL_RE.search(text))
+        deps.primitives._early_stop_check = lambda text: (
+            bool(_FINAL_RE.search(text)) or bool(_CALL_STOP_RE.search(text))
+        )
     llm_started = asyncio.get_event_loop().time()
     if str(role) == str(Role.FRONTDOOR) and _frontdoor_trace_enabled():
         log.warning(
@@ -1086,6 +1280,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 elapsed_ms,
                 e,
             )
+        _record_session_turn(state, role=str(role), error=f"LLM call failed: {e}")
         return "", f"LLM call failed: {e}", False, {}
     except Exception as e:
         if str(role) == str(Role.FRONTDOOR) and _frontdoor_trace_enabled():
@@ -1097,6 +1292,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 elapsed_ms,
                 e,
             )
+        _record_session_turn(state, role=str(role), error=f"LLM call failed (unexpected): {e}")
         return "", f"LLM call failed (unexpected): {e}", False, {}
     finally:
         if deps.primitives is not None:
@@ -1117,6 +1313,15 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             len(code),
             infer_meta or "{}",
         )
+
+    # Track aggregate completion tokens (Fast-RLM budget control)
+    try:
+        _meta = getattr(deps.primitives, "_last_inference_meta", None) or {}
+        _completion_tokens = int(_meta.get("tokens", 0))
+        if _completion_tokens > 0:
+            state.aggregate_tokens += _completion_tokens
+    except Exception:
+        pass
 
     # Save raw LLM output for FINAL() rescue before code extraction
     raw_llm_output = code
@@ -1166,6 +1371,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 "Your output was all comments — no executable code ran. "
                 "You already reasoned through the problem. Call FINAL now with the actual value — e.g. FINAL(\"B\") or FINAL(42)."
             )
+            _record_session_turn(state, role=str(role), code=code, nudge=nudge)
             return "", None, False, {"_nudge": nudge}
 
     # Comment-ratio guard: model is reasoning in comments with minimal
@@ -1199,6 +1405,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                     "STOP re-deriving. Call FINAL now with the value you reached — e.g. FINAL(\"B\") or FINAL(42). "
                     "Do NOT start over. Do NOT re-explain."
                 )
+                _record_session_turn(state, role=str(role), code=code, nudge=nudge)
                 return "", None, False, {"_nudge": nudge}
 
     # Pre-REPL FINAL shortcut: if extracted code contains FINAL() mixed
@@ -1229,6 +1436,15 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 )
                 code = "\n".join(final_lines)
 
+    # Capture exploration baseline for tool-call diffing in session log
+    _exploration_baseline = 0
+    try:
+        if deps.repl is not None:
+            elog = deps.repl.get_exploration_log()
+            _exploration_baseline = len(elog.events)
+    except Exception:
+        pass
+
     # Write code to inference tap so the TUI shows what's being executed
     _tap_write_repl_exec(code, state.turns)
 
@@ -1252,6 +1468,9 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             is_final=False,
             error=f"REPL execution timed out after {deps.repl.config.timeout_seconds}s",
         )
+
+    # Track REPL execution count (Fast-RLM budget control)
+    state.repl_executions += 1
 
     # Write execution result to inference tap
     _tap_write_repl_result(result.output, result.error, result.is_final, state.turns)
@@ -1288,6 +1507,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             "3. Submit it: FINAL(solution)\n"
             "Do NOT use bare input(). Wrap ALL code in a string variable."
         )
+        _record_session_turn(state, role=str(role), code=code, error=result.error, nudge=nudge)
         return "", None, False, {"_nudge": nudge}
 
     # No-output guard: code ran successfully but produced no output, no error,
@@ -1311,6 +1531,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 "You must call FINAL with the actual computed value — e.g. FINAL(\"B\") or FINAL(42). "
                 "If the task asks for code, call FINAL with the complete program text as a string."
             )
+        _record_session_turn(
+            state, role=str(role), code=code, nudge=nudge,
+            tool_calls=_get_exploration_tool_calls(deps, _exploration_baseline),
+        )
         return "", None, False, {"_nudge": nudge}
 
     # Status-message guard: model called FINAL() with a status phrase
@@ -1347,6 +1571,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 "FINAL must contain the actual answer or complete program text. "
                 "If the task asks for code, call FINAL(your_code_as_string)."
             )
+            _record_session_turn(state, role=str(role), code=code, nudge=nudge)
             return "", None, False, {"_nudge": nudge}
 
     artifacts = dict(deps.repl.artifacts) if hasattr(deps.repl, "artifacts") else {}
@@ -1361,6 +1586,15 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         result.error[:200] if result.error else None,
         result.is_final,
         code[:200] if code else "",
+    )
+    _record_session_turn(
+        state,
+        role=str(role),
+        code=code,
+        output=output,
+        error=result.error if result.error else None,
+        is_final=result.is_final,
+        tool_calls=_get_exploration_tool_calls(deps, _exploration_baseline),
     )
     return output, result.error if result.error else None, result.is_final, artifacts
 

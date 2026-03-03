@@ -192,10 +192,15 @@ class Features:
     model_fallback: bool = False  # Try same-tier alternatives on circuit-open
     content_cache: bool = False  # SHA-256 keyed response cache for LLM calls
     session_compaction: bool = False  # Summarize old context on long conversations
+    session_log: bool = False  # Append-only processing journal across REPL turns
     depth_model_overrides: bool = False  # Map nested llm_call depth to cheaper roles
     resume_tokens: bool = False  # Base64url continuation tokens for crash recovery
     approval_gates: bool = False  # Human approval at escalation boundaries
     binding_routing: bool = False  # Priority-ordered routing overrides
+
+    # Budget controls (Fast-RLM)
+    worker_call_budget: bool = False  # Cap total REPL executions per task
+    task_token_budget: bool = False   # Cap cumulative tokens across all turns
 
     # Context window management (C2/C3/C1)
     accurate_token_counting: bool = False  # Use llama-server /tokenize for exact token counts
@@ -292,11 +297,14 @@ class Features:
             "model_fallback": self.model_fallback,
             "content_cache": self.content_cache,
             "session_compaction": self.session_compaction,
+            "session_log": self.session_log,
             "depth_model_overrides": self.depth_model_overrides,
             "resume_tokens": self.resume_tokens,
             "approval_gates": self.approval_gates,
             "binding_routing": self.binding_routing,
             "skillbank": self.skillbank,
+            "worker_call_budget": self.worker_call_budget,
+            "task_token_budget": self.task_token_budget,
             "accurate_token_counting": self.accurate_token_counting,
             "tool_result_clearing": self.tool_result_clearing,
             "mock_mode": self.mock_mode,
@@ -392,10 +400,13 @@ def get_features(
             "model_fallback": True,  # Validated: PASS -1.5s latency (2026-02-20)
             "content_cache": False,  # Enable after cache correctness validation
             "session_compaction": True,  # Low-risk default: compacts long contexts with clear rollback toggle
+            "session_log": True,  # Append-only REPL session journal for multi-turn context
             "depth_model_overrides": True,  # Enabled with worker-only + max-depth guardrails
             "resume_tokens": True,  # Validated: PASS -1.1s latency (2026-02-20)
             "approval_gates": True,  # Validated: PASS -20.6s latency (2026-02-20)
             "binding_routing": False,  # Enable after routing regression testing
+            "worker_call_budget": True,  # Fast-RLM: cap total REPL executions per task
+            "task_token_budget": True,  # Fast-RLM: cap cumulative tokens per task
             "accurate_token_counting": False,  # Enable after /tokenize validation
             "tool_result_clearing": True,  # Enabled for production context pressure relief
             "mock_mode": False,  # Real mode in production
@@ -436,10 +447,13 @@ def get_features(
             "model_fallback": False,  # Disabled in tests by default
             "content_cache": False,  # Disabled in tests by default
             "session_compaction": False,  # Disabled in tests by default
+            "session_log": False,  # Disabled in tests by default
             "depth_model_overrides": False,  # Disabled in tests by default
             "resume_tokens": False,  # Disabled in tests by default
             "approval_gates": False,  # Disabled in tests by default
             "binding_routing": False,  # Disabled in tests by default
+            "worker_call_budget": False,  # Disabled in tests by default
+            "task_token_budget": False,  # Disabled in tests by default
             "accurate_token_counting": False,  # Disabled in tests by default
             "tool_result_clearing": False,  # Disabled in tests by default
             "mock_mode": True,  # Mock mode in tests
@@ -487,12 +501,15 @@ def get_features(
         "model_fallback": _feature_flag_bool("MODEL_FALLBACK", defaults["model_fallback"]),
         "content_cache": _feature_flag_bool("CONTENT_CACHE", defaults["content_cache"]),
         "session_compaction": _feature_flag_bool("SESSION_COMPACTION", defaults["session_compaction"]),
+        "session_log": _feature_flag_bool("SESSION_LOG", defaults["session_log"]),
         "depth_model_overrides": _feature_flag_bool(
             "DEPTH_MODEL_OVERRIDES", defaults["depth_model_overrides"]
         ),
         "resume_tokens": _feature_flag_bool("RESUME_TOKENS", defaults["resume_tokens"]),
         "approval_gates": _feature_flag_bool("APPROVAL_GATES", defaults["approval_gates"]),
         "binding_routing": _feature_flag_bool("BINDING_ROUTING", defaults["binding_routing"]),
+        "worker_call_budget": _feature_flag_bool("WORKER_CALL_BUDGET", defaults["worker_call_budget"]),
+        "task_token_budget": _feature_flag_bool("TASK_TOKEN_BUDGET", defaults["task_token_budget"]),
         "accurate_token_counting": _feature_flag_bool("ACCURATE_TOKEN_COUNTING", defaults["accurate_token_counting"]),
         "tool_result_clearing": _feature_flag_bool("TOOL_RESULT_CLEARING", defaults["tool_result_clearing"]),
         "mock_mode": _feature_flag_bool("MOCK_MODE", defaults["mock_mode"]),
