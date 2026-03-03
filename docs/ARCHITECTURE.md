@@ -4,7 +4,7 @@
 **Last Updated**: 2026-02-09
 
 > **This is the living technical reference** — updated continuously as the system evolves.
-> For narrative explanations of each subsystem, see the [Research Chapters](chapters/INDEX.md).
+> For narrative explanations of each subsystem, see the [Chapter Index](chapters/INDEX.md).
 
 ### Recent Updates (2026-02-09)
 
@@ -23,7 +23,7 @@
 
 ### Recent Updates (2026-02-05)
 
-- **Research Context Tracker**: DAG-based tracking of REPL tool invocations with semantic cross-refs. See [Ch11](chapters/11-repl-environment.md).
+- **Research Context Tracker**: DAG-based tracking of REPL tool invocations with semantic cross-refs. See [Ch03](chapters/03-repl-environment.md).
 
 ### Recent Updates (2026-02-04)
 
@@ -32,15 +32,15 @@
 
 ## Table of Contents
 
-1. [System Overview](#system-overview) — *see also [Ch10: Orchestration](chapters/10-orchestration-architecture.md)*
-2. [Request Flow](#request-flow) — *see also [Ch12: Server Stack](chapters/12-production-server-stack.md)*
-3. [Module Responsibilities](#module-responsibilities) — *see also [Ch11: REPL](chapters/11-repl-environment.md)*
-4. [Escalation System](#escalation-system) — *see also [Ch18: Escalation](chapters/18-escalation-and-routing.md)*
-5. [Feature Flag System](#feature-flag-system) — *see also [Ch02: Runtime](chapters/02-runtime-environment.md)*
-6. [Security Model](#security-model) — *see also [Ch23: Security](chapters/23-security-and-monitoring.md)*
-7. [Adding New Features](#adding-new-features) — *see also [Ch22: Tool Registry](chapters/22-tool-registry.md)*
+1. [System Overview](#system-overview) — *see also [Ch02: Orchestration](chapters/02-orchestration-architecture.md)*
+2. [Request Flow](#request-flow) — *see also [Ch04: Server Stack](chapters/04-production-server-stack.md)*
+3. [Module Responsibilities](#module-responsibilities) — *see also [Ch03: REPL](chapters/03-repl-environment.md)*
+4. [Escalation System](#escalation-system) — *see also [Ch10: Escalation](chapters/10-escalation-and-routing.md)*
+5. [Feature Flag System](#feature-flag-system) — *see also [Ch01: Runtime](chapters/01-runtime-environment.md)*
+6. [Security Model](#security-model) — *see also [Ch14: Security](chapters/14-security-and-monitoring.md)*
+7. [Adding New Features](#adding-new-features) — *see also [Ch13: Tool Registry](chapters/13-tool-registry.md)*
 8. [Common Pitfalls](#common-pitfalls)
-9. [Testing Guidelines](#testing-guidelines) — *see also [Ch21: Benchmarking](chapters/21-benchmarking-framework.md)*
+9. [Testing Guidelines](#testing-guidelines) — *see also Benchmarking Framework (epyc-inference-research)*
 
 ---
 
@@ -96,7 +96,7 @@ The orchestration system implements a hierarchical local-agent workflow for prod
 | **C** | Workers | Explore, summarize, vision, math, fast burst | HOT (explore, vision) / WARM (fast workers) |
 | **D** | Embedder + Draft | Embedding server, speculative decoding draft (co-loaded) | HOT |
 
-**Note**: As of 2026-01, all tiers except WARM fast workers (~1.5B) are always resident. The HOT tier uses ~535GB (47% of 1130GB RAM). See [Chapter 12](chapters/12-production-server-stack.md) for the full server topology.
+**Note**: As of 2026-01, all tiers except WARM fast workers (~1.5B) are always resident. The HOT tier uses ~535GB (47% of 1130GB RAM). See [Chapter 04](chapters/04-production-server-stack.md) for the full server topology.
 
 ---
 
