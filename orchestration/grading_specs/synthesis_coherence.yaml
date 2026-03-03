@@ -1,0 +1,35 @@
+# Model-graded eval: synthesis coherence assessment.
+#
+# Triggers on long answers (>200 tokens) to evaluate whether
+# the synthesis is coherent or rambling/contradictory.
+
+eval_type: cot_classify
+judge_role: worker_explore
+judge_mode: direct
+
+trigger:
+  field: tokens_generated
+  min_value: 200
+
+prompt_template: |
+  You are evaluating the coherence of an AI-generated answer.
+
+  **Question**: {question}
+  **Model answer**: {answer}
+
+  Think step by step about the answer's coherence, then classify it.
+
+  Categories:
+  (A) Coherent — well-structured, on-topic, no contradictions
+  (B) Mostly coherent — minor tangents or repetition but overall clear
+  (C) Rambling — excessive length, significant off-topic content, or repetition
+  (D) Incoherent — contradictory statements, lost thread, or nonsensical
+
+  Respond with your reasoning, then on the final line write exactly one letter: A, B, C, or D.
+
+choice_strings: ["A", "B", "C", "D"]
+choice_scores:
+  A: 1.0
+  B: 0.7
+  C: 0.3
+  D: 0.0

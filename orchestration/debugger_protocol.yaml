@@ -1,0 +1,50 @@
+# Structured output protocol for ClaudeDebugger.
+#
+# Defines the JSON schema for debugger actions emitted inside
+# ```json:debugger_actions fenced blocks.  The legacy NEW_SIGNAL: /
+# RELOAD_SERVICE: text format is still accepted as fallback.
+
+action_types:
+  new_signal:
+    description: Propose a new anomaly detector signal.
+    required_fields:
+      - name        # str — signal identifier (snake_case)
+      - weight      # float — 0.3, 0.5, or 1.0
+      - description # str — one-line description
+      - detector    # str — Python boolean expression
+      - evidence    # list[str] — question_ids demonstrating the pattern
+    optional_fields:
+      - category    # str — signal category
+      - params      # dict — tunable parameters
+
+  reload_service:
+    description: Request restart of an infrastructure service.
+    required_fields:
+      - service     # str — one of: orchestrator, nextplaid-code, nextplaid-docs
+      - reason      # str — one-line explanation
+    optional_fields: []
+
+  grading_observation:
+    description: Report an observation from model-graded eval results.
+    required_fields:
+      - eval_name   # str — which grading spec (e.g. answer_quality)
+      - observation # str — what was observed
+    optional_fields:
+      - severity    # str — info, warning, critical
+      - affected_suites  # list[str] — suites where this applies
+      - suggested_action # str — recommended fix
+
+  config_suggestion:
+    description: Suggest a change to anomaly signal configuration.
+    required_fields:
+      - signal_name # str — target signal
+      - field       # str — which field to change (weight, threshold, etc.)
+      - current     # any — current value
+      - proposed    # any — proposed new value
+      - reason      # str — justification
+    optional_fields: []
+
+validation:
+  # Each action must have a "type" field matching one of action_types above.
+  # Unknown types are logged as warnings but not rejected.
+  strict: false

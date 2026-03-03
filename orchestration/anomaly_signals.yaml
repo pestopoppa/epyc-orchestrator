@@ -1,0 +1,177 @@
+# Anomaly signal configuration for pipeline monitoring.
+#
+# This file externalizes detector weights, thresholds, and categories
+# from src/pipeline_monitor/anomaly.py.  The Python module loads this
+# YAML at startup and falls back to hardcoded SIGNAL_WEIGHTS if missing.
+#
+# Scoring: anomaly_score = max(triggered signal weights).
+
+scoring:
+  aggregation: max  # current behavior: max(triggered_weights)
+  grading_sample_rate: 0.1  # fraction of answers sampled for model-graded eval
+
+signals:
+  # ── Category: empty_output (weight 1.0) ──
+  near_empty:
+    weight: 1.0
+    category: empty_output
+    params:
+      threshold: 5  # min word-tokens for code_execution answers
+
+  silent_execution:
+    weight: 0.5
+    category: empty_output
+    params: {}
+
+  repl_max_turns:
+    weight: 1.0
+    category: empty_output
+    params: {}
+
+  max_turns_exhausted:
+    weight: 1.0
+    category: empty_output
+    params: {}
+
+  # ── Category: protocol_error (weight 1.0) ──
+  format_violation:
+    weight: 1.0
+    category: protocol_error
+    params: {}
+
+  delegation_format_error:
+    weight: 1.0
+    category: protocol_error
+    params: {}
+
+  template_echo:
+    weight: 1.0
+    category: protocol_error
+    params: {}
+
+  status_phrase_final:
+    weight: 1.0
+    category: protocol_error
+    params: {}
+
+  function_repr_leak:
+    weight: 1.0
+    category: leak
+    params: {}
+
+  malformed_delegation:
+    weight: 0.5
+    category: protocol_error
+    params: {}
+
+  # ── Category: quality_concern (weight 0.5) ──
+  repetition_loop:
+    weight: 1.0
+    category: quality_concern
+    params:
+      threshold: 0.4  # trigram unique ratio below this = degeneration
+
+  self_doubt_loop:
+    weight: 0.5
+    category: quality_concern
+    params:
+      threshold: 3  # restart phrases count
+
+  excessive_tokens:
+    weight: 0.5
+    category: quality_concern
+    params:
+      threshold: 2000  # max tokens for MCQ answers
+
+  comment_only:
+    weight: 0.5
+    category: quality_concern
+    params: {}
+
+  prose_only_code_task:
+    weight: 1.0
+    category: quality_concern
+    params: {}
+
+  assistant_help_request:
+    weight: 1.0
+    category: quality_concern
+    params: {}
+
+  # ── Category: routing_issue (weight 0.5) ──
+  misrouted_to_coder:
+    weight: 1.0
+    category: routing_issue
+    params: {}
+
+  wasteful_delegation:
+    weight: 0.5
+    category: routing_issue
+    params:
+      min_answer_len: 30  # answers shorter than this after delegation = wasteful
+
+  self_escalation:
+    weight: 0.5
+    category: routing_issue
+    params: {}
+
+  repl_no_tools:
+    weight: 0.5
+    category: routing_issue
+    params: {}
+
+  slow_delegation:
+    weight: 0.5
+    category: routing_issue
+    params:
+      threshold_ms: 120000  # delegation hop latency threshold
+
+  escalation_cycle:
+    weight: 1.0
+    category: routing_issue
+    params: {}
+
+  coder_on_knowledge_task:
+    weight: 0.5
+    category: routing_issue
+    params: {}
+
+  # ── Category: leak (weight 0.5-1.0) ──
+  think_tag_leak:
+    weight: 0.5
+    category: leak
+    params: {}
+
+  vision_blindness:
+    weight: 1.0
+    category: leak
+    params:
+      threshold: 10  # min tokens for vision role answers
+
+  # ── Category: skillbank ──
+  skill_mismatch:
+    weight: 0.5
+    category: skillbank
+    params: {}
+
+  no_skills_available:
+    weight: 0.3
+    category: skillbank
+    params: {}
+
+  # ── Category: infrastructure ──
+  distill_batch_latency:
+    weight: 0.5
+    category: infrastructure
+    params:
+      threshold_ms: 5000  # per-batch latency spike threshold
+
+  timeout_no_retry:
+    weight: 0.5
+    category: infrastructure
+    params: {}
+
+  tool_discovery_missing:
+    weight: 0.3
+    category: infrastructure
+    params: {}

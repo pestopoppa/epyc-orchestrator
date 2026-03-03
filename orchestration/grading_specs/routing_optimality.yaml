@@ -1,0 +1,40 @@
+# Model-graded eval: routing optimality assessment.
+#
+# Triggers when delegation occurred, evaluating whether the
+# routing chain was optimal or wasteful.
+
+eval_type: cot_classify
+judge_role: worker_explore
+judge_mode: direct
+
+trigger:
+  field: delegation_events
+  min_length: 1
+
+prompt_template: |
+  You are evaluating the routing decision in an AI orchestration pipeline.
+
+  **Question**: {question}
+  **Scoring method**: {scoring_method}
+  **Role history**: {role_history}
+  **Final answer quality**: {passed} (pass/fail)
+  **Elapsed time**: {elapsed_s}s
+
+  The system routed this question through: {role_history}
+
+  Think step by step about whether the routing was optimal, then classify it.
+
+  Categories:
+  (A) Optimal — the routing chain was the most efficient path to a correct answer
+  (B) Acceptable — routing was reasonable but a shorter path existed
+  (C) Wasteful — unnecessary delegation added latency without improving answer quality
+  (D) Harmful — routing to the wrong specialist degraded the answer
+
+  Respond with your reasoning, then on the final line write exactly one letter: A, B, C, or D.
+
+choice_strings: ["A", "B", "C", "D"]
+choice_scores:
+  A: 1.0
+  B: 0.7
+  C: 0.3
+  D: 0.0

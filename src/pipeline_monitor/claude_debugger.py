@@ -50,7 +50,7 @@ def _get_project_root() -> Path:
         from src.config import get_config
         return get_config().paths.project_root
     except Exception:
-        return Path("/mnt/raid0/llm/claude")
+        return Path.cwd()
 
 
 def _get_stack_script() -> Path:
@@ -67,7 +67,7 @@ def _get_retry_queue_path() -> Path:
             from src.config import get_config
             _RETRY_QUEUE_PATH_CACHED = get_config().paths.log_dir / "retry_queue.jsonl"
         except Exception:
-            _RETRY_QUEUE_PATH_CACHED = Path("/mnt/raid0/llm/claude/logs/retry_queue.jsonl")
+            _RETRY_QUEUE_PATH_CACHED = Path("logs/retry_queue.jsonl")
     return _RETRY_QUEUE_PATH_CACHED
 
 
@@ -78,7 +78,7 @@ def _get_proposed_signals_path() -> Path:
             from src.config import get_config
             _PROPOSED_SIGNALS_PATH_CACHED = get_config().paths.log_dir / "proposed_signals.jsonl"
         except Exception:
-            _PROPOSED_SIGNALS_PATH_CACHED = Path("/mnt/raid0/llm/claude/logs/proposed_signals.jsonl")
+            _PROPOSED_SIGNALS_PATH_CACHED = Path("logs/proposed_signals.jsonl")
     return _PROPOSED_SIGNALS_PATH_CACHED
 
 # Services the debugger is allowed to reload via orchestrator_stack.py.
@@ -148,6 +148,43 @@ _NEW_SIGNAL_RE = _re.compile(
 _RELOAD_SERVICE_RE = _re.compile(
     r"RELOAD_SERVICE:\s*(?P<service>\S+)(?:\s+reason=(?P<reason>.+))?",
 )
+
+
+_DEBUGGER_ACTIONS_RE = _re.compile(
+    r"```json:debugger_actions\s*\n(.*?)```",
+    _re.DOTALL,
+)
+
+_VALID_ACTION_TYPES = {"new_signal", "reload_service", "grading_observation", "config_suggestion"}
+
+
+def _extract_debugger_actions(text: str) -> list[dict]:
+    """Parse structured JSON actions from ```json:debugger_actions fenced blocks.
+
+    Returns list of action dicts. Falls back to empty list if no structured
+    blocks found (caller should use legacy regex extraction).
+    """
+    actions = []
+    for m in _DEBUGGER_ACTIONS_RE.finditer(text):
+        try:
+            parsed = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            logger.warning("[DEBUG] Invalid JSON in debugger_actions block")
+            continue
+        # Accept both single action and list of actions
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        if isinstance(parsed, list):
+            for action in parsed:
+                if not isinstance(action, dict):
+                    continue
+                action_type = action.get("type", "")
+                if action_type not in _VALID_ACTION_TYPES:
+                    logger.warning(
+                        "[DEBUG] Unknown debugger action type: %s", action_type
+                    )
+                actions.append(action)
+    return actions
 
 
 def _extract_proposed_signals(text: str) -> list[dict]:
@@ -517,9 +554,51 @@ class ClaudeDebugger:
             self.session_id = response["session_id"]
             logger.info(f"[DEBUG] Session ID: {self.session_id}")
 
-        # Extract any proposed new anomaly signals from Claude's response
+        # Extract actions — try structured JSON first, fall back to regex
         result_text = response.get("result", "")
-        proposals = _extract_proposed_signals(result_text)
+        structured_actions = _extract_debugger_actions(result_text)
+
+        if structured_actions:
+            # Dispatch structured actions
+            proposals = []
+            reload_requests = []
+            for action in structured_actions:
+                atype = action.get("type", "")
+                if atype == "new_signal":
+                    proposals.append({
+                        "name": action.get("name", ""),
+                        "weight": float(action.get("weight", 0.5)),
+                        "description": action.get("description", ""),
+                        "detector": action.get("detector", ""),
+                        "evidence": action.get("evidence", []),
+                    })
+                elif atype == "reload_service":
+                    svc = action.get("service", "")
+                    if svc in RELOADABLE_SERVICES:
+                        reload_requests.append({
+                            "service": svc,
+                            "reason": action.get("reason", ""),
+                        })
+                elif atype == "grading_observation":
+                    logger.info(
+                        "[DEBUG] Grading observation (%s): %s",
+                        action.get("eval_name", "?"),
+                        action.get("observation", "")[:200],
+                    )
+                elif atype == "config_suggestion":
+                    logger.info(
+                        "[DEBUG] Config suggestion: %s.%s %s → %s (%s)",
+                        action.get("signal_name", "?"),
+                        action.get("field", "?"),
+                        action.get("current", "?"),
+                        action.get("proposed", "?"),
+                        action.get("reason", "")[:100],
+                    )
+        else:
+            # Legacy regex extraction
+            proposals = _extract_proposed_signals(result_text)
+            reload_requests = _extract_reload_requests(result_text)
+
         if proposals:
             logger.info(
                 f"[DEBUG] Claude proposed {len(proposals)} new anomaly signal(s): "
@@ -530,8 +609,6 @@ class ClaudeDebugger:
                 path=self.project_root / "logs" / "proposed_signals.jsonl",
             )
 
-        # Execute any RELOAD_SERVICE: directives from Claude
-        reload_requests = _extract_reload_requests(result_text)
         for req in reload_requests:
             self._reload_service(req["service"], reason=req.get("reason", ""))
 
@@ -971,6 +1048,22 @@ class ClaudeDebugger:
                     f"({', '.join(skill_data.get('skill_types', []))}), "
                     f"~{skill_data.get('skill_context_tokens', 0)} tokens injected"
                 )
+
+            # Model-graded eval results (populated post-hoc)
+            graded = diag.get("model_graded_evals", {})
+            if graded:
+                parts.append("- **Model-Graded Evals**:")
+                for eval_name, eval_data in graded.items():
+                    if isinstance(eval_data, dict):
+                        cls = eval_data.get("classification", "?")
+                        score = eval_data.get("score", "?")
+                        parts.append(f"  - {eval_name}: {cls} (score={score})")
+                    elif isinstance(eval_data, list):
+                        for item in eval_data:
+                            cls = item.get("classification", "?")
+                            score = item.get("score", "?")
+                            spec = item.get("spec_name", eval_name)
+                            parts.append(f"  - {spec}: {cls} (score={score})")
 
             tap_off = diag.get("tap_offset_bytes", 0)
             tap_len = diag.get("tap_length_bytes", 0)

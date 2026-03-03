@@ -25,7 +25,7 @@ def _get_diagnostics_path() -> Path:
             from src.config import get_config
             _DIAGNOSTICS_PATH = get_config().paths.log_dir / "seeding_diagnostics.jsonl"
         except Exception:
-            _DIAGNOSTICS_PATH = Path("/mnt/raid0/llm/claude/logs/seeding_diagnostics.jsonl")
+            _DIAGNOSTICS_PATH = Path("logs/seeding_diagnostics.jsonl")
     return _DIAGNOSTICS_PATH
 
 
@@ -71,6 +71,8 @@ def build_diagnostic(
     compaction_triggered: bool = False,
     compaction_tokens_saved: int = 0,
     think_harder_expected_roi: float = 0.0,
+    # Model-graded subjective eval results (populated post-hoc)
+    model_graded_evals: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a diagnostic record from evaluation results.
 
@@ -139,6 +141,8 @@ def build_diagnostic(
         "compaction_triggered": compaction_triggered,
         "compaction_tokens_saved": compaction_tokens_saved,
         "think_harder_expected_roi": think_harder_expected_roi,
+        # Model-graded evals (populated post-hoc, not present during live recording)
+        "model_graded_evals": model_graded_evals or {},
     }
 
 

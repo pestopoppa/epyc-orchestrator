@@ -1,0 +1,39 @@
+# Model-graded eval: answer quality assessment.
+#
+# Triggers on failed answers to assess whether the answer was
+# completely wrong or partially correct (scorer too strict).
+
+eval_type: cot_classify
+judge_role: worker_explore
+judge_mode: direct
+
+trigger:
+  field: passed
+  equals: false
+
+prompt_template: |
+  You are evaluating the quality of an AI-generated answer.
+
+  **Question**: {question}
+  **Expected answer**: {expected}
+  **Model answer**: {answer}
+  **Scoring method**: {scoring_method}
+
+  Think step by step about the answer quality, then classify it.
+
+  Categories:
+  (A) Correct — the answer is semantically correct but may differ in format
+  (B) Partially correct — contains the right idea but is incomplete or has minor errors
+  (C) Wrong approach — attempted the right method but made a significant error
+  (D) Completely wrong — answer is unrelated or nonsensical
+  (E) Scorer issue — answer appears correct but was marked wrong (possible scoring bug)
+
+  Respond with your reasoning, then on the final line write exactly one letter: A, B, C, D, or E.
+
+choice_strings: ["A", "B", "C", "D", "E"]
+choice_scores:
+  A: 1.0
+  B: 0.6
+  C: 0.3
+  D: 0.0
+  E: 0.8  # high score — may indicate scorer bug, not model failure

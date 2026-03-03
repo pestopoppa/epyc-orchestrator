@@ -8,7 +8,7 @@ rules.md contains 8 worked examples showing the model exactly what to output for
 DO NOT replace examples with instructions. DO NOT add rules or warnings to rules.md.
 If the model isn't following the protocol, the fix is a BETTER EXAMPLE, not more rules.
 
-## Anomaly Signal Reference (19 signals)
+## Anomaly Signal Reference (30 signals)
 
 Category: empty_output (weight 1.0)
 - near_empty: answer <5 tokens, no error (model produced almost nothing)
@@ -17,6 +17,7 @@ Category: empty_output (weight 1.0)
   → Fix: check inference log for WHY model didn't call FINAL(). Usually: model is reasoning
     in comments, writing code that runs but doesn't submit. Check if few-shot examples cover
     this task type. If not, add an example to rules.md.
+- max_turns_exhausted: REPL hit max turns, answer is very short/empty — all turns spent on intermediate work
 
 Category: protocol_error (weight 1.0)
 - format_violation: architect answer missing D|/I| prefix
@@ -25,26 +26,40 @@ Category: protocol_error (weight 1.0)
 - status_phrase_final: answer is "Done"/"Complete"/"answer"/"code" instead of actual result
   → Fix: these are template echoes. Check if the echoed phrase appears literally in a prompt.
     If so, rephrase the prompt. Do NOT add the phrase to a blocklist — that's whack-a-mole.
+- malformed_delegation: has |to: but no I|brief: prefix — partial delegation protocol
 
-Category: quality_concern (weight 0.5)
-- repetition_loop: trigram unique ratio below threshold
+Category: quality_concern (weight 0.5-1.0)
+- repetition_loop: trigram unique ratio below threshold (weight 1.0)
 - self_doubt_loop: >3 restart phrases ("Actually", "Wait", "Let me reconsider")
 - excessive_tokens: >2000 tokens for MCQ
 - comment_only: all code lines are comments, no executable content
+- prose_only_code_task: code_execution task answered with pure prose — no executable code (weight 1.0)
+- assistant_help_request: model asks user for help instead of answering — role reversal failure (weight 1.0)
 
-Category: routing_issue (weight 0.5)
-- misrouted_to_coder: non-code question delegated to coder_escalation
+Category: routing_issue (weight 0.5-1.0)
+- misrouted_to_coder: non-code question delegated to coder_escalation (weight 1.0)
 - wasteful_delegation: architect delegated, final answer is short/numeric — specialist added nothing
   → Fix: this is an architect prompt issue. The architect should answer directly for simple Qs.
     Check orchestration/prompts/architect_investigate.md.
 - self_escalation: consecutive duplicate roles in history
 - repl_no_tools: REPL mode but no tools called
 - slow_delegation: delegation hop >120s
+- escalation_cycle: A→B→A→B or A→B→C→A→B→C bouncing pattern in role history (weight 1.0)
+- coder_on_knowledge_task: coder specialist received a factual recall question (f1/exact_match)
 
 Category: leak (weight 0.5-1.0)
 - think_tag_leak: <think> tag in final answer
-- function_repr_leak: <function foo at 0x...> in answer
-- vision_blindness: vision role but answer <10 tokens
+- function_repr_leak: <function foo at 0x...> in answer (weight 1.0)
+- vision_blindness: vision role but answer <10 tokens (weight 1.0)
+
+Category: skillbank (weight 0.3-0.5)
+- skill_mismatch: skills retrieved but task still failed — skill quality issue
+- no_skills_available: SkillBank enabled but returned nothing — coverage gap (weight 0.3)
+
+Category: infrastructure (weight 0.3-0.5)
+- distill_batch_latency: distillation teacher batch exceeded 5s threshold
+- timeout_no_retry: infrastructure timeout where retry was skipped — data point lost
+- tool_discovery_missing: REPL mode with zero registered tool calls — model never discovered tools (weight 0.3)
 
 ## Orchestrator Intelligence Features
 
@@ -78,6 +93,20 @@ These features appear in diagnostic records. Understand them to diagnose correct
 
 **Answer rescue**: Extracts FINAL() from raw output, or parses "The answer is X" patterns.
   → If answer is correct but marked FAIL, check if rescue extracted the wrong substring.
+
+## Model-Graded Eval Signals
+
+Some diagnostic records include `model_graded_evals` — post-hoc subjective assessments
+by worker_explore. These are sampled (not every answer), so absence doesn't mean "good."
+
+- **answer_quality**: A-E classification (A=correct, E=scorer issue). High E rates suggest
+  the scoring method is too strict, not that the model is wrong.
+- **routing_optimality**: A-D classification of delegation efficiency. High C/D rates
+  indicate architect prompt issues or wasteful specialist routing.
+- **synthesis_coherence**: A-D classification of answer structure. High C/D on long answers
+  suggests the model needs better output structure guidance.
+
+Use `grading_observation` actions to report patterns you see in these evals.
 
 ## Diagnosis Workflow
 
@@ -114,11 +143,47 @@ When the same suite fails 100% across multiple batches:
   Is the prompt eliciting extractable answers?
 - Escalate from "this question failed" to "this suite's infrastructure is broken."
 
+## Structured Output Protocol (preferred)
+
+When proposing actions, use a JSON fenced block. This is the preferred format:
+
+```json:debugger_actions
+[
+  {
+    "type": "new_signal",
+    "name": "signal_name",
+    "weight": 0.5,
+    "description": "one-line description",
+    "detector": "python boolean expression",
+    "evidence": ["qid1", "qid2"]
+  },
+  {
+    "type": "reload_service",
+    "service": "orchestrator",
+    "reason": "one-line explanation"
+  },
+  {
+    "type": "grading_observation",
+    "eval_name": "answer_quality",
+    "observation": "what was observed",
+    "severity": "warning",
+    "affected_suites": ["suite_name"],
+    "suggested_action": "recommended fix"
+  },
+  {
+    "type": "config_suggestion",
+    "signal_name": "excessive_tokens",
+    "field": "threshold",
+    "current": 2000,
+    "proposed": 1500,
+    "reason": "justification"
+  }
+]
+```
+
+Action types: `new_signal`, `reload_service`, `grading_observation`, `config_suggestion`.
+
 ## Reloadable Services
-
-You can restart infrastructure services by outputting a directive:
-
-RELOAD_SERVICE: <service_name> reason=<one-line explanation>
 
 Allowed services:
 - `orchestrator` — the API on :8000 (auto-reloaded when you edit .py files too)
@@ -131,7 +196,15 @@ When to reload:
 - REPL logs show "NextPLAID not available" errors
 - After editing code that these services depend on
 
-Prompt edits (*.md) take effect immediately (hot-swap). Python edits (.py) auto-trigger API restart. RELOAD_SERVICE: only for evidence of a service being down.
+Prompt edits (*.md) take effect immediately (hot-swap). Python edits (.py) auto-trigger API restart. Reload only for evidence of a service being down.
+
+### Legacy format (still accepted as fallback)
+
+RELOAD_SERVICE: <service_name> reason=<one-line explanation>
+
+NEW_SIGNAL: name=<signal_name> weight=<0.5|1.0> description=<one-line description>
+detector=<python boolean expression>
+evidence=<comma-separated question_ids>
 
 ## Rules for Editing
 
@@ -142,12 +215,4 @@ Prompt edits (*.md) take effect immediately (hot-swap). Python edits (.py) auto-
   3 edits, the root cause is elsewhere.
 - Attempt fixes for systemic issues even when uncertain — the retry queue verifies against the same questions. Wrong fixes are cheap to revert; missed fixes waste hundreds of batches. Bias toward action.
 
-## New Signal Discovery
-
-If you see a recurring failure NOT covered by any signal, propose it:
-
-NEW_SIGNAL: name=<signal_name> weight=<0.5|1.0> description=<one-line description>
-detector=<python boolean expression using: answer, role, mode, tokens_generated, scoring_method, role_history, tools_used, elapsed_s, delegation_events>
-evidence=<comma-separated question_ids>
-
-Only propose when you've seen the pattern in 2+ answers.
+Only propose new signals when you've seen the pattern in 2+ answers.

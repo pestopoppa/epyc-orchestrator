@@ -203,6 +203,9 @@ class Features:
     worker_call_budget: bool = False  # Cap total REPL executions per task
     task_token_budget: bool = False   # Cap cumulative tokens across all turns
 
+    # Pipeline monitoring: model-graded subjective evals
+    model_grading: bool = False  # Post-hoc model-graded evals via worker_explore
+
     # Context window management (C2/C3/C1)
     accurate_token_counting: bool = False  # Use llama-server /tokenize for exact token counts
     tool_result_clearing: bool = False  # Clear stale <<<TOOL_OUTPUT>>> blocks from last_output
@@ -309,6 +312,7 @@ class Features:
             "task_token_budget": self.task_token_budget,
             "accurate_token_counting": self.accurate_token_counting,
             "tool_result_clearing": self.tool_result_clearing,
+            "model_grading": self.model_grading,
             "mock_mode": self.mock_mode,
         }
 
@@ -412,6 +416,7 @@ def get_features(
             "task_token_budget": True,  # Fast-RLM: cap cumulative tokens per task
             "accurate_token_counting": False,  # Enable after /tokenize validation
             "tool_result_clearing": True,  # Enabled for production context pressure relief
+            "model_grading": False,  # Enable after grading spec validation
             "mock_mode": False,  # Real mode in production
         }
     else:
@@ -460,6 +465,7 @@ def get_features(
             "task_token_budget": False,  # Disabled in tests by default
             "accurate_token_counting": False,  # Disabled in tests by default
             "tool_result_clearing": False,  # Disabled in tests by default
+            "model_grading": False,  # Disabled in tests by default
             "mock_mode": True,  # Mock mode in tests
         }
 
@@ -517,6 +523,7 @@ def get_features(
         "task_token_budget": _feature_flag_bool("TASK_TOKEN_BUDGET", defaults["task_token_budget"]),
         "accurate_token_counting": _feature_flag_bool("ACCURATE_TOKEN_COUNTING", defaults["accurate_token_counting"]),
         "tool_result_clearing": _feature_flag_bool("TOOL_RESULT_CLEARING", defaults["tool_result_clearing"]),
+        "model_grading": _feature_flag_bool("MODEL_GRADING", defaults["model_grading"]),
         "mock_mode": _feature_flag_bool("MOCK_MODE", defaults["mock_mode"]),
     }
 
