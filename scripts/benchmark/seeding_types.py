@@ -64,7 +64,7 @@ DEFAULT_SUITES = [
     "gpqa", "usaco", "livecodebench", "debugbench",
     "mode_advantage_hard", "math",
     # Medium difficulty
-    "hotpotqa", "simpleqa", "agentic", "coder",
+    "hotpotqa", "simpleqa", "agentic", "skill_transfer", "coder",
     "long_context", "mode_advantage",
     # Easier / format-focused suites last
     "thinking", "general", "instruction_precision",
