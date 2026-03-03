@@ -47,6 +47,12 @@ Skills:  SkillBank(SQLite+FAISS) → SkillRetriever → OutcomeTracker
 Tools:   REPLExecutor → ToolRegistry → PluginLoader
 ```
 
+## Documentation
+
+- **[Architecture Reference](docs/ARCHITECTURE.md)** — living technical reference, module responsibilities, request flow
+- **[Chapter Index](docs/chapters/INDEX.md)** — 17 chapters covering runtime, REPL, MemRL, escalation, tools, SkillBank, and more
+- **[Setup Guide](docs/SETUP.md)** — installation and configuration
+
 ## Configuration
 
 All paths are configurable via environment variables (see `.env.example`). The system uses `pydantic-settings` for type-safe configuration with hierarchical defaults.
