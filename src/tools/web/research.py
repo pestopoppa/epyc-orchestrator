@@ -14,8 +14,10 @@ Architecture:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -104,6 +106,60 @@ def _fetch_page(url: str, max_length: int = _CONTENT_PER_PAGE) -> dict[str, Any]
         }
 
 
+_MIN_PARAGRAPH_LEN = 80
+
+
+def _dedup_pages(
+    pages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Remove duplicate paragraphs across pages (paragraph-level SHA256 dedup).
+
+    Pages are processed in order — the first page to contain a paragraph keeps
+    it; later pages have the duplicate removed.  Short paragraphs (< _MIN_PARAGRAPH_LEN
+    chars) are always kept to avoid stripping headings and list items.
+
+    Args:
+        pages: Ordered list of page dicts (each must have a ``content`` key).
+
+    Returns:
+        Tuple of (deduped_pages, stats_dict).
+    """
+    seen: set[str] = set()
+    stats = {"paragraphs_removed": 0, "chars_saved": 0, "pages_affected": 0}
+    deduped: list[dict[str, Any]] = []
+
+    for page in pages:
+        content = page.get("content", "")
+        paragraphs = content.split("\n\n")
+        kept: list[str] = []
+        page_had_removal = False
+
+        for para in paragraphs:
+            stripped = para.strip()
+            if len(stripped) < _MIN_PARAGRAPH_LEN:
+                kept.append(para)
+                continue
+
+            # Normalize: lowercase + collapse whitespace
+            normalized = re.sub(r"\s+", " ", stripped.lower())
+            h = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+            if h in seen:
+                stats["paragraphs_removed"] += 1
+                stats["chars_saved"] += len(stripped)
+                page_had_removal = True
+            else:
+                seen.add(h)
+                kept.append(para)
+
+        if page_had_removal:
+            stats["pages_affected"] += 1
+
+        deduped.append({**page, "content": "\n\n".join(kept)})
+
+    return deduped, stats
+
+
 def _synthesize_page(
     url: str,
     title: str,
@@ -136,12 +192,14 @@ def _synthesize_page(
         f"information from the following web page content that answers or relates "
         f"to the query. Be concise but thorough — include specific facts, numbers, "
         f"names, and technical details. If the page is not relevant, say so briefly.\n"
+        f"IMPORTANT: Only use information from the retrieved content below. "
+        f"Do not add facts from your training data.\n"
         f"<|im_end|>\n"
         f"<|im_start|>user\n"
         f"Query: {query}\n\n"
         f"Page: {title} ({url})\n\n"
         f"Content:\n{content}\n\n"
-        f"Synthesize the relevant information from this page.\n"
+        f"Synthesize the relevant information from this page. Cite the source URL when stating specific facts.\n"
         f"<|im_end|>\n"
         f"<|im_start|>assistant\n"
     )
@@ -205,6 +263,7 @@ def _web_research_impl(
         Dict with synthesized results and metadata.
     """
     t0 = time.perf_counter()
+    dedup_stats = {"paragraphs_removed": 0, "chars_saved": 0, "pages_affected": 0}
 
     # Step 1: Search
     search_result = web_search(query, max_results=max_results, domain_filter=domain_filter)
@@ -254,11 +313,15 @@ def _web_research_impl(
                     "error": str(e),
                 }
 
-    # Step 3: Synthesize with worker models in parallel
-    to_synthesize = [
-        f for f in fetched.values()
-        if f.get("success") and f.get("content", "").strip()
+    # Step 3: Rank-ordered dedup, then synthesize with worker models in parallel
+    successful_pages = [
+        fetched[r["url"]]
+        for r in pages_to_fetch
+        if r["url"] in fetched
+        and fetched[r["url"]].get("success")
+        and fetched[r["url"]].get("content", "").strip()
     ]
+    to_synthesize, dedup_stats = _dedup_pages(successful_pages)
 
     synthesized = []
     if to_synthesize:
@@ -309,6 +372,8 @@ def _web_research_impl(
         "sources": sources,
         "pages_fetched": len(to_synthesize),
         "pages_synthesized": synth_count,
+        "dedup_paragraphs_removed": dedup_stats["paragraphs_removed"],
+        "dedup_chars_saved": dedup_stats["chars_saved"],
         "total_elapsed_ms": total_elapsed,
     }
 

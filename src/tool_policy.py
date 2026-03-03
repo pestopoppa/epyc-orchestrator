@@ -46,7 +46,7 @@ TOOL_GROUPS: dict[str, frozenset[str]] = {
         "query_db", "read_file", "search_files",
     }),
     "group:web": frozenset({
-        "web_fetch", "web_search",
+        "web_fetch", "web_search", "web_research",
     }),
     "group:math": frozenset({
         "calculate", "plot",
