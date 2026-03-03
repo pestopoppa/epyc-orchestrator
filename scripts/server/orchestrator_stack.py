@@ -1057,6 +1057,7 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env["ORCHESTRATOR_TASK_TOKEN_BUDGET"] = "1"
     env.setdefault("ORCHESTRATOR_WORKER_CALL_BUDGET_CAP", "30")
     env.setdefault("ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP", "200000")
+    env["ORCHESTRATOR_SESSION_SCRATCHPAD"] = "1"
     _apply_orchestrator_profile(env, profile)
     # Bound inference-lock waits by default to avoid multi-minute silent stalls
     # during iterative debugging / seeding runs.

@@ -119,6 +119,9 @@ class TaskState:
     session_summary_cache: str = ""
     session_summary_turn: int = 0
 
+    # Session scratchpad (model-extracted semantic insights)
+    scratchpad_entries: list[Any] = field(default_factory=list)
+
     # Budget controls (Fast-RLM)
     repl_executions: int = 0       # Total REPL execute() calls across all turns
     aggregate_tokens: int = 0      # Cumulative completion tokens across all turns

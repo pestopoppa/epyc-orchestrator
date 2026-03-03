@@ -361,6 +361,15 @@ class PromptBuilder:
             )
         prompt.error_details = "\n".join(error_parts)
 
+        # Inject scratchpad insights from previous role
+        scratchpad = getattr(failure_context, "scratchpad_entries", None) or []
+        if scratchpad:
+            insight_lines = "\n".join(
+                e.to_bullet() if hasattr(e, "to_bullet") else f"- {e}"
+                for e in scratchpad
+            )
+            prompt.failure_info += f"\n\n## Previous Insights\n{insight_lines}"
+
         if as_structured:
             return prompt
         return prompt.to_string()
