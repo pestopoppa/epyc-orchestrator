@@ -237,6 +237,14 @@ def _execute_delegated(
     if delegation_events:
         delegation_success = any(e.get("success") for e in delegation_events)
 
+    # Extract web_research results from delegation tool_timings (Search-R1)
+    raw_timings = delegation_stats.get("tool_timings", [])
+    web_research_results = [
+        t["web_research_data"]
+        for t in raw_timings
+        if isinstance(t, dict) and t.get("tool_name") == "_web_research_result"
+    ]
+
     return ChatResponse(
         answer=answer,
         turns=1 + loops,
@@ -263,4 +271,5 @@ def _execute_delegated(
         http_overhead_ms=primitives.total_http_overhead_ms,
         skills_retrieved=len(routing.skill_ids),
         skill_ids=routing.skill_ids,
+        web_research_results=web_research_results,
     )

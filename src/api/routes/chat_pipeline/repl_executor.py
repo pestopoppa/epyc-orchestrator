@@ -694,6 +694,23 @@ async def _execute_repl(
                 extra=task_extra(task_id=task_id, stage="execute", mode="repl_checkpoint"),
             )
 
+    # Extract web_research tool results for Search-R1 reward pipeline
+    web_research_results = []
+    for inv in invocation_log:
+        if inv.tool_name == "web_research" and inv.success and isinstance(getattr(inv, "result", None), dict):
+            wr = inv.result
+            web_research_results.append({
+                "query": wr.get("query", ""),
+                "pages_fetched": wr.get("pages_fetched", 0),
+                "pages_synthesized": wr.get("pages_synthesized", 0),
+                "total_elapsed_ms": wr.get("total_elapsed_ms", 0.0),
+                "sources": [
+                    {"url": s.get("url", ""), "title": s.get("title", "")}
+                    for s in wr.get("sources", [])
+                    if isinstance(s, dict)
+                ],
+            })
+
     return ChatResponse(
         answer=answer,
         turns=turns,
@@ -734,4 +751,6 @@ async def _execute_repl(
         # Context window management (C1/C3)
         compaction_triggered=task_state.compaction_count > 0,
         compaction_tokens_saved=task_state.compaction_tokens_saved,
+        # Web research telemetry (Search-R1)
+        web_research_results=web_research_results,
     )

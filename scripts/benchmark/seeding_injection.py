@@ -159,6 +159,11 @@ def _inject_3way_rewards_http(
             "slot_progress_source": action_cost.get("slot_progress_source", ""),
         }
 
+        # Inject web research reward dimensions when available (Search-R1)
+        wr_rewards = metadata.get("web_research_rewards", {}).get(action_key)
+        if wr_rewards:
+            context.update(wr_rewards)
+
         payload = {
             "task_description": prompt[:200],
             "action": action_key,

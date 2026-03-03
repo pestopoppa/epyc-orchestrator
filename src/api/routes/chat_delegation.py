@@ -430,6 +430,19 @@ def _parse_architect_decision(response: str) -> dict:
     """
     text = response.strip()
 
+    # ── Strip leading prose/thinking before D|/I| ──
+    # Models sometimes emit reasoning or <think> tags before the protocol prefix.
+    # Search for D| or I| on its own line and strip everything before it.
+    if not text.startswith(("D|", "I|")):
+        # Try to find D| or I| at the start of any line
+        toon_match = re.search(r"^([DI]\|.*)$", text, re.MULTILINE)
+        if toon_match:
+            logger.info(
+                "[architect-parse] recovered D|/I| from mid-response (stripped %d chars of preamble)",
+                toon_match.start(),
+            )
+            text = toon_match.group(0).strip()
+
     # ── TOON: D|<answer> ──
     if text.startswith("D|"):
         raw_answer = text[2:].strip()
@@ -1026,7 +1039,12 @@ def _run_specialist_loop(
                 r"""FINAL\(\s*(?:'{3}(.+?)'{3}|"{3}(.+?)"{3}|["'](.+?)["']|(\S+?))\s*\)""",
                 re.DOTALL,
             )
-            primitives._early_stop_check = lambda text: bool(_final_re.search(text))
+            _call_re = re.compile(
+                r'CALL\s*\(\s*"[^"]+"\s*(?:,\s*\w+\s*=\s*(?:"[^"]*"|\'[^\']*\'|\d+|True|False|None))*\s*\)',
+            )
+            primitives._early_stop_check = lambda text: (
+                bool(_final_re.search(text)) or bool(_call_re.search(text))
+            )
             llm_started = time.perf_counter()
             try:
                 code = primitives.llm_call(
@@ -1162,6 +1180,23 @@ def _run_specialist_loop(
                 phase_tool_timings.append(
                     {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms, "success": inv.success}
                 )
+                # Capture web_research results for Search-R1 reward pipeline
+                if inv.tool_name == "web_research" and inv.success and isinstance(getattr(inv, "result", None), dict):
+                    wr = inv.result
+                    phase_tool_timings.append({
+                        "tool_name": "_web_research_result",
+                        "web_research_data": {
+                            "query": wr.get("query", ""),
+                            "pages_fetched": wr.get("pages_fetched", 0),
+                            "pages_synthesized": wr.get("pages_synthesized", 0),
+                            "total_elapsed_ms": wr.get("total_elapsed_ms", 0.0),
+                            "sources": [
+                                {"url": s.get("url", ""), "title": s.get("title", "")}
+                                for s in wr.get("sources", [])
+                                if isinstance(s, dict)
+                            ],
+                        },
+                    })
     except (InferenceError, ConnectionError, TimeoutError, OSError) as e:
         report = f"[Delegation failed: {e}]"
         err_text = str(e).lower()

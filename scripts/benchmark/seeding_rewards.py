@@ -7,11 +7,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from urllib.parse import urlparse
+
 from seeding_types import (
     ComparativeResult,
     ESCALATION_REWARD,
     ROLE_COST_TIER,
     RoleResult,
+    WebResearchTelemetry,
     # Phase 4: 3-way routing
     ACTION_SELF_DIRECT,
     ACTION_SELF_REPL,
@@ -29,6 +32,11 @@ __all__ = [
     "compute_3way_rewards",
     "score_delegation_chain",
     "compute_tool_value",
+    # Search-R1: Web research quality rewards
+    "extract_web_research_telemetry",
+    "compute_web_research_rewards",
+    "aggregate_web_research_reward",
+    "score_query_strategy",
 ]
 
 # Default per-role optimized tokens/second from production benchmarks.
@@ -363,3 +371,213 @@ def compute_tool_value(
         "tools_hurt": direct_passed and not repl_passed,
         "tool_advantage": int(repl_passed) - int(direct_passed),
     }
+
+
+# ── Search-R1: Web research quality rewards ──────────────────────────
+
+
+def extract_web_research_telemetry(
+    tool_results: list[dict],
+) -> WebResearchTelemetry:
+    """Aggregate telemetry from web_research tool result dicts.
+
+    Args:
+        tool_results: List of web_research return dicts (from ToolInvocation.result).
+
+    Returns:
+        Aggregated WebResearchTelemetry.
+    """
+    if not tool_results:
+        return WebResearchTelemetry()
+
+    total_pages_fetched = 0
+    total_pages_synthesized = 0
+    total_elapsed_ms = 0.0
+    queries: list[str] = []
+    source_urls: list[str] = []
+
+    for wr in tool_results:
+        if not isinstance(wr, dict):
+            continue
+        total_pages_fetched += int(wr.get("pages_fetched", 0) or 0)
+        total_pages_synthesized += int(wr.get("pages_synthesized", 0) or 0)
+        total_elapsed_ms += float(wr.get("total_elapsed_ms", 0.0) or 0.0)
+        q = wr.get("query", "")
+        if q:
+            queries.append(q)
+        for src in wr.get("sources", []):
+            if isinstance(src, dict):
+                url = src.get("url", "")
+                if url:
+                    source_urls.append(url)
+
+    # Compute unique domains
+    domains: set[str] = set()
+    for url in source_urls:
+        try:
+            parsed = urlparse(url)
+            if parsed.hostname:
+                domains.add(parsed.hostname)
+        except Exception:
+            pass
+
+    return WebResearchTelemetry(
+        call_count=len(tool_results),
+        total_pages_fetched=total_pages_fetched,
+        total_pages_synthesized=total_pages_synthesized,
+        total_elapsed_ms=total_elapsed_ms,
+        unique_domains=len(domains),
+        queries=queries,
+        source_urls=source_urls,
+    )
+
+
+def compute_web_research_rewards(
+    telemetry: WebResearchTelemetry,
+    passed: bool,
+    f1_score: float = 0.0,
+) -> dict[str, float]:
+    """Compute multi-dimensional web research quality rewards.
+
+    Returns empty dict if no web_research calls were made.
+
+    Dimensions:
+        wr_accuracy: 1.0 if passed, else 0.0
+        wr_source_diversity: unique_domains / pages_fetched (0–1)
+        wr_efficiency: 1/pages_fetched for correct answers only (0–1)
+        wr_completeness: f1_score passthrough
+
+    Args:
+        telemetry: Aggregated web research telemetry.
+        passed: Whether the overall task passed.
+        f1_score: F1 score (0–1) if available.
+
+    Returns:
+        Dict of reward dimension name -> value.
+    """
+    if telemetry.call_count == 0:
+        return {}
+
+    rewards: dict[str, float] = {}
+    rewards["wr_accuracy"] = 1.0 if passed else 0.0
+    rewards["wr_completeness"] = max(0.0, min(1.0, f1_score))
+
+    if telemetry.total_pages_fetched > 0:
+        rewards["wr_source_diversity"] = min(
+            1.0, telemetry.unique_domains / telemetry.total_pages_fetched
+        )
+        # Efficiency: fewer pages for a correct answer = better
+        if passed:
+            rewards["wr_efficiency"] = min(1.0, 1.0 / telemetry.total_pages_fetched)
+        else:
+            rewards["wr_efficiency"] = 0.0
+    else:
+        rewards["wr_source_diversity"] = 0.0
+        rewards["wr_efficiency"] = 0.0
+
+    return rewards
+
+
+_DEFAULT_WR_WEIGHTS: dict[str, float] = {
+    "wr_accuracy": 0.5,
+    "wr_completeness": 0.3,
+    "wr_source_diversity": 0.1,
+    "wr_efficiency": 0.1,
+}
+
+
+def aggregate_web_research_reward(
+    dimension_rewards: dict[str, float],
+    weights: dict[str, float] | None = None,
+) -> float:
+    """Aggregate multi-dimensional web research rewards into a single scalar.
+
+    Args:
+        dimension_rewards: Per-dimension reward values.
+        weights: Optional weight overrides (default: accuracy=0.5, completeness=0.3,
+                 diversity=0.1, efficiency=0.1).
+
+    Returns:
+        Weighted average reward (0–1). Returns 0.0 if no dimensions present.
+    """
+    if not dimension_rewards:
+        return 0.0
+
+    w = weights or _DEFAULT_WR_WEIGHTS
+    total_weight = 0.0
+    weighted_sum = 0.0
+
+    for dim, val in dimension_rewards.items():
+        dim_weight = w.get(dim, 0.0)
+        weighted_sum += dim_weight * val
+        total_weight += dim_weight
+
+    if total_weight == 0.0:
+        return 0.0
+    return weighted_sum / total_weight
+
+
+def score_query_strategy(
+    web_research_results: list[dict],
+) -> dict[str, float]:
+    """Score the root LM's query decomposition strategy.
+
+    Evaluates how well the model breaks complex questions into
+    sub-queries across multiple web_research calls.
+
+    Dimensions:
+        query_count: Number of web_research calls
+        query_diversity: Jaccard distance between consecutive queries
+        source_yield: unique domains / total calls
+
+    Args:
+        web_research_results: List of web_research return dicts.
+
+    Returns:
+        Dict of strategy metric name -> value.
+    """
+    if not web_research_results:
+        return {}
+
+    queries: list[str] = []
+    all_domains: set[str] = set()
+    for wr in web_research_results:
+        if not isinstance(wr, dict):
+            continue
+        q = wr.get("query", "")
+        if q:
+            queries.append(q)
+        for src in wr.get("sources", []):
+            if isinstance(src, dict):
+                url = src.get("url", "")
+                if url:
+                    try:
+                        parsed = urlparse(url)
+                        if parsed.hostname:
+                            all_domains.add(parsed.hostname)
+                    except Exception:
+                        pass
+
+    n_calls = len(web_research_results)
+    strategy: dict[str, float] = {
+        "query_count": float(n_calls),
+    }
+
+    # Query diversity: average Jaccard distance between consecutive queries
+    if len(queries) >= 2:
+        distances: list[float] = []
+        for i in range(1, len(queries)):
+            tokens_a = set(queries[i - 1].lower().split())
+            tokens_b = set(queries[i].lower().split())
+            union = tokens_a | tokens_b
+            if union:
+                jaccard = len(tokens_a & tokens_b) / len(union)
+                distances.append(1.0 - jaccard)  # distance = 1 - similarity
+        strategy["query_diversity"] = sum(distances) / len(distances) if distances else 0.0
+    else:
+        strategy["query_diversity"] = 0.0
+
+    # Source yield: unique domains per call
+    strategy["source_yield"] = len(all_domains) / n_calls if n_calls > 0 else 0.0
+
+    return strategy
