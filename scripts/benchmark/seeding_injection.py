@@ -160,9 +160,12 @@ def _inject_3way_rewards_http(
         }
 
         # Inject web research reward dimensions when available (Search-R1)
-        wr_rewards = metadata.get("web_research_rewards", {}).get(action_key)
-        if wr_rewards:
+        if wr_rewards := metadata.get("web_research_rewards", {}).get(action_key):
             context.update(wr_rewards)
+
+        # Inject scratchpad insight rewards when available (Search-R1 Step 5)
+        if sp_rewards := metadata.get("scratchpad_rewards", {}).get(action_key):
+            context.update(sp_rewards)
 
         payload = {
             "task_description": prompt[:200],

@@ -42,6 +42,7 @@ from seeding_rewards import (
     compute_tool_value,
     extract_web_research_telemetry,
     compute_web_research_rewards,
+    compute_scratchpad_rewards,
     score_delegation_chain,
     score_query_strategy,
     success_reward,
@@ -207,6 +208,8 @@ def _build_role_result(
         think_harder_expected_roi=resp.get("think_harder_expected_roi", 0.0),
         # Web research telemetry (Search-R1)
         web_research_results=resp.get("web_research_results", []),
+        # Scratchpad insights (Search-R1 Step 5)
+        scratchpad_insights=resp.get("scratchpad_insights", []),
     )
     return rr, error_type
 
@@ -504,6 +507,21 @@ def _compute_3way_metadata(
         metadata["web_research_telemetry"] = wr_telemetry
     if wr_strategy:
         metadata["web_research_strategy"] = wr_strategy
+
+    # ── Step 5: Scratchpad insight rewards ──
+    sp_rewards: dict[str, dict] = {}
+    for config_key, rr in role_results.items():
+        if rr is None:
+            continue
+        if not rr.scratchpad_insights and not rr.web_research_results:
+            continue
+        sp = compute_scratchpad_rewards(
+            rr.scratchpad_insights, rr.web_research_results, rr.answer, rr.passed,
+        )
+        if sp:
+            sp_rewards[config_key] = sp
+    if sp_rewards:
+        metadata["scratchpad_rewards"] = sp_rewards
 
     return metadata
 

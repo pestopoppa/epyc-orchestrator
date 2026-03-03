@@ -137,6 +137,11 @@ class ChatResponse(BaseModel):
         default_factory=list,
         description="Per-call web_research tool result data (query, sources, timing)",
     )
+    # Scratchpad insights (Search-R1 Step 5: session scratchpad memory)
+    scratchpad_insights: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Model-extracted semantic insights from session scratchpad (turn, category, insight, confidence)",
+    )
 
 
 class HealthResponse(BaseModel):
