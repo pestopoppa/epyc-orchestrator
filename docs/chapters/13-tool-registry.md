@@ -17,13 +17,14 @@ The registry organizes over 40 tools into eight categories, each declared in `or
 
 All tools are defined in `orchestration/tool_registry.yaml`:
 
-#### Web Tools (4)
+#### Web Tools (5)
 
 | Tool | Description | Permission |
 |------|-------------|------------|
 | `http_get` | Fetch content via HTTP GET | `network` |
 | `http_post` | Send data via HTTP POST | `network` |
 | `web_search` | DuckDuckGo search (no API key) | `network` |
+| `web_research` | Compound: search → parallel fetch → worker synthesis → dense summaries | `network` |
 | `fetch_wikipedia` | Wikipedia article summary | `network` |
 
 #### Data Tools (9)
@@ -236,7 +237,7 @@ When the `cascading_tool_policy` feature flag is enabled, the flat `ToolPermissi
 Implemented in `src/tool_policy.py`:
 
 - `PolicyLayer(name, allow, deny)` — frozen dataclass. Allow intersects, deny removes.
-- `TOOL_GROUPS` — group: prefixes expand to tool sets (`group:read`, `group:write`, `group:code`, `group:data`, `group:web`, `group:math`, `group:all`).
+- `TOOL_GROUPS` — group: prefixes expand to tool sets (`group:read`, `group:write`, `group:code`, `group:data`, `group:web`, `group:math`, `group:all`). Note: `group:web` includes `web_research` as of 2026-03-03 (was missing, causing cascading policy grants of `group:web` to exclude it).
 - `resolve_policy_chain(layers, all_tools)` — iterates layers, narrowing the allowed set.
 - `permissions_to_policy(name, perms, all_tools)` — backward-compat adapter from `ToolPermissions`.
 

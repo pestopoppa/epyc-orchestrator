@@ -102,6 +102,24 @@ class EscalationConfig:
 
 **Rationale**: Format/schema errors indicate model instruction-following issues, not task complexity. Escalation won't help—just retry with clearer prompt.
 
+### Budget-Based Termination (Fast-RLM)
+
+Two budget controls are checked before `_execute_turn()` in all 7 node types, preventing wasted LLM calls when a task has consumed excessive resources:
+
+| Budget | Default | Env Variable | Pressure Warning |
+|--------|---------|--------------|------------------|
+| Worker call budget | 30 calls | `ORCHESTRATOR_WORKER_CALL_BUDGET_CAP` | ≤3 remaining |
+| Per-task token budget | 200K tokens | `ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP` | <15% remaining |
+
+When a budget is exceeded, `_rescue_from_last_output()` attempts graceful termination (extracting a partial answer from prior output) before falling through to hard FAIL. Feature flags: `worker_call_budget`, `task_token_budget`.
+
+### EscalationContext Data Fields
+
+`EscalationContext` now carries additional state for cross-tier continuity:
+
+- `solution_file: str` — path to auto-persisted code from the previous role's REPL turns, so the escalation target can `peek()` and patch rather than rewrite from scratch
+- `scratchpad_entries: list[ScratchpadEntry]` — model-extracted semantic insights (bug locations, eliminated approaches, discovered constraints) from the session scratchpad, injected as `## Previous Insights` in the escalation prompt
+
 ### Escalation Chains
 
 <details>

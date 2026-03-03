@@ -193,6 +193,39 @@ store.save_checkpoint(checkpoint)
 
 </details>
 
+## Session Log (Processing Journal)
+
+Separate from the checkpoint system, the session log is an append-only REPL processing journal at `/mnt/raid0/llm/tmp/session_{task_id}.md`. While checkpoints capture periodic snapshots, the session log captures **every** REPL turn as a `TurnRecord` dataclass:
+
+| Field | Purpose |
+|-------|---------|
+| `code_hash` | SHA256 of executed code (for anti-loop detection) |
+| `outcome` | success / error / timeout / no_code |
+| `tool_calls` | List of tools invoked during the turn |
+| `error_preview` | First 200 chars of error output |
+| `output_preview` | First 200 chars of execution output |
+
+Every 2 turns, `worker_fast` (Qwen2.5-1.5B, port 8086) generates a compressed summary injected into the agent's prompt as a `[Session History]` block. A deterministic head+tail fallback is used when the worker is unavailable.
+
+**Anti-loop detection**: The summary flags repeated `code_hash` values, breaking restart loops where the model generates identical code each turn.
+
+**Cross-escalation continuity**: `session_log_path` and `session_log_records` travel on `TaskState`, so session history survives escalation/delegation boundaries.
+
+**Feature flag**: `session_log` (production=True, test=False).
+**Key files**: `src/graph/session_log.py`, state fields in `src/graph/state.py`, integration in `src/graph/helpers.py`.
+
+### Session Scratchpad
+
+On top of the session log summary, the `session_scratchpad` feature extracts structured semantic insights — zero additional inference calls (piggybacks on the worker_fast summary). Each `ScratchpadEntry` has:
+
+- **Category**: `bug_location`, `approach_eliminated`, `constraint_discovered`, `user_intent`, `dependency_found`
+- **Confidence**: 0.0–1.0 score from the worker model
+- **Pruning**: Category-based (newer supersedes older in same category), max 8 entries
+
+The `[Key Insights]` block is prepended before `[Session History]` in prompt injection. On escalation, entries are passed through `EscalationContext.scratchpad_entries` and rendered as `## Previous Insights` in the escalation prompt.
+
+**Feature flag**: `session_scratchpad` (production=True, test=False).
+
 ## Document Tracking & Change Detection
 
 Every document processed during a session gets a SHA-256 fingerprint stored alongside the session record. On resume, the system re-hashes each file and flags anything that has changed or gone missing. OCR results are cached per-session in a dedicated SQLite database so re-processing a 40-page PDF is effectively free.

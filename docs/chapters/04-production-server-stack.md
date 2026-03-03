@@ -182,6 +182,10 @@ python3 scripts/server/orchestrator_stack.py reload orchestrator
 
 </details>
 
+### Critical Environment Variables
+
+All startup paths (`orchestrator_stack.py start`, `reset_episodic_memory.sh`, `seeding_infra.py --preflight`) set `ORCHESTRATOR_CASCADING_TOOL_POLICY=1`. Without this, the legacy tool permission path denies ALL roles ALL tools because no role has `tool_permissions` defined in `model_registry.yaml`. This was fixed on 2026-03-03 after circuit breaker cascades caused seeding stalls.
+
 ### State Persistence
 
 <details>

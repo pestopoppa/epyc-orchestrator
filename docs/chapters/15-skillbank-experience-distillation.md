@@ -550,6 +550,16 @@ Old `DesignCandidate` JSON without `skill_config` deserializes to `skill_config=
 
 </details>
 
+## Skill Transfer Evaluation Suite
+
+The `skill_transfer.yaml` eval suite (36 questions) specifically validates that SkillBank skills transfer across domains. It tests 4 skills (`structured_extraction`, `error_diagnosis`, `multi_step_planning`, `format_transformation`) across 3 domains (`code`, `math`, `web_research`) with 3 questions each. F1 scoring, threshold 0.5.
+
+Analysis scripts:
+- `scripts/benchmark/analyze_skill_transfer.py` — skill × domain pass-rate matrix per action key
+- `scripts/benchmark/skill_transfer_regression.py` — before/after model swap regression detection with configurable threshold
+
+The suite is registered in `DEFAULT_SUITES` and `YAML_ONLY_SUITES` in both repos.
+
 ## Feature Flag
 
 SkillBank is gated behind the `ORCHESTRATOR_SKILLBANK=1` environment variable and depends on the `memrl` feature flag for episodic store and embedder infrastructure. All skill retrieval paths are wrapped in try/except with debug logging, so if anything goes wrong, the system falls back gracefully to pre-SkillBank behavior with no skill context injected.

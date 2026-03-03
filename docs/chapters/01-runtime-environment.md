@@ -8,7 +8,7 @@ The configuration system uses **pydantic-settings** for type-safe environment va
 
 ## Feature Flag System
 
-Ten independent feature flags let us turn orchestration modules on and off without touching code. In test mode everything defaults to off for isolation; in production everything flips on. The flags live in `src/features.py` and are validated at startup — if you enable `scripts` without `tools`, for example, initialization will complain.
+Fifteen independent feature flags let us turn orchestration modules on and off without touching code. In test mode everything defaults to off for isolation; in production everything flips on. The flags live in `src/features.py` and are validated at startup — if you enable `scripts` without `tools`, for example, initialization will complain.
 
 <details>
 <summary>Core feature flags table</summary>
@@ -25,6 +25,11 @@ Ten independent feature flags let us turn orchestration modules on and off witho
 | `restricted_python` | `ORCHESTRATOR_RESTRICTED_PYTHON` | Use RestrictedPython sandbox | RestrictedPython>=7.0 |
 | `generation_monitor` | `ORCHESTRATOR_GENERATION_MONITOR` | Early failure detection (Phase 6) | None |
 | `mock_mode` | `ORCHESTRATOR_MOCK_MODE` | Mock responses (test safety) | None |
+| `cascading_tool_policy` | `ORCHESTRATOR_CASCADING_TOOL_POLICY` | PolicyLayer chain for tool permissions | None |
+| `session_log` | `ORCHESTRATOR_SESSION_LOG` | Append-only REPL processing journal per task | None |
+| `session_scratchpad` | `ORCHESTRATOR_SESSION_SCRATCHPAD` | Model-extracted semantic insights per turn | `session_log` |
+| `worker_call_budget` | `ORCHESTRATOR_WORKER_CALL_BUDGET` | Cap total REPL executions per task (default 30) | None |
+| `task_token_budget` | `ORCHESTRATOR_TASK_TOKEN_BUDGET` | Cap cumulative completion tokens per task (default 200K) | None |
 
 </details>
 
@@ -201,6 +206,18 @@ Before any file write operation:
 **Forbidden paths**: `/home/`, `/tmp/` (except via bind mount), `/var/`, `~/.cache/`, any path not starting with `/mnt/raid0/`.
 
 </details>
+
+### Graph Execution Controls
+
+Environment variables that control REPL turn budgets and token caps. These are set in `orchestrator_stack.py` at startup.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ORCHESTRATOR_REPL_TURN_N_TOKENS` | 5000 | Max completion tokens per REPL turn (was 768 prior to 2026-03-03) |
+| `ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS` | 5000 | Max tokens for frontdoor non-tool turns |
+| `ORCHESTRATOR_WORKER_CALL_BUDGET_CAP` | 30 | Max REPL execute() calls per task |
+| `ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP` | 200000 | Max cumulative completion tokens per task |
+| `ORCHESTRATOR_CASCADING_TOOL_POLICY` | 1 | Enable PolicyLayer chain (legacy path denies all tools) |
 
 ## OMP & NUMA Runtime Tuning
 

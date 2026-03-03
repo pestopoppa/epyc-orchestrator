@@ -354,6 +354,29 @@ During orchestration, Phase B/C nodes check `Q(task_class, "worker_explore") > t
 
 </details>
 
+### Web Research Reward Dimensions (Search-R1)
+
+Beyond routing cost, the Q-value update now incorporates web research effectiveness when `web_research` tool usage is detected during seeding. Four dimensions are computed in `seeding_rewards.py`:
+
+| Dimension | Signal | Range |
+|-----------|--------|-------|
+| `wr_accuracy` | Binary correctness of final answer | 0.0–1.0 |
+| `wr_source_diversity` | Unique domains / total fetched pages | 0.0–1.0 |
+| `wr_efficiency` | Inverse of total fetch time (normalized) | 0.0–1.0 |
+| `wr_completeness` | Pages synthesized / pages fetched | 0.0–1.0 |
+
+These are injected into the reward context via `seeding_injection.py` and consumed by `q_scorer.py` as a +0.05 additive bonus for `wr_source_diversity` when `wr_accuracy > 0` (correctness-gated to avoid rewarding diverse but wrong searches).
+
+Additionally, scratchpad rewards measure model self-awareness during research:
+
+| Dimension | Signal |
+|-----------|--------|
+| `sp_insight_count` | Number of insights extracted by worker_fast |
+| `sp_web_insight_ratio` | Fraction of insights referencing web content |
+| `sp_answer_containment` | Fraction of insight keywords present in final answer |
+
+Query strategy scoring (`score_query_strategy()`) evaluates multi-call decomposition: query count, query diversity (Jaccard distance between consecutive queries), and source yield (unique domains / total calls).
+
 ## MemRL Phases
 
 The system has evolved through 8 phases, from manual YAML-based routing all the way to models making their own routing decisions via REPL tools. All phases are now in production.
