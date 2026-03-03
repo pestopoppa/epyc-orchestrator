@@ -36,10 +36,10 @@ _log = logging.getLogger(__name__)
 # ── Fallback Constants ──────────────────────────────────────────────────────
 
 _ROOT_LM_SYSTEM_FALLBACK = (
-    "You complete tasks by writing Python code that runs in a sandboxed REPL. "
-    "Every task must end with a FINAL() call containing the actual answer. "
-    "Study the examples in the Rules section — they show the exact pattern "
-    "for each task type. Output only valid Python. No markdown."
+    "You have access to a Python REPL with tools. "
+    "If you know the answer, call FINAL() immediately — no code needed. "
+    "If the task benefits from computation or tools, write Python. "
+    "Always end with FINAL() or FINAL_VAR()."
 )
 
 _CONFIDENCE_ESTIMATION_FALLBACK = """Estimate your probability of correctly answering this question.
@@ -190,6 +190,7 @@ class PromptBuilder:
         corpus_context: str = "",
         *,
         as_structured: bool = False,
+        solution_file: str = "",
     ) -> str | RootLMPrompt:
         """Build the prompt for the Root LM (frontdoor).
 
@@ -213,7 +214,7 @@ class PromptBuilder:
             rules=self._resolve_rules(),
             state=f"Turn {turn + 1}\n{state}",
             task=original_prompt,
-            instruction="Write Python code. End with FINAL(). See examples above.\n\n```python\n# ",
+            instruction="Answer or write code. End with FINAL().\n\n",
         )
 
         # Build context section based on last output/error
@@ -228,9 +229,20 @@ class PromptBuilder:
                     "```",
                     error_preview,
                     "```",
-                    "Fix the error and try again.",
                 ]
             )
+            if solution_file:
+                context_parts.append(
+                    f"Your previous code is saved at `{solution_file}`. "
+                    "Read it with `peek(99999, file_path=\"{}\")`, fix ONLY the broken part, ".format(solution_file)
+                    + "and rewrite the corrected version with `file_write_safe`. "
+                    "Do NOT rewrite from scratch — make targeted fixes to the existing code."
+                )
+            else:
+                context_parts.append(
+                    "Fix ONLY the broken part of your previous code. "
+                    "Do NOT rewrite from scratch — make targeted fixes."
+                )
         elif last_output:
             output_preview = last_output[: self.config.max_output_preview]
             if len(last_output) > self.config.max_output_preview:
@@ -302,6 +314,24 @@ class PromptBuilder:
                 original_prompt, state, failure_context, decision, role
             )
 
+        # Check if previous role left a solution file
+        sol_file = getattr(failure_context, "solution_file", "") or ""
+        if sol_file:
+            instructions = (
+                f"The previous role's code is saved at `{sol_file}`. "
+                f"Read it with `peek(99999, file_path=\"{sol_file}\")`, "
+                "fix ONLY the broken part, and rewrite the corrected version "
+                f"with `file_write_safe(\"{sol_file}\", corrected_code)`. "
+                "Do NOT rewrite from scratch — make targeted fixes.\n"
+                "Output Python code that will execute in the REPL environment."
+            )
+        else:
+            instructions = (
+                "Fix the issue and complete the task. "
+                "You have more capability than the previous role.\n"
+                "Output Python code that will execute in the REPL environment."
+            )
+
         prompt = EscalationPrompt(
             header=f"# Escalation from {role}",
             failure_info=(
@@ -311,11 +341,7 @@ class PromptBuilder:
             ),
             state=state,
             task=original_prompt,
-            instructions=(
-                "Fix the issue and complete the task. "
-                "You have more capability than the previous role.\n"
-                "Output Python code that will execute in the REPL environment."
-            ),
+            instructions=instructions,
         )
 
         # Build error details

@@ -93,6 +93,7 @@ class TaskState:
     escalation_prompt: str = ""
     last_error: str = ""
     last_output: str = ""
+    last_code: str = ""
     artifacts: dict[str, Any] = field(default_factory=dict)
     task_ir: dict[str, Any] = field(default_factory=dict)
     task_type: str = "chat"

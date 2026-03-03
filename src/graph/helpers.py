@@ -52,7 +52,7 @@ def _use_inline_calls_in_tests() -> bool:
 
 def _repl_turn_token_cap() -> int:
     """Token cap for tool-required turns to avoid timeout-length rambles."""
-    return max(64, _env_int("ORCHESTRATOR_REPL_TURN_N_TOKENS", 768))
+    return max(64, _env_int("ORCHESTRATOR_REPL_TURN_N_TOKENS", 5000))
 
 
 def _frontdoor_turn_token_cap() -> int:
@@ -75,7 +75,7 @@ def _frontdoor_repl_non_tool_token_cap() -> int:
     Raised to 768 to match the tool-required cap.  MCQ self-doubt
     prevention is handled separately in direct_stage._MCQ_MAX_TOKENS.
     """
-    return max(64, _env_int("ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS", 768))
+    return max(64, _env_int("ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS", 5000))
 
 
 def _frontdoor_trace_enabled() -> bool:
@@ -163,6 +163,36 @@ def _workspace_prompt_block(state: TaskState) -> str:
     if state.anti_pattern_warning:
         lines.append(f"- warning: {state.anti_pattern_warning[:240]}")
     return "\n".join(lines)
+
+
+def _solution_file_path(state: TaskState) -> str:
+    """Return the path for the persisted solution file."""
+    task_id = state.task_id or "scratch"
+    # Sanitize task_id for filesystem
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in task_id)[:80]
+    return f"/mnt/raid0/llm/tmp/{safe_id}_solution.py"
+
+
+def _persist_solution_file(state: TaskState, code: str) -> None:
+    """Write the model's current code to a file for incremental editing.
+
+    This allows the model (and escalated roles) to read, patch, and re-test
+    the code rather than rewriting from scratch on each error.
+    """
+    if not code or not code.strip():
+        return
+    # Skip trivial code (bare FINAL calls, single-line answers)
+    stripped = code.strip()
+    if stripped.startswith("FINAL(") and "\n" not in stripped:
+        return
+    try:
+        path = _solution_file_path(state)
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+    except Exception as e:
+        log.debug("Failed to persist solution file: %s", e)
 
 
 def _update_workspace_from_turn(state: TaskState, role: Role | str, output: str, error: str | None) -> None:
@@ -928,6 +958,14 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             # Speculative pre-warm of architect KV cache for complex tasks (WS3C)
             _maybe_prewarm_architect(state)
 
+        # Pass solution file path when there's an error so the model can patch
+        sol_file = ""
+        if state.last_error and state.last_code:
+            import os
+            candidate = _solution_file_path(state)
+            if os.path.exists(candidate):
+                sol_file = candidate
+
         builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL))
         prompt = builder.build_root_lm_prompt(
             state=repl_state,
@@ -936,6 +974,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             last_error=state.last_error,
             turn=state.turns - 1,
             corpus_context=corpus_ctx,
+            solution_file=sol_file,
         )
         if gathered_context:
             prompt += "\n\n[Auto Gathered Context]\n" + gathered_context
@@ -1087,6 +1126,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     code = extract_code_from_response(code)
     code = auto_wrap_final(code)
+
+    # Persist extracted code for incremental editing on error/escalation
+    state.last_code = code
+    _persist_solution_file(state, code)
 
     _update_workspace_from_turn(state, role, raw_llm_output, None)
 

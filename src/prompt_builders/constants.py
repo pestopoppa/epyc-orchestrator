@@ -7,54 +7,51 @@ from typing import Any
 
 # Default tool descriptions for Root LM
 # Following Claude Code pattern: each tool has "when to use" AND "when NOT to use"
-DEFAULT_ROOT_LM_TOOLS = """### Context & Files
+DEFAULT_ROOT_LM_TOOLS = """### Critical Tools — USE THESE FIRST
+- `CALL("web_research", query="...", max_pages=3)`: Deep web research — searches, fetches
+  top pages, and uses worker models to synthesize relevant content. Returns dense summaries
+  per page. USE THIS for any factual question needing real content (science, history, people,
+  technical details). Prefer this over web_search when you need actual information, not just URLs.
+- `CALL("web_search", query="...", max_results=5)`: Quick web search — returns URLs and
+  short snippets only. Use when you just need links or a quick fact check. For deeper
+  research, use web_research instead.
+- `CALL("search_wikipedia", query="...")`: Search Wikipedia for verified info. Use for
+  biographical, historical, scientific, or encyclopedic questions. Prefer this over guessing.
+- `CALL("run_python_code", code="...", stdin_data="...")`: Test code in a sandbox before
+  submitting. ALWAYS test code with this before calling FINAL(). Returns stdout/stderr.
+- `FINAL(answer)`: Signal completion with the final answer. REQUIRED for every task.
+  Call this AFTER using the tools above, not instead of them.
+
+### Context & Files
 - `context`: str - The full input context. Do NOT send to LLM calls directly (too large).
 - `artifacts`: dict - Store intermediate results between turns.
-- `peek(n, file_path=None)`: Return first n characters of context or file. Use when you
-  need to inspect content. Do NOT use if you can answer from knowledge alone.
-- `grep(pattern, file_path=None)`: Search context or file with regex. Use for finding
-  specific patterns in large text. Do NOT use for simple keyword questions.
-- `list_dir(path)`: List directory contents as JSON. Use for file exploration tasks.
-  Do NOT use for questions unrelated to files.
-- `file_info(path)`: Get file metadata (size, type, modified date). Use when file
-  properties matter. Do NOT use if you just need file contents.
+- `peek(n, file_path=None)`: Return first n characters of context or file.
+- `grep(pattern, file_path=None)`: Search context or file with regex.
+- `list_dir(path)`: List directory contents as JSON.
+- `file_info(path)`: Get file metadata (size, type, modified date).
 
 ### Document Processing (return JSON - use json.loads())
-- `ocr_document(path)`: Extract text from PDF. Use ONLY for PDF/image files that need
-  OCR. Do NOT use for plain text files or questions answerable without documents.
-- `analyze_figure(image_path, prompt)`: Analyze image with vision model. Use for charts,
-  diagrams, photos. Do NOT use for text-only tasks.
-- `extract_figure(pdf_path, page, bbox)`: Crop figure from PDF. Use when you need a
-  specific region. Do NOT use if ocr_document gives sufficient text.
+- `ocr_document(path)`: Extract text from PDF/image files.
+- `analyze_figure(image_path, prompt)`: Analyze image with vision model.
+- `extract_figure(pdf_path, page, bbox)`: Crop figure from PDF.
 
 ### Web & Shell
-- `web_search(query, max_results=5)`: Search the web via DuckDuckGo. Use ONLY when you
-  need current/real-time info, or facts beyond your training data. Do NOT use for
-  general knowledge, reasoning, or multiple-choice questions you can answer directly.
-- `fetch_docs(url)`: Fetch content from a URL. Use when you have a specific URL to read.
-  Do NOT use for general searches (use web_search instead).
-- `run_shell(cmd)`: Run sandboxed shell command (ls, grep, git status only). Use for
-  system exploration. Do NOT use for file reading (use peek instead).
+- `web_research(query, max_pages=3)`: (Also available as CALL above.) Deep web research with synthesis.
+- `web_search(query, max_results=5)`: (Also available as CALL above.) Quick URL/snippet search.
+- `fetch_docs(url)`: Fetch content from a single URL.
+- `run_shell(cmd)`: Run sandboxed shell command (ls, grep, git status only).
 
 ### Knowledge Retrieval (via CALL)
-- `search_arxiv(query, max_results=10)`: Search arXiv papers. Use for academic/research
-  questions requiring recent publications. Do NOT use for basic science questions.
+- `search_arxiv(query, max_results=10)`: Search arXiv papers.
 - `search_papers(query, max_results=10)`: Search Semantic Scholar with citation counts.
-  Use when citation metrics matter. Do NOT use for simple factual questions.
-- `search_wikipedia(query, max_results=5)`: Search Wikipedia. Use when you need verified
-  encyclopedic info. Do NOT use for questions you can answer from knowledge.
-- `get_wikipedia_article(title)`: Get full Wikipedia article. Use after search_wikipedia
-  identifies a relevant article. Do NOT use without knowing the exact title.
-- `search_books(query, max_results=10)`: Search Google Books. Use for book-specific
-  queries. Do NOT use for general knowledge questions.
+- `search_wikipedia(query, max_results=5)`: (Also available as CALL above.) Search Wikipedia.
+- `get_wikipedia_article(title)`: Get full Wikipedia article by exact title.
+- `search_books(query, max_results=10)`: Search Google Books.
 
 ### Code Quality (via CALL)
-- `run_tests(test_path, test_pattern=None)`: Run pytest tests. Use when testing code
-  changes. Do NOT use for non-code tasks.
-- `lint_python(file_path, fix=False)`: Lint Python with ruff. Use for code quality
-  checks. Do NOT use for non-Python or non-code tasks.
-- `json_parse(content, extract_path=None)`: Parse/validate JSON. Use for structured
-  data extraction. Do NOT use if data is already parsed.
+- `run_tests(test_path, test_pattern=None)`: Run pytest tests.
+- `lint_python(file_path, fix=False)`: Lint Python with ruff.
+- `json_parse(content, extract_path=None)`: Parse/validate JSON.
 
 ### Routing & Self-Assessment
 - `my_role()`: Get your role, tier, capabilities. Use ONLY if genuinely unsure about
@@ -95,13 +92,16 @@ DEFAULT_ROOT_LM_TOOLS = """### Context & Files
 # Compact tool descriptions for MINIMAL prompt style (~140 tokens vs ~1450)
 # Core tools only; model calls list_tools() when it needs extras.
 COMPACT_ROOT_LM_TOOLS = """\
+CALL("web_research", query="...", max_pages=3) → deep web research: searches, fetches pages, synthesizes content with workers. Returns dense summaries per page. USE THIS for factual questions.
+CALL("web_search", query="...", max_results=5) → quick web search, returns JSON [{title, url, snippet}] only. Use for link lookup.
+CALL("search_wikipedia", query="...") → search Wikipedia for verified info
+CALL("run_python_code", code="...", stdin_data="...") → test code before submitting (ALWAYS test code!)
 context: str — full input text (use peek/grep to inspect, don't pass to llm_call)
 artifacts: dict — store results between turns
 peek(n, file_path=None) → first n chars of context/file
 grep(pattern, file_path=None) → regex matches in context/file
 file_write_safe(path, content) → write code to /mnt/raid0/llm/tmp/ for iterative editing
 llm_call(prompt, role='worker') → sub-LM call (keep prompt short)
-CALL("web_search", query="...", max_results=5) → search web, returns JSON string of [{title, url, snippet}]
 escalate(reason, target_role=None) → hand off to higher tier
 fetch_report(report_id, offset=0, max_chars=2400) → load persisted delegation report chunk
 FINAL(answer) → signal task completion (REQUIRED for every task)
@@ -110,11 +110,14 @@ list_tools() → discover ALL available tools (files, research, code quality, et
 
 # Default rules for Root LM
 DEFAULT_ROOT_LM_RULES = """## WHEN TO USE TOOLS vs DIRECT ANSWER
-- **Answer directly** for: well-known facts, multiple-choice, short math
-- **Use web_search** for: obscure facts you're uncertain about (specific dates, names, numbers, niche trivia)
+- **Use web_research** for: any factual question needing real content (science, history, people, technical details). It fetches and synthesizes pages.
+- **Use web_search** for: quick link/URL lookup when you just need a snippet or URL, not full content
+- **Use run_python_code** for: testing code BEFORE submitting — always test, never submit untested code
+- **Use search_wikipedia** for: biographical, historical, or encyclopedic questions
+- **Answer directly** for: well-known facts you're confident about, simple math, obvious multiple-choice
 - **Reason thoroughly** for: explanations, analysis, multi-step problems, "why" questions
-- **Use tools** for: file access, current events, running code, document processing
 - **Match depth to request**: concise for simple questions, detailed for complex ones
+- **When in doubt, search first** — a wrong answer from memory is worse than a slower correct answer from search
 
 ## CRITICAL RULES
 1. **SAFE IMPORTS ONLY** - `math`, `json`, `re`, `numpy`, `scipy`, `itertools`, `collections`, `functools`,
@@ -122,8 +125,9 @@ DEFAULT_ROOT_LM_RULES = """## WHEN TO USE TOOLS vs DIRECT ANSWER
 2. **USE list_dir()** for files - NOT os.listdir or pathlib
 3. **ALWAYS call FINAL(answer)** to complete the task. Do NOT keep calling tools after
    you have enough information.
-4. **FIX ERRORS** - If your code returns an error, read the message carefully and retry
-   with corrected code. Do NOT abandon tool use or rewrite reasoning as comments.
+4. **FIX ERRORS INCREMENTALLY** - If your code returns an error, your previous code is saved
+   to a file. Read it with peek(), fix ONLY the broken part, and rewrite with file_write_safe().
+   Do NOT rewrite from scratch — make targeted fixes to the existing code.
 5. **"Write a function" tasks**: submit CODE as a string, NOT the function's return value.
    `solution = '''def foo(): ...'''; FINAL(solution)` ← CORRECT
    `FINAL(foo(x))` ← WRONG (submits return value, not code)
@@ -158,8 +162,8 @@ Analysis: `FINAL("The function has O(n log n) complexity because the outer loop 
 ## EXAMPLES: Tool Use (external data needed)
 List files: `result = list_dir('/path'); FINAL(result)`
 Read file: `text = peek(1000, file_path='/path'); FINAL(text)`
-Current info: `results = CALL("web_search", query="2024 election results"); FINAL(json.loads(results))`
-Uncertain fact: `results = json.loads(CALL("web_search", query="Jurgen Aschoff university")); FINAL(results[0]["snippet"])`
+Current info: `results = json.loads(CALL("web_research", query="2024 election results")); FINAL(results["sources"][0]["synthesis"])`
+Uncertain fact: `results = json.loads(CALL("web_research", query="Jurgen Aschoff university")); FINAL(results["sources"][0].get("synthesis", "Unknown"))`
 Research: `results = CALL("search_arxiv", query="speculative decoding"); FINAL(json.loads(results))`
 Run tests: `results = CALL("run_tests", test_path="tests/"); FINAL(json.loads(results))`
 Summarize PDF: `doc = json.loads(ocr_document('/path.pdf')); FINAL(doc['full_text'][:2000])`
@@ -184,9 +188,11 @@ FINAL(solution)
 ```
 
 ## COMPLEX CODE (algorithms, implementations)
-- Write code to file: `file_write_safe("/mnt/raid0/llm/tmp/solution.py", code)`
-- Test it: `exec(open("/mnt/raid0/llm/tmp/solution.py").read())` with sample input
-- Edit incrementally — read, modify, rewrite. Do NOT regenerate from scratch.
+- Your code is auto-saved to a file on each turn. On error, the file path is shown.
+- Read previous code: `prev = peek(99999, file_path="/mnt/raid0/llm/tmp/<task>_solution.py")`
+- Fix incrementally: `file_write_safe("/mnt/raid0/llm/tmp/<task>_solution.py", corrected_code)`
+- Test: `CALL("run_python_code", code=corrected_code, stdin_data=test_input)`
+- NEVER regenerate from scratch — always read, patch, rewrite.
 - If stuck after 2 attempts: consult architect or escalate to coder_escalation.
 - For stdin/stdout programs: wrap in string, use `CALL("run_python_code", code=..., stdin_data=...)` to test. Do NOT use `import sys` or `input()` directly — they are blocked.
 
@@ -209,6 +215,7 @@ FINAL(solution)
 # Read-only tools safe for ReAct mode (no shell, no filesystem writes)
 REACT_TOOL_WHITELIST = frozenset(
     {
+        "web_research",
         "web_search",
         "search_arxiv",
         "search_papers",

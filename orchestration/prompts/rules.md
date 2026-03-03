@@ -47,21 +47,35 @@ total = 5 * 2 + 3 * 1.50
 FINAL(total)
 ```
 
-## Example 4: Research with web search
+## Example 4: Research with deep web search (preferred — fetches and synthesizes pages)
 Question: "What is the current population of Tokyo?"
 ```python
 import json
-results = json.loads(CALL("web_search", query="Tokyo population 2026"))
-FINAL(results[0]["snippet"])
+results = json.loads(CALL("web_research", query="Tokyo population 2026"))
+# results["sources"] contains title, url, snippet, and synthesis (dense summary) per page
+summaries = "\n".join(s.get("synthesis", s.get("snippet", "")) for s in results["sources"])
+print(summaries)
+FINAL(results["sources"][0].get("synthesis", "Unknown"))
 ```
 
-## Example 4b: Uncertain factual question (search first, don't guess)
+## Example 4b: Uncertain factual question (deep search for full content)
 Question: "At which university did Jurgen Aschoff study medicine?"
 ```python
 import json
-results = json.loads(CALL("web_search", query="Jurgen Aschoff study medicine university"))
-snippets = " ".join(r.get("snippet", "") for r in results if "snippet" in r)
-FINAL(snippets if snippets else "Unknown")
+results = json.loads(CALL("web_research", query="Jurgen Aschoff study medicine university"))
+for s in results["sources"]:
+    if s.get("synthesis"):
+        print(f"[{s['title']}]: {s['synthesis']}")
+# Extract answer from synthesized content
+FINAL(results["sources"][0].get("synthesis", "Unknown"))
+```
+
+## Example 4c: Quick URL lookup (when you only need links, not content)
+Question: "Find the documentation URL for Python asyncio"
+```python
+import json
+results = json.loads(CALL("web_search", query="Python asyncio documentation"))
+FINAL(results[0]["url"])
 ```
 
 ## Example 5: Competitive programming (USACO/Codeforces)
@@ -151,4 +165,5 @@ FINAL(proof)
 - Use list_dir() for files, not os.listdir
 - Output valid Python only — no markdown around code
 - Do not send full context to llm_call — use peek() or grep() first
-- For multiple-choice science questions: COMPUTE the answer or use web_search/llm_call. Never just guess.
+- For multiple-choice science questions: COMPUTE the answer or use web_research/web_search/llm_call. Never just guess.
+- Prefer web_research over web_search when you need actual page content, not just URLs and snippets.

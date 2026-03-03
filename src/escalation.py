@@ -98,6 +98,7 @@ class EscalationContext:
     max_retries: int | None = None
     # Model-initiated routing fields
     target_role_requested: str = ""  # Specific role requested by model
+    solution_file: str = ""  # Path to persisted solution code from previous role
 
     def __post_init__(self) -> None:
         """Normalize types."""
