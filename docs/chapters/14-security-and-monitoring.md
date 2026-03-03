@@ -6,6 +6,8 @@ The orchestration system implements defense-in-depth through three independent s
 
 This chapter covers each mechanism, their thresholds, and how they interact with the escalation system.
 
+**Tool permission enforcement**: The cascading tool policy (`ORCHESTRATOR_CASCADING_TOOL_POLICY=1`) must be enabled in all startup paths. The legacy permission path (when disabled) denies ALL roles ALL tools because no role has `tool_permissions` defined in `model_registry.yaml`. This caused a production outage on 2026-03-03 where tool calls were denied, triggering circuit breaker cascades. See [Chapter 13: Tool Registry & Permissions](13-tool-registry.md) for the full policy architecture.
+
 ## AST-Based Code Validation
 
 The REPL sandbox uses Python's `ast` module to inspect syntax trees before any LLM-generated code runs. This makes it immune to string concatenation tricks that defeat regex-based filters. A two-layer permission model lets trusted built-in tools call `open()` and `subprocess` internally while blocking those same operations in user-facing code, and an optional RestrictedPython layer adds guarded attribute access on top.

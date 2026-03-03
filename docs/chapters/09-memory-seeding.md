@@ -259,11 +259,16 @@ python scripts/benchmark/seed_specialist_routing.py --3way --dry-run --suites th
 - 3-way seeding uses binary rewards for faithful P(success) estimation
 - Cost is stored in metadata, not incorporated into Q-values
 
+**Search-R1 reward integration (2026-03-03):** When `web_research` tool usage is detected during seeding, multi-dimensional rewards (`wr_accuracy`, `wr_source_diversity`, `wr_efficiency`, `wr_completeness`) and scratchpad rewards (`sp_insight_count`, `sp_web_insight_ratio`, `sp_answer_containment`) are computed per-config and injected alongside binary rewards. See [Chapter 07: MemRL System](07-memrl-system.md) for reward dimension details.
+
 </details>
 
 <details><summary>Question pool and pre-extracted data</summary>
 
-All ~53K questions from 18 HF dataset adapters plus YAML suites are pre-extracted into `benchmarks/prompts/question_pool.jsonl`. Runtime sampling reads this file (~100ms) instead of loading 16 Arrow/Parquet datasets (~30s).
+All ~53K questions from 18 HF dataset adapters plus YAML suites are pre-extracted into `benchmarks/prompts/question_pool.jsonl`. As of 2026-03-03 the pool includes 20 suites (53,231 questions) with two new additions:
+
+- **`web_research`** (50 questions) — 5 categories (post-cutoff, multi-source, verification, current-data, multi-hop) with prompts requiring `web_research` tool invocation. F1 scoring, threshold 0.5.
+- **`skill_transfer`** (36 questions) — 4 skills (structured_extraction, error_diagnosis, multi_step_planning, format_transformation) × 3 domains (code, math, web_research) × 3 questions. Validates SkillBank cross-domain transfer. F1 scoring. Runtime sampling reads this file (~100ms) instead of loading 16 Arrow/Parquet datasets (~30s).
 
 - **Sampling**: Full shuffle per suite, take first N unseen. Guarantees coverage of entire pool.
 - **Seen tracking**: `benchmarks/results/eval/seen_questions.jsonl` -- questions marked seen only when rewards are injected.

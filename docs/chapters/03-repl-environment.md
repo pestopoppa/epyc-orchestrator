@@ -90,6 +90,9 @@ Uses ColBERT token-level matching via NextPLAID (:8088, LateOn-Code 130M, 128-di
 | `archive_file(name)` | Get specific file | Read extracted document |
 | `archive_search(query)` | Search across archive | Find all references |
 | `web_fetch(url)` | Fetch HTTP content | Download documentation |
+| `web_research(query)` | Deep web search with synthesis | Multi-source research questions |
+
+`web_research` is a compound tool (`src/tools/web/research.py`): calls `web_search()` for top URLs, fetches pages in parallel via `ThreadPoolExecutor`, sends each page to explore worker (port 8082) for query-focused synthesis, and returns dense per-source summaries. Includes paragraph-level SHA256 dedup (`_dedup_pages()`) and anchored synthesis prompting to prevent hallucination.
 
 ### Tool Calls from REPL
 
@@ -132,6 +135,15 @@ class REPLConfig:
 ```
 
 </details>
+
+### REPL Turn Token Caps
+
+Two token caps in `src/graph/helpers.py` limit completion length per REPL turn (default 5000, raised from 768 on 2026-03-03):
+
+- `_repl_turn_token_cap()` → env `ORCHESTRATOR_REPL_TURN_N_TOKENS` — applied when `state.tool_required` and no explicit `n_tokens`
+- `_frontdoor_repl_non_tool_token_cap()` → env `ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS` — applied to frontdoor when `tool_required=False`
+
+Too-low caps cause restart loops: the model writes reasoning prose, gets truncated mid-expression, the REPL finds no executable code, and the next turn restarts fresh.
 
 ## Structured Mode Chaining (Phase 2a)
 
@@ -216,6 +228,34 @@ Exploration logs feed into episodic memory for Q-learning:
 
 </details>
 
+## Solution File Persistence
+
+Each REPL turn auto-saves the agent's code to `/mnt/raid0/llm/tmp/{task_id}_solution.py` via `_persist_solution_file()` in `src/graph/helpers.py`. This enables incremental debugging: on error, the prompt instructs the model to `peek(solution_file)`, patch the specific failure, and `file_write_safe()` the fix — instead of rewriting from scratch each turn.
+
+On escalation, the `solution_file` path is passed through `EscalationContext` so the next-tier model can read the previous attempt's code and build on it rather than starting from zero.
+
+**State field**: `TaskState.last_code` tracks the most recent code block for hash-based dedup.
+
+## Session Log (Processing Journal)
+
+The session log is an append-only processing journal at `/mnt/raid0/llm/tmp/session_{task_id}.md` that captures every REPL turn as a `TurnRecord` dataclass (code hash, outcome, tool calls, error/output previews). This provides cross-turn memory — without it, each turn only sees `last_output`/`last_error` from the immediately preceding turn.
+
+Every 2 turns, `worker_fast` (1.5B, 4 slots) generates a compressed summary of the session log. This summary is injected into the agent's prompt as a `[Session History]` block, with a deterministic head+tail fallback when the worker is unavailable.
+
+**Anti-loop detection**: Repeated code hashes are flagged in the summary, breaking restart loops where the model writes identical code each turn.
+
+**Feature flag**: `session_log` (production=True, test=False, env=`ORCHESTRATOR_SESSION_LOG`).
+
+**Key files**: `src/graph/session_log.py` (TurnRecord, build/append/summarize), state fields in `src/graph/state.py`.
+
+### Session Scratchpad Memory
+
+The session scratchpad extracts structured semantic insights during the worker_fast summary call — zero additional inference. Each `ScratchpadEntry` has a category (`bug_location`, `approach_eliminated`, `constraint_discovered`, `user_intent`, `dependency_found`), confidence score, and source turn number.
+
+Category-based pruning keeps max 8 entries: a newer entry in the same category supersedes its predecessor. The `[Key Insights]` block is prepended before `[Session History]` in prompt injection, and entries travel through `EscalationContext` into escalation prompts as `## Previous Insights`.
+
+**Feature flag**: `session_scratchpad` (production=True, test=False, env=`ORCHESTRATOR_SESSION_SCRATCHPAD`).
+
 ## Research Context Tracker
 
 The Research Context Tracker builds a DAG of tool invocations within a REPL session. Each call gets a prefixed ID (like G1 for grep, P1 for peek), and the system detects cross-references between results both by string matching and semantic similarity. Once three or more nodes exist, a rendered tree is injected into the agent's context.
@@ -235,6 +275,7 @@ Each tool invocation receives a prefixed, auto-incrementing ID:
 | T | TOOL | T1 |
 | D | list_dir | D1 |
 | W | web_fetch | W1 |
+| WR | web_research | WR1 |
 | R | recall | R1 |
 | CS | code_search | CS1 |
 | DS | doc_search | DS1 |

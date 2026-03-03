@@ -90,6 +90,21 @@ When you want to validate a new calibration config, run replay twice — once wi
 3. Compare quality/cost/calibration metrics.
 4. Promote only if risk/coverage targets and utility KPIs pass.
 
+## Budget Controls (Fast-RLM)
+
+In addition to the confidence-based risk gate, two resource budget controls limit runaway task execution. These are inspired by the Fast-RLM paper's recursion and call-count limits, adapted as hard caps with pressure warnings.
+
+| Budget | State Field | Default Cap | Env Variable | Pressure Warning |
+|--------|-------------|-------------|--------------|------------------|
+| Worker call budget | `state.repl_executions` | 30 | `ORCHESTRATOR_WORKER_CALL_BUDGET_CAP` | ≤3 remaining |
+| Per-task token budget | `state.aggregate_tokens` | 200K | `ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP` | <15% remaining |
+
+Both budgets are checked **before** `_execute_turn()` in all 7 graph node types (`FrontdoorNode`, `CoderNode`, `WorkerNode`, etc.), saving a wasted LLM call when the budget is already exhausted. When exceeded, `_rescue_from_last_output()` attempts to extract a partial answer from prior output before falling through to hard FAIL.
+
+Feature flags: `worker_call_budget` and `task_token_budget` (both production=True, test=False). Enabled in production via `orchestrator_stack.py`.
+
+Pre-existing depth limits: `max_escalations=2`, `detect_role_cycle()`, `max_turns=15` — these remain as complementary safeguards.
+
 ## Related Modules
 
 - `orchestration/repl_memory/retriever.py`
