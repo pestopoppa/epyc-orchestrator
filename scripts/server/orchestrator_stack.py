@@ -1372,9 +1372,59 @@ def cmd_start(args: argparse.Namespace) -> int:
     return 0
 
 
+def _find_pids_on_port(port: int) -> list[int]:
+    """Find PIDs listening on a port via lsof (fallback for stale state)."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+        pass
+    return []
+
+
+def _scan_known_ports() -> dict[int, list[int]]:
+    """Scan all known orchestrator ports for running processes.
+
+    Returns:
+        {port: [pid, ...]} for ports that have listeners.
+    """
+    known_ports = sorted({s["port"] for s in HOT_SERVERS} | {8000})
+    found: dict[int, list[int]] = {}
+    for port in known_ports:
+        pids = _find_pids_on_port(port)
+        if pids:
+            found[port] = pids
+    return found
+
+
 def cmd_stop(args: argparse.Namespace) -> int:
     """Stop components."""
     state = load_state()
+
+    if not state and args.all:
+        # State file empty — fall back to port scanning
+        found = _scan_known_ports()
+        if not found:
+            print("No running components found")
+            return 0
+
+        print(f"State file empty but found processes on {len(found)} ports (port scan fallback)")
+        killed = 0
+        for port, pids in sorted(found.items()):
+            for pid in pids:
+                print(f"  Stopping PID {pid} on port {port}...")
+                if kill_process(pid):
+                    print(f"    [OK] Stopped")
+                    killed += 1
+                else:
+                    print(f"    [!] Failed to stop")
+        print(f"Stopped {killed} orphaned processes")
+        save_state({})
+        return 0
 
     if not state:
         print("No running components found")
@@ -1411,6 +1461,20 @@ def cmd_stop(args: argparse.Namespace) -> int:
             print(f"  [?] {name} not found in state")
 
     save_state(state)
+
+    # After state-based stop, scan for orphans that survived
+    if args.all:
+        orphans = _scan_known_ports()
+        if orphans:
+            print(f"\nFound {sum(len(p) for p in orphans.values())} orphaned processes on {len(orphans)} ports")
+            for port, pids in sorted(orphans.items()):
+                for pid in pids:
+                    print(f"  Stopping orphan PID {pid} on port {port}...")
+                    if kill_process(pid):
+                        print(f"    [OK] Stopped")
+                    else:
+                        print(f"    [!] Failed to stop")
+
     return 0
 
 
