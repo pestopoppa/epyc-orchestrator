@@ -29,7 +29,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 DEFAULT_KUZU_PATH = Path(
-    "/mnt/raid0/llm/claude/orchestration/repl_memory/kuzu_db/routing_graph"
+    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/kuzu_db/routing_graph"
 )
 
 
@@ -161,7 +161,7 @@ class BipartiteRoutingGraph:
         # Cluster memories per type and create QueryCluster nodes
         clusters_created = 0
         for task_type, mems in by_type.items():
-            # Collect embeddings
+            # Collect embeddings for KMeans clustering
             embeddings = []
             valid_mems = []
             for m in mems:
@@ -170,37 +170,44 @@ class BipartiteRoutingGraph:
                     embeddings.append(np.asarray(emb, dtype=np.float64))
                     valid_mems.append(m)
 
-            if not embeddings:
-                continue
+            if embeddings:
+                # KMeans clustering on embeddings
+                X = np.stack(embeddings)
+                k = max(5, min(n_clusters_per_type, len(X) // 10))
+                k = min(k, len(X))
 
-            X = np.stack(embeddings)
-            # Dynamic cluster count
-            k = max(5, min(n_clusters_per_type, len(X) // 10))
-            k = min(k, len(X))  # Can't have more clusters than samples
+                kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=min(256, len(X)))
+                labels = kmeans.fit_predict(X)
+                centroids = kmeans.cluster_centers_
 
-            kmeans = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=min(256, len(X)))
-            labels = kmeans.fit_predict(X)
-            centroids = kmeans.cluster_centers_
-
-            for ci in range(k):
+                for ci in range(k):
+                    cluster_id = str(uuid.uuid4())
+                    mask = labels == ci
+                    count = int(mask.sum())
+                    if count == 0:
+                        continue
+                    rep_idx = np.argmin(np.linalg.norm(X[mask] - centroids[ci], axis=1))
+                    rep_mem = [m for m, keep in zip(valid_mems, mask) if keep][rep_idx]
+                    rep_text = getattr(rep_mem, "task_description", "")[:200]
+                    self._create_query_cluster(
+                        cluster_id, rep_text, centroids[ci], task_type, count
+                    )
+                    cluster_mems = [m for m, keep in zip(valid_mems, mask) if keep]
+                    self._compute_performance_edges(cluster_id, cluster_mems)
+                    clusters_created += 1
+            else:
+                # Fallback: no embeddings — one cluster per task_type with
+                # synthetic embedding from the task type description
                 cluster_id = str(uuid.uuid4())
-                mask = labels == ci
-                count = int(mask.sum())
-                if count == 0:
-                    continue
-
-                # Pick representative text from closest to centroid
-                rep_idx = np.argmin(np.linalg.norm(X[mask] - centroids[ci], axis=1))
-                rep_mem = [m for m, keep in zip(valid_mems, mask) if keep][rep_idx]
-                rep_text = getattr(rep_mem, "task_description", "")[:200]
-
+                desc = f"Task type: {task_type}"
+                try:
+                    centroid = embedder.embed_text(desc)
+                except Exception:
+                    centroid = np.zeros(1024, dtype=np.float64)
                 self._create_query_cluster(
-                    cluster_id, rep_text, centroids[ci], task_type, count
+                    cluster_id, desc, centroid, task_type, len(mems)
                 )
-
-                # Compute PERFORMANCE_ON edges for this cluster
-                cluster_mems = [m for m, keep in zip(valid_mems, mask) if keep]
-                self._compute_performance_edges(cluster_id, cluster_mems)
+                self._compute_performance_edges(cluster_id, mems)
                 clusters_created += 1
 
         # Count edges
@@ -217,13 +224,13 @@ class BipartiteRoutingGraph:
         }
 
     def _clear_graph(self) -> None:
-        """Remove all nodes and edges."""
+        """Remove TaskType/QueryCluster nodes and all edges (preserves LLMRole)."""
         for table in ["PERFORMANCE_ON", "BELONGS_TO"]:
             try:
                 self.conn.execute(f"MATCH ()-[r:{table}]->() DELETE r")
             except Exception:
                 pass
-        for table in ["QueryCluster", "TaskType", "LLMRole"]:
+        for table in ["QueryCluster", "TaskType"]:
             try:
                 self.conn.execute(f"MATCH (n:{table}) DELETE n")
             except Exception:
@@ -261,7 +268,13 @@ class BipartiteRoutingGraph:
             role = ctx.get("role", "")
             if not role:
                 action = getattr(mem, "action", "")
-                role = action.split(",")[0].split(":")[0].strip() if action else ""
+                if not action:
+                    continue
+                # Handle "escalate:X->Y" format — target role is Y
+                if action.startswith("escalate:") and "->" in action:
+                    role = action.split("->")[-1].strip()
+                else:
+                    role = action.split(",")[0].split(":")[0].strip()
             if not role:
                 continue
 

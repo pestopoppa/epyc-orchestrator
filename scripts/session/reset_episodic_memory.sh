@@ -46,6 +46,7 @@ ARCHIVE_DB_PATH="$META_ARCHIVE_DIR/archive.db"
 SEEN_PATH="$EVAL_DIR/seen_questions.jsonl"
 CLASSIFIER_WEIGHTS_PATH="$EPYC_ORCHESTRATOR_ROOT/orchestration/repl_memory/routing_classifier_weights.npz"
 TRAINING_DATA_PATH="$EPYC_ORCHESTRATOR_ROOT/orchestration/repl_memory/training_data.npz"
+GAT_WEIGHTS_PATH="$EPYC_ORCHESTRATOR_ROOT/orchestration/repl_memory/graph_router_weights.npz"
 EPYC_ROOT="${EPYC_ROOT:-/mnt/raid0/llm/epyc-root}"
 
 # Match orchestrator API environment for consistency with seeding infra
@@ -265,28 +266,59 @@ if [[ -f "$TRAINING_DATA_PATH" ]]; then
 else
   echo "  training_data.npz: not found (clean)"
 fi
+if [[ -f "$GAT_WEIGHTS_PATH" ]]; then
+  rm -f "$GAT_WEIGHTS_PATH"
+  echo "  graph_router_weights.npz: removed (stale after reset)"
+else
+  echo "  graph_router_weights.npz: not found (clean)"
+fi
 
-# 10. Create handoff reminder to retrain classifier after accumulating memories
-HANDOFF="$EPYC_ROOT/handoffs/active/retrain-routing-classifier.md"
+# 10. Create unified handoff reminder to retrain routing models
+HANDOFF="$EPYC_ROOT/handoffs/active/retrain-routing-models.md"
 if [[ -d "$EPYC_ROOT/handoffs/active" ]] && [[ ! -f "$HANDOFF" ]]; then
   cat > "$HANDOFF" << HANDOFF_EOF
-# Retrain Routing Classifier
+# Retrain Routing Models
 
 **Status**: BLOCKED
 **Blocked on**: Accumulate ~500+ routing memories via seeding
 **Created**: $(date +%Y-%m-%d)
 
 ## Context
-Episodic memory was reset. The routing classifier weights were invalidated.
-Normal FAISS retrieval is active as fallback. Once enough new episodic
-memories are collected (~500+ routing memories), retrain the classifier.
+Episodic memory was reset. Both the routing classifier weights and GraphRouter
+GAT weights were invalidated. Normal FAISS retrieval is active as fallback.
+Once enough new episodic memories are collected (~500+ routing memories),
+retrain both models.
 
 ## Steps
-1. Verify memory count: \`python3 -c "from orchestration.repl_memory.episodic_store import EpisodicStore; s = EpisodicStore(); print(s.count('routing'))"\`
-2. Extract training data: \`python3 scripts/graph_router/extract_training_data.py\`
-3. Train classifier: \`python3 scripts/graph_router/train_routing_classifier.py\`
-4. Enable: set \`ORCHESTRATOR_ROUTING_CLASSIFIER=1\` in \`orchestrator_stack.py\`
-5. Delete this handoff
+
+### 1. Verify memory count
+\`\`\`bash
+python3 -c "from orchestration.repl_memory.episodic_store import EpisodicStore; s = EpisodicStore(); print(s.count('routing'))"
+\`\`\`
+
+### 2. Retrain routing classifier (MLP)
+\`\`\`bash
+python3 scripts/graph_router/extract_training_data.py
+python3 scripts/graph_router/train_routing_classifier.py
+\`\`\`
+
+### 3. Retrain GraphRouter (GAT)
+\`\`\`bash
+python3 scripts/graph_router/train_graph_router.py --epochs 100
+python3 scripts/graph_router/onboard_model.py \\
+    --role test_new_model \\
+    --description "Validation model" \\
+    --port 9999 --tps 60.0 --memory-tier HOT --memory-gb 10
+\`\`\`
+
+### 4. Enable features
+Set in \`orchestrator_stack.py\` or environment:
+\`\`\`bash
+export ORCHESTRATOR_ROUTING_CLASSIFIER=1
+export ORCHESTRATOR_GRAPH_ROUTER=1
+\`\`\`
+
+### 5. Delete this handoff
 HANDOFF_EOF
   echo "  Created handoff reminder: $HANDOFF"
 fi
