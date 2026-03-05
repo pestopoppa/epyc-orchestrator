@@ -36,8 +36,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Default paths (on RAID array per CLAUDE.md requirements)
-DEFAULT_DB_PATH = Path("/mnt/raid0/llm/claude/orchestration/repl_memory/sessions")
-DEFAULT_EMBEDDINGS_PATH = Path("/mnt/raid0/llm/claude/orchestration/repl_memory/embeddings.npy")
+DEFAULT_DB_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
+DEFAULT_EMBEDDINGS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/embeddings.npy")
 
 
 @dataclass
@@ -546,6 +546,75 @@ class EpisodicStore:
             model_id=row[10] if len(row) > 10 else None,
         )
 
+    def get_all_memories(
+        self,
+        action_type: Optional[str] = None,
+        include_embeddings: bool = False,
+        min_update_count: int = 0,
+    ) -> List[MemoryEntry]:
+        """
+        Retrieve all memories from the store.
+
+        Used by training pipelines (graph sync, classifier training) that need
+        bulk access to the full memory set.
+
+        Args:
+            action_type: Optional filter by action type (e.g. "routing").
+            include_embeddings: If True, load embeddings from FAISS/NumPy.
+                Default False to avoid unnecessary FAISS lookups.
+            min_update_count: Minimum update_count filter (for training quality).
+
+        Returns:
+            List of MemoryEntry (embedding field is None unless include_embeddings=True).
+        """
+        query = """
+            SELECT id, embedding_idx, action, action_type, context, outcome, q_value,
+                   created_at, updated_at, update_count, model_id
+            FROM memories
+        """
+        params: list = []
+        filters = []
+
+        if action_type:
+            filters.append("action_type = ?")
+            params.append(action_type)
+        if min_update_count > 0:
+            filters.append("update_count >= ?")
+            params.append(min_update_count)
+
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
+
+        query += " ORDER BY created_at ASC"
+
+        with sqlite3.connect(self.sqlite_path) as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        results = []
+        for row in rows:
+            embedding = None
+            embedding_idx = row[1]
+            if include_embeddings and hasattr(self._embedding_store, "get_embedding"):
+                embedding = self._embedding_store.get_embedding(embedding_idx)
+
+            results.append(
+                MemoryEntry(
+                    id=row[0],
+                    embedding=embedding,
+                    action=row[2],
+                    action_type=row[3],
+                    context=json.loads(row[4]),
+                    outcome=row[5],
+                    q_value=row[6],
+                    created_at=datetime.fromisoformat(row[7]),
+                    updated_at=datetime.fromisoformat(row[8]),
+                    update_count=row[9],
+                    model_id=row[10] if len(row) > 10 else None,
+                )
+            )
+
+        return results
+
     def count(self, action_type: Optional[str] = None) -> int:
         """Count memories, optionally filtered by action type."""
         with sqlite3.connect(self.sqlite_path) as conn:
@@ -950,6 +1019,9 @@ class GraphEnhancedStore:
 
     def get_by_id(self, memory_id: str):
         return self.store.get_by_id(memory_id)
+
+    def get_all_memories(self, *args, **kwargs):
+        return self.store.get_all_memories(*args, **kwargs)
 
     def count(self, action_type: Optional[str] = None) -> int:
         return self.store.count(action_type)
