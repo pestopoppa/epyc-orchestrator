@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .failure_graph import FailureGraph
     from .graph_router_predictor import GraphRouterPredictor
     from .hypothesis_graph import HypothesisGraph
+    from .routing_classifier import RoutingClassifier
 
 
 def _retr_cfg():
@@ -556,11 +557,15 @@ class HybridRouter:
         rule_based_router: "RuleBasedRouter",  # Forward reference
         graph_router: Optional["GraphRouterPredictor"] = None,
         graph_router_weight: float = 0.3,
+        routing_classifier: Optional["RoutingClassifier"] = None,
+        classifier_confidence_threshold: float = 0.8,
     ):
         self.retriever = retriever
         self.rule_based = rule_based_router
         self.graph_router = graph_router
         self.graph_router_weight = graph_router_weight
+        self.routing_classifier = routing_classifier
+        self.classifier_confidence_threshold = classifier_confidence_threshold
         self.last_decision_meta: Dict[str, Any] = {}
 
     def _record_decision_meta(
@@ -709,6 +714,40 @@ class HybridRouter:
             r.posterior_score = r.selection_score + r.prior_term
         return sorted(results, key=lambda x: x.posterior_score, reverse=True)
 
+    # Task types matching extract_training_data.py (order must be stable)
+    _CLASSIFIER_TASK_TYPES = ["code", "chat", "architecture", "ingest", "general"]
+
+    def _build_classifier_features(self, task_ir: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Build 1031-dim feature vector for classifier from task_ir.
+
+        Returns None if embedding fails.
+        """
+        try:
+            embedding = self.retriever.embedder.embed_task_ir(task_ir)
+        except Exception:
+            return None
+
+        emb = np.asarray(embedding, dtype=np.float32)
+
+        # Task type one-hot
+        tt_vec = np.zeros(len(self._CLASSIFIER_TASK_TYPES), dtype=np.float32)
+        task_type = (task_ir.get("task_type", "general") or "general").lower()
+        matched = False
+        for i, tt in enumerate(self._CLASSIFIER_TASK_TYPES):
+            if tt in task_type:
+                tt_vec[i] = 1.0
+                matched = True
+                break
+        if not matched:
+            tt_vec[self._CLASSIFIER_TASK_TYPES.index("general")] = 1.0
+
+        # Context features
+        ctx_len = task_ir.get("context_length", 0)
+        norm_ctx_len = np.float32(np.log1p(ctx_len) / 12.0)
+        has_images = np.float32(1.0 if task_ir.get("has_images", False) else 0.0)
+
+        return np.concatenate([emb, tt_vec, [norm_ctx_len], [has_images]])
+
     def route(
         self,
         task_ir: Dict[str, Any],
@@ -724,6 +763,23 @@ class HybridRouter:
             (routing_decision, strategy_used) tuple
             strategy_used is "learned" or "rules"
         """
+        # Classifier fast-path: skip full retrieval if confident
+        if self.routing_classifier is not None:
+            features = self._build_classifier_features(task_ir)
+            if features is not None:
+                action, confidence = self.routing_classifier.predict_action(features)
+                if confidence >= self.classifier_confidence_threshold:
+                    routing = self._parse_routing_action(action)
+                    if routing:
+                        self.retriever.update_last_role(routing[0])
+                        self.last_decision_meta = {
+                            "decision_source": "classifier",
+                            "chosen_action": action,
+                            "classifier_confidence": round(confidence, 4),
+                            "classifier_threshold": self.classifier_confidence_threshold,
+                        }
+                        return (routing, "classifier")
+
         # Try learned routing first
         results = self.retriever.retrieve_for_routing(task_ir)
         results = self._apply_priors(results, priors)
@@ -795,6 +851,23 @@ class HybridRouter:
             (routing_decision, strategy_used, mode) tuple
             mode is "direct", "react", or "repl"
         """
+        # Classifier fast-path
+        if self.routing_classifier is not None:
+            features = self._build_classifier_features(task_ir)
+            if features is not None:
+                action, confidence = self.routing_classifier.predict_action(features)
+                if confidence >= self.classifier_confidence_threshold:
+                    routing, mode = self._parse_routing_action_with_mode(action)
+                    if routing:
+                        self.retriever.update_last_role(routing[0])
+                        self.last_decision_meta = {
+                            "decision_source": "classifier",
+                            "chosen_action": action,
+                            "classifier_confidence": round(confidence, 4),
+                            "classifier_threshold": self.classifier_confidence_threshold,
+                        }
+                        return (routing, "classifier", mode)
+
         # Try learned routing first
         results = self.retriever.retrieve_for_routing(task_ir)
         results = self._apply_priors(results, priors)

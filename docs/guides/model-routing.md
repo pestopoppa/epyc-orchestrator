@@ -73,9 +73,21 @@ The orchestrator uses **learned routing** via MemRL (Memory-based Reinforcement 
 
 | Strategy | When Used | How It Works |
 |----------|-----------|--------------|
+| `classifier` | Routing classifier enabled, high confidence (≥0.8) | Offline-trained MLP, <0.1ms, skips FAISS retrieval |
 | `learned` | MemRL enabled, sufficient history | Q-values from episodic memory retrieval |
 | `rules` | MemRL disabled or cold start | Deterministic rules from escalation chains |
 | `default` | Fallback | Route to frontdoor |
+
+### Routing Classifier (ColBERT-Zero Distillation)
+
+When `ORCHESTRATOR_ROUTING_CLASSIFIER=1`, a lightweight MLP classifier runs as a **fast first-pass** before full FAISS retrieval:
+
+1. Build 1031-dim feature vector (query embedding + task_type + context features)
+2. Forward pass (<0.1ms, numpy matmul)
+3. If confidence ≥ 0.8: use classifier's action directly, skip retrieval
+4. Otherwise: fall through to normal TwoPhaseRetriever pipeline
+
+The classifier is trained offline from episodic memory Q-values via `scripts/graph_router/train_routing_classifier.py`. See [MEMRL_DISTILLATION_DESIGN.md](../reference/agent-config/MEMRL_DISTILLATION_DESIGN.md) for architecture details.
 
 ### Hard Benchmark Suites (2026-02-03)
 

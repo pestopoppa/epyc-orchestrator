@@ -44,6 +44,9 @@ SKILL_IDMAP_PATH="$MEMORY_DIR/skill_id_map.npy"
 SESSION_EMBEDDINGS_PATH="$MEMORY_DIR/session_embeddings.npy"
 ARCHIVE_DB_PATH="$META_ARCHIVE_DIR/archive.db"
 SEEN_PATH="$EVAL_DIR/seen_questions.jsonl"
+CLASSIFIER_WEIGHTS_PATH="$EPYC_ORCHESTRATOR_ROOT/orchestration/repl_memory/routing_classifier_weights.npz"
+TRAINING_DATA_PATH="$EPYC_ORCHESTRATOR_ROOT/orchestration/repl_memory/training_data.npz"
+EPYC_ROOT="${EPYC_ROOT:-/mnt/raid0/llm/epyc-root}"
 
 # Match orchestrator API environment for consistency with seeding infra
 export HF_HOME="/mnt/raid0/llm/cache/huggingface"
@@ -249,7 +252,46 @@ else
   echo "  seen_questions.jsonl: kept (--keep-seen)"
 fi
 
-# 9. Restart API to pick up empty state
+# 9. Invalidate routing classifier weights (stale data protection)
+if [[ -f "$CLASSIFIER_WEIGHTS_PATH" ]]; then
+  rm -f "$CLASSIFIER_WEIGHTS_PATH"
+  echo "  routing_classifier_weights.npz: removed (stale after reset)"
+else
+  echo "  routing_classifier_weights.npz: not found (clean)"
+fi
+if [[ -f "$TRAINING_DATA_PATH" ]]; then
+  rm -f "$TRAINING_DATA_PATH"
+  echo "  training_data.npz: removed (stale after reset)"
+else
+  echo "  training_data.npz: not found (clean)"
+fi
+
+# 10. Create handoff reminder to retrain classifier after accumulating memories
+HANDOFF="$EPYC_ROOT/handoffs/active/retrain-routing-classifier.md"
+if [[ -d "$EPYC_ROOT/handoffs/active" ]] && [[ ! -f "$HANDOFF" ]]; then
+  cat > "$HANDOFF" << HANDOFF_EOF
+# Retrain Routing Classifier
+
+**Status**: BLOCKED
+**Blocked on**: Accumulate ~500+ routing memories via seeding
+**Created**: $(date +%Y-%m-%d)
+
+## Context
+Episodic memory was reset. The routing classifier weights were invalidated.
+Normal FAISS retrieval is active as fallback. Once enough new episodic
+memories are collected (~500+ routing memories), retrain the classifier.
+
+## Steps
+1. Verify memory count: \`python3 -c "from orchestration.repl_memory.episodic_store import EpisodicStore; s = EpisodicStore(); print(s.count('routing'))"\`
+2. Extract training data: \`python3 scripts/graph_router/extract_training_data.py\`
+3. Train classifier: \`python3 scripts/graph_router/train_routing_classifier.py\`
+4. Enable: set \`ORCHESTRATOR_ROUTING_CLASSIFIER=1\` in \`orchestrator_stack.py\`
+5. Delete this handoff
+HANDOFF_EOF
+  echo "  Created handoff reminder: $HANDOFF"
+fi
+
+# 11. Restart API to pick up empty state
 echo "  API: restarting to pick up empty state..."
 restart_api
 

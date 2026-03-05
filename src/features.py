@@ -171,6 +171,9 @@ class Features:
     # Phase 9: Staged reward shaping (PARL-inspired explore→exploit annealing)
     staged_rewards: bool = False  # Anneal exploration bonus in Q-value updates
 
+    # MemRL Distillation: offline-trained routing classifier (ColBERT-Zero inspired)
+    routing_classifier: bool = False  # Fast MLP routing before FAISS retrieval
+
     # SkillBank: Experience distillation into structured skills (SkillRL §3.1)
     skillbank: bool = False  # Enable SkillBank skill retrieval + prompt injection
 
@@ -307,6 +310,7 @@ class Features:
             "resume_tokens": self.resume_tokens,
             "approval_gates": self.approval_gates,
             "binding_routing": self.binding_routing,
+            "routing_classifier": self.routing_classifier,
             "skillbank": self.skillbank,
             "worker_call_budget": self.worker_call_budget,
             "task_token_budget": self.task_token_budget,
@@ -396,6 +400,7 @@ def get_features(
             "parallel_execution": True,  # Validated: PASS -25.5s latency (2026-02-20)
             "personas": False,  # Enable after persona quality validation
             "staged_rewards": False,  # Enable after exploration/exploitation validation
+            "routing_classifier": False,  # Enable after classifier training and A/B test
             "skillbank": False,  # Enable after distillation pipeline validation
             "input_formalizer": True,  # Validated: PASS -16.2s latency (2026-02-20)
             "generation_monitor": True,  # Early failure detection in production
@@ -445,6 +450,7 @@ def get_features(
             "parallel_execution": False,  # Disabled in tests by default
             "personas": False,  # Disabled in tests by default
             "staged_rewards": False,  # Disabled in tests by default
+            "routing_classifier": False,  # Disabled in tests by default
             "skillbank": False,  # Disabled in tests by default
             "input_formalizer": False,  # Disabled in tests by default
             "generation_monitor": False,  # Disabled in tests by default
@@ -499,6 +505,7 @@ def get_features(
         "parallel_execution": _feature_flag_bool("PARALLEL_EXECUTION", defaults["parallel_execution"]),
         "personas": _feature_flag_bool("PERSONAS", defaults["personas"]),
         "staged_rewards": _feature_flag_bool("STAGED_REWARDS", defaults["staged_rewards"]),
+        "routing_classifier": _feature_flag_bool("ROUTING_CLASSIFIER", defaults["routing_classifier"]),
         "skillbank": _feature_flag_bool("SKILLBANK", defaults["skillbank"]),
         "input_formalizer": _feature_flag_bool("INPUT_FORMALIZER", defaults["input_formalizer"]),
         "generation_monitor": _feature_flag_bool("GENERATION_MONITOR", defaults["generation_monitor"]),

@@ -57,6 +57,14 @@ except ImportError:
     SkillBank = None
     SkillRetriever = None
 
+# Routing classifier (offline-trained MLP for fast routing decisions)
+try:
+    from .routing_classifier import RoutingClassifier
+    _ROUTING_CLASSIFIER_AVAILABLE = True
+except ImportError:
+    _ROUTING_CLASSIFIER_AVAILABLE = False
+    RoutingClassifier = None
+
 # Graph modules are optional (require kuzu)
 try:
     from .failure_graph import FailureGraph, FailureMode, Symptom, Mitigation
@@ -101,6 +109,8 @@ __all__ = [
     "SkillRetriever",
     "SkillRetrievalConfig",
     "SkillRetrievalResult",
+    # Routing classifier (optional)
+    "RoutingClassifier",
     # Graphs (optional)
     "FailureGraph",
     "FailureMode",

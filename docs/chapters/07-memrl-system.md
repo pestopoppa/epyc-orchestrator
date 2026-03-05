@@ -652,6 +652,22 @@ See [Chapter 08: Graph-Based Reasoning](08-graph-reasoning.md) for full architec
 
 **Key files**: `routing_graph.py`, `lightweight_gat.py`, `graph_router_predictor.py`, `scripts/graph_router/train_graph_router.py`
 
+## Routing Classifier Distillation (March 2026)
+
+The MemRL distillation pipeline extracts routing knowledge from episodic memory into a compact offline-trained classifier. Inspired by ColBERT-Zero's insight that **supervised fine-tuning before distillation is critical**.
+
+**Architecture**: 2-layer MLP (Input(1031) → Dense(128, ReLU) → Dense(64, ReLU) → Dense(N_actions, Softmax)). ~140K parameters. Inference: <0.1ms. Pure numpy — no PyTorch dependency.
+
+**Training**: Q-value weighted cross-entropy loss. High Q-value memories contribute more — the classifier learns from confident routing decisions. Mini-batch SGD with cosine LR decay and early stopping.
+
+**Integration**: Fast first-pass in HybridRouter. If classifier confidence ≥ 0.8, skip FAISS retrieval entirely. Otherwise fall through to normal TwoPhaseRetriever. Feature-gated: `ORCHESTRATOR_ROUTING_CLASSIFIER=1`.
+
+**Reset safety**: Classifier weights are auto-deleted when episodic memory is reset. `RoutingClassifier.load()` returns `None` for missing weights — retriever silently falls back.
+
+**Key files**: `routing_classifier.py`, `scripts/graph_router/extract_training_data.py`, `scripts/graph_router/train_routing_classifier.py`, `scripts/graph_router/ab_test_classifier.py`
+
+See [MEMRL_DISTILLATION_DESIGN.md](../reference/agent-config/MEMRL_DISTILLATION_DESIGN.md) for full design document.
+
 ## Literature Mapping (Architecture Review Alignment)
 
 This chapter's design choices map directly to the architecture review's research threads. Each theme has a practical interpretation and concrete code anchor.
@@ -690,6 +706,9 @@ This chapter's design choices map directly to the architecture review's research
 8. `orchestration/repl_memory/routing_graph.py`: Bipartite routing graph (Kuzu)
 9. `orchestration/repl_memory/lightweight_gat.py`: Pure numpy 2-layer GAT
 10. `orchestration/repl_memory/graph_router_predictor.py`: Cached GNN inference
+11. `orchestration/repl_memory/routing_classifier.py`: Offline-trained MLP routing classifier
+12. `scripts/graph_router/extract_training_data.py`: Training data extraction from episodic store
+13. `scripts/graph_router/train_routing_classifier.py`: Classifier training pipeline
 
 ### Replay Harness
 

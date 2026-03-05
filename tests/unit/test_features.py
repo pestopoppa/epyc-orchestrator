@@ -183,7 +183,7 @@ class TestFeaturesSummary:
             "side_effect_tracking", "structured_tool_output", "model_fallback",
             "content_cache", "session_compaction", "session_log", "session_scratchpad",
             "depth_model_overrides", "resume_tokens",
-            "approval_gates", "binding_routing", "skillbank",
+            "approval_gates", "binding_routing", "routing_classifier", "skillbank",
             "worker_call_budget", "task_token_budget",
             "accurate_token_counting", "tool_result_clearing",
             "model_grading", "mock_mode",
