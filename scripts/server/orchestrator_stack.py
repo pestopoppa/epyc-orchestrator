@@ -262,14 +262,15 @@ DOCKER_SERVICES = [
         "name": "nextplaid-docs",
         "port": 8089,
         "image": "ghcr.io/lightonai/next-plaid:cpu-1.0.4",
-        "model": "lightonai/answerai-colbert-small-v1-onnx",
+        "model": "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx",
         "description": "Multi-vector doc retrieval (ColBERT)",
         "volumes": [
             f"{_PATHS['project_root']}/cache/next-plaid/docs-indices:/data/indices",
             f"{_PATHS['cache_dir']}/huggingface:/root/.cache/huggingface",
+            "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx:/models/gte-moderncolbert-v1-onnx:ro",
         ],
         "args": ["--host", "0.0.0.0", "--port", "8080", "--index-dir", "/data/indices",
-                 "--model", "lightonai/answerai-colbert-small-v1-onnx", "--int8"],
+                 "--model", "/models/gte-moderncolbert-v1-onnx", "--int8"],
     },
 ]
 
@@ -1058,6 +1059,11 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env.setdefault("ORCHESTRATOR_WORKER_CALL_BUDGET_CAP", "30")
     env.setdefault("ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP", "200000")
     env["ORCHESTRATOR_SESSION_SCRATCHPAD"] = "1"
+    env["ORCHESTRATOR_SESSION_LOG"] = "1"
+    env["ORCHESTRATOR_APPROVAL_GATES"] = "1"
+    env["ORCHESTRATOR_RESUME_TOKENS"] = "1"
+    env["ORCHESTRATOR_SIDE_EFFECT_TRACKING"] = "1"
+    env["ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT"] = "1"
     _apply_orchestrator_profile(env, profile)
     # Bound inference-lock waits by default to avoid multi-minute silent stalls
     # during iterative debugging / seeding runs.
