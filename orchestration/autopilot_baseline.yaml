@@ -1,0 +1,21 @@
+# AutoPilot frozen baseline metrics.
+# Update via: python autopilot.py checkpoint --production-best
+# Or manually after establishing baseline performance.
+
+quality: 2.0      # Average quality 0-3 scale
+speed: 15.0       # Median tokens/sec
+cost: 0.4         # Normalized cost 0-1
+reliability: 0.9  # Fraction of non-error responses
+frontdoor_speed: 15.0  # Frontdoor-only throughput baseline
+
+per_suite_quality:
+  general: 2.5
+  math: 2.0
+  coder: 2.0
+  thinking: 2.0
+  simpleqa: 2.5
+  hotpotqa: 2.0
+  agentic: 1.8
+  instruction_precision: 2.2
+  long_context: 1.8
+  mode_advantage_hard: 1.5
