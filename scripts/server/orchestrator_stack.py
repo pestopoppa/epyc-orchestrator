@@ -750,9 +750,6 @@ def build_server_command(
         "architect_coding": "8192",     # 480B MoE → ~24GB KV
         "ingest_long_context": "32768", # 80B SSM, needs long context
     }
-    # Architect roles benefit from quantized KV cache (halves KV memory)
-    _KV_QUANTIZED_ROLES = {"architect_general", "architect_coding"}
-
     context_size = _KV_CONTEXT_SIZES.get(role_config.name, "32768")
 
     cmd = [
@@ -765,10 +762,6 @@ def build_server_command(
         "-t", "96",  # Threads
         "--flash-attn", "on",  # Flash attention
     ]
-
-    # Quantized KV cache for large architects (halves KV memory usage)
-    if role_config.name in _KV_QUANTIZED_ROLES:
-        cmd.extend(["--cache-type-k", "q8_0"])
 
     # Add acceleration based on type
     if accel.type == "moe_expert_reduction" and accel.experts:
