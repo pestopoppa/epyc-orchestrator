@@ -108,14 +108,32 @@ async def openai_chat_completions(
     created = int(time.time())
 
     # Determine if we should use real inference
-    # Real mode requires: registry loaded AND at least one backend available
-    # For testing without live servers, we always fall back to mock mode
+    # Real mode requires: registry loaded AND mock_mode disabled via env
     from src.features import features
+    from src.config import get_config
 
     f = features()
     use_real_mode = (
         state.registry is not None and not f.mock_mode  # Respect mock_mode feature flag
     )
+
+    # Build real primitives with server_urls (matching /chat endpoint pattern)
+    primitives = None
+    if use_real_mode:
+        try:
+            from src.llm_primitives import LLMPrimitives
+
+            server_urls = get_config().server_urls.as_dict()
+            primitives = LLMPrimitives(
+                mock_mode=False,
+                server_urls=server_urls,
+                registry=state.registry,
+                health_tracker=state.health_tracker,
+                admission_controller=getattr(state, "admission", None),
+            )
+        except Exception as e:
+            logger.warning("Failed to create LLMPrimitives: %s", e)
+            primitives = None
 
     if request.stream:
         # Streaming mode with real orchestration
@@ -146,9 +164,9 @@ async def openai_chat_completions(
                     yield f"data: {json.dumps(chunk)}\n\n"
                 response_text = mock_response
             else:
-                # Real orchestration with streaming - use singleton LLMPrimitives
-                if state.llm_primitives is None:
-                    error_msg = "LLM primitives not initialized"
+                # Real orchestration with streaming
+                if primitives is None:
+                    error_msg = "LLM primitives not initialized — check server_urls config"
                     chunk = {
                         "id": chat_id,
                         "object": "chat.completion.chunk",
@@ -164,9 +182,6 @@ async def openai_chat_completions(
                     }
                     yield f"data: {json.dumps(chunk)}\n\n"
                     response_text = error_msg
-                    primitives = None
-                else:
-                    primitives = state.llm_primitives
 
                 if primitives:
                     # Build combined context
@@ -281,14 +296,13 @@ async def openai_chat_completions(
             # Mock mode fallback
             response_text = f"[MOCK] Processed via {role}: {prompt[:100]}..."
         else:
-            # Real orchestration - use singleton LLMPrimitives
+            # Real orchestration
             try:
-                if state.llm_primitives is None:
+                if primitives is None:
                     raise HTTPException(
                         status_code=503,
-                        detail="LLM primitives not initialized",
+                        detail="LLM primitives not initialized — check server_urls config",
                     )
-                primitives = state.llm_primitives
 
                 combined_context = prompt
                 if context:
