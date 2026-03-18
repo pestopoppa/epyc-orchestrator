@@ -33,6 +33,14 @@ from src.api.structured_logging import task_extra
 
 log = logging.getLogger(__name__)
 
+# Relative cost weights by model tier (arbitrary units for Pareto comparison)
+_TIER_COST_WEIGHTS: dict[str, float] = {
+    "A": 10.0,   # 235B+ architect
+    "B": 3.0,    # 32B-70B specialist
+    "C": 1.0,    # 7B-14B worker
+    "D": 0.2,    # draft/TTS
+}
+
 
 # ── Stage 1: Routing ────────────────────────────────────────────────────
 
@@ -121,6 +129,78 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         except Exception as exc:
             log.debug("Failure risk veto check failed: %s", exc)
 
+    # Factual-risk scoring (shadow/enforce mode only — no-op when mode is "off")
+    try:
+        from src.classifiers.factual_risk import assess_risk, get_mode as _fr_mode
+        if _fr_mode() != "off":
+            _fr_result = assess_risk(
+                request.prompt,
+                role=str(routing_decision[0]) if routing_decision else "",
+            )
+            # Attach to routing result (consumed by response builder / telemetry)
+            # These are set on the RoutingResult after construction below.
+            _factual_risk_score = _fr_result.adjusted_risk_score
+            _factual_risk_band = _fr_result.risk_band
+            log.info(
+                "Factual risk: score=%.3f band=%s (raw=%.3f adj=%.1f)",
+                _fr_result.adjusted_risk_score,
+                _fr_result.risk_band,
+                _fr_result.risk_score,
+                _fr_result.role_adjustment,
+                extra=task_extra(
+                    task_id=task_id,
+                    stage="routing",
+                    strategy="factual_risk",
+                ),
+            )
+        else:
+            _factual_risk_score = 0.0
+            _factual_risk_band = ""
+    except Exception as _fr_exc:
+        log.debug("Factual risk scoring skipped: %s", _fr_exc)
+        _factual_risk_score = 0.0
+        _factual_risk_band = ""
+
+    # Difficulty-signal scoring (shadow/enforce mode only — no-op when mode is "off")
+    try:
+        from src.classifiers.difficulty_signal import assess_difficulty, get_mode as _ds_mode
+        if _ds_mode() != "off":
+            _ds_result = assess_difficulty(
+                request.prompt,
+                role=str(routing_decision[0]) if routing_decision else "",
+            )
+            _difficulty_score = _ds_result.difficulty_score
+            _difficulty_band = _ds_result.difficulty_band
+            log.info(
+                "Difficulty signal: score=%.3f band=%s",
+                _ds_result.difficulty_score,
+                _ds_result.difficulty_band,
+                extra=task_extra(
+                    task_id=task_id,
+                    stage="routing",
+                    strategy="difficulty_signal",
+                ),
+            )
+        else:
+            _difficulty_score, _difficulty_band = 0.0, ""
+    except Exception as _ds_exc:
+        log.debug("Difficulty signal scoring skipped: %s", _ds_exc)
+        _difficulty_score, _difficulty_band = 0.0, ""
+
+    # Estimated cost (tier weight × prompt tokens / 1M — relative units for Pareto)
+    _estimated_cost = 0.0
+    try:
+        _role_str = str(routing_decision[0]) if routing_decision else "frontdoor"
+        if state.registry:
+            _role_cfg = state.registry.get_role(_role_str)
+            _tier = getattr(_role_cfg, "tier", "C") if _role_cfg else "C"
+        else:
+            _tier = "C"
+        _est_tokens = len(request.prompt) // 4 + len(request.context or "") // 4
+        _estimated_cost = _TIER_COST_WEIGHTS.get(_tier, 1.0) * _est_tokens / 1_000_000
+    except Exception:
+        pass
+
     # Log task start (MemRL integration)
     if state.progress_logger:
         routing_meta = {
@@ -129,6 +209,11 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
             "heuristic_priors": {
                 k: round(v, 4) for k, v in sorted(heuristic_priors.items(), key=lambda kv: -kv[1])[:4]
             },
+            "factual_risk_score": round(_factual_risk_score, 4),
+            "factual_risk_band": _factual_risk_band,
+            "difficulty_score": round(_difficulty_score, 4),
+            "difficulty_band": _difficulty_band,
+            "estimated_cost": round(_estimated_cost, 6),
         }
         if state.hybrid_router and hasattr(state.hybrid_router, "last_decision_meta"):
             try:
@@ -174,6 +259,11 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         tool_hint=tool_hint,
         skill_context=skill_context,
         skill_ids=skill_ids,
+        factual_risk_score=_factual_risk_score,
+        factual_risk_band=_factual_risk_band,
+        difficulty_score=_difficulty_score,
+        difficulty_band=_difficulty_band,
+        estimated_cost=_estimated_cost,
     )
 
 
@@ -238,6 +328,7 @@ def _init_primitives(request: ChatRequest, state) -> LLMPrimitives:
                     registry=state.registry,
                     health_tracker=getattr(state, "health_tracker", None),
                     admission_controller=getattr(state, "admission", None),
+                    num_slots=get_config().server.num_slots,
                 )
                 if not request.server_urls:
                     state._real_primitives = primitives

@@ -45,7 +45,7 @@ def _get_default_working_dir() -> str:
         return str(get_config().paths.project_root)
     except Exception as e:
         logger.debug("Could not load config for working dir: %s", e)
-        return "/mnt/raid0/llm/claude"
+        return str(Path.cwd())
 
 
 @dataclass

@@ -711,13 +711,14 @@ def build_server_command(
                 "--flash-attn", "on",
             ]
         else:
-            # explore workers: 7B model with speculative decoding for 46 t/s
+            # explore workers: 7B f16 model with speculative decoding + tree speculation
             # Summarization handled by worker_summarize (32B) on port 8081
             return [
                 str(LLAMA_SERVER),
                 "-m", model_path,
                 "-md", EXPLORE_DRAFT_MODEL,  # Spec decode with 0.5B draft
                 "--draft-max", "24",  # K=24 for optimal speedup
+                "--draft-p-split", "0.3",  # Tree speculation (+3-4% on 7B f16, +16% on 32B f16)
                 "--lookup",  # Prompt n-gram lookup as fallback when spec insufficient
                 "--host", "127.0.0.1",
                 "--port", str(port),
@@ -789,6 +790,30 @@ def build_server_command(
                 "-md", draft_config.model.full_path,
                 "--draft-max", str(accel.k or 16),
             ])
+
+    # Self-speculation: same model as target and draft, draft exits early
+    elif accel.type == "self_speculation" and accel.n_layer_exit_draft:
+        cmd.extend([
+            "-md", model_path,
+            "--n-layer-exit-draft", str(accel.n_layer_exit_draft),
+            "--draft-max", str(accel.k or 16),
+        ])
+
+    # Hierarchical speculation: self-spec with intermediate verification
+    elif accel.type == "hierarchical_speculation":
+        cmd.extend([
+            "-md", model_path,
+            "--n-layer-exit-draft", str(accel.n_layer_exit_draft or 0),
+            "--hierarchical-spec",
+            "--draft-max", str(accel.k or 16),
+        ])
+        if accel.n_layer_exit_intermediate:
+            cmd.extend(["--n-layer-exit-intermediate", str(accel.n_layer_exit_intermediate)])
+
+    # Tree speculation: --draft-p-split enables DySpec branching
+    # Beneficial on f16 targets (+15.8%) and Q8 (+2.5%), net-negative on Q4 (-5.5%)
+    if accel.p_split is not None:
+        cmd.extend(["--draft-p-split", str(accel.p_split)])
 
     # Add prompt n-gram lookup (spec-first, lookup-fallback) when enabled in registry
     # Per-role flag: beneficial on dense/small-MoE models (30B: +27%), net-negative on large MoE (480B)

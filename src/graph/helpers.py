@@ -50,9 +50,33 @@ def _use_inline_calls_in_tests() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 
-def _repl_turn_token_cap() -> int:
-    """Token cap for tool-required turns to avoid timeout-length rambles."""
-    return max(64, _env_int("ORCHESTRATOR_REPL_TURN_N_TOKENS", 5000))
+# Band-adaptive token budgets (reasoning-compression Action 5)
+_BAND_TOKEN_BUDGETS: dict[str, int] = {
+    "easy": 1500,
+    "medium": 3500,
+    "hard": 7000,
+}
+
+# Reasoning length alarm multiplier (short-m@k Action 9)
+_REASONING_LENGTH_ALARM_MULTIPLIER = 1.5
+
+
+def _repl_turn_token_cap(difficulty_band: str = "") -> int:
+    """Token cap for tool-required turns to avoid timeout-length rambles.
+
+    When difficulty_signal is in enforce mode and a band is provided,
+    returns a band-specific budget. Otherwise returns the flat default.
+    """
+    flat_cap = max(64, _env_int("ORCHESTRATOR_REPL_TURN_N_TOKENS", 5000))
+    if not difficulty_band:
+        return flat_cap
+    try:
+        from src.classifiers.difficulty_signal import get_mode
+        if get_mode() != "enforce":
+            return flat_cap
+    except Exception:
+        return flat_cap
+    return _BAND_TOKEN_BUDGETS.get(difficulty_band, flat_cap)
 
 
 def _frontdoor_turn_token_cap() -> int:
@@ -76,6 +100,43 @@ def _frontdoor_repl_non_tool_token_cap() -> int:
     prevention is handled separately in direct_stage._MCQ_MAX_TOKENS.
     """
     return max(64, _env_int("ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS", 5000))
+
+
+def _check_reasoning_length_alarm(
+    raw_output: str, difficulty_band: str, completion_tokens: int
+) -> bool:
+    """Return True if <think> block massively exceeds band budget (Action 9).
+
+    Double-gated: feature flag ``reasoning_length_alarm`` AND
+    ``difficulty_signal`` mode must be ``enforce``.
+    """
+    from src.features import features
+    if not features().reasoning_length_alarm:
+        return False
+    if not difficulty_band:
+        return False
+    try:
+        from src.classifiers.difficulty_signal import get_mode
+        if get_mode() != "enforce":
+            return False
+    except Exception:
+        return False
+    budget = _BAND_TOKEN_BUDGETS.get(difficulty_band)
+    if budget is None:
+        return False
+    threshold = budget * _REASONING_LENGTH_ALARM_MULTIPLIER
+    # Extract <think> blocks
+    from src.classifiers.quality_detector import _THINK_BLOCK_RE
+    think_blocks = _THINK_BLOCK_RE.findall(raw_output)
+    if not think_blocks:
+        return False
+    # Use completion_tokens if available, else rough char-based estimate
+    if completion_tokens > 0:
+        token_count = completion_tokens
+    else:
+        think_text = "".join(think_blocks)
+        token_count = len(think_text) // 4
+    return token_count > threshold
 
 
 def _worker_call_budget_cap() -> int:
@@ -254,6 +315,42 @@ def _persist_solution_file(state: TaskState, code: str) -> None:
             f.write(code)
     except Exception as e:
         log.debug("Failed to persist solution file: %s", e)
+
+
+def _spill_if_truncated(text: str, max_chars: int, label: str, state: "TaskState") -> str:
+    """Return *text* with a retrieval pointer appended if it exceeds *max_chars*.
+
+    When the ``output_spill_to_file`` feature flag is enabled and *text* is
+    longer than *max_chars*, write the full content to a temp file and return
+    the truncated text plus a ``peek()`` instruction so the model can retrieve
+    the rest on demand.  Otherwise return *text* unchanged.
+    """
+    if len(text) <= max_chars:
+        return text
+    from src.features import features
+    if not features().output_spill_to_file:
+        return text
+    task_id = state.task_id or "scratch"
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in task_id)[:80]
+    turn = state.turns
+    spill_path = f"/mnt/raid0/llm/tmp/{safe_id}_{label}_t{turn}.txt"
+    try:
+        os.makedirs(os.path.dirname(spill_path), exist_ok=True)
+        with open(spill_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        # Reserve space for the pointer so the builder's own truncation
+        # doesn't clip it.  Pointer is ~100 chars; reserve 150 for safety.
+        _pointer_reserve = 150
+        preview_end = max(200, max_chars - _pointer_reserve)
+        truncated = text[:preview_end]
+        pointer = (
+            f"\n[... {len(text) - preview_end} chars truncated; "
+            f'full {label}: peek(99999, file_path="{spill_path}")]'
+        )
+        return truncated + pointer
+    except Exception as e:
+        log.debug("Failed to spill %s to file: %s", label, e)
+        return text
 
 
 def _update_workspace_from_turn(state: TaskState, role: Role | str, output: str, error: str | None) -> None:
@@ -1100,6 +1197,28 @@ def _rescue_from_last_output(text: str) -> str | None:
     return None
 
 
+def _log_state_snapshot(ctx: Ctx, role: str) -> None:
+    """Persist a full state snapshot for the current turn (LangGraph pre-migration)."""
+    try:
+        import json as _json
+        from src.graph.persistence import _state_to_dict
+
+        state = ctx.state
+        blob = {
+            "type": "turn_snapshot",
+            "turn": state.turns,
+            "role": role,
+            "state": _state_to_dict(state),
+        }
+        store = getattr(ctx.deps, "session_store", None)
+        if store is not None:
+            store.save_checkpoint(state.task_id, _json.dumps(blob), "state_snapshot")
+        else:
+            log.debug("State snapshot: turn=%d role=%s fields=%d", state.turns, role, len(blob["state"]))
+    except Exception:
+        log.debug("State snapshot failed", exc_info=True)
+
+
 async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bool, dict]:
     """Execute one LLM → REPL turn.
 
@@ -1110,6 +1229,27 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     deps = ctx.deps
     state.turns += 1
     log.debug("_execute_turn: turn=%d, role=%s", state.turns, role)
+
+    # Full state snapshot (LangGraph pre-migration)
+    from src.features import features as _get_features
+    if _get_features().state_history_snapshots:
+        _log_state_snapshot(ctx, str(role))
+
+    # Generalized interrupt conditions (LangGraph pre-migration)
+    if _get_features().generalized_interrupts:
+        conditions = getattr(deps, "interrupt_conditions", None) or []
+        if conditions:
+            from src.graph.approval_gate import (
+                check_interrupt_conditions,
+                request_approval_for_interrupt,
+                ApprovalDecision,
+            )
+            interrupt_desc = check_interrupt_conditions(conditions, state, state.artifacts)
+            if interrupt_desc:
+                decision = request_approval_for_interrupt(ctx, interrupt_desc)
+                if decision == ApprovalDecision.REJECT:
+                    _record_session_turn(state, role=str(role), error=f"Interrupted: {interrupt_desc}")
+                    return "", f"Interrupted: {interrupt_desc}", False, {}
 
     # Initialize session log on first turn
     _init_session_log(state)
@@ -1166,11 +1306,19 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 sol_file = candidate
 
         builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL))
+        _prompt_cfg = builder.config
+        # CMV Action 11: spill long output/error to file with peek() pointer
+        _spilled_output = _spill_if_truncated(
+            state.last_output, _prompt_cfg.max_output_preview, "output", state,
+        )
+        _spilled_error = _spill_if_truncated(
+            state.last_error, _prompt_cfg.max_error_preview, "error", state,
+        )
         prompt = builder.build_root_lm_prompt(
             state=repl_state,
             original_prompt=state.prompt,
-            last_output=state.last_output,
-            last_error=state.last_error,
+            last_output=_spilled_output,
+            last_error=_spilled_error,
             turn=state.turns - 1,
             corpus_context=corpus_ctx,
             solution_file=sol_file,
@@ -1219,7 +1367,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # Tool-required turns can ramble until role timeout when left unlimited.
     # Apply a bounded per-turn token budget unless think-harder already set one.
     if state.tool_required and "n_tokens" not in llm_kwargs:
-        llm_kwargs["n_tokens"] = _repl_turn_token_cap()
+        llm_kwargs["n_tokens"] = _repl_turn_token_cap(state.difficulty_band)
 
     if (
         str(role) == str(Role.FRONTDOOR)
@@ -1344,6 +1492,36 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     # Save raw LLM output for FINAL() rescue before code extraction
     raw_llm_output = code
+
+    # Reasoning length alarm (short-m@k Action 9): if <think> exceeds
+    # 1.5× band budget, retry once with a conciseness nudge.
+    if _check_reasoning_length_alarm(raw_llm_output, getattr(state, "difficulty_band", ""), _completion_tokens):
+        if not getattr(state, "_alarm_retried", False):
+            state._alarm_retried = True  # type: ignore[attr-defined]
+            log.info(
+                "Reasoning length alarm: completion_tokens=%d exceeds %.0f× budget for band=%s, retrying with conciseness nudge",
+                _completion_tokens, _REASONING_LENGTH_ALARM_MULTIPLIER, state.difficulty_band,
+            )
+            _conciseness_nudge = (
+                "\n\n[SYSTEM: Your reasoning was excessively long. "
+                "Be concise — shorter reasoning chains are more accurate. "
+                "Get to the answer directly.]"
+            )
+            _retry_prompt = prompt + _conciseness_nudge
+            try:
+                if _use_inline_calls_in_tests() or type(deps.primitives.llm_call).__module__.startswith("unittest.mock"):
+                    code = deps.primitives.llm_call(
+                        _retry_prompt, role=str(role), stop_sequences=["\n```\n"],
+                        skip_suffix=True, **llm_kwargs,
+                    )
+                else:
+                    code = await asyncio.to_thread(
+                        deps.primitives.llm_call, _retry_prompt, role=str(role),
+                        stop_sequences=["\n```\n"], skip_suffix=True, **llm_kwargs,
+                    )
+                raw_llm_output = code
+            except Exception as e:
+                log.warning("Reasoning length alarm retry failed: %s", e)
 
     # Extract and wrap code
     from src.prompt_builders import extract_code_from_response, auto_wrap_final

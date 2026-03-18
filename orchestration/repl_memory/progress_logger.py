@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Default log path (on RAID array, or fallback to workspace for devcontainer)
-_RAID_LOG_PATH = Path("/mnt/raid0/llm/claude/logs/progress")
+_RAID_LOG_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/logs/progress")
 _WORKSPACE_LOG_PATH = Path("/workspace/logs/progress")
 
 # Use RAID path if available, otherwise fallback to workspace
@@ -49,6 +49,9 @@ class EventType(str, Enum):
     # Routing events
     ROUTING_DECISION = "routing_decision"
     ROUTING_FALLBACK = "routing_fallback"
+
+    # Delegation events
+    DELEGATION_DECISION = "delegation_decision"
 
     # Escalation events
     ESCALATION_TRIGGERED = "escalation_triggered"
@@ -238,7 +241,48 @@ class ProgressLogger:
                 data={
                     "routing": routing_decision,
                     "strategy": routing_strategy,
+                    "delegation_policy_version": self.DELEGATION_POLICY_VERSION,
                     **(routing_meta or {}),
+                },
+            )
+        )
+
+    # Current policy version — bump when delegation logic changes materially
+    DELEGATION_POLICY_VERSION = "1.0"
+
+    def log_delegation(
+        self,
+        task_id: str,
+        complexity: str,
+        action: str,
+        confidence: float,
+        difficulty_score: float = 0.0,
+        difficulty_band: str = "",
+    ) -> None:
+        """Log proactive delegation decision for MemRL Q-learning.
+
+        Called by ProactiveDelegator.log_delegation_decision() after routing
+        a task by complexity.
+
+        Args:
+            task_id: Task identifier.
+            complexity: TaskComplexity value (trivial/simple/moderate/complex).
+            action: Delegation action (direct/repl/specialist/architect).
+            confidence: Routing confidence from MemRL (1.0 if heuristic-only).
+            difficulty_score: Prompt difficulty [0, 1] from difficulty_signal classifier.
+            difficulty_band: "easy" | "medium" | "hard" from difficulty_signal classifier.
+        """
+        self.log(
+            ProgressEntry(
+                event_type=EventType.DELEGATION_DECISION,
+                task_id=task_id,
+                data={
+                    "complexity": complexity,
+                    "action": action,
+                    "confidence": confidence,
+                    "delegation_policy_version": self.DELEGATION_POLICY_VERSION,
+                    "difficulty_score": round(difficulty_score, 4),
+                    "difficulty_band": difficulty_band,
                 },
             )
         )

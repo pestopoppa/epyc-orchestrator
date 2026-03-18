@@ -8,7 +8,7 @@
   "settings_schema": {
     "canvas_directory": {
       "type": "string",
-      "default": "/mnt/raid0/llm/claude/logs/canvases",
+      "default": "/mnt/raid0/llm/epyc-orchestrator/logs/canvases",
       "description": "Directory for canvas files"
     },
     "use_toon": {

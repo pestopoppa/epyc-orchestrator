@@ -488,6 +488,7 @@ async def _execute_repl(
         max_turns=max_turns,
         tool_required=routing.tool_required,
         tool_hint=routing.tool_hint,
+        difficulty_band=routing.difficulty_band,
     )
 
     task_deps = TaskDeps(

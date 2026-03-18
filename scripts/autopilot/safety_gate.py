@@ -185,3 +185,49 @@ class SafetyGate:
 
     def reset_failures(self) -> None:
         self._consecutive_failures = 0
+
+    @staticmethod
+    def analyze_failure(result: EvalResult, verdict: SafetyVerdict) -> str:
+        """Build a structured failure narrative from safety verdict and eval result.
+
+        Pure rule-based (no LLM). Returns empty string if verdict passed.
+        """
+        if verdict.passed:
+            return ""
+
+        sections: list[str] = []
+
+        # VIOLATIONS
+        if verdict.violations:
+            lines = ["VIOLATIONS:"]
+            for v in verdict.violations:
+                lines.append(f"  - {v}")
+            sections.append("\n".join(lines))
+
+        # DEGRADED SUITES (per-suite quality below floor)
+        degraded = [
+            (suite, q)
+            for suite, q in result.per_suite_quality.items()
+            if q < QUALITY_FLOOR
+        ]
+        if degraded:
+            lines = ["DEGRADED SUITES:"]
+            for suite, q in sorted(degraded, key=lambda x: x[1]):
+                lines.append(f"  - {suite}: {q:.3f} (floor: {QUALITY_FLOOR})")
+            sections.append("\n".join(lines))
+
+        # ROUTING IMBALANCE (>60% to one tier)
+        for tier_name, frac in result.routing_distribution.items():
+            if frac > 0.6:
+                sections.append(
+                    f"ROUTING IMBALANCE:\n  - {tier_name}: {frac:.1%} of requests"
+                )
+
+        # WARNINGS
+        if verdict.warnings:
+            lines = ["WARNINGS:"]
+            for w in verdict.warnings:
+                lines.append(f"  - {w}")
+            sections.append("\n".join(lines))
+
+        return "\n\n".join(sections)

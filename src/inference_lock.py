@@ -12,6 +12,7 @@ import fcntl
 import logging
 import os
 import subprocess
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -72,6 +73,19 @@ def _lock_log_every_s() -> float:
 def _lock_trace_enabled() -> bool:
     raw = os.environ.get("ORCHESTRATOR_INFERENCE_LOCK_TRACE", "0")
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _max_lock_hold_s() -> float:
+    """Maximum seconds a lock may be held before the watchdog force-releases it.
+
+    Default 130s — just above the 120s httpx read timeout cap.  If the httpx
+    timeout fires normally (at 120s), the lock is released via the regular
+    ``finally`` path.  The watchdog is a safety net for the case where the
+    httpx timeout itself fails to interrupt the blocked socket read.
+
+    Set ORCHESTRATOR_MAX_LOCK_HOLD_S=0 to disable the watchdog.
+    """
+    return max(0.0, _env_float("ORCHESTRATOR_MAX_LOCK_HOLD_S", 130.0))
 
 
 def _current_lock_owner_pids(lock_file: Path) -> list[str]:
@@ -329,6 +343,7 @@ def inference_lock(
     deadline_s: float | None = None,
     request_tag: str | None = None,
     port: int | None = None,
+    max_hold_s: float | None = None,
 ):
     """Acquire inference lock for the given role.
 
@@ -338,6 +353,10 @@ def inference_lock(
         port: llama-server port for this role. When provided, enables
             slot cleanup: on lock timeout (erase holder's slots) and on
             error inside the lock (erase our own slots).
+        max_hold_s: Maximum seconds the lock may be held before a watchdog
+            daemon thread force-releases it. ``None`` (default) reads from
+            ``ORCHESTRATOR_MAX_LOCK_HOLD_S`` env var (default 180). Set to
+            0 to disable the watchdog.
     """
     lock_file = _lock_path(role)
 
@@ -392,6 +411,41 @@ def inference_lock(
                 wait_s,
                 lock_file,
             )
+
+        # --- Watchdog: force-release if held too long ---
+        _hold_limit = max_hold_s if max_hold_s is not None else _max_lock_hold_s()
+        _watchdog_done = threading.Event()
+        _watchdog_fired = False
+
+        def _watchdog() -> None:
+            nonlocal _watchdog_fired
+            if not _watchdog_done.wait(timeout=_hold_limit):
+                # Timeout expired — lock is still held.
+                _watchdog_fired = True
+                log.critical(
+                    "Lock hold watchdog: force-releasing after %.0fs "
+                    "(role=%s, mode=%s, request=%s, lock=%s, pid=%d)",
+                    _hold_limit, role, mode, request_tag or "n/a",
+                    lock_file, os.getpid(),
+                )
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass  # Best-effort; fd may already be closed.
+                # Also try to erase slots so the backend stops generating.
+                if port is not None:
+                    try:
+                        _erase_port_slots(port)
+                    except Exception:
+                        pass
+
+        if _hold_limit > 0:
+            _wd_thread = threading.Thread(
+                target=_watchdog, daemon=True,
+                name=f"lock-watchdog-{role}-{request_tag or 'n/a'}",
+            )
+            _wd_thread.start()
+
         acquired_at = time.perf_counter()
         _inner_error = False
         try:
@@ -400,8 +454,17 @@ def inference_lock(
             _inner_error = True
             raise
         finally:
+            # Signal watchdog to stop (no-op if already fired).
+            _watchdog_done.set()
+
             held_s = time.perf_counter() - acquired_at
-            if held_s > 30.0:
+            if _watchdog_fired:
+                log.warning(
+                    "Inference lock was force-released by watchdog after %.1fs "
+                    "(role=%s, request=%s)",
+                    held_s, role, request_tag or "n/a",
+                )
+            elif held_s > 30.0:
                 log.warning(
                     "Inference lock held %.1fs (%s, role=%s)",
                     held_s,
@@ -410,15 +473,17 @@ def inference_lock(
                 )
             if _lock_trace_enabled():
                 log.warning(
-                    "Inference lock release trace pid=%d role=%s mode=%s request=%s held_s=%.3f lock=%s",
+                    "Inference lock release trace pid=%d role=%s mode=%s request=%s held_s=%.3f lock=%s watchdog_fired=%s",
                     os.getpid(),
                     role,
                     mode,
                     request_tag or "n/a",
                     held_s,
                     lock_file,
+                    _watchdog_fired,
                 )
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            if not _watchdog_fired:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
             # If inference inside the lock failed (timeout/cancel/error),
             # erase our own slot so the backend stops generating tokens.
             if _inner_error and port is not None:

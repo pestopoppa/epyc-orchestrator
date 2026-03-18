@@ -796,7 +796,7 @@ class ProcedureRegistry:
         """Execute a shell command using shlex for safe argument splitting."""
         command = action.get("command", "")
         timeout = action.get("timeout_seconds", 300)
-        working_dir = action.get("working_dir", "/mnt/raid0/llm/claude")
+        working_dir = action.get("working_dir", "/mnt/raid0/llm/epyc-orchestrator")
 
         # Validate working directory is on RAID
         if not working_dir.startswith("/mnt/raid0/"):
@@ -957,7 +957,7 @@ class ProcedureRegistry:
         """Run a verification gate."""
         gate_name = action.get("args", {}).get("gate")
 
-        cwd = "/mnt/raid0/llm/claude"
+        cwd = "/mnt/raid0/llm/epyc-orchestrator"
 
         # Map gates to argument lists (no shell=True needed)
         gate_commands: dict[str, list[str]] = {

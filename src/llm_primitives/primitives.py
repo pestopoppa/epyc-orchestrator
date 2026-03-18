@@ -64,7 +64,7 @@ class LLMPrimitives(
         config: LLMPrimitivesConfig | None = None,
         mock_responses: dict[str, str] | None = None,
         server_urls: dict[str, str] | None = None,
-        num_slots: int = 4,
+        num_slots: int = 2,
         registry: Any | None = None,
         worker_pool: Any | None = None,
         use_worker_pool: bool = False,
@@ -629,64 +629,6 @@ class LLMPrimitives(
         if not snippets:
             return task
         return retriever.format_for_rag(snippets, task)
-
-    def llm_call_stream(
-        self,
-        prompt: str,
-        role: str = "worker",
-        n_tokens: int | None = None,
-        stop_sequences: list[str] | None = None,
-    ):
-        """Stream tokens from a sub-LM call.
-
-        Yields individual tokens as they are generated. Useful for
-        real-time streaming in the REPL loop.
-
-        Args:
-            prompt: The prompt for the sub-LM.
-            role: Role determining which model to use.
-            n_tokens: Max tokens to generate.
-            stop_sequences: Optional stop sequences.
-
-        Yields:
-            str: Individual tokens as generated.
-        """
-        # Check for streaming backend support
-        backend = self._backends.get(role) if hasattr(self, "_backends") else None
-        if backend is not None and hasattr(backend, "infer_stream_text"):
-            from src.model_server import InferenceRequest
-            from src.config import get_config
-
-            role_timeout = get_config().timeouts.role_timeouts_dict().get(
-                role, self.config.call_timeout
-            )
-            role_timeout = self._clamp_timeout_to_request_budget(role_timeout)
-            request = InferenceRequest(
-                role=role,
-                prompt=prompt,
-                n_tokens=n_tokens or -1,
-                timeout=role_timeout,
-                stop_sequences=stop_sequences,
-                cache_prompt=getattr(self, "cache_prompt", True),
-                stream=True,
-            )
-            from src.inference_lock import inference_lock
-
-            with inference_lock(
-                role,
-                cancel_check=self.get_request_cancel_check(),
-                deadline_s=self.get_request_deadline_s(),
-                request_tag=self.get_request_task_id(),
-            ):
-                deadline_s = self.get_request_deadline_s()
-                if deadline_s is not None:
-                    request.timeout = self._clamp_timeout_to_request_budget(request.timeout)
-                for chunk in backend.infer_stream_text(None, request):
-                    yield chunk.text if hasattr(chunk, "text") else str(chunk)
-        else:
-            # Fallback: non-streaming call, yield entire result at once
-            result = self.llm_call(prompt, role=role, n_tokens=n_tokens, stop_sequences=stop_sequences)
-            yield result
 
     def llm_batch(
         self,

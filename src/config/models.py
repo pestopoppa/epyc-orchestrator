@@ -151,8 +151,8 @@ class ServerConfigData:
     timeout: int = 600
     """Request timeout in seconds (increased for architect models)."""
 
-    num_slots: int = 4
-    """Number of parallel slots."""
+    num_slots: int = 2
+    """Number of parallel slots (must match llama-server -np value)."""
 
     connect_timeout: int = 5
     """Connection timeout."""
@@ -248,7 +248,7 @@ def _get_default_llm_root() -> str:
 def _get_default_project_root() -> str:
     """Get project root from environment or default."""
     llm_root = _get_default_llm_root()
-    return os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT", f"{llm_root}/claude")
+    return os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT", f"{llm_root}/epyc-orchestrator")
 
 
 @dataclass

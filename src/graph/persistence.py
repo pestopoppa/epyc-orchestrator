@@ -118,8 +118,8 @@ class SQLiteStatePersistence(BaseStatePersistence[TaskState, TaskResult]):
             log.debug("Graph snapshot persist failed: %s", exc)
 
 
-def _state_to_dict(state: TaskState) -> dict:
-    """Serialize TaskState to a JSON-safe dict."""
+def _state_to_dict_minimal(state: TaskState) -> dict:
+    """Serialize TaskState to a minimal JSON-safe dict (8 fields)."""
     return {
         "task_id": state.task_id,
         "prompt": state.prompt[:500],
@@ -130,3 +130,41 @@ def _state_to_dict(state: TaskState) -> dict:
         "turns": state.turns,
         "last_error": state.last_error[:200] if state.last_error else "",
     }
+
+
+_SKIP_FIELDS = frozenset({"task_manager", "pending_approval"})
+
+
+def _state_to_dict_full(state: TaskState) -> dict:
+    """Serialize all TaskState fields to a JSON-safe dict.
+
+    Skips ``task_manager`` (not serializable) and ``pending_approval`` (transient).
+    """
+    import dataclasses
+    from enum import Enum
+
+    result: dict = {}
+    for f in dataclasses.fields(state):
+        if f.name in _SKIP_FIELDS:
+            continue
+        val = getattr(state, f.name)
+        if isinstance(val, Enum):
+            val = str(val)
+        elif isinstance(val, (list, dict, str, int, float, bool, type(None))):
+            pass  # JSON-safe as-is
+        else:
+            try:
+                val = repr(val)
+            except Exception:
+                val = f"<unserializable {type(val).__name__}>"
+        result[f.name] = val
+    return result
+
+
+def _state_to_dict(state: TaskState) -> dict:
+    """Serialize TaskState — full or minimal based on feature flag."""
+    from src.features import features as _get_features
+
+    if _get_features().state_history_snapshots:
+        return _state_to_dict_full(state)
+    return _state_to_dict_minimal(state)

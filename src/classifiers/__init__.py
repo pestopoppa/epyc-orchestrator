@@ -51,6 +51,7 @@ from src.classifiers.keyword_matcher import (
 )
 from src.classifiers.output_parser import strip_tool_outputs, truncate_looped_answer
 from src.classifiers.quality_detector import detect_output_quality_issue
+from src.classifiers.factual_risk import FactualRiskResult, assess_risk, get_mode as get_factual_risk_mode
 
 # Lazy import for MemRL components (may not be available)
 def get_classification_retriever():
@@ -82,4 +83,7 @@ __all__ = [
     "strip_tool_outputs",
     "truncate_looped_answer",
     "detect_output_quality_issue",
+    "FactualRiskResult",
+    "assess_risk",
+    "get_factual_risk_mode",
 ]

@@ -167,6 +167,17 @@ async def lifespan(app: FastAPI):
     if f.memrl:
         ensure_memrl_initialized(state)
 
+        # Seed classification exemplars from YAML if episodic store is empty.
+        # This ensures ClassificationRetriever has exemplars for Q-value voting
+        # without requiring a manual seed_memory() call.
+        try:
+            from orchestration.repl_memory.seed_loader import seed_memory
+            seed_stats = seed_memory(force=False)
+            if seed_stats.get("seeded", 0) > 0:
+                logger.info("Auto-seeded %d classification exemplars", seed_stats["seeded"])
+        except Exception as e:
+            logger.debug("Exemplar auto-seeding skipped: %s", e)
+
     # Background Q-scoring task (only if MemRL feature enabled).
     # Only run in ONE worker to avoid 6× parallel log scans that burn
     # 100% CPU on all workers.  Use a file lock to elect one worker.
@@ -175,7 +186,7 @@ async def lifespan(app: FastAPI):
         from src.config import get_config as _gc
         _bg_lock_path = str(_gc().paths.log_dir / ".bg_cleanup.lock")
     except Exception:
-        _bg_lock_path = "/mnt/raid0/llm/claude/logs/.bg_cleanup.lock"
+        _bg_lock_path = "logs/.bg_cleanup.lock"
     _is_primary_worker = False
     if f.memrl:
         try:

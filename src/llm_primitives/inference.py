@@ -429,11 +429,16 @@ class InferenceMixin:
                                 _chunk_count = 0
                                 _REP_CHECK_INTERVAL = 50  # check every ~50 chunks
 
+                                _cancel = self.get_request_cancel_check()
+
                                 def _on_chunk_guarded(content: str) -> None:
                                     nonlocal _chunk_count
                                     tap.write_chunk(content)
                                     _acc.append(content)
                                     _chunk_count += 1
+                                    # Client disconnect → abort streaming to release lock sooner.
+                                    if _cancel is not None and _cancel():
+                                        raise StopIteration
                                     # Caller-provided early-stop (FINAL, TOON, etc.)
                                     if _stop_check is not None and _stop_check("".join(_acc)):
                                         raise StopIteration
@@ -451,7 +456,19 @@ class InferenceMixin:
                                     role_config, request, on_chunk=_on_chunk_guarded
                                 )
                             else:
-                                result = backend.infer(role_config, request)
+                                # Prefer streaming for cancellation support
+                                if hasattr(backend, "infer_stream_text"):
+                                    _cancel_tap = self.get_request_cancel_check()
+
+                                    def _on_chunk_tap(content: str) -> None:
+                                        if _cancel_tap is not None and _cancel_tap():
+                                            raise StopIteration
+
+                                    result = backend.infer_stream_text(
+                                        role_config, request, on_chunk=_on_chunk_tap
+                                    )
+                                else:
+                                    result = backend.infer(role_config, request)
                                 tap.write_response(result.output)
                             tap.write_timings(
                                 result.tokens_generated,
@@ -460,7 +477,21 @@ class InferenceMixin:
                                 result.predicted_per_second,
                             )
                     else:
-                        result = backend.infer(role_config, request)
+                        # Use streaming even without tap — each chunk is a
+                        # cancellation checkpoint, preventing indefinite lock
+                        # hold when the httpx batch read hangs.
+                        if hasattr(backend, "infer_stream_text"):
+                            _cancel_nt = self.get_request_cancel_check()
+
+                            def _cancel_only(content: str) -> None:
+                                if _cancel_nt is not None and _cancel_nt():
+                                    raise StopIteration
+
+                            result = backend.infer_stream_text(
+                                role_config, request, on_chunk=_cancel_only
+                            )
+                        else:
+                            result = backend.infer(role_config, request)
             except Exception as exc:
                 req_elapsed_ms = (time.perf_counter() - req_started) * 1000
                 transport = "stream" if can_stream else "batch"

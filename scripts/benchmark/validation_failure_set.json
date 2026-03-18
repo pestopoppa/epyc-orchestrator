@@ -1,0 +1,373 @@
+{
+  "description": "Known failure question IDs from seeding diagnostics 2026-02-27 to 2026-03-02",
+  "purpose": "Targeted prompt validation - test prompt changes against these exact failures",
+  "failure_sets": {
+    "repl_no_tools": [
+      {
+        "question_id": "simpleqa/simpleqa_general_01132",
+        "suite": "simpleqa",
+        "scoring_method": "exact_match",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "France",
+        "expected_preview": "Poland"
+      },
+      {
+        "question_id": "simpleqa/simpleqa_general_02667",
+        "suite": "simpleqa",
+        "scoring_method": "exact_match",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "1964",
+        "expected_preview": "1944"
+      },
+      {
+        "question_id": "simpleqa/simpleqa_general_04208",
+        "suite": "simpleqa",
+        "scoring_method": "exact_match",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "University of Cambridge",
+        "expected_preview": "University of Oxford"
+      },
+      {
+        "question_id": "hotpotqa/hotpot_comparison_5a8baf4b5542996e8ac889c5",
+        "suite": "hotpotqa",
+        "scoring_method": "f1",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "In These Times",
+        "expected_preview": "Multinational Monitor"
+      },
+      {
+        "question_id": "hotpotqa/hotpot_comparison_5ab7cc145542995dae37e9a1",
+        "suite": "hotpotqa",
+        "scoring_method": "f1",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "None",
+        "expected_preview": "lead singer"
+      },
+      {
+        "question_id": "hotpotqa/hotpot_bridge_5abcc818554299658360048b",
+        "suite": "hotpotqa",
+        "scoring_method": "f1",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "4x100m relay",
+        "expected_preview": "4 x 100 metre relay"
+      },
+      {
+        "question_id": "gpqa/gpqa_Organic Chemistry_0020",
+        "suite": "gpqa",
+        "scoring_method": "multiple_choice",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "D",
+        "expected_preview": "A"
+      },
+      {
+        "question_id": "gpqa/gpqa_Organic Chemistry_0255",
+        "suite": "gpqa",
+        "scoring_method": "multiple_choice",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "B",
+        "expected_preview": "A"
+      },
+      {
+        "question_id": "gpqa/gpqa_Quantum Mechanics_0293",
+        "suite": "gpqa",
+        "scoring_method": "multiple_choice",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[Max turns (10) reached]",
+        "expected_preview": "D"
+      },
+      {
+        "question_id": "usaco/usaco_silver_964_bronze_where_am_i?",
+        "suite": "usaco",
+        "scoring_method": "code_execution",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[Max turns (10) reached]",
+        "expected_preview": ""
+      },
+      {
+        "question_id": "usaco/usaco_silver_966_silver_moobuzz",
+        "suite": "usaco",
+        "scoring_method": "code_execution",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[Max turns (10) reached]",
+        "expected_preview": ""
+      },
+      {
+        "question_id": "usaco/usaco_silver_1211_gold_moo_network",
+        "suite": "usaco",
+        "scoring_method": "code_execution",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[Max turns (10) reached]",
+        "expected_preview": ""
+      },
+      {
+        "question_id": "coder/mbpp_0416",
+        "suite": "coder",
+        "scoring_method": "substring",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[Max turns (10) reached]",
+        "expected_preview": "breakSum"
+      },
+      {
+        "question_id": "coder/mbpp_0232",
+        "suite": "coder",
+        "scoring_method": "substring",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[Max turns (10) reached]",
+        "expected_preview": "larg_nnum"
+      },
+      {
+        "question_id": "coder/humaneval_HumanEval_6",
+        "suite": "coder",
+        "scoring_method": "substring",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[2, 3, 1, 3]",
+        "expected_preview": "parse_nested_parens"
+      },
+      {
+        "question_id": "math/math500_Counting & Probability_00348",
+        "suite": "math",
+        "scoring_method": "substring",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[Max turns (10) reached]",
+        "expected_preview": "4495"
+      },
+      {
+        "question_id": "math/math500_Prealgebra_00396",
+        "suite": "math",
+        "scoring_method": "substring",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "[Max turns (10) reached]",
+        "expected_preview": "2"
+      },
+      {
+        "question_id": "math/math500_Precalculus_00425",
+        "suite": "math",
+        "scoring_method": "substring",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "tools_used": 0,
+        "answer_preview": "3*R^2 - (a^2 + b^2 + c^2)/4",
+        "expected_preview": "3R^2"
+      }
+    ],
+    "format_violation": [
+      {
+        "question_id": "hotpotqa/hotpot_bridge_5a84a97f5542992a431d1a87",
+        "suite": "hotpotqa",
+        "config": "architect_general:delegated",
+        "passed": false,
+        "answer_preview": "King Edward VII Land is a peninsula located in Antarctica."
+      },
+      {
+        "question_id": "hotpotqa/hotpot_bridge_5a84a97f5542992a431d1a87",
+        "suite": "hotpotqa",
+        "config": "architect_coding:delegated",
+        "passed": false,
+        "answer_preview": "King Edward VII Peninsula is located at the northwestern extremity of Marie Byrd Land in Antarctica, projecting into the Ross Sea between Sulzberger Bay and the northeast corner of the Ross Ice Shelf."
+      },
+      {
+        "question_id": "hotpotqa/hotpot_bridge_5a84b5f05542991dd0999da5",
+        "suite": "hotpotqa",
+        "config": "architect_coding:delegated",
+        "passed": false,
+        "answer_preview": "The European Masters Games and Olympic Games are both international multi-sport events held every four years, but they differ in participant age groups and organizing bodies.|to:worker_summarize"
+      },
+      {
+        "question_id": "hotpotqa/hotpot_bridge_5ae61351554299546bf83066",
+        "suite": "hotpotqa",
+        "config": "architect_coding:delegated",
+        "passed": false,
+        "answer_preview": "Acne Studios was founded in 1996, Moschino in 1983, Fendi in 1925, Versus (Versace) in 1989, Dolce & Gabbana in 1985, and Scappino in 1914. The oldest fashion house among these is Scappino.|to:worker_"
+      },
+      {
+        "question_id": "agentic/bfcl_036",
+        "suite": "agentic",
+        "config": "architect_general:delegated",
+        "passed": true,
+        "answer_preview": "{\"function\": \"hash_file\", \"args\": {\"path\": \"/data/report.pdf\", \"algorithm\": \"SHA-256\"}} D|{\"function\": \"hash_file\", \"args\": {\"path\": \"/data/report.pdf\", \"algorithm\": \"SHA-256\"}} I|brief:search for ICT"
+      },
+      {
+        "question_id": "agentic/bfcl_036",
+        "suite": "agentic",
+        "config": "architect_coding:delegated",
+        "passed": true,
+        "answer_preview": "hash_file(path=\"/data/report.pdf\", algorithm=\"SHA-256\")"
+      },
+      {
+        "question_id": "agentic/bfcl_038",
+        "suite": "agentic",
+        "config": "architect_general:delegated",
+        "passed": true,
+        "answer_preview": "{\"function\": \"snapshot_volume\", \"args\": {\"volume_id\": \"vol-abc123\", \"label\": \"pre-upgrade-backup\"}}"
+      },
+      {
+        "question_id": "agentic/bfcl_038",
+        "suite": "agentic",
+        "config": "architect_coding:delegated",
+        "passed": true,
+        "answer_preview": "{\"function\": \"snapshot_volume\", \"arguments\": {\"volume_id\": \"vol-abc123\", \"label\": \"pre-upgrade-backup\"}}"
+      },
+      {
+        "question_id": "gpqa/gpqa_Quantum Mechanics_0293",
+        "suite": "gpqa",
+        "config": "architect_general:delegated",
+        "passed": false,
+        "answer_preview": "To solve this problem, we need to calculate the probability of measuring each eigenstate and find the average value of the given operator.\n\n### Step 1: Normalize the state\nThe given state is proportio"
+      },
+      {
+        "question_id": "gpqa/gpqa_Astrophysics_0434",
+        "suite": "gpqa",
+        "config": "architect_general:delegated",
+        "passed": false,
+        "answer_preview": "To determine the required velocity for stars in Group_2 to achieve a critical distance of 1.5 AU, we need to consider gravitational interactions and relative velocities.\n\nThe critical distance $ r_c $"
+      },
+      {
+        "question_id": "gpqa/gpqa_Organic Chemistry_0116",
+        "suite": "gpqa",
+        "config": "architect_general:delegated",
+        "passed": false,
+        "answer_preview": "Wait, let me recheck.\n\nThe starting material is (R,Z)-N-(2-ethylcyclohexylidene)ethanaminium.\nThis implies the cyclohexane ring has a substituent at position 2 that's ethyl (from the \"2-ethyl\").\nThere"
+      },
+      {
+        "question_id": "gpqa/gpqa_Condensed Matter Physics_0428",
+        "suite": "gpqa",
+        "config": "architect_general:delegated",
+        "passed": false,
+        "answer_preview": "Wait, let me think again.\n\nThe energy dispersion relation is given as E(p) = \u0394 + b(p - p0)^2.\n\nWe need to find the density of states (DOS), which in 3D for a continuous spectrum is generally proportio"
+      }
+    ],
+    "prose_only_code_task": [
+      {
+        "question_id": "usaco/usaco_silver_964_bronze_where_am_i?",
+        "suite": "usaco",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "answer_preview": "[Max turns (10) reached]"
+      },
+      {
+        "question_id": "usaco/usaco_silver_964_bronze_where_am_i?",
+        "suite": "usaco",
+        "config": "architect_general:delegated",
+        "passed": false,
+        "answer_preview": "context: str (119 chars)\nartifacts: {}"
+      },
+      {
+        "question_id": "usaco/usaco_silver_964_bronze_where_am_i?",
+        "suite": "usaco",
+        "config": "architect_coding:delegated",
+        "passed": false,
+        "answer_preview": "context: str (70 chars)\nartifacts: {}"
+      },
+      {
+        "question_id": "usaco/usaco_silver_966_silver_moobuzz",
+        "suite": "usaco",
+        "config": "frontdoor:repl",
+        "passed": false,
+        "answer_preview": "[Max turns (10) reached]"
+      },
+      {
+        "question_id": "usaco/usaco_silver_966_silver_moobuzz",
+        "suite": "usaco",
+        "config": "architect_general:delegated",
+        "passed": false,
+        "answer_preview": "[Delegation timeout after 2 turn(s), 57.0s. Specialist role=coder_escalation, mode=react. Brief=binary search on answer with count of skipped numbers "
+      }
+    ],
+    "misrouted_to_coder": [
+      {
+        "question_id": "gpqa/gpqa_Organic Chemistry_0255",
+        "suite": "gpqa",
+        "config": "architect_coding:delegated",
+        "passed": false
+      },
+      {
+        "question_id": "simpleqa/simpleqa_general_01132",
+        "suite": "simpleqa",
+        "config": "architect_coding:delegated",
+        "passed": false
+      },
+      {
+        "question_id": "instruction_precision/ifeval_2912",
+        "suite": "instruction_precision",
+        "config": "architect_coding:delegated",
+        "passed": true
+      },
+      {
+        "question_id": "mode_advantage_hard/ma_hard_reason_002",
+        "suite": "mode_advantage_hard",
+        "config": "architect_coding:delegated",
+        "passed": false
+      },
+      {
+        "question_id": "simpleqa/simpleqa_general_02667",
+        "suite": "simpleqa",
+        "config": "architect_general:delegated",
+        "passed": false
+      }
+    ]
+  },
+  "all_question_ids": [
+    "agentic/bfcl_036",
+    "agentic/bfcl_038",
+    "coder/humaneval_HumanEval_6",
+    "coder/mbpp_0232",
+    "coder/mbpp_0416",
+    "gpqa/gpqa_Astrophysics_0434",
+    "gpqa/gpqa_Condensed Matter Physics_0428",
+    "gpqa/gpqa_Organic Chemistry_0020",
+    "gpqa/gpqa_Organic Chemistry_0116",
+    "gpqa/gpqa_Organic Chemistry_0255",
+    "gpqa/gpqa_Quantum Mechanics_0293",
+    "hotpotqa/hotpot_bridge_5a84a97f5542992a431d1a87",
+    "hotpotqa/hotpot_bridge_5a84b5f05542991dd0999da5",
+    "hotpotqa/hotpot_bridge_5abcc818554299658360048b",
+    "hotpotqa/hotpot_bridge_5ae61351554299546bf83066",
+    "hotpotqa/hotpot_comparison_5a8baf4b5542996e8ac889c5",
+    "hotpotqa/hotpot_comparison_5ab7cc145542995dae37e9a1",
+    "instruction_precision/ifeval_2912",
+    "math/math500_Counting & Probability_00348",
+    "math/math500_Prealgebra_00396",
+    "math/math500_Precalculus_00425",
+    "mode_advantage_hard/ma_hard_reason_002",
+    "simpleqa/simpleqa_general_01132",
+    "simpleqa/simpleqa_general_02667",
+    "simpleqa/simpleqa_general_04208",
+    "usaco/usaco_silver_1211_gold_moo_network",
+    "usaco/usaco_silver_964_bronze_where_am_i?",
+    "usaco/usaco_silver_966_silver_moobuzz"
+  ]
+}

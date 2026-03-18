@@ -13,7 +13,7 @@
   },
   {
     "task": "What files are in the project directory",
-    "code": "result = list_dir('/mnt/raid0/llm/claude')\nFINAL(result)",
+    "code": "result = list_dir('/mnt/raid0/llm/epyc-orchestrator')\nFINAL(result)",
     "tools_used": ["list_dir", "FINAL"],
     "category": "filesystem"
   },
@@ -37,7 +37,7 @@
   },
   {
     "task": "Show me the beginning of README.md",
-    "code": "content = peek(1000, file_path='/mnt/raid0/llm/claude/README.md')\nFINAL(content)",
+    "code": "content = peek(1000, file_path='/mnt/raid0/llm/epyc-orchestrator/README.md')\nFINAL(content)",
     "tools_used": ["peek", "FINAL"],
     "category": "filesystem"
   },

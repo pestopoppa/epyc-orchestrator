@@ -12,6 +12,9 @@ from src.graph.approval_gate import (
     HaltState,
     should_halt,
     request_approval_for_escalation,
+    InterruptCondition,
+    check_interrupt_conditions,
+    request_approval_for_interrupt,
 )
 
 
@@ -116,3 +119,53 @@ class TestRequestApproval:
         assert halt.reason == HaltReason.ESCALATION
         assert halt.from_role == "worker_general"
         assert halt.to_role == "coder_escalation"
+
+
+class TestInterruptCondition:
+    """Tests for generalized interrupt conditions (LangGraph pre-migration)."""
+
+    def test_interrupt_condition_halt_reason(self):
+        assert HaltReason.INTERRUPT_CONDITION == "interrupt_condition"
+
+    def test_check_interrupt_conditions_none(self):
+        """Empty conditions list returns None."""
+        assert check_interrupt_conditions([], {}, {}) is None
+
+    def test_check_interrupt_conditions_triggers(self):
+        cond = MagicMock()
+        cond.should_interrupt.return_value = "budget exceeded"
+        result = check_interrupt_conditions([cond], {}, {})
+        assert result == "budget exceeded"
+
+    def test_check_interrupt_conditions_skips_none(self):
+        cond = MagicMock()
+        cond.should_interrupt.return_value = None
+        assert check_interrupt_conditions([cond], {}, {}) is None
+
+    def test_check_interrupt_conditions_handles_exception(self):
+        cond = MagicMock()
+        cond.should_interrupt.side_effect = RuntimeError("boom")
+        assert check_interrupt_conditions([cond], {}, {}) is None
+
+    def test_request_approval_for_interrupt_no_callback(self):
+        ctx = MagicMock()
+        ctx.deps.approval_callback = None
+        decision = request_approval_for_interrupt(ctx, "test interrupt")
+        assert decision == ApprovalDecision.APPROVE
+
+    def test_request_approval_for_interrupt_reject(self):
+        set_features(Features(approval_gates=True, resume_tokens=False))
+        callback = MagicMock()
+        callback.request_approval.return_value = ApprovalDecision.REJECT
+
+        ctx = MagicMock()
+        ctx.deps.approval_callback = callback
+        ctx.state.pending_approval = None
+
+        decision = request_approval_for_interrupt(ctx, "budget exceeded")
+        assert decision == ApprovalDecision.REJECT
+        callback.request_approval.assert_called_once()
+
+        halt = callback.request_approval.call_args[0][0]
+        assert halt.reason == HaltReason.INTERRUPT_CONDITION
+        assert halt.description == "budget exceeded"

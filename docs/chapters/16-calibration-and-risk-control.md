@@ -151,6 +151,108 @@ Secondary context:
 
 </details>
 
+## Skill Effectiveness Scoring
+
+When SkillBank is active (`ORCHESTRATOR_SKILLBANK=1`), skill retrieval outcomes feed into effectiveness tracking, which in turn influences confidence calibration.
+
+<details>
+<summary>OutcomeTracker and effectiveness lifecycle</summary>
+
+### OutcomeTracker
+
+`OutcomeTracker` (`orchestration/repl_memory/skill_evolution.py`) tracks per-skill retrieval outcomes with a rolling effectiveness score:
+
+- Each time a skill is retrieved for a task, the retrieval is recorded
+- After task completion, the outcome (success/failure/escalation) is correlated back to retrieved skills
+- `effectiveness_score` is updated as a rolling average (initial default: 0.5)
+
+### Lifecycle Thresholds
+
+| Threshold | Value | Action |
+|-----------|-------|--------|
+| Promotion | effectiveness >= 0.8 | Confidence boosted by +0.1 |
+| Stable | 0.3 <= effectiveness < 0.8 | No action |
+| Deprecation | confidence < 0.3 | Skill marked `deprecated=True`, excluded from retrieval |
+| Hard ceiling | confidence 0.95 | Prevents overconfidence |
+
+### Interaction with Risk Control
+
+Skill effectiveness data provides an additional signal for calibration:
+- High-effectiveness skills increase routing confidence for covered task types
+- Low-effectiveness or deprecated skills are excluded, preventing confidence inflation from bad memories
+- The `min_confidence` parameter in `SkillRetrievalConfig` (default 0.3) acts as a quality gate aligned with the risk control's confidence thresholds
+
+</details>
+
+See [Chapter 15: SkillBank](15-skillbank-experience-distillation.md) for the full evolution mechanism.
+
+## Input-Side Classifiers (`src/classifiers/`)
+
+The conformal risk gate (above) operates on output-side uncertainty — it requires a routing decision and memory retrieval to produce confidence estimates. Two complementary input-side classifiers assess the prompt itself before any model call, using fast regex-only feature extraction.
+
+### Factual Risk Scorer
+
+`src/classifiers/factual_risk.py` (280 lines, 43 tests) scores prompts for hallucination risk based on input features: date/entity questions, citation requests, claim density, uncertainty markers, factual keyword ratio.
+
+```python
+@dataclass
+class FactualRiskResult:
+    risk_score: float           # [0, 1] raw prompt-based risk
+    adjusted_risk_score: float  # [0, 1] adjusted for assigned role capability
+    risk_band: str              # "low" | "medium" | "high"
+    risk_features: dict         # for telemetry
+    role_adjustment: float      # tier multiplier (0.6 for 235B, 1.0 for 7B)
+```
+
+Mode gate via `classifier_config.yaml`:
+- `off`: no computation
+- `shadow`: compute and log in `routing_meta`, no routing changes (current)
+- `enforce`: wire into cheap-first bypass, plan review gate, escalation policy (future)
+
+Telemetry fields on `RoutingResult`: `factual_risk_score`, `factual_risk_band`, `estimated_cost`. Logged in every `ROUTING_DECISION` event. The `estimated_cost` field (tier_weight × estimated_tokens / 1M) provides relative cost units for Pareto cost dimension tracking.
+
+### Difficulty Signal Classifier
+
+`src/classifiers/difficulty_signal.py` (~230 lines, 30 tests) classifies prompt difficulty using 7 regex features: prompt length, multi-step indicators, constraint count, code presence, math presence, nesting depth, ambiguity markers. Produces a weighted score mapped to bands.
+
+```python
+@dataclass
+class DifficultyResult:
+    difficulty_score: float     # [0, 1]
+    adjusted_difficulty_score: float
+    difficulty_band: str        # "easy" | "medium" | "hard"
+    difficulty_features: dict
+```
+
+Band thresholds (configurable in `classifier_config.yaml`): easy < 0.3, medium 0.3-0.6, hard > 0.6.
+
+Currently in `shadow` mode. Band-adaptive token budgets are wired in `_repl_turn_token_cap()` (`src/graph/helpers.py`): when mode is `enforce`, the flat 5000-token REPL cap is replaced with band-specific budgets (easy=1500, medium=3500, hard=7000). The `difficulty_band` propagates from `RoutingResult` → `TaskState.difficulty_band` → the cap function. In shadow mode, the flat cap is used (backward compatible).
+
+Telemetry fields on `RoutingResult`: `difficulty_score`, `difficulty_band`. Also available on `EscalationContext`.
+
+### Relationship to Conformal Risk Gate
+
+These classifiers complement the conformal prediction gate:
+
+| Signal | Type | When | What it measures |
+|--------|------|------|------------------|
+| Factual risk | Input-side | Before routing | Prompt's hallucination risk |
+| Difficulty signal | Input-side | Before routing | Prompt's reasoning complexity |
+| Conformal confidence | Output-side | During routing | Model's uncertainty on this task type |
+
+They should not double-gate: if conformal prediction already rejects a routing, factual risk is moot. When both are in enforce mode, factual risk should modulate the conformal threshold (high factual risk → stricter confidence requirement).
+
+### Output Quality Detection
+
+`src/classifiers/quality_detector.py` detects degenerate model output via text heuristics:
+
+1. **N-gram repetition** — trigram unique ratio below threshold (degeneration loops)
+2. **Garbled output** — mostly very short lines mixed with long ones
+3. **Near-empty output** — content too short after prefix stripping
+4. **Think-block loop detection** — 4-gram repetition inside `<think>` blocks (reasoning model failure mode where the model enters a repetitive reasoning loop). Threshold: >15% duplicate 4-grams. Research backing: SEER shows failed outputs are ~1,193 tokens longer than successful ones; repetition within reasoning is a strong failure signal.
+
+Config-driven thresholds via `ChatPipelineConfig`. The quality detector is always active (no mode gate).
+
 ---
 
 *Previous: [Chapter 15: SkillBank & Experience Distillation](15-skillbank-experience-distillation.md)* | *Next: [Chapter 17: Programmatic Tool Chaining](17-programmatic-tool-chaining.md)*

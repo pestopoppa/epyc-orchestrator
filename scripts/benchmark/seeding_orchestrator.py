@@ -87,6 +87,7 @@ def _erase_slots(port: int, *, all_slots: bool = False) -> None:
         resp = httpx.get(f"http://localhost:{port}/slots", timeout=5)
         if resp.status_code != 200:
             return
+        erased_slots: list[int] = []
         for slot in resp.json():
             # When all_slots=True, erase every slot (idle or processing)
             # to clear stale KV cache between eval questions.
@@ -115,7 +116,7 @@ def _erase_slots(port: int, *, all_slots: bool = False) -> None:
 
                 if status == 200:
                     _SLOT_ERASE_CAPABILITY[port] = strategy
-                    logger.info(f"  → erased slot {slot_id} on port {port}")
+                    erased_slots.append(slot_id)
                     erased = True
                     break
                 if status not in unsupported_codes:
@@ -132,6 +133,9 @@ def _erase_slots(port: int, *, all_slots: bool = False) -> None:
                 logger.warning(
                     f"  slot erase unsupported on port {port}; disabling erase attempts"
                 )
+        if erased_slots:
+            ids = ", ".join(str(s) for s in erased_slots)
+            logger.info(f"  → erased {len(erased_slots)} slot(s) on port {port} [{ids}]")
     except Exception as e:
         logger.warning("  [erase-slots] port %d: %s", port, e)
 

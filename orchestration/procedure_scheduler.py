@@ -112,7 +112,7 @@ class ProcedureScheduler:
             persist_state: Whether to persist state between runs.
         """
         self.registry = registry
-        self.state_path = Path(state_path or "/mnt/raid0/llm/claude/orchestration/procedures/state/scheduler.json")
+        self.state_path = Path(state_path or "/mnt/raid0/llm/epyc-orchestrator/orchestration/procedures/state/scheduler.json")
         self.max_concurrent = max_concurrent
         self.persist_state = persist_state
 

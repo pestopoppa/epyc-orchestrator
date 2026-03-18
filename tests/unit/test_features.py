@@ -186,7 +186,10 @@ class TestFeaturesSummary:
             "approval_gates", "binding_routing", "routing_classifier", "skillbank",
             "worker_call_budget", "task_token_budget",
             "accurate_token_counting", "tool_result_clearing",
-            "model_grading", "mock_mode",
+            "reasoning_length_alarm", "output_spill_to_file",
+            "model_grading", "self_speculation", "hierarchical_speculation",
+            "state_history_snapshots", "generalized_interrupts",
+            "mock_mode",
         }
         assert set(s.keys()) == expected_keys
 

@@ -16,7 +16,7 @@ class ChatRequest(BaseModel):
     real_mode: bool = Field(
         default=False, description="Enable real inference with RadixAttention caching"
     )
-    max_turns: int = Field(default=10, ge=1, le=50, description="Maximum orchestration turns")
+    max_turns: int = Field(default=15, ge=1, le=50, description="Maximum orchestration turns")
     role: str = Field(
         default="", description="Initial role to use (empty = auto-route via _classify_and_route)"
     )

@@ -19,8 +19,13 @@ def _get_config_path() -> Path:
         return Path(env_path)
 
     # Default path relative to project root
+    try:
+        from src.config import get_config
+        _default_root = str(get_config().paths.project_root)
+    except Exception:
+        _default_root = str(Path.cwd())
     project_root = os.environ.get(
-        "ORCHESTRATOR_PATHS_PROJECT_ROOT", "/mnt/raid0/llm/claude"
+        "ORCHESTRATOR_PATHS_PROJECT_ROOT", _default_root
     )
     return Path(project_root) / "orchestration" / "classifier_config.yaml"
 
@@ -224,6 +229,26 @@ def _get_default_config() -> dict[str, Any]:
                         ],
                     },
                 },
+            },
+        },
+        "factual_risk": {
+            "mode": "off",
+            "threshold_low": 0.3,
+            "threshold_high": 0.7,
+            "force_review_high": True,
+            "early_escalation_high": False,
+            "role_adjustments": {
+                "tier_1": 0.6,
+                "tier_2": 0.8,
+                "tier_3": 1.0,
+            },
+            "feature_weights": {
+                "has_date_question": 0.15,
+                "has_entity_question": 0.15,
+                "has_citation_request": 0.10,
+                "claim_density": 0.25,
+                "factual_keyword_ratio": 0.20,
+                "uncertainty_markers": 0.15,
             },
         },
     }

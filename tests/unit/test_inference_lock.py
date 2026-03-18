@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 from src import inference_lock as lock_mod
@@ -82,3 +83,41 @@ def test_acquire_lock_aborts_on_request_deadline(monkeypatch, tmp_path):
             assert False, "expected TimeoutError"
         except TimeoutError as e:
             assert "deadline exceeded" in str(e)
+
+
+def test_lock_watchdog_force_releases(monkeypatch, tmp_path):
+    """Watchdog should force-release the lock after max_hold_s, unblocking the context."""
+    _patch_config_tmp(monkeypatch, tmp_path)
+    monkeypatch.delenv("ORCHESTRATOR_INFERENCE_LOCK_FILE", raising=False)
+    monkeypatch.delenv("ORCHESTRATOR_MAX_LOCK_HOLD_S", raising=False)
+
+    start = time.monotonic()
+    with lock_mod.inference_lock("frontdoor", max_hold_s=2):
+        # Simulate a stuck inference — sleep longer than the watchdog timeout.
+        time.sleep(4)
+    elapsed = time.monotonic() - start
+
+    # The context manager should complete; watchdog fires at ~2s, sleep finishes at ~4s.
+    # Key assertion: the lock was released (we didn't deadlock).
+    assert elapsed < 6, f"Lock held too long ({elapsed:.1f}s), watchdog may not have fired"
+
+
+def test_lock_watchdog_does_not_fire_on_normal_hold(monkeypatch, tmp_path):
+    """Watchdog should NOT fire when lock is released normally before timeout."""
+    _patch_config_tmp(monkeypatch, tmp_path)
+    monkeypatch.delenv("ORCHESTRATOR_INFERENCE_LOCK_FILE", raising=False)
+
+    import logging
+    fired = []
+    orig_critical = logging.Logger.critical
+
+    def _capture_critical(self, msg, *args, **kwargs):
+        fired.append(msg)
+        orig_critical(self, msg, *args, **kwargs)
+
+    monkeypatch.setattr(logging.Logger, "critical", _capture_critical)
+
+    with lock_mod.inference_lock("frontdoor", max_hold_s=5):
+        time.sleep(0.1)  # Well under the 5s watchdog
+
+    assert not any("force-releasing" in str(m) for m in fired)

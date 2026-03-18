@@ -345,6 +345,32 @@ def extract_code_from_response(response: str) -> str:
     code = _strip_import_lines(code)
     if _is_valid_python(code):
         return code
+
+    # Last-resort prose rescue: scan the ENTIRE raw response for CALL()/FINAL()
+    # embedded anywhere in prose lines.  Models sometimes write tool calls as
+    # part of their reasoning (e.g. "I should CALL("search_wikipedia", ...)")
+    # without code blocks.  Extract just the executable parts.
+    _INLINE_CALL_RE = re.compile(
+        r'((?:CALL|TOOL)\s*\(\s*"[^"]+"\s*(?:,\s*\w+\s*=\s*(?:"[^"]*"|\'[^\']*\'|\d+|True|False|None))*\s*\))',
+    )
+    _INLINE_FINAL_RE = re.compile(
+        r'(FINAL\s*\(\s*(?:"[^"]*"|\'[^\']*\'|[A-Za-z0-9_.]+)\s*\))',
+    )
+    rescued: list[str] = []
+    for m in _INLINE_CALL_RE.finditer(response):
+        expr = m.group(1)
+        if _is_valid_python(expr):
+            rescued.append(f"result = {expr}")
+            rescued.append("print(result)")
+    for m in _INLINE_FINAL_RE.finditer(response):
+        expr = m.group(1)
+        if _is_valid_python(expr):
+            rescued.append(expr)
+    if rescued:
+        rescued_code = "\n".join(rescued)
+        _log.info("Prose CALL/FINAL rescue: extracted %d expressions from raw output", len(rescued))
+        return rescued_code
+
     return ""
 
 

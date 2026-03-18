@@ -152,6 +152,9 @@ class TaskState:
     tool_required: bool = False
     tool_hint: str | None = None
 
+    # Difficulty-adaptive signal (from routing classifier, used for token budget modulation)
+    difficulty_band: str = ""
+
     # Grammar enforcement tracking
     grammar_enforced: bool = False
 
@@ -265,3 +268,4 @@ class TaskDeps:
     progress_logger: Any = None  # ProgressLoggerProtocol
     session_store: Any = None  # SQLiteSessionStore
     approval_callback: Any = None  # ApprovalCallback protocol (Phase 4A)
+    interrupt_conditions: list[Any] = field(default_factory=list)  # InterruptCondition protocol instances

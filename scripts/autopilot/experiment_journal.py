@@ -55,6 +55,7 @@ class JournalEntry:
     memory_count: int = 0
     active_flags: list[str] = field(default_factory=list)
     eval_details: dict[str, Any] = field(default_factory=dict)
+    failure_analysis: str = ""
 
 
 class ExperimentJournal:
@@ -114,6 +115,7 @@ class ExperimentJournal:
                         memory_count=data.get("memory_count", 0),
                         active_flags=data.get("active_flags", []),
                         eval_details=data.get("eval_details", {}),
+                        failure_analysis=data.get("failure_analysis", ""),
                     )
                     self._entries.append(entry)
             batch += 1

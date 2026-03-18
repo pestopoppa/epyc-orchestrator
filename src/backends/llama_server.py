@@ -138,8 +138,8 @@ class LlamaServerBackend(ModelBackend):
             ),
             limits=httpx.Limits(
                 max_connections=20,  # Total connections in pool
-                max_keepalive_connections=10,  # Persistent idle connections
-                keepalive_expiry=60.0,  # Seconds before closing idle connection
+                max_keepalive_connections=10,
+                keepalive_expiry=5.0,  # Short expiry as safety net
             ),
             transport=httpx.HTTPTransport(retries=self.config.retry_count),
         )
@@ -236,12 +236,28 @@ class LlamaServerBackend(ModelBackend):
 
         try:
             http_start = time.perf_counter()
+            _overall = request.timeout or self.config.timeout
+            _batch_timeout = httpx.Timeout(
+                connect=self.config.connect_timeout,
+                read=min(_overall, 120),
+                write=_overall,
+                pool=30,
+            )
+            _prompt_len = len(request.prompt or "")
+            logger.warning(
+                "llama POST /completion start role=%s prompt_chars=%d n_predict=%d timeout=%.0f",
+                role_config.name, _prompt_len, request.n_tokens, _overall,
+            )
             response = self.client.post(
                 "/completion",
                 json=payload,
-                timeout=request.timeout or self.config.timeout,
+                timeout=_batch_timeout,
             )
             http_elapsed_ms = (time.perf_counter() - http_start) * 1000
+            logger.warning(
+                "llama POST /completion done role=%s elapsed_ms=%.0f status=%d",
+                role_config.name, http_elapsed_ms, response.status_code,
+            )
             response.raise_for_status()
             result_data = response.json()
 
@@ -372,11 +388,18 @@ class LlamaServerBackend(ModelBackend):
         payload["stream"] = True
 
         try:
+            _overall = request.timeout or self.config.timeout
+            _stream_timeout = httpx.Timeout(
+                connect=self.config.connect_timeout,
+                read=min(_overall, 120),
+                write=_overall,
+                pool=30,
+            )
             with self.client.stream(
                 "POST",
                 "/completion",
                 json=payload,
-                timeout=request.timeout or self.config.timeout,
+                timeout=_stream_timeout,
             ) as response:
                 response.raise_for_status()
 
@@ -457,6 +480,12 @@ class LlamaServerBackend(ModelBackend):
                 pool=_overall_timeout,
             )
             chunks: list[str] = []  # outside with-block so ReadTimeout handler can access
+            _prompt_len = len(request.prompt or "")
+            logger.info(
+                "llama STREAM /completion start role=%s prompt_chars=%d n_predict=%d timeout=%.0f id_slot=%s",
+                role_config.name, _prompt_len, request.n_tokens, _overall_timeout,
+                payload.get("id_slot", "NONE"),
+            )
 
             with self.client.stream(
                 "POST",
@@ -500,9 +529,6 @@ class LlamaServerBackend(ModelBackend):
                             early_stopped = True
                     if early_stopped:
                         tokens_generated = len(chunks)  # approximate
-                        # Early-stop breaks before the stop=True event which
-                        # carries timings. Compute generation_ms from wall
-                        # clock so timing telemetry isn't lost.
                         _es_elapsed = (time.perf_counter() - http_start) * 1000
                         timings = {
                             "predicted_ms": _es_elapsed,

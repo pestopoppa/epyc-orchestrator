@@ -472,6 +472,7 @@ def run_loop(
 
         # Safety gate
         verdict = gate.check(eval_result)
+        failure_analysis = gate.analyze_failure(eval_result, verdict)
         if not verdict:
             log.warning(
                 "Safety violations: %s", "; ".join(verdict.violations)
@@ -528,6 +529,7 @@ def run_loop(
                 config_snapshot=action,
                 memory_count=memory_count,
                 active_flags=[],
+                failure_analysis=failure_analysis,
                 eval_details={
                     "per_suite_quality": eval_result.per_suite_quality,
                     "routing_distribution": eval_result.routing_distribution,

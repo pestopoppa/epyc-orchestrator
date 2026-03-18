@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Prompt template location
 PROMPT_TEMPLATE_PATH = Path(
-    "/mnt/raid0/llm/claude/orchestration/prompts/meta_agent_reflect.md"
+    "/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/meta_agent_reflect.md"
 )
 
 

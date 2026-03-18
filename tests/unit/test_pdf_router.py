@@ -167,7 +167,7 @@ class TestPDFRouterIntegration:
     @pytest.mark.integration
     def test_extract_real_pdf(self):
         """Test extraction with a real PDF file."""
-        pdf_path = Path("/mnt/raid0/llm/claude/tmp/Twyne_V1_Whitepaper.pdf")
+        pdf_path = Path("/mnt/raid0/llm/epyc-orchestrator/tmp/Twyne_V1_Whitepaper.pdf")
         if not pdf_path.exists():
             pytest.skip("Test PDF not available")
         if not os.access(pdf_path, os.R_OK):
@@ -186,7 +186,7 @@ class TestPDFRouterIntegration:
     @pytest.mark.integration
     def test_extract_with_figures(self):
         """Test figure extraction with a real PDF."""
-        pdf_path = Path("/mnt/raid0/llm/claude/tmp/Twyne_V1_Whitepaper.pdf")
+        pdf_path = Path("/mnt/raid0/llm/epyc-orchestrator/tmp/Twyne_V1_Whitepaper.pdf")
         if not pdf_path.exists():
             pytest.skip("Test PDF not available")
 

@@ -65,3 +65,7 @@ orchestration/repl_memory/sessions/
 
 # Claude Code config
 .claude/
+.gitnexus
+
+# Benchmark images (large, not tracked)
+benchmarks/images/

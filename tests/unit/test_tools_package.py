@@ -402,15 +402,15 @@ class TestLintCodeTool:
         with (
             patch("src.tools.code.lint.Path") as mock_path,
             patch("src.tools.code.lint.subprocess.run", return_value=mock_result),
-            patch("src.tools.code.lint.ALLOWED_PATHS", ["/mnt/raid0/llm/claude/"]),
+            patch("src.tools.code.lint.ALLOWED_PATHS", ["/mnt/raid0/llm/epyc-orchestrator/"]),
         ):
             mock_file = MagicMock()
             mock_path.return_value = mock_file
             mock_file.resolve.return_value = mock_file
-            mock_file.__str__.return_value = "/mnt/raid0/llm/claude/test.py"
+            mock_file.__str__.return_value = "/mnt/raid0/llm/epyc-orchestrator/test.py"
             mock_file.exists.return_value = True
 
-            result = lint_python(file_path="/mnt/raid0/llm/claude/test.py")
+            result = lint_python(file_path="/mnt/raid0/llm/epyc-orchestrator/test.py")
 
         assert result["success"] is True
         assert result["issue_count"] == 0
@@ -440,15 +440,15 @@ class TestLintCodeTool:
         with (
             patch("src.tools.code.lint.Path") as mock_path,
             patch("src.tools.code.lint.subprocess.run", return_value=mock_result),
-            patch("src.tools.code.lint.ALLOWED_PATHS", ["/mnt/raid0/llm/claude/"]),
+            patch("src.tools.code.lint.ALLOWED_PATHS", ["/mnt/raid0/llm/epyc-orchestrator/"]),
         ):
             mock_file = MagicMock()
             mock_path.return_value = mock_file
             mock_file.resolve.return_value = mock_file
-            mock_file.__str__.return_value = "/mnt/raid0/llm/claude/test.py"
+            mock_file.__str__.return_value = "/mnt/raid0/llm/epyc-orchestrator/test.py"
             mock_file.exists.return_value = True
 
-            result = lint_python(file_path="/mnt/raid0/llm/claude/test.py")
+            result = lint_python(file_path="/mnt/raid0/llm/epyc-orchestrator/test.py")
 
         assert result["success"] is False
         assert result["issue_count"] == 1
@@ -474,15 +474,15 @@ class TestLintCodeTool:
                 "src.tools.code.lint.subprocess.run",
                 side_effect=subprocess.TimeoutExpired("ruff", 60),
             ),
-            patch("src.tools.code.lint.ALLOWED_PATHS", ["/mnt/raid0/llm/claude/"]),
+            patch("src.tools.code.lint.ALLOWED_PATHS", ["/mnt/raid0/llm/epyc-orchestrator/"]),
         ):
             mock_file = MagicMock()
             mock_path.return_value = mock_file
             mock_file.resolve.return_value = mock_file
-            mock_file.__str__.return_value = "/mnt/raid0/llm/claude/test.py"
+            mock_file.__str__.return_value = "/mnt/raid0/llm/epyc-orchestrator/test.py"
             mock_file.exists.return_value = True
 
-            result = lint_python(file_path="/mnt/raid0/llm/claude/test.py")
+            result = lint_python(file_path="/mnt/raid0/llm/epyc-orchestrator/test.py")
 
         assert result["success"] is False
         assert "timed out" in result["error"]
@@ -494,15 +494,15 @@ class TestLintCodeTool:
         with (
             patch("src.tools.code.lint.Path") as mock_path,
             patch("src.tools.code.lint.subprocess.run", side_effect=FileNotFoundError),
-            patch("src.tools.code.lint.ALLOWED_PATHS", ["/mnt/raid0/llm/claude/"]),
+            patch("src.tools.code.lint.ALLOWED_PATHS", ["/mnt/raid0/llm/epyc-orchestrator/"]),
         ):
             mock_file = MagicMock()
             mock_path.return_value = mock_file
             mock_file.resolve.return_value = mock_file
-            mock_file.__str__.return_value = "/mnt/raid0/llm/claude/test.py"
+            mock_file.__str__.return_value = "/mnt/raid0/llm/epyc-orchestrator/test.py"
             mock_file.exists.return_value = True
 
-            result = lint_python(file_path="/mnt/raid0/llm/claude/test.py")
+            result = lint_python(file_path="/mnt/raid0/llm/epyc-orchestrator/test.py")
 
         assert result["success"] is False
         assert "not installed" in result["error"]
@@ -537,7 +537,7 @@ class TestRunTestsTool:
         with (
             patch("src.tools.code.run_tests._validate_path", return_value=(True, None)),
             patch("src.tools.code.run_tests.subprocess.run", return_value=mock_result),
-            patch("src.tools.code.run_tests._get_project_root", return_value="/mnt/raid0/llm/claude"),
+            patch("src.tools.code.run_tests._get_project_root", return_value="/mnt/raid0/llm/epyc-orchestrator"),
         ):
             result = run_tests(test_path="tests/")
 
@@ -557,7 +557,7 @@ class TestRunTestsTool:
         with (
             patch("src.tools.code.run_tests._validate_path", return_value=(True, None)),
             patch("src.tools.code.run_tests.subprocess.run", return_value=mock_result),
-            patch("src.tools.code.run_tests._get_project_root", return_value="/mnt/raid0/llm/claude"),
+            patch("src.tools.code.run_tests._get_project_root", return_value="/mnt/raid0/llm/epyc-orchestrator"),
         ):
             result = run_tests(test_path="tests/")
 
@@ -587,7 +587,7 @@ class TestRunTestsTool:
                 "src.tools.code.run_tests.subprocess.run",
                 side_effect=subprocess.TimeoutExpired("pytest", 300),
             ),
-            patch("src.tools.code.run_tests._get_project_root", return_value="/mnt/raid0/llm/claude"),
+            patch("src.tools.code.run_tests._get_project_root", return_value="/mnt/raid0/llm/epyc-orchestrator"),
         ):
             result = run_tests(test_path="tests/")
 
@@ -606,7 +606,7 @@ class TestRunTestsTool:
         with (
             patch("src.tools.code.run_tests._validate_path", return_value=(True, None)),
             patch("src.tools.code.run_tests.subprocess.run", return_value=mock_result) as mock_run,
-            patch("src.tools.code.run_tests._get_project_root", return_value="/mnt/raid0/llm/claude"),
+            patch("src.tools.code.run_tests._get_project_root", return_value="/mnt/raid0/llm/epyc-orchestrator"),
         ):
             result = run_tests(
                 test_path="tests/",

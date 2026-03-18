@@ -276,7 +276,7 @@ fi
 # 10. Create unified handoff reminder to retrain routing models
 HANDOFF="$EPYC_ROOT/handoffs/active/retrain-routing-models.md"
 if [[ -d "$EPYC_ROOT/handoffs/active" ]] && [[ ! -f "$HANDOFF" ]]; then
-  cat > "$HANDOFF" << HANDOFF_EOF
+  cat >"$HANDOFF" <<HANDOFF_EOF
 # Retrain Routing Models
 
 **Status**: BLOCKED
@@ -284,10 +284,10 @@ if [[ -d "$EPYC_ROOT/handoffs/active" ]] && [[ ! -f "$HANDOFF" ]]; then
 **Created**: $(date +%Y-%m-%d)
 
 ## Context
-Episodic memory was reset. Both the routing classifier weights and GraphRouter
-GAT weights were invalidated. Normal FAISS retrieval is active as fallback.
-Once enough new episodic memories are collected (~500+ routing memories),
-retrain both models.
+Episodic memory was reset. The routing classifier weights, GraphRouter GAT
+weights, and SkillBank skills were all invalidated. Normal FAISS retrieval
+is active as fallback. Once enough new episodic memories are collected
+(~500+ routing memories), retrain routing models and re-distill skills.
 
 ## Steps
 
@@ -311,14 +311,27 @@ python3 scripts/graph_router/onboard_model.py \\
     --port 9999 --tps 60.0 --memory-tier HOT --memory-gb 10
 \`\`\`
 
-### 4. Enable features
+### 4. Re-distill SkillBank
+\`\`\`bash
+# Dry-run to check trajectory volume
+python3 -m orchestration.repl_memory.distillation.pipeline --days 25 --teacher mock --dry-run
+
+# Real distillation (needs ~500 trajectories)
+python3 -m orchestration.repl_memory.distillation.pipeline --days 25 --teacher claude
+
+# Verify
+sqlite3 /mnt/raid0/llm/tmp/skills.db "SELECT skill_type, COUNT(*) FROM skills GROUP BY skill_type;"
+\`\`\`
+
+### 5. Enable features
 Set in \`orchestrator_stack.py\` or environment:
 \`\`\`bash
 export ORCHESTRATOR_ROUTING_CLASSIFIER=1
 export ORCHESTRATOR_GRAPH_ROUTER=1
+export ORCHESTRATOR_SKILLBANK=1
 \`\`\`
 
-### 5. Delete this handoff
+### 6. Delete this handoff
 HANDOFF_EOF
   echo "  Created handoff reminder: $HANDOFF"
 fi

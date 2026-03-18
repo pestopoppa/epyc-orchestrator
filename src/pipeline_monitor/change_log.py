@@ -29,7 +29,7 @@ def _get_log_path() -> Path:
             from src.config import get_config
             _LOG_PATH = get_config().paths.log_dir / "debug_changes.jsonl"
         except Exception:
-            _LOG_PATH = Path("/mnt/raid0/llm/claude/logs/debug_changes.jsonl")
+            _LOG_PATH = Path("logs/debug_changes.jsonl")
     return _LOG_PATH
 
 

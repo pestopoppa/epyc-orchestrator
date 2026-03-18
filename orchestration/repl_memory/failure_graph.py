@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Default path (on RAID array per CLAUDE.md requirements)
 # Note: Each graph needs its own Kuzu database directory to avoid collisions
-DEFAULT_KUZU_PATH = Path("/mnt/raid0/llm/claude/orchestration/repl_memory/kuzu_db/failure_graph")
+DEFAULT_KUZU_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/kuzu_db/failure_graph")
 
 
 @dataclass

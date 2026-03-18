@@ -227,6 +227,11 @@ class RoleResult:
     web_research_results: list[dict] = field(default_factory=list)
     # Scratchpad insights (Search-R1 Step 5)
     scratchpad_insights: list[dict] = field(default_factory=list)
+    # Factual-risk scoring (routing-intelligence Phase 5)
+    factual_risk_score: float = 0.0
+    factual_risk_adjusted: float = 0.0
+    factual_risk_band: str = ""
+    factual_risk_features: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

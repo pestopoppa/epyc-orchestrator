@@ -46,7 +46,7 @@ def tmp_write_dir(tmp_path):
 @pytest.fixture
 def patches_base(tmp_path):
     """Create a patches directory structure for patch tool tests."""
-    base = Path("/mnt/raid0/llm/claude/orchestration/patches")
+    base = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/patches")
     for sub in ("pending", "approved", "rejected"):
         (base / sub).mkdir(parents=True, exist_ok=True)
     yield base
@@ -59,7 +59,7 @@ class TestLogAppend:
     """Test _log_append() method."""
 
     def test_append_writes_with_timestamp(self, repl):
-        log_file = "/mnt/raid0/llm/claude/logs/test_mutation.log"
+        log_file = "/mnt/raid0/llm/epyc-orchestrator/logs/test_mutation.log"
         try:
             if os.path.exists(log_file):
                 os.remove(log_file)
@@ -83,7 +83,7 @@ class TestLogAppend:
 
     def test_append_increments_exploration_calls(self, repl):
         before = repl._exploration_calls
-        log_file = "/mnt/raid0/llm/claude/logs/test_counter.log"
+        log_file = "/mnt/raid0/llm/epyc-orchestrator/logs/test_counter.log"
         try:
             repl._log_append("test_counter.log", "msg")
             assert repl._exploration_calls == before + 1

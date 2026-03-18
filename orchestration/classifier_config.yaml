@@ -211,3 +211,43 @@ classification_exemplars:
       expected_role: architect_general
     - prompt: "Evaluate the trade-offs between these two approaches"
       expected_role: architect_general
+
+# Tier 5: Factual-risk scoring (Phase 3)
+# Scores prompts for hallucination risk based on input features.
+# Complementary to conformal prediction (which gates on output uncertainty).
+factual_risk:
+  mode: "shadow"  # off|shadow|enforce — shadow since 2026-03-15 (scorer validated, 43 tests)
+  threshold_low: 0.3   # below = "low" risk band
+  threshold_high: 0.7  # above = "high" risk band
+  force_review_high: true       # force plan review for high-risk prompts (Phase 4)
+  early_escalation_high: false  # trigger earlier escalation for high-risk (Phase 4)
+  # Per-role capability adjustment — stronger models reduce effective risk
+  role_adjustments:
+    tier_1: 0.6   # 235B+ (architect_general, thinking_*)
+    tier_2: 0.8   # 32B-70B (coder_escalation)
+    tier_3: 1.0   # 7B-14B (worker_*, frontdoor, explore)
+  # Feature weights for score computation (must sum to 1.0)
+  feature_weights:
+    has_date_question: 0.15
+    has_entity_question: 0.15
+    has_citation_request: 0.10
+    claim_density: 0.25
+    factual_keyword_ratio: 0.20
+    uncertainty_markers: 0.15  # inverse — presence reduces risk
+
+# Tier 6: Difficulty-adaptive signal (reasoning compression routing)
+# Scores prompt difficulty for adaptive reasoning compression.
+# Easy prompts → compressed reasoning; Hard prompts → full reasoning chains.
+# Informed by OPSDC (arxiv:2603.05433).
+difficulty_signal:
+  mode: "shadow"           # off|shadow|enforce — start in shadow for telemetry
+  threshold_easy: 0.3
+  threshold_hard: 0.6
+  feature_weights:
+    prompt_length_tokens: 0.15
+    multi_step_indicators: 0.20
+    constraint_count: 0.15
+    code_presence: 0.10
+    math_presence: 0.10
+    nesting_depth: 0.15
+    ambiguity_markers: 0.15

@@ -103,7 +103,7 @@ class TrajectoryExtractor:
     ):
         self.reader = reader
         self.embedder = embedder
-        self.cache_dir = cache_dir or Path("/mnt/raid0/llm/claude/cache/replay")
+        self.cache_dir = cache_dir or Path("/mnt/raid0/llm/epyc-orchestrator/cache/replay")
 
     def extract_complete(
         self,

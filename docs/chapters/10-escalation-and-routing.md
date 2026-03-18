@@ -954,6 +954,17 @@ The blend is conservative: `posterior = (1-w) × retriever + w × graph_router`,
 
 See [Chapter 08: Graph-Based Reasoning](08-graph-reasoning.md) for schema, training, and onboarding details.
 
+## Input-Side Routing Classifiers (2026-03)
+
+Two regex-based classifiers run in `_route_request()` before model execution, providing input-side signals that complement the output-side conformal risk gate:
+
+- **Factual Risk Scorer** (`src/classifiers/factual_risk.py`) — scores hallucination risk from prompt features. Mode: `shadow` (logs in `routing_meta`, no routing changes yet).
+- **Difficulty Signal** (`src/classifiers/difficulty_signal.py`) — classifies prompt complexity into easy/medium/hard bands. Mode: `shadow`. When moved to `enforce`, modulates REPL token caps by band (easy=1500, medium=3500, hard=7000).
+
+Both attach fields to `RoutingResult` (`factual_risk_score`, `factual_risk_band`, `difficulty_score`, `difficulty_band`) and are logged in every `ROUTING_DECISION` event via `routing_meta`. The output quality detector (`src/classifiers/quality_detector.py`) also gained think-block loop detection for reasoning model degeneration.
+
+See [Chapter 16: Calibration and Risk Control](16-calibration-and-risk-control.md) for full classifier documentation, config, and relationship to the conformal risk gate.
+
 ## Literature Mapping (Architecture Review Alignment)
 
 This chapter's routing and escalation mechanics are grounded in several research-backed ideas, from hierarchical delegation to risk-aware abstention. The table below maps review themes to their practical implementation in this codebase.
@@ -1035,6 +1046,55 @@ Evaluated LLMLingua-2 extractive compression for reducing architect escalation p
 | 0.7 | 0.30 | 2.5s | def preserved, class/error destroyed |
 
 **Why it fails**: Over-compresses (0.5 target → 0.23 actual), `force_tokens` ineffective for code identifiers, compression latency (2.5-13s) exceeds ~1.67s architect prefill savings. Feature flag `escalation_compression` kept `False` permanently. Revisiting would require AST-preserving structural compression.
+
+## Escalation Reduction via Skill Propagation
+
+SkillBank creates a knowledge pipeline that monotonically reduces escalation rates for recurring task categories. The dynamic:
+
+1. Hard task arrives → worker fails → **escalates to architect**
+2. Architect solves → success trajectory stored in episodic store
+3. Distillation pipeline extracts **escalation skill** (what reasoning strategy the architect used)
+4. Skill injected into **worker prompts** on similar future tasks
+5. Worker handles task directly → **escalation avoided**
+
+<details>
+<summary>Implementation details</summary>
+
+### Escalation Skill Type
+
+Escalation skills (`skill_type='escalation'`) capture transferable reasoning strategies:
+
+```
+Title:         "Debug Single-File Bugs Locally"
+Principle:     For debugging tasks affecting a single file with a clear error message,
+               use REPL mode with targeted stack-trace analysis. Escalation to coder is
+               unnecessary for stack-trace-guided fixes.
+When to apply: task_type is "debugging", context contains single file path and error trace
+```
+
+### Interaction with THINK_HARDER
+
+`THINK_HARDER` and escalation skills are complementary:
+- **THINK_HARDER** gives the current model more tokens/CoT to try harder on the same task
+- **Escalation skills** give the model domain knowledge it wouldn't have otherwise
+
+When both are active, the model first receives skill-augmented prompts (knowledge), and if it still fails, THINK_HARDER boosts its reasoning budget before escalation.
+
+### Injection Points
+
+Skills are prepended to the task prompt at two sites:
+- `direct_stage.py` (line 78): Direct routing path
+- `repl_executor.py` (line 294): REPL execution path
+
+The `SkillAugmentedRouter` in `routing.py` retrieves relevant skills and passes the formatted context through `RoutingResult.skill_context`.
+
+### Feature Gate
+
+`ORCHESTRATOR_SKILLBANK=1` (requires `ORCHESTRATOR_MEMRL=1`). Currently feature-flagged OFF, awaiting initial distillation and A/B validation.
+
+</details>
+
+See [Chapter 15: SkillBank](15-skillbank-experience-distillation.md) for the full skill schema, distillation pipeline, and recursive evolution mechanism.
 
 ---
 

@@ -127,7 +127,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
     class ServerSettings(BaseSettings):
         default_url: str = "http://localhost:8080"
         timeout: int = 600
-        num_slots: int = 4
+        num_slots: int = 2
         connect_timeout: int = 5
         retry_count: int = 3
         retry_backoff: float = 0.5
@@ -418,7 +418,7 @@ def _load_from_env() -> OrchestratorConfigData:
             timeout=_env_int(
                 f"{P}SERVER_TIMEOUT", int(_registry_timeout("server", "request", 600))
             ),
-            num_slots=_env_int(f"{P}SERVER_NUM_SLOTS", 4),
+            num_slots=_env_int(f"{P}SERVER_NUM_SLOTS", 2),
             connect_timeout=_env_int(f"{P}SERVER_CONNECT_TIMEOUT", 5),
             retry_count=_env_int(f"{P}SERVER_RETRY_COUNT", 3),
             retry_backoff=_env_float(f"{P}SERVER_RETRY_BACKOFF", 0.5),

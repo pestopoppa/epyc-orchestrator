@@ -482,6 +482,53 @@ Edge masking (20% held out) → BCE loss → SGD with cosine LR decay. Runtime: 
 
 </details>
 
+## Failure Lesson Formalization (SkillBank Integration)
+
+The FailureGraph captures **what** failed and **what** was tried. SkillBank's failure lessons extend this with **why** (flawed reasoning), **what should have happened** (correct alternative), and **how to prevent recurrence** (prevention principle).
+
+<details>
+<summary>Failure lesson structure and FailureBridge pipeline</summary>
+
+### Failure Lesson Skill Format
+
+Each failure lesson distilled by SkillBank follows a structured format that maps onto FailureGraph entities:
+
+```
+FAILURE POINT:       What went wrong         → maps to FailureMode.description
+FLAWED REASONING:    Why the system chose this path    → NEW (not in FailureGraph)
+CORRECT ALTERNATIVE: What should have been done        → maps to Mitigation.action
+PREVENTION:          Actionable avoidance rule          → NEW (proactive, not reactive)
+```
+
+### FailureBridge
+
+`FailureBridge` (`orchestration/repl_memory/distillation/failure_bridge.py`, 251 lines) synchronizes between the Kuzu FailureGraph and the SkillBank:
+
+1. **Context extraction**: Queries FailureGraph for known failure modes and mitigations matching symptoms from failed trajectories. This context is injected into the distillation prompt so teachers don't duplicate known mitigations.
+2. **Back-propagation**: New failure lessons with success_rate-tracked prevention principles are optionally written back to FailureGraph as Mitigation nodes, closing the loop.
+
+### Data Flow
+
+```
+Failed trajectory → FailureBridge.build_failure_context()
+                       │
+                       ├── Query FailureGraph for matching failures
+                       ├── Query existing mitigations (skip if success_rate > 0.8)
+                       │
+                       ▼
+                  Teacher distillation prompt (with FailureGraph context)
+                       │
+                       ▼
+                  Failure lesson skill → SkillBank
+                       │
+                       ▼ (optional back-propagation)
+                  New Mitigation node → FailureGraph
+```
+
+</details>
+
+See [Chapter 15: SkillBank](15-skillbank-experience-distillation.md) for the full distillation pipeline and skill schema.
+
 ---
 
 *Previous: [Chapter 07: MemRL System](07-memrl-system.md)* | *Next: [Chapter 09: Memory Seeding & Bootstrap](09-memory-seeding.md)*

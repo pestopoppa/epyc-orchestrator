@@ -84,24 +84,24 @@ numactl --interleave=all \
 # 1. Set environment
 export HF_HOME=/mnt/raid0/llm/cache/huggingface
 export TMPDIR=/mnt/raid0/llm/tmp
-export XDG_CACHE_HOME=/mnt/raid0/llm/claude/cache
+export XDG_CACHE_HOME=/mnt/raid0/llm/epyc-orchestrator/cache
 
 # 2. Initialize logging
-source /mnt/raid0/llm/claude/scripts/utils/agent_log.sh
+source /mnt/raid0/llm/epyc-orchestrator/scripts/utils/agent_log.sh
 agent_session_start "Session purpose"
 
 # 3. Discover models
-bash /mnt/raid0/llm/claude/scripts/session/session_init.sh
+bash /mnt/raid0/llm/epyc-orchestrator/scripts/session/session_init.sh
 
 # 4. Load context
-head -100 /mnt/raid0/llm/claude/logs/research_report.md
+head -100 /mnt/raid0/llm/epyc-orchestrator/logs/research_report.md
 ```
 
 ### After Work Completed
 
 ```bash
 # Run all gates
-cd /mnt/raid0/llm/claude && make gates
+cd /mnt/raid0/llm/epyc-orchestrator && make gates
 ```
 
 ## Benchmarking
@@ -177,7 +177,7 @@ make test     # Tests only
 ### Start Session Logging
 
 ```bash
-source /mnt/raid0/llm/claude/scripts/utils/agent_log.sh
+source /mnt/raid0/llm/epyc-orchestrator/scripts/utils/agent_log.sh
 agent_session_start "Description"
 ```
 
@@ -192,9 +192,9 @@ agent_task_end "Task description" "success"
 ### Analyze Logs
 
 ```bash
-/mnt/raid0/llm/claude/scripts/utils/agent_log_analyze.sh --summary
-/mnt/raid0/llm/claude/scripts/utils/agent_log_analyze.sh --loops
-/mnt/raid0/llm/claude/scripts/utils/agent_log_analyze.sh --errors
+/mnt/raid0/llm/epyc-orchestrator/scripts/utils/agent_log_analyze.sh --summary
+/mnt/raid0/llm/epyc-orchestrator/scripts/utils/agent_log_analyze.sh --loops
+/mnt/raid0/llm/epyc-orchestrator/scripts/utils/agent_log_analyze.sh --errors
 ```
 
 ## Model Testing
@@ -228,9 +228,9 @@ export TRANSFORMERS_CACHE=/mnt/raid0/llm/cache/huggingface
 export HF_DATASETS_CACHE=/mnt/raid0/llm/cache/huggingface/datasets
 export PIP_CACHE_DIR=/mnt/raid0/llm/cache/pip
 export TMPDIR=/mnt/raid0/llm/tmp
-export XDG_CACHE_HOME=/mnt/raid0/llm/claude/cache
-export XDG_DATA_HOME=/mnt/raid0/llm/claude/share
-export XDG_STATE_HOME=/mnt/raid0/llm/claude/state
+export XDG_CACHE_HOME=/mnt/raid0/llm/epyc-orchestrator/cache
+export XDG_DATA_HOME=/mnt/raid0/llm/epyc-orchestrator/share
+export XDG_STATE_HOME=/mnt/raid0/llm/epyc-orchestrator/state
 
 # Critical for inference
 export OMP_NUM_THREADS=1

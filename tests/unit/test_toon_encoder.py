@@ -272,7 +272,7 @@ class TestToonTokenReduction:
             pytest.skip("toon_format not installed")
 
         data = {
-            "path": "/mnt/raid0/llm/claude",
+            "path": "/mnt/raid0/llm/epyc-orchestrator",
             "files": [{"name": f"file{i}.py", "type": "file", "size": i * 100} for i in range(20)],
             "total": 20,
         }
