@@ -20,7 +20,7 @@ This reference summarizes practical chain patterns for structured REPL mode.
 ```python
 a = peek(200)
 b = grep("timeout")
-c = list_dir("/mnt/raid0/llm/claude")
+c = list_dir("/mnt/raid0/llm/epyc-orchestrator")
 ```
 
 - In `dep` mode, executes as one parallel read wave.

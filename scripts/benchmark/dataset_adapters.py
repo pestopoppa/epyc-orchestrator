@@ -44,6 +44,8 @@ ADAPTER_SUITES = {
     "gpqa", "simpleqa", "hotpotqa", "livecodebench",
     # Phase 2 hard benchmarks
     "debugbench", "usaco",
+    # Phase 3: physics reasoning
+    "physics", "physreason",
 }
 
 # Suites that stay YAML-based (no public dataset or intentionally synthetic)

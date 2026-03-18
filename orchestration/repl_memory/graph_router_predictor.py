@@ -21,7 +21,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 DEFAULT_WEIGHTS_PATH = Path(
-    "/mnt/raid0/llm/claude/orchestration/repl_memory/graph_router_weights.npz"
+    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/graph_router_weights.npz"
 )
 
 

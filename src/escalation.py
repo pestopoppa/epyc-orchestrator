@@ -100,6 +100,12 @@ class EscalationContext:
     target_role_requested: str = ""  # Specific role requested by model
     solution_file: str = ""  # Path to persisted solution code from previous role
     scratchpad_entries: list = field(default_factory=list)  # Semantic insights from session
+    # Factual-risk fields (populated by factual_risk scorer when mode != "off")
+    risk_score: float = 0.0  # Raw prompt-based risk [0, 1]
+    risk_band: str = "low"  # "low" | "medium" | "high"
+    # Difficulty-signal fields (populated by difficulty_signal scorer when mode != "off")
+    difficulty_score: float = 0.0  # Prompt difficulty [0, 1]
+    difficulty_band: str = "easy"  # "easy" | "medium" | "hard"
 
     def __post_init__(self) -> None:
         """Normalize types."""

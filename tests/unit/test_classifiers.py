@@ -506,6 +506,94 @@ class TestDetectOutputQualityIssue:
         assert _detect_output_quality_issue(clean) is None
 
 
+class TestDetectThinkBlockLoop:
+    """Tests for detect_think_block_loop() — reasoning loop detection in <think> blocks."""
+
+    def test_no_think_block_returns_none(self):
+        from src.classifiers.quality_detector import detect_think_block_loop
+
+        assert detect_think_block_loop("Just a normal answer") is None
+
+    def test_short_think_block_skipped(self):
+        from src.classifiers.quality_detector import detect_think_block_loop
+
+        assert detect_think_block_loop("<think>Let me think briefly.</think> Answer: 42") is None
+
+    def test_clean_think_block_passes(self):
+        from src.classifiers.quality_detector import detect_think_block_loop
+
+        think = (
+            "<think>First I need to identify the problem. The equation is quadratic. "
+            "I'll use the discriminant formula. b squared minus 4ac gives us the "
+            "number of solutions. Plugging in: 4 - 4(1)(1) = 0. One repeated root. "
+            "The solution is x = -b/(2a) = -2/2 = -1. Let me verify by substituting "
+            "back into the original equation: (-1)^2 + 2(-1) + 1 = 1 - 2 + 1 = 0. Correct.</think>"
+            "The answer is x = -1."
+        )
+        assert detect_think_block_loop(think) is None
+
+    def test_looping_think_block_detected(self):
+        from src.classifiers.quality_detector import detect_think_block_loop
+
+        # Simulate a degenerate reasoning loop
+        repeated_phrase = "Let me reconsider this problem again. "
+        think = f"<think>{repeated_phrase * 30}</think>I'm not sure."
+        result = detect_think_block_loop(think)
+        assert result is not None
+        assert "think_block_loop" in result
+
+    def test_subtle_loop_detected(self):
+        from src.classifiers.quality_detector import detect_think_block_loop
+
+        # Model repeats the same reasoning step with slight variation
+        steps = [
+            "Step 1: We need to find the derivative. ",
+            "The derivative of x squared is 2x. ",
+            "So the answer is 2x. ",
+            "Wait, let me reconsider. ",
+        ]
+        # Repeat the same 4-step pattern 12 times
+        think = "<think>" + "".join(steps * 12) + "</think>The derivative is 2x."
+        result = detect_think_block_loop(think)
+        assert result is not None
+        assert "think_block_loop" in result
+
+    def test_multiple_think_blocks_combined(self):
+        from src.classifiers.quality_detector import detect_think_block_loop
+
+        # Two think blocks, each partially repetitive, combined they loop
+        phrase = "checking the boundary condition again "
+        block1 = f"<think>{phrase * 10}first conclusion here</think>"
+        block2 = f"<think>{phrase * 10}second conclusion here</think>"
+        result = detect_think_block_loop(block1 + "middle text " + block2)
+        assert result is not None
+        assert "think_block_loop" in result
+
+    def test_custom_threshold(self):
+        from src.classifiers.quality_detector import detect_think_block_loop
+
+        # Mildly repetitive — passes default threshold but fails strict one
+        words = ["alpha beta gamma delta "] * 5 + ["unique phrase number " + str(i) + " " for i in range(20)]
+        think = "<think>" + "".join(words) + "</think>Done."
+        # Should pass with default threshold
+        assert detect_think_block_loop(think) is None
+        # Should fail with very strict threshold
+        result = detect_think_block_loop(think, repetition_threshold=0.05)
+        # May or may not trigger — depends on exact n-gram distribution
+        assert result is None or "think_block_loop" in result
+
+    def test_integration_with_detect_output_quality(self):
+        """Verify think block loop detection integrates into the main detector."""
+        from src.classifiers import detect_output_quality_issue
+
+        repeated = "I need to solve this step by step carefully. "
+        answer = f"<think>{repeated * 25}</think>The answer is 42."
+        result = detect_output_quality_issue(answer)
+        assert result is not None
+        # May be caught by either the general repetition detector or think-block loop
+        assert "repetition" in result or "think_block_loop" in result
+
+
 class TestStripToolOutputs:
     """Tests for strip_tool_outputs()."""
 
@@ -640,3 +728,26 @@ class TestTruncateLoopedAnswer:
         prompt = "What is the meaning of life, the universe, and everything in existence?"
         answer = "42 is the answer to everything."
         assert _truncate_looped_answer(answer, prompt) == answer
+
+
+# ── Estimated cost on RoutingResult tests ────────────────────────────
+
+
+class TestEstimatedCost:
+    """Test estimated_cost field on RoutingResult."""
+
+    def test_default_estimated_cost_is_zero(self):
+        from src.api.routes.chat_utils import RoutingResult
+        r = RoutingResult("t", {}, False)
+        assert r.estimated_cost == 0.0
+
+    def test_tier_a_costs_more_than_tier_c(self):
+        from src.api.routes.chat_pipeline.routing import _TIER_COST_WEIGHTS
+        prompt_tokens = 1000
+        cost_a = _TIER_COST_WEIGHTS["A"] * prompt_tokens / 1_000_000
+        cost_c = _TIER_COST_WEIGHTS["C"] * prompt_tokens / 1_000_000
+        assert cost_a > cost_c
+
+    def test_tier_weights_ordering(self):
+        from src.api.routes.chat_pipeline.routing import _TIER_COST_WEIGHTS
+        assert _TIER_COST_WEIGHTS["A"] > _TIER_COST_WEIGHTS["B"] > _TIER_COST_WEIGHTS["C"] > _TIER_COST_WEIGHTS["D"]

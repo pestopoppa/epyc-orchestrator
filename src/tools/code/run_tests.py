@@ -38,9 +38,7 @@ def _get_project_root() -> str:
     except Exception:
         pass
 
-    # Fallback: try hardcoded path, then cwd
-    if Path("/mnt/raid0/llm/claude").exists():
-        return "/mnt/raid0/llm/claude"
+    # Fallback: cwd
     return os.getcwd()
 
 

@@ -40,7 +40,7 @@ class TestSessionEndpoints:
         request_data = {
             "name": "Test Session",
             "project": "test-project",
-            "working_directory": "/mnt/raid0/llm/claude",
+            "working_directory": "/mnt/raid0/llm/epyc-orchestrator",
         }
         response = client.post("/sessions", json=request_data)
         assert response.status_code == 200
@@ -48,7 +48,7 @@ class TestSessionEndpoints:
         data = response.json()
         assert data["name"] == "Test Session"
         assert data["project"] == "test-project"
-        assert data["working_directory"] == "/mnt/raid0/llm/claude"
+        assert data["working_directory"] == "/mnt/raid0/llm/epyc-orchestrator"
         assert data["status"] == "active"
         assert "id" in data
         assert "created_at" in data

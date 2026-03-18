@@ -128,6 +128,12 @@ DEFAULT_ROOT_LM_RULES = """## WHEN TO USE TOOLS vs DIRECT ANSWER
 4. **FIX ERRORS INCREMENTALLY** - If your code returns an error, your previous code is saved
    to a file. Read it with peek(), fix ONLY the broken part, and rewrite with file_write_safe().
    Do NOT rewrite from scratch — make targeted fixes to the existing code.
+5. **TOOL CALLS ARE CODE** - Write CALL() as executable Python code, NOT as prose.
+   When you need to call a tool, write ONLY the code — no explanation before or after.
+   STOP generating after the CALL() line. The REPL will execute it and return results
+   in the next turn. Do NOT continue reasoning after a CALL — wait for the result.
+   WRONG: "Let me search for this. CALL("web_research", query="...")" ← prose, won't execute
+   RIGHT: `result = CALL("web_research", query="...")\nprint(result)` ← executable code
 5. **"Write a function" tasks**: submit CODE as a string, NOT the function's return value.
    `solution = '''def foo(): ...'''; FINAL(solution)` ← CORRECT
    `FINAL(foo(x))` ← WRONG (submits return value, not code)
@@ -189,10 +195,12 @@ FINAL(solution)
 
 ## COMPLEX CODE (algorithms, implementations)
 - Your code is auto-saved to a file on each turn. On error, the file path is shown.
+- Your session log tracks all previous turns. Check [Session History] block above for what was already tried.
 - Read previous code: `prev = peek(99999, file_path="/mnt/raid0/llm/tmp/<task>_solution.py")`
 - Fix incrementally: `file_write_safe("/mnt/raid0/llm/tmp/<task>_solution.py", corrected_code)`
 - Test: `CALL("run_python_code", code=corrected_code, stdin_data=test_input)`
 - NEVER regenerate from scratch — always read, patch, rewrite.
+- NEVER repeat an approach that already failed — check session history for past errors.
 - If stuck after 2 attempts: consult architect or escalate to coder_escalation.
 - For stdin/stdout programs: wrap in string, use `CALL("run_python_code", code=..., stdin_data=...)` to test. Do NOT use `import sys` or `input()` directly — they are blocked.
 
@@ -206,8 +214,9 @@ FINAL(solution)
 
 ## OTHER RULES
 - NEVER send full context to llm_call - use peek() or grep() first
-- Output only valid Python code - no markdown, no explanations around the code
-- Do NOT reason in Python comments. Think before writing code, then write only executable statements ending with FINAL()."""
+- Output ONLY valid Python code - no markdown, no prose, no explanations
+- Do NOT reason in Python comments. Think before writing code, then write only executable statements ending with FINAL().
+- Each turn: write ONLY code. If calling a tool, write the CALL line and STOP. Wait for the result in the next turn before continuing."""
 
 
 # ── ReAct Tool Loop Constants ──────────────────────────────────────────────

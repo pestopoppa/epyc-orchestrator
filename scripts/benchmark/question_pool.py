@@ -247,6 +247,59 @@ def sample_from_pool(
     return all_prompts
 
 
+def load_questions_by_ids(
+    question_ids: list[str],
+    pool_path: Path | None = None,
+) -> list[dict]:
+    """Load specific questions by their IDs from the pool.
+
+    Args:
+        question_ids: List of question IDs to retrieve.  Accepts both bare IDs
+            (e.g. ``"simpleqa_general_01132"``) and ``suite/id`` format
+            (e.g. ``"simpleqa/simpleqa_general_01132"``).  The suite prefix is
+            stripped automatically before lookup.
+        pool_path: Optional pool file path override.
+
+    Returns:
+        List of question dicts matching the requested IDs, preserving input order.
+        Logs warnings for any IDs not found in the pool.
+    """
+    pool = load_pool(pool_path, warn_stale=False)
+    # Build flat lookup: id -> question dict
+    by_id: dict[str, dict] = {}
+    for questions in pool.values():
+        for q in questions:
+            by_id[q.get("id", "")] = q
+
+    result: list[dict] = []
+    missing: list[str] = []
+    for qid in question_ids:
+        # Strip suite/ prefix if present (e.g. "simpleqa/simpleqa_general_01132" -> "simpleqa_general_01132")
+        bare_id = qid.split("/", 1)[1] if "/" in qid else qid
+        if bare_id in by_id:
+            result.append(by_id[bare_id])
+        elif qid in by_id:
+            result.append(by_id[qid])
+        else:
+            missing.append(qid)
+
+    # Deduplicate while preserving order (same question can appear in multiple failure sets)
+    seen_ids: set[str] = set()
+    deduped: list[dict] = []
+    for q in result:
+        if q["id"] not in seen_ids:
+            seen_ids.add(q["id"])
+            deduped.append(q)
+
+    if missing:
+        logger.warning(
+            f"load_questions_by_ids: {len(missing)} IDs not found in pool: "
+            f"{missing[:5]}{'...' if len(missing) > 5 else ''}"
+        )
+    logger.info(f"Loaded {len(deduped)}/{len(question_ids)} questions by ID")
+    return deduped
+
+
 def pool_header(pool_path: Path | None = None) -> dict | None:
     """Read just the header metadata from a pool file."""
     pool_path = pool_path or POOL_FILE

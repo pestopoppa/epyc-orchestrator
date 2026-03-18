@@ -350,6 +350,45 @@ class REPLConfig:
 
 </details>
 
+## Skill Diagnostics (SkillBank Monitoring)
+
+When SkillBank is active (`ORCHESTRATOR_SKILLBANK=1`), the monitoring system surfaces skill health anomalies.
+
+<details>
+<summary>Diagnostic signals and recommended actions</summary>
+
+### Anomaly Signals
+
+| Signal | Detection | Recommended Action |
+|--------|-----------|-------------------|
+| Low-confidence skills (< 0.3) | `SELECT * FROM skills WHERE confidence < 0.3 AND deprecated=0` | Review for deprecation |
+| High-retrieval, low-effectiveness | `retrieval_count > 10 AND effectiveness_score < 0.3` | Revise principle or deprecate |
+| Unused skills (> 7 days, 0 retrievals) | `retrieval_count=0 AND created_at < now-7d` | May indicate overly narrow `when_to_apply` |
+| Category coverage gaps | Task types with no matching skills | Schedule targeted distillation |
+
+### Skill Health Summary
+
+The skill diagnostics module (`test_skill_diagnostics.py`, 164 lines of tests) validates that:
+- Anomaly detection correctly identifies degraded skills
+- Diagnostic summaries aggregate skill bank statistics
+- Health metrics are consistent with `EvolutionMonitor` thresholds
+
+### Operational Queries
+
+```bash
+# Quick health check
+sqlite3 /mnt/raid0/llm/tmp/skills.db \
+  "SELECT skill_type, COUNT(*), ROUND(AVG(confidence),2), ROUND(AVG(effectiveness_score),2) FROM skills WHERE deprecated=0 GROUP BY skill_type;"
+
+# Skills needing attention
+sqlite3 /mnt/raid0/llm/tmp/skills.db \
+  "SELECT id, title, confidence, effectiveness_score, retrieval_count FROM skills WHERE (confidence < 0.3 OR (retrieval_count > 10 AND effectiveness_score < 0.3)) AND deprecated=0;"
+```
+
+</details>
+
+See [Chapter 15: SkillBank](15-skillbank-experience-distillation.md) for the full evolution and effectiveness tracking mechanism.
+
 ## References
 
 <details>
@@ -362,13 +401,15 @@ class REPLConfig:
 - Restricted executor: `src/restricted_executor.py`
 - Tool registry permissions: `src/tool_registry.py`
 - Safety reviewer agent: `agents/safety-reviewer.md`
+- Skill diagnostics: `orchestration/repl_memory/skill_evolution.py`
 
 ### Related Chapters
 
 1. [Chapter 03: REPL Environment](03-repl-environment.md) -- full REPL architecture and built-in tools
 2. [Chapter 10: Escalation & Routing](10-escalation-and-routing.md) -- how EARLY_ABORT triggers escalation
 3. [Chapter 13: Tool Registry & Agent Roles](13-tool-registry.md) -- permission model and role definitions
-4. Storage Architecture & Safety (documented in epyc-root) -- root filesystem protection
+4. [Chapter 15: SkillBank & Experience Distillation](15-skillbank-experience-distillation.md) -- skill schema and evolution
+5. Storage Architecture & Safety (documented in epyc-root) -- root filesystem protection
 
 </details>
 

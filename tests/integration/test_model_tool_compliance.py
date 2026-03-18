@@ -157,12 +157,12 @@ ROLE_TOOL_REQUIREMENTS = {
 # Prompts designed to test specific tool usage
 TOOL_TEST_PROMPTS = {
     "list_dir": {
-        "prompt": "List all files in /mnt/raid0/llm/claude/tmp",
+        "prompt": "List all files in /mnt/raid0/llm/epyc-orchestrator/tmp",
         "expected_tool": "list_dir",
         "forbidden_alternative": "os.listdir",
     },
     "peek": {
-        "prompt": "Show the first 100 characters of /mnt/raid0/llm/claude/README.md",
+        "prompt": "Show the first 100 characters of /mnt/raid0/llm/epyc-orchestrator/README.md",
         "expected_tool": "peek",
         "forbidden_alternative": "open(",
     },
@@ -172,7 +172,7 @@ TOOL_TEST_PROMPTS = {
         "forbidden_alternative": "re.findall",
     },
     "file_info": {
-        "prompt": "Get the file size and modification date of /mnt/raid0/llm/claude/CLAUDE.md",
+        "prompt": "Get the file size and modification date of /mnt/raid0/llm/epyc-orchestrator/CLAUDE.md",
         "expected_tool": "file_info",
         "forbidden_alternative": "os.stat",
     },
@@ -214,7 +214,7 @@ def mock_repl_environment():
 @pytest.fixture
 def compliant_response_list_dir():
     """Example of a compliant response for list_dir task."""
-    return """result = list_dir('/mnt/raid0/llm/claude/tmp')
+    return """result = list_dir('/mnt/raid0/llm/epyc-orchestrator/tmp')
 FINAL(result)"""
 
 
@@ -222,21 +222,21 @@ FINAL(result)"""
 def non_compliant_response_list_dir():
     """Example of a non-compliant response that uses os.listdir."""
     return """import os
-files = os.listdir('/mnt/raid0/llm/claude/tmp')
+files = os.listdir('/mnt/raid0/llm/epyc-orchestrator/tmp')
 FINAL(files)"""
 
 
 @pytest.fixture
 def compliant_response_peek():
     """Example of a compliant response for peek task."""
-    return """content = peek(100, file_path='/mnt/raid0/llm/claude/README.md')
+    return """content = peek(100, file_path='/mnt/raid0/llm/epyc-orchestrator/README.md')
 FINAL(content)"""
 
 
 @pytest.fixture
 def non_compliant_response_peek():
     """Example of a non-compliant response that uses open()."""
-    return """with open('/mnt/raid0/llm/claude/README.md', 'r') as f:
+    return """with open('/mnt/raid0/llm/epyc-orchestrator/README.md', 'r') as f:
     content = f.read(100)
 FINAL(content)"""
 
@@ -416,7 +416,7 @@ class TestREPLToolExecution:
 
     def test_list_dir_executes_successfully(self, mock_repl_environment):
         """Test that list_dir can be executed in REPL."""
-        code = "result = list_dir('/mnt/raid0/llm/claude')"
+        code = "result = list_dir('/mnt/raid0/llm/epyc-orchestrator')"
         result = mock_repl_environment.execute(code)
 
         # Should execute without security error

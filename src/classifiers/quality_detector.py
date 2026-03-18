@@ -7,7 +7,12 @@ No MemRL coupling — reads thresholds from ChatPipelineConfig.
 
 from __future__ import annotations
 
+import re
+
 from src.config import get_config as _get_config
+
+# Regex for extracting <think> blocks (greedy within each block)
+_THINK_BLOCK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
 def detect_output_quality_issue(answer: str) -> str | None:
@@ -61,5 +66,64 @@ def detect_output_quality_issue(answer: str) -> str | None:
         stripped = stripped.removeprefix(prefix).strip()
     if len(stripped) < 10:
         return "near_empty_output"
+
+    # 4. Reasoning loop detection in <think> blocks
+    think_issue = detect_think_block_loop(answer)
+    if think_issue:
+        return think_issue
+
+    return None
+
+
+def detect_think_block_loop(
+    answer: str,
+    *,
+    ngram_size: int = 4,
+    repetition_threshold: float = 0.15,
+    min_words: int = 40,
+) -> str | None:
+    """Detect n-gram repetition loops inside <think> blocks.
+
+    Reasoning models sometimes enter degenerate loops where they repeat
+    the same phrase or reasoning step. SEER research shows failed outputs
+    are ~1,193 tokens longer than successful ones — repetition within
+    reasoning is a strong failure signal.
+
+    Args:
+        answer: Full model output (may contain <think>...</think> blocks).
+        ngram_size: Size of n-grams to check (default 4-grams).
+        repetition_threshold: Max fraction of repeated n-grams before flagging
+            (0.15 = 15% of n-grams are duplicates → flag).
+        min_words: Minimum word count in think block to analyze.
+
+    Returns:
+        Issue description if loop detected, None otherwise.
+    """
+    think_blocks = _THINK_BLOCK_RE.findall(answer)
+    if not think_blocks:
+        return None
+
+    # Analyze the concatenated think content
+    think_text = " ".join(think_blocks)
+    words = think_text.split()
+    if len(words) < min_words:
+        return None
+
+    # Build n-grams and compute repetition ratio
+    ngrams = [
+        " ".join(words[i : i + ngram_size])
+        for i in range(len(words) - ngram_size + 1)
+    ]
+    if not ngrams:
+        return None
+
+    unique_ratio = len(set(ngrams)) / len(ngrams)
+    repeated_ratio = 1.0 - unique_ratio
+
+    if repeated_ratio > repetition_threshold:
+        return (
+            f"think_block_loop ({ngram_size}-gram repeated_ratio="
+            f"{repeated_ratio:.2f}, {len(words)} words)"
+        )
 
     return None

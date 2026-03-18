@@ -147,6 +147,8 @@ class ProactiveDelegator:
         complexity: TaskComplexity,
         action: str,
         confidence: float,
+        difficulty_score: float = 0.0,
+        difficulty_band: str = "",
     ) -> None:
         """Log delegation decision for MemRL Q-learning."""
         if self.progress_logger:
@@ -155,6 +157,8 @@ class ProactiveDelegator:
                 complexity=complexity.value,
                 action=action,
                 confidence=confidence,
+                difficulty_score=difficulty_score,
+                difficulty_band=difficulty_band,
             )
 
     async def delegate(self, task_ir: dict[str, Any]) -> AggregatedResult:

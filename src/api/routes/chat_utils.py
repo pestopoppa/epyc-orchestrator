@@ -8,6 +8,7 @@ output quality heuristics, format enforcement, and shared constants.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -55,6 +56,14 @@ class RoutingResult:
     tool_hint: str | None = None  # Specific tool name if deterministic
     skill_context: str = ""  # Formatted skill text for prompt injection (SkillRL §3.2)
     skill_ids: list[str] = field(default_factory=list)  # IDs of retrieved skills
+    # Factual-risk scoring (populated in shadow/enforce mode, empty when off)
+    factual_risk_score: float = 0.0
+    factual_risk_band: str = ""
+    # Difficulty-adaptive signal (populated in shadow/enforce mode, empty when off)
+    difficulty_score: float = 0.0
+    difficulty_band: str = ""
+    # Estimated pre-inference cost (relative units: tier_weight × estimated_tokens / 1M)
+    estimated_cost: float = 0.0
 
     @property
     def role(self) -> str:
@@ -124,11 +133,15 @@ def _strip_tool_outputs(text: str, tool_outputs: list[str]) -> str:
     return strip_tool_outputs(text, tool_outputs)
 
 
+_FUNCTION_REPR_RE = re.compile(r"<(?:function|class|module) \w+ at 0x[0-9a-fA-F]+>")
+
+
 def _resolve_answer(result: "ExecutionResult", tool_outputs: list[str] | None = None) -> str:
     """Extract the best answer from an ExecutionResult.
 
     Handles cases where the model prints content then uses a stub FINAL().
     Strips tool outputs (my_role, route_advice, list_dir) from captured output.
+    Strips Python object repr strings that leak when model evaluates a bare name.
     """
     captured = result.output.strip() if result.output else ""
     final = result.final_answer or ""
@@ -136,6 +149,15 @@ def _resolve_answer(result: "ExecutionResult", tool_outputs: list[str] | None = 
     # Strip tool outputs from captured stdout
     if tool_outputs:
         captured = _strip_tool_outputs(captured, tool_outputs)
+
+    # Guard: strip function/class repr strings from captured output.
+    # These leak when the model's last REPL turn evaluates a bare function name
+    # (e.g. `is_valid_parenthese`) without calling FINAL() — Python echoes
+    # `<function is_valid_parenthese at 0x...>` which becomes the answer.
+    if captured and _FUNCTION_REPR_RE.fullmatch(captured):
+        captured = ""
+    if final and _FUNCTION_REPR_RE.fullmatch(final.strip()):
+        final = ""
 
     if captured and _is_stub_final(final):
         return captured

@@ -202,6 +202,10 @@ class Features:
     approval_gates: bool = False  # Human approval at escalation boundaries
     binding_routing: bool = False  # Priority-ordered routing overrides
 
+    # LangGraph pre-migration: full state snapshots + generalized interrupts
+    state_history_snapshots: bool = False  # Full TaskState snapshots each turn
+    generalized_interrupts: bool = False  # Pluggable interrupt conditions before REPL
+
     # Budget controls (Fast-RLM)
     worker_call_budget: bool = False  # Cap total REPL executions per task
     task_token_budget: bool = False   # Cap cumulative tokens across all turns
@@ -209,9 +213,19 @@ class Features:
     # Pipeline monitoring: model-graded subjective evals
     model_grading: bool = False  # Post-hoc model-graded evals via worker_explore
 
+    # HSD: Hierarchical Self-Speculation
+    self_speculation: bool = False  # Self-speculation with layer-exit draft
+    hierarchical_speculation: bool = False  # Hierarchical intermediate verification
+
     # Context window management (C2/C3/C1)
     accurate_token_counting: bool = False  # Use llama-server /tokenize for exact token counts
     tool_result_clearing: bool = False  # Clear stale <<<TOOL_OUTPUT>>> blocks from last_output
+
+    # Reasoning length alarm (short-m@k Action 9): retry with conciseness nudge
+    reasoning_length_alarm: bool = False  # Cancel + retry when <think> exceeds 1.5× band budget
+
+    # CMV-style output spill (Action 11): write truncated output/error to temp file with peek() pointer
+    output_spill_to_file: bool = False  # Spill long REPL output/error to file + retrieval pointer
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
@@ -251,6 +265,12 @@ class Features:
             errors.append("approval_gates feature requires resume_tokens feature")
         if self.approval_gates and not self.side_effect_tracking:
             errors.append("approval_gates feature requires side_effect_tracking feature")
+
+        # Generalized interrupts depend on approval gates and resume tokens
+        if self.generalized_interrupts and not self.approval_gates:
+            errors.append("generalized_interrupts requires approval_gates")
+        if self.generalized_interrupts and not self.resume_tokens:
+            errors.append("generalized_interrupts requires resume_tokens")
 
         # RestrictedPython requires the library
         if self.restricted_python:
@@ -316,7 +336,13 @@ class Features:
             "task_token_budget": self.task_token_budget,
             "accurate_token_counting": self.accurate_token_counting,
             "tool_result_clearing": self.tool_result_clearing,
+            "reasoning_length_alarm": self.reasoning_length_alarm,
+            "output_spill_to_file": self.output_spill_to_file,
             "model_grading": self.model_grading,
+            "self_speculation": self.self_speculation,
+            "hierarchical_speculation": self.hierarchical_speculation,
+            "state_history_snapshots": self.state_history_snapshots,
+            "generalized_interrupts": self.generalized_interrupts,
             "mock_mode": self.mock_mode,
         }
 
@@ -421,7 +447,13 @@ def get_features(
             "task_token_budget": True,  # Fast-RLM: cap cumulative tokens per task
             "accurate_token_counting": False,  # Enable after /tokenize validation
             "tool_result_clearing": True,  # Enabled for production context pressure relief
+            "reasoning_length_alarm": True,  # short-m@k Action 9: retry verbose reasoning
+            "output_spill_to_file": True,  # CMV Action 11: spill truncated output/error to file
             "model_grading": False,  # Enable after grading spec validation
+            "self_speculation": False,  # HSD: self-speculation with layer-exit draft
+            "hierarchical_speculation": False,  # HSD: hierarchical intermediate verification
+            "state_history_snapshots": False,  # LangGraph pre-migration: full state snapshots
+            "generalized_interrupts": False,  # LangGraph pre-migration: pluggable interrupts
             "mock_mode": False,  # Real mode in production
         }
     else:
@@ -471,7 +503,13 @@ def get_features(
             "task_token_budget": False,  # Disabled in tests by default
             "accurate_token_counting": False,  # Disabled in tests by default
             "tool_result_clearing": False,  # Disabled in tests by default
+            "reasoning_length_alarm": False,  # Disabled in tests by default
+            "output_spill_to_file": False,  # Disabled in tests by default
             "model_grading": False,  # Disabled in tests by default
+            "self_speculation": False,  # HSD: self-speculation with layer-exit draft
+            "hierarchical_speculation": False,  # HSD: hierarchical intermediate verification
+            "state_history_snapshots": False,  # LangGraph pre-migration: off in tests
+            "generalized_interrupts": False,  # LangGraph pre-migration: off in tests
             "mock_mode": True,  # Mock mode in tests
         }
 
@@ -530,7 +568,13 @@ def get_features(
         "task_token_budget": _feature_flag_bool("TASK_TOKEN_BUDGET", defaults["task_token_budget"]),
         "accurate_token_counting": _feature_flag_bool("ACCURATE_TOKEN_COUNTING", defaults["accurate_token_counting"]),
         "tool_result_clearing": _feature_flag_bool("TOOL_RESULT_CLEARING", defaults["tool_result_clearing"]),
+        "reasoning_length_alarm": _feature_flag_bool("REASONING_LENGTH_ALARM", defaults["reasoning_length_alarm"]),
+        "output_spill_to_file": _feature_flag_bool("OUTPUT_SPILL_TO_FILE", defaults["output_spill_to_file"]),
         "model_grading": _feature_flag_bool("MODEL_GRADING", defaults["model_grading"]),
+        "self_speculation": _feature_flag_bool("SELF_SPECULATION", defaults["self_speculation"]),
+        "hierarchical_speculation": _feature_flag_bool("HIERARCHICAL_SPECULATION", defaults["hierarchical_speculation"]),
+        "state_history_snapshots": _feature_flag_bool("STATE_HISTORY_SNAPSHOTS", defaults["state_history_snapshots"]),
+        "generalized_interrupts": _feature_flag_bool("GENERALIZED_INTERRUPTS", defaults["generalized_interrupts"]),
         "mock_mode": _feature_flag_bool("MOCK_MODE", defaults["mock_mode"]),
     }
 

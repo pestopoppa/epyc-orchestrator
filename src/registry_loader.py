@@ -51,7 +51,7 @@ class ModelConfig:
 class AccelerationConfig:
     """Acceleration strategy configuration."""
 
-    type: str  # speculative_decoding, moe_expert_reduction, prompt_lookup, none
+    type: str  # speculative_decoding, moe_expert_reduction, prompt_lookup, self_speculation, hierarchical_speculation, none
     draft_role: str | None = None
     k: int | None = None  # Draft tokens for speculative
     experts: int | None = None  # Expert count for MoE reduction
@@ -60,6 +60,10 @@ class AccelerationConfig:
     lookup: bool = False  # Enable --lookup (prompt n-gram fallback)
     temperature: float | None = None
     corpus_retrieval: bool = False  # Enable corpus-augmented prompt stuffing
+    n_layer_exit_draft: int | None = None  # Layer exit depth for self-speculation draft
+    hierarchical_spec: bool = False  # Enable hierarchical intermediate verification
+    n_layer_exit_intermediate: int | None = None  # Intermediate depth for HiSpec (0 = auto N/4)
+    p_split: float | None = None  # Tree speculation branching threshold (--draft-p-split)
 
 
 @dataclass
@@ -351,6 +355,7 @@ class RegistryLoader:
             lookup=bool(lookup),
             temperature=accel_data.get("temperature"),
             corpus_retrieval=bool(corpus_enabled),
+            p_split=accel_data.get("p_split"),
         )
 
         # Build performance metrics

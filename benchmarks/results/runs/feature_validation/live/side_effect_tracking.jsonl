@@ -1,0 +1,1 @@
+{"feature": "side_effect_tracking", "verdict": "PASS", "quality_delta": 0.0, "latency_delta_s": 0.0, "tps_delta": 0.0, "memory_delta_mb": 0.0, "timestamp": "2026-03-04T16:52:48+00:00", "baseline": {"p50_s": 0.0, "avg_tps": 0.0, "prompts_run": 0, "responses": []}, "candidate": {"p50_s": 0.0, "avg_tps": 0.0, "prompts_run": 0, "responses": []}}

@@ -230,14 +230,17 @@ class TapTailer:
         if self._stop.is_set():
             return
 
-        with open(self._path) as fh:
+        with open(self._path, "rb") as fh:
             # Seek to end — we only care about new output
             fh.seek(0, 2)
             while not self._stop.is_set():
-                # Read all available data at once (not line-by-line)
-                chunk = fh.read(8192)
-                if chunk:
-                    self._process_chunk(chunk)
+                # Binary mode + explicit seek clears Python's internal
+                # buffer so we reliably see cross-process appends.
+                pos = fh.tell()
+                fh.seek(pos)
+                raw = fh.read(8192)
+                if raw:
+                    self._process_chunk(raw.decode("utf-8", errors="replace"))
                 else:
                     self._stop.wait(self._poll)
 
@@ -265,6 +268,9 @@ class TapTailer:
                 # Detect ROLE= header → append to chain
                 if "ROLE=" in fragment:
                     role = fragment.split("ROLE=", 1)[1].strip()
+                    if role and role in self._role_chain:
+                        # Cycle detected (e.g. frontdoor seen again) → new question
+                        self._role_chain.clear()
                     if role and (not self._role_chain or self._role_chain[-1] != role):
                         self._role_chain.append(role)
                     self._current_section.append(fragment)

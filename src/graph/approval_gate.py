@@ -42,6 +42,7 @@ class HaltReason(str, Enum):
     ESCALATION = "escalation"  # Tier crossing
     DESTRUCTIVE_TOOL = "destructive_tool"  # Tool with destructive=True
     HIGH_COST = "high_cost"  # Architect-tier invocation
+    INTERRUPT_CONDITION = "interrupt_condition"  # Generalized interrupt
 
 
 class ApprovalDecision(str, Enum):
@@ -180,4 +181,68 @@ def request_approval_for_escalation(
         "Approval gate: %s → %s: %s (decision: %s)",
         from_role, to_role, halt_reason, decision,
     )
+    return decision
+
+
+# ---------------------------------------------------------------------------
+# Generalized interrupts (LangGraph pre-migration)
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class InterruptCondition(Protocol):
+    """Pluggable condition that can halt graph execution before REPL."""
+
+    def should_interrupt(self, state: Any, artifacts: dict) -> str | None:
+        """Return description string if should interrupt, None otherwise."""
+        ...
+
+
+def check_interrupt_conditions(
+    conditions: list[InterruptCondition],
+    state: Any,
+    artifacts: dict,
+) -> str | None:
+    """Check all conditions, return first trigger description or None."""
+    for cond in conditions:
+        try:
+            desc = cond.should_interrupt(state, artifacts)
+            if desc is not None:
+                return desc
+        except Exception as exc:
+            log.debug("Interrupt condition check failed: %s", exc)
+    return None
+
+
+def request_approval_for_interrupt(
+    ctx: Any,
+    description: str,
+) -> ApprovalDecision:
+    """Request approval for an interrupt condition."""
+    callback = getattr(ctx.deps, "approval_callback", None)
+    if callback is None:
+        return ApprovalDecision.APPROVE
+
+    resume_token = ""
+    from src.features import features as _get_features
+
+    if _get_features().resume_tokens:
+        try:
+            from src.graph.resume_token import ResumeToken
+
+            token = ResumeToken.from_state(ctx.state, "interrupt")
+            resume_token = token.encode()
+        except Exception:
+            pass
+
+    halt = HaltState(
+        reason=HaltReason.INTERRUPT_CONDITION,
+        description=description,
+        resume_token=resume_token,
+        from_role=str(getattr(ctx.state, "current_role", "")),
+    )
+    ctx.state.pending_approval = halt
+    decision = callback.request_approval(halt)
+    ctx.state.pending_approval = None
+    log.info("Interrupt gate: %s (decision: %s)", description, decision)
     return decision

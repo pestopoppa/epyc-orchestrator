@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Storage paths (RAID array per CLAUDE.md)
 DEFAULT_SKILLBANK_PATH = Path(
-    "/mnt/raid0/llm/claude/orchestration/repl_memory/sessions"
+    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions"
 )
 
 SKILL_TYPES = ("general", "routing", "escalation", "failure_lesson")

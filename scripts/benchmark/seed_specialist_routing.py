@@ -357,6 +357,7 @@ def run_batch_3way(
     use_pool: bool = True,
     debugger: "ClaudeDebugger | None" = None,
     outcome_tracker: Any = None,
+    questions_override: list[dict] | None = None,
 ) -> list[ThreeWayResult]:
     """Run one 3-way evaluation batch.
 
@@ -373,6 +374,8 @@ def run_batch_3way(
             at the start of each question.  Used by the TUI to update the
             status bar.
         debugger: Optional ClaudeDebugger for pipeline monitoring.
+        questions_override: If provided, use these questions directly instead of
+            sampling. Used by --question-ids for targeted validation.
     """
     import httpx as _httpx
 
@@ -380,15 +383,19 @@ def run_batch_3way(
     if not _check_server_health(url):
         raise HealthCheckError(f"API unreachable: {url}")
 
-    # Load seen questions
-    seen = load_seen_questions()
-    logger.info(f"Previously seen questions: {len(seen)}")
+    if questions_override is not None:
+        questions = questions_override
+        logger.info(f"Using {len(questions)} override questions (--question-ids)")
+    else:
+        # Load seen questions
+        seen = load_seen_questions()
+        logger.info(f"Previously seen questions: {len(seen)}")
 
-    # Sample unseen questions (debug mode backfills with seen when exhausted)
-    questions = sample_unseen_questions(
-        suites, sample_per_suite, seen, seed,
-        use_pool=use_pool, allow_reseen=debugger is not None,
-    )
+        # Sample unseen questions (debug mode backfills with seen when exhausted)
+        questions = sample_unseen_questions(
+            suites, sample_per_suite, seen, seed,
+            use_pool=use_pool, allow_reseen=debugger is not None,
+        )
     if not questions:
         logger.info("No unseen questions available.")
         return []
@@ -867,6 +874,12 @@ Examples (legacy mode - DEPRECATED):
         help="Runtime tuning preset (default: infra-stable).",
     )
     parser.add_argument(
+        "--question-ids", type=str, default=None,
+        help="Path to a JSON file with question IDs to evaluate. "
+        "Accepts either a flat list of ID strings or the validation_failure_set.json format "
+        "(uses the 'all_question_ids' key). Bypasses random sampling — evaluates exactly these questions.",
+    )
+    parser.add_argument(
         "--sample-size", type=int, default=10,
         help="Questions per suite per batch (default: 10)",
     )
@@ -1191,6 +1204,35 @@ Examples (legacy mode - DEPRECATED):
             except Exception as e:
                 logger.warning("[EVOLVE] Periodic evolution failed (non-fatal): %s", e)
 
+    # ── Load --question-ids override (if provided) ──
+    _questions_override: list[dict] | None = None
+    if args.question_ids:
+        import json as _json
+        _qid_path = Path(args.question_ids)
+        if not _qid_path.exists():
+            logger.error(f"--question-ids file not found: {_qid_path}")
+            sys.exit(1)
+        with open(_qid_path) as _f:
+            _qid_data = _json.load(_f)
+        # Accept either a flat list or validation_failure_set.json format
+        if isinstance(_qid_data, list):
+            _qid_list = _qid_data
+        elif isinstance(_qid_data, dict) and "all_question_ids" in _qid_data:
+            _qid_list = _qid_data["all_question_ids"]
+        else:
+            logger.error("--question-ids JSON must be a list of IDs or have 'all_question_ids' key")
+            sys.exit(1)
+        from question_pool import load_questions_by_ids
+        _questions_override = load_questions_by_ids(_qid_list)
+        if not _questions_override:
+            logger.error("No questions matched from --question-ids file")
+            sys.exit(1)
+        logger.info(f"[--question-ids] Loaded {len(_questions_override)} questions for targeted evaluation")
+        # Force dry-run when using question-ids (safety: don't inject rewards for validation)
+        if not args.dry_run:
+            logger.info("[--question-ids] Forcing --dry-run (no reward injection during validation)")
+            args.dry_run = True
+
     # ── Phase 4: 3-Way Routing Mode ──
     if args.three_way:
         from contextlib import nullcontext
@@ -1254,11 +1296,17 @@ Examples (legacy mode - DEPRECATED):
                             use_pool=not args.no_pool,
                             debugger=_debugger,
                             outcome_tracker=_outcome_tracker,
+                            questions_override=_questions_override,
                         )
                         all_results.extend(results)
 
                         # Run evolve/replay hooks periodically
                         _run_post_batch_hooks(batch)
+
+                        # --question-ids in continuous mode: stop after first batch
+                        if _questions_override is not None:
+                            logger.info("[--question-ids] All override questions evaluated. Stopping.")
+                            break
 
                         if not results:
                             logger.info("No unseen questions. Waiting 60s...")
@@ -1287,6 +1335,7 @@ Examples (legacy mode - DEPRECATED):
                     use_pool=not args.no_pool,
                     debugger=_debugger,
                     outcome_tracker=_outcome_tracker,
+                    questions_override=_questions_override,
                 )
 
         # Summary printed AFTER TUI context exits (normal terminal restored)

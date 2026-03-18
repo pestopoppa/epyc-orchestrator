@@ -57,6 +57,15 @@ except ImportError:
     SkillBank = None
     SkillRetriever = None
 
+# Strategy store: retrievable strategy memory for AutoPilot species
+try:
+    from .strategy_store import StrategyStore, StrategyEntry
+    _STRATEGY_STORE_AVAILABLE = True
+except ImportError:
+    _STRATEGY_STORE_AVAILABLE = False
+    StrategyStore = None
+    StrategyEntry = None
+
 # Routing classifier (offline-trained MLP for fast routing decisions)
 try:
     from .routing_classifier import RoutingClassifier
@@ -109,6 +118,9 @@ __all__ = [
     "SkillRetriever",
     "SkillRetrievalConfig",
     "SkillRetrievalResult",
+    # Strategy store (optional)
+    "StrategyStore",
+    "StrategyEntry",
     # Routing classifier (optional)
     "RoutingClassifier",
     # Graphs (optional)

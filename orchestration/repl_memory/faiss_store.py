@@ -16,7 +16,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Default paths (on RAID array per CLAUDE.md requirements)
-DEFAULT_FAISS_PATH = Path("/mnt/raid0/llm/claude/orchestration/repl_memory/sessions")
+DEFAULT_FAISS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
 
 
 class EmbeddingStoreProtocol(Protocol):

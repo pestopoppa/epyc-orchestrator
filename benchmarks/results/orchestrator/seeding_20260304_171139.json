@@ -1,0 +1,45 @@
+{
+  "config": {
+    "suites": [
+      "debugbench",
+      "livecodebench"
+    ],
+    "roles": [
+      "frontdoor",
+      "coder_escalation",
+      "coder_escalation",
+      "architect_general",
+      "architect_coding",
+      "worker_vision",
+      "vision_escalation"
+    ],
+    "modes": [
+      "direct",
+      "repl"
+    ],
+    "combos": [
+      "worker_vision:direct",
+      "frontdoor:direct",
+      "worker_vision:repl",
+      "coder_escalation:direct",
+      "coder_escalation:direct",
+      "architect_general:direct",
+      "architect_coding:direct",
+      "vision_escalation:direct",
+      "frontdoor:repl",
+      "coder_escalation:repl",
+      "coder_escalation:repl",
+      "architect_general:delegated",
+      "architect_coding:delegated"
+    ],
+    "sample_size": 100,
+    "seed": 1772643194,
+    "dry_run": false,
+    "dedup": true,
+    "alias_map": {
+      "coder_escalation": "coder_escalation"
+    }
+  },
+  "results": [],
+  "timestamp": "2026-03-04T17:11:39.134302"
+}

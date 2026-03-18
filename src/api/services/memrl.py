@@ -455,7 +455,7 @@ def ensure_memrl_initialized(state: "AppState") -> bool:
                     from src.config import get_config as _get_config
                     _proj_root = _get_config().paths.project_root
                 except Exception:
-                    _proj_root = _Path("/mnt/raid0/llm/claude")
+                    _proj_root = _Path.cwd()
                 weights_path = _proj_root / "orchestration/repl_memory/graph_router_weights.npz"
                 if weights_path.exists():
                     gat.load(weights_path)

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Default archive location on RAID
 DEFAULT_ARCHIVE_PATH = Path(
-    "/mnt/raid0/llm/claude/orchestration/repl_memory/meta_archive/archive.db"
+    "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/meta_archive/archive.db"
 )
 
 

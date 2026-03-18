@@ -230,7 +230,7 @@ class TestPathsConfig:
             os.environ.pop("ORCHESTRATOR_PATHS_LLM_ROOT", None)
             os.environ.pop("ORCHESTRATOR_PATHS_PROJECT_ROOT", None)
             cfg = PathsConfig()
-            assert str(cfg.project_root) == "/mnt/raid0/llm/claude"
+            assert str(cfg.project_root) == "/mnt/raid0/llm/epyc-orchestrator"
 
     def test_raid_prefix_default(self) -> None:
         with patch.dict(os.environ, {}, clear=False):

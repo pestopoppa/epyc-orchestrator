@@ -7,7 +7,13 @@ from unittest.mock import MagicMock
 
 from pydantic_graph import End
 
-from src.graph.persistence import SQLiteStatePersistence, _state_to_dict
+from src.features import Features, set_features, reset_features
+from src.graph.persistence import (
+    SQLiteStatePersistence,
+    _state_to_dict,
+    _state_to_dict_full,
+    _state_to_dict_minimal,
+)
 from src.graph.nodes import FrontdoorNode, CoderNode
 from src.graph.state import TaskState, TaskResult
 from src.roles import Role
@@ -111,3 +117,67 @@ class TestSQLiteStatePersistence:
         persistence = SQLiteStatePersistence(store, "session-001")
         async with persistence.record_run("run-001"):
             pass  # Should not raise
+
+
+@pytest.fixture(autouse=True)
+def _reset_features_after():
+    """Reset features after each test in this module."""
+    yield
+    reset_features()
+
+
+class TestFullStateSerialization:
+    """Tests for _state_to_dict_full() (LangGraph pre-migration)."""
+
+    def test_full_state_serialization(self):
+        """Full serializer captures all dataclass fields minus skip set."""
+        state = TaskState(
+            task_id="t-full",
+            prompt="long prompt",
+            current_role=Role.CODER_ESCALATION,
+            consecutive_failures=2,
+            escalation_count=1,
+            role_history=["frontdoor", "coder_escalation"],
+            turns=5,
+            last_error="err",
+            last_output="out",
+            last_code="print(1)",
+            artifacts={"key": "val"},
+        )
+        d = _state_to_dict_full(state)
+
+        # Must include core fields
+        assert d["task_id"] == "t-full"
+        assert d["prompt"] == "long prompt"  # no truncation
+        assert d["turns"] == 5
+        assert d["last_error"] == "err"  # no truncation
+        assert d["artifacts"] == {"key": "val"}
+
+        # Must have many more fields than the minimal 8
+        assert len(d) > 20
+
+    def test_full_state_handles_role_enum(self):
+        state = TaskState(current_role=Role.CODER_ESCALATION)
+        d = _state_to_dict_full(state)
+        assert d["current_role"] == "coder_escalation"
+
+    def test_full_state_skips_task_manager(self):
+        state = TaskState()
+        d = _state_to_dict_full(state)
+        assert "task_manager" not in d
+        assert "pending_approval" not in d
+
+    def test_feature_flag_controls_detail(self):
+        state = TaskState(task_id="t-flag", prompt="x" * 1000, last_error="e" * 500)
+
+        # Flag off → minimal (8 keys)
+        set_features(Features(state_history_snapshots=False))
+        d_min = _state_to_dict(state)
+        assert len(d_min) == 8
+        assert len(d_min["prompt"]) == 500  # truncated
+
+        # Flag on → full (many keys)
+        set_features(Features(state_history_snapshots=True))
+        d_full = _state_to_dict(state)
+        assert len(d_full) > 20
+        assert len(d_full["prompt"]) == 1000  # not truncated

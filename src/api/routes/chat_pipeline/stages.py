@@ -178,7 +178,12 @@ def _execute_react(
                 r"""FINAL\(\s*(?:'{3}(.+?)'{3}|"{3}(.+?)"{3}|["'](.+?)["']|(\S+?))\s*\)""",
                 re.DOTALL,
             )
-            primitives._early_stop_check = lambda text: bool(_final_re.search(text))
+            _call_re = re.compile(
+                r'CALL\s*\(\s*"[^"]+"\s*(?:,\s*\w+\s*=\s*(?:"[^"]*"|\'[^\']*\'|\d+|True|False|None))*\s*\)',
+            )
+            primitives._early_stop_check = lambda text: (
+                bool(_final_re.search(text)) or bool(_call_re.search(text))
+            )
             try:
                 code = primitives.llm_call(
                     react_prompt,
