@@ -95,7 +95,7 @@ STATE_FILE = _PATHS["log_dir"] / "orchestrator_state.json"
 LLAMA_SERVER = _PATHS["llama_cpp_bin"] / "llama-server"
 LOG_DIR = _PATHS["log_dir"]
 
-# Port assignments by role
+# Port assignments by role (primary ports — NUMA replicas use offset ports)
 PORT_MAP = {
     "frontdoor": 8080,
     "coder_escalation": 8081,
@@ -123,34 +123,132 @@ PORT_MAP = {
     "document_formalizer": 9001,
 }
 
-# HOT roles (always started) - includes architects in HOT tier (510GB total, 45% of 1130GB RAM)
+# All NUMA replica ports (for port scanning and cleanup)
+NUMA_REPLICA_PORTS = {
+    port
+    for cfg in NUMA_CONFIG.values()
+    for _, port, _ in cfg["instances"]
+    if port not in PORT_MAP.values()
+}
+
+# HOT roles (always started) - NUMA-optimized (~515GB total, 46% of 1130GB RAM)
 HOT_ROLES = {
     "frontdoor", "coder_escalation", "worker_explore", "embedder",
     "architect_general", "architect_coding", "ingest_long_context",
     "worker_vision", "vision_escalation",
 }
 
-# NUMA memory placement for large models — reduces page migration overhead.
-# EPYC 9655 has 2 NUMA nodes (~580GB each, distance 10 local / 12 remote).
-# Uses --preferred (not --membind) so models allocate on a home node but still
-# use all 96 cores and full memory bandwidth across both nodes.
-# This prevents the OS from interleaving 235B/480B weights across nodes, which
-# causes page migration when the other model triggers memory pressure.
-NUMA_PREFERRED_MAP: dict[str, str] = {
-    "architect_general": "0",     # 235B → prefer node 0
-    "architect_coding": "1",      # 480B → prefer node 1
-    "ingest_long_context": "1",   # 80B SSM → prefer node 1
+# =============================================================================
+# NUMA CPU Pinning — validated via benchmarks (2026-03-18)
+# =============================================================================
+# EPYC 9655: 192 cores, 2 NUMA nodes (~566 GB each).
+# Node 0: cores 0-47, HT 96-143
+# Node 1: cores 48-95, HT 144-191
+#
+# Key findings:
+# - Models ≤65GB: 4×48t NUMA-quarter instances give 6-7x aggregate throughput
+# - Models 130-250GB: 1×96t NUMA-node pinning gives 1.2-1.5x
+# - Using all 192t is ANTI-OPTIMAL (46-60% cross-NUMA penalty)
+# - taskset alone is sufficient — numactl --membind adds no benefit (S4 result)
+# - mlock gives 30x latency improvement under memory pressure (S2) — enabled for ALL HOT tier
+# - Total mlock budget: ~701 GB of 1.13 TB (62%), leaving ~429 GB for KV caches + OS
+
+# NUMA quarter definitions: (cpu_list, thread_count)
+NUMA_Q0A = ("0-23,96-119", 48)
+NUMA_Q0B = ("24-47,120-143", 48)
+NUMA_Q1A = ("48-71,144-167", 48)
+NUMA_Q1B = ("72-95,168-191", 48)
+NUMA_NODE0 = ("0-47,96-143", 96)
+NUMA_NODE1 = ("48-95,144-191", 96)
+
+# Per-role NUMA configurations.
+# "instances" is a list of (cpu_list, port, threads) tuples.
+# Roles with multiple instances get round-robin routing (requires orchestrator support).
+NUMA_CONFIG: dict[str, dict] = {
+    # Qwen3.5-35B-A3B Q4_K_M (19 GB) — 4×48t NUMA quarters
+    # Benchmark: moe6+lookup = 19.6 t/s per instance, ~78 t/s aggregate
+    "frontdoor": {
+        "instances": [
+            (NUMA_Q0A[0], 8080, NUMA_Q0A[1]),
+            (NUMA_Q0B[0], 8180, NUMA_Q0B[1]),
+            (NUMA_Q1A[0], 8280, NUMA_Q1A[1]),
+            (NUMA_Q1B[0], 8380, NUMA_Q1B[1]),
+        ],
+        "mlock": True,   # 19 GB per instance — latency-critical (S2: 30x improvement)
+    },
+    # Qwen2.5-Coder-32B Q4KM (18.5 GB) — 4×48t NUMA quarters
+    # Sweep-verified 2026-03-21: dm=32, ps=0.05, 10.8 t/s/inst, ~43.3 agg
+    "coder_escalation": {
+        "instances": [
+            (NUMA_Q0A[0], 8081, NUMA_Q0A[1]),
+            (NUMA_Q0B[0], 8181, NUMA_Q0B[1]),
+            (NUMA_Q1A[0], 8281, NUMA_Q1A[1]),
+            (NUMA_Q1B[0], 8381, NUMA_Q1B[1]),
+        ],
+        "mlock": True,
+        "spec_overrides": {"draft_max": 32, "p_split": 0.05},  # sweep-verified
+    },
+    # Qwen3.5-122B-A10B Q4_K_M (69 GB) — 1×96t node0
+    # Sweep-verified 2026-03-21: dm=24, ps=0, 4.3 t/s. Tree devastating on hybrids.
+    "architect_general": {
+        "instances": [
+            (NUMA_NODE0[0], 8083, NUMA_NODE0[1]),
+        ],
+        "mlock": True,
+        "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified
+    },
+    # Qwen3-Coder-480B Q4KM (250 GB) — 1×96t node0
+    # Sweep-verified 2026-03-21: dm=24, ps=0, 7.0 t/s. Tree is HARMFUL (-19%).
+    "architect_coding": {
+        "instances": [
+            (NUMA_NODE0[0], 8084, NUMA_NODE0[1]),
+        ],
+        "mlock": True,
+        "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified (was dm=48/ps=0.05)
+    },
+    # 2×96t: ~24 t/s aggregate (2x)
+    "ingest_long_context": {
+        "instances": [
+            (NUMA_NODE0[0], 8085, NUMA_NODE0[1]),
+        ],
+        "mlock": True,    # ~46 GB — latency-critical for ingest pipeline
+    },
+    # Worker: Qwen3-Coder-30B-A3B Q4KM (16 GB) — try-cheap-first model
+    # Replaced 7B f16 (2026-03-21): 30B-A3B is 2x faster (39 vs 19 t/s), better quality, similar RAM.
+    # Sweep-verified: dm=8, ps=0, 39.1 t/s at 48t. Can scale to 4×48t (~156 t/s agg).
+    "worker_explore": {
+        "instances": [(NUMA_Q0A[0], 8082, NUMA_Q0A[1])],
+        "mlock": True,
+        "spec_overrides": {"draft_max": 8, "p_split": 0},  # sweep-verified (dm irrelevant 38-39 t/s)
+    },
+    # Qwen2.5-VL-7B Q4_K_M (~4 GB) — 24 threads
+    "worker_vision": {
+        "instances": [(NUMA_Q0B[0], 8086, 24)],
+        "mlock": True,    # ~4 GB — minimal footprint
+    },
+    # Qwen3-VL-30B-A3B MoE (~17 GB) — 96 threads, pin to node1
+    "vision_escalation": {
+        "instances": [(NUMA_NODE1[0], 8087, 96)],
+        "mlock": True,    # ~17 GB — fits in 1.13 TB budget
+    },
 }
 
+# Roles that should use --mlock (requires ulimit -l unlimited in launch env)
+MLOCK_ROLES = {role for role, cfg in NUMA_CONFIG.items() if cfg.get("mlock")}
 
-def _numa_prefix(role: str) -> list[str]:
-    """Return numactl prefix for a role if numactl is available."""
-    if not shutil.which("numactl"):
-        return []
-    node = NUMA_PREFERRED_MAP.get(role)
-    if node is not None:
-        return ["numactl", f"--preferred={node}"]
-    return ["numactl", "--interleave=all"]
+
+def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
+    """Return taskset CPU-pinning prefix for a role instance.
+
+    Uses taskset -c for CPU pinning (validated: numactl adds no benefit over
+    taskset + first-touch memory policy, per S4 benchmark results).
+    """
+    cfg = NUMA_CONFIG.get(role)
+    if cfg and instance_idx < len(cfg["instances"]):
+        cpu_list = cfg["instances"][instance_idx][0]
+        return ["taskset", "-c", cpu_list]
+    # Fallback: no pinning (embedders, fast workers, dev mode)
+    return []
 
 
 # Roles that must never run concurrently (large/latency-sensitive paths).
@@ -169,17 +267,30 @@ SERIAL_ROLES = {
 }
 
 # Servers to start (unique ports only)
-# HOT tier uses ~510GB total (45% of 1130GB RAM), leaving 620GB for KV cache
+# HOT tier with NUMA-aware deployment (2026-03-19):
+#   frontdoor (Qwen3.5-35B, 19GB): 4×48t, moe6+lookup, ~78 t/s agg, ports 8080,8180,8280,8380
+#   coder_escalation (32B Q4KM, 18.5GB): 4×48t, spec+tree+lookup, ~43.3 t/s agg, ports 8081,8181,8281,8381
+#   architect_general (Qwen3.5-122B, 69GB): 1×96t node0, moe8+spec+lu, 12.6 t/s
+#   architect_coding (480B, 250GB): 1×96t node0, spec+tree+lu, 3.82 t/s
+#   ingest (80B SSM, 46GB): 1×96t node0, no spec, ~12 t/s
+# Total: frontdoor 76GB + coder 260GB + arch 69GB + 480B 250GB + ingest 46GB ≈ 701GB
 HOT_SERVERS = [
-    {"port": 8080, "roles": ["frontdoor"]},
-    {"port": 8081, "roles": ["coder_escalation", "worker_summarize"]},  # Added worker_summarize
+    # Frontdoor: 4 NUMA-pinned instances (primary + 3 replicas)
+    {"port": 8080, "roles": ["frontdoor"], "numa_instance": 0},
+    {"port": 8180, "roles": ["frontdoor"], "numa_instance": 1},
+    {"port": 8280, "roles": ["frontdoor"], "numa_instance": 2},
+    {"port": 8380, "roles": ["frontdoor"], "numa_instance": 3},
+    # Coder escalation: 4 NUMA-pinned instances (primary + 3 replicas)
+    {"port": 8081, "roles": ["coder_escalation", "worker_summarize"], "numa_instance": 0},
+    {"port": 8181, "roles": ["coder_escalation"], "numa_instance": 1},
+    {"port": 8281, "roles": ["coder_escalation"], "numa_instance": 2},
+    {"port": 8381, "roles": ["coder_escalation"], "numa_instance": 3},
     # Worker pool HOT tier
     {"port": 8082, "roles": ["worker_explore", "worker_general", "worker_math"],
      "worker_pool": True, "worker_type": "explore"},
     # Vision servers (VL models with multimodal projector, NO spec decode)
     {"port": 8086, "roles": ["worker_vision"], "vision": True, "vision_type": "worker"},
     {"port": 8087, "roles": ["vision_escalation"], "vision": True, "vision_type": "escalation"},
-    # worker_code REMOVED - route to coder_escalation (32B is faster + better quality)
     # Parallel BGE embedder instances (6 for redundancy, ~4GB total)
     {"port": 8090, "roles": ["embedder"], "embedding": True},
     {"port": 8091, "roles": ["embedder_1"], "embedding": True},
@@ -187,7 +298,7 @@ HOT_SERVERS = [
     {"port": 8093, "roles": ["embedder_3"], "embedding": True},
     {"port": 8094, "roles": ["embedder_4"], "embedding": True},
     {"port": 8095, "roles": ["embedder_5"], "embedding": True},
-    # Architects in HOT tier (always resident)
+    # Architects in HOT tier (always resident, NUMA node0 pinned)
     {"port": 8083, "roles": ["architect_general"]},
     {"port": 8084, "roles": ["architect_coding"]},
     {"port": 8085, "roles": ["ingest_long_context"]},
@@ -201,12 +312,14 @@ EMBEDDER_PORTS = [8090, 8091, 8092, 8093, 8094, 8095]
 # Worker pool models (FIXED paths to existing files)
 # NOTE: worker_coder/worker_code use the fast 1.5B worker backend on port 8102.
 WORKER_POOL_MODELS = {
-    "explore": str(_PATHS["models_dir"] / "Qwen2.5-7B-Instruct-f16.gguf"),
+    # Qwen3-Coder-30B-A3B Q4KM — replaced 7B f16 (2026-03-21): 2x faster, better quality
+    "explore": str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
     "fast": str(_PATHS["model_base"] / "QuantFactory/Qwen2.5-Coder-1.5B-GGUF/Qwen2.5-Coder-1.5B.Q4_K_M.gguf"),
 }
 
 # Draft model for speculative decoding on explore worker
-EXPLORE_DRAFT_MODEL = str(_PATHS["model_base"] / "lmstudio-community/Qwen2.5-Coder-0.5B-GGUF/Qwen2.5-Coder-0.5B-Q8_0.gguf")
+# Qwen3-Coder-DRAFT-0.75B (matched to 30B-A3B, sweep-verified dm=8 ps=0)
+EXPLORE_DRAFT_MODEL = str(_PATHS["models_dir"] / "Qwen3-Coder-Instruct-DRAFT-0.75B-32k-Q4_0.gguf")
 
 # Vision models (VL) with multimodal projector
 VISION_WORKER_MODEL = str(_PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf")
@@ -300,9 +413,14 @@ def validate_model_paths() -> list[str]:
     if not Path(EXPLORE_DRAFT_MODEL).exists():
         errors.append(f"[HOT] Explore draft: {EXPLORE_DRAFT_MODEL}")
 
-    # Architect models (now in HOT tier)
+    # Frontdoor model (swapped to Qwen3.5-35B-A3B, 2026-03-19)
+    frontdoor_model = str(_PATHS["model_base"] / "unsloth/Qwen3.5-35B-A3B-GGUF/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf")
+    if not Path(frontdoor_model).exists():
+        errors.append(f"[HOT] frontdoor: {frontdoor_model}")
+
+    # Architect/ingest models
     architect_models = [
-        ("architect_general", str(_PATHS["model_base"] / "lmstudio-community/Qwen3-235B-A22B-GGUF/")),
+        ("architect_general", str(_PATHS["model_base"] / "unsloth/Qwen3.5-122B-A10B-GGUF/")),  # swapped 2026-03-19
         ("architect_coding", str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Coder-480B-A35B-Instruct-GGUF/")),
         ("ingest_long_context", str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/")),
     ]
@@ -711,15 +829,15 @@ def build_server_command(
                 "--flash-attn", "on",
             ]
         else:
-            # explore workers: 7B f16 model with speculative decoding + tree speculation
-            # Summarization handled by worker_summarize (32B) on port 8081
+            # explore workers: Qwen3-Coder-30B-A3B Q4KM with spec decode + lookup
+            # Replaced 7B f16 (2026-03-21): 2x faster, better quality, similar RAM
             return [
                 str(LLAMA_SERVER),
                 "-m", model_path,
-                "-md", EXPLORE_DRAFT_MODEL,  # Spec decode with 0.5B draft
-                "--draft-max", "24",  # K=24 for optimal speedup
-                "--draft-p-split", "0.3",  # Tree speculation (+3-4% on 7B f16, +16% on 32B f16)
-                "--lookup",  # Prompt n-gram lookup as fallback when spec insufficient
+                "-md", EXPLORE_DRAFT_MODEL,  # Spec decode with DRAFT-0.75B
+                "--draft-max", "8",    # sweep-verified 2026-03-21 (dm irrelevant: 38-39 across all)
+                "--draft-p-split", "0",  # linear only (tree net-negative at 48t)
+                "--lookup",  # Prompt n-gram lookup as fallback
                 "--host", "127.0.0.1",
                 "--port", str(port),
                 "-np", "2",  # 2 parallel slots
@@ -744,6 +862,15 @@ def build_server_command(
     accel = role_config.acceleration
     parallel_slots = "1" if role_config.name in SERIAL_ROLES else "2"
 
+    # NUMA-aware thread count: use the configured thread count for the
+    # specific instance, falling back to 96 (single NUMA node).
+    numa_cfg = NUMA_CONFIG.get(role_config.name)
+    if numa_cfg and numa_cfg["instances"]:
+        # Default to first instance thread count (all instances same for a role)
+        thread_count = str(numa_cfg["instances"][0][2])
+    else:
+        thread_count = "96"
+
     # KV cache budgets: role-aware context sizes to prevent memory pressure.
     # Total KV ~82GB across all servers, well within 475GB available budget.
     _KV_CONTEXT_SIZES = {
@@ -760,9 +887,15 @@ def build_server_command(
         "--port", str(port),
         "-np", parallel_slots,  # Parallel slots (1 for large roles, 2 otherwise)
         "-c", context_size,     # Role-aware context size
-        "-t", "96",  # Threads
-        "--flash-attn", "on",  # Flash attention
+        "-t", thread_count,     # NUMA-aware thread count (48 for quarter, 96 for node)
+        "--flash-attn", "on",   # Flash attention
     ]
+
+    # mlock: lock model weights in RAM to prevent page cache eviction.
+    # Validated in S2: 30x latency improvement under memory pressure.
+    # Requires ulimit -l unlimited in launch environment.
+    if role_config.name in MLOCK_ROLES:
+        cmd.append("--mlock")
 
     # Add acceleration based on type
     if accel.type == "moe_expert_reduction" and accel.experts:
@@ -811,9 +944,35 @@ def build_server_command(
             cmd.extend(["--n-layer-exit-intermediate", str(accel.n_layer_exit_intermediate)])
 
     # Tree speculation: --draft-p-split enables DySpec branching
-    # Beneficial on f16 targets (+15.8%) and Q8 (+2.5%), net-negative on Q4 (-5.5%)
+    # Coder Q4KM: tree beneficial (+2.7% at 48t). Hybrids: tree HARMFUL (-25% to -40%)
+    # IMPORTANT: binary defaults p_split=0.1 (tree ON). Must explicitly pass 0 for linear.
     if accel.p_split is not None:
         cmd.extend(["--draft-p-split", str(accel.p_split)])
+    elif accel.type in ("speculative_decoding", "moe_expert_reduction") and accel.draft_role:
+        # No p_split in registry = linear speculation. Explicit 0 prevents silent tree activation.
+        cmd.extend(["--draft-p-split", "0"])
+
+    # NUMA-specific spec param overrides: when NUMA thread count differs from 192t,
+    # the optimal draft_max/p_split may differ. Override the registry defaults with
+    # NUMA-optimal values from bench_sweep_spec_params.sh results.
+    if numa_cfg and "spec_overrides" in numa_cfg:
+        overrides = numa_cfg["spec_overrides"]
+        if "draft_max" in overrides:
+            # Replace --draft-max value in existing cmd
+            for i, arg in enumerate(cmd):
+                if arg == "--draft-max" and i + 1 < len(cmd):
+                    cmd[i + 1] = str(overrides["draft_max"])
+                    break
+        if "p_split" in overrides:
+            # Replace or add --draft-p-split
+            replaced = False
+            for i, arg in enumerate(cmd):
+                if arg == "--draft-p-split" and i + 1 < len(cmd):
+                    cmd[i + 1] = str(overrides["p_split"])
+                    replaced = True
+                    break
+            if not replaced and overrides["p_split"] > 0:
+                cmd.extend(["--draft-p-split", str(overrides["p_split"])])
 
     # Add prompt n-gram lookup (spec-first, lookup-fallback) when enabled in registry
     # Per-role flag: beneficial on dense/small-MoE models (30B: +27%), net-negative on large MoE (480B)
@@ -834,6 +993,7 @@ def start_server(
     worker_type: str = None,
     vision_mode: bool = False,
     vision_type: str = None,
+    numa_instance: int = 0,
 ) -> ProcessInfo | None:
     """Start a llama-server for the given roles."""
     # Vision mode - VL models with multimodal projector
@@ -993,17 +1153,22 @@ def start_server(
     cmd = build_server_command(role_config, port, dev_mode)
 
     model_name = DEV_MODEL if dev_mode else role_config.model.name
+    numa_cfg = NUMA_CONFIG.get(primary_role)
+    numa_label = ""
+    if numa_cfg and numa_instance < len(numa_cfg["instances"]):
+        cpu_list = numa_cfg["instances"][numa_instance][0]
+        numa_label = f" [NUMA {numa_instance}: cpus {cpu_list}]"
 
-    print(f"  Starting port {port}: {model_name}")
+    print(f"  Starting port {port}: {model_name}{numa_label}")
     print(f"    Roles: {', '.join(roles)}")
     print(f"    Command: {' '.join(cmd[:5])}...")
 
-    # Start process — NUMA-pinned for architects, interleaved for others
+    # Start process — taskset CPU-pinned per NUMA config
     with open(log_file, "w") as log:
         env = os.environ.copy()
         # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
         proc = subprocess.Popen(
-            _numa_prefix(primary_role) + cmd,
+            _numa_prefix(primary_role, numa_instance) + cmd,
             stdout=log,
             stderr=subprocess.STDOUT,
             env=env,
@@ -1299,6 +1464,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         worker_type = server.get("worker_type")
         vision_mode = server.get("vision", False)
         vision_type = server.get("vision_type")
+        numa_instance = server.get("numa_instance", 0)
 
         info = start_server(
             port, roles, registry, args.dev,
@@ -1307,6 +1473,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             worker_type=worker_type,
             vision_mode=vision_mode,
             vision_type=vision_type,
+            numa_instance=numa_instance,
         )
         if info:
             state[f"server_{port}"] = info
@@ -1410,7 +1577,7 @@ def _scan_known_ports() -> dict[int, list[int]]:
     Returns:
         {port: [pid, ...]} for ports that have listeners.
     """
-    known_ports = sorted({s["port"] for s in HOT_SERVERS} | {8000})
+    known_ports = sorted({s["port"] for s in HOT_SERVERS} | NUMA_REPLICA_PORTS | {8000})
     found: dict[int, list[int]] = {}
     for port in known_ports:
         pids = _find_pids_on_port(port)
