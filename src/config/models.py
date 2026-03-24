@@ -375,12 +375,12 @@ class ServerURLsConfig:
     Each field maps an orchestrator role to a llama-server URL.
     """
 
-    # Tier A - Front Door / Orchestrator
-    frontdoor: str = "http://localhost:8080"
+    # Tier A - Front Door / Orchestrator (4×48t NUMA round-robin)
+    frontdoor: str = "http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
 
-    # Tier B - Specialists (code)
-    coder: str = "http://localhost:8081"
-    coder_escalation: str = "http://localhost:8081"
+    # Tier B - Specialists (code) (4×48t NUMA round-robin)
+    coder: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+    coder_escalation: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
 
     # Tier C - Workers
     worker: str = "http://localhost:8082"
@@ -392,7 +392,7 @@ class ServerURLsConfig:
     worker_coder: str = "http://localhost:8102"
     worker_code: str = "http://localhost:8102"
     worker_fast: str = "http://localhost:8102"
-    worker_summarize: str = "http://localhost:8081"
+    worker_summarize: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
 
     # Tier B - Architects
     architect_general: str = "http://localhost:8083"
