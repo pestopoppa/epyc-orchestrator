@@ -28,6 +28,7 @@ Environment Variables:
 
 from __future__ import annotations
 
+import dataclasses
 from functools import lru_cache
 
 from ..env_parsing import env_bool as _env_bool
@@ -138,9 +139,10 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         )
 
     class ServerURLsSettings(BaseSettings):
-        frontdoor: str = "http://localhost:8080"
-        coder: str = "http://localhost:8081"
-        coder_escalation: str = "http://localhost:8081"
+        # Multi-instance roles: comma-separated URLs for round-robin distribution
+        frontdoor: str = "http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
+        coder: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+        coder_escalation: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
         worker: str = "http://localhost:8082"
         worker_general: str = "http://localhost:8082"
         worker_explore: str = "http://localhost:8082"
@@ -150,7 +152,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         worker_coder: str = "http://localhost:8102"
         worker_code: str = "http://localhost:8102"
         worker_fast: str = "http://localhost:8102"
-        worker_summarize: str = "http://localhost:8081"
+        worker_summarize: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
         architect_general: str = "http://localhost:8083"
         architect_coding: str = "http://localhost:8084"
         ingest_long_context: str = "http://localhost:8085"
@@ -434,35 +436,9 @@ def _load_from_env() -> OrchestratorConfigData:
             ngram_size=_env_int(f"{P}MONITOR_NGRAM_SIZE", 3),
             combined_threshold=_env_float(f"{P}MONITOR_COMBINED_THRESHOLD", 0.7),
         ),
-        server_urls=ServerURLsConfig(
-            frontdoor=_env_str(f"{P}SERVER_URLS_FRONTDOOR", "http://localhost:8080"),
-            coder=_env_str(f"{P}SERVER_URLS_CODER", "http://localhost:8081"),
-            coder_escalation=_env_str(f"{P}SERVER_URLS_CODER_ESCALATION", "http://localhost:8081"),
-            worker=_env_str(f"{P}SERVER_URLS_WORKER", "http://localhost:8082"),
-            worker_general=_env_str(f"{P}SERVER_URLS_WORKER_GENERAL", "http://localhost:8082"),
-            worker_explore=_env_str(f"{P}SERVER_URLS_WORKER_EXPLORE", "http://localhost:8082"),
-            worker_math=_env_str(f"{P}SERVER_URLS_WORKER_MATH", "http://localhost:8082"),
-            worker_vision=_env_str(f"{P}SERVER_URLS_WORKER_VISION", "http://localhost:8086"),
-            vision_escalation=_env_str(
-                f"{P}SERVER_URLS_VISION_ESCALATION", "http://localhost:8087"
-            ),
-            worker_coder=_env_str(f"{P}SERVER_URLS_WORKER_CODER", "http://localhost:8102"),
-            worker_code=_env_str(f"{P}SERVER_URLS_WORKER_CODE", "http://localhost:8102"),
-            worker_fast=_env_str(f"{P}SERVER_URLS_WORKER_FAST", "http://localhost:8102"),
-            worker_summarize=_env_str(f"{P}SERVER_URLS_WORKER_SUMMARIZE", "http://localhost:8081"),
-            architect_general=_env_str(
-                f"{P}SERVER_URLS_ARCHITECT_GENERAL", "http://localhost:8083"
-            ),
-            architect_coding=_env_str(f"{P}SERVER_URLS_ARCHITECT_CODING", "http://localhost:8084"),
-            ingest_long_context=_env_str(
-                f"{P}SERVER_URLS_INGEST_LONG_CONTEXT", "http://localhost:8085"
-            ),
-            api_url=_env_str(f"{P}SERVER_URLS_API_URL", "http://localhost:8000"),
-            ocr_server=_env_str(f"{P}SERVER_URLS_OCR_SERVER", "http://localhost:9001"),
-            vision_api=_env_str(
-                f"{P}SERVER_URLS_VISION_API", "http://localhost:8000/v1/vision/analyze"
-            ),
-        ),
+        # ServerURLsConfig defaults are the single source of truth.
+        # Env vars (ORCHESTRATOR_SERVER_URLS_<FIELD>) override individual fields.
+        server_urls=_build_server_urls(P),
         timeouts=TimeoutsConfig(
             # All defaults come from registry; env vars can override
             worker_explore=_env_int(
@@ -644,6 +620,24 @@ def _load_from_env() -> OrchestratorConfigData:
     )
 
 
+def _build_server_urls(prefix: str) -> ServerURLsConfig:
+    """Build ServerURLsConfig with env overrides on top of dataclass defaults.
+
+    Single source of truth: defaults live in ServerURLsConfig (models.py).
+    Env vars ORCHESTRATOR_SERVER_URLS_<FIELD> override individual fields.
+    """
+    import dataclasses
+
+    defaults = ServerURLsConfig()
+    overrides = {}
+    for f in dataclasses.fields(defaults):
+        env_key = f"{prefix}SERVER_URLS_{f.name.upper()}"
+        env_val = _env_str(env_key, None)
+        if env_val is not None:
+            overrides[f.name] = env_val
+    return dataclasses.replace(defaults, **overrides) if overrides else defaults
+
+
 @lru_cache(maxsize=1)
 def get_config() -> OrchestratorConfigData:
     """Get the global configuration.
@@ -707,25 +701,10 @@ def get_config() -> OrchestratorConfigData:
                 repl=settings.features.repl,
                 caching=settings.features.caching,
             ),
+            # Pydantic ServerURLsSettings → dataclass ServerURLsConfig (same fields)
             server_urls=ServerURLsConfig(
-                frontdoor=settings.server_urls.frontdoor,
-                coder=settings.server_urls.coder,
-                coder_escalation=settings.server_urls.coder_escalation,
-                worker=settings.server_urls.worker,
-                worker_general=settings.server_urls.worker_general,
-                worker_explore=settings.server_urls.worker_explore,
-                worker_math=settings.server_urls.worker_math,
-                worker_vision=settings.server_urls.worker_vision,
-                vision_escalation=settings.server_urls.vision_escalation,
-                worker_code=settings.server_urls.worker_code,
-                worker_fast=settings.server_urls.worker_fast,
-                worker_summarize=settings.server_urls.worker_summarize,
-                architect_general=settings.server_urls.architect_general,
-                architect_coding=settings.server_urls.architect_coding,
-                ingest_long_context=settings.server_urls.ingest_long_context,
-                api_url=settings.server_urls.api_url,
-                ocr_server=settings.server_urls.ocr_server,
-                vision_api=settings.server_urls.vision_api,
+                **{f.name: getattr(settings.server_urls, f.name, f.default)
+                   for f in dataclasses.fields(ServerURLsConfig)}
             ),
             timeouts=TimeoutsConfig(
                 worker_explore=settings.timeouts.worker_explore,

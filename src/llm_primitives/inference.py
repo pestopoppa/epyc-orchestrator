@@ -52,13 +52,20 @@ def _detect_streaming_repetition(text: str, min_block: int = 60, min_repeats: in
     return False
 
 
+def _primary_url(url_str: str) -> str:
+    """Extract the first URL from a potentially comma-separated list."""
+    if not url_str:
+        return ""
+    return url_str.split(",")[0].strip()
+
+
 def _extract_port(url: str) -> int | None:
     """Extract port number from a backend URL like 'http://localhost:8080'."""
     if not url:
         return None
     try:
         from urllib.parse import urlparse
-        parsed = urlparse(url)
+        parsed = urlparse(_primary_url(url))
         return parsed.port
     except Exception:
         return None
@@ -357,7 +364,8 @@ class InferenceMixin:
         req_started = time.perf_counter()
 
         # Admission control: reject early if backend queue is full
-        backend_url = self.server_urls.get(role, "") if self.server_urls else ""
+        # Use primary URL for admission/health tracking (round-robin handled by backend layer)
+        backend_url = _primary_url(self.server_urls.get(role, "")) if self.server_urls else ""
         admission = getattr(self, "admission_controller", None)
         admitted = False
         cancel_check = self.get_request_cancel_check()
