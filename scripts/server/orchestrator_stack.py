@@ -166,7 +166,7 @@ NUMA_NODE1 = ("48-95,144-191", 96)
 # Roles with multiple instances get round-robin routing (requires orchestrator support).
 NUMA_CONFIG: dict[str, dict] = {
     # Qwen3.5-35B-A3B Q4_K_M (19 GB) — 4×48t NUMA quarters
-    # Benchmark: moe6+lookup = 19.6 t/s per instance, ~78 t/s aggregate
+    # Benchmark (2026-03-24): moe6 = 12.7 t/s/inst, ~50.8 agg. NO lookup — segfault on hybrids.
     "frontdoor": {
         "instances": [
             (NUMA_Q0A[0], 8080, NUMA_Q0A[1]),
@@ -268,7 +268,7 @@ SERIAL_ROLES = {
 
 # Servers to start (unique ports only)
 # HOT tier with NUMA-aware deployment (2026-03-19):
-#   frontdoor (Qwen3.5-35B, 19GB): 4×48t, moe6+lookup, ~78 t/s agg, ports 8080,8180,8280,8380
+#   frontdoor (Qwen3.5-35B, 19GB): 4×48t, moe6 (NO lookup — segfault on hybrids), ~50.8 t/s agg, ports 8080,8180,8280,8380
 #   coder_escalation (32B Q4KM, 18.5GB): 4×48t, spec+tree+lookup, ~43.3 t/s agg, ports 8081,8181,8281,8381
 #   architect_general (Qwen3.5-122B, 69GB): 1×96t node0, moe8+spec+lu, 12.6 t/s
 #   architect_coding (480B, 250GB): 1×96t node0, spec+tree+lu, 3.82 t/s
