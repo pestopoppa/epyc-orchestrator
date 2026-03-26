@@ -891,6 +891,22 @@ def build_server_command(
         "--flash-attn", "on",   # Flash attention
     ]
 
+    # KV cache quantization: reduces KV memory by 2.5-3.6x with negligible quality impact.
+    # Phase 0 benchmarks (2026-03-25): generation speed neutral, memory savings significant at 65K+.
+    # q8_0 K / q4_0 V = quality-neutral (PPL identical to f16), 2.5x compression.
+    # q4_0 / q4_0 = near-neutral (PPL +0.017 vs f16), 3.6x compression.
+    # NOTE: --kv-hadamard requires hadamard-kv-smoothing build (not yet in production binary).
+    _KV_QUANT_CONFIGS = {
+        "frontdoor":            ("q4_0", "q4_0"),   # hybrid model, KV tiny, free compression
+        "coder_escalation":     ("q8_0", "q4_0"),   # pure attention, quality-neutral config
+        "architect_general":    ("q8_0", "q4_0"),   # large model, memory savings matter
+        "architect_coding":     ("q8_0", "q4_0"),   # large model, memory savings matter
+        "ingest_long_context":  ("q8_0", "q4_0"),   # long context, KV savings significant
+    }
+    kv_quant = _KV_QUANT_CONFIGS.get(role_config.name)
+    if kv_quant:
+        cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1]])
+
     # mlock: lock model weights in RAM to prevent page cache eviction.
     # Validated in S2: 30x latency improvement under memory pressure.
     # Requires ulimit -l unlimited in launch environment.
