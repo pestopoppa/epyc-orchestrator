@@ -59,16 +59,18 @@ class ScoringConfig:
 
     # Per-role optimized tokens/second from production benchmarks.
     # Used to normalize cost: expected_elapsed = tokens_generated / baseline_tps.
+    # Deployment-mode t/s from comprehensive spec param sweep (2026-03-21).
+    # These reflect NUMA-pinned production throughput, not 192t reference.
     baseline_tps_by_role: Dict[str, float] = field(default_factory=lambda: {
-        "frontdoor": 18.3,
-        "coder_escalation": 39.44,
-        "architect_general": 6.75,
-        "architect_coding": 10.3,
-        "ingest_long_context": 6.29,
-        "worker_explore": 27.88,
-        "worker_math": 48.5,
-        "worker_vision": 15.28,
-        "vision_escalation": 27.6,
+        "frontdoor": 19.6,           # Qwen3.5-35B-A3B, moe6+lu, 4×48t (~19.6/inst)
+        "coder_escalation": 10.8,    # Qwen2.5-Coder-32B Q4KM, dm=32 ps=0.05, 48t (was 39.44)
+        "architect_general": 4.3,    # Qwen3.5-122B-A10B, moe8+spec dm=24, 96t (was 6.75)
+        "architect_coding": 7.0,     # Qwen3-Coder-480B, spec dm=24 ps=0, 96t (was 10.3)
+        "ingest_long_context": 12.0, # Qwen3-Next-80B-A3B, no spec (SSM), 96t (was 6.29)
+        "worker_explore": 39.1,      # Qwen3-Coder-30B-A3B Q4KM, dm=8 ps=0, 48t (was 27.88)
+        "worker_math": 39.1,         # shared with worker_explore (was 48.5)
+        "worker_vision": 15.28,      # unchanged (vision model, no sweep data)
+        "vision_escalation": 27.6,   # unchanged (vision model, no sweep data)
     })
 
     # Per-role quality baselines (from RESULTS.md relative benchmark scores).

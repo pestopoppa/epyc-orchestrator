@@ -13,21 +13,21 @@ The stack spans three tiers of servers, each mapped to a port range. The HOT tie
 <details>
 <summary>Server port assignments and tier breakdown</summary>
 
-### HOT Tier (Always Resident)
+### HOT Tier (Always Resident) — NUMA-Optimized (2026-03-19)
 
-| Port | Roles | Model | Acceleration | Speed | RAM |
-|------|-------|-------|--------------|-------|-----|
-| 8080 | frontdoor | Qwen3-Coder-30B-A3B Q4_K_M | MoE6 | 18 t/s | ~18GB |
-| 8081 | coder_escalation, worker_summarize | Qwen2.5-Coder-32B Q4_K_M + 0.5B draft | Spec K=24 + lookup | 39 t/s | ~22GB |
-| 8082 | worker_explore, worker_math | Qwen2.5-7B-Instruct f16 + 0.5B draft | Spec K=24 + lookup | 44 t/s | ~14GB |
-| 8083 | architect_general | Qwen3-235B-A22B Q4_K_M | MoE4 | 6.75 t/s | ~140GB |
-| 8084 | architect_coding | Qwen3-Coder-480B-A35B Q4_K_M | MoE3 | 10.3 t/s | ~280GB |
-| 8085 | ingest_long_context | Qwen3-Next-80B-A3B Q4_K_M | MoE4 (NO SPEC!) | 6.3 t/s | ~45GB |
-| 8086 | worker_vision | Qwen2.5-VL-7B Q4_K_M + mmproj | None (VL) | ~15 t/s | ~8GB |
-| 8087 | vision_escalation | Qwen3-VL-30B-A3B Q4_K_M + mmproj | MoE4 | ~10 t/s | ~20GB |
-| 8090-8095 | embedder (6x) | BGE-large-en-v1.5 F16 | probe-first | — | ~4GB |
+| Port(s) | Roles | Model | NUMA | Acceleration | Speed | RAM |
+|---------|-------|-------|------|--------------|-------|-----|
+| 8080,8180,8280,8380 | frontdoor (4×) | Qwen3.5-35B-A3B Q4_K_M | 4×48t quarters | MoE6 + lookup, mlock | ~78 t/s agg | 19GB×4 |
+| 8081,8181,8281,8381 | coder_escalation (4×) | Qwen2.5-Coder-32B f16 + 0.5B draft | 4×48t quarters | Spec K=24 + lookup | ~26 t/s agg | 65GB×4 |
+| 8082 | worker_explore, worker_math | Qwen2.5-7B-Instruct f16 + 0.5B draft | Q0A pinned | Spec K=24 + tree + lookup | 44 t/s | ~14GB |
+| 8083 | architect_general | Qwen3.5-122B-A10B Q4_K_M + 0.8B draft | Node 0, 96t | MoE8 + spec K=8 + lookup | 12.6 t/s | ~69GB |
+| 8084 | architect_coding | Qwen3-Coder-480B-A35B Q4_K_M | Node 0, 96t | Spec + tree dm=48 + lookup | 3.82 t/s | ~250GB |
+| 8085 | ingest_long_context | Qwen3-Next-80B-A3B Q4_K_M | Node 0, 96t | None (SSM), mlock | ~12 t/s | ~46GB |
+| 8086 | worker_vision | Qwen2.5-VL-7B Q4_K_M + mmproj | Q0B pinned | None (VL) | ~15 t/s | ~8GB |
+| 8087 | vision_escalation | Qwen3-VL-30B-A3B Q4_K_M + mmproj | Node 1, 96t | MoE4 | ~10 t/s | ~20GB |
+| 8090-8095 | embedder (6x) | BGE-large-en-v1.5 F16 | unpinned | probe-first | — | ~4GB |
 
-**Total HOT RAM**: ~538GB (48% of 1130GB), leaving ~592GB for KV cache and OS.
+**Total HOT RAM**: ~701GB (62% of 1130GB) with multi-instance copies, leaving ~429GB for KV cache and OS.
 
 ### Auxiliary Services
 
@@ -250,9 +250,9 @@ def wait_for_health(port: int, timeout: int = 120) -> bool:
 ```
 COMPONENT                 PORT     PID        STATUS     MODEL
 --------------------------------------------------------------------------------
-frontdoor                 8080     12345      healthy    Qwen3-Coder-30B-A3B-Q4_K_M
+frontdoor                 8080     12345      healthy    Qwen3.5-35B-A3B-UD-Q4_K_M
 coder_escalation          8081     12346      healthy    Qwen2.5-Coder-32B-Q4_K_M
-architect_general         8083     12348      healthy    Qwen3-235B-A22B-Q4_K_M
+architect_general         8083     12348      healthy    Qwen3.5-122B-A10B-Q4_K_M
 orchestrator              8000     12350      healthy    uvicorn
 ```
 
