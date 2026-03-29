@@ -240,6 +240,11 @@ async def _try_cheap_first(
     if execution_mode == "delegated":
         return None
 
+    # RI-2: Skip cheap-first when factual risk is high — cheap models are
+    # unreliable on factual questions and incorrect answers are worse than slow.
+    if routing.factual_risk_band == "high":
+        return None
+
     # Phase B/C: check Q-value before attempting
     if cfg.try_cheap_first_phase in ("B", "C"):
         if hasattr(state, "hybrid_router") and state.hybrid_router is not None:
@@ -766,6 +771,7 @@ async def chat_stream(
                             to_tier=current_role,
                             reason=f"Model-initiated: {reason}",
                         )
+                    state.record_escalation(str(role_history[-2]), str(current_role))
                     continue  # Next turn with new role
 
             # Log delegation outcomes
@@ -848,6 +854,7 @@ async def chat_stream(
                             to_tier=current_role,
                             reason=f"{decision.reason} (failures: {consecutive_failures})",
                         )
+                    state.record_escalation(str(role_history[-2]), str(current_role))
                 elif decision.action == EscalationAction.FAIL:
                     yield error_event(f"[FAILED: {decision.reason}]")
                     break

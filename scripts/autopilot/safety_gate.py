@@ -97,9 +97,13 @@ class Baseline:
 class SafetyGate:
     """Enforces safety constraints on trial results."""
 
-    def __init__(self, baseline_path: Path | None = None):
+    def __init__(
+        self,
+        baseline_path: Path | None = None,
+        consecutive_failures: int = 0,
+    ):
         self.baseline = Baseline.load(baseline_path)
-        self._consecutive_failures = 0
+        self._consecutive_failures = consecutive_failures
 
     @property
     def consecutive_failures(self) -> int:

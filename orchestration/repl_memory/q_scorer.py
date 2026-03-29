@@ -59,16 +59,17 @@ class ScoringConfig:
 
     # Per-role optimized tokens/second from production benchmarks.
     # Used to normalize cost: expected_elapsed = tokens_generated / baseline_tps.
-    # Deployment-mode t/s from comprehensive spec param sweep (2026-03-21).
-    # These reflect NUMA-pinned production throughput, not 192t reference.
+    # Deployment-mode t/s from NUMA-pinned production, per model_registry.yaml.
+    # Updated 2026-03-29: frontdoor lookup disabled (segfault on hybrids),
+    # architect_coding swapped to REAP-246B.
     baseline_tps_by_role: Dict[str, float] = field(default_factory=lambda: {
-        "frontdoor": 19.6,           # Qwen3.5-35B-A3B, moe6+lu, 4×48t (~19.6/inst)
-        "coder_escalation": 10.8,    # Qwen2.5-Coder-32B Q4KM, dm=32 ps=0.05, 48t (was 39.44)
-        "architect_general": 4.3,    # Qwen3.5-122B-A10B, moe8+spec dm=24, 96t (was 6.75)
-        "architect_coding": 7.0,     # Qwen3-Coder-480B, spec dm=24 ps=0, 96t (was 10.3)
-        "ingest_long_context": 12.0, # Qwen3-Next-80B-A3B, no spec (SSM), 96t (was 6.29)
-        "worker_explore": 39.1,      # Qwen3-Coder-30B-A3B Q4KM, dm=8 ps=0, 48t (was 27.88)
-        "worker_math": 39.1,         # shared with worker_explore (was 48.5)
+        "frontdoor": 12.7,           # Qwen3.5-35B-A3B, moe6 only (NO lookup — segfault), 48t/inst
+        "coder_escalation": 10.8,    # Qwen2.5-Coder-32B Q4KM, dm=32 ps=0.05, 48t
+        "architect_general": 4.3,    # Qwen3.5-122B-A10B, moe8+spec dm=24, 96t
+        "architect_coding": 8.0,     # REAP-246B Q4KM, dm=32 ps=0, 96t (was 480B@7.0, swapped 2026-03-29)
+        "ingest_long_context": 12.0, # Qwen3-Next-80B-A3B, no spec (SSM), 96t
+        "worker_explore": 39.1,      # Qwen3-Coder-30B-A3B Q4KM, dm=8 ps=0, 48t
+        "worker_math": 39.1,         # shared with worker_explore
         "worker_vision": 15.28,      # unchanged (vision model, no sweep data)
         "vision_escalation": 27.6,   # unchanged (vision model, no sweep data)
     })
@@ -93,7 +94,7 @@ class ScoringConfig:
         "worker_explore": 0.5,    # 4.4GB, HOT
         "worker_math": 0.5,       # 4.4GB, HOT
         "architect_general": 3.0,  # 133GB, WARM (mmap load penalty)
-        "architect_coding": 5.0,   # 271GB, WARM (huge)
+        "architect_coding": 3.5,   # 139GB, WARM (REAP-246B, was 5.0 for 480B@271GB)
         "ingest_long_context": 1.5, # 46GB, WARM
     })
 

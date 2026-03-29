@@ -56,6 +56,8 @@ class JournalEntry:
     active_flags: list[str] = field(default_factory=list)
     eval_details: dict[str, Any] = field(default_factory=dict)
     failure_analysis: str = ""
+    hypothesis: str = ""
+    expected_mechanism: str = ""
 
 
 class ExperimentJournal:
@@ -116,6 +118,8 @@ class ExperimentJournal:
                         active_flags=data.get("active_flags", []),
                         eval_details=data.get("eval_details", {}),
                         failure_analysis=data.get("failure_analysis", ""),
+                        hypothesis=data.get("hypothesis", ""),
+                        expected_mechanism=data.get("expected_mechanism", ""),
                     )
                     self._entries.append(entry)
             batch += 1
@@ -200,13 +204,50 @@ class ExperimentJournal:
         if recent:
             lines.append(f"\nLast {len(recent)} trials:")
             for e in recent:
-                lines.append(
+                line = (
                     f"  #{e.trial_id} [{e.species}/{e.action_type}] "
                     f"T{e.tier} q={e.quality:.3f} s={e.speed:.1f} "
                     f"c={e.cost:.3f} r={e.reliability:.2f} "
                     f"→ {e.pareto_status}"
                 )
+                if e.failure_analysis:
+                    # Compact single-line failure summary for controller visibility
+                    fa_oneline = e.failure_analysis.replace("\n", " | ")[:200]
+                    line += f"  FAILED: {fa_oneline}"
+                lines.append(line)
         return "\n".join(lines)
+
+    def recent_failures(
+        self, species: str | None = None, n: int = 10
+    ) -> list[JournalEntry]:
+        """Return the last n entries with non-empty failure_analysis.
+
+        Optionally filter by species name.
+        """
+        failed = [
+            e for e in self._entries
+            if e.failure_analysis
+            and (species is None or e.species == species)
+        ]
+        return failed[-n:]
+
+    def suite_quality_trend(
+        self, last_n: int = 10
+    ) -> dict[str, list[tuple[int, float]]]:
+        """Per-suite quality over the last n trials that have suite data.
+
+        Returns {suite_name: [(trial_id, quality), ...]} sorted by trial_id.
+        """
+        entries_with_suites = [
+            e for e in self._entries
+            if e.eval_details.get("per_suite_quality")
+        ][-last_n:]
+
+        trends: dict[str, list[tuple[int, float]]] = {}
+        for e in entries_with_suites:
+            for suite, q in e.eval_details["per_suite_quality"].items():
+                trends.setdefault(suite, []).append((e.trial_id, q))
+        return trends
 
     # ── species effectiveness ────────────────────────────────────
 

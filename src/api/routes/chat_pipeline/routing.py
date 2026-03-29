@@ -103,33 +103,8 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         )
         routing_decision = [classified_role]
 
-    # Failure graph veto — revert high-risk specialists to frontdoor
-    if (
-        state.failure_graph
-        and routing_decision
-        and str(routing_decision[0]) != str(Role.FRONTDOOR)
-        and routing_strategy not in ("mock", "forced")
-    ):
-        try:
-            risk = state.failure_graph.get_failure_risk(str(routing_decision[0]))
-            if risk > 0.5:
-                log.warning(
-                    "Failure veto: %s risk=%.2f > 0.5, reverting to frontdoor",
-                    routing_decision[0],
-                    risk,
-                    extra=task_extra(
-                        task_id=task_id,
-                        role=str(routing_decision[0]),
-                        stage="routing",
-                        strategy="failure_vetoed",
-                    ),
-                )
-                routing_decision = [str(Role.FRONTDOOR)]
-                routing_strategy = "failure_vetoed"
-        except Exception as exc:
-            log.debug("Failure risk veto check failed: %s", exc)
-
     # Factual-risk scoring (shadow/enforce mode only — no-op when mode is "off")
+    # RI-5: Moved BEFORE failure graph veto so risk band can modulate veto threshold.
     try:
         from src.classifiers.factual_risk import assess_risk, get_mode as _fr_mode
         if _fr_mode() != "off":
@@ -137,8 +112,6 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
                 request.prompt,
                 role=str(routing_decision[0]) if routing_decision else "",
             )
-            # Attach to routing result (consumed by response builder / telemetry)
-            # These are set on the RoutingResult after construction below.
             _factual_risk_score = _fr_result.adjusted_risk_score
             _factual_risk_band = _fr_result.risk_band
             log.info(
@@ -160,6 +133,39 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         log.debug("Factual risk scoring skipped: %s", _fr_exc)
         _factual_risk_score = 0.0
         _factual_risk_band = ""
+
+    # Failure graph veto — revert high-risk specialists to frontdoor
+    # RI-5: Veto threshold modulated by factual-risk band.
+    # High factual risk → lower veto threshold (more conservative routing).
+    # Low factual risk → higher threshold (allow specialist attempts).
+    _VETO_THRESHOLDS = {"high": 0.3, "medium": 0.5, "low": 0.7, "": 0.5}
+    if (
+        state.failure_graph
+        and routing_decision
+        and str(routing_decision[0]) != str(Role.FRONTDOOR)
+        and routing_strategy not in ("mock", "forced")
+    ):
+        try:
+            risk = state.failure_graph.get_failure_risk(str(routing_decision[0]))
+            veto_threshold = _VETO_THRESHOLDS.get(_factual_risk_band, 0.5)
+            if risk > veto_threshold:
+                log.warning(
+                    "Failure veto: %s risk=%.2f > %.1f (factual_risk=%s), reverting to frontdoor",
+                    routing_decision[0],
+                    risk,
+                    veto_threshold,
+                    _factual_risk_band or "none",
+                    extra=task_extra(
+                        task_id=task_id,
+                        role=str(routing_decision[0]),
+                        stage="routing",
+                        strategy="failure_vetoed",
+                    ),
+                )
+                routing_decision = [str(Role.FRONTDOOR)]
+                routing_strategy = "failure_vetoed"
+        except Exception as exc:
+            log.debug("Failure risk veto check failed: %s", exc)
 
     # Difficulty-signal scoring (shadow/enforce mode only — no-op when mode is "off")
     try:
@@ -215,6 +221,33 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
             "difficulty_band": _difficulty_band,
             "estimated_cost": round(_estimated_cost, 6),
         }
+        # DS-1: Inject queue depth telemetry from backend stats
+        if state.llm_primitives and hasattr(state.llm_primitives, "get_stats"):
+            try:
+                _stats = state.llm_primitives.get_stats()
+                routing_meta["active_requests"] = state.active_requests
+                if "per_role" in _stats:
+                    routing_meta["queue_depth"] = {
+                        role: rs.get("total_active", rs.get("round_robin_requests", 0))
+                        for role, rs in _stats["per_role"].items()
+                        if isinstance(rs, dict)
+                    }
+            except Exception:
+                pass
+        # DS-4: Log stack state (models loaded, instance counts) alongside routing
+        if state.registry and hasattr(state.registry, "roles"):
+            try:
+                routing_meta["stack_state"] = {
+                    name: {
+                        "model": str(getattr(cfg.model, "name", cfg.model))[:60],
+                        "tier": cfg.tier,
+                        "instances": getattr(cfg, "numa_instances", 1),
+                    }
+                    for name, cfg in state.registry.roles.items()
+                    if not name.startswith("draft_")
+                }
+            except Exception:
+                pass
         if state.hybrid_router and hasattr(state.hybrid_router, "last_decision_meta"):
             try:
                 routing_meta.update(state.hybrid_router.last_decision_meta or {})
@@ -367,10 +400,14 @@ def _plan_review_gate(
 ) -> list | None:
     """Run architect plan review if applicable. Returns modified routing_decision or None."""
     plan_review_result = None
+    # RI-3: Force plan review when factual risk is high, regardless of complexity heuristics.
+    # High-risk prompts need architect oversight to catch factual errors.
+    risk_forced = routing.factual_risk_band == "high" and features().factual_risk_mode == "enforce"
+    needs_review = _needs_plan_review(routing.task_ir, routing.routing_decision, state)
     if (
         request.real_mode
         and features().plan_review
-        and _needs_plan_review(routing.task_ir, routing.routing_decision, state)
+        and (needs_review or risk_forced)
     ):
         plan_review_result = _architect_plan_review(
             routing.task_ir, routing.routing_decision, primitives, state, routing.task_id

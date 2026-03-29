@@ -94,6 +94,8 @@ _PATHS = _get_paths()
 STATE_FILE = _PATHS["log_dir"] / "orchestrator_state.json"
 LLAMA_SERVER = _PATHS["llama_cpp_bin"] / "llama-server"
 LOG_DIR = _PATHS["log_dir"]
+# DS-3: KV state save/restore directory for dynamic stack management
+SLOT_SAVE_DIR = _PATHS["cache_dir"] / "kv_slots"
 
 # Port assignments by role (primary ports — NUMA replicas use offset ports)
 PORT_MAP = {
@@ -1007,6 +1009,12 @@ def build_server_command(
     # Combined mode: 5.4x vs 5.2x spec-only (production-consolidated commit 8e35dbc01)
     if accel.lookup:
         cmd.append("--lookup")
+
+    # DS-3: KV state save/restore — enables dynamic stack slot persistence.
+    # Each role gets its own subdirectory to avoid slot ID collisions.
+    slot_dir = SLOT_SAVE_DIR / role_config.name
+    slot_dir.mkdir(parents=True, exist_ok=True)
+    cmd.extend(["--slot-save-path", str(slot_dir)])
 
     return cmd
 
