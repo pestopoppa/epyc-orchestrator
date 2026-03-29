@@ -404,8 +404,35 @@ def run_loop(
     max_trials: int | None = None,
     dry_run: bool = False,
     use_controller: bool = True,
+    use_tui: bool = False,
 ) -> None:
     """Main optimization loop."""
+    # Optional TUI for live inference monitoring
+    tui = None
+    tui_ctx = None
+    if use_tui:
+        try:
+            from autopilot_tui import AutoPilotTUI
+            tui = AutoPilotTUI()
+            tui_ctx = tui.__enter__()
+        except Exception as e:
+            log.warning("TUI not available: %s", e)
+            tui = None
+
+    try:
+        _run_loop_inner(max_trials, dry_run, use_controller, tui)
+    finally:
+        if tui is not None:
+            tui.__exit__(None, None, None)
+
+
+def _run_loop_inner(
+    max_trials: int | None,
+    dry_run: bool,
+    use_controller: bool,
+    tui: "AutoPilotTUI | None" = None,
+) -> None:
+    """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
     state = load_state()
     journal = ExperimentJournal()
     archive = ParetoArchive()
@@ -500,6 +527,16 @@ def run_loop(
 
         # ── 3. Act ───────────────────────────────────────────────
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
+
+        # Update TUI with trial info
+        if tui is not None:
+            species_hint = action.get("type", "unknown")
+            tui.set_trial(trial_counter, species_hint)
+            # Show the action description as the "current prompt" in TUI
+            prompt_preview = action.get("description", "")
+            if not prompt_preview:
+                prompt_preview = json.dumps(action, indent=2)[:500]
+            tui.set_prompt(prompt_preview)
 
         if dry_run:
             eval_result = EvalResult(
@@ -717,6 +754,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         max_trials=args.max_trials,
         dry_run=args.dry_run,
         use_controller=not args.no_controller,
+        use_tui=args.tui,
     )
 
 
@@ -827,6 +865,8 @@ def main() -> None:
     p_start.add_argument("--max-trials", type=int, default=None)
     p_start.add_argument("--no-controller", action="store_true",
                          help="Use autonomous species selection instead of Claude CLI")
+    p_start.add_argument("--tui", action="store_true",
+                         help="Live Rich TUI for inference monitoring (hang detection)")
     p_start.set_defaults(func=cmd_start)
 
     # status
