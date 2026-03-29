@@ -224,6 +224,7 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         session_compaction_keep_recent_ratio: float = 0.20
         session_compaction_recompaction_interval: int = 0
         session_compaction_min_turns: int = 5
+        session_compaction_trigger_ratio: float = 0.75
 
         model_config = SettingsConfigDict(
             env_prefix="ORCHESTRATOR_CHAT_",
@@ -531,6 +532,9 @@ def _load_from_env() -> OrchestratorConfigData:
             session_compaction_min_turns=_env_int(
                 f"{P}CHAT_SESSION_COMPACTION_MIN_TURNS", 5
             ),
+            session_compaction_trigger_ratio=_env_float(
+                f"{P}CHAT_SESSION_COMPACTION_TRIGGER_RATIO", 0.75
+            ),
         ),
         memrl_retrieval=MemRLRetrievalConfigData(
             semantic_k=_env_int(f"{P}MEMRL_RETRIEVAL_SEMANTIC_K", 20),
@@ -758,6 +762,7 @@ def get_config() -> OrchestratorConfigData:
                 session_compaction_keep_recent_ratio=settings.chat.session_compaction_keep_recent_ratio,
                 session_compaction_recompaction_interval=settings.chat.session_compaction_recompaction_interval,
                 session_compaction_min_turns=settings.chat.session_compaction_min_turns,
+                session_compaction_trigger_ratio=settings.chat.session_compaction_trigger_ratio,
             ),
             memrl_retrieval=MemRLRetrievalConfigData(
                 semantic_k=settings.memrl_retrieval.semantic_k,

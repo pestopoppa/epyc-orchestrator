@@ -878,10 +878,14 @@ async def _maybe_compact_context(ctx: Ctx) -> None:
     if state.turns < max(1, int(min_turns_before_compaction)):
         return
 
-    # Token-aware trigger: 60% of model max context
+    # Token-aware trigger: configurable ratio of model max context (CF Phase 0)
     model_max_ctx = _get_model_max_context(ctx)
     context_tokens = _estimate_context_tokens(ctx, state.context)
-    trigger_threshold = int(model_max_ctx * 0.60)
+    try:
+        trigger_ratio = _chat_cfg.session_compaction_trigger_ratio
+    except AttributeError:
+        trigger_ratio = 0.75
+    trigger_threshold = int(model_max_ctx * trigger_ratio)
 
     should_compact = context_tokens >= trigger_threshold or len(state.context) > 12000
 

@@ -128,7 +128,7 @@ class WorkerTier(Enum):
 | code_impl, refactor, test_gen | worker_coder (semantic) → fast pool (8102) | Parallel coding bursts with low latency |
 | boilerplate, transform | fast_1/fast_2 (8102/8112) | 1.5B WARM | High throughput, simple tasks |
 
-**worker_coder Active (legacy `worker_code` alias retained)**: Coding-worker semantics route to the fast pool on port 8102 for parallel subtask bursts; specialist `coder_escalation` remains available for heavier synthesis/debug tasks.
+**worker_coder**: Coding-worker semantics route to the fast pool on port 8102 for parallel subtask bursts; specialist `coder_escalation` remains available for heavier synthesis/debug tasks.
 
 ### Expansion Strategy
 

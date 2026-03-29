@@ -29,7 +29,6 @@ runtime_defaults:
       worker_summarize: 120
       worker_general: 60
       worker_coder: 30
-      worker_code: 60
       worker_fast: 30
       frontdoor: 180
       coder_escalation: 120
