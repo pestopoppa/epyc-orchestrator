@@ -87,7 +87,7 @@ class NumericSwarm:
 
         optuna = self._optuna
         storage = f"sqlite:///{self.db_path}"
-        study_name = f"autopilot_{surface}"
+        study_name = self._study_name(surface)
 
         try:
             study = optuna.load_study(
@@ -244,6 +244,53 @@ class NumericSwarm:
         except Exception as e:
             log.debug("fANOVA importance not available: %s", e)
             return {}
+
+    def mark_epoch(self, reason: str) -> None:
+        """Invalidate existing studies by starting a new epoch.
+
+        After regime changes (StructuralLab flag changes, PromptForge prompt
+        changes), old Optuna trials reflect a different optimization landscape.
+        This method increments an epoch counter and creates fresh studies,
+        so new trials start from the new regime's baseline.
+
+        The old studies remain in the SQLite DB for historical reference
+        but are no longer used for suggestions.
+        """
+        # Determine next epoch number by checking existing study names
+        optuna = self._optuna
+        storage = f"sqlite:///{self.db_path}"
+        try:
+            existing = optuna.study.get_all_study_summaries(storage=storage)
+            epoch_numbers = []
+            for s in existing:
+                parts = s.study_name.split("_epoch")
+                if len(parts) == 2:
+                    try:
+                        epoch_numbers.append(int(parts[1]))
+                    except ValueError:
+                        pass
+            next_epoch = max(epoch_numbers, default=0) + 1
+        except Exception:
+            next_epoch = 1
+
+        log.info(
+            "Marking epoch %d (reason: %s). Old studies invalidated.",
+            next_epoch, reason,
+        )
+
+        # Clear cached studies — they'll be recreated with new epoch suffix
+        self._studies.clear()
+
+        # Override study naming to include epoch
+        self._epoch = next_epoch
+
+    def _study_name(self, surface: str) -> str:
+        """Get study name with optional epoch suffix."""
+        base = f"autopilot_{surface}"
+        epoch = getattr(self, "_epoch", 0)
+        if epoch > 0:
+            return f"{base}_epoch{epoch}"
+        return base
 
     def summary(self) -> dict[str, Any]:
         """Summary for controller consumption."""

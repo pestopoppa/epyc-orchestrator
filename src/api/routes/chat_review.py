@@ -355,17 +355,23 @@ def _store_plan_review_episode(
     if state.progress_logger:
         from orchestration.repl_memory.progress_logger import ProgressEntry, EventType
 
+        # RI-6: Structured review context replaces truncated feedback proxy.
+        # Provides task_type, risk_band, key_claims for richer MemRL signal.
+        _review_context = {
+            "decision": review.decision,
+            "score": review.score,
+            "feedback": review.feedback[:200],
+            "patches": review.patches[:5],
+            "task_type": task_ir.get("task_type", "chat"),
+            "risk_band": task_ir.get("risk_band", ""),
+            "verification_focus": review.decision if review.decision != "ok" else "",
+        }
         state.progress_logger.log(
             ProgressEntry(
                 event_type=EventType.PLAN_REVIEWED,
                 task_id=task_id,
                 agent_role="architect_general",
-                data={
-                    "decision": review.decision,
-                    "score": review.score,
-                    "feedback": review.feedback[:100],
-                    "patches": review.patches[:5],
-                },
+                data=_review_context,
                 outcome="success" if review.is_ok else "corrected",
             )
         )
@@ -387,7 +393,9 @@ def _store_plan_review_episode(
                 context={
                     "task_type": task_ir.get("task_type", "chat"),
                     "review_decision": review.decision,
-                    "review_feedback": review.feedback[:100],
+                    "review_feedback": review.feedback[:200],
+                    "risk_band": task_ir.get("risk_band", ""),
+                    "verification_focus": review.decision if review.decision != "ok" else "",
                     "source": "plan_review",
                 },
             )

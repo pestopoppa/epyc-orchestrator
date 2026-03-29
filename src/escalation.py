@@ -347,15 +347,25 @@ class EscalationPolicy:
 
         # Standard retry/escalate logic
         if context.failure_count < max_retries:
-            # On penultimate retry, try "think harder" before escalating:
+            # RI-4: Risk-aware think-harder trigger — for high-risk prompts,
+            # engage think-harder on FIRST failure instead of waiting for
+            # penultimate retry. Factual errors compound; early deep thinking
+            # is cheaper than multiple shallow retries followed by escalation.
+            is_high_risk = context.risk_band == "high" and context.risk_score > 0.5
+            think_harder_trigger = max_retries - 1  # Default: penultimate retry
+            if is_high_risk:
+                think_harder_trigger = 0  # First failure → think harder immediately
+
+            # On think-harder trigger, try "think harder" before escalating:
             # same model with CoT prefix, 2x token budget, slightly higher temperature.
             # This is a free escalation axis — often matches the bigger model's quality.
-            if context.failure_count == max_retries - 1 and isinstance(context.current_role, Role):
+            if context.failure_count >= think_harder_trigger and isinstance(context.current_role, Role):
                 return EscalationDecision(
                     action=EscalationAction.THINK_HARDER,
                     target_role=context.current_role,
-                    reason=f"Think harder before escalating from {context.current_role}",
-                    retries_remaining=0,
+                    reason=f"Think harder before escalating from {context.current_role}"
+                    + (" (high factual risk)" if is_high_risk else ""),
+                    retries_remaining=max(0, max_retries - context.failure_count - 1),
                     config_override={
                         "n_tokens": 4096,  # 2x default
                         "cot_prefix": "# Step-by-step solution:\n",

@@ -113,6 +113,10 @@ class AppState:
     mock_requests: int = 0
     real_requests: int = 0
 
+    # DS-2: Escalation rate telemetry (protected by _stats_lock)
+    total_escalations: int = 0
+    escalations_by_path: dict = field(default_factory=dict)  # "from→to": count
+
     # Idle scoring control (protected by _stats_lock)
     active_requests: int = 0
     q_scorer_enabled: bool = True
@@ -179,6 +183,15 @@ class AppState:
             else:
                 self.real_requests += 1
 
+    def record_escalation(self, from_role: str, to_role: str) -> None:
+        """Record an escalation event (thread-safe). DS-2 telemetry."""
+        with self._stats_lock:
+            self.total_escalations += 1
+            path_key = f"{from_role}→{to_role}"
+            self.escalations_by_path[path_key] = (
+                self.escalations_by_path.get(path_key, 0) + 1
+            )
+
     def increment_active(self) -> None:
         """Increment active request counter (thread-safe)."""
         with self._stats_lock:
@@ -205,6 +218,13 @@ class AppState:
                 "mock_requests": self.mock_requests,
                 "real_requests": self.real_requests,
                 "active_requests": self.active_requests,
+                # DS-2: Escalation rate telemetry
+                "total_escalations": self.total_escalations,
+                "escalation_rate": (
+                    self.total_escalations / self.total_requests
+                    if self.total_requests > 0 else 0.0
+                ),
+                "escalations_by_path": dict(self.escalations_by_path),
             }
 
     def reset_stats(self) -> None:
@@ -214,6 +234,8 @@ class AppState:
             self.total_turns = 0
             self.mock_requests = 0
             self.real_requests = 0
+            self.total_escalations = 0
+            self.escalations_by_path = {}
 
 
 # Global application state singleton

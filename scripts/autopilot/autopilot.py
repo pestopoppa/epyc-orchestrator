@@ -78,6 +78,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Species Budget
 {budget}
 
+### Suite Quality Trends (last 10 evals)
+{suite_quality_trends}
+
 ### Plot Paths (reference for trend analysis)
 {plot_paths}
 
@@ -217,6 +220,7 @@ def dispatch_action(
     tower: EvalTower,
     gate: SafetyGate,
     archive: ParetoArchive,
+    journal: ExperimentJournal,
     state: dict[str, Any],
 ) -> tuple[EvalResult | None, str]:
     """Execute an action and return (eval_result, species_name)."""
@@ -261,9 +265,24 @@ def dispatch_action(
         mutation_type = action.get("mutation", "targeted_fix")
         description = action.get("description", "")
 
+        # Gather failure context from recent journal entries (AP-1)
+        recent_failures = journal.recent_failures(species="prompt_forge", n=5)
+        failure_context = "\n\n".join(
+            f"Trial #{f.trial_id} ({f.action_type}):\n{f.failure_analysis}"
+            for f in recent_failures
+        )
+        # Get per-suite quality from most recent eval
+        last_entries = journal.recent(1)
+        last_per_suite = (
+            last_entries[-1].eval_details.get("per_suite_quality")
+            if last_entries else None
+        )
+
         mutation = forge.propose_mutation(
             target_file=target,
             mutation_type=mutation_type,
+            failure_context=failure_context,
+            per_suite_quality=last_per_suite,
             description=description,
         )
         forge.apply_mutation(mutation)
@@ -276,6 +295,8 @@ def dispatch_action(
             forge.revert_mutation(mutation)
             return eval_result, "prompt_forge"
 
+        # AP-7: Prompt change accepted — invalidate stale Optuna trials
+        swarm.mark_epoch(f"prompt_mutation:{target}/{mutation_type}")
         return eval_result, "prompt_forge"
 
     elif action_type == "structural_experiment":
@@ -295,6 +316,9 @@ def dispatch_action(
             # Revert flags
             reverted = {k: not v for k, v in flags.items()}
             lab.apply_flag_experiment(reverted)
+        else:
+            # AP-7: Structural change accepted — invalidate stale Optuna trials
+            swarm.mark_epoch(f"structural_experiment:{flags}")
 
         return eval_result, "structural_lab"
 
@@ -364,7 +388,9 @@ def run_loop(
     state = load_state()
     journal = ExperimentJournal()
     archive = ParetoArchive()
-    gate = SafetyGate()
+    gate = SafetyGate(
+        consecutive_failures=state.get("consecutive_failures", 0),
+    )
     tower = EvalTower(url=ORCHESTRATOR_URL)
     meta = MetaOptimizer()
 
@@ -433,6 +459,7 @@ def run_loop(
                 memory_count=memory_count,
                 converged=converged,
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
+                suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
             )
 
@@ -460,7 +487,8 @@ def run_loop(
             species_name = action.get("type", "unknown").split("_")[0]
         else:
             eval_result, species_name = dispatch_action(
-                action, seeder, swarm, forge, lab, tower, gate, archive, state
+                action, seeder, swarm, forge, lab, tower, gate, archive,
+                journal, state,
             )
 
         # ── 4. Evaluate ─────────────────────────────────────────
@@ -513,6 +541,21 @@ def run_loop(
             git_tag = f"autopilot/trial-{trial_counter}"
             _git_tag(git_tag, f"Trial {trial_counter}: {species_name}/{action.get('type', '')}")
 
+        # Compute trial lineage (AP-3): find most recent trial from same species
+        parent_trial_id = None
+        config_diff: dict[str, Any] = {}
+        species_history = journal.by_species(species_name)
+        if species_history:
+            parent = species_history[-1]
+            parent_trial_id = parent.trial_id
+            # Compute config diff: keys that changed between parent and current
+            prev_cfg = parent.config_snapshot
+            for key in set(list(prev_cfg.keys()) + list(action.keys())):
+                old_val = prev_cfg.get(key)
+                new_val = action.get(key)
+                if old_val != new_val:
+                    config_diff[key] = {"old": old_val, "new": new_val}
+
         journal.record(
             JournalEntry(
                 trial_id=trial_counter,
@@ -527,6 +570,8 @@ def run_loop(
                 pareto_status=pareto_status,
                 git_tag=git_tag,
                 config_snapshot=action,
+                config_diff=config_diff,
+                parent_trial=parent_trial_id,
                 memory_count=memory_count,
                 active_flags=[],
                 failure_analysis=failure_analysis,
@@ -558,6 +603,7 @@ def run_loop(
         # Save state
         trial_counter += 1
         state["trial_counter"] = trial_counter
+        state["consecutive_failures"] = gate.consecutive_failures
         archive.save(state)
         save_state(state)
 
@@ -576,6 +622,29 @@ def run_loop(
     save_state(state)
     if not dry_run:
         lab.checkpoint_state(trial_id=trial_counter, notes="Shutdown checkpoint")
+
+
+def _format_suite_trends(
+    trends: dict[str, list[tuple[int, float]]],
+) -> str:
+    """Format suite quality trends for the controller prompt."""
+    if not trends:
+        return "  (no suite data yet)"
+    lines = []
+    for suite, points in sorted(trends.items()):
+        vals = [q for _, q in points]
+        direction = ""
+        if len(vals) >= 3:
+            recent_avg = sum(vals[-3:]) / 3
+            older_avg = sum(vals[:3]) / 3
+            delta = recent_avg - older_avg
+            if delta < -0.05:
+                direction = " ↓ DECLINING"
+            elif delta > 0.05:
+                direction = " ↑ improving"
+        trail = " → ".join(f"{q:.2f}" for _, q in points[-5:])
+        lines.append(f"  {suite}: {trail}{direction}")
+    return "\n".join(lines)
 
 
 def _auto_action(

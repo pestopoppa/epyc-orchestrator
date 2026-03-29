@@ -607,7 +607,7 @@ def _add_evidence(ctx: Ctx, outcome: str, delta: float | None = None) -> None:
 
 
 def _log_escalation(ctx: Ctx, from_role: str, to_role: str, reason: str) -> None:
-    """Log an escalation event via progress logger."""
+    """Log an escalation event via progress logger and state telemetry."""
     pl = ctx.deps.progress_logger
     if pl is None:
         return
@@ -620,6 +620,13 @@ def _log_escalation(ctx: Ctx, from_role: str, to_role: str, reason: str) -> None
         )
     except Exception as exc:
         log.debug("progress_logger.log_escalation failed: %s", exc)
+    # DS-2: Record escalation in AppState telemetry (if available)
+    app_state = getattr(ctx.deps, "app_state", None)
+    if app_state and hasattr(app_state, "record_escalation"):
+        try:
+            app_state.record_escalation(from_role, to_role)
+        except Exception:
+            pass
 
 
 def _maybe_prewarm_architect(state: "TaskState") -> None:
