@@ -93,11 +93,25 @@ See `architecture_ir.schema.json` for full specification.
 ```yaml
 roles:
   frontdoor:
-    model: Qwen3-Coder-30B-A3B-Instruct
+    model: Qwen3.5-35B-A3B-Q4_K_M
     acceleration:
       type: moe_expert_reduction
-      experts: 4
-  
+      experts: 6
+      lookup: true
+    numa_instances: 4
+    numa_threads_per_instance: 48
+
+  architect_general:
+    model: Qwen3.5-122B-A10B-Q4_K_M
+    acceleration:
+      type: moe_spec_lookup
+      experts: 8
+      draft: Qwen3.5-0.8B-Q8_0
+      k: 8
+      lookup: true
+    numa_instances: 1
+    numa_threads_per_instance: 96
+
   coder_escalation:
     model: Qwen2.5-Coder-32B-Instruct
     acceleration:
@@ -108,15 +122,15 @@ roles:
 
 The dispatcher should read this file and **never improvise** model selection.
 
-## Production Server Topology (Updated 2026-01-28)
+## Production Server Topology (Updated 2026-03-19)
 
 Launch the production stack using the Python orchestrator:
 
 ```bash
-# Full production stack (~535GB, 47% of 1130GB RAM)
+# Full production stack (~701GB, 62% of 1130GB RAM)
 python scripts/server/orchestrator_stack.py start
 
-# HOT tier only (~535GB)
+# HOT tier only (~701GB)
 python scripts/server/orchestrator_stack.py start --hot-only
 
 # Development mode (single 0.5B model, fast startup)
@@ -129,19 +143,19 @@ python scripts/server/orchestrator_stack.py status
 python scripts/server/orchestrator_stack.py stop --all
 ```
 
-### HOT Tier (Always Resident, ~510GB)
+### HOT Tier (Always Resident, ~701GB) — NUMA-Optimized (2026-03-19)
 
-| Port | Role | Model | Acceleration | Speed |
-|------|------|-------|--------------|-------|
-| 8080 | frontdoor, coder_escalation | Qwen3-Coder-30B-A3B-Q4_K_M | MoE6 | 18 t/s |
-| 8081 | coder_escalation, worker_summarize | Qwen2.5-Coder-32B-Q4_K_M + 0.5B draft | spec K=24 + lookup | 33-95 t/s |
-| 8082 | worker_explore, worker_math | Qwen2.5-7B-Instruct-f16 + 0.5B draft | spec K=24 | 46 t/s |
-| 8083 | architect_general | Qwen3-235B-A22B-Q4_K_M (4 files, ~140GB) | MoE4 | 6.75 t/s |
-| 8084 | architect_coding | Qwen3-Coder-480B-A35B-Q4_K_M (8 files, ~280GB) | MoE3 | 10.3 t/s |
-| 8085 | ingest_long_context | Qwen3-Next-80B-A3B-Q4_K_M (~45GB) | MoE4 (NO SPEC!) | 6.3 t/s |
-| 8086 | worker_vision | Qwen2.5-VL-7B-Q4_K_M + mmproj | None (VL) | ~15 t/s |
-| 8087 | vision_escalation | Qwen3-VL-30B-A3B-Q4_K_M + mmproj | MoE4 | ~10 t/s |
-| 8090-8095 | embedder (6x) | BGE-large-en-v1.5-F16 | probe-first | — |
+| Port(s) | Role | Model | NUMA | Acceleration | Speed |
+|---------|------|-------|------|--------------|-------|
+| 8080,8180,8280,8380 | frontdoor (4x) | Qwen3.5-35B-A3B Q4_K_M | 4x48t quarters | MoE6+lookup, mlock | ~19.6 t/s/inst |
+| 8081,8181,8281,8381 | coder_escalation (4x) | Qwen2.5-Coder-32B f16 + 0.5B draft | 4x48t quarters | spec K=24 + lookup | ~6.6 t/s/inst |
+| 8082 | worker_explore, worker_math | Qwen2.5-7B-Instruct-f16 + 0.5B draft | Q0A pinned | spec K=24 | 46 t/s |
+| 8083 | architect_general | Qwen3.5-122B-A10B Q4_K_M + 0.8B draft | Node 0, 96t | MoE8+spec+lookup | 12.6 t/s |
+| 8084 | architect_coding | Qwen3-Coder-480B-A35B Q4_K_M | Node 0, 96t | tree dm=48 ps=0.05 | 3.82 t/s |
+| 8085 | ingest_long_context | Qwen3-Next-80B-A3B Q4_K_M | Node 0, 96t | None (SSM), mlock | ~12 t/s |
+| 8086 | worker_vision | Qwen2.5-VL-7B Q4_K_M + mmproj | Q0B pinned | None (VL) | ~15 t/s |
+| 8087 | vision_escalation | Qwen3-VL-30B-A3B Q4_K_M + mmproj | Node 1, 96t | MoE4 | ~10 t/s |
+| 8090-8095 | embedder (6x) | BGE-large-en-v1.5-F16 | unpinned | probe-first | — |
 
 ### WARM Tier (Burst Capacity, ~1GB)
 
@@ -168,7 +182,7 @@ python scripts/server/orchestrator_stack.py stop --all
 
 ```
 Code: coder_escalation (30B) → coder_escalation (32B) → architect_coding (480B)
-General: frontdoor (30B) → architect_general (235B)
+General: frontdoor (35B) → architect_general (122B)
 Vision: worker_vision (7B, port 8086) → vision_escalation (30B, port 8087)
 ```
 

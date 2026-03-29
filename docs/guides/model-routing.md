@@ -15,7 +15,7 @@ Is this code generation?
         ├── Yes → Qwen2.5-VL-7B (port 8086) or Qwen3-VL-30B (port 8087)
         └── No
             Is this reasoning/architecture?
-            ├── Yes → Architect: Qwen3-235B (port 8083) or 480B (port 8084)
+            ├── Yes → Architect: Qwen3.5-122B (port 8083) or 480B (port 8084)
             └── No → Explore worker: Qwen2.5-7B + spec (44 t/s, port 8082)
 ```
 
@@ -23,11 +23,11 @@ Is this code generation?
 
 | Task | Model | Port | Acceleration | Speed |
 |------|-------|------|--------------|-------|
-| Interactive chat | Qwen3-Coder-30B-A3B | 8080 | MoE6 | 18 t/s |
+| Interactive chat | Qwen3.5-35B-A3B | 8080 | MoE6+lookup, 4×NUMA | ~19.6 t/s/inst |
 | Code generation / escalation | Qwen2.5-Coder-32B | 8081 | Spec K=24 + lookup | 39 t/s |
 | Explore / summarize | Qwen2.5-7B-Instruct-f16 | 8082 | Spec K=24 + lookup | 44 t/s |
 | Long context | Qwen3-Next-80B-A3B | 8085 | MoE4 only | 6.3 t/s |
-| Architecture (general) | Qwen3-235B-A22B | 8083 | MoE4 | 6.75 t/s |
+| Architecture (general) | Qwen3.5-122B-A10B | 8083 | MoE8+spec+lookup | 12.6 t/s |
 | Architecture (coding) | Qwen3-Coder-480B-A35B | 8084 | MoE3 | 10.3 t/s |
 | Vision (worker) | Qwen2.5-VL-7B + mmproj | 8086 | None | ~15 t/s |
 | Vision (escalation) | Qwen3-VL-30B-A3B + mmproj | 8087 | MoE4 | ~10 t/s |
