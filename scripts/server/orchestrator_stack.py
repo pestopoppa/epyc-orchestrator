@@ -197,14 +197,14 @@ NUMA_CONFIG: dict[str, dict] = {
         "mlock": True,
         "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified
     },
-    # Qwen3-Coder-480B Q4KM (250 GB) — 1×96t node0
-    # Sweep-verified 2026-03-21: dm=24, ps=0, 7.0 t/s. Tree is HARMFUL (-19%).
+    # REAP-246B Q4KM (139 GB) — 1×96t node0. Replaces 480B (2026-03-29).
+    # 82% quality (+9pp), 8.0 t/s (+14%), 139 GB (-44%). Sweep-verified dm=32, ps=0.
     "architect_coding": {
         "instances": [
             (NUMA_NODE0[0], 8084, NUMA_NODE0[1]),
         ],
         "mlock": True,
-        "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified (was dm=48/ps=0.05)
+        "spec_overrides": {"draft_max": 32, "p_split": 0},  # sweep-verified 2026-03-26
     },
     # 2×96t: ~24 t/s aggregate (2x)
     "ingest_long_context": {
@@ -421,7 +421,7 @@ def validate_model_paths() -> list[str]:
     # Architect/ingest models
     architect_models = [
         ("architect_general", str(_PATHS["model_base"] / "unsloth/Qwen3.5-122B-A10B-GGUF/")),  # swapped 2026-03-19
-        ("architect_coding", str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Coder-480B-A35B-Instruct-GGUF/")),
+        ("architect_coding", "/mnt/raid0/llm/models/Qwen3-Coder-REAP-246B-A35B-Q4_K_M.gguf"),  # REAP-246B replaces 480B (2026-03-29)
         ("ingest_long_context", str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/")),
     ]
     for role, path in architect_models:
@@ -875,7 +875,7 @@ def build_server_command(
     # Total KV ~82GB across all servers, well within 475GB available budget.
     _KV_CONTEXT_SIZES = {
         "architect_general": "16384",   # 235B MoE → ~32GB KV
-        "architect_coding": "8192",     # 480B MoE → ~24GB KV
+        "architect_coding": "16384",    # REAP-246B MoE (139 GB, freed 111 GB vs 480B) → can afford larger KV
         "ingest_long_context": "32768", # 80B SSM, needs long context
     }
     context_size = _KV_CONTEXT_SIZES.get(role_config.name, "32768")
@@ -891,21 +891,24 @@ def build_server_command(
         "--flash-attn", "on",   # Flash attention
     ]
 
-    # KV cache quantization: reduces KV memory by 2.5-3.6x with negligible quality impact.
+    # KV cache quantization: reduces KV memory with negligible quality impact.
     # Phase 0 benchmarks (2026-03-25): generation speed neutral, memory savings significant at 65K+.
-    # q8_0 K / q4_0 V = quality-neutral (PPL identical to f16), 2.5x compression.
-    # q4_0 / q4_0 = near-neutral (PPL +0.017 vs f16), 3.6x compression.
-    # NOTE: --kv-hadamard requires hadamard-kv-smoothing build (not yet in production binary).
+    # CRITICAL (2026-03-28): V=q4_0 causes 71% prefill regression on pure-attention models.
+    # V=f16 has ZERO prefill regression (actually 1% faster due to K bandwidth savings).
+    # q4_0 K / f16 V = quality-neutral (PPL +0.017 with Hadamard), 37% KV savings, zero speed cost.
+    # q4_0 / q4_0 = 71% KV savings but 71% prefill regression on pure-attn. OK for hybrid (SSM amortizes).
+    # --kv-hadamard: production binary rebuilt with Hadamard support (commit b51c905ec, 2026-03-28).
+    # Closes q4_0 K PPL gap from +0.055 to +0.017 vs f16. Zero throughput overhead.
     _KV_QUANT_CONFIGS = {
-        "frontdoor":            ("q4_0", "q4_0"),   # hybrid model, KV tiny, free compression
-        "coder_escalation":     ("q8_0", "q4_0"),   # pure attention, quality-neutral config
-        "architect_general":    ("q8_0", "q4_0"),   # large model, memory savings matter
-        "architect_coding":     ("q8_0", "q4_0"),   # large model, memory savings matter
-        "ingest_long_context":  ("q8_0", "q4_0"),   # long context, KV savings significant
+        "frontdoor":            ("q4_0", "q4_0"),   # hybrid model (75% SSM), prefill regression amortized
+        "coder_escalation":     ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
+        "architect_general":    ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
+        "architect_coding":     ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
+        "ingest_long_context":  ("q4_0", "q4_0"),   # hybrid model (SSM), long context, max compression
     }
     kv_quant = _KV_QUANT_CONFIGS.get(role_config.name)
     if kv_quant:
-        cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1]])
+        cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1], "--kv-hadamard"])
 
     # mlock: lock model weights in RAM to prevent page cache eviction.
     # Validated in S2: 30x latency improvement under memory pressure.

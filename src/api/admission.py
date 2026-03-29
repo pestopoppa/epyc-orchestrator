@@ -53,7 +53,7 @@ DEFAULT_LIMITS: dict[str, int] = {
     "http://localhost:8081": 1,   # coder_escalation (32B) — sweep: p95 1.98x at 2, serial only
     "http://localhost:8082": 1,   # worker_explore (7B) — sweep: all concurrent levels rejected on p95
     "http://localhost:8083": 1,   # architect_general (235B) — SERIAL
-    "http://localhost:8084": 1,   # architect_coding (480B) — SERIAL
+    "http://localhost:8084": 1,   # architect_coding (REAP-246B, was 480B) — SERIAL
     "http://localhost:8085": 1,   # ingest_long_context (80B SSM) — SERIAL
     "http://localhost:8086": 2,   # worker_vision (7B VL) — not swept, keep as-is
     "http://localhost:8087": 1,   # vision_escalation (30B VL MoE) — SERIAL
