@@ -375,28 +375,28 @@ class ServerURLsConfig:
     Each field maps an orchestrator role to a llama-server URL.
     """
 
-    # Tier A - Front Door / Orchestrator (4×48t NUMA round-robin)
-    frontdoor: str = "http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
+    # Tier A - Front Door (pre-warm: 1×96t full-speed + 4×48t concurrent)
+    # "full:" prefix triggers ConcurrencyAwareBackend (single→96t, concurrent→48t)
+    frontdoor: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
 
-    # Tier B - Specialists (code) (4×48t NUMA round-robin)
-    coder: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
-    coder_escalation: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+    # Tier B - Specialists (pre-warm: 1×96t + 4×48t)
+    coder: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+    coder_escalation: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
 
-    # Tier C - Workers
-    worker: str = "http://localhost:8082"
-    worker_general: str = "http://localhost:8082"
-    worker_explore: str = "http://localhost:8082"
-    worker_math: str = "http://localhost:8082"
+    # Tier C - Workers (pre-warm: 1×96t + 4×48t)
+    worker: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    worker_general: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    worker_explore: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    worker_math: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
     worker_vision: str = "http://localhost:8086"
     vision_escalation: str = "http://localhost:8087"
     worker_coder: str = "http://localhost:8102"
-    worker_code: str = "http://localhost:8102"
     worker_fast: str = "http://localhost:8102"
-    worker_summarize: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+    worker_summarize: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
 
-    # Tier B - Architects
-    architect_general: str = "http://localhost:8083"
-    architect_coding: str = "http://localhost:8084"
+    # Tier B - Architects (2×96t cross-NUMA, round-robin)
+    architect_general: str = "http://localhost:8083,http://localhost:8183"
+    architect_coding: str = "http://localhost:8084,http://localhost:8184"
     ingest_long_context: str = "http://localhost:8085"
 
     # Services

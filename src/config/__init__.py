@@ -139,22 +139,22 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         )
 
     class ServerURLsSettings(BaseSettings):
-        # Multi-instance roles: comma-separated URLs for round-robin distribution
-        frontdoor: str = "http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
-        coder: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
-        coder_escalation: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
-        worker: str = "http://localhost:8082"
-        worker_general: str = "http://localhost:8082"
-        worker_explore: str = "http://localhost:8082"
-        worker_math: str = "http://localhost:8082"
+        # Pre-warm (2026-03-29): "full:" prefix = ConcurrencyAwareBackend (1×96t + 4×48t)
+        # Without prefix: RoundRobinBackend (multi-URL) or single backend
+        frontdoor: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
+        coder: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+        coder_escalation: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+        worker: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
+        worker_general: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
+        worker_explore: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
+        worker_math: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
         worker_vision: str = "http://localhost:8086"
         vision_escalation: str = "http://localhost:8087"
         worker_coder: str = "http://localhost:8102"
-        worker_code: str = "http://localhost:8102"
         worker_fast: str = "http://localhost:8102"
-        worker_summarize: str = "http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
-        architect_general: str = "http://localhost:8083"
-        architect_coding: str = "http://localhost:8084"
+        worker_summarize: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+        architect_general: str = "http://localhost:8083,http://localhost:8183"
+        architect_coding: str = "http://localhost:8084,http://localhost:8184"
         ingest_long_context: str = "http://localhost:8085"
         api_url: str = "http://localhost:8000"
         ocr_server: str = "http://localhost:9001"

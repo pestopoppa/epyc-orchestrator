@@ -21,24 +21,62 @@ class BackendMixin:
         try:
             from src.backends.llama_server import LlamaServerBackend, ServerConfig
             from src.backends.round_robin import RoundRobinBackend
+            from src.backends.concurrency_aware import ConcurrencyAwareBackend
             from src.prefix_cache import CachingBackend, PrefixRouter
 
             for role, url_str in server_urls.items():
                 urls = [u.strip() for u in url_str.split(",") if u.strip()]
 
-                if len(urls) > 1:
-                    # Multi-instance role: create one backend per URL, wrap in round-robin
+                # Pre-warm convention: first URL prefixed with "full:" denotes
+                # the full-speed (1×96t) instance for ConcurrencyAwareBackend.
+                # Remaining URLs are quarter (48t) instances.
+                has_full = urls and urls[0].startswith("full:")
+                if has_full:
+                    full_url = urls[0][len("full:"):]
+                    quarter_urls = urls[1:]
+                else:
+                    full_url = None
+                    quarter_urls = urls
+
+                if has_full and quarter_urls:
+                    # Pre-warm role: full-speed + quarter instances
+                    full_config = ServerConfig(base_url=full_url, num_slots=num_slots)
+                    full_backend = CachingBackend(
+                        LlamaServerBackend(full_config),
+                        PrefixRouter(num_slots=num_slots),
+                    )
+                    full_port = int(full_url.rsplit(":", 1)[-1]) if ":" in full_url else 0
+
+                    quarter_backends = []
+                    for url in quarter_urls:
+                        qcfg = ServerConfig(base_url=url, num_slots=num_slots)
+                        quarter_backends.append(CachingBackend(
+                            LlamaServerBackend(qcfg),
+                            PrefixRouter(num_slots=num_slots),
+                        ))
+
+                    self._backends[role] = ConcurrencyAwareBackend(
+                        full_backend, quarter_backends,
+                        role=role, full_port=full_port,
+                    )
+                    _log.info(
+                        "Concurrency-aware backend for %s: 1 full + %d quarters",
+                        role, len(quarter_backends),
+                    )
+                elif len(quarter_urls) > 1:
+                    # Multi-instance role without full: round-robin
                     backends = []
-                    for url in urls:
+                    for url in quarter_urls:
                         config = ServerConfig(base_url=url, num_slots=num_slots)
                         backend = LlamaServerBackend(config)
                         router = PrefixRouter(num_slots=num_slots)
                         backends.append(CachingBackend(backend, router))
                     self._backends[role] = RoundRobinBackend(backends, role=role)
-                    _log.info("Round-robin backend for %s: %d instances", role, len(urls))
+                    _log.info("Round-robin backend for %s: %d instances", role, len(quarter_urls))
                 else:
                     # Single-instance role
-                    config = ServerConfig(base_url=urls[0], num_slots=num_slots)
+                    url = quarter_urls[0] if quarter_urls else url_str
+                    config = ServerConfig(base_url=url, num_slots=num_slots)
                     backend = LlamaServerBackend(config)
                     router = PrefixRouter(num_slots=num_slots)
                     self._backends[role] = CachingBackend(backend, router)

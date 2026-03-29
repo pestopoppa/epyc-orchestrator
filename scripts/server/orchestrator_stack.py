@@ -97,19 +97,20 @@ LOG_DIR = _PATHS["log_dir"]
 # DS-3: KV state save/restore directory for dynamic stack management
 SLOT_SAVE_DIR = _PATHS["cache_dir"] / "kv_slots"
 
-# Port assignments by role (primary ports — NUMA replicas use offset ports)
+# Port assignments by role (primary ports — full-speed 1×96t instances)
+# Pre-warm (2026-03-29): primary port is the full-speed instance.
+# Quarter instances on offset ports (808x, 818x, 828x, 838x).
 PORT_MAP = {
-    "frontdoor": 8080,
-    "coder_escalation": 8081,
-    # Worker pool ports (heterogeneous)
-    "worker_general": 8082,  # Legacy alias -> worker_explore
-    "worker_explore": 8082,  # Explore worker (7B)
-    "worker_math": 8082,     # Shares with explore
-    "worker_vision": 8086,   # Dedicated VL server
-    "vision_escalation": 8087,  # VL escalation (Qwen3-VL-30B MoE)
-    "worker_coder": 8102,    # Fast coding worker semantic role (1.5B backend)
-    "worker_fast": 8102,     # Fast worker (1.5B, WARM, 4 slots)
-    # Specialists
+    "frontdoor": 8070,           # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
+    "coder_escalation": 8071,    # Full-speed 1×96t (quarters: 8081, 8181, 8281, 8381)
+    "worker_explore": 8072,      # Full-speed 1×96t (quarters: 8082, 8182, 8282, 8382)
+    "worker_general": 8072,      # Alias -> worker_explore
+    "worker_math": 8072,         # Shares with worker_explore
+    "worker_vision": 8086,       # Dedicated VL server
+    "vision_escalation": 8087,   # VL escalation (Qwen3-VL-30B MoE)
+    "worker_coder": 8102,        # Fast coding worker semantic role (1.5B backend)
+    "worker_fast": 8102,         # Fast worker (1.5B, WARM, 4 slots)
+    # Specialists (no pre-warm — already multi-instance or too large for quarters)
     "architect_general": 8083,
     "architect_coding": 8084,
     "ingest_long_context": 8085,
@@ -166,26 +167,32 @@ NUMA_NODE1 = ("48-95,144-191", 96)
 # "instances" is a list of (cpu_list, port, threads) tuples.
 # Roles with multiple instances get round-robin routing (requires orchestrator support).
 NUMA_CONFIG: dict[str, dict] = {
-    # Qwen3.5-35B-A3B Q4_K_M (19 GB) — 4×48t NUMA quarters
-    # Benchmark (2026-03-24): moe6 = 12.7 t/s/inst, ~50.8 agg. NO lookup — segfault on hybrids.
+    # Qwen3.5-35B-A3B Q4_K_M (19 GB) — pre-warm: 1×96t full-speed + 4×48t concurrent
+    # Benchmark (2026-03-24): moe6 = 12.7 t/s at 48t. 96t TBD (expect higher per-request).
+    # Pre-warm strategy (2026-03-29): 5 instances total, +19 GB (95 GB total for frontdoor).
+    # Concurrency router: single session → full (96t), concurrent → quarter (48t) instances.
     "frontdoor": {
         "instances": [
-            (NUMA_Q0A[0], 8080, NUMA_Q0A[1]),
-            (NUMA_Q0B[0], 8180, NUMA_Q0B[1]),
-            (NUMA_Q1A[0], 8280, NUMA_Q1A[1]),
-            (NUMA_Q1B[0], 8380, NUMA_Q1B[1]),
+            (NUMA_NODE0[0], 8070, NUMA_NODE0[1]),  # full: 1×96t (max single-session speed)
+            (NUMA_Q0A[0], 8080, NUMA_Q0A[1]),      # quarter 0
+            (NUMA_Q0B[0], 8180, NUMA_Q0B[1]),      # quarter 1
+            (NUMA_Q1A[0], 8280, NUMA_Q1A[1]),      # quarter 2
+            (NUMA_Q1B[0], 8380, NUMA_Q1B[1]),      # quarter 3
         ],
+        "full_instance_idx": 0,  # index of 1×96t instance in list above
         "mlock": True,   # 19 GB per instance — latency-critical (S2: 30x improvement)
     },
-    # Qwen2.5-Coder-32B Q4KM (18.5 GB) — 4×48t NUMA quarters
-    # Sweep-verified 2026-03-21: dm=32, ps=0.05, 10.8 t/s/inst, ~43.3 agg
+    # Qwen2.5-Coder-32B Q4KM (18.5 GB) — pre-warm: 1×96t + 4×48t
+    # Sweep-verified 2026-03-21: dm=32, ps=0.05, 10.8 t/s/inst at 48t
     "coder_escalation": {
         "instances": [
-            (NUMA_Q0A[0], 8081, NUMA_Q0A[1]),
-            (NUMA_Q0B[0], 8181, NUMA_Q0B[1]),
-            (NUMA_Q1A[0], 8281, NUMA_Q1A[1]),
-            (NUMA_Q1B[0], 8381, NUMA_Q1B[1]),
+            (NUMA_NODE0[0], 8071, NUMA_NODE0[1]),  # full: 1×96t
+            (NUMA_Q0A[0], 8081, NUMA_Q0A[1]),      # quarter 0
+            (NUMA_Q0B[0], 8181, NUMA_Q0B[1]),      # quarter 1
+            (NUMA_Q1A[0], 8281, NUMA_Q1A[1]),      # quarter 2
+            (NUMA_Q1B[0], 8381, NUMA_Q1B[1]),      # quarter 3
         ],
+        "full_instance_idx": 0,
         "mlock": True,
         "spec_overrides": {"draft_max": 32, "p_split": 0.05},  # sweep-verified
     },
@@ -218,16 +225,18 @@ NUMA_CONFIG: dict[str, dict] = {
         ],
         "mlock": True,    # ~46 GB — latency-critical for ingest pipeline
     },
-    # Worker: Qwen3-Coder-30B-A3B Q4KM (16 GB) — try-cheap-first model, 4×48t NUMA
+    # Worker: Qwen3-Coder-30B-A3B Q4KM (16 GB) — pre-warm: 1×96t + 4×48t
     # Replaced 7B f16 (2026-03-21): 30B-A3B is 2x faster (39 vs 19 t/s), better quality.
-    # Sweep-verified: dm=8, ps=0, 39.1 t/s at 48t. 4×48t = ~156 t/s agg (same arch as old frontdoor).
+    # Sweep-verified: dm=8, ps=0, 39.1 t/s at 48t. 4×48t = ~156 t/s agg.
     "worker_explore": {
         "instances": [
-            (NUMA_Q0A[0], 8082, NUMA_Q0A[1]),
-            (NUMA_Q0B[0], 8182, NUMA_Q0B[1]),
-            (NUMA_Q1A[0], 8282, NUMA_Q1A[1]),
-            (NUMA_Q1B[0], 8382, NUMA_Q1B[1]),
+            (NUMA_NODE0[0], 8072, NUMA_NODE0[1]),  # full: 1×96t
+            (NUMA_Q0A[0], 8082, NUMA_Q0A[1]),      # quarter 0
+            (NUMA_Q0B[0], 8182, NUMA_Q0B[1]),      # quarter 1
+            (NUMA_Q1A[0], 8282, NUMA_Q1A[1]),      # quarter 2
+            (NUMA_Q1B[0], 8382, NUMA_Q1B[1]),      # quarter 3
         ],
+        "full_instance_idx": 0,
         "mlock": True,
         "spec_overrides": {"draft_max": 8, "p_split": 0},  # sweep-verified (dm irrelevant 38-39 t/s)
     },
@@ -277,27 +286,39 @@ SERIAL_ROLES = {
 }
 
 # Servers to start (unique ports only)
-# HOT tier with NUMA-aware deployment (2026-03-19):
-#   frontdoor (Qwen3.5-35B, 19GB): 4×48t, moe6 (NO lookup — segfault on hybrids), ~50.8 t/s agg, ports 8080,8180,8280,8380
-#   coder_escalation (32B Q4KM, 18.5GB): 4×48t, spec+tree+lookup, ~43.3 t/s agg, ports 8081,8181,8281,8381
-#   architect_general (Qwen3.5-122B, 69GB): 1×96t node0, moe8+spec+lu, 12.6 t/s
-#   architect_coding (480B, 250GB): 1×96t node0, spec+tree+lu, 3.82 t/s
-#   ingest (80B SSM, 46GB): 1×96t node0, no spec, ~12 t/s
-# Total: frontdoor 76GB + coder 260GB + arch 69GB + 480B 250GB + ingest 46GB ≈ 701GB
+# Pre-warm deployment (2026-03-29): 1×96t full-speed + 4×48t quarter instances per role.
+# Full-speed instances on 807x, quarter instances on 808x/818x/828x/838x.
+#   frontdoor (19GB): 1×96t(8070) + 4×48t(8080-8380) = 95 GB, moe6
+#   coder (18.5GB): 1×96t(8071) + 4×48t(8081-8381) = 92.5 GB, spec+tree+lu
+#   worker (16GB): 1×96t(8072) + 4×48t(8082-8382) = 80 GB, spec dm=8
+#   arch_gen (69GB): 2×96t(8083,8183) = 138 GB
+#   arch_code (139GB): 2×96t(8084,8184) = 278 GB
+#   ingest (46GB): 1×96t(8085) = 46 GB
+# Total: ~730 GB (~65% of RAM), 400 GB free for KV caches + OS
 HOT_SERVERS = [
-    # Frontdoor: 4 NUMA-pinned instances (primary + 3 replicas)
-    {"port": 8080, "roles": ["frontdoor"], "numa_instance": 0},
-    {"port": 8180, "roles": ["frontdoor"], "numa_instance": 1},
-    {"port": 8280, "roles": ["frontdoor"], "numa_instance": 2},
-    {"port": 8380, "roles": ["frontdoor"], "numa_instance": 3},
-    # Coder escalation: 4 NUMA-pinned instances (primary + 3 replicas)
-    {"port": 8081, "roles": ["coder_escalation", "worker_summarize"], "numa_instance": 0},
-    {"port": 8181, "roles": ["coder_escalation"], "numa_instance": 1},
-    {"port": 8281, "roles": ["coder_escalation"], "numa_instance": 2},
-    {"port": 8381, "roles": ["coder_escalation"], "numa_instance": 3},
-    # Worker pool HOT tier
+    # Frontdoor: 1×96t full-speed + 4×48t quarter instances
+    {"port": 8070, "roles": ["frontdoor"], "numa_instance": 0},   # full: 96t
+    {"port": 8080, "roles": ["frontdoor"], "numa_instance": 1},   # quarter 0
+    {"port": 8180, "roles": ["frontdoor"], "numa_instance": 2},   # quarter 1
+    {"port": 8280, "roles": ["frontdoor"], "numa_instance": 3},   # quarter 2
+    {"port": 8380, "roles": ["frontdoor"], "numa_instance": 4},   # quarter 3
+    # Coder escalation: 1×96t full-speed + 4×48t quarter instances
+    {"port": 8071, "roles": ["coder_escalation", "worker_summarize"], "numa_instance": 0},
+    {"port": 8081, "roles": ["coder_escalation"], "numa_instance": 1},
+    {"port": 8181, "roles": ["coder_escalation"], "numa_instance": 2},
+    {"port": 8281, "roles": ["coder_escalation"], "numa_instance": 3},
+    {"port": 8381, "roles": ["coder_escalation"], "numa_instance": 4},
+    # Worker: 1×96t full-speed + 4×48t quarter instances
+    {"port": 8072, "roles": ["worker_explore", "worker_general", "worker_math"],
+     "worker_pool": True, "worker_type": "explore"},  # full: 96t
     {"port": 8082, "roles": ["worker_explore", "worker_general", "worker_math"],
-     "worker_pool": True, "worker_type": "explore"},
+     "worker_pool": True, "worker_type": "explore", "numa_instance": 1},
+    {"port": 8182, "roles": ["worker_explore"],
+     "worker_pool": True, "worker_type": "explore", "numa_instance": 2},
+    {"port": 8282, "roles": ["worker_explore"],
+     "worker_pool": True, "worker_type": "explore", "numa_instance": 3},
+    {"port": 8382, "roles": ["worker_explore"],
+     "worker_pool": True, "worker_type": "explore", "numa_instance": 4},
     # Vision servers (VL models with multimodal projector, NO spec decode)
     {"port": 8086, "roles": ["worker_vision"], "vision": True, "vision_type": "worker"},
     {"port": 8087, "roles": ["vision_escalation"], "vision": True, "vision_type": "escalation"},
@@ -308,9 +329,11 @@ HOT_SERVERS = [
     {"port": 8093, "roles": ["embedder_3"], "embedding": True},
     {"port": 8094, "roles": ["embedder_4"], "embedding": True},
     {"port": 8095, "roles": ["embedder_5"], "embedding": True},
-    # Architects in HOT tier (always resident, NUMA node0 pinned)
-    {"port": 8083, "roles": ["architect_general"]},
-    {"port": 8084, "roles": ["architect_coding"]},
+    # Architects in HOT tier (2×96t cross-NUMA each)
+    {"port": 8083, "roles": ["architect_general"], "numa_instance": 0},
+    {"port": 8183, "roles": ["architect_general"], "numa_instance": 1},
+    {"port": 8084, "roles": ["architect_coding"], "numa_instance": 0},
+    {"port": 8184, "roles": ["architect_coding"], "numa_instance": 1},
     {"port": 8085, "roles": ["ingest_long_context"]},
 ]
 
