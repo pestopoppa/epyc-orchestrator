@@ -188,20 +188,24 @@ NUMA_CONFIG: dict[str, dict] = {
         "mlock": True,
         "spec_overrides": {"draft_max": 32, "p_split": 0.05},  # sweep-verified
     },
-    # Qwen3.5-122B-A10B Q4_K_M (69 GB) — 1×96t node0
-    # Sweep-verified 2026-03-21: dm=24, ps=0, 4.3 t/s. Tree devastating on hybrids.
+    # Qwen3.5-122B-A10B Q4_K_M (69 GB) — 2×96t cross-NUMA
+    # Sweep-verified 2026-03-21: dm=24, ps=0, 4.3 t/s (1×96t).
+    # 2×96t estimated ~8.3 t/s agg (1.92x, extrapolated from REAP-246B scaling).
     "architect_general": {
         "instances": [
             (NUMA_NODE0[0], 8083, NUMA_NODE0[1]),
+            (NUMA_NODE1[0], 8183, NUMA_NODE1[1]),
         ],
         "mlock": True,
         "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified
     },
-    # REAP-246B Q4KM (139 GB) — 1×96t node0. Replaces 480B (2026-03-29).
-    # 82% quality (+9pp), 8.0 t/s (+14%), 139 GB (-44%). Sweep-verified dm=32, ps=0.
+    # REAP-246B Q4KM (139 GB) — 2×96t cross-NUMA. Replaces 480B (2026-03-29).
+    # 82% quality (+9pp), 16.5 t/s agg (1.92x), 139 GB (-44%). Sweep-verified dm=32, ps=0.
+    # NUMA benchmark: 2×96t = 16.5 t/s (1.92x vs 1×96t = 8.0 t/s).
     "architect_coding": {
         "instances": [
             (NUMA_NODE0[0], 8084, NUMA_NODE0[1]),
+            (NUMA_NODE1[0], 8184, NUMA_NODE1[1]),
         ],
         "mlock": True,
         "spec_overrides": {"draft_max": 32, "p_split": 0},  # sweep-verified 2026-03-26
@@ -213,11 +217,16 @@ NUMA_CONFIG: dict[str, dict] = {
         ],
         "mlock": True,    # ~46 GB — latency-critical for ingest pipeline
     },
-    # Worker: Qwen3-Coder-30B-A3B Q4KM (16 GB) — try-cheap-first model
-    # Replaced 7B f16 (2026-03-21): 30B-A3B is 2x faster (39 vs 19 t/s), better quality, similar RAM.
-    # Sweep-verified: dm=8, ps=0, 39.1 t/s at 48t. Can scale to 4×48t (~156 t/s agg).
+    # Worker: Qwen3-Coder-30B-A3B Q4KM (16 GB) — try-cheap-first model, 4×48t NUMA
+    # Replaced 7B f16 (2026-03-21): 30B-A3B is 2x faster (39 vs 19 t/s), better quality.
+    # Sweep-verified: dm=8, ps=0, 39.1 t/s at 48t. 4×48t = ~156 t/s agg (same arch as old frontdoor).
     "worker_explore": {
-        "instances": [(NUMA_Q0A[0], 8082, NUMA_Q0A[1])],
+        "instances": [
+            (NUMA_Q0A[0], 8082, NUMA_Q0A[1]),
+            (NUMA_Q0B[0], 8182, NUMA_Q0B[1]),
+            (NUMA_Q1A[0], 8282, NUMA_Q1A[1]),
+            (NUMA_Q1B[0], 8382, NUMA_Q1B[1]),
+        ],
         "mlock": True,
         "spec_overrides": {"draft_max": 8, "p_split": 0},  # sweep-verified (dm irrelevant 38-39 t/s)
     },
