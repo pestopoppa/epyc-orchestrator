@@ -108,7 +108,6 @@ PORT_MAP = {
     "worker_vision": 8086,   # Dedicated VL server
     "vision_escalation": 8087,  # VL escalation (Qwen3-VL-30B MoE)
     "worker_coder": 8102,    # Fast coding worker semantic role (1.5B backend)
-    "worker_code": 8102,     # Legacy alias -> worker_coder
     "worker_fast": 8102,     # Fast worker (1.5B, WARM, 4 slots)
     # Specialists
     "architect_general": 8083,
@@ -321,7 +320,7 @@ EMBEDDING_MODEL_PATH = str(_PATHS["models_dir"] / "bge-large-en-v1.5-f16.gguf")
 EMBEDDER_PORTS = [8090, 8091, 8092, 8093, 8094, 8095]
 
 # Worker pool models (FIXED paths to existing files)
-# NOTE: worker_coder/worker_code use the fast 1.5B worker backend on port 8102.
+# NOTE: worker_coder uses the fast 1.5B worker backend on port 8102.
 WORKER_POOL_MODELS = {
     # Qwen3-Coder-30B-A3B Q4KM — replaced 7B f16 (2026-03-21): 2x faster, better quality
     "explore": str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),

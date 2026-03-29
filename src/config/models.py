@@ -665,6 +665,8 @@ class ChatPipelineConfig:
     """Re-trigger compaction every N turns after first compaction. 0 = disabled."""
     session_compaction_min_turns: int = 5
     """Minimum turns before compaction can run (default 5 to avoid very-early churn)."""
+    session_compaction_trigger_ratio: float = 0.75
+    """Fraction of model max context at which compaction fires (default 0.75, was 0.60)."""
 
     # Try-cheap-first: speculative pre-filter using 7B worker before specialist.
     # Phase A = try all, Phase B = MemRL-guided, Phase C = fully learned.

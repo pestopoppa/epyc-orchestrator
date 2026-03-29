@@ -637,7 +637,7 @@ class InferenceMixin:
             List of model responses in order.
         """
         # Determine task type from role
-        # worker_explore -> explore, worker_code -> code, etc.
+        # worker_explore -> explore, worker_coder -> coder, etc.
         task_type = "explore"  # default
         if "_" in role:
             suffix = role.split("_", 1)[1]
