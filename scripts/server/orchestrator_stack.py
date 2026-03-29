@@ -125,13 +125,7 @@ PORT_MAP = {
     "document_formalizer": 9001,
 }
 
-# All NUMA replica ports (for port scanning and cleanup)
-NUMA_REPLICA_PORTS = {
-    port
-    for cfg in NUMA_CONFIG.values()
-    for _, port, _ in cfg["instances"]
-    if port not in PORT_MAP.values()
-}
+# NUMA_REPLICA_PORTS defined after NUMA_CONFIG below (line order dependency)
 
 # HOT roles (always started) - NUMA-optimized (~515GB total, 46% of 1130GB RAM)
 HOT_ROLES = {
@@ -254,6 +248,14 @@ NUMA_CONFIG: dict[str, dict] = {
 
 # Roles that should use --mlock (requires ulimit -l unlimited in launch env)
 MLOCK_ROLES = {role for role, cfg in NUMA_CONFIG.items() if cfg.get("mlock")}
+
+# All NUMA replica ports (for port scanning and cleanup)
+NUMA_REPLICA_PORTS = {
+    port
+    for cfg in NUMA_CONFIG.values()
+    for _, port, _ in cfg["instances"]
+    if port not in PORT_MAP.values()
+}
 
 
 def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
