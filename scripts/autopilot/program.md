@@ -70,6 +70,24 @@ These are immutable — changing them invalidates all experiment results:
 - **This file** (`program.md`) — only humans edit this
 - **Core orchestrator logic**: `src/graph/`, `src/api/`, `src/pipeline_monitor/` (optimization targets the *configuration* of these systems, not their code)
 
+### Eval Trust Boundary (AP-12)
+
+Species code (`species/*.py`) operates OUTSIDE the eval trust boundary. Species propose experiments; the eval tower measures outcomes. The boundary is:
+
+```
+OUTSIDE (species can modify)          │  INSIDE (immutable, species cannot touch)
+──────────────────────────────────────┼─────────────────────────────────────────
+orchestration/prompts/*.md            │  scripts/benchmark/seed_specialist_routing.py
+orchestration/*.yaml (config)         │  scripts/benchmark/debug_scorer.py
+src/features.py (flags only)          │  scripts/benchmark/dataset_adapters.py
+scripts/autopilot/species/*.py        │  scripts/benchmark/question_pool.py
+scripts/server/orchestrator_stack.py  │  benchmarks/prompts/question_pool.jsonl
+                                      │  scripts/autopilot/safety_gate.py
+                                      │  scripts/autopilot/eval_tower.py
+```
+
+If a species modifies any file inside the trust boundary, the experiment is invalid and should be automatically reverted. The eval tower's `eval_t0/t1/t2` methods are the sole source of truth for quality measurement.
+
 ---
 
 ## Goal Metric

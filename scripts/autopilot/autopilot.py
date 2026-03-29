@@ -295,6 +295,27 @@ def dispatch_action(
             forge.revert_mutation(mutation)
             return eval_result, "prompt_forge"
 
+        # AP-10: Simplicity criterion — reject mutations that add
+        # disproportionate complexity for marginal quality gain.
+        orig_len = len(mutation.original_content)
+        new_len = len(mutation.mutated_content)
+        if orig_len > 0:
+            size_increase = (new_len - orig_len) / orig_len
+            # Compare quality against last known quality from journal
+            last_quality = 0.0
+            recent = journal.recent(1)
+            if recent:
+                last_quality = recent[-1].quality
+            quality_delta = eval_result.quality - last_quality
+            if size_increase > 0.20 and quality_delta < 0.02:
+                log.warning(
+                    "Simplicity criterion: prompt grew %.0f%% for %.3f quality gain, reverting",
+                    size_increase * 100,
+                    quality_delta,
+                )
+                forge.revert_mutation(mutation)
+                return eval_result, "prompt_forge"
+
         # AP-7: Prompt change accepted — invalidate stale Optuna trials
         swarm.mark_epoch(f"prompt_mutation:{target}/{mutation_type}")
         return eval_result, "prompt_forge"
