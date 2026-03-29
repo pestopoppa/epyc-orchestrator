@@ -677,16 +677,16 @@ roles:
 
   frontdoor:
     tier: A
-    description: Primary interactive orchestrator - high quality, always resident
+    description: Root LM — Qwen3.5-35B-A3B MoE hybrid (quality 2.48/3, NUMA 1×96t + 4×48t)
     backend:
       type: local
     model:
-      name: Qwen3-Coder-30B-A3B-Instruct
-      huggingface_id: lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF
-      path: lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
+      name: Qwen3.5-35B-A3B-UD-Q4_K_M
+      huggingface_id: unsloth/Qwen3.5-35B-A3B-GGUF
+      path: unsloth/Qwen3.5-35B-A3B-GGUF/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
       quant: Q4_K_M
-      size_gb: 17.5
-      architecture: moe
+      size_gb: 19
+      architecture: qwen35moe
     candidate_roles:
     - frontdoor
     - coder
@@ -695,21 +695,12 @@ roles:
     acceleration:
       type: moe_expert_reduction
       experts: 6
-      override_key: qwen3moe.expert_used_count
-      speculative_decoding:
-        type: speculative_decoding
-        draft_role: draft_qwen3_coder_0_75b
-        k: 16
-        lookup: true
-        notes: >
-          jukofyork vocab transplant draft VERIFIED (2026-02-13).
-          BOS matched (comma token 11). 70-77% acceptance.
-          MoE6 + spec + lookup = 47.11 t/s (best config).
-        benchmarked: 2026-02-13
+      override_key: qwen35moe.expert_used_count
+      lookup: false  # DISABLED: --lookup segfaults on Qwen3.5 SSM+MoE hybrids (2026-03-24)
+      # No spec decode — net-negative on Qwen3.5 hybrids (SSM checkpoint overhead)
     performance:
-      baseline_tps: 29.28
-      moe6_baseline_tps: 30.84
-      moe6_spec_tps: 37.08
+      baseline_tps: 12.7  # moe6, 48t NUMA quarter (measured 2026-03-24)
+      moe6_baseline_tps: 12.7
       moe6_spec_lookup_tps: 47.11
       full_spec_tps: 41.75
       optimized_tps: 47.11
