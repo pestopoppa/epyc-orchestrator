@@ -911,14 +911,12 @@ roles:
       Other agents will elaborate — stop once the decision is clear.
   architect_coding:
     tier: B
-    description: Hardest coding/architecture escalation - IR-first
+    description: Hardest coding/architecture escalation — REAP-246B (50% pruned from 480B, 2026-03-29)
     model:
-      name: Qwen3-Coder-480B-A35B-Instruct
-      huggingface_id: lmstudio-community/Qwen3-Coder-480B-A35B-Instruct-GGUF
-      path: lmstudio-community/Qwen3-Coder-480B-A35B-Instruct-GGUF/Qwen3-Coder-480B-A35B-Instruct-Q4_K_M-00001-of-00008.gguf
+      name: Qwen3-Coder-REAP-246B-A35B-Q4_K_M
+      path: Qwen3-Coder-REAP-246B-A35B-Q4_K_M.gguf
       quant: Q4_K_M
-      size_gb: 271
-      split_count: 8
+      size_gb: 139
       architecture: moe
       max_context: 131072
     candidate_roles:
@@ -927,17 +925,15 @@ roles:
     acceleration:
       type: speculative_decoding
       draft_role: draft_qwen3_coder_0_75b
-      k: 16
+      k: 32    # sweep-verified 2026-03-26 for REAP-246B
+      lookup: true  # safe on pure MoE (no hybrid segfault)
       notes: >
-        jukofyork vocab transplant draft VERIFIED (2026-02-13).
-        BOS matched (both comma token 11). 74-82% acceptance.
-        Full experts + spec = recommended (quality over speed for architect role).
-        MoE3+spec was 12.74 t/s but full+spec at 9.00 preserves full quality.
-      benchmarked: 2026-02-13
+        REAP-246B (50% expert-pruned from 480B). 82% quality (+9pp), 8.0 t/s (96t).
+        dm=32, ps=0 sweep-verified 2026-03-26. 2×96t = 16.5 t/s agg.
+      benchmarked: 2026-03-26
     constraints:
       notes: >
-        Prompt lookup works mechanically (18.4% accept on refactoring)
-        but is net-negative on speed due to MoE verification overhead.
+        Pure MoE — lookup safe (no hybrid segfault). Linear spec only (tree harmful).
         Spec decode (74-82% accept) is the correct acceleration method.
         SSM ban does NOT apply — MoE is architecture-agnostic for lookup.
     performance:
