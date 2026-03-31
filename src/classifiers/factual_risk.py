@@ -303,12 +303,20 @@ def assess_risk(
 def get_mode(config: dict[str, Any] | None = None) -> str:
     """Get the current factual-risk mode.
 
+    Environment override: ``ORCHESTRATOR_FACTUAL_RISK_MODE`` takes
+    precedence over classifier_config.yaml when set.
+
     Args:
         config: Optional config override.
 
     Returns:
         "off", "shadow", or "enforce".
     """
+    import os
+
+    env_mode = os.environ.get("ORCHESTRATOR_FACTUAL_RISK_MODE")
+    if env_mode and env_mode in ("off", "shadow", "enforce"):
+        return env_mode
     if config is None:
         config = _get_config()
     return str(config.get("mode", "off"))
