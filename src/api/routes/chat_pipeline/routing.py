@@ -402,7 +402,8 @@ def _plan_review_gate(
     plan_review_result = None
     # RI-3: Force plan review when factual risk is high, regardless of complexity heuristics.
     # High-risk prompts need architect oversight to catch factual errors.
-    risk_forced = routing.factual_risk_band == "high" and features().factual_risk_mode == "enforce"
+    from src.classifiers.factual_risk import get_mode as _fr_get_mode
+    risk_forced = routing.factual_risk_band == "high" and _fr_get_mode() == "enforce"
     needs_review = _needs_plan_review(routing.task_ir, routing.routing_decision, state)
     if (
         request.real_mode
