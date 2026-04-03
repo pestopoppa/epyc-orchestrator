@@ -130,26 +130,26 @@ _DIRECT_ANSWER_ROLES = frozenset({"worker_explore", "frontdoor"})
 _TERSE_PREFIX = "Answer with ONLY the answer. No explanation.\n\n"
 _LIST_PREFIX = "Respond with only the requested items, comma-separated.\n\n"
 
-_MATH_START = re.compile(
-    r"^(what is|calculate|solve|compute|evaluate|find the value of)\b", re.IGNORECASE
+# Narrow: "What is <arithmetic>" only — excludes "Solve", "Calculate" etc.
+# that match coding/physics/reasoning questions.
+_WHAT_IS_ARITH = re.compile(
+    r"^what is\s+\d[\d\s+\-*/^().]+\d", re.IGNORECASE
 )
-_ARITH_OPS = re.compile(r"\d\s*[+\-*/^]\s*\d")
-_LIST_START = re.compile(r"^(list|name|enumerate)\b", re.IGNORECASE)
+_LIST_EXACT = re.compile(r"^(list|name)\s+exactly\b", re.IGNORECASE)
 
 
 def get_direct_answer_prefix(role: str, question: str = "") -> str:
     """Return a concise-answer directive for roles that need bare output.
 
     Used by _try_cheap_first in chat.py to prepend a formatting directive.
-    Returns a terse prefix only for math/arithmetic questions, a list prefix
-    for list questions, and empty string for everything else to avoid
-    suppressing reasoning on physics, simpleqa, etc.
+    Very selective: only fires for pure arithmetic ("What is 2+3") and
+    explicit list requests ("List exactly ..."). Default is NO prefix.
     """
     if role not in _DIRECT_ANSWER_ROLES or not question:
         return ""
     q = question.strip()
-    if _MATH_START.search(q) or _ARITH_OPS.search(q):
+    if _WHAT_IS_ARITH.search(q):
         return _TERSE_PREFIX
-    if _LIST_START.search(q):
+    if _LIST_EXACT.search(q):
         return _LIST_PREFIX
     return ""
