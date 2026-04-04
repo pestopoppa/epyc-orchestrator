@@ -58,12 +58,14 @@ class EvalTower:
         url: str = ORCHESTRATOR_URL,
         timeout: int = DEFAULT_TIMEOUT,
         sentinel_path: Path | None = None,
+        on_question: "Callable[[str], None] | None" = None,
     ):
         self.url = url
         self.timeout = timeout
         self._sentinel_path = sentinel_path or SENTINEL_PATH
         self._sentinels: list[dict] | None = None
         self._pool = None
+        self.on_question = on_question
 
     # ── sentinel questions (T0) ──────────────────────────────────
 
@@ -104,6 +106,9 @@ class EvalTower:
         scoring_method = q.get("scoring_method", "exact_match")
         scoring_config = q.get("scoring_config", {})
         image_path = q.get("image_path", "")
+
+        if self.on_question:
+            self.on_question(prompt)
 
         start = time.time()
         try:
@@ -323,6 +328,34 @@ class EvalTower:
             return self.eval_t2(n=n or 500, seed=seed)
         else:
             raise ValueError(f"Unknown eval tier: {tier}")
+
+    # ── trace capture ──────────────────────────────────────────
+
+    TAP_PATH = Path("/mnt/raid0/llm/tmp/inference_tap.log")
+
+    def capture_recent_traces(self, n_lines: int = 50) -> str:
+        """Read the last n_lines from inference_tap.log for PromptForge feedback.
+
+        Returns raw trace text (ROLE/PROMPT/RESPONSE sections) that shows
+        how the orchestrator actually handled recent requests.  Empty string
+        if the tap file doesn't exist or is unreadable.
+        """
+        try:
+            if not self.TAP_PATH.exists():
+                return ""
+            with open(self.TAP_PATH, "rb") as f:
+                # Seek to approximate tail position
+                f.seek(0, 2)  # EOF
+                size = f.tell()
+                # Read last ~8KB (generous for n_lines)
+                read_bytes = min(size, n_lines * 160)
+                f.seek(max(0, size - read_bytes))
+                tail = f.read().decode("utf-8", errors="replace")
+            lines = tail.splitlines()
+            return "\n".join(lines[-n_lines:])
+        except Exception as e:
+            log.warning("Could not capture traces: %s", e)
+            return ""
 
     def progressive_eval(self, seed: int = 42) -> tuple[EvalResult, int]:
         """Progressive evaluation: T0 → T1 if passed → T2 if Pareto candidate.
