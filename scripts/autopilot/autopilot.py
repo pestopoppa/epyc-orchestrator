@@ -668,7 +668,10 @@ def _run_loop_inner(
     gate = SafetyGate(
         consecutive_failures=state.get("consecutive_failures", 0),
     )
-    tower = EvalTower(url=ORCHESTRATOR_URL)
+    tower = EvalTower(
+        url=ORCHESTRATOR_URL,
+        on_question=tui.set_prompt if tui is not None else None,
+    )
     meta = MetaOptimizer()
 
     seeder = Seeder(
