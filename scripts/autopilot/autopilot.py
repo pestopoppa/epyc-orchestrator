@@ -34,6 +34,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ORCH_ROOT = SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
 
+import yaml
+
 from experiment_journal import ExperimentJournal, JournalEntry
 from pareto_archive import ParetoArchive, ParetoEntry
 from safety_gate import EvalResult, SafetyGate
@@ -41,20 +43,32 @@ from eval_tower import EvalTower
 from config_applicator import apply_params, health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
 from progress_plots import generate_all_plots
-from species import Seeder, NumericSwarm, PromptForge, StructuralLab
+from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
+from species.prompt_forge import CODE_MUTATION_ALLOWLIST
+
+# Strategy store for species memory (B1)
+sys.path.insert(0, str(ORCH_ROOT))
+from orchestration.repl_memory.strategy_store import StrategyStore
 
 log = logging.getLogger("autopilot")
 
 STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 LOCK_PATH = ORCH_ROOT / "orchestration" / ".autopilot.lock"
+BLACKLIST_PATH = SCRIPT_DIR / "failure_blacklist.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
 PLOT_INTERVAL = 10  # Generate plots every N trials
 
 # ── Controller Prompt Template ───────────────────────────────────
 
+PROGRAM_PATH = SCRIPT_DIR / "program.md"
+
 CONTROLLER_PROMPT_TEMPLATE = """\
 You are the AutoPilot meta-reasoning controller for an LLM orchestration stack.
 Your job: analyze current system state and propose the SINGLE best next action.
+
+## Program (strategy & constraints — human-editable)
+
+{program}
 
 ## Current State
 
@@ -81,6 +95,12 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Suite Quality Trends (last 10 evals)
 {suite_quality_trends}
 
+### Recent Insights (cross-species)
+{insights}
+
+### Blacklisted Configurations
+{blacklist_text}
+
 ### Plot Paths (reference for trend analysis)
 {plot_paths}
 
@@ -101,12 +121,16 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Numeric: {{"type": "numeric_trial", "surface": "memrl_retrieval|think_harder|monitor|escalation", "params": {{}}}}
   (Leave params empty to let Optuna suggest; provide params to test specific values)
 - Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix|compress|few_shot_evolution", "description": "..."}}
+- Code: {{"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix", "description": "..."}}
+  (Mutate Python code — ONLY files in allowlist: {code_targets})
 - Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
 - Train: {{"type": "train_routing_models", "min_memories": 500}}
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
 - Deep eval: {{"type": "deep_eval", "tier": 2}}
 - Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}
+- Distill: {{"type": "distill_knowledge", "last_n": 10}}
+  (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
 
 Include brief reasoning before the action block.
 """
@@ -130,6 +154,65 @@ def load_state() -> dict[str, Any]:
 def save_state(state: dict[str, Any]) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, indent=2, default=str))
+
+
+# ── Failure Blacklist (B2) ───────────────────────────────────
+
+
+def load_blacklist() -> list[dict[str, Any]]:
+    """Load failure blacklist from YAML."""
+    if not BLACKLIST_PATH.exists():
+        return []
+    try:
+        data = yaml.safe_load(BLACKLIST_PATH.read_text()) or {}
+        return data.get("blacklist", [])
+    except Exception as e:
+        log.warning("Could not load blacklist: %s", e)
+        return []
+
+
+def check_blacklist(action: dict[str, Any], blacklist: list[dict[str, Any]]) -> str | None:
+    """Check if action matches any blacklist pattern.
+
+    Returns the reason string if blocked, None if allowed.
+    """
+    if not isinstance(action, dict):
+        return None
+    for entry in blacklist:
+        pattern = entry.get("pattern", {})
+        if not isinstance(pattern, dict):
+            continue
+        if pattern and all(action.get(k) == v for k, v in pattern.items()):
+            return entry.get("reason", "blacklisted")
+    return None
+
+
+def append_blacklist(action: dict[str, Any], trial_id: int, reason: str) -> None:
+    """Auto-append a blacklist entry after rollback trigger."""
+    # Build a pattern from the action's key fields
+    pattern = {}
+    for key in ("type", "surface", "file", "mutation", "flags"):
+        if key in action:
+            pattern[key] = action[key]
+    if not pattern:
+        return
+
+    entry = {
+        "pattern": pattern,
+        "reason": reason,
+        "added": datetime.now(timezone.utc).isoformat(),
+        "source_trial": trial_id,
+    }
+
+    data = {"blacklist": []}
+    if BLACKLIST_PATH.exists():
+        try:
+            data = yaml.safe_load(BLACKLIST_PATH.read_text()) or {"blacklist": []}
+        except Exception:
+            pass
+    data.setdefault("blacklist", []).append(entry)
+    BLACKLIST_PATH.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+    log.info("Blacklisted pattern: %s (reason: %s)", pattern, reason)
 
 
 # ── Claude CLI Controller ────────────────────────────────────────
@@ -182,6 +265,15 @@ def invoke_controller(
         return "", session_id
 
 
+def _unwrap_action(data: Any) -> dict[str, Any] | None:
+    """Unwrap action from list or validate dict."""
+    if isinstance(data, list) and len(data) > 0:
+        data = data[0]
+    if isinstance(data, dict) and "type" in data:
+        return data
+    return None
+
+
 def extract_action(text: str) -> dict[str, Any] | None:
     """Extract structured action from controller response."""
     marker = "```json:autopilot_actions"
@@ -189,7 +281,8 @@ def extract_action(text: str) -> dict[str, Any] | None:
         start = text.index(marker) + len(marker)
         end = text.index("```", start)
         try:
-            return json.loads(text[start:end].strip())
+            data = json.loads(text[start:end].strip())
+            return _unwrap_action(data)
         except json.JSONDecodeError as e:
             log.error("Failed to parse action JSON: %s", e)
             return None
@@ -200,7 +293,7 @@ def extract_action(text: str) -> dict[str, Any] | None:
         end = text.index("```", start)
         try:
             data = json.loads(text[start:end].strip())
-            if "type" in data:
+            if isinstance(data, dict) and "type" in data:
                 return data
         except (json.JSONDecodeError, ValueError):
             pass
@@ -222,6 +315,8 @@ def dispatch_action(
     archive: ParetoArchive,
     journal: ExperimentJournal,
     state: dict[str, Any],
+    strategy_store: StrategyStore | None = None,
+    evo: EvolutionManager | None = None,
 ) -> tuple[EvalResult | None, str]:
     """Execute an action and return (eval_result, species_name)."""
     action_type = action.get("type", "")
@@ -271,6 +366,37 @@ def dispatch_action(
             f"Trial #{f.trial_id} ({f.action_type}):\n{f.failure_analysis}"
             for f in recent_failures
         )
+
+        # B5: Cross-species fertilization — prepend insights from all species
+        cross_insights = journal.insights_text(n=5)
+        if cross_insights and cross_insights != "(no insights yet)":
+            failure_context = (
+                f"## Cross-Species Insights\n{cross_insights}\n\n"
+                + failure_context
+            )
+
+        # B1: Strategy store retrieval — add past strategy insights
+        if strategy_store is not None:
+            query = f"{target} {mutation_type} {description}"
+            strategies = strategy_store.retrieve(query, k=3)
+            if strategies:
+                strategy_lines = "\n".join(
+                    f"- Trial #{s.source_trial_id} ({s.species}): {s.description} → {s.insight}"
+                    for s in strategies
+                )
+                failure_context = (
+                    f"## Past Strategy Insights\n{strategy_lines}\n\n"
+                    + failure_context
+                )
+
+        # B3: Execution trace feedback — add recent inference traces
+        last_traces = state.get("last_traces", "")
+        if last_traces:
+            failure_context = (
+                f"## Recent Execution Traces\n{last_traces}\n\n"
+                + failure_context
+            )
+
         # Get per-suite quality from most recent eval
         last_entries = journal.recent(1)
         last_per_suite = (
@@ -315,9 +441,97 @@ def dispatch_action(
                 )
                 forge.revert_mutation(mutation)
                 return eval_result, "prompt_forge"
+            # Block catastrophic shrinkage (>50% reduction) — likely destructive
+            if size_increase < -0.50:
+                log.warning(
+                    "Simplicity criterion: prompt shrank %.0f%% — likely destructive, reverting",
+                    abs(size_increase) * 100,
+                )
+                forge.revert_mutation(mutation)
+                return eval_result, "prompt_forge"
 
         # AP-7: Prompt change accepted — invalidate stale Optuna trials
         swarm.mark_epoch(f"prompt_mutation:{target}/{mutation_type}")
+        return eval_result, "prompt_forge"
+
+    elif action_type == "code_mutation":
+        # Meta-Harness Tier 2: Python code mutation
+        target = action.get("file", "")
+        mutation_type = action.get("mutation", "targeted_fix")
+        description = action.get("description", "")
+
+        # Gather context (same as prompt_mutation)
+        recent_failures = journal.recent_failures(species="prompt_forge", n=5)
+        failure_context = "\n\n".join(
+            f"Trial #{f.trial_id} ({f.action_type}):\n{f.failure_analysis}"
+            for f in recent_failures
+        )
+        cross_insights = journal.insights_text(n=5)
+        if cross_insights and cross_insights != "(no insights yet)":
+            failure_context = f"## Cross-Species Insights\n{cross_insights}\n\n" + failure_context
+        last_traces = state.get("last_traces", "")
+        if last_traces:
+            failure_context = f"## Recent Execution Traces\n{last_traces}\n\n" + failure_context
+
+        last_entries = journal.recent(1)
+        last_per_suite = (
+            last_entries[-1].eval_details.get("per_suite_quality")
+            if last_entries else None
+        )
+
+        try:
+            mutation = forge.propose_code_mutation(
+                target_file=target,
+                mutation_type=mutation_type,
+                failure_context=failure_context,
+                per_suite_quality=last_per_suite,
+                description=description,
+            )
+        except (ValueError, FileNotFoundError) as e:
+            log.error("Code mutation blocked: %s", e)
+            return None, "prompt_forge"
+
+        if not mutation.syntax_valid:
+            log.warning("Code mutation failed syntax validation, skipping")
+            return None, "prompt_forge"
+
+        forge.apply_code_mutation(mutation)
+        eval_result = tower.eval_t0()
+
+        verdict = gate.check(eval_result)
+        if not verdict:
+            log.warning("Code mutation failed safety gate, reverting")
+            forge.revert_code_mutation(mutation)
+            return eval_result, "prompt_forge"
+
+        # Simplicity criterion for code — block both excessive growth AND catastrophic shrinkage
+        orig_len = len(mutation.original_content)
+        new_len = len(mutation.mutated_content)
+        if orig_len > 0:
+            size_change = (new_len - orig_len) / orig_len
+            last_quality = 0.0
+            recent = journal.recent(1)
+            if recent:
+                last_quality = recent[-1].quality
+            quality_delta = eval_result.quality - last_quality
+            # Block excessive growth with insufficient quality gain
+            if size_change > 0.20 and quality_delta < 0.02:
+                log.warning(
+                    "Simplicity criterion: code grew %.0f%% for %.3f quality gain, reverting",
+                    size_change * 100, quality_delta,
+                )
+                forge.revert_code_mutation(mutation)
+                return eval_result, "prompt_forge"
+            # Block catastrophic shrinkage (>50% reduction) — likely destructive
+            if size_change < -0.50:
+                log.warning(
+                    "Simplicity criterion: code shrank %.0f%% — likely destructive, reverting",
+                    abs(size_change) * 100,
+                )
+                forge.revert_code_mutation(mutation)
+                return eval_result, "prompt_forge"
+
+        swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
         return eval_result, "prompt_forge"
 
     elif action_type == "structural_experiment":
@@ -392,6 +606,21 @@ def dispatch_action(
         eval_result = tower.eval_t0()
         return eval_result, "structural_lab"
 
+    elif action_type == "distill_knowledge":
+        # Evolution Manager: knowledge distillation (no eval, no system change)
+        last_n = action.get("last_n", 10)
+        if evo is not None and strategy_store is not None:
+            result = evo.distill(
+                journal_entries=journal.all_entries(),
+                strategy_store=strategy_store,
+                last_n=last_n,
+                trial_id=state.get("trial_counter", 0),
+            )
+            log.info("Knowledge distillation: %s", result)
+        else:
+            log.warning("distill_knowledge requires evo + strategy_store")
+        return None, "evolution_manager"
+
     else:
         log.warning("Unknown action type: %s", action_type)
         return None, "unknown"
@@ -442,10 +671,26 @@ def _run_loop_inner(
     tower = EvalTower(url=ORCHESTRATOR_URL)
     meta = MetaOptimizer()
 
-    seeder = Seeder(url=ORCHESTRATOR_URL, dry_run=dry_run)
+    seeder = Seeder(
+        url=ORCHESTRATOR_URL,
+        dry_run=dry_run,
+        on_question=tui.set_prompt if tui is not None else None,
+    )
     swarm = NumericSwarm()
     forge = PromptForge(auto_commit=not dry_run)
     lab = StructuralLab(orchestrator_url=ORCHESTRATOR_URL)
+    evo = EvolutionManager(use_local_model=not use_controller)
+
+    # B1: Strategy store for species memory
+    strategy_store: StrategyStore | None = None
+    try:
+        strategy_store = StrategyStore()
+        log.info("Strategy store loaded (%d entries)", strategy_store.count())
+    except Exception as e:
+        log.warning("Strategy store unavailable: %s", e)
+
+    # B2: Failure blacklist
+    blacklist = load_blacklist()
 
     # Load species budget from state
     if "species_budget" in state:
@@ -496,7 +741,25 @@ def _run_loop_inner(
 
         # ── 2. Reason ────────────────────────────────────────────
         if use_controller:
+            # Load program.md (human-editable strategy file)
+            try:
+                program_text = PROGRAM_PATH.read_text()
+            except OSError:
+                program_text = "(program.md not found)"
+            # B4/B5: Format insights for controller
+            insights_text = journal.insights_text(n=10)
+
+            # B2: Format blacklist for controller
+            if blacklist:
+                bl_lines = []
+                for entry in blacklist:
+                    bl_lines.append(f"  - {entry.get('pattern', {})} — {entry.get('reason', '')}")
+                blacklist_text = "\n".join(bl_lines)
+            else:
+                blacklist_text = "  (none)"
+
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
+                program=program_text,
                 pareto_summary=archive.summary_text(),
                 journal_summary=journal.summary_text(20),
                 seeder_status=json.dumps(seeder.convergence_status(), indent=2),
@@ -508,6 +771,9 @@ def _run_loop_inner(
                 converged=converged,
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
+                insights=insights_text,
+                blacklist_text=blacklist_text,
+                code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
             )
 
@@ -526,6 +792,15 @@ def _run_loop_inner(
             action = {"type": "seed_batch", "n_questions": 10}
 
         # ── 3. Act ───────────────────────────────────────────────
+        # B2: Check failure blacklist before dispatch
+        blocked_reason = check_blacklist(action, blacklist)
+        if blocked_reason:
+            log.warning(
+                "Trial %d: action blacklisted (%s), requesting new action",
+                trial_counter, blocked_reason,
+            )
+            action = {"type": "seed_batch", "n_questions": 10}
+
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
 
         # Update TUI with trial info
@@ -546,7 +821,7 @@ def _run_loop_inner(
         else:
             eval_result, species_name = dispatch_action(
                 action, seeder, swarm, forge, lab, tower, gate, archive,
-                journal, state,
+                journal, state, strategy_store=strategy_store, evo=evo,
             )
 
         # ── 4. Evaluate ─────────────────────────────────────────
@@ -565,6 +840,12 @@ def _run_loop_inner(
             )
             if gate.should_rollback():
                 log.error("Consecutive failure limit reached, rolling back")
+                # B2: Auto-append failing config to blacklist
+                append_blacklist(
+                    action, trial_counter,
+                    f"Auto-blacklisted: 3 consecutive failures ending at trial {trial_counter}",
+                )
+                blacklist = load_blacklist()  # Reload after append
                 lab.restore_checkpoint()
                 gate.reset_failures()
 
@@ -581,6 +862,22 @@ def _run_loop_inner(
                 reasoning=json.dumps(action),
             )
         )
+
+        # B1: Store strategy on Pareto frontier improvements
+        if pareto_status == "frontier" and strategy_store is not None:
+            try:
+                strategy_store.store(
+                    description=f"{action.get('type', '')}: {hypothesis}",
+                    insight=f"q={eval_result.quality:.3f} s={eval_result.speed:.1f} mechanism={expected_mechanism}",
+                    source_trial_id=trial_counter,
+                    species=species_name,
+                )
+            except Exception as e:
+                log.warning("Strategy store write failed: %s", e)
+
+        # B3: Capture execution traces for next PromptForge iteration
+        if not dry_run:
+            state["last_traces"] = tower.capture_recent_traces(50)
 
         # If new Pareto entry, promote to T1
         if pareto_status == "frontier" and eval_result.tier == 0 and not dry_run:
@@ -614,6 +911,16 @@ def _run_loop_inner(
                 if old_val != new_val:
                     config_diff[key] = {"old": old_val, "new": new_val}
 
+        # Build active_flags from action context
+        active_flags_dict = action.get("flags", {})
+        active_flags_list = [
+            f"{k}={v}" for k, v in active_flags_dict.items()
+        ] if active_flags_dict else []
+
+        # Extract hypothesis and expected mechanism from action/controller
+        hypothesis = action.get("description", "")
+        expected_mechanism = action.get("mutation", "") or action.get("surface", "")
+
         journal.record(
             JournalEntry(
                 trial_id=trial_counter,
@@ -631,13 +938,16 @@ def _run_loop_inner(
                 config_diff=config_diff,
                 parent_trial=parent_trial_id,
                 memory_count=memory_count,
-                active_flags=[],
+                active_flags=active_flags_list,
                 failure_analysis=failure_analysis,
                 eval_details={
                     "per_suite_quality": eval_result.per_suite_quality,
                     "routing_distribution": eval_result.routing_distribution,
                     "details": eval_result.details,
                 },
+                reasoning=json.dumps(action),
+                hypothesis=hypothesis,
+                expected_mechanism=expected_mechanism,
             )
         )
 
@@ -650,6 +960,14 @@ def _run_loop_inner(
                 is_converged=converged,
             )
             state["species_budget"] = meta.budget.as_dict()
+
+        # Context budget management: auto-checkpoint at intervals
+        if trial_counter > 0 and trial_counter % 25 == 0 and not dry_run:
+            log.info("Auto-checkpoint at trial %d", trial_counter)
+            lab.checkpoint_state(
+                trial_id=trial_counter,
+                notes=f"Auto-checkpoint at trial {trial_counter}",
+            )
 
         # Generate plots periodically
         if trial_counter % PLOT_INTERVAL == 0:
@@ -678,6 +996,8 @@ def _run_loop_inner(
     log.info("AutoPilot shutting down (trial=%d)", trial_counter)
     archive.save(state)
     save_state(state)
+    if strategy_store is not None:
+        strategy_store.close()
     if not dry_run:
         lab.checkpoint_state(trial_id=trial_counter, notes="Shutdown checkpoint")
 
@@ -722,6 +1042,8 @@ def _auto_action(
         if converged:
             return {"type": "train_routing_models", "min_memories": 500}
         return {"type": "structural_experiment", "flags": {"think_harder": True}}
+    elif species == "evolution_manager":
+        return {"type": "distill_knowledge", "last_n": 10}
     return {"type": "seed_batch", "n_questions": 10}
 
 
@@ -843,6 +1165,8 @@ def cmd_restore(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # force=True overrides any basicConfig already called at import time
+    # (seed_specialist_routing.py calls basicConfig at module level)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -852,6 +1176,7 @@ def main() -> None:
                 ORCH_ROOT / "logs" / "autopilot.log", mode="a"
             ),
         ],
+        force=True,
     )
 
     parser = argparse.ArgumentParser(

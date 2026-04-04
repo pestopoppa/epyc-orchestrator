@@ -16,9 +16,22 @@ from typing import Any
 
 log = logging.getLogger("autopilot.prompt_forge")
 
+import ast
+import importlib
+import subprocess as _subprocess  # avoid shadowing
+
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
 PROJECT_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+
+# Meta-Harness Tier 2: Python files that code mutations may touch.
+# This is the eval trust boundary — files NOT on this list are immutable.
+CODE_MUTATION_ALLOWLIST = [
+    "src/prompt_builders/resolver.py",      # Prompt resolution logic
+    "src/escalation.py",                     # Escalation policy & retry logic
+    "src/graph/escalation_helpers.py",       # Role cycle detection
+    "src/tool_policy.py",                    # Tool access control rules
+]
 
 MUTATION_TYPES = [
     "targeted_fix",  # Fix specific failure patterns
@@ -38,6 +51,18 @@ class PromptMutation:
     mutated_content: str = ""
     git_diff: str = ""
     accepted: bool = False
+
+
+@dataclass
+class CodeMutation:
+    file: str  # Relative path, e.g. "src/escalation.py"
+    mutation_type: str
+    description: str
+    original_content: str = ""
+    mutated_content: str = ""
+    git_diff: str = ""
+    accepted: bool = False
+    syntax_valid: bool = False
 
 
 class PromptForge:
@@ -138,10 +163,16 @@ class PromptForge:
         }
 
     def revert_mutation(self, mutation: PromptMutation) -> None:
-        """Revert a mutation to original content."""
+        """Revert a mutation to original content and commit the revert."""
         self.write_prompt(mutation.file, mutation.original_content)
         mutation.accepted = False
-        log.info("Reverted mutation on %s", mutation.file)
+        # Commit the revert so corrupted state is never the HEAD
+        if self.auto_commit:
+            self._git_commit(
+                f"autopilot: revert prompt mutation on {mutation.file}\n\n"
+                f"Reverted: {mutation.description}"
+            )
+        log.info("Reverted prompt mutation on %s (committed)", mutation.file)
 
     # ── Claude CLI invocation ────────────────────────────────────
 
@@ -344,4 +375,303 @@ class PromptForge:
             "n_prompts": len(prompts),
             "session_active": self._session_id is not None,
             "mutation_types": MUTATION_TYPES,
+            "code_mutation_targets": CODE_MUTATION_ALLOWLIST,
         }
+
+    # ── Meta-Harness Tier 2: Code mutations ──────────────────────
+
+    def propose_code_mutation(
+        self,
+        target_file: str,
+        mutation_type: str = "targeted_fix",
+        failure_context: str = "",
+        per_suite_quality: dict[str, float] | None = None,
+        description: str = "",
+    ) -> CodeMutation:
+        """Propose a mutation to a Python code file (Tier 2 search space).
+
+        Only files in CODE_MUTATION_ALLOWLIST may be mutated.
+        """
+        if target_file not in CODE_MUTATION_ALLOWLIST:
+            raise ValueError(
+                f"Code mutation blocked: {target_file} not in allowlist. "
+                f"Allowed: {CODE_MUTATION_ALLOWLIST}"
+            )
+
+        abs_path = PROJECT_ROOT / target_file
+        if not abs_path.exists():
+            raise FileNotFoundError(f"Target file not found: {abs_path}")
+
+        original = abs_path.read_text()
+
+        prompt = self._build_code_mutation_prompt(
+            target_file=target_file,
+            mutation_type=mutation_type,
+            original_content=original,
+            failure_context=failure_context,
+            per_suite_quality=per_suite_quality,
+            description=description,
+        )
+
+        result = self._invoke_claude(prompt)
+        mutated_content = self._extract_code_mutation(result, original)
+
+        mutation = CodeMutation(
+            file=target_file,
+            mutation_type=mutation_type,
+            description=description or f"{mutation_type} on {target_file}",
+            original_content=original,
+            mutated_content=mutated_content,
+        )
+
+        # Deep validation: syntax + shrinkage + public names + import test
+        valid, reason = self._validate_code_mutation(original, mutated_content, target_file)
+        mutation.syntax_valid = valid
+        if not valid:
+            log.warning("Code mutation rejected (%s): %s", target_file, reason)
+            mutation.mutated_content = original
+
+        return mutation
+
+    def apply_code_mutation(self, mutation: CodeMutation) -> dict[str, Any]:
+        """Apply a code mutation with syntax validation + git safety."""
+        if not mutation.syntax_valid:
+            return {"status": "rejected", "reason": "syntax_invalid"}
+
+        abs_path = PROJECT_ROOT / mutation.file
+
+        # Git commit current state before mutation (safety net)
+        try:
+            subprocess.run(
+                ["git", "add", str(abs_path)],
+                timeout=10, cwd=str(PROJECT_ROOT),
+            )
+            subprocess.run(
+                ["git", "commit", "-m",
+                 f"autopilot: pre-code-mutation checkpoint ({mutation.file})"],
+                timeout=10, cwd=str(PROJECT_ROOT),
+                capture_output=True,
+            )
+        except Exception:
+            pass  # Commit may fail if no changes — that's OK
+
+        # Write the mutated code
+        abs_path.write_text(mutation.mutated_content)
+        mutation.accepted = True
+
+        # Capture diff
+        try:
+            result = subprocess.run(
+                ["git", "diff", str(abs_path)],
+                capture_output=True, text=True, timeout=10,
+                cwd=str(PROJECT_ROOT),
+            )
+            mutation.git_diff = result.stdout
+        except Exception:
+            mutation.git_diff = ""
+
+        if self.auto_commit and mutation.git_diff:
+            self._git_commit_file(
+                abs_path,
+                f"autopilot: code {mutation.mutation_type} on {mutation.file}\n\n"
+                f"{mutation.description}",
+            )
+
+        return {
+            "status": "applied",
+            "file": mutation.file,
+            "mutation_type": mutation.mutation_type,
+            "diff_lines": len(mutation.git_diff.splitlines()),
+        }
+
+    def revert_code_mutation(self, mutation: CodeMutation) -> None:
+        """Revert a code mutation to original content and commit the revert."""
+        abs_path = PROJECT_ROOT / mutation.file
+        abs_path.write_text(mutation.original_content)
+        mutation.accepted = False
+        # Commit the revert so corrupted state is never the HEAD
+        if self.auto_commit:
+            self._git_commit_file(
+                abs_path,
+                f"autopilot: revert code mutation on {mutation.file}\n\n"
+                f"Reverted: {mutation.description}",
+            )
+        log.info("Reverted code mutation on %s (committed)", mutation.file)
+
+    def _validate_syntax(self, code: str) -> bool:
+        """Validate Python syntax via ast.parse."""
+        try:
+            ast.parse(code)
+            return True
+        except SyntaxError as e:
+            log.warning("Syntax error in mutated code: %s", e)
+            return False
+
+    def _validate_code_mutation(
+        self, original: str, mutated: str, target_file: str
+    ) -> tuple[bool, str]:
+        """Deep validation of a code mutation beyond syntax.
+
+        Returns (valid, reason). Checks:
+        1. Syntax (ast.parse)
+        2. No catastrophic size reduction (>60% shrinkage)
+        3. Public names preserved (classes, functions defined at module level)
+        4. Import test (actually importable, no circular imports)
+        """
+        # 1. Syntax
+        try:
+            mutated_tree = ast.parse(mutated)
+        except SyntaxError as e:
+            return False, f"syntax error: {e}"
+
+        # 2. Catastrophic shrinkage — reject if >60% of lines removed
+        orig_lines = len(original.splitlines())
+        new_lines = len(mutated.splitlines())
+        if orig_lines > 10 and new_lines < orig_lines * 0.4:
+            return False, (
+                f"catastrophic shrinkage: {orig_lines}→{new_lines} lines "
+                f"({100 * (1 - new_lines / orig_lines):.0f}% removed)"
+            )
+
+        # 3. Public names preserved — every class/function at module level
+        #    in the original must still exist in the mutated version
+        def _top_level_names(tree: ast.AST) -> set[str]:
+            names = set()
+            for node in ast.iter_child_nodes(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    names.add(node.name)
+            return names
+
+        orig_tree = ast.parse(original)
+        orig_names = _top_level_names(orig_tree)
+        new_names = _top_level_names(mutated_tree)
+        missing = orig_names - new_names
+        if missing:
+            return False, f"missing public names: {missing}"
+
+        # 4. Import test — write to temp, try importing
+        abs_path = PROJECT_ROOT / target_file
+        try:
+            # Temporarily write mutated code
+            backup = abs_path.read_text()
+            abs_path.write_text(mutated)
+            try:
+                module_name = target_file.replace("/", ".").removesuffix(".py")
+                # Clear any cached version
+                import sys
+                if module_name in sys.modules:
+                    del sys.modules[module_name]
+                importlib.import_module(module_name)
+            except Exception as e:
+                abs_path.write_text(backup)
+                return False, f"import failed: {e}"
+            finally:
+                # Always restore original before returning
+                abs_path.write_text(backup)
+        except Exception as e:
+            return False, f"validation IO error: {e}"
+
+        return True, "ok"
+
+    def _build_code_mutation_prompt(
+        self,
+        target_file: str,
+        mutation_type: str,
+        original_content: str,
+        failure_context: str,
+        per_suite_quality: dict[str, float] | None,
+        description: str,
+    ) -> str:
+        """Build prompt for code mutation."""
+        lines = [
+            "You are an expert Python engineer optimizing an LLM orchestration system.",
+            "",
+            f"## Task: {mutation_type} mutation on `{target_file}`",
+            "",
+        ]
+
+        if description:
+            lines.append(f"Goal: {description}\n")
+
+        type_instructions = {
+            "targeted_fix": (
+                "Analyze the failure cases below and make targeted edits to fix "
+                "specific failure patterns. Keep changes minimal and focused. "
+                "Do NOT refactor or add features beyond what's needed to fix the issue."
+            ),
+            "compress": (
+                "Reduce complexity while preserving behavior. Remove dead code, "
+                "simplify conditionals, merge redundant branches."
+            ),
+        }
+        lines.append(type_instructions.get(mutation_type, "Improve this code with minimal changes."))
+        lines.append("")
+
+        lines.append(f"## Current code (`{target_file}`):\n```python")
+        lines.append(original_content)
+        lines.append("```\n")
+
+        if failure_context:
+            lines.append(f"## Context (failures, traces, insights):\n{failure_context}\n")
+
+        if per_suite_quality:
+            lines.append("## Per-suite quality (0-3 scale):")
+            for suite, quality in sorted(per_suite_quality.items()):
+                bar = "█" * int(quality) + "░" * (3 - int(quality))
+                lines.append(f"  {suite}: {quality:.2f} {bar}")
+            lines.append("")
+
+        lines.append(
+            "## IMPORTANT CONSTRAINTS:\n"
+            "1. Return the COMPLETE modified file in a ```python fenced block\n"
+            "2. Do NOT change function signatures or class names\n"
+            "3. Do NOT add new dependencies\n"
+            "4. Keep changes minimal — one logical change only\n"
+            "5. The code must pass ast.parse() (valid Python syntax)\n"
+        )
+
+        lines.append(
+            "## Output format:\n"
+            "Return the complete modified file inside a ```python fenced block."
+        )
+
+        return "\n".join(lines)
+
+    def _extract_code_mutation(self, result: str, original: str) -> str:
+        """Extract mutated Python code from Claude's response."""
+        if "```python" in result:
+            start = result.index("```python") + len("```python")
+            end = result.index("```", start)
+            return result[start:end].strip()
+
+        if "```" in result:
+            blocks = result.split("```")
+            for i in range(1, len(blocks), 2):
+                block = blocks[i]
+                if block.strip().startswith(("json", "{")):
+                    continue
+                if len(block.strip()) > 100:
+                    lines = block.strip().split("\n")
+                    if lines[0].strip() in ("python", "py"):
+                        return "\n".join(lines[1:]).strip()
+                    return block.strip()
+
+        log.warning("Could not extract code mutation from response, returning original")
+        return original
+
+    def _git_commit_file(self, path: Path, message: str) -> None:
+        """Git add + commit a specific file."""
+        try:
+            subprocess.run(
+                ["git", "add", str(path)],
+                timeout=10, check=True,
+                cwd=str(PROJECT_ROOT),
+            )
+            subprocess.run(
+                ["git", "commit", "-m", message],
+                timeout=10, check=True,
+                cwd=str(PROJECT_ROOT),
+            )
+            log.info("Committed code mutation: %s", path.name)
+        except Exception as e:
+            log.warning("Git commit failed: %s", e)
