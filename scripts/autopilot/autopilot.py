@@ -327,7 +327,7 @@ def dispatch_action(
         suites = action.get("suites")
         result = seeder.run_batch(n_questions=n, suites=suites)
         # After seeding, run T0 eval
-        eval_result = tower.eval_t0()
+        eval_result = tower.hybrid_eval()
         return eval_result, "seeder"
 
     elif action_type == "numeric_trial":
@@ -346,7 +346,7 @@ def dispatch_action(
                 "trial_number": trial["trial_number"],
             }
 
-        eval_result = tower.eval_t0()
+        eval_result = tower.hybrid_eval()
         # Report to Optuna if we have a trial
         if "_current_optuna_trial" in state and eval_result:
             t = state.pop("_current_optuna_trial")
@@ -412,7 +412,7 @@ def dispatch_action(
             description=description,
         )
         forge.apply_mutation(mutation)
-        eval_result = tower.eval_t0()
+        eval_result = tower.hybrid_eval()
 
         # Revert if quality drops
         verdict = gate.check(eval_result)
@@ -496,7 +496,7 @@ def dispatch_action(
             return None, "prompt_forge"
 
         forge.apply_code_mutation(mutation)
-        eval_result = tower.eval_t0()
+        eval_result = tower.hybrid_eval()
 
         verdict = gate.check(eval_result)
         if not verdict:
@@ -542,7 +542,7 @@ def dispatch_action(
             return None, "structural_lab"
 
         lab.apply_flag_experiment(flags)
-        eval_result = tower.eval_t0()
+        eval_result = tower.hybrid_eval()
 
         # Revert if quality drops
         verdict = gate.check(eval_result)
@@ -565,7 +565,7 @@ def dispatch_action(
         )
         result = lab.train_routing_models(min_memories=min_mem)
         log.info("Training result: %s", result)
-        eval_result = tower.eval_t0()
+        eval_result = tower.hybrid_eval()
         return eval_result, "structural_lab"
 
     elif action_type == "distill_skillbank":
@@ -577,7 +577,7 @@ def dispatch_action(
         )
         result = lab.distill_skillbank(teacher=teacher, categories=categories)
         log.info("Distillation result: %s", result)
-        eval_result = tower.eval_t0()
+        eval_result = tower.hybrid_eval()
         return eval_result, "structural_lab"
 
     elif action_type == "reset_memories":
@@ -603,7 +603,7 @@ def dispatch_action(
         else:
             lab.restore_checkpoint(Path(to_cp))
         gate.reset_failures()
-        eval_result = tower.eval_t0()
+        eval_result = tower.hybrid_eval()
         return eval_result, "structural_lab"
 
     elif action_type == "distill_knowledge":
@@ -881,17 +881,6 @@ def _run_loop_inner(
         # B3: Capture execution traces for next PromptForge iteration
         if not dry_run:
             state["last_traces"] = tower.capture_recent_traces(50)
-
-        # If new Pareto entry, promote to T1
-        if pareto_status == "frontier" and eval_result.tier == 0 and not dry_run:
-            log.info("Pareto candidate! Running T1 evaluation...")
-            t1_result = tower.eval_t1()
-            t1_verdict = gate.check(t1_result)
-            if t1_verdict:
-                eval_result = t1_result
-                # Update Pareto entry with T1 results
-                archive._frontier[-1].objectives = t1_result.objectives
-                archive._frontier[-1].eval_tier = 1
 
         # Git tag
         git_tag = ""

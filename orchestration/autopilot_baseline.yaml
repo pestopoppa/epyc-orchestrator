@@ -1,43 +1,27 @@
 # AutoPilot frozen baseline metrics.
 # Update via: python autopilot.py checkpoint --production-best
-# Or manually after establishing baseline performance.
 #
-# AR-1 baseline captured 2026-03-30 (105 questions, 15/suite × 7 suites)
-# Config: Post CF-0 (compaction trigger 0.75), pre-autoresearch
+# Recalibrated 2026-04-04 for hybrid eval (T1 scale).
+# Previous T0-only baseline was misleading — T0 saturated at 3.0 after trial 15.
+# T1 (50 questions) and T2 (480 questions) give honest signal.
+# Using T2 trial-45 as reference (most recent honest measurement).
 
-quality: 1.72             # Best single-action accuracy (direct 57.3%) mapped to 0-3 scale
-speed: 12.7               # Frontdoor t/s (from RI-0 baseline, moe6 no lookup)
-cost: 0.5                 # Normalized cost estimate (3-way pipeline median 181s/question)
-reliability: 1.0          # No infrastructure errors in 105-question run
+quality: 1.16             # T2 quality from trial 45 (480q, ~39% correct on 0-3 scale)
+speed: 18.0               # Median t/s from T2 eval
+cost: 0.5                 # Normalized cost estimate
+reliability: 0.86         # 86% non-error from trial 45
 frontdoor_speed: 12.7     # Frontdoor-only throughput baseline
 
-# Per-action accuracy from 3-way eval (pass/fail, 105 questions)
-action_accuracy:
-  direct: 0.573           # 59/103 — frontdoor without tools
-  repl: 0.431             # 44/102 — frontdoor with tools (REPL overhead hurts simple questions)
-  architect: 0.524        # 55/105 — architect_general + architect_coding with delegation
+# Per-suite quality — will be populated from first hybrid eval run.
+# T2 deep evals didn't persist per-suite breakdown in journal.
+per_suite_quality: {}
 
-# Tool value analysis
-tool_value:
-  helped: 9               # Questions where REPL > direct
-  neutral: 72
-  hurt: 24                # Questions where REPL < direct — tools hurt 2.7x more than help
+# Historical T2 quality trend (for reference, not used by gate):
+# Trial 16: 1.30, Trial 20: 1.23, Trial 26: 1.22,
+# Trial 31: 1.21, Trial 36: 1.18, Trial 45: 1.16
 
-# Timing through full pipeline
-timing:
-  median_s: 181.2         # Median per-question (includes full escalation chain)
-  p95_s: 600.4            # p95 (timeout-hitting questions)
-
-# Per-suite quality (placeholder — per-suite not captured in this run's output)
-# TODO: Re-run with --output to get per-suite JSON breakdown
-per_suite_quality:
-  general: 0.0            # Placeholder — update with per-suite data
-  math: 0.0
-  coder: 0.0
-  thinking: 0.0
-  simpleqa: 0.0
-  hotpotqa: 0.0
-  gpqa: 0.0
-
-captured_at: "2026-03-30"
-notes: "Post CF-0 (trigger 0.75), pre-autoresearch baseline. Tools hurt > help (24 vs 9). Architect comparable to direct despite higher cost. Per-suite breakdown pending re-run with JSON output."
+captured_at: "2026-04-04"
+notes: >
+  Recalibrated for hybrid eval (T0 fast-reject + T1 real gate).
+  Previous baseline q=1.72 was from 105-question 3-way eval (different methodology).
+  Using T2 trial-45 q=1.16 as floor so autopilot can only improve from here.

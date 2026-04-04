@@ -20,11 +20,14 @@ DEFAULT_BASELINE_PATH = (
 )
 
 # Hard-coded safety thresholds
-QUALITY_FLOOR = 2.0  # Average quality >= 2.0/3.0
-REGRESSION_THRESHOLD = -0.05  # Max quality drop vs baseline
+# T0 thresholds (10 sentinel questions — inflated scale, saturates at 3.0)
+QUALITY_FLOOR_T0 = 2.0  # Average quality >= 2.0/3.0
+# T1/T2 thresholds (50-500 real benchmark questions — honest signal)
+QUALITY_FLOOR_T1 = 1.0  # ~33% correct minimum
+REGRESSION_THRESHOLD = -0.05  # Max quality drop vs baseline (fraction of baseline)
 PER_SUITE_REGRESSION = -0.1  # Max per-suite quality drop
 ARCHITECT_ROUTING_CAP = 0.80  # Max fraction routed to architect-tier
-MAX_CONSECUTIVE_FAILURES = 3  # Auto-rollback after this many T0 failures
+MAX_CONSECUTIVE_FAILURES = 3  # Auto-rollback after this many failures
 
 
 @dataclass
@@ -114,21 +117,27 @@ class SafetyGate:
         violations = []
         warnings = []
 
-        # 1. Quality floor
-        if result.quality < QUALITY_FLOOR:
+        # 1. Quality floor (tier-aware)
+        quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
+        if result.quality < quality_floor:
             violations.append(
-                f"Quality floor violation: {result.quality:.3f} < {QUALITY_FLOOR}"
+                f"Quality floor violation: {result.quality:.3f} < {quality_floor} (tier {result.tier})"
             )
 
-        # 2. Regression vs baseline
-        delta = result.quality - self.baseline.quality
-        if delta < REGRESSION_THRESHOLD:
-            violations.append(
-                f"Quality regression: {delta:+.3f} vs baseline "
-                f"(threshold: {REGRESSION_THRESHOLD})"
-            )
-        elif delta < 0:
-            warnings.append(f"Slight quality drop: {delta:+.3f} vs baseline")
+        # 2. Regression vs baseline (relative: allow 5% drop from baseline)
+        baseline_q = self.baseline.quality
+        if baseline_q > 0:
+            relative_delta = (result.quality - baseline_q) / baseline_q
+            if relative_delta < REGRESSION_THRESHOLD:
+                violations.append(
+                    f"Quality regression: {result.quality:.3f} vs baseline {baseline_q:.3f} "
+                    f"({relative_delta:+.1%}, threshold: {REGRESSION_THRESHOLD:+.0%})"
+                )
+            elif relative_delta < 0:
+                warnings.append(
+                    f"Slight quality drop: {result.quality:.3f} vs baseline {baseline_q:.3f} "
+                    f"({relative_delta:+.1%})"
+                )
 
         # 3. Per-suite regression
         for suite, quality in result.per_suite_quality.items():
@@ -162,6 +171,9 @@ class SafetyGate:
                 f"({result.speed / self.baseline.frontdoor_speed:.0%} of baseline)"
             )
 
+        # 6. Proxy-only improvement detection (skeptical re-questioning)
+        warnings.extend(self._proxy_check(result))
+
         passed = len(violations) == 0
         verdict = SafetyVerdict(passed=passed, violations=violations, warnings=warnings)
 
@@ -172,6 +184,39 @@ class SafetyGate:
             self._consecutive_failures = 0
 
         return verdict
+
+    def _proxy_check(self, result: EvalResult) -> list[str]:
+        """Detect proxy-only improvements: quality up but concentrated in easy suites.
+
+        Returns warnings (not violations) — these are suspicious but not blocking.
+        Flags cases where overall quality improved but only 1 suite drove the gain
+        while other suites declined.  (GPD "skeptical re-questioning" pattern.)
+        """
+        warnings: list[str] = []
+        if not result.per_suite_quality or not self.baseline.per_suite_quality:
+            return warnings
+
+        improved: list[tuple[str, float]] = []
+        declined: list[tuple[str, float]] = []
+        for suite, q in result.per_suite_quality.items():
+            bq = self.baseline.per_suite_quality.get(suite)
+            if bq is None:
+                continue
+            delta = q - bq
+            if delta > 0.05:
+                improved.append((suite, delta))
+            elif delta < -0.02:
+                declined.append((suite, delta))
+
+        # Flag if gains concentrated in ≤1 suite while others declined
+        if improved and declined and len(improved) <= 1:
+            imp_str = ", ".join(f"{s} +{d:.2f}" for s, d in improved)
+            dec_str = ", ".join(f"{s} {d:+.2f}" for s, d in declined)
+            warnings.append(
+                f"Proxy-only improvement: gains in [{imp_str}] "
+                f"but declines in [{dec_str}]"
+            )
+        return warnings
 
     def should_rollback(self) -> bool:
         """True if consecutive failures exceed threshold."""
@@ -209,15 +254,16 @@ class SafetyGate:
             sections.append("\n".join(lines))
 
         # DEGRADED SUITES (per-suite quality below floor)
+        quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
         degraded = [
             (suite, q)
             for suite, q in result.per_suite_quality.items()
-            if q < QUALITY_FLOOR
+            if q < quality_floor
         ]
         if degraded:
             lines = ["DEGRADED SUITES:"]
             for suite, q in sorted(degraded, key=lambda x: x[1]):
-                lines.append(f"  - {suite}: {q:.3f} (floor: {QUALITY_FLOOR})")
+                lines.append(f"  - {suite}: {q:.3f} (floor: {quality_floor})")
             sections.append("\n".join(lines))
 
         # ROUTING IMBALANCE (>60% to one tier)
