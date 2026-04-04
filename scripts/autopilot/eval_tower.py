@@ -357,6 +357,24 @@ class EvalTower:
             log.warning("Could not capture traces: %s", e)
             return ""
 
+    def hybrid_eval(self, seed: int = 42, t1_n: int = 50) -> EvalResult:
+        """Hybrid evaluation: T0 as fast pre-filter, T1 as real gate.
+
+        - If T0 fails (quality < 2.5), reject immediately without T1 cost.
+        - If T0 passes, run T1 (50 questions, ~2-3min) for real signal.
+        - Returns T0 result on fast-reject, T1 result otherwise.
+        """
+        t0 = self.eval_t0()
+        if t0.quality < 2.5:
+            log.info("Hybrid eval: T0 failed (q=%.3f), fast-reject", t0.quality)
+            return t0
+
+        log.info("Hybrid eval: T0 passed (q=%.3f), running T1 (%d questions)...",
+                 t0.quality, t1_n)
+        t1 = self.eval_t1(n=t1_n, seed=seed)
+        log.info("Hybrid eval: T1 result q=%.3f r=%.2f", t1.quality, t1.reliability)
+        return t1
+
     def progressive_eval(self, seed: int = 42) -> tuple[EvalResult, int]:
         """Progressive evaluation: T0 → T1 if passed → T2 if Pareto candidate.
 
