@@ -612,7 +612,20 @@ class PromptBuilder:
             f"Complete tasks efficiently and accurately.",
         )
 
-        return resolve_prompt(role_name, fallback, subdir="roles")
+        prompt = resolve_prompt(role_name, fallback, subdir="roles")
+
+        # B1: Inject frozen user profile into system prompt (prefix cache stable)
+        from src.features import features as _get_features
+        if _get_features().user_modeling:
+            try:
+                from src.user_modeling.profile_store import get_profile_store
+                _snapshot = get_profile_store().frozen_snapshot("default")
+                if _snapshot:
+                    prompt = f"{prompt}\n\n## User Profile\n{_snapshot}"
+            except Exception:
+                pass  # fail-silent: profile unavailable should not break prompting
+
+        return prompt
 
 
 # Module-level functions for backwards compatibility

@@ -87,14 +87,41 @@ async def openai_chat_completions(
     prompt = user_messages[-1].content
 
     # Build conversation context from message history
+    # B2: Apply context compression on structured messages before flattening
+    history_messages = list(request.messages[:-1])
+    from src.features import features as _feat
+    if _feat().context_compression and len(history_messages) > 8:
+        try:
+            from src.context_compression import ContextCompressor
+            _compressor = ContextCompressor()
+            _result = _compressor.compress(
+                [{"role": m.role, "content": m.content or "",
+                  **({"tool_calls": m.tool_calls} if getattr(m, "tool_calls", None) else {}),
+                  **({"tool_call_id": m.tool_call_id} if getattr(m, "tool_call_id", None) else {})}
+                 for m in history_messages]
+            )
+            if _result.tool_outputs_summarized > 0 or _result.tool_pairs_fixed > 0:
+                import logging
+                logging.getLogger(__name__).info(
+                    "B2 context compression: %d outputs summarized, %d pairs fixed",
+                    _result.tool_outputs_summarized, _result.tool_pairs_fixed,
+                )
+            history_messages_dicts = _result.messages
+        except Exception:
+            history_messages_dicts = [
+                {"role": m.role, "content": m.content or ""} for m in history_messages
+            ]
+    else:
+        history_messages_dicts = [
+            {"role": m.role, "content": m.content or ""} for m in history_messages
+        ]
+
     context_parts = []
-    for msg in request.messages[:-1]:  # All but last message
-        if msg.role == "system":
-            context_parts.append(f"System: {msg.content}")
-        elif msg.role == "user":
-            context_parts.append(f"User: {msg.content}")
-        elif msg.role == "assistant":
-            context_parts.append(f"Assistant: {msg.content}")
+    for msg in history_messages_dicts:
+        role_label = msg.get("role", "user").capitalize()
+        content = msg.get("content", "")
+        if content:
+            context_parts.append(f"{role_label}: {content}")
     context = "\n\n".join(context_parts) if context_parts else None
 
     # Map model to role
