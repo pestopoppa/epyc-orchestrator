@@ -367,6 +367,71 @@ class PromptForge:
         except Exception as e:
             log.warning("Git commit failed: %s", e)
 
+    # ── Worktree-isolated mutations (AP-11) ────────────────────────
+
+    def apply_mutation_isolated(
+        self,
+        mutation: PromptMutation,
+        trial_name: str,
+    ) -> "ExperimentContext":
+        """Apply a prompt mutation in an isolated worktree.
+
+        Returns an ExperimentContext. The caller must call ctx.accept() or
+        ctx.reject() after evaluation. If neither is called, the context
+        manager auto-rejects on cleanup.
+
+        Usage:
+            from scripts.autopilot.worktree_manager import WorktreeManager
+            wt = WorktreeManager()
+            with wt.experiment(trial_name) as ctx:
+                forge.apply_mutation_in_context(ctx, mutation)
+                result = tower.hybrid_eval()
+                if result.quality > baseline:
+                    ctx.accept(f"autopilot: {mutation.mutation_type} on {mutation.file}")
+                else:
+                    ctx.reject()
+        """
+        from scripts.autopilot.worktree_manager import WorktreeManager
+        wt = WorktreeManager(PROJECT_ROOT)
+        return wt.experiment(trial_name)
+
+    def apply_mutation_in_context(
+        self,
+        ctx: Any,
+        mutation: "PromptMutation",
+    ) -> dict[str, Any]:
+        """Apply a prompt mutation within an experiment context.
+
+        The context handles file backup, worktree versioning, and
+        copying the mutated file to the main repo for live eval.
+        """
+        rel_path = f"orchestration/prompts/{mutation.file}"
+        ctx.apply_file(rel_path, mutation.mutated_content)
+        mutation.accepted = True
+        return {
+            "status": "applied_isolated",
+            "file": mutation.file,
+            "mutation_type": mutation.mutation_type,
+            "worktree": str(ctx.worktree_path),
+        }
+
+    def apply_code_mutation_in_context(
+        self,
+        ctx: Any,
+        mutation: "CodeMutation",
+    ) -> dict[str, Any]:
+        """Apply a code mutation within an experiment context."""
+        if not mutation.syntax_valid:
+            return {"status": "rejected", "reason": "syntax_invalid"}
+        ctx.apply_file(mutation.file, mutation.mutated_content)
+        mutation.accepted = True
+        return {
+            "status": "applied_isolated",
+            "file": mutation.file,
+            "mutation_type": mutation.mutation_type,
+            "worktree": str(ctx.worktree_path),
+        }
+
     def summary(self) -> dict[str, Any]:
         """Summary for controller."""
         prompts = self.list_prompts()
