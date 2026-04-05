@@ -65,6 +65,7 @@ def _delegation_diagnostics(
         "repeated_roles": repeated_roles,
         "report_handles_count": len(delegation_stats.get("report_handles", []) or []),
         "report_handles": delegation_stats.get("report_handles", [])[:4],
+        "delegation_cache_hits": int(delegation_stats.get("delegation_cache_hits", 0) or 0),
         "delegation_inference_hops": len(infer),
         "avg_prompt_ms": avg_prompt_ms,
         "avg_gen_ms": avg_gen_ms,

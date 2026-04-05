@@ -1498,37 +1498,63 @@ def _architect_delegated_answer_inner(
         remaining_budget_s = total_budget_s - (time.perf_counter() - orchestration_started)
         specialist_budget_s = max(10.0, remaining_budget_s - 5.0)
 
-        # Give specialist its full role timeout instead of squeezing it
-        # by the parent's remaining deadline.  The specialist loop already
-        # enforces wall-clock limits via elapsed checks and specialist_budget_s.
-        from src.config import get_config as _get_config
-        _role_timeout_s = float(_get_config().timeouts.for_role(delegate_to))
-        _specialist_deadline_s = time.perf_counter() + max(_role_timeout_s, specialist_budget_s)
-
-        with primitives.request_context(
-            cancel_check=primitives.get_request_cancel_check(),
-            deadline_s=_specialist_deadline_s,
-            task_id=primitives.get_request_task_id(),
-            priority=primitives.get_request_priority(),
-        ):
-            report, deleg_tools, deleg_tools_called, phase_tool_timings, specialist_timed_out, report_rescued, specialist_infer_meta = _run_specialist_loop(
-                question,
-                context,
-                brief,
-                delegate_to,
-                delegate_mode,
-                primitives,
-                tool_registry,
-                time_budget_s=specialist_budget_s,
+        # ── Delegation result cache: check before running specialist ──
+        from src.delegation_cache import get_delegation_cache as _get_deleg_cache
+        _deleg_cache = _get_deleg_cache()
+        _cache_key = _deleg_cache.make_key(brief, delegate_to)
+        _cached = _deleg_cache.get(_cache_key)
+        if _cached is not None:
+            report = _cached.report
+            report_handle = _cached.report_handle
+            if report_handle:
+                stats["report_handles"].append(report_handle)
+            stats.setdefault("delegation_cache_hits", 0)
+            stats["delegation_cache_hits"] += 1
+            log.info(
+                "Delegation cache hit (loop %d, target=%s, age=%.0fs)",
+                loop, delegate_to, _cached.age_seconds,
             )
-        total_tools += deleg_tools
-        all_tools_called.extend(deleg_tools_called)
-        compressed_report, report_handle = _compress_report_for_loop(
-            report, question, primitives, delegate_to,
-        )
-        report = compressed_report
-        if report_handle:
-            stats["report_handles"].append(report_handle)
+        else:
+            # Give specialist its full role timeout instead of squeezing it
+            # by the parent's remaining deadline.  The specialist loop already
+            # enforces wall-clock limits via elapsed checks and specialist_budget_s.
+            from src.config import get_config as _get_config
+            _role_timeout_s = float(_get_config().timeouts.for_role(delegate_to))
+            _specialist_deadline_s = time.perf_counter() + max(_role_timeout_s, specialist_budget_s)
+
+            with primitives.request_context(
+                cancel_check=primitives.get_request_cancel_check(),
+                deadline_s=_specialist_deadline_s,
+                task_id=primitives.get_request_task_id(),
+                priority=primitives.get_request_priority(),
+            ):
+                report, deleg_tools, deleg_tools_called, phase_tool_timings, specialist_timed_out, report_rescued, specialist_infer_meta = _run_specialist_loop(
+                    question,
+                    context,
+                    brief,
+                    delegate_to,
+                    delegate_mode,
+                    primitives,
+                    tool_registry,
+                    time_budget_s=specialist_budget_s,
+                )
+            total_tools += deleg_tools
+            all_tools_called.extend(deleg_tools_called)
+            compressed_report, report_handle = _compress_report_for_loop(
+                report, question, primitives, delegate_to,
+            )
+            report = compressed_report
+            if report_handle:
+                stats["report_handles"].append(report_handle)
+
+            # Store in cache for future reuse (skip failed/error reports)
+            if report and not report.startswith(("[ERROR", "[Delegation failed")):
+                delegate_tokens_for_cache = primitives.total_tokens_generated - tokens_before
+                _deleg_cache.put(
+                    _cache_key, report, delegate_to,
+                    tokens_used=delegate_tokens_for_cache,
+                    report_handle=report_handle,
+                )
 
         phase_b_ms = (time.perf_counter() - phase_b_start) * 1000
         delegate_tokens = primitives.total_tokens_generated - tokens_before
