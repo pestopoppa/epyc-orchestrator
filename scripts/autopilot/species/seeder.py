@@ -55,6 +55,7 @@ class Seeder:
         batch_size: int = 10,
         suites: list[str] | None = None,
         dry_run: bool = False,
+        on_question: "Callable[[str], None] | None" = None,
     ):
         self.url = url
         self.timeout = timeout
@@ -64,6 +65,7 @@ class Seeder:
             "hotpotqa", "agentic", "instruction_precision",
         ]
         self.dry_run = dry_run
+        self.on_question = on_question
         self._seen: set[str] = set()
         self._td_errors: list[tuple[int, float]] = []  # (batch_num, avg_td_error)
         self._batch_count = 0
@@ -114,6 +116,12 @@ class Seeder:
 
         with httpx.Client(timeout=self.timeout) as client:
             for i, q in enumerate(questions):
+                # Notify TUI of current question
+                if self.on_question:
+                    suite = q.get("suite", "unknown")
+                    qid = q.get("id", q.get("question_id", f"q_{i}"))
+                    prompt_text = q.get("prompt", "")
+                    self.on_question(f"[{suite}] {qid}\n\n{prompt_text}")
                 try:
                     role_results, rewards, metadata = evaluate_question_3way(
                         prompt_info=q,

@@ -191,7 +191,7 @@ class StructuralLab:
 
         # Train MLP classifier
         try:
-            classifier_script = ORCH_ROOT / "orchestration" / "repl_memory" / "train_routing_classifier.py"
+            classifier_script = ORCH_ROOT / "scripts" / "graph_router" / "train_routing_classifier.py"
             if classifier_script.exists():
                 proc = subprocess.run(
                     ["python", str(classifier_script)],

@@ -2856,9 +2856,6 @@ roles:
     candidate_roles:
     - formalizer
     - math
-    constraints:
-      forbid:
-      - speculative_decoding
     memory:
       residency: warm
       pinned: false
@@ -2890,9 +2887,6 @@ roles:
     candidate_roles:
     - formalizer
     - math
-    constraints:
-      forbid:
-      - speculative_decoding
     memory:
       residency: warm
       pinned: false

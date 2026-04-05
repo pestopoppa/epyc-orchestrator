@@ -49,6 +49,7 @@ DEFAULT_LOG = ORCH_ROOT / "logs" / "autopilot.log"
 DEFAULT_TAP = "/mnt/raid0/llm/tmp/inference_tap.log"
 DEFAULT_REPL_TAP = "/mnt/raid0/llm/tmp/repl_tap.log"
 SENTINEL_PATH = "/mnt/raid0/llm/tmp/.inference_tap_active"
+PROMPT_TAP_PATH = "/mnt/raid0/llm/tmp/autopilot_prompt_tap.txt"
 
 
 class LogTailer:
@@ -86,10 +87,8 @@ class LogTailer:
             return
 
         with open(self._path, "rb") as fh:
-            fh.seek(0, 2)  # seek to end
+            # Read from beginning to pick up existing log lines
             while not self._stop.is_set():
-                pos = fh.tell()
-                fh.seek(pos)
                 raw = fh.read(16384)
                 if raw:
                     text = raw.decode("utf-8", errors="replace")
@@ -148,6 +147,11 @@ class AutoPilotTUI:
     def set_prompt(self, prompt: str) -> None:
         with self._lock:
             self._current_prompt = prompt
+        # Write to tap file so standalone TUI can read it
+        try:
+            Path(PROMPT_TAP_PATH).write_text(prompt)
+        except OSError:
+            pass
 
     def set_trial(self, trial_id: int, species: str = "") -> None:
         with self._lock:
@@ -267,10 +271,18 @@ class AutoPilotTUI:
             border_style="green",
         ))
 
-        # Lower left: Current prompt
+        # Lower left: Current prompt (auto-scrolling)
         p_vis = max(3, prompt_height - 2)
         with self._lock:
             prompt_raw = self._current_prompt
+        # Fall back to prompt tap file (for standalone TUI mode)
+        if not prompt_raw:
+            try:
+                tap = Path(PROMPT_TAP_PATH)
+                if tap.exists():
+                    prompt_raw = tap.read_text()
+            except OSError:
+                pass
         if prompt_raw:
             prompt_raw = _sanitize_display(prompt_raw)
             p_wrap_w = max(20, left_width - 4)
@@ -280,8 +292,20 @@ class AutoPilotTUI:
                     p_wrapped.extend(textwrap.wrap(para, width=p_wrap_w))
                 else:
                     p_wrapped.append("")
-            p_lines = p_wrapped[-p_vis:]
-            p_display = "\n".join(p_lines)
+            if len(p_wrapped) <= p_vis:
+                p_display = "\n".join(p_wrapped)
+            else:
+                total = len(p_wrapped) + 1
+                elapsed_p = time.monotonic() - self._start_time
+                offset = int(elapsed_p / 2.0) % total
+                visible = []
+                for j in range(p_vis):
+                    idx = (offset + j) % total
+                    if idx < len(p_wrapped):
+                        visible.append(p_wrapped[idx])
+                    else:
+                        visible.append("")
+                p_display = "\n".join(visible)
         else:
             p_display = "(no prompt active)"
         layout["prompt"].update(Panel(

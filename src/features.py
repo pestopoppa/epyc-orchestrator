@@ -254,6 +254,9 @@ class Features:
     user_modeling: bool = False  # B1: Cross-session user preference modeling
     session_token_budget: bool = False  # B5: Per-session token budget with compact/stop signals
 
+    # Claude Code Local Integration (CC Local)
+    claude_code_mcp_chat: bool = False  # MCP tools for delegating chat to running orchestrator
+
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
 
@@ -385,6 +388,7 @@ class Features:
             "context_compression": self.context_compression,
             "user_modeling": self.user_modeling,
             "session_token_budget": self.session_token_budget,
+            "claude_code_mcp_chat": self.claude_code_mcp_chat,
             "mock_mode": self.mock_mode,
         }
 
@@ -507,6 +511,7 @@ def get_features(
             "context_compression": False,  # B2: enable after protected-zone quality validation
             "user_modeling": False,  # B1: enable after profile store + deriver validation
             "session_token_budget": False,  # B5: enable after budget threshold tuning
+            "claude_code_mcp_chat": False,  # CC Local: enable after MCP tool validation
             "mock_mode": False,  # Real mode in production
         }
     else:
@@ -574,6 +579,7 @@ def get_features(
             "context_compression": False,  # B2: off in tests
             "user_modeling": False,  # B1: off in tests
             "session_token_budget": False,  # B5: off in tests
+            "claude_code_mcp_chat": False,  # CC Local: off in tests
             "mock_mode": True,  # Mock mode in tests
         }
 
@@ -650,6 +656,7 @@ def get_features(
         "context_compression": _feature_flag_bool("CONTEXT_COMPRESSION", defaults["context_compression"]),
         "user_modeling": _feature_flag_bool("USER_MODELING", defaults["user_modeling"]),
         "session_token_budget": _feature_flag_bool("SESSION_TOKEN_BUDGET", defaults["session_token_budget"]),
+        "claude_code_mcp_chat": _feature_flag_bool("CLAUDE_CODE_MCP_CHAT", defaults["claude_code_mcp_chat"]),
         "mock_mode": _feature_flag_bool("MOCK_MODE", defaults["mock_mode"]),
     }
 

@@ -249,6 +249,42 @@ class ExperimentJournal:
                 trends.setdefault(suite, []).append((e.trial_id, q))
         return trends
 
+    # ── insights ──────────────────────────────────────────────────
+
+    def insights_text(self, n: int = 10) -> str:
+        """Synthesize actionable insights from recent trials.
+
+        Extracts hypothesis + outcome from trials that either reached the
+        Pareto frontier or failed safety gates — the two outcomes worth
+        learning from.  Returns a compact text block suitable for injection
+        into species prompts (cross-species fertilization).
+        """
+        interesting = [
+            e for e in self._entries
+            if e.pareto_status == "frontier" or e.failure_analysis
+        ][-n:]
+        if not interesting:
+            return "(no insights yet)"
+
+        lines: list[str] = []
+        for e in interesting:
+            tag = "SUCCESS" if e.pareto_status == "frontier" else "FAILED"
+            hyp = e.hypothesis or e.action_type
+            mechanism = e.expected_mechanism or ""
+            detail = ""
+            if e.pareto_status == "frontier":
+                detail = f"q={e.quality:.3f} s={e.speed:.1f}"
+            elif e.failure_analysis:
+                # Compact single-line failure summary
+                detail = e.failure_analysis.replace("\n", " | ")[:120]
+            species_label = e.species
+            lines.append(
+                f"  [{tag}] #{e.trial_id} ({species_label}/{hyp})"
+                + (f" [{mechanism}]" if mechanism else "")
+                + f": {detail}"
+            )
+        return "\n".join(lines)
+
     # ── species effectiveness ────────────────────────────────────
 
     def species_effectiveness(
