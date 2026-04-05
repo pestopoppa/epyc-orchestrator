@@ -105,6 +105,148 @@ class TurnRecord:
 
 
 # ---------------------------------------------------------------------------
+# ConsolidatedSegment — two-level condensation (CF Phase 1)
+# ---------------------------------------------------------------------------
+
+# Max granular blocks before forcing consolidation
+MAX_GRANULAR_BLOCKS = 15
+
+
+@dataclass
+class ConsolidatedSegment:
+    """A consolidated segment from two-level condensation.
+
+    Tier 1 (granular): TurnRecord.to_log_line() produces stable 1-2 sentence
+    blocks that accumulate without re-processing.
+
+    Tier 2 (deep): At consolidation boundaries, accumulated Tier 1 blocks are
+    consolidated into a dense paragraph via worker_explore (7B).
+    """
+
+    turn_range: tuple[int, int]  # (start_turn, end_turn) inclusive
+    granular_blocks: list[str]   # raw Tier 1 lines preserved for audit
+    consolidated: str            # Tier 2 dense paragraph
+    trigger: str                 # what triggered consolidation
+    timestamp: float = 0.0
+
+    def to_prompt_block(self) -> str:
+        """Compact representation for prompt injection."""
+        return (
+            f"[Turns {self.turn_range[0]}-{self.turn_range[1]} "
+            f"({self.trigger})]\n{self.consolidated}"
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for checkpoint persistence."""
+        return {
+            "turn_range": list(self.turn_range),
+            "granular_blocks": self.granular_blocks,
+            "consolidated": self.consolidated,
+            "trigger": self.trigger,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ConsolidatedSegment":
+        """Deserialize from checkpoint."""
+        return cls(
+            turn_range=tuple(d["turn_range"]),
+            granular_blocks=d["granular_blocks"],
+            consolidated=d["consolidated"],
+            trigger=d.get("trigger", "unknown"),
+            timestamp=d.get("timestamp", 0.0),
+        )
+
+
+def build_granular_summary(record: TurnRecord) -> str:
+    """Tier 1: deterministic 1-2 sentence block from a TurnRecord.
+
+    No LLM call — pure formatting from structured turn data.
+    """
+    return record.to_log_line()
+
+
+def should_consolidate(
+    granular_blocks: list[str],
+    record: TurnRecord,
+    prev_role: str = "",
+) -> str | None:
+    """Check if Tier 2 consolidation should fire.
+
+    Returns the trigger reason string, or None if no consolidation needed.
+    """
+    # Escalation boundary (role change)
+    if record.escalation_target or (prev_role and record.role != prev_role):
+        return "escalation"
+
+    # Sub-task completion (FINAL accepted)
+    if record.outcome == "final":
+        return "final"
+
+    # Block count threshold
+    if len(granular_blocks) >= MAX_GRANULAR_BLOCKS:
+        return "block_limit"
+
+    return None
+
+
+def build_consolidation_prompt(granular_blocks: list[str]) -> str:
+    """Build prompt for Tier 2 deep consolidation via worker_explore."""
+    block_text = "\n".join(granular_blocks)
+    return (
+        "Consolidate this sequence of REPL session events into a dense 2-4 "
+        "sentence paragraph. Preserve: key findings, errors encountered, "
+        "approaches tried, and current state. Drop: redundant details, "
+        "repeated failures, tool call noise. Be specific and factual.\n\n"
+        f"Events ({len(granular_blocks)} entries):\n{block_text}"
+    )
+
+
+async def consolidate_segment(
+    primitives: Any,
+    granular_blocks: list[str],
+    turn_range: tuple[int, int],
+    trigger: str,
+    *,
+    inline: bool = False,
+) -> ConsolidatedSegment:
+    """Run Tier 2 consolidation: LLM call over bounded granular blocks.
+
+    Falls back to concatenated granular blocks if LLM call fails.
+    """
+    import time
+
+    prompt = build_consolidation_prompt(granular_blocks)
+    consolidated_text = ""
+
+    try:
+        if inline:
+            consolidated_text = primitives.llm_call(
+                prompt, role="worker_explore", n_tokens=300,
+            )
+        else:
+            import asyncio
+            consolidated_text = await asyncio.to_thread(
+                primitives.llm_call, prompt,
+                role="worker_explore", n_tokens=300,
+            )
+    except Exception as exc:
+        log.debug("Tier 2 consolidation failed, using granular fallback: %s", exc)
+
+    if not consolidated_text or not consolidated_text.strip():
+        # Fallback: join granular blocks (still shorter than full re-summarization)
+        consolidated_text = "; ".join(granular_blocks)
+
+    return ConsolidatedSegment(
+        turn_range=turn_range,
+        granular_blocks=list(granular_blocks),
+        consolidated=consolidated_text.strip(),
+        trigger=trigger,
+        timestamp=time.time(),
+    )
+
+
+# ---------------------------------------------------------------------------
 # ScratchpadEntry — model-extracted semantic insights
 # ---------------------------------------------------------------------------
 
