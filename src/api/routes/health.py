@@ -109,6 +109,11 @@ async def _probe_core_backends() -> dict[str, Any]:
     for role in core_roles:
         url = server_urls.get(role)
         if url:
+            # Strip "full:" prefix used by ConcurrencyAwareBackend and
+            # take only the first URL from comma-separated lists.
+            if url.startswith("full:"):
+                url = url[len("full:"):]
+            url = url.split(",")[0]
             role_list.append(role)
             tasks.append(_probe_backend(url))
     if not tasks:

@@ -122,6 +122,11 @@ class TaskState:
     # Session scratchpad (model-extracted semantic insights)
     scratchpad_entries: list[Any] = field(default_factory=list)
 
+    # Two-level condensation (CF Phase 1)
+    consolidated_segments: list[Any] = field(default_factory=list)
+    pending_granular_blocks: list[str] = field(default_factory=list)
+    pending_granular_start_turn: int = 0
+
     # Budget controls (Fast-RLM)
     repl_executions: int = 0       # Total REPL execute() calls across all turns
     aggregate_tokens: int = 0      # Cumulative completion tokens across all turns

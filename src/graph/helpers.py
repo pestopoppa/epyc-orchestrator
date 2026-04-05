@@ -1046,12 +1046,19 @@ async def _maybe_refresh_session_summary(state: TaskState, deps: TaskDeps) -> No
     """Regenerate session summary if stale by >= _SESSION_LOG_REGEN_INTERVAL turns."""
     if not state.session_log_path or not state.session_log_records:
         return
+
+    from src.features import features as _get_features
+    use_two_level = _get_features().two_level_condensation
+
+    if use_two_level:
+        await _refresh_two_level_summary(state, deps)
+        return
+
     turns_since = state.turns - state.session_summary_turn
     if turns_since < _SESSION_LOG_REGEN_INTERVAL and state.session_summary_cache:
         return
 
-    from src.features import features
-    use_scratchpad = features().session_scratchpad
+    use_scratchpad = _get_features().session_scratchpad
 
     try:
         from src.graph.session_log import (
@@ -1086,6 +1093,95 @@ async def _maybe_refresh_session_summary(state: TaskState, deps: TaskDeps) -> No
             state.session_summary_cache = build_session_summary_deterministic(
                 state.session_log_records
             )
+
+
+async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
+    """Two-level condensation: accumulate granular blocks, consolidate at boundaries.
+
+    Tier 1: Each turn produces a deterministic log line (no LLM call).
+    Tier 2: At escalation/final/block-limit boundaries, consolidate accumulated
+    granular blocks into a dense paragraph via worker_explore.
+    """
+    from src.graph.session_log import (
+        build_granular_summary,
+        should_consolidate,
+        consolidate_segment,
+    )
+
+    if not state.session_log_records:
+        return
+
+    # Get the latest record (just appended)
+    latest = state.session_log_records[-1]
+
+    # Tier 1: accumulate granular block
+    granular_line = build_granular_summary(latest)
+    state.pending_granular_blocks.append(granular_line)
+    if state.pending_granular_start_turn == 0:
+        state.pending_granular_start_turn = latest.turn
+
+    # Determine previous role for escalation detection
+    prev_role = ""
+    if len(state.session_log_records) >= 2:
+        prev_role = state.session_log_records[-2].role
+
+    # Check consolidation trigger
+    trigger = should_consolidate(
+        state.pending_granular_blocks, latest, prev_role,
+    )
+
+    # Also trigger on compaction threshold
+    if trigger is None:
+        try:
+            from src.config import get_config
+            trigger_ratio = get_config().chat.session_compaction_trigger_ratio
+        except (AttributeError, Exception):
+            trigger_ratio = 0.75
+        # Use char heuristic: if consolidated segments + pending blocks are large
+        total_chars = sum(len(b) for b in state.pending_granular_blocks)
+        if total_chars > 3000:
+            trigger = "context_pressure"
+
+    if trigger and len(state.pending_granular_blocks) >= 2:
+        # Tier 2: consolidate
+        turn_range = (state.pending_granular_start_turn, latest.turn)
+
+        if deps.primitives is not None:
+            segment = await consolidate_segment(
+                deps.primitives,
+                state.pending_granular_blocks,
+                turn_range,
+                trigger,
+                inline=_use_inline_calls_in_tests(),
+            )
+        else:
+            from src.graph.session_log import ConsolidatedSegment
+            import time as _time
+            segment = ConsolidatedSegment(
+                turn_range=turn_range,
+                granular_blocks=list(state.pending_granular_blocks),
+                consolidated="; ".join(state.pending_granular_blocks),
+                trigger=trigger,
+                timestamp=_time.time(),
+            )
+
+        state.consolidated_segments.append(segment)
+        state.pending_granular_blocks = []
+        state.pending_granular_start_turn = 0
+
+    # Build summary from consolidated segments + pending granular blocks
+    parts = ["[Session History — Two-Level]"]
+    for seg in state.consolidated_segments:
+        parts.append(seg.to_prompt_block())
+    if state.pending_granular_blocks:
+        parts.append("[Recent (not yet consolidated)]")
+        for block in state.pending_granular_blocks[-5:]:
+            parts.append(f"  {block}")
+        if len(state.pending_granular_blocks) > 5:
+            parts.insert(-5, f"  ... ({len(state.pending_granular_blocks) - 5} earlier entries)")
+
+    state.session_summary_cache = "\n".join(parts)
+    state.session_summary_turn = state.turns
 
 
 def _session_log_prompt_block(state: TaskState) -> str:

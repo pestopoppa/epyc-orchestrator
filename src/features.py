@@ -217,6 +217,9 @@ class Features:
     self_speculation: bool = False  # Self-speculation with layer-exit draft
     hierarchical_speculation: bool = False  # Hierarchical intermediate verification
 
+    # Two-level condensation (Context-Folding Phase 1)
+    two_level_condensation: bool = False  # Granular + deep consolidation instead of per-2-turn re-summarization
+
     # Context window management (C2/C3/C1)
     accurate_token_counting: bool = False  # Use llama-server /tokenize for exact token counts
     tool_result_clearing: bool = False  # Clear stale <<<TOOL_OUTPUT>>> blocks from last_output
@@ -334,6 +337,7 @@ class Features:
             "skillbank": self.skillbank,
             "worker_call_budget": self.worker_call_budget,
             "task_token_budget": self.task_token_budget,
+            "two_level_condensation": self.two_level_condensation,
             "accurate_token_counting": self.accurate_token_counting,
             "tool_result_clearing": self.tool_result_clearing,
             "reasoning_length_alarm": self.reasoning_length_alarm,
@@ -445,6 +449,7 @@ def get_features(
             "binding_routing": False,  # Enable after routing regression testing
             "worker_call_budget": True,  # Fast-RLM: cap total REPL executions per task
             "task_token_budget": True,  # Fast-RLM: cap cumulative tokens per task
+            "two_level_condensation": False,  # CF Phase 1: enable after quality validation
             "accurate_token_counting": False,  # Enable after /tokenize validation
             "tool_result_clearing": True,  # Enabled for production context pressure relief
             "reasoning_length_alarm": True,  # short-m@k Action 9: retry verbose reasoning
@@ -501,6 +506,7 @@ def get_features(
             "binding_routing": False,  # Disabled in tests by default
             "worker_call_budget": False,  # Disabled in tests by default
             "task_token_budget": False,  # Disabled in tests by default
+            "two_level_condensation": False,  # CF Phase 1: off in tests
             "accurate_token_counting": False,  # Disabled in tests by default
             "tool_result_clearing": False,  # Disabled in tests by default
             "reasoning_length_alarm": False,  # Disabled in tests by default
@@ -566,6 +572,7 @@ def get_features(
         "binding_routing": _feature_flag_bool("BINDING_ROUTING", defaults["binding_routing"]),
         "worker_call_budget": _feature_flag_bool("WORKER_CALL_BUDGET", defaults["worker_call_budget"]),
         "task_token_budget": _feature_flag_bool("TASK_TOKEN_BUDGET", defaults["task_token_budget"]),
+        "two_level_condensation": _feature_flag_bool("TWO_LEVEL_CONDENSATION", defaults["two_level_condensation"]),
         "accurate_token_counting": _feature_flag_bool("ACCURATE_TOKEN_COUNTING", defaults["accurate_token_counting"]),
         "tool_result_clearing": _feature_flag_bool("TOOL_RESULT_CLEARING", defaults["tool_result_clearing"]),
         "reasoning_length_alarm": _feature_flag_bool("REASONING_LENGTH_ALARM", defaults["reasoning_length_alarm"]),
