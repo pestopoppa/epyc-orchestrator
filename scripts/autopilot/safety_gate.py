@@ -57,6 +57,27 @@ class EvalResult:
     def objectives(self) -> tuple[float, float, float, float]:
         return (self.quality, self.speed, -self.cost, self.reliability)
 
+    def to_grep_lines(self, trial_id: int = 0, species: str = "") -> str:
+        """AP-13: Grep-parseable key: value output.
+
+        Designed for `grep 'METRIC' autopilot.log | awk -F': '` extraction.
+        """
+        lines = [
+            f"METRIC trial: {trial_id}",
+            f"METRIC species: {species}",
+            f"METRIC tier: {self.tier}",
+            f"METRIC quality: {self.quality:.4f}",
+            f"METRIC speed: {self.speed:.2f}",
+            f"METRIC cost: {self.cost:.4f}",
+            f"METRIC reliability: {self.reliability:.4f}",
+            f"METRIC n_questions: {self.n_questions}",
+        ]
+        for suite, q in sorted(self.per_suite_quality.items()):
+            lines.append(f"METRIC suite_{suite}: {q:.4f}")
+        for role, frac in sorted(self.routing_distribution.items()):
+            lines.append(f"METRIC route_{role}: {frac:.4f}")
+        return "\n".join(lines)
+
 
 @dataclass
 class Baseline:
