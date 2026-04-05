@@ -304,6 +304,48 @@ def extract_action(text: str) -> dict[str, Any] | None:
 # ── Action Dispatch ──────────────────────────────────────────────
 
 
+def _validate_single_variable(action: dict[str, Any]) -> str | None:
+    """AP-9: Validate that an action proposes a single-variable change.
+
+    Returns an error message if the action violates the single-variable
+    constraint, or None if it passes.
+    """
+    action_type = action.get("type", "")
+
+    if action_type == "prompt_mutation":
+        # Must target exactly one file
+        target = action.get("file", "")
+        if not target:
+            return "prompt_mutation must specify a single target file"
+        if "," in target or ";" in target:
+            return f"prompt_mutation targets multiple files: {target}"
+
+    elif action_type == "code_mutation":
+        target = action.get("file", "")
+        if not target:
+            return "code_mutation must specify a single target file"
+
+    elif action_type == "structural_experiment":
+        flags = action.get("flags", {})
+        if len(flags) > 1:
+            return (
+                f"structural_experiment changes {len(flags)} flags at once "
+                f"({list(flags.keys())}); limit to 1 for clean attribution"
+            )
+
+    elif action_type == "numeric_trial":
+        params = action.get("params", {})
+        # Optuna-suggested params are fine (controlled search), but explicit
+        # multi-param overrides violate single-variable principle
+        if len(params) > 1:
+            return (
+                f"numeric_trial sets {len(params)} params explicitly; "
+                "limit to 1 for clean attribution (Optuna suggestions exempt)"
+            )
+
+    return None
+
+
 def dispatch_action(
     action: dict[str, Any],
     seeder: Seeder,
@@ -320,6 +362,12 @@ def dispatch_action(
 ) -> tuple[EvalResult | None, str]:
     """Execute an action and return (eval_result, species_name)."""
     action_type = action.get("type", "")
+
+    # AP-9: Single-variable scope enforcement
+    scope_err = _validate_single_variable(action)
+    if scope_err:
+        log.warning("AP-9 scope violation: %s — skipping trial", scope_err)
+        return None, action_type
     log.info("Dispatching action: %s", action_type)
 
     if action_type == "seed_batch":
@@ -833,6 +881,9 @@ def _run_loop_inner(
             state["trial_counter"] = trial_counter
             save_state(state)
             continue
+
+        # AP-13: Emit grep-parseable metrics
+        log.info("\n%s", eval_result.to_grep_lines(trial_counter, species_name))
 
         # Safety gate
         verdict = gate.check(eval_result)
