@@ -20,7 +20,8 @@ class SpeciesBudget:
     seeder: float = 0.40  # Default: 40% seeding (backbone)
     numeric_swarm: float = 0.25  # 25% numeric optimization
     prompt_forge: float = 0.20  # 20% prompt mutation
-    structural_lab: float = 0.15  # 15% structural experiments
+    structural_lab: float = 0.10  # 10% structural experiments
+    evolution_manager: float = 0.05  # 5% knowledge distillation
 
     def as_dict(self) -> dict[str, float]:
         return {
@@ -28,15 +29,30 @@ class SpeciesBudget:
             "numeric_swarm": self.numeric_swarm,
             "prompt_forge": self.prompt_forge,
             "structural_lab": self.structural_lab,
+            "evolution_manager": self.evolution_manager,
         }
 
     def normalize(self) -> None:
-        total = self.seeder + self.numeric_swarm + self.prompt_forge + self.structural_lab
+        d = self.as_dict()
+        total = sum(d.values())
         if total > 0:
-            self.seeder /= total
-            self.numeric_swarm /= total
-            self.prompt_forge /= total
-            self.structural_lab /= total
+            for k, v in d.items():
+                setattr(self, k, v / total)
+
+
+# Per-species token budget caps (prevent runaway cost per iteration)
+SPECIES_TOKEN_BUDGETS: dict[str, int] = {
+    "seeder": 50_000,          # API-bound, not token-bound
+    "numeric_swarm": 10_000,   # Optuna is cheap
+    "prompt_forge": 200_000,   # Claude CLI mutation is expensive
+    "structural_lab": 30_000,  # Moderate — training scripts
+    "evolution_manager": 100_000,  # LLM summarization
+}
+
+
+def get_token_budget(species: str) -> int:
+    """Return the token budget cap for a species."""
+    return SPECIES_TOKEN_BUDGETS.get(species, 50_000)
 
 
 class MetaOptimizer:
@@ -69,18 +85,20 @@ class MetaOptimizer:
         # Phase-based adjustments
         if memory_count < 500:
             # Phase: seeding priority
-            self.budget.seeder = 0.60
+            self.budget.seeder = 0.55
             self.budget.numeric_swarm = 0.15
             self.budget.prompt_forge = 0.15
             self.budget.structural_lab = 0.10
+            self.budget.evolution_manager = 0.05
             log.info("Meta: seeding phase (memories=%d < 500)", memory_count)
 
         elif is_converged and memory_count >= 500:
             # Phase: training + structural experiments
-            self.budget.seeder = 0.20
+            self.budget.seeder = 0.15
             self.budget.numeric_swarm = 0.25
             self.budget.prompt_forge = 0.20
-            self.budget.structural_lab = 0.35
+            self.budget.structural_lab = 0.30
+            self.budget.evolution_manager = 0.10
             log.info("Meta: training phase (converged, memories=%d)", memory_count)
 
         else:
@@ -96,6 +114,8 @@ class MetaOptimizer:
                     self.budget.prompt_forge = max(0.10, 0.15 + rate * 0.2)
                 elif species == "structural_lab":
                     self.budget.structural_lab = max(0.05, 0.10 + rate * 0.2)
+                elif species == "evolution_manager":
+                    self.budget.evolution_manager = max(0.03, 0.05 + rate * 0.1)
 
         # Stagnation boost: increase exploration
         if hv_slope < 0.001:

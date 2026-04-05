@@ -343,6 +343,197 @@ def reload_plugins() -> str:
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
 
 
+# ---------------------------------------------------------------------------
+# CC Local Integration — chat delegation tools
+# ---------------------------------------------------------------------------
+
+_ORCHESTRATOR_API_URL = None
+
+
+def _get_api_url() -> str:
+    """Get the orchestrator API base URL from environment."""
+    global _ORCHESTRATOR_API_URL
+    if _ORCHESTRATOR_API_URL is None:
+        import os
+        _ORCHESTRATOR_API_URL = os.environ.get(
+            "ORCHESTRATOR_API_URL", "http://localhost:8000"
+        )
+    return _ORCHESTRATOR_API_URL
+
+
+def _is_mcp_chat_enabled() -> bool:
+    """Check if the claude_code_mcp_chat feature flag is enabled."""
+    import os
+    val = os.environ.get("ORCHESTRATOR_CLAUDE_CODE_MCP_CHAT", "0").lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _post_chat(payload: dict) -> dict:
+    """POST a JSON payload to the orchestrator /chat endpoint.
+
+    Returns parsed JSON response dict, or a dict with 'error' key on failure.
+    """
+    import time
+    import urllib.request
+    import urllib.error
+
+    url = f"{_get_api_url()}/chat"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    timeout_s = payload.get("timeout_s", 120)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s + 5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as exc:
+        return {"error": f"Orchestrator not reachable at {url}: {exc.reason}"}
+    except TimeoutError:
+        return {"error": f"Request timed out after {timeout_s}s"}
+    except json.JSONDecodeError as exc:
+        return {"error": f"Invalid JSON response: {exc}"}
+
+
+def _format_chat_response(resp: dict) -> str:
+    """Format a ChatResponse dict into a readable MCP tool result."""
+    if "error" in resp:
+        return f"Error: {resp['error']}"
+
+    lines = []
+
+    # Answer
+    answer = resp.get("answer", "")
+    if answer:
+        lines.append(answer)
+
+    # Error from orchestrator
+    error_code = resp.get("error_code")
+    if error_code:
+        detail = resp.get("error_detail", "")
+        lines.append(f"\n[Error {error_code}] {detail}")
+
+    # Routing metadata
+    routed_to = resp.get("routed_to", "")
+    strategy = resp.get("routing_strategy", "")
+    mode = resp.get("mode", "")
+    elapsed = resp.get("elapsed_seconds")
+
+    meta_parts = []
+    if routed_to:
+        meta_parts.append(f"role={routed_to}")
+    if strategy:
+        meta_parts.append(f"strategy={strategy}")
+    if mode:
+        meta_parts.append(f"mode={mode}")
+    if elapsed is not None:
+        meta_parts.append(f"elapsed={elapsed:.1f}s")
+
+    if meta_parts:
+        lines.append(f"\n[Routing: {', '.join(meta_parts)}]")
+
+    return "\n".join(lines) if lines else "(empty response)"
+
+
+@mcp.tool()
+def orchestrator_chat(
+    prompt: str,
+    context: str = "",
+    force_role: str = "",
+    force_mode: str = "",
+    timeout_s: int = 120,
+) -> str:
+    """Send a prompt to the local orchestrator for inference via the full routing pipeline.
+
+    Routes through MemRL routing, factual risk scoring, mode selection, and
+    delegation. Requires the orchestrator stack to be running.
+
+    Args:
+        prompt: The user's prompt or question.
+        context: Additional context to include.
+        force_role: Force a specific role (e.g., "architect_coding", "frontdoor").
+                    Empty string uses automatic routing.
+        force_mode: Force a mode ("direct", "repl", "delegated").
+                    Empty string uses automatic selection.
+        timeout_s: Request timeout in seconds (default 120).
+
+    Returns:
+        The model's response with routing metadata.
+    """
+    if not _is_mcp_chat_enabled():
+        return "CC Local integration disabled. Set ORCHESTRATOR_CLAUDE_CODE_MCP_CHAT=1 to enable."
+
+    import time
+
+    payload: dict = {
+        "prompt": prompt,
+        "real_mode": True,
+        "mock_mode": False,
+        "timeout_s": timeout_s,
+        "client_deadline_unix_s": time.time() + timeout_s,
+    }
+    if context:
+        payload["context"] = context
+    if force_role:
+        payload["force_role"] = force_role
+    if force_mode:
+        payload["force_mode"] = force_mode
+
+    resp = _post_chat(payload)
+    return _format_chat_response(resp)
+
+
+@mcp.tool()
+def orchestrator_route_explain(
+    prompt: str,
+    context: str = "",
+) -> str:
+    """Explain how the orchestrator would route a prompt WITHOUT running inference.
+
+    Uses mock mode to execute the routing pipeline (MemRL, risk scoring,
+    mode selection) and return the routing decision without generating a response.
+
+    Args:
+        prompt: The prompt to analyze.
+        context: Additional context to include.
+
+    Returns:
+        Routing analysis showing selected role, strategy, mode, and timeout.
+    """
+    if not _is_mcp_chat_enabled():
+        return "CC Local integration disabled. Set ORCHESTRATOR_CLAUDE_CODE_MCP_CHAT=1 to enable."
+
+    payload: dict = {
+        "prompt": prompt,
+        "real_mode": False,
+        "mock_mode": True,
+    }
+    if context:
+        payload["context"] = context
+
+    resp = _post_chat(payload)
+
+    if "error" in resp:
+        return f"Error: {resp['error']}"
+
+    lines = ["Routing Analysis:"]
+    routed_to = resp.get("routed_to", "unknown")
+    lines.append(f"  Role: {routed_to}")
+    lines.append(f"  Strategy: {resp.get('routing_strategy', 'unknown')}")
+    lines.append(f"  Mode: {resp.get('mode', 'unknown')}")
+    lines.append(f"  Tool required: {resp.get('tool_required', False)}")
+    lines.append(f"  Timeout: {resp.get('timeout_s', '?')}s")
+
+    delegation = resp.get("delegation_success")
+    if delegation is not None:
+        lines.append(f"  Delegation: {'success' if delegation else 'no'}")
+
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     # Initialize plugin loader on startup
     _get_plugin_loader()

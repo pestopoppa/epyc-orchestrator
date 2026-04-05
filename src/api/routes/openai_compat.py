@@ -124,12 +124,19 @@ async def openai_chat_completions(
             context_parts.append(f"{role_label}: {content}")
     context = "\n\n".join(context_parts) if context_parts else None
 
-    # Map model to role
-    role = request.x_orchestrator_role or (
-        Role.FRONTDOOR
-        if request.model in ("orchestrator", "gpt-4", "gpt-3.5-turbo", "claude-3")
-        else request.model
-    )
+    # Map model to role — x_force_model > x_orchestrator_role > model field
+    if request.x_force_model:
+        role = request.x_force_model
+    elif request.x_orchestrator_role:
+        role = request.x_orchestrator_role
+    elif request.model in ("orchestrator", "gpt-4", "gpt-3.5-turbo", "claude-3"):
+        role = Role.FRONTDOOR
+    else:
+        role = request.model
+
+    # Escalation cap and REPL disable flags — pass through to metadata
+    max_escalation = request.x_max_escalation
+    disable_repl = request.x_disable_repl
 
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
     created = int(time.time())
@@ -216,49 +223,60 @@ async def openai_chat_completions(
                     if context:
                         combined_context = f"{context}\n\nUser: {prompt}"
 
-                    # Create REPL environment
-                    repl = REPLEnvironment(
-                        context=combined_context,
-                        llm_primitives=primitives,
-                        tool_registry=state.tool_registry,
-                        script_registry=state.script_registry,
-                        role=role,
-                    )
-
-                    # Run orchestration loop (simplified for streaming)
-                    max_turns = request.max_tokens // 500 if request.max_tokens else 3
-                    max_turns = min(max(max_turns, 1), 5)
-
-                    for turn in range(max_turns):
-                        repl_state = repl.get_state()
-                        root_prompt = build_root_lm_prompt(
-                            state=repl_state,
-                            original_prompt=prompt,
-                            last_output="",
-                            last_error="",
-                            turn=turn,
+                    if disable_repl:
+                        # Direct LLM call — no REPL, no code execution
+                        try:
+                            response_text = primitives.llm_call(
+                                combined_context, role=role,
+                                n_tokens=request.max_tokens,
+                            )
+                        except Exception as e:
+                            response_text = f"[ERROR] Direct call failed: {e}"
+                        total_tokens = primitives.total_tokens_generated
+                    else:
+                        # Create REPL environment
+                        repl = REPLEnvironment(
+                            context=combined_context,
+                            llm_primitives=primitives,
+                            tool_registry=state.tool_registry,
+                            script_registry=state.script_registry,
+                            role=role,
                         )
 
-                        try:
-                            code = primitives.llm_call(root_prompt, role=role, n_tokens=1024)
-                            code = extract_code_from_response(code)
-                            code = auto_wrap_final(code)
-                        except Exception as e:
-                            code = f'FINAL("Error during generation: {e}")'
+                        # Run orchestration loop (simplified for streaming)
+                        max_turns = request.max_tokens // 500 if request.max_tokens else 3
+                        max_turns = min(max(max_turns, 1), 5)
 
-                        # Execute in REPL
-                        result = repl.execute(code)
+                        for turn in range(max_turns):
+                            repl_state = repl.get_state()
+                            root_prompt = build_root_lm_prompt(
+                                state=repl_state,
+                                original_prompt=prompt,
+                                last_output="",
+                                last_error="",
+                                turn=turn,
+                            )
 
-                        if result.is_final:
-                            response_text = result.final_answer or ""
-                            break
-                        elif result.output:
-                            response_text = result.output
-                    else:
-                        # Max turns reached
-                        response_text = response_text or f"[Completed {max_turns} turns]"
+                            try:
+                                code = primitives.llm_call(root_prompt, role=role, n_tokens=1024)
+                                code = extract_code_from_response(code)
+                                code = auto_wrap_final(code)
+                            except Exception as e:
+                                code = f'FINAL("Error during generation: {e}")'
 
-                    total_tokens = primitives.total_tokens_generated
+                            # Execute in REPL
+                            result = repl.execute(code)
+
+                            if result.is_final:
+                                response_text = result.final_answer or ""
+                                break
+                            elif result.output:
+                                response_text = result.output
+                        else:
+                            # Max turns reached
+                            response_text = response_text or f"[Completed {max_turns} turns]"
+
+                        total_tokens = primitives.total_tokens_generated
 
                     # Stream the response character by character (OpenAI format)
                     first_chunk = True
@@ -298,11 +316,16 @@ async def openai_chat_completions(
                 ],
             }
             if request.x_show_routing:
-                final_chunk["x_orchestrator_metadata"] = {
+                meta = {
                     "role": role,
                     "elapsed_seconds": time.perf_counter() - start_time,
                     "tokens": total_tokens,
                 }
+                if max_escalation:
+                    meta["max_escalation"] = max_escalation
+                if disable_repl:
+                    meta["repl_disabled"] = True
+                final_chunk["x_orchestrator_metadata"] = meta
             yield f"data: {json.dumps(final_chunk)}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -335,39 +358,46 @@ async def openai_chat_completions(
                 if context:
                     combined_context = f"{context}\n\nUser: {prompt}"
 
-                repl = REPLEnvironment(
-                    context=combined_context,
-                    llm_primitives=primitives,
-                    tool_registry=state.tool_registry,
-                    script_registry=state.script_registry,
-                    role=role,
-                )
-
-                max_turns = request.max_tokens // 500 if request.max_tokens else 3
-                max_turns = min(max(max_turns, 1), 5)
-
-                response_text = ""
-                for turn in range(max_turns):
-                    repl_state = repl.get_state()
-                    root_prompt = build_root_lm_prompt(
-                        state=repl_state,
-                        original_prompt=prompt,
-                        last_output="",
-                        last_error="",
-                        turn=turn,
+                if disable_repl:
+                    # Direct LLM call — no REPL, no code execution
+                    response_text = primitives.llm_call(
+                        combined_context, role=role,
+                        n_tokens=request.max_tokens,
+                    )
+                else:
+                    repl = REPLEnvironment(
+                        context=combined_context,
+                        llm_primitives=primitives,
+                        tool_registry=state.tool_registry,
+                        script_registry=state.script_registry,
+                        role=role,
                     )
 
-                    code = primitives.llm_call(root_prompt, role=role, n_tokens=1024)
-                    code = extract_code_from_response(code)
-                    code = auto_wrap_final(code)
+                    max_turns = request.max_tokens // 500 if request.max_tokens else 3
+                    max_turns = min(max(max_turns, 1), 5)
 
-                    result = repl.execute(code)
+                    response_text = ""
+                    for turn in range(max_turns):
+                        repl_state = repl.get_state()
+                        root_prompt = build_root_lm_prompt(
+                            state=repl_state,
+                            original_prompt=prompt,
+                            last_output="",
+                            last_error="",
+                            turn=turn,
+                        )
 
-                    if result.is_final:
-                        response_text = result.final_answer or ""
-                        break
-                    elif result.output:
-                        response_text = result.output
+                        code = primitives.llm_call(root_prompt, role=role, n_tokens=1024)
+                        code = extract_code_from_response(code)
+                        code = auto_wrap_final(code)
+
+                        result = repl.execute(code)
+
+                        if result.is_final:
+                            response_text = result.final_answer or ""
+                            break
+                        elif result.output:
+                            response_text = result.output
 
                 total_tokens = primitives.total_tokens_generated
 
@@ -395,6 +425,8 @@ async def openai_chat_completions(
             x_orchestrator_metadata={
                 "role": role,
                 "elapsed_seconds": elapsed,
+                **({"max_escalation": max_escalation} if max_escalation else {}),
+                **({"repl_disabled": True} if disable_repl else {}),
             }
             if request.x_show_routing
             else None,

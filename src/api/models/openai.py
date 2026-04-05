@@ -22,8 +22,26 @@ class OpenAIChatRequest(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=1024, ge=1, le=32768)
     stream: bool = Field(default=False, description="Enable streaming")
-    # Extension fields
-    x_orchestrator_role: str | None = Field(default=None, description="Force specific role")
+    # Extension fields — orchestrator routing overrides
+    x_orchestrator_role: str | None = Field(
+        default=None,
+        description="Force specific orchestrator role, bypassing frontdoor routing. "
+        "Values: any role from /v1/models (e.g. 'architect_coding', 'worker_math').",
+    )
+    x_max_escalation: str | None = Field(
+        default=None,
+        description="Cap escalation tier. Values: 'A' (frontdoor only), 'B1' (coder), "
+        "'B2' (architect), 'C' (worker). Prevents escalation beyond the specified tier.",
+    )
+    x_force_model: str | None = Field(
+        default=None,
+        description="Force a specific model by registry name (e.g. 'architect_qwen2_5_72b'), "
+        "bypassing all routing logic. Takes precedence over x_orchestrator_role.",
+    )
+    x_disable_repl: bool = Field(
+        default=False,
+        description="Skip REPL code execution — force direct text response only.",
+    )
     x_show_routing: bool = Field(default=False, description="Include routing metadata")
 
 

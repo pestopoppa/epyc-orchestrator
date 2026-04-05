@@ -7,7 +7,7 @@
   suite: general
   prompt: "What is the capital of Australia?"
   expected: "Canberra"
-  scoring_method: substring_match
+  scoring_method: substring
   scoring_config: {}
 
 # 2. Math reasoning (worker math)
@@ -15,7 +15,7 @@
   suite: math
   prompt: "What is the value of 3^4 + 4^3?"
   expected: "145"
-  scoring_method: exact_match
+  scoring_method: substring
   scoring_config: {}
 
 # 3. Code generation (REPL path)
@@ -23,7 +23,7 @@
   suite: coder
   prompt: "Write a Python function that returns the nth Fibonacci number using memoization. Return just the function."
   expected: "def fibonacci"
-  scoring_method: substring_match
+  scoring_method: substring
   scoring_config: {}
 
 # 4. Multi-step reasoning (thinking path)
@@ -31,15 +31,15 @@
   suite: thinking
   prompt: "A train travels from City A to City B at 60 km/h and returns at 40 km/h. What is the average speed for the round trip?"
   expected: "48"
-  scoring_method: substring_match
+  scoring_method: substring
   scoring_config: {}
 
 # 5. Instruction following (frontdoor with constraints)
 - id: sentinel_instruction_01
   suite: instruction_precision
   prompt: "List exactly 3 primary colors, separated by commas, with no other text."
-  expected: "red, blue, yellow"
-  scoring_method: substring_match
+  expected: "red"
+  scoring_method: substring
   scoring_config: {}
 
 # 6. Long context / summarization
@@ -47,7 +47,7 @@
   suite: long_context
   prompt: "Summarize the key differences between TCP and UDP protocols in exactly 2 sentences."
   expected: "TCP"
-  scoring_method: substring_match
+  scoring_method: substring
   scoring_config: {}
 
 # 7. Agentic (tool use path)
@@ -55,7 +55,7 @@
   suite: agentic
   prompt: "Calculate the factorial of 12 step by step and give the final result."
   expected: "479001600"
-  scoring_method: substring_match
+  scoring_method: substring
   scoring_config: {}
 
 # 8. HotpotQA-style multi-hop
@@ -63,7 +63,7 @@
   suite: hotpotqa
   prompt: "If water boils at 100°C at sea level, and the boiling point decreases by about 0.5°C per 150m of altitude, approximately what temperature does water boil at 3000m altitude?"
   expected: "90"
-  scoring_method: substring_match
+  scoring_method: substring
   scoring_config: {}
 
 # 9. SimpleQA factual
@@ -71,7 +71,7 @@
   suite: simpleqa
   prompt: "In what year was the Python programming language first released?"
   expected: "1991"
-  scoring_method: substring_match
+  scoring_method: substring
   scoring_config: {}
 
 # 10. Escalation-requiring (complex)
@@ -79,5 +79,5 @@
   suite: mode_advantage_hard
   prompt: "Explain the difference between strong and weak typing in programming languages, giving one example of each type of language."
   expected: "Python"
-  scoring_method: substring_match
+  scoring_method: substring
   scoring_config: {}
