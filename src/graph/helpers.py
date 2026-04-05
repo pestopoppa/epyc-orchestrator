@@ -898,6 +898,19 @@ async def _maybe_compact_context(ctx: Ctx) -> None:
     ):
         should_compact = True
 
+    # B5: Session token budget can also trigger compaction at 70% utilization
+    if not should_compact and _get_features().session_token_budget:
+        try:
+            from src.session_analytics import SessionTokenBudget
+            _budget = SessionTokenBudget.from_env()
+            _budget.input_tokens = state.aggregate_tokens  # approximate
+            _status = _budget.check()
+            if _status.should_compact:
+                should_compact = True
+                log.info("Session token budget triggered compaction at %.0f%%", _status.utilization * 100)
+        except Exception:
+            pass
+
     if not should_compact:
         return
 
@@ -1686,8 +1699,23 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     try:
         _meta = getattr(deps.primitives, "_last_inference_meta", None) or {}
         _completion_tokens = int(_meta.get("tokens", 0))
+        _prompt_tokens = int(_meta.get("prompt_tokens", 0))
         if _completion_tokens > 0:
             state.aggregate_tokens += _completion_tokens
+        # B5: Record tokens in session budget tracker if available
+        if _get_features().session_token_budget:
+            try:
+                _stb = getattr(state, "_session_token_budget", None)
+                if _stb is None:
+                    from src.session_analytics import SessionTokenBudget
+                    _stb = SessionTokenBudget.from_env()
+                    state._session_token_budget = _stb  # type: ignore[attr-defined]
+                _stb.record_tokens(prompt_tokens=_prompt_tokens, completion_tokens=_completion_tokens)
+                _budget_status = _stb.check()
+                if _budget_status.should_stop:
+                    log.warning("B5 session token budget exhausted: %s", _budget_status.message)
+            except Exception:
+                pass
     except Exception:
         pass
 
