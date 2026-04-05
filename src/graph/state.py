@@ -127,6 +127,12 @@ class TaskState:
     pending_granular_blocks: list[str] = field(default_factory=list)
     pending_granular_start_turn: int = 0
 
+    # Segment cache for hash-based dedup (CF Phase 1+)
+    segment_cache: Any = None  # SegmentCache instance, lazily initialized
+
+    # Compaction quality monitor (CF Phase 3b)
+    compaction_quality_monitor: Any = None  # CompactionQualityMonitor instance
+
     # Budget controls (Fast-RLM)
     repl_executions: int = 0       # Total REPL execute() calls across all turns
     aggregate_tokens: int = 0      # Cumulative completion tokens across all turns

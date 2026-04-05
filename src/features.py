@@ -206,6 +206,9 @@ class Features:
     state_history_snapshots: bool = False  # Full TaskState snapshots each turn
     generalized_interrupts: bool = False  # Pluggable interrupt conditions before REPL
 
+    # LangGraph migration Phase 1: hybrid bridge (run_task dispatches to LG backend)
+    langgraph_bridge: bool = False  # Route orchestration through LangGraph instead of pydantic_graph
+
     # Budget controls (Fast-RLM)
     worker_call_budget: bool = False  # Cap total REPL executions per task
     task_token_budget: bool = False   # Cap cumulative tokens across all turns
@@ -220,6 +223,18 @@ class Features:
     # Two-level condensation (Context-Folding Phase 1)
     two_level_condensation: bool = False  # Granular + deep consolidation instead of per-2-turn re-summarization
 
+    # Context-Folding Phase 1+: segment hash dedup cache
+    segment_cache_dedup: bool = False  # Hash-based dedup to skip LLM consolidation on repeated blocks
+
+    # Context-Folding Phase 2c: heuristic helpfulness scoring
+    helpfulness_scoring: bool = False  # Score segments by recency/overlap/outcome for compaction priority
+
+    # Context-Folding Phase 3a: process reward telemetry
+    process_reward_telemetry: bool = False  # Log token_budget_ratio, on_scope, tool_success per turn
+
+    # Context-Folding Phase 3b: role-aware compaction profiles
+    role_aware_compaction: bool = False  # Per-role compaction aggressiveness (architect conservative, worker aggressive)
+
     # Context window management (C2/C3/C1)
     accurate_token_counting: bool = False  # Use llama-server /tokenize for exact token counts
     tool_result_clearing: bool = False  # Clear stale <<<TOOL_OUTPUT>>> blocks from last_output
@@ -227,8 +242,17 @@ class Features:
     # Reasoning length alarm (short-m@k Action 9): retry with conciseness nudge
     reasoning_length_alarm: bool = False  # Cancel + retry when <think> exceeds 1.5× band budget
 
+    # Tool output compression (Phase 2 native): compress verbose output before prompt injection
+    tool_output_compression: bool = False  # Compress pytest/git/build output to preserve actionable info only
+
     # CMV-style output spill (Action 11): write truncated output/error to temp file with peek() pointer
     output_spill_to_file: bool = False  # Spill long REPL output/error to file + retrieval pointer
+
+    # Conversation Management (B-series cherry-picks from Hermes/OpenGauss)
+    injection_scanning: bool = False  # B7: Prompt injection scanning on loaded context
+    context_compression: bool = False  # B2: Protected-zone context compression
+    user_modeling: bool = False  # B1: Cross-session user preference modeling
+    session_token_budget: bool = False  # B5: Per-session token budget with compact/stop signals
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
@@ -274,6 +298,10 @@ class Features:
             errors.append("generalized_interrupts requires approval_gates")
         if self.generalized_interrupts and not self.resume_tokens:
             errors.append("generalized_interrupts requires resume_tokens")
+
+        # User modeling requires injection scanning for write safety
+        if self.user_modeling and not self.injection_scanning:
+            errors.append("user_modeling feature requires injection_scanning feature")
 
         # RestrictedPython requires the library
         if self.restricted_python:
@@ -338,15 +366,25 @@ class Features:
             "worker_call_budget": self.worker_call_budget,
             "task_token_budget": self.task_token_budget,
             "two_level_condensation": self.two_level_condensation,
+            "segment_cache_dedup": self.segment_cache_dedup,
+            "helpfulness_scoring": self.helpfulness_scoring,
+            "process_reward_telemetry": self.process_reward_telemetry,
+            "role_aware_compaction": self.role_aware_compaction,
             "accurate_token_counting": self.accurate_token_counting,
             "tool_result_clearing": self.tool_result_clearing,
             "reasoning_length_alarm": self.reasoning_length_alarm,
+            "tool_output_compression": self.tool_output_compression,
             "output_spill_to_file": self.output_spill_to_file,
             "model_grading": self.model_grading,
             "self_speculation": self.self_speculation,
             "hierarchical_speculation": self.hierarchical_speculation,
             "state_history_snapshots": self.state_history_snapshots,
             "generalized_interrupts": self.generalized_interrupts,
+            "langgraph_bridge": self.langgraph_bridge,
+            "injection_scanning": self.injection_scanning,
+            "context_compression": self.context_compression,
+            "user_modeling": self.user_modeling,
+            "session_token_budget": self.session_token_budget,
             "mock_mode": self.mock_mode,
         }
 
@@ -450,15 +488,25 @@ def get_features(
             "worker_call_budget": True,  # Fast-RLM: cap total REPL executions per task
             "task_token_budget": True,  # Fast-RLM: cap cumulative tokens per task
             "two_level_condensation": False,  # CF Phase 1: enable after quality validation
+            "segment_cache_dedup": False,  # CF Phase 1+: enable after two_level_condensation validated
+            "helpfulness_scoring": False,  # CF Phase 2c: enable after calibration
+            "process_reward_telemetry": False,  # CF Phase 3a: enable after two_level_condensation validated
+            "role_aware_compaction": False,  # CF Phase 3b: enable after helpfulness_scoring validated
             "accurate_token_counting": False,  # Enable after /tokenize validation
             "tool_result_clearing": True,  # Enabled for production context pressure relief
             "reasoning_length_alarm": True,  # short-m@k Action 9: retry verbose reasoning
+            "tool_output_compression": False,  # Phase 2 native: enable after quality validation
             "output_spill_to_file": True,  # CMV Action 11: spill truncated output/error to file
             "model_grading": False,  # Enable after grading spec validation
             "self_speculation": False,  # HSD: self-speculation with layer-exit draft
             "hierarchical_speculation": False,  # HSD: hierarchical intermediate verification
             "state_history_snapshots": False,  # LangGraph pre-migration: full state snapshots
             "generalized_interrupts": False,  # LangGraph pre-migration: pluggable interrupts
+            "langgraph_bridge": False,  # LangGraph Phase 1: off until validated
+            "injection_scanning": True,  # B7: low risk, always scan loaded context
+            "context_compression": False,  # B2: enable after protected-zone quality validation
+            "user_modeling": False,  # B1: enable after profile store + deriver validation
+            "session_token_budget": False,  # B5: enable after budget threshold tuning
             "mock_mode": False,  # Real mode in production
         }
     else:
@@ -507,15 +555,25 @@ def get_features(
             "worker_call_budget": False,  # Disabled in tests by default
             "task_token_budget": False,  # Disabled in tests by default
             "two_level_condensation": False,  # CF Phase 1: off in tests
+            "segment_cache_dedup": False,  # CF Phase 1+: off in tests
+            "helpfulness_scoring": False,  # CF Phase 2c: off in tests
+            "process_reward_telemetry": False,  # CF Phase 3a: off in tests
+            "role_aware_compaction": False,  # CF Phase 3b: off in tests
             "accurate_token_counting": False,  # Disabled in tests by default
             "tool_result_clearing": False,  # Disabled in tests by default
             "reasoning_length_alarm": False,  # Disabled in tests by default
+            "tool_output_compression": False,  # Disabled in tests by default
             "output_spill_to_file": False,  # Disabled in tests by default
             "model_grading": False,  # Disabled in tests by default
             "self_speculation": False,  # HSD: self-speculation with layer-exit draft
             "hierarchical_speculation": False,  # HSD: hierarchical intermediate verification
             "state_history_snapshots": False,  # LangGraph pre-migration: off in tests
             "generalized_interrupts": False,  # LangGraph pre-migration: off in tests
+            "langgraph_bridge": False,  # LangGraph Phase 1: off in tests
+            "injection_scanning": False,  # B7: off in tests
+            "context_compression": False,  # B2: off in tests
+            "user_modeling": False,  # B1: off in tests
+            "session_token_budget": False,  # B5: off in tests
             "mock_mode": True,  # Mock mode in tests
         }
 
@@ -573,15 +631,25 @@ def get_features(
         "worker_call_budget": _feature_flag_bool("WORKER_CALL_BUDGET", defaults["worker_call_budget"]),
         "task_token_budget": _feature_flag_bool("TASK_TOKEN_BUDGET", defaults["task_token_budget"]),
         "two_level_condensation": _feature_flag_bool("TWO_LEVEL_CONDENSATION", defaults["two_level_condensation"]),
+        "segment_cache_dedup": _feature_flag_bool("SEGMENT_CACHE_DEDUP", defaults["segment_cache_dedup"]),
+        "helpfulness_scoring": _feature_flag_bool("HELPFULNESS_SCORING", defaults["helpfulness_scoring"]),
+        "process_reward_telemetry": _feature_flag_bool("PROCESS_REWARD_TELEMETRY", defaults["process_reward_telemetry"]),
+        "role_aware_compaction": _feature_flag_bool("ROLE_AWARE_COMPACTION", defaults["role_aware_compaction"]),
         "accurate_token_counting": _feature_flag_bool("ACCURATE_TOKEN_COUNTING", defaults["accurate_token_counting"]),
         "tool_result_clearing": _feature_flag_bool("TOOL_RESULT_CLEARING", defaults["tool_result_clearing"]),
         "reasoning_length_alarm": _feature_flag_bool("REASONING_LENGTH_ALARM", defaults["reasoning_length_alarm"]),
+        "tool_output_compression": _feature_flag_bool("TOOL_OUTPUT_COMPRESSION", defaults["tool_output_compression"]),
         "output_spill_to_file": _feature_flag_bool("OUTPUT_SPILL_TO_FILE", defaults["output_spill_to_file"]),
         "model_grading": _feature_flag_bool("MODEL_GRADING", defaults["model_grading"]),
         "self_speculation": _feature_flag_bool("SELF_SPECULATION", defaults["self_speculation"]),
         "hierarchical_speculation": _feature_flag_bool("HIERARCHICAL_SPECULATION", defaults["hierarchical_speculation"]),
         "state_history_snapshots": _feature_flag_bool("STATE_HISTORY_SNAPSHOTS", defaults["state_history_snapshots"]),
         "generalized_interrupts": _feature_flag_bool("GENERALIZED_INTERRUPTS", defaults["generalized_interrupts"]),
+        "langgraph_bridge": _feature_flag_bool("LANGGRAPH_BRIDGE", defaults["langgraph_bridge"]),
+        "injection_scanning": _feature_flag_bool("INJECTION_SCANNING", defaults["injection_scanning"]),
+        "context_compression": _feature_flag_bool("CONTEXT_COMPRESSION", defaults["context_compression"]),
+        "user_modeling": _feature_flag_bool("USER_MODELING", defaults["user_modeling"]),
+        "session_token_budget": _feature_flag_bool("SESSION_TOKEN_BUDGET", defaults["session_token_budget"]),
         "mock_mode": _feature_flag_bool("MOCK_MODE", defaults["mock_mode"]),
     }
 

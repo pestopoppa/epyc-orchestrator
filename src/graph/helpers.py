@@ -1146,7 +1146,27 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
         # Tier 2: consolidate
         turn_range = (state.pending_granular_start_turn, latest.turn)
 
-        if deps.primitives is not None:
+        # Phase 1+: check segment cache for dedup
+        from src.graph.session_log import SegmentCache
+        use_cache = _get_features().segment_cache_dedup
+        cached_text = None
+        if use_cache:
+            if state.segment_cache is None:
+                state.segment_cache = SegmentCache()
+            cached_text = state.segment_cache.lookup(state.pending_granular_blocks)
+
+        if cached_text is not None:
+            # Cache hit — skip LLM consolidation
+            from src.graph.session_log import ConsolidatedSegment
+            import time as _time
+            segment = ConsolidatedSegment(
+                turn_range=turn_range,
+                granular_blocks=list(state.pending_granular_blocks),
+                consolidated=cached_text,
+                trigger=trigger + "_cached",
+                timestamp=_time.time(),
+            )
+        elif deps.primitives is not None:
             segment = await consolidate_segment(
                 deps.primitives,
                 state.pending_granular_blocks,
@@ -1154,6 +1174,11 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
                 trigger,
                 inline=_use_inline_calls_in_tests(),
             )
+            # Insert into cache after successful LLM consolidation
+            if use_cache and state.segment_cache is not None:
+                state.segment_cache.insert(
+                    state.pending_granular_blocks, segment.consolidated,
+                )
         else:
             from src.graph.session_log import ConsolidatedSegment
             import time as _time
@@ -1164,10 +1189,63 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
                 trigger=trigger,
                 timestamp=_time.time(),
             )
+            # Also cache fallback consolidations
+            if use_cache and state.segment_cache is not None:
+                state.segment_cache.insert(
+                    state.pending_granular_blocks, segment.consolidated,
+                )
+
+        # Phase 3a: attach reward signals
+        if _get_features().process_reward_telemetry:
+            from src.graph.session_log import compute_reward_signals
+            seg_records = [
+                r for r in state.session_log_records
+                if turn_range[0] <= r.turn <= turn_range[1]
+            ]
+            segment.reward_signals = compute_reward_signals(seg_records)
 
         state.consolidated_segments.append(segment)
         state.pending_granular_blocks = []
         state.pending_granular_start_turn = 0
+
+        # Phase 3b: role-aware compaction of older segments
+        if (
+            _get_features().role_aware_compaction
+            and len(state.consolidated_segments) > 4
+        ):
+            from src.graph.session_log import (
+                get_compaction_profile,
+                segment_helpfulness,
+                prioritized_compaction,
+                CompactionQualityMonitor,
+            )
+            role_str = getattr(state, "current_role", "") or ""
+            profile = get_compaction_profile(role_str)
+
+            # Free zone: preserve most recent segments
+            n_free = max(1, int(len(state.consolidated_segments) * profile.free_zone_ratio))
+            compactable = state.consolidated_segments[:-n_free]
+            free_zone = state.consolidated_segments[-n_free:]
+
+            if compactable and _get_features().helpfulness_scoring:
+                recent_text = "\n".join(state.pending_granular_blocks[-3:])
+                to_compact = []
+                to_keep = []
+                for seg in compactable:
+                    score = segment_helpfulness(seg, state.turns, recent_text)
+                    if score < profile.preserve_threshold:
+                        to_compact.append(seg)
+                    else:
+                        to_keep.append(seg)
+
+                if to_compact:
+                    for seg in to_compact:
+                        first_sentence = seg.consolidated.split(". ")[0] + "."
+                        seg.consolidated = f"[Compacted] {first_sentence}"
+
+                    if state.compaction_quality_monitor is None:
+                        state.compaction_quality_monitor = CompactionQualityMonitor()
+                    state.compaction_quality_monitor.record_compaction(len(to_compact))
 
     # Build summary from consolidated segments + pending granular blocks
     parts = ["[Session History — Two-Level]"]
@@ -1414,12 +1492,28 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
         builder = PromptBuilder(PromptConfig(style=PromptStyle.MINIMAL))
         _prompt_cfg = builder.config
+
+        # Tool output compression (Phase 2 native): compress before spill
+        _output_for_prompt = state.last_output
+        _error_for_prompt = state.last_error
+        if _get_features().tool_output_compression:
+            try:
+                import sys as _sys
+                _root = "/mnt/raid0/llm/epyc-root/scripts/utils"
+                if _root not in _sys.path:
+                    _sys.path.insert(0, _root)
+                from compress_tool_output import compress_tool_output as _compress
+                _output_for_prompt = _compress(state.last_output, state.last_code)
+                _error_for_prompt = _compress(state.last_error, state.last_code)
+            except Exception:
+                log.debug("Tool output compression failed, using raw output", exc_info=True)
+
         # CMV Action 11: spill long output/error to file with peek() pointer
         _spilled_output = _spill_if_truncated(
-            state.last_output, _prompt_cfg.max_output_preview, "output", state,
+            _output_for_prompt, _prompt_cfg.max_output_preview, "output", state,
         )
         _spilled_error = _spill_if_truncated(
-            state.last_error, _prompt_cfg.max_error_preview, "error", state,
+            _error_for_prompt, _prompt_cfg.max_error_preview, "error", state,
         )
         prompt = builder.build_root_lm_prompt(
             state=repl_state,

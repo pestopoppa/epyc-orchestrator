@@ -59,6 +59,11 @@ class TurnRecord:
     nudge_text: str = ""
     escalation_target: str = ""
 
+    # Process reward telemetry (CF Phase 3a)
+    token_budget_ratio: float = 0.0   # tokens_used / tokens_budgeted for this turn
+    on_scope: bool = True             # whether turn stayed on-task (heuristic)
+    tool_success_ratio: float = 1.0   # fraction of tool calls that succeeded
+
     def to_log_line(self) -> str:
         """Compact single-line summary for deterministic fallback."""
         parts = [f"T{self.turn}({self.role})"]
@@ -128,6 +133,7 @@ class ConsolidatedSegment:
     consolidated: str            # Tier 2 dense paragraph
     trigger: str                 # what triggered consolidation
     timestamp: float = 0.0
+    reward_signals: Any = None   # RewardSignals instance (CF Phase 3a), optional
 
     def to_prompt_block(self) -> str:
         """Compact representation for prompt injection."""
@@ -138,24 +144,427 @@ class ConsolidatedSegment:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for checkpoint persistence."""
-        return {
+        d = {
             "turn_range": list(self.turn_range),
             "granular_blocks": self.granular_blocks,
             "consolidated": self.consolidated,
             "trigger": self.trigger,
             "timestamp": self.timestamp,
         }
+        if self.reward_signals is not None:
+            d["reward_signals"] = self.reward_signals.to_dict()
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ConsolidatedSegment":
         """Deserialize from checkpoint."""
+        reward_data = d.get("reward_signals")
+        reward_signals = RewardSignals.from_dict(reward_data) if reward_data else None
         return cls(
             turn_range=tuple(d["turn_range"]),
             granular_blocks=d["granular_blocks"],
             consolidated=d["consolidated"],
             trigger=d.get("trigger", "unknown"),
             timestamp=d.get("timestamp", 0.0),
+            reward_signals=reward_signals,
         )
+
+
+# ---------------------------------------------------------------------------
+# SegmentCache — hash-based dedup for consolidated segments (CF Phase 1+)
+# ---------------------------------------------------------------------------
+
+
+class SegmentCache:
+    """Hash-based dedup cache for consolidated segment text.
+
+    Avoids re-consolidating identical block sequences (e.g. repeated
+    tool outputs like git status, pytest results). The cache key is a
+    SHA-256 hash of normalized block content.
+
+    Lifecycle: per-session, created lazily on TaskState, survives
+    checkpoints via to_dict/from_dict.
+    """
+
+    def __init__(self, max_size: int = 64):
+        self._store: dict[str, str] = {}  # hash -> consolidated text
+        self._max_size = max_size
+        self._hits = 0
+        self._misses = 0
+
+    @staticmethod
+    def normalize(blocks: list[str]) -> str:
+        """Normalize block list for stable hashing.
+
+        Strips whitespace, lowercases, joins with null sentinel.
+        """
+        return "\x00".join(b.strip().lower() for b in blocks)
+
+    @staticmethod
+    def key(normalized: str) -> str:
+        """SHA-256[:16] hash key from normalized text."""
+        return hashlib.sha256(
+            normalized.encode("utf-8", errors="replace")
+        ).hexdigest()[:16]
+
+    def lookup(self, blocks: list[str]) -> str | None:
+        """Check cache for matching consolidated text. Returns None on miss."""
+        norm = self.normalize(blocks)
+        k = self.key(norm)
+        result = self._store.get(k)
+        if result is not None:
+            self._hits += 1
+        else:
+            self._misses += 1
+        return result
+
+    def insert(self, blocks: list[str], consolidated: str) -> None:
+        """Insert consolidated text for block sequence. FIFO eviction at max_size."""
+        norm = self.normalize(blocks)
+        k = self.key(norm)
+        if len(self._store) >= self._max_size and k not in self._store:
+            oldest = next(iter(self._store))
+            del self._store[oldest]
+        self._store[k] = consolidated
+
+    @property
+    def hit_rate(self) -> float:
+        """Cache hit rate as a fraction [0.0, 1.0]."""
+        total = self._hits + self._misses
+        return self._hits / total if total > 0 else 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for checkpoint persistence."""
+        return {
+            "store": dict(self._store),
+            "max_size": self._max_size,
+            "hits": self._hits,
+            "misses": self._misses,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "SegmentCache":
+        """Deserialize from checkpoint."""
+        cache = cls(max_size=d.get("max_size", 64))
+        cache._store = dict(d.get("store", {}))
+        cache._hits = d.get("hits", 0)
+        cache._misses = d.get("misses", 0)
+        return cache
+
+
+# ---------------------------------------------------------------------------
+# RewardSignals — process reward telemetry (CF Phase 3a)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RewardSignals:
+    """Aggregate process reward telemetry for a consolidated segment."""
+
+    avg_token_budget_ratio: float = 0.0
+    scope_adherence: float = 1.0       # fraction of turns on-scope
+    avg_tool_success: float = 1.0
+    advantage: float = 0.0             # position-weighted advantage
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "avg_token_budget_ratio": self.avg_token_budget_ratio,
+            "scope_adherence": self.scope_adherence,
+            "avg_tool_success": self.avg_tool_success,
+            "advantage": self.advantage,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "RewardSignals":
+        return cls(**{k: d.get(k, 0.0) for k in cls.__dataclass_fields__})
+
+
+_OUTCOME_REWARDS = {
+    "ok": 0.5,
+    "final": 1.0,
+    "error": -0.5,
+    "escalation": -0.2,
+    "nudge": -0.1,
+    "silent": 0.0,
+}
+
+
+def segment_advantage(records: list[TurnRecord], gamma: float = 0.95) -> float:
+    """Position-weighted advantage for a sequence of turn records.
+
+    Uses discounted success signal: +1 for final, +0.5 for ok, -0.5 for error.
+    Discount applied from end of segment backward (later turns weighted more).
+    """
+    if not records:
+        return 0.0
+
+    advantage = 0.0
+    discount = 1.0
+    for record in reversed(records):
+        reward = _OUTCOME_REWARDS.get(record.outcome, 0.0)
+        advantage += discount * reward
+        discount *= gamma
+
+    return advantage
+
+
+def compute_reward_signals(records: list[TurnRecord]) -> RewardSignals:
+    """Compute aggregate reward signals from a list of TurnRecords."""
+    if not records:
+        return RewardSignals()
+
+    budget_ratios = [r.token_budget_ratio for r in records if r.token_budget_ratio > 0]
+    on_scope_count = sum(1 for r in records if r.on_scope)
+    tool_ratios = [r.tool_success_ratio for r in records]
+
+    return RewardSignals(
+        avg_token_budget_ratio=(
+            sum(budget_ratios) / len(budget_ratios) if budget_ratios else 0.0
+        ),
+        scope_adherence=on_scope_count / len(records),
+        avg_tool_success=(
+            sum(tool_ratios) / len(tool_ratios) if tool_ratios else 1.0
+        ),
+        advantage=segment_advantage(records),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpfulness Scoring — heuristic segment priority (CF Phase 2c)
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_IDENTIFIER_RE = _re.compile(
+    r'(?:'
+    r'(?:[a-zA-Z_][\w]*(?:\.[\w]+)+)'          # dotted: foo.bar.baz
+    r'|(?:/[\w./-]+\.[\w]+)'                    # file paths: /src/foo.py
+    r'|(?:[a-zA-Z_][\w]*\(\))'                 # function calls: foo()
+    r'|(?:[A-Z][a-zA-Z0-9]+(?:[A-Z][a-zA-Z0-9]+)+)'  # CamelCase: FooBar
+    r')'
+)
+
+
+def extract_identifiers(text: str) -> set[str]:
+    """Parse file paths, function calls, dotted names, CamelCase from text."""
+    return set(_IDENTIFIER_RE.findall(text))
+
+
+def compute_reference_overlap(segment_text: str, recent_text: str) -> float:
+    """Jaccard overlap of identifiers between segment and recent text.
+
+    Returns float in [0.0, 1.0]. Higher means segment is more relevant
+    to recent context.
+    """
+    seg_ids = extract_identifiers(segment_text)
+    recent_ids = extract_identifiers(recent_text)
+    if not seg_ids and not recent_ids:
+        return 0.0
+    union = seg_ids | recent_ids
+    return len(seg_ids & recent_ids) / len(union) if union else 0.0
+
+
+# Content sensitivity patterns (preserve segments matching these)
+_SENSITIVE_PATTERNS = [
+    _re.compile(r"WARNING|CRITICAL|FATAL", _re.IGNORECASE),
+    _re.compile(r"bug_location|constraint_discovered", _re.IGNORECASE),
+    _re.compile(r"(?:API|auth|secret|token|credential)", _re.IGNORECASE),
+]
+
+# Outcome importance weights for helpfulness heuristic
+_OUTCOME_HELPFULNESS = {
+    "ok": 0.3,
+    "error": 0.5,       # errors are informative (what NOT to do)
+    "final": 0.8,       # successful completions very helpful
+    "escalation": 0.6,  # escalation context matters
+    "nudge": 0.2,
+    "silent": 0.1,
+}
+
+
+def segment_helpfulness(
+    segment: ConsolidatedSegment,
+    current_turn: int,
+    recent_text: str = "",
+    *,
+    recency_weight: float = 0.3,
+    overlap_weight: float = 0.3,
+    outcome_weight: float = 0.2,
+    sensitivity_weight: float = 0.2,
+) -> float:
+    """Score a segment's helpfulness for retention priority.
+
+    Returns float in [0.0, 1.0]. Lower scores = compact first.
+
+    Components:
+      - recency: exponential decay based on turn distance
+      - reference_overlap: identifier overlap with recent turns
+      - outcome: average outcome importance of segment's turns
+      - sensitivity: presence of critical/sensitive content
+    """
+    # Recency: gentle decay over turn distance
+    mid_turn = (segment.turn_range[0] + segment.turn_range[1]) / 2
+    distance = max(current_turn - mid_turn, 0)
+    recency = 1.0 / (1.0 + distance * 0.1)
+
+    # Reference overlap
+    overlap = compute_reference_overlap(segment.consolidated, recent_text)
+
+    # Outcome score from granular blocks
+    outcome_scores = []
+    for block in segment.granular_blocks:
+        matched = False
+        for outcome, weight in _OUTCOME_HELPFULNESS.items():
+            if outcome in block.lower():
+                outcome_scores.append(weight)
+                matched = True
+                break
+        if not matched:
+            outcome_scores.append(0.2)
+    avg_outcome = sum(outcome_scores) / len(outcome_scores) if outcome_scores else 0.2
+
+    # Sensitivity: any critical patterns present?
+    sensitivity = 0.0
+    for pat in _SENSITIVE_PATTERNS:
+        if pat.search(segment.consolidated):
+            sensitivity = 1.0
+            break
+
+    return (
+        recency_weight * recency
+        + overlap_weight * overlap
+        + outcome_weight * avg_outcome
+        + sensitivity_weight * sensitivity
+    )
+
+
+def prioritized_compaction(
+    segments: list[ConsolidatedSegment],
+    current_turn: int,
+    recent_text: str = "",
+) -> list[ConsolidatedSegment]:
+    """Return segments sorted by ascending helpfulness (least helpful first).
+
+    Does NOT mutate the input list. Caller decides how many to compact.
+    """
+    scored = [
+        (segment_helpfulness(seg, current_turn, recent_text), seg)
+        for seg in segments
+    ]
+    scored.sort(key=lambda x: x[0])
+    return [seg for _, seg in scored]
+
+
+# ---------------------------------------------------------------------------
+# CompactionProfile — role-aware compaction (CF Phase 3b)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CompactionProfile:
+    """Role-specific compaction parameters.
+
+    Controls how aggressively context is compacted for different
+    orchestration roles. Text-sensitive roles (coder, architect)
+    get conservative profiles; exploratory roles get aggressive.
+    """
+
+    max_compression_level: int = 3       # 1=light, 2=moderate, 3=aggressive
+    free_zone_ratio: float = 0.25        # fraction of segments kept un-compacted
+    preserve_threshold: float = 0.6      # helpfulness score above which to preserve
+    quality_check_interval: int = 5      # consolidations between quality checks
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_compression_level": self.max_compression_level,
+            "free_zone_ratio": self.free_zone_ratio,
+            "preserve_threshold": self.preserve_threshold,
+            "quality_check_interval": self.quality_check_interval,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "CompactionProfile":
+        return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
+
+
+# Default profiles per orchestrator role
+COMPACTION_PROFILES: dict[str, CompactionProfile] = {
+    "architect": CompactionProfile(
+        max_compression_level=1,
+        free_zone_ratio=0.40,
+        preserve_threshold=0.7,
+        quality_check_interval=3,
+    ),
+    "worker_coder": CompactionProfile(
+        max_compression_level=2,
+        free_zone_ratio=0.30,
+        preserve_threshold=0.5,
+        quality_check_interval=5,
+    ),
+    "worker_explore": CompactionProfile(
+        max_compression_level=3,
+        free_zone_ratio=0.20,
+        preserve_threshold=0.4,
+        quality_check_interval=8,
+    ),
+    "worker_fast": CompactionProfile(
+        max_compression_level=3,
+        free_zone_ratio=0.15,
+        preserve_threshold=0.3,
+        quality_check_interval=10,
+    ),
+}
+
+DEFAULT_COMPACTION_PROFILE = CompactionProfile()
+
+
+def get_compaction_profile(role: str) -> CompactionProfile:
+    """Get compaction profile for a role, with fallback to default."""
+    return COMPACTION_PROFILES.get(role, DEFAULT_COMPACTION_PROFILE)
+
+
+@dataclass
+class CompactionQualityMonitor:
+    """Tracks compaction quality metrics over time.
+
+    Monitors whether compaction is discarding segments that turn out
+    to be needed later (referenced in subsequent turns).
+    """
+
+    compactions_performed: int = 0
+    segments_compacted: int = 0
+    post_compaction_references: int = 0   # times compacted content was re-referenced
+    quality_checks: int = 0
+
+    def record_compaction(self, n_segments: int) -> None:
+        self.compactions_performed += 1
+        self.segments_compacted += n_segments
+
+    def record_reference_miss(self) -> None:
+        """A compacted segment's identifiers appeared in a later turn."""
+        self.post_compaction_references += 1
+
+    def record_quality_check(self) -> None:
+        self.quality_checks += 1
+
+    @property
+    def miss_rate(self) -> float:
+        """Fraction of compacted segments later referenced."""
+        if self.segments_compacted == 0:
+            return 0.0
+        return self.post_compaction_references / self.segments_compacted
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "compactions_performed": self.compactions_performed,
+            "segments_compacted": self.segments_compacted,
+            "post_compaction_references": self.post_compaction_references,
+            "quality_checks": self.quality_checks,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "CompactionQualityMonitor":
+        return cls(**{k: d.get(k, 0) for k in cls.__dataclass_fields__})
 
 
 def build_granular_summary(record: TurnRecord) -> str:
@@ -325,6 +734,9 @@ def build_turn_record(
     nudge: str = "",
     escalation_target: str = "",
     tool_calls: list[str] | None = None,
+    token_budget_ratio: float = 0.0,
+    on_scope: bool = True,
+    tool_success_ratio: float = 1.0,
 ) -> TurnRecord:
     """Factory to build a TurnRecord from execution results."""
     # Classify outcome
@@ -356,6 +768,9 @@ def build_turn_record(
         tool_calls=tool_calls or [],
         nudge_text=nudge,
         escalation_target=escalation_target,
+        token_budget_ratio=token_budget_ratio,
+        on_scope=on_scope,
+        tool_success_ratio=tool_success_ratio,
     )
 
 
