@@ -175,6 +175,7 @@ class RoleResult:
     error: str | None = None
     error_type: str = "none"
     tokens_generated: int = 0
+    tool_output_tokens: int = 0  # Estimated tokens from tool outputs (~len/4)
     # Slot-observed decoded token estimate for timed-out infra calls where
     # payload-derived tokens are unavailable (kept separate from tokens_generated).
     tokens_generated_estimate: int = 0

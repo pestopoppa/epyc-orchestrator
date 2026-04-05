@@ -1177,8 +1177,16 @@ def _run_specialist_loop(
         if deleg_repl.tool_registry:
             for inv in deleg_repl.tool_registry.get_invocation_log():
                 tools_called.append(inv.tool_name)
+                # Estimate tool output tokens (~4 chars per token)
+                _output_tokens = 0
+                if inv.success and inv.result is not None:
+                    if isinstance(inv.result, str):
+                        _output_tokens = len(inv.result) // 4
+                    elif isinstance(inv.result, dict):
+                        _output_tokens = len(str(inv.result)) // 4
                 phase_tool_timings.append(
-                    {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms, "success": inv.success}
+                    {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms, "success": inv.success,
+                     "output_tokens": _output_tokens}
                 )
                 # Capture web_research results for Search-R1 reward pipeline
                 if inv.tool_name == "web_research" and inv.success and isinstance(getattr(inv, "result", None), dict):

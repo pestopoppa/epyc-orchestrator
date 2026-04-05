@@ -17,7 +17,7 @@ from typing import Any
 
 
 def compute_tps(resp: dict[str, Any], elapsed: float = 0.0) -> float:
-    """Compute tokens/second from response dict.
+    """Compute tokens/second from response dict (model tokens only).
 
     When *elapsed* (wall-clock seconds) is provided and positive, uses
     ``tokens_generated / elapsed`` for accurate pipeline throughput.
@@ -35,8 +35,48 @@ def compute_tps(resp: dict[str, Any], elapsed: float = 0.0) -> float:
     return 0.0
 
 
-def _tps_str(tps: float) -> str:
-    return f", {tps:.1f} t/s" if tps > 0 else ""
+def compute_effective_tps(resp: dict[str, Any], elapsed: float = 0.0) -> float:
+    """Compute effective tokens/second including tool and delegation output.
+
+    Tools and delegates produce useful tokens that the model would have had
+    to generate itself.  Counting them in the numerator treats tools as
+    throughput amplifiers rather than throughput drags.
+
+    effective_tps = (model_tokens + tool_output_tokens + delegate_tokens) / wall_clock
+
+    Falls back to ``compute_tps`` when no tool/delegation data is present.
+    """
+    model_tokens = int(resp.get("tokens_generated", 0) or 0)
+    tool_tokens = int(resp.get("tool_output_tokens", 0) or 0)
+
+    # Sum delegate tokens from delegation_events
+    delegate_tokens = 0
+    for de in resp.get("delegation_events", []):
+        delegate_tokens += int(de.get("tokens_generated", 0) or 0)
+
+    effective = model_tokens + tool_tokens + delegate_tokens
+    if elapsed > 0 and effective > 0:
+        return effective / elapsed
+
+    # No effective data — fall back to model-only
+    return compute_tps(resp, elapsed)
+
+
+def _tps_str(tps: float, effective_tps: float = 0.0) -> str:
+    if effective_tps > 0 and tps > 0 and abs(effective_tps - tps) > 0.1:
+        return f", {effective_tps:.1f} eff t/s ({tps:.1f} model)"
+    if tps > 0:
+        return f", {tps:.1f} t/s"
+    return ""
+
+
+def _effective_tokens(resp: dict[str, Any]) -> int:
+    """Total effective tokens: model + tool output + delegate output."""
+    total = int(resp.get("tokens_generated", 0) or 0)
+    total += int(resp.get("tool_output_tokens", 0) or 0)
+    for de in resp.get("delegation_events", []):
+        total += int(de.get("tokens_generated", 0) or 0)
+    return total
 
 
 def _token_str(resp: dict[str, Any], status: str) -> str:
@@ -44,6 +84,9 @@ def _token_str(resp: dict[str, Any], status: str) -> str:
     est = int(resp.get("tokens_generated_estimate", 0) or 0)
     if status == "INFRA" and tokens == 0 and est > 0:
         return f"{tokens} tok, est {est} tok"
+    effective = _effective_tokens(resp)
+    if effective > tokens:
+        return f"{effective} eff tok ({tokens} model)"
     return f"{tokens} tok"
 
 
@@ -84,9 +127,10 @@ def format_self_direct(
     """
     status = _status_str(None if infra else passed, error)
     tps = compute_tps(resp, elapsed)
+    eff_tps = compute_effective_tps(resp, elapsed)
     token_info = _token_str(resp, status)
     return [
-        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps)}, {token_info})"
+        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info})"
     ]
 
 
@@ -109,13 +153,14 @@ def format_self_repl(
     """
     status = _status_str(None if infra else passed, error)
     tps = compute_tps(resp, elapsed)
+    eff_tps = compute_effective_tps(resp, elapsed)
     token_info = _token_str(resp, status)
     tools_used = resp.get("tools_used", 0)
     tools_called = resp.get("tools_called", [])
     tool_timings = resp.get("tool_timings", [])
 
     lines = [
-        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps)}, {token_info}, {tools_used} tools)"
+        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info}, {tools_used} tools)"
     ]
     if tools_used > 0 and tools_called:
         lines.append(f"      tools: {', '.join(_dedup_consecutive(tools_called))}")
@@ -134,7 +179,7 @@ def format_architect_result(
     """Format one ARCHITECT result with tools, delegation, and chain.
 
     Output:
-        ARCHITECT → PASS (106.7s, 6.8 t/s, 724 tok)
+        ARCHITECT → PASS (106.7s, 14.0 eff t/s (6.8 model), 1498 eff tok (724 model))
           tools: peek, grep
           peek: 200ms (ok)
           grep: 150ms (ok)
@@ -145,6 +190,7 @@ def format_architect_result(
     """
     status = _status_str(passed, error)
     tps = compute_tps(resp, elapsed)
+    eff_tps = compute_effective_tps(resp, elapsed)
     token_info = _token_str(resp, status)
     tools_used = resp.get("tools_used", 0)
     tools_called = resp.get("tools_called", [])
@@ -153,7 +199,7 @@ def format_architect_result(
     role_history = resp.get("role_history", [])
 
     lines = [
-        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps)}, {token_info})"
+        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info})"
     ]
 
     # Tool list

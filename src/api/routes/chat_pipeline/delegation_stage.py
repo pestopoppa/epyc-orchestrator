@@ -246,6 +246,13 @@ def _execute_delegated(
         if isinstance(t, dict) and t.get("tool_name") == "_web_research_result"
     ]
 
+    # Sum tool output tokens for effective throughput calculation
+    tool_output_tokens = sum(
+        int(t.get("output_tokens", 0) or 0)
+        for t in raw_timings
+        if isinstance(t, dict) and t.get("tool_name") != "_web_research_result"
+    )
+
     return ChatResponse(
         answer=answer,
         turns=1 + loops,
@@ -259,6 +266,7 @@ def _execute_delegated(
         routing_strategy="delegated",
         mode="delegated",
         tokens_generated=primitives.total_tokens_generated,
+        tool_output_tokens=tool_output_tokens,
         formalization_applied=routing.formalization_applied,
         tools_used=delegation_stats.get("tools_used", 0),
         tools_called=delegation_stats.get("tools_called", []),

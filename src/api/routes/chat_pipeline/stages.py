@@ -214,10 +214,18 @@ def _execute_react(
             answer = react_repl.get_state()
         react_tools_used = react_repl._tool_invocations
         if react_repl.tool_registry and hasattr(react_repl.tool_registry, "get_invocation_log"):
-            react_tool_timings = [
-                {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms, "success": inv.success}
-                for inv in react_repl.tool_registry.get_invocation_log()
-            ]
+            react_tool_timings = []
+            for inv in react_repl.tool_registry.get_invocation_log():
+                _output_tokens = 0
+                if inv.success and inv.result is not None:
+                    if isinstance(inv.result, str):
+                        _output_tokens = len(inv.result) // 4
+                    elif isinstance(inv.result, dict):
+                        _output_tokens = len(str(inv.result)) // 4
+                react_tool_timings.append(
+                    {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms,
+                     "success": inv.success, "output_tokens": _output_tokens}
+                )
             react_tools_called = [inv.tool_name for inv in react_repl.tool_registry.get_invocation_log()]
         react_tools_used = max(
             react_tools_used,
@@ -274,6 +282,12 @@ def _execute_react(
         )
 
     cache_stats = primitives.get_cache_stats() if primitives._backends else None
+    # Sum tool output tokens for effective throughput
+    react_tool_output_tokens = sum(
+        int(t.get("output_tokens", 0) or 0)
+        for t in react_tool_timings
+        if isinstance(t, dict)
+    )
     return ChatResponse(
         answer=answer,
         turns=1,
@@ -287,6 +301,7 @@ def _execute_react(
         routing_strategy="react",
         mode="react",
         tokens_generated=primitives.total_tokens_generated,
+        tool_output_tokens=react_tool_output_tokens,
         formalization_applied=routing.formalization_applied,
         tools_used=react_tools_used,
         tools_called=react_tools_called,
