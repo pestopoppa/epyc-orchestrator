@@ -67,6 +67,25 @@ tools:
       - input: {query: "Python asyncio tutorial", max_results: 5}
         description: "Search for Python tutorials"
 
+  web_research:
+    category: web
+    description: "Deep web research: search, fetch top pages, and synthesize with worker models. Returns dense summaries instead of bare snippets."
+    parameters:
+      query: {type: string, required: true, description: "Search query"}
+      max_results: {type: integer, required: false, default: 5, description: "Maximum search results to retrieve"}
+      max_pages: {type: integer, required: false, default: 3, description: "Maximum pages to fetch and synthesize"}
+      domain_filter: {type: string, required: false, description: "Optional domain filter (e.g. docs.python.org)"}
+    returns: {type: object, fields: [sources, metadata]}
+    implementation:
+      type: python
+      module: src.tools.web.research
+      function: web_research
+    permissions: [network]
+    allowed_callers: ["direct", "chain"]
+    examples:
+      - input: {query: "Fulcher & Scott criteria of community identity", max_pages: 3}
+        description: "Research a topic with page synthesis"
+
   fetch_wikipedia:
     category: web
     description: "Fetch Wikipedia article summary"
@@ -844,6 +863,67 @@ tools:
       type: python
       module: orchestration.tools.task_management
       function: tool_budget_override
+    permissions: [compute]
+    allowed_callers: ["direct"]
+    side_effects: ["system_state"]
+
+  # ============ USER MODELING TOOLS (B1) ============
+  user_profile:
+    category: data
+    description: "Retrieve the current user profile (preferences, facts, background)."
+    parameters:
+      user_id: {type: string, required: false, default: "default", description: "User identifier"}
+    returns: {type: string}
+    implementation:
+      type: python
+      module: src.user_modeling.tools
+      function: user_profile
+    permissions: [compute]
+    allowed_callers: ["direct"]
+    side_effects: ["read_only"]
+
+  user_search:
+    category: data
+    description: "Search stored user facts by keyword."
+    parameters:
+      query: {type: string, required: true, description: "Search query (case-insensitive substring)"}
+      user_id: {type: string, required: false, default: "default"}
+    returns: {type: string}
+    implementation:
+      type: python
+      module: src.user_modeling.tools
+      function: user_search
+    permissions: [compute]
+    allowed_callers: ["direct"]
+    side_effects: ["read_only"]
+
+  user_context:
+    category: data
+    description: "Get contextual answer about the user's preferences or background."
+    parameters:
+      question: {type: string, required: true, description: "Question about user preferences"}
+      user_id: {type: string, required: false, default: "default"}
+    returns: {type: string}
+    implementation:
+      type: python
+      module: src.user_modeling.tools
+      function: user_context
+    permissions: [compute]
+    allowed_callers: ["direct"]
+    side_effects: ["read_only"]
+
+  user_conclude:
+    category: data
+    description: "Persist a durable user preference or fact. Scanned for injection safety."
+    parameters:
+      fact: {type: string, required: true, description: "The preference or fact to store"}
+      category: {type: string, required: false, default: "general", description: "One of: general, format, workflow, style, domain"}
+      user_id: {type: string, required: false, default: "default"}
+    returns: {type: string}
+    implementation:
+      type: python
+      module: src.user_modeling.tools
+      function: user_conclude
     permissions: [compute]
     allowed_callers: ["direct"]
     side_effects: ["system_state"]
