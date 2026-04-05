@@ -1,0 +1,710 @@
+"""LangGraph node functions — framework-agnostic wrappers around _execute_turn().
+
+Each function mirrors a pydantic_graph node class from ``src.graph.nodes``.
+They receive OrchestratorState, call the same ``_execute_turn()`` helper,
+mutate state fields, and return a dict update with ``next_node`` set to
+control conditional edges.
+
+Node names used in edges:
+    "frontdoor", "worker", "coder", "coder_escalation",
+    "ingest", "architect", "architect_coding", "__end__"
+"""
+
+from __future__ import annotations
+
+import logging
+from types import SimpleNamespace
+from typing import Any
+
+from langchain_core.runnables import RunnableConfig
+
+from src.escalation import ErrorCategory
+from src.roles import Role
+from src.graph.state import TaskDeps, TaskResult, TaskState
+from src.graph.helpers import (
+    MAX_CONSECUTIVE_NUDGES,
+    _add_evidence,
+    _build_think_harder_config,
+    _check_budget_exceeded,
+    _classify_error,
+    _execute_turn,
+    _log_escalation,
+    _make_end_result,
+    _record_failure,
+    _record_mitigation,
+    _rescue_from_last_output,
+    _resolve_answer,
+    _should_escalate,
+    _should_retry,
+    _should_think_harder,
+)
+from src.graph.langgraph.state import lg_to_task_state, task_state_to_lg
+
+log = logging.getLogger(__name__)
+
+# Sentinel: when next_node is this value, the graph should terminate
+END = "__end__"
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_ctx(state_dict: dict[str, Any], config: RunnableConfig) -> tuple[Any, TaskState, TaskDeps]:
+    """Build a pydantic_graph-compatible context from LangGraph state + config.
+
+    Returns a (ctx, task_state, deps) triple. The ``ctx`` is a SimpleNamespace
+    that duck-types ``GraphRunContext[TaskState, TaskDeps]`` — the same interface
+    ``_execute_turn()`` and helpers consume.
+    """
+    deps: TaskDeps = config.get("configurable", {}).get("deps", TaskDeps())
+
+    # Reconstruct TaskState from LG state dict
+    task_state = TaskState()
+    lg_to_task_state(state_dict, task_state)
+
+    # Restore config constants from configurable
+    configurable = config.get("configurable", {})
+    for attr in (
+        "think_harder_min_expected_roi",
+        "think_harder_min_samples",
+        "think_harder_cooldown_turns",
+        "think_harder_ema_alpha",
+        "think_harder_min_marginal_utility",
+    ):
+        if attr in configurable:
+            setattr(task_state, attr, configurable[attr])
+
+    # Build ctx that matches Ctx = GraphRunContext[TaskState, TaskDeps]
+    ctx = SimpleNamespace(state=task_state, deps=deps)
+    return ctx, task_state, deps
+
+
+def _state_update(task_state: TaskState, next_node: str) -> dict[str, Any]:
+    """Convert mutated TaskState back to a LangGraph state update dict."""
+    update = task_state_to_lg(task_state)
+    update["next_node"] = next_node
+    return update
+
+
+def _record_escalation_role(state: TaskState, role: Role) -> None:
+    """Record role transition and attribute architect prewarm hits."""
+    state.record_role(role)
+    if role not in {Role.ARCHITECT_GENERAL, Role.ARCHITECT_CODING}:
+        return
+    try:
+        from src.services.escalation_prewarmer import get_shared_prewarmer
+        get_shared_prewarmer().record_prewarm_hit(str(role))
+    except Exception as exc:
+        log.debug("Prewarm hit attribution failed for role=%s: %s", role, exc)
+
+
+def _handle_end(ctx, answer: str, success: bool, task_state: TaskState) -> dict[str, Any]:
+    """Create end-of-graph state update.
+
+    Calls ``_make_end_result`` for side effects (evidence recording, workspace
+    update), then builds the terminal state dict.
+    """
+    # _make_end_result produces side effects we need
+    _make_end_result(ctx, answer, success)
+    update = task_state_to_lg(task_state)
+    update["next_node"] = END
+    # Store result in state for extraction by the compiled graph
+    update["_result"] = {
+        "answer": answer,
+        "success": success,
+        "role_history": list(task_state.role_history),
+        "turns": task_state.turns,
+        "delegation_events": list(task_state.delegation_events),
+    }
+    return update
+
+
+# ---------------------------------------------------------------------------
+# Node functions
+# ---------------------------------------------------------------------------
+
+
+async def frontdoor_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+    """Frontdoor node — entry point for unclassified requests.
+
+    Escalates to coder_escalation on failure.
+    """
+    ctx, task_state, deps = _build_ctx(state, config)
+
+    if task_state.turns >= task_state.max_turns:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[Max turns ({task_state.max_turns}) reached]", False, task_state)
+
+    budget_reason = _check_budget_exceeded(ctx)
+    if budget_reason:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[{budget_reason}]", False, task_state)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, Role.FRONTDOOR)
+    task_state.artifacts.update(artifacts)
+
+    if is_final:
+        tool_outputs = artifacts.get("_tool_outputs", [])
+        answer = _resolve_answer(output, tool_outputs)
+        return _handle_end(ctx, answer, True, task_state)
+
+    if error:
+        task_state.consecutive_failures += 1
+        task_state.last_error = error
+        task_state.last_output = output
+        error_cat = _classify_error(error)
+        _record_failure(ctx, error_cat, error)
+
+        if error_cat == ErrorCategory.EARLY_ABORT:
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            from_role = str(task_state.current_role)
+            task_state.record_role(Role.CODER_ESCALATION)
+            _log_escalation(ctx, from_role, str(Role.CODER_ESCALATION), f"Early abort: {error[:100]}")
+            return _state_update(task_state, "coder_escalation")
+
+        if _should_think_harder(ctx, error_cat):
+            task_state.think_harder_attempted = True
+            task_state.think_harder_config = _build_think_harder_config(task_state)
+            return _state_update(task_state, "frontdoor")
+
+        if _should_escalate(ctx, error_cat, Role.CODER_ESCALATION):
+            if task_state.think_harder_attempted:
+                task_state.think_harder_succeeded = False
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            task_state.think_harder_attempted = False
+            from_role = str(task_state.current_role)
+            task_state.record_role(Role.CODER_ESCALATION)
+            _log_escalation(ctx, from_role, str(Role.CODER_ESCALATION),
+                            f"Escalating after {task_state.consecutive_failures} failures")
+            return _state_update(task_state, "coder_escalation")
+
+        if _should_retry(ctx, error_cat):
+            return _state_update(task_state, "frontdoor")
+
+        return _handle_end(ctx, f"[FAILED: {error}]", False, task_state)
+
+    task_state.last_output = output
+    if task_state.think_harder_attempted and task_state.think_harder_succeeded is None:
+        task_state.think_harder_succeeded = True
+    nudge = artifacts.get("_nudge")
+    if nudge:
+        task_state.consecutive_nudges += 1
+        task_state.last_error = nudge
+        if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
+            task_state.consecutive_failures += 1
+            task_state.consecutive_nudges = 0
+            error_cat = _classify_error(nudge)
+            if _should_escalate(ctx, error_cat, Role.CODER_ESCALATION):
+                task_state.escalation_count += 1
+                task_state.consecutive_failures = 0
+                from_role = str(task_state.current_role)
+                task_state.record_role(Role.CODER_ESCALATION)
+                _log_escalation(ctx, from_role, str(Role.CODER_ESCALATION),
+                                f"Escalating after {MAX_CONSECUTIVE_NUDGES} repeated nudges")
+                return _state_update(task_state, "coder_escalation")
+            return _state_update(task_state, "frontdoor")
+    else:
+        task_state.consecutive_failures = 0
+        task_state.consecutive_nudges = 0
+        task_state.last_error = ""
+    return _state_update(task_state, "frontdoor")
+
+
+async def worker_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+    """Worker node for all WORKER_* roles. Escalates to coder_escalation."""
+    ctx, task_state, deps = _build_ctx(state, config)
+
+    if task_state.turns >= task_state.max_turns:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[Max turns ({task_state.max_turns}) reached]", False, task_state)
+
+    budget_reason = _check_budget_exceeded(ctx)
+    if budget_reason:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[{budget_reason}]", False, task_state)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, task_state.current_role)
+    task_state.artifacts.update(artifacts)
+
+    if is_final:
+        tool_outputs = artifacts.get("_tool_outputs", [])
+        answer = _resolve_answer(output, tool_outputs)
+        return _handle_end(ctx, answer, True, task_state)
+
+    if error:
+        task_state.consecutive_failures += 1
+        task_state.last_error = error
+        task_state.last_output = output
+        error_cat = _classify_error(error)
+        _record_failure(ctx, error_cat, error)
+
+        if error_cat == ErrorCategory.EARLY_ABORT:
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            from_role = str(task_state.current_role)
+            task_state.record_role(Role.CODER_ESCALATION)
+            _log_escalation(ctx, from_role, str(Role.CODER_ESCALATION), f"Early abort: {error[:100]}")
+            return _state_update(task_state, "coder_escalation")
+
+        if _should_think_harder(ctx, error_cat):
+            task_state.think_harder_attempted = True
+            task_state.think_harder_config = _build_think_harder_config(task_state)
+            return _state_update(task_state, "worker")
+
+        if _should_escalate(ctx, error_cat, Role.CODER_ESCALATION):
+            if task_state.think_harder_attempted:
+                task_state.think_harder_succeeded = False
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            task_state.think_harder_attempted = False
+            from_role = str(task_state.current_role)
+            task_state.record_role(Role.CODER_ESCALATION)
+            _log_escalation(ctx, from_role, str(Role.CODER_ESCALATION),
+                            f"Escalating after {task_state.consecutive_failures} failures")
+            return _state_update(task_state, "coder_escalation")
+
+        if _should_retry(ctx, error_cat):
+            return _state_update(task_state, "worker")
+
+        return _handle_end(ctx, f"[FAILED: {error}]", False, task_state)
+
+    task_state.consecutive_failures = 0
+    task_state.last_output = output
+    if task_state.think_harder_attempted and task_state.think_harder_succeeded is None:
+        task_state.think_harder_succeeded = True
+    nudge = artifacts.get("_nudge")
+    if nudge:
+        task_state.consecutive_nudges += 1
+        task_state.last_error = nudge
+        if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
+            task_state.consecutive_failures += 1
+            task_state.consecutive_nudges = 0
+            return _state_update(task_state, "worker")
+    else:
+        task_state.consecutive_failures = 0
+        task_state.consecutive_nudges = 0
+        task_state.last_error = ""
+    return _state_update(task_state, "worker")
+
+
+async def coder_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+    """Coder node for THINKING_REASONING. Escalates to architect."""
+    ctx, task_state, deps = _build_ctx(state, config)
+
+    if task_state.turns >= task_state.max_turns:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[Max turns ({task_state.max_turns}) reached]", False, task_state)
+
+    budget_reason = _check_budget_exceeded(ctx)
+    if budget_reason:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[{budget_reason}]", False, task_state)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, task_state.current_role)
+    task_state.artifacts.update(artifacts)
+
+    # Model-initiated escalation
+    if artifacts.get("_escalation_requested"):
+        artifacts.pop("_escalation_target", None)
+        reason = artifacts.pop("_escalation_reason", "Model requested")
+        artifacts.pop("_escalation_requested", None)
+        task_state.escalation_count += 1
+        task_state.consecutive_failures = 0
+        from_role = str(task_state.current_role)
+        _record_escalation_role(task_state, Role.ARCHITECT_GENERAL)
+        _log_escalation(ctx, from_role, str(Role.ARCHITECT_GENERAL), f"Model-initiated: {reason}")
+        return _state_update(task_state, "architect")
+
+    if is_final:
+        tool_outputs = artifacts.get("_tool_outputs", [])
+        answer = _resolve_answer(output, tool_outputs)
+        if task_state.escalation_count > 0:
+            _record_mitigation(ctx, task_state.role_history[-2] if len(task_state.role_history) > 1 else "unknown", str(task_state.current_role))
+        return _handle_end(ctx, answer, True, task_state)
+
+    if error:
+        task_state.consecutive_failures += 1
+        task_state.last_error = error
+        task_state.last_output = output
+        error_cat = _classify_error(error)
+        _record_failure(ctx, error_cat, error)
+
+        if error_cat == ErrorCategory.EARLY_ABORT:
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            from_role = str(task_state.current_role)
+            _record_escalation_role(task_state, Role.ARCHITECT_GENERAL)
+            _log_escalation(ctx, from_role, str(Role.ARCHITECT_GENERAL), f"Early abort: {error[:100]}")
+            return _state_update(task_state, "architect")
+
+        if _should_think_harder(ctx, error_cat):
+            task_state.think_harder_attempted = True
+            task_state.think_harder_config = _build_think_harder_config(task_state)
+            return _state_update(task_state, "coder")
+
+        if _should_escalate(ctx, error_cat, Role.ARCHITECT_GENERAL):
+            if task_state.think_harder_attempted:
+                task_state.think_harder_succeeded = False
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            task_state.think_harder_attempted = False
+            from_role = str(task_state.current_role)
+            _record_escalation_role(task_state, Role.ARCHITECT_GENERAL)
+            _log_escalation(ctx, from_role, str(Role.ARCHITECT_GENERAL),
+                            f"Escalating after {task_state.consecutive_failures} failures")
+            return _state_update(task_state, "architect")
+
+        if _should_retry(ctx, error_cat):
+            return _state_update(task_state, "coder")
+
+        return _handle_end(ctx, f"[FAILED: {error}]", False, task_state)
+
+    task_state.consecutive_failures = 0
+    task_state.last_output = output
+    if task_state.think_harder_attempted and task_state.think_harder_succeeded is None:
+        task_state.think_harder_succeeded = True
+    nudge = artifacts.get("_nudge")
+    if nudge:
+        task_state.consecutive_nudges += 1
+        task_state.last_error = nudge
+        if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
+            task_state.consecutive_failures += 1
+            task_state.consecutive_nudges = 0
+            return _state_update(task_state, "coder")
+    else:
+        task_state.consecutive_failures = 0
+        task_state.consecutive_nudges = 0
+        task_state.last_error = ""
+    return _state_update(task_state, "coder")
+
+
+async def coder_escalation_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+    """Coder escalation node. Escalates to architect_coding."""
+    ctx, task_state, deps = _build_ctx(state, config)
+
+    if task_state.turns >= task_state.max_turns:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[Max turns ({task_state.max_turns}) reached]", False, task_state)
+
+    budget_reason = _check_budget_exceeded(ctx)
+    if budget_reason:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[{budget_reason}]", False, task_state)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, Role.CODER_ESCALATION)
+    task_state.artifacts.update(artifacts)
+
+    if is_final:
+        tool_outputs = artifacts.get("_tool_outputs", [])
+        answer = _resolve_answer(output, tool_outputs)
+        if task_state.escalation_count > 0:
+            _record_mitigation(ctx, task_state.role_history[-2] if len(task_state.role_history) > 1 else "unknown", str(task_state.current_role))
+        return _handle_end(ctx, answer, True, task_state)
+
+    if error:
+        task_state.consecutive_failures += 1
+        task_state.last_error = error
+        task_state.last_output = output
+        error_cat = _classify_error(error)
+        _record_failure(ctx, error_cat, error)
+
+        if error_cat == ErrorCategory.EARLY_ABORT:
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            from_role = str(task_state.current_role)
+            _record_escalation_role(task_state, Role.ARCHITECT_CODING)
+            _log_escalation(ctx, from_role, str(Role.ARCHITECT_CODING), f"Early abort: {error[:100]}")
+            return _state_update(task_state, "architect_coding")
+
+        if _should_think_harder(ctx, error_cat):
+            task_state.think_harder_attempted = True
+            task_state.think_harder_config = _build_think_harder_config(task_state)
+            return _state_update(task_state, "coder_escalation")
+
+        if _should_escalate(ctx, error_cat, Role.ARCHITECT_CODING):
+            if task_state.think_harder_attempted:
+                task_state.think_harder_succeeded = False
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            task_state.think_harder_attempted = False
+            from_role = str(task_state.current_role)
+            _record_escalation_role(task_state, Role.ARCHITECT_CODING)
+            _log_escalation(ctx, from_role, str(Role.ARCHITECT_CODING),
+                            f"Escalating after {task_state.consecutive_failures} failures")
+            return _state_update(task_state, "architect_coding")
+
+        if _should_retry(ctx, error_cat):
+            return _state_update(task_state, "coder_escalation")
+
+        return _handle_end(ctx, f"[FAILED: {error}]", False, task_state)
+
+    task_state.consecutive_failures = 0
+    task_state.last_output = output
+    if task_state.think_harder_attempted and task_state.think_harder_succeeded is None:
+        task_state.think_harder_succeeded = True
+    nudge = artifacts.get("_nudge")
+    if nudge:
+        task_state.consecutive_nudges += 1
+        task_state.last_error = nudge
+        if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
+            task_state.consecutive_failures += 1
+            task_state.consecutive_nudges = 0
+            return _state_update(task_state, "coder_escalation")
+    else:
+        task_state.consecutive_failures = 0
+        task_state.consecutive_nudges = 0
+        task_state.last_error = ""
+    return _state_update(task_state, "coder_escalation")
+
+
+async def ingest_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+    """Ingest node for INGEST_LONG_CONTEXT. Escalates to architect."""
+    ctx, task_state, deps = _build_ctx(state, config)
+
+    if task_state.turns >= task_state.max_turns:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[Max turns ({task_state.max_turns}) reached]", False, task_state)
+
+    budget_reason = _check_budget_exceeded(ctx)
+    if budget_reason:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[{budget_reason}]", False, task_state)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, Role.INGEST_LONG_CONTEXT)
+    task_state.artifacts.update(artifacts)
+
+    if is_final:
+        tool_outputs = artifacts.get("_tool_outputs", [])
+        answer = _resolve_answer(output, tool_outputs)
+        return _handle_end(ctx, answer, True, task_state)
+
+    if error:
+        task_state.consecutive_failures += 1
+        task_state.last_error = error
+        task_state.last_output = output
+        error_cat = _classify_error(error)
+        _record_failure(ctx, error_cat, error)
+
+        if error_cat == ErrorCategory.EARLY_ABORT:
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            from_role = str(task_state.current_role)
+            _record_escalation_role(task_state, Role.ARCHITECT_GENERAL)
+            _log_escalation(ctx, from_role, str(Role.ARCHITECT_GENERAL), f"Early abort: {error[:100]}")
+            return _state_update(task_state, "architect")
+
+        if _should_think_harder(ctx, error_cat):
+            task_state.think_harder_attempted = True
+            task_state.think_harder_config = _build_think_harder_config(task_state)
+            return _state_update(task_state, "ingest")
+
+        if _should_escalate(ctx, error_cat, Role.ARCHITECT_GENERAL):
+            if task_state.think_harder_attempted:
+                task_state.think_harder_succeeded = False
+            task_state.escalation_count += 1
+            task_state.consecutive_failures = 0
+            task_state.think_harder_attempted = False
+            from_role = str(task_state.current_role)
+            _record_escalation_role(task_state, Role.ARCHITECT_GENERAL)
+            _log_escalation(ctx, from_role, str(Role.ARCHITECT_GENERAL),
+                            f"Escalating after {task_state.consecutive_failures} failures")
+            return _state_update(task_state, "architect")
+
+        if _should_retry(ctx, error_cat):
+            return _state_update(task_state, "ingest")
+
+        return _handle_end(ctx, f"[FAILED: {error}]", False, task_state)
+
+    task_state.consecutive_failures = 0
+    task_state.last_output = output
+    if task_state.think_harder_attempted and task_state.think_harder_succeeded is None:
+        task_state.think_harder_succeeded = True
+    nudge = artifacts.get("_nudge")
+    if nudge:
+        task_state.consecutive_nudges += 1
+        task_state.last_error = nudge
+        if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
+            task_state.consecutive_failures += 1
+            task_state.consecutive_nudges = 0
+            return _state_update(task_state, "ingest")
+    else:
+        task_state.consecutive_failures = 0
+        task_state.consecutive_nudges = 0
+        task_state.last_error = ""
+    return _state_update(task_state, "ingest")
+
+
+async def architect_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+    """Architect node — terminal. No further escalation."""
+    ctx, task_state, deps = _build_ctx(state, config)
+
+    if task_state.turns >= task_state.max_turns:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[Max turns ({task_state.max_turns}) reached]", False, task_state)
+
+    budget_reason = _check_budget_exceeded(ctx)
+    if budget_reason:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[{budget_reason}]", False, task_state)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, Role.ARCHITECT_GENERAL)
+    task_state.artifacts.update(artifacts)
+
+    if is_final:
+        tool_outputs = artifacts.get("_tool_outputs", [])
+        answer = _resolve_answer(output, tool_outputs)
+        if task_state.escalation_count > 0:
+            _record_mitigation(ctx, task_state.role_history[-2] if len(task_state.role_history) > 1 else "unknown", str(task_state.current_role))
+        return _handle_end(ctx, answer, True, task_state)
+
+    if error:
+        task_state.consecutive_failures += 1
+        task_state.last_error = error
+        task_state.last_output = output
+        error_cat = _classify_error(error)
+        _record_failure(ctx, error_cat, error)
+
+        if _should_think_harder(ctx, error_cat):
+            task_state.think_harder_attempted = True
+            task_state.think_harder_config = _build_think_harder_config(task_state)
+            return _state_update(task_state, "architect")
+
+        if _should_retry(ctx, error_cat):
+            return _state_update(task_state, "architect")
+
+        _add_evidence(ctx, "explore_fallback", -0.3)
+        return _handle_end(ctx, f"[FAILED: Terminal role {task_state.current_role}: {error}]", False, task_state)
+
+    task_state.consecutive_failures = 0
+    task_state.last_output = output
+    if task_state.think_harder_attempted and task_state.think_harder_succeeded is None:
+        task_state.think_harder_succeeded = True
+    nudge = artifacts.get("_nudge")
+    if nudge:
+        task_state.consecutive_nudges += 1
+        task_state.last_error = nudge
+        if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
+            task_state.consecutive_failures += 1
+            task_state.consecutive_nudges = 0
+            return _state_update(task_state, "architect")
+    else:
+        task_state.consecutive_failures = 0
+        task_state.consecutive_nudges = 0
+        task_state.last_error = ""
+    return _state_update(task_state, "architect")
+
+
+async def architect_coding_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+    """Architect coding node — terminal. No further escalation."""
+    ctx, task_state, deps = _build_ctx(state, config)
+
+    if task_state.turns >= task_state.max_turns:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[Max turns ({task_state.max_turns}) reached]", False, task_state)
+
+    budget_reason = _check_budget_exceeded(ctx)
+    if budget_reason:
+        rescued = _rescue_from_last_output(task_state.last_output)
+        if rescued:
+            return _handle_end(ctx, rescued, True, task_state)
+        return _handle_end(ctx, f"[{budget_reason}]", False, task_state)
+
+    output, error, is_final, artifacts = await _execute_turn(ctx, Role.ARCHITECT_CODING)
+    task_state.artifacts.update(artifacts)
+
+    if is_final:
+        tool_outputs = artifacts.get("_tool_outputs", [])
+        answer = _resolve_answer(output, tool_outputs)
+        if task_state.escalation_count > 0:
+            _record_mitigation(ctx, task_state.role_history[-2] if len(task_state.role_history) > 1 else "unknown", str(task_state.current_role))
+        return _handle_end(ctx, answer, True, task_state)
+
+    if error:
+        task_state.consecutive_failures += 1
+        task_state.last_error = error
+        task_state.last_output = output
+        error_cat = _classify_error(error)
+        _record_failure(ctx, error_cat, error)
+
+        if _should_think_harder(ctx, error_cat):
+            task_state.think_harder_attempted = True
+            task_state.think_harder_config = _build_think_harder_config(task_state)
+            return _state_update(task_state, "architect_coding")
+
+        if _should_retry(ctx, error_cat):
+            return _state_update(task_state, "architect_coding")
+
+        _add_evidence(ctx, "explore_fallback", -0.3)
+        return _handle_end(ctx, f"[FAILED: Terminal role {task_state.current_role}: {error}]", False, task_state)
+
+    task_state.consecutive_failures = 0
+    task_state.last_output = output
+    if task_state.think_harder_attempted and task_state.think_harder_succeeded is None:
+        task_state.think_harder_succeeded = True
+    nudge = artifacts.get("_nudge")
+    if nudge:
+        task_state.consecutive_nudges += 1
+        task_state.last_error = nudge
+        if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
+            task_state.consecutive_failures += 1
+            task_state.consecutive_nudges = 0
+            return _state_update(task_state, "architect_coding")
+    else:
+        task_state.consecutive_failures = 0
+        task_state.consecutive_nudges = 0
+        task_state.last_error = ""
+    return _state_update(task_state, "architect_coding")
+
+
+# ---------------------------------------------------------------------------
+# Node name -> role mapping (for select_start_node equivalent)
+# ---------------------------------------------------------------------------
+
+ROLE_TO_LG_NODE: dict[str, str] = {
+    "frontdoor": "frontdoor",
+    "worker_general": "worker",
+    "worker_math": "worker",
+    "worker_summarize": "worker",
+    "worker_vision": "worker",
+    "toolrunner": "worker",
+    "thinking_reasoning": "coder",
+    "coder_escalation": "coder_escalation",
+    "ingest_long_context": "ingest",
+    "architect_general": "architect",
+    "architect_coding": "architect_coding",
+}
+
+
+def select_start_lg_node(role: str) -> str:
+    """Map a role string to the LangGraph node name."""
+    return ROLE_TO_LG_NODE.get(role, "frontdoor")

@@ -38,6 +38,10 @@ dependencies = [
     # Orchestration graph (escalation flow)
     "pydantic-graph>=0.1.0",
 
+    # LangGraph migration (Phase 1: hybrid bridge alongside pydantic-graph)
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+
     # Utilities
     "psutil>=5.9.0",  # Memory monitoring
     "requests>=2.31.0",
