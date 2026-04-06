@@ -300,23 +300,40 @@ def assess_risk(
     )
 
 
-def get_mode(config: dict[str, Any] | None = None) -> str:
+def get_mode(config: dict[str, Any] | None = None, role: str = "") -> str:
     """Get the current factual-risk mode.
 
     Environment override: ``ORCHESTRATOR_FACTUAL_RISK_MODE`` takes
     precedence over classifier_config.yaml when set.
 
+    Supports "canary" mode (RI-10): probabilistically returns "enforce"
+    for a fraction of requests, filtered by role.
+
     Args:
         config: Optional config override.
+        role: Current routing role (for canary role filtering).
 
     Returns:
         "off", "shadow", or "enforce".
     """
     import os
+    import random
 
     env_mode = os.environ.get("ORCHESTRATOR_FACTUAL_RISK_MODE")
     if env_mode and env_mode in ("off", "shadow", "enforce"):
         return env_mode
     if config is None:
         config = _get_config()
-    return str(config.get("mode", "off"))
+
+    mode = str(config.get("mode", "off"))
+
+    if mode == "canary":
+        # RI-10: Probabilistic canary — enforce for a fraction of requests
+        canary_ratio = float(config.get("canary_ratio", 0.25))
+        canary_roles = config.get("canary_roles", [])
+        # If role filter is set and current role doesn't match, stay in shadow
+        if canary_roles and role and role not in canary_roles:
+            return "shadow"
+        return "enforce" if random.random() < canary_ratio else "shadow"
+
+    return mode

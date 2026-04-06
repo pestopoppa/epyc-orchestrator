@@ -216,7 +216,11 @@ classification_exemplars:
 # Scores prompts for hallucination risk based on input features.
 # Complementary to conformal prediction (which gates on output uncertainty).
 factual_risk:
-  mode: "shadow"  # off|shadow|enforce — shadow since 2026-03-15 (scorer validated, 43 tests)
+  mode: "shadow"  # off|shadow|enforce|canary — shadow since 2026-03-15 (scorer validated, 43 tests)
+  # RI-10 canary: set mode to "canary" and canary_ratio to 0.25 for 25% enforce
+  canary_ratio: 0.25            # fraction of requests that get enforce behavior in canary mode
+  canary_roles:                 # roles that participate in canary (empty = all roles)
+    - "frontdoor"
   threshold_low: 0.3   # below = "low" risk band
   threshold_high: 0.7  # above = "high" risk band
   force_review_high: true       # force plan review for high-risk prompts (Phase 4)
@@ -241,8 +245,11 @@ factual_risk:
 # Informed by OPSDC (arxiv:2603.05433).
 difficulty_signal:
   mode: "shadow"           # off|shadow|enforce — start in shadow for telemetry
-  threshold_easy: 0.3
-  threshold_hard: 0.6
+  # Thresholds recalibrated 2026-04-06 from Package A telemetry (635 requests):
+  # Old: easy<0.3, hard>0.6 → 92.3% easy, 7.7% medium, 0% hard (useless)
+  # New: easy<0.15, hard>0.35 → ~40% easy, ~40% medium, ~20% hard (actionable)
+  threshold_easy: 0.15
+  threshold_hard: 0.35
   feature_weights:
     prompt_length_tokens: 0.15
     multi_step_indicators: 0.20
