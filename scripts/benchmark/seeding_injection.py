@@ -153,6 +153,7 @@ def _inject_3way_rewards_http(
                 tokens_generated if tokens_generated > 0 else tokens_estimate
             ),
             "predicted_tps": action_cost.get("predicted_tps", 0.0),
+            "prompt_eval_ms": action_cost.get("prompt_eval_ms", 0.0),
             "generation_ms": action_cost.get("generation_ms", 0.0),
             "tools_used": action_cost.get("tools_used", 0),
             "backend_task_id": action_cost.get("backend_task_id", 0),

@@ -100,6 +100,50 @@ def _status_str(passed: bool | None, error: str | None) -> str:
     return "FAIL"
 
 
+def _timing_str(resp: dict[str, Any]) -> str:
+    """Format prompt eval and generation timing breakdown with t/s rates.
+
+    Output (both available):  " [prefill=2.3s 1850 pp/s, gen=0.8s 18.5 t/s]"
+    Output (gen only):        " [gen=0.8s 18.5 t/s]"
+    Output (neither):         ""
+    """
+    prompt_ms = float(resp.get("prompt_eval_ms", 0.0) or 0.0)
+    gen_ms = float(resp.get("generation_ms", 0.0) or 0.0)
+    if prompt_ms <= 0 and gen_ms <= 0:
+        return ""
+
+    parts = []
+    if prompt_ms > 0:
+        # Prompt tokens from cache_stats (keyed by role, sum all)
+        cache_stats = resp.get("cache_stats")
+        prompt_tokens = 0
+        if isinstance(cache_stats, dict):
+            for v in cache_stats.values():
+                if isinstance(v, dict):
+                    prompt_tokens += int(v.get("total_prompt_tokens", 0) or 0)
+                elif isinstance(v, (int, float)):
+                    # Flat dict (e.g. total_prompt_tokens at top level)
+                    pass
+            # Fallback: flat dict with total_prompt_tokens at top level
+            if prompt_tokens == 0:
+                prompt_tokens = int(cache_stats.get("total_prompt_tokens", 0) or 0)
+        pp_rate = ""
+        if prompt_tokens > 0:
+            pp_tps = prompt_tokens / (prompt_ms / 1000.0)
+            pp_rate = f" {pp_tps:.0f} pp/s"
+        parts.append(f"prefill={prompt_ms / 1000:.1f}s{pp_rate}")
+
+    if gen_ms > 0:
+        tokens = int(resp.get("tokens_generated", 0) or 0)
+        gen_rate = ""
+        if tokens > 0:
+            gen_tps = tokens / (gen_ms / 1000.0)
+            gen_rate = f" {gen_tps:.1f} t/s"
+        parts.append(f"gen={gen_ms / 1000:.1f}s{gen_rate}")
+
+    return f" [{', '.join(parts)}]"
+
+
 def _dedup_consecutive(items: list[str]) -> list[str]:
     """Deduplicate consecutive repeated items for readability."""
     deduped: list[str] = []
@@ -123,14 +167,15 @@ def format_self_direct(
     """Format SELF:direct result line.
 
     Output:
-        SELF:direct → PASS (4.6s, 23.5 t/s, 85 tok)
+        SELF:direct → PASS (4.6s, 23.5 t/s, 85 tok) [prefill=2.3s 1850 pp/s, gen=2.1s 40.5 t/s]
     """
     status = _status_str(None if infra else passed, error)
     tps = compute_tps(resp, elapsed)
     eff_tps = compute_effective_tps(resp, elapsed)
     token_info = _token_str(resp, status)
+    timing = _timing_str(resp)
     return [
-        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info})"
+        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info}){timing}"
     ]
 
 
@@ -145,7 +190,7 @@ def format_self_repl(
     """Format SELF:repl result with tools and per-tool timing.
 
     Output:
-        SELF:repl → PASS (16.2s, 18.3 t/s, 240 tok, 3 tools)
+        SELF:repl → PASS (16.2s, 18.3 t/s, 240 tok, 3 tools) [prefill=1.5s 2200 pp/s, gen=8.2s 29.3 t/s]
           tools: peek, grep, FINAL
           peek: 120ms (ok)
           grep: 85ms (ok)
@@ -155,12 +200,13 @@ def format_self_repl(
     tps = compute_tps(resp, elapsed)
     eff_tps = compute_effective_tps(resp, elapsed)
     token_info = _token_str(resp, status)
+    timing = _timing_str(resp)
     tools_used = resp.get("tools_used", 0)
     tools_called = resp.get("tools_called", [])
     tool_timings = resp.get("tool_timings", [])
 
     lines = [
-        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info}, {tools_used} tools)"
+        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info}, {tools_used} tools){timing}"
     ]
     if tools_used > 0 and tools_called:
         lines.append(f"      tools: {', '.join(_dedup_consecutive(tools_called))}")
@@ -179,7 +225,7 @@ def format_architect_result(
     """Format one ARCHITECT result with tools, delegation, and chain.
 
     Output:
-        ARCHITECT → PASS (106.7s, 14.0 eff t/s (6.8 model), 1498 eff tok (724 model))
+        ARCHITECT → PASS (106.7s, 14.0 eff t/s (6.8 model), 1498 eff tok (724 model)) [prefill=4.2s 1520 pp/s, gen=95.3s 7.6 t/s]
           tools: peek, grep
           peek: 200ms (ok)
           grep: 150ms (ok)
@@ -192,6 +238,7 @@ def format_architect_result(
     tps = compute_tps(resp, elapsed)
     eff_tps = compute_effective_tps(resp, elapsed)
     token_info = _token_str(resp, status)
+    timing = _timing_str(resp)
     tools_used = resp.get("tools_used", 0)
     tools_called = resp.get("tools_called", [])
     tool_timings = resp.get("tool_timings", [])
@@ -199,7 +246,7 @@ def format_architect_result(
     role_history = resp.get("role_history", [])
 
     lines = [
-        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info})"
+        f"    {action_key} → {status} ({elapsed:.1f}s{_tps_str(tps, eff_tps)}, {token_info}){timing}"
     ]
 
     # Tool list
