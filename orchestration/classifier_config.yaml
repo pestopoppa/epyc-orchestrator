@@ -216,7 +216,7 @@ classification_exemplars:
 # Scores prompts for hallucination risk based on input features.
 # Complementary to conformal prediction (which gates on output uncertainty).
 factual_risk:
-  mode: "shadow"  # off|shadow|enforce|canary — shadow since 2026-03-15 (scorer validated, 43 tests)
+  mode: "canary"  # off|shadow|enforce|canary — canary since 2026-04-06 (25% enforce on frontdoor, RI-10)
   # RI-10 canary: set mode to "canary" and canary_ratio to 0.25 for 25% enforce
   canary_ratio: 0.25            # fraction of requests that get enforce behavior in canary mode
   canary_roles:                 # roles that participate in canary (empty = all roles)
