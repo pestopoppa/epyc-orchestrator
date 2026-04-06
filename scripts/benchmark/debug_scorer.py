@@ -378,7 +378,7 @@ def _score_programmatic(
     min_val = config.get("min_val", 0)
     max_val = config.get("max_val", 0)
     # IFEval adapter uses "count" and "relation" instead of threshold/min_val/max_val
-    count = config.get("count", threshold)
+    count = config.get("count") or threshold or 0
     relation = config.get("relation", "at_least")
 
     answer_stripped = answer.strip()
