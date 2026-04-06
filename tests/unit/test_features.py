@@ -185,10 +185,16 @@ class TestFeaturesSummary:
             "depth_model_overrides", "resume_tokens",
             "approval_gates", "binding_routing", "routing_classifier", "skillbank",
             "worker_call_budget", "task_token_budget",
+            "two_level_condensation", "segment_cache_dedup",
+            "helpfulness_scoring", "process_reward_telemetry", "role_aware_compaction",
             "accurate_token_counting", "tool_result_clearing",
-            "reasoning_length_alarm", "output_spill_to_file",
+            "reasoning_length_alarm", "tool_output_compression", "output_spill_to_file",
             "model_grading", "self_speculation", "hierarchical_speculation",
             "state_history_snapshots", "generalized_interrupts",
+            "langgraph_bridge",
+            "injection_scanning", "context_compression",
+            "user_modeling", "session_token_budget",
+            "claude_code_mcp_chat",
             "mock_mode",
         }
         assert set(s.keys()) == expected_keys

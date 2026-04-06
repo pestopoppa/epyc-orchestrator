@@ -189,6 +189,9 @@ class OrchestratorState(TypedDict, total=False):
     grammar_enforced: bool
     cache_affinity_bonus: float
 
+    # --- Terminal result (set by _handle_end) ---
+    _result: dict[str, Any]
+
     # --- Graph control (internal) ---
     # Which node to execute next — used by conditional edges
     next_node: str
@@ -199,7 +202,10 @@ class OrchestratorState(TypedDict, total=False):
 # ---------------------------------------------------------------------------
 
 # Fields to skip when converting TaskState -> OrchestratorState
-_SKIP_TO_LG = frozenset({"task_manager", "pending_approval"})
+_SKIP_TO_LG = frozenset({
+    "task_manager", "pending_approval",
+    "segment_cache", "compaction_quality_monitor",
+})
 
 # Config constants that moved to LangGraphConfig
 _CONFIG_FIELDS = frozenset({
@@ -209,6 +215,43 @@ _CONFIG_FIELDS = frozenset({
     "think_harder_ema_alpha",
     "think_harder_min_marginal_utility",
 })
+
+
+# Fields with operator.add reducers — nodes must return deltas, not full lists
+APPEND_FIELDS = frozenset({
+    "role_history", "gathered_files", "delegation_events",
+    "context_file_paths", "session_log_records", "scratchpad_entries",
+    "consolidated_segments", "pending_granular_blocks",
+})
+
+
+def snapshot_append_lengths(state_dict: dict[str, Any]) -> dict[str, int]:
+    """Capture current lengths of all append-reducer fields.
+
+    Call at node entry to record baseline lengths. Used by
+    ``state_update_delta()`` to compute deltas.
+    """
+    return {
+        field: len(state_dict.get(field, []))
+        for field in APPEND_FIELDS
+    }
+
+
+def state_update_delta(
+    update: dict[str, Any],
+    snapshot_lengths: dict[str, int],
+) -> dict[str, Any]:
+    """Trim append-reducer fields in a state update dict to deltas only.
+
+    Given a full state dict and the snapshot of list lengths at node entry,
+    slices each append-reducer field to contain only new elements added
+    during this node's execution. This prevents LangGraph's operator.add
+    reducer from duplicating existing elements.
+    """
+    for field, orig_len in snapshot_lengths.items():
+        if field in update and isinstance(update[field], list):
+            update[field] = update[field][orig_len:]
+    return update
 
 
 def task_state_to_lg(state) -> dict[str, Any]:
