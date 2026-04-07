@@ -210,6 +210,21 @@ class EvalTower:
         total_routed = sum(route_counts.values()) or 1
         routing_dist = {k: v / total_routed for k, v in route_counts.items()}
 
+        # AP-16: Instruction token budget
+        instruction_tokens = self._count_instruction_tokens()
+        avg_prompt_tokens = sum(len(r.prompt) // 4 for r in results) / len(results)
+        total_per_request = instruction_tokens + avg_prompt_tokens
+        instruction_ratio = (
+            instruction_tokens / total_per_request if total_per_request > 0 else 0.0
+        )
+        if instruction_ratio > 0.20:
+            log.warning(
+                "AP-16: Instruction token ratio %.1f%% exceeds 20%% threshold "
+                "(%d instruction tokens per request)",
+                instruction_ratio * 100,
+                instruction_tokens,
+            )
+
         return EvalResult(
             tier=tier,
             quality=quality,
@@ -224,7 +239,23 @@ class EvalTower:
                 "total": len(results),
                 "errors": sum(1 for r in results if r.error),
             },
+            instruction_token_count=instruction_tokens,
+            instruction_token_ratio=instruction_ratio,
         )
+
+    def _count_instruction_tokens(self) -> int:
+        """AP-16: Count approximate instruction tokens from .md prompt templates.
+
+        Scans orchestration/prompts/*.md for system prompt templates loaded on
+        each request. Uses ~4 chars/token heuristic (typical for English text
+        with Qwen/Llama tokenizers).
+        """
+        prompts_dir = _orch_root / "orchestration" / "prompts"
+        total_chars = 0
+        if prompts_dir.exists():
+            for md in prompts_dir.rglob("*.md"):
+                total_chars += md.stat().st_size
+        return total_chars // 4
 
     # ── tiered evaluation ────────────────────────────────────────
 

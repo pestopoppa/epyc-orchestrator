@@ -35,6 +35,7 @@ class SafetyVerdict:
     passed: bool
     violations: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)  # AP-14: deficiency categories
 
     def __bool__(self) -> bool:
         return self.passed
@@ -52,6 +53,8 @@ class EvalResult:
     routing_distribution: dict[str, float] = field(default_factory=dict)
     n_questions: int = 0
     details: dict[str, Any] = field(default_factory=dict)
+    instruction_token_count: int = 0  # AP-16: per-request instruction overhead
+    instruction_token_ratio: float = 0.0  # AP-16: instruction_tokens / total_input_tokens
 
     @property
     def objectives(self) -> tuple[float, float, float, float]:
@@ -76,6 +79,9 @@ class EvalResult:
             lines.append(f"METRIC suite_{suite}: {q:.4f}")
         for role, frac in sorted(self.routing_distribution.items()):
             lines.append(f"METRIC route_{role}: {frac:.4f}")
+        # AP-16: Instruction token budget
+        lines.append(f"METRIC instruction_tokens: {self.instruction_token_count}")
+        lines.append(f"METRIC instruction_ratio: {self.instruction_token_ratio:.4f}")
         return "\n".join(lines)
 
 
@@ -137,6 +143,7 @@ class SafetyGate:
         """Run all safety checks on an eval result."""
         violations = []
         warnings = []
+        categories = []  # AP-14: track which checks failed
 
         # 1. Quality floor (tier-aware)
         quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
@@ -144,6 +151,7 @@ class SafetyGate:
             violations.append(
                 f"Quality floor violation: {result.quality:.3f} < {quality_floor} (tier {result.tier})"
             )
+            categories.append("quality_floor")
 
         # 2. Regression vs baseline (relative: allow 5% drop from baseline)
         baseline_q = self.baseline.quality
@@ -154,6 +162,7 @@ class SafetyGate:
                     f"Quality regression: {result.quality:.3f} vs baseline {baseline_q:.3f} "
                     f"({relative_delta:+.1%}, threshold: {REGRESSION_THRESHOLD:+.0%})"
                 )
+                categories.append("regression")
             elif relative_delta < 0:
                 warnings.append(
                     f"Slight quality drop: {result.quality:.3f} vs baseline {baseline_q:.3f} "
@@ -170,6 +179,8 @@ class SafetyGate:
                         f"Suite '{suite}' regression: {suite_delta:+.3f} "
                         f"(threshold: {PER_SUITE_REGRESSION})"
                     )
+                    if "per_suite_regression" not in categories:
+                        categories.append("per_suite_regression")
 
         # 4. Routing diversity
         architect_frac = result.routing_distribution.get("architect", 0.0)
@@ -178,6 +189,7 @@ class SafetyGate:
                 f"Routing diversity violation: {architect_frac:.1%} architect-tier "
                 f"(cap: {ARCHITECT_ROUTING_CAP:.0%})"
             )
+            categories.append("routing_diversity")
 
         # 5. Throughput floor
         if result.speed < self.baseline.frontdoor_speed * 0.8:
@@ -186,6 +198,7 @@ class SafetyGate:
                 f"{self.baseline.frontdoor_speed * 0.8:.1f} t/s "
                 f"(80% of baseline {self.baseline.frontdoor_speed:.1f})"
             )
+            categories.append("throughput")
         elif result.speed < self.baseline.frontdoor_speed * 0.9:
             warnings.append(
                 f"Speed marginal: {result.speed:.1f} t/s "
@@ -196,7 +209,7 @@ class SafetyGate:
         warnings.extend(self._proxy_check(result))
 
         passed = len(violations) == 0
-        verdict = SafetyVerdict(passed=passed, violations=violations, warnings=warnings)
+        verdict = SafetyVerdict(passed=passed, violations=violations, warnings=warnings, categories=categories)
 
         # Track consecutive failures
         if not passed:
