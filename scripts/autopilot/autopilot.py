@@ -124,6 +124,8 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Code: {{"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix", "description": "..."}}
   (Mutate Python code — ONLY files in allowlist: {code_targets})
 - Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
+- Prune: {{"type": "structural_prune", "file": "frontdoor.md", "block": "## Section Name", "description": "..."}}
+  (Delete an instruction block from a .md prompt file — accepted only if quality >= baseline AND instruction_token_ratio decreases)
 - Train: {{"type": "train_routing_models", "min_memories": 500}}
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
@@ -496,6 +498,7 @@ def dispatch_action(
                     abs(size_increase) * 100,
                 )
                 forge.revert_mutation(mutation)
+                state["_dispatch_deficiency"] = "shrinkage"  # AP-14
                 return eval_result, "prompt_forge"
 
         # AP-7: Prompt change accepted — invalidate stale Optuna trials
@@ -577,6 +580,7 @@ def dispatch_action(
                     abs(size_change) * 100,
                 )
                 forge.revert_code_mutation(mutation)
+                state["_dispatch_deficiency"] = "shrinkage"  # AP-14
                 return eval_result, "prompt_forge"
 
         swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
@@ -603,6 +607,62 @@ def dispatch_action(
             # AP-7: Structural change accepted — invalidate stale Optuna trials
             swarm.mark_epoch(f"structural_experiment:{flags}")
 
+        return eval_result, "structural_lab"
+
+    elif action_type == "structural_prune":
+        # AP-17: Block-level deletion from .md prompt files
+        target = action.get("file", "")
+        block_id = action.get("block", "")
+
+        if not target or not block_id:
+            log.warning("structural_prune requires 'file' and 'block'")
+            return None, "structural_lab"
+
+        # Only allow pruning .md files in prompts directory
+        prompts_dir = Path(__file__).resolve().parents[2] / "orchestration" / "prompts"
+        target_path = prompts_dir / target
+        if not target_path.exists() or not target.endswith(".md"):
+            log.warning("Prune target not found or not .md: %s", target_path)
+            return None, "structural_lab"
+
+        original_content = target_path.read_text()
+        pruned_content = lab.prune_block(original_content, block_id)
+        if pruned_content is None or pruned_content == original_content:
+            log.warning("Block '%s' not found in %s", block_id, target)
+            return None, "structural_lab"
+
+        # Save deleted block in action for journal rollback
+        deleted_lines = original_content.split("\n")
+        pruned_lines = pruned_content.split("\n")
+        action["_deleted_block"] = "\n".join(
+            line for line in deleted_lines if line not in pruned_lines
+        )
+
+        # Apply pruning
+        target_path.write_text(pruned_content)
+        pre_ratio = state.get("_last_instruction_ratio", 0.0)
+
+        eval_result = tower.hybrid_eval()
+
+        # Acceptance: safety gate passes AND instruction_token_ratio decreased
+        verdict_result = gate.check(eval_result)
+        ratio_decreased = eval_result.instruction_token_ratio < pre_ratio
+
+        if not verdict_result or not ratio_decreased:
+            reasons = []
+            if not verdict_result:
+                reasons.append(f"safety gate: {verdict_result.violations}")
+            if not ratio_decreased:
+                reasons.append(
+                    f"ratio not decreased: {eval_result.instruction_token_ratio:.4f} "
+                    f">= {pre_ratio:.4f}"
+                )
+            log.warning("Structural prune rejected: %s", "; ".join(reasons))
+            target_path.write_text(original_content)
+            return eval_result, "structural_lab"
+
+        # Accepted — invalidate stale Optuna trials
+        swarm.mark_epoch(f"structural_prune:{target}/{block_id}")
         return eval_result, "structural_lab"
 
     elif action_type == "train_routing_models":
@@ -894,6 +954,7 @@ def _run_loop_inner(
             )
             if gate.should_rollback():
                 log.error("Consecutive failure limit reached, rolling back")
+                state["_dispatch_deficiency"] = "consecutive_failures"  # AP-14
                 # B2: Auto-append failing config to blacklist
                 append_blacklist(
                     action, trial_counter,
@@ -962,7 +1023,25 @@ def _run_loop_inner(
 
         # Extract hypothesis and expected mechanism from action/controller
         hypothesis = action.get("description", "")
-        expected_mechanism = action.get("mutation", "") or action.get("surface", "")
+        # AP-15: Fallback for species that don't provide description
+        if not hypothesis:
+            action_type = action.get("type", "")
+            if action_type == "seed_batch":
+                hypothesis = f"Seed {action.get('n_questions', 10)} questions across {action.get('suites', 'all')}"
+            elif action_type == "numeric_trial":
+                hypothesis = f"Optimize {action.get('surface', 'unknown')} surface"
+            elif action_type == "structural_experiment":
+                hypothesis = f"Toggle flags: {action.get('flags', {})}"
+            elif action_type in ("train_routing_models", "distill_skillbank", "rollback"):
+                hypothesis = action_type.replace("_", " ").title()
+        expected_mechanism = action.get("mutation", "") or action.get("surface", "") or action.get("type", "")
+
+        # AP-14: Extract deficiency category from safety verdict + dispatch side channel
+        deficiency_category = ""
+        if not verdict.passed:
+            deficiency_category = verdict.categories[0] if verdict.categories else ""
+        if not deficiency_category:
+            deficiency_category = state.pop("_dispatch_deficiency", "")
 
         journal.record(
             JournalEntry(
@@ -991,8 +1070,14 @@ def _run_loop_inner(
                 reasoning=json.dumps(action),
                 hypothesis=hypothesis,
                 expected_mechanism=expected_mechanism,
+                deficiency_category=deficiency_category,
+                instruction_token_count=eval_result.instruction_token_count,
+                instruction_token_ratio=eval_result.instruction_token_ratio,
             )
         )
+
+        # AP-16: Track last instruction ratio for structural pruning comparison
+        state["_last_instruction_ratio"] = eval_result.instruction_token_ratio
 
         # ── 6. Meta-learn ───────────────────────────────────────
         if meta.should_rebalance(trial_counter):

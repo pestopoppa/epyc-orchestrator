@@ -10,9 +10,27 @@ import json
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 from io import StringIO
 from pathlib import Path
 from typing import Any
+
+
+class DeficiencyCategory(str, Enum):
+    """Structured failure classification for safety gate violations (AP-14).
+
+    Each category maps to a specific SafetyGate check or dispatch_action guard.
+    Using str mixin for natural JSON serialization in JSONL journal.
+    """
+    QUALITY_FLOOR = "quality_floor"
+    REGRESSION = "regression"
+    PER_SUITE = "per_suite_regression"
+    ROUTING_DIVERSITY = "routing_diversity"
+    THROUGHPUT = "throughput"
+    CONSECUTIVE_FAILURES = "consecutive_failures"
+    CODE_VALIDATION = "code_validation"
+    SHRINKAGE = "shrinkage"
+    REVERT = "revert"
 
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 MAX_TRIALS_PER_FILE = 1000
@@ -58,6 +76,9 @@ class JournalEntry:
     failure_analysis: str = ""
     hypothesis: str = ""
     expected_mechanism: str = ""
+    deficiency_category: str = ""  # AP-14: DeficiencyCategory value or empty
+    instruction_token_count: int = 0  # AP-16: per-request instruction overhead
+    instruction_token_ratio: float = 0.0  # AP-16: instruction_tokens / total_input
 
 
 class ExperimentJournal:
@@ -120,6 +141,9 @@ class ExperimentJournal:
                         failure_analysis=data.get("failure_analysis", ""),
                         hypothesis=data.get("hypothesis", ""),
                         expected_mechanism=data.get("expected_mechanism", ""),
+                        deficiency_category=data.get("deficiency_category", ""),
+                        instruction_token_count=data.get("instruction_token_count", 0),
+                        instruction_token_ratio=data.get("instruction_token_ratio", 0.0),
                     )
                     self._entries.append(entry)
             batch += 1

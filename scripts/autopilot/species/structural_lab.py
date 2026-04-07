@@ -355,6 +355,40 @@ class StructuralLab:
         except Exception:
             return 0
 
+    def prune_block(self, content: str, block_id: str) -> str | None:
+        """AP-17: Remove a heading-delimited block from markdown content.
+
+        block_id is a heading like "## Section Name". Removes from the heading
+        through the next heading at the same or higher level (or end of file).
+        Returns pruned content, or None if block not found.
+        """
+        lines = content.split("\n")
+        block_level = block_id.count("#")
+        block_title = block_id.lstrip("# ").strip()
+
+        start_idx = None
+        end_idx = None
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                level = len(stripped) - len(stripped.lstrip("#"))
+                title = stripped.lstrip("# ").strip()
+                if start_idx is None and title == block_title and level == block_level:
+                    start_idx = i
+                elif start_idx is not None and level <= block_level:
+                    end_idx = i
+                    break
+
+        if start_idx is None:
+            return None
+
+        if end_idx is None:
+            end_idx = len(lines)
+
+        pruned_lines = lines[:start_idx] + lines[end_idx:]
+        return "\n".join(pruned_lines)
+
     def summary(self) -> dict[str, Any]:
         return {
             "memory_count": self._get_memory_count(),
