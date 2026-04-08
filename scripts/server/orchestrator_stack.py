@@ -4,12 +4,15 @@
 Launches all models + orchestrator with granular reload support.
 
 Usage:
-    orchestrator_stack.py start [--hot-only] [--include-warm ROLE...] [--dev]
+    orchestrator_stack.py start [--hot-only] [--include-warm ROLE...] [--only ROLE...] [--dev]
     orchestrator_stack.py stop [--all | COMPONENT...]
     orchestrator_stack.py reload COMPONENT...
     orchestrator_stack.py status
 
 Examples:
+    # Start ONLY specific roles (skip everything else, preserve what's running)
+    ./orchestrator_stack.py start --only worker_vision vision_escalation
+
     # Start HOT models only
     ./orchestrator_stack.py start --hot-only
 
@@ -924,6 +927,7 @@ def build_server_command(
         "-c", context_size,     # Role-aware context size
         "-t", thread_count,     # NUMA-aware thread count (48 for quarter, 96 for node)
         "--flash-attn", "on",   # Flash attention
+        "--jinja",              # Use model's native chat template (enables thinking on Qwen3/3.5)
     ]
 
     # KV cache quantization: reduces KV memory with negligible quality impact.
@@ -1454,10 +1458,44 @@ def cmd_start(args: argparse.Namespace) -> int:
         print("  [OK] All model paths validated")
         print()
 
-    # Kill existing processes on target ports (skip healthy servers)
-    print("[1] Cleaning up existing processes...")
+    # Determine which servers to start
+    servers_to_start = []
+
+    if args.dev:
+        print("[1] Starting in DEV mode (single 0.5B model)...")
+        servers_to_start = [{"port": 8080, "roles": ["dev"]}]
+    elif args.only:
+        # --only: start ONLY the specified roles, nothing else
+        requested = set(args.only)
+        print(f"[1] Selective start: {', '.join(sorted(requested))}")
+        for server in HOT_SERVERS + WARM_SERVERS:
+            if requested & set(server["roles"]):
+                servers_to_start.append(server)
+                print(f"  Including: port {server['port']} ({', '.join(server['roles'])})")
+        if not servers_to_start:
+            print(f"  [!] No servers matched roles: {', '.join(sorted(requested))}")
+            print(f"  Available roles: {', '.join(sorted({r for s in HOT_SERVERS + WARM_SERVERS for r in s['roles']}))}")
+            return 1
+    else:
+        print("[1] Starting HOT servers...")
+        servers_to_start = HOT_SERVERS.copy()
+
+        # Add warm servers if requested
+        if args.include_warm:
+            for warm_server in WARM_SERVERS:
+                for role in warm_server["roles"]:
+                    if role in args.include_warm:
+                        servers_to_start.append(warm_server)
+                        print(f"  Including WARM server: port {warm_server['port']} ({role})")
+                        break
+
+    print()
+
+    # Check target ports — skip healthy, clean up unhealthy
+    target_ports = {s["port"] for s in servers_to_start}
+    print("[2] Checking target ports...")
     already_healthy_ports: set[int] = set()
-    for server in HOT_SERVERS + WARM_SERVERS:
+    for server in servers_to_start:
         port = server["port"]
         if is_port_in_use(port):
             if wait_for_health(port, timeout=3):
@@ -1480,26 +1518,6 @@ def cmd_start(args: argparse.Namespace) -> int:
                 print(f"  [!] Error cleaning port {port}: {e}")
     if already_healthy_ports:
         print(f"  Preserved {len(already_healthy_ports)} healthy server(s)")
-    print()
-
-    # Determine which servers to start
-    servers_to_start = []
-
-    if args.dev:
-        print("[2] Starting in DEV mode (single 0.5B model)...")
-        servers_to_start = [{"port": 8080, "roles": ["dev"]}]
-    else:
-        print("[2] Starting HOT servers...")
-        servers_to_start = HOT_SERVERS.copy()
-
-        # Add warm servers if requested
-        if args.include_warm:
-            for warm_server in WARM_SERVERS:
-                for role in warm_server["roles"]:
-                    if role in args.include_warm:
-                        servers_to_start.append(warm_server)
-                        print(f"  Including WARM server: port {warm_server['port']} ({role})")
-                        break
 
     print()
 
@@ -1557,9 +1575,16 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     print()
 
-    # Start orchestrator (skip if already healthy)
-    print("[4] Starting orchestrator API...")
-    if 8000 in already_healthy_ports:
+    # Start orchestrator (skip if already healthy, or if --only was used for model servers)
+    if args.only:
+        print("[4] Skipping orchestrator API (--only mode)")
+        if wait_for_health(8000, timeout=2):
+            print("  Orchestrator already healthy")
+            state["orchestrator"] = {"port": 8000, "status": "preserved"}
+        else:
+            print("  [i] Orchestrator not running — start separately if needed")
+    elif 8000 in already_healthy_ports:
+        print("[4] Starting orchestrator API...")
         print("  Orchestrator already healthy, skipping")
         state["orchestrator"] = {"port": 8000, "status": "preserved"}
     else:
@@ -1573,7 +1598,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     print()
 
     # Start document formalizer (optional, non-fatal)
-    if not args.dev:
+    if not args.dev and not args.only:
         print("[5] Starting document formalizer (LightOnOCR-2)...")
         info = start_document_formalizer()
         if info:
@@ -2175,6 +2200,9 @@ def main() -> int:
     start_parser = subparsers.add_parser("start", help="Start the stack")
     start_parser.add_argument("--hot-only", action="store_true", help="Start HOT models only")
     start_parser.add_argument("--include-warm", nargs="+", metavar="ROLE", help="Include WARM models")
+    start_parser.add_argument("--only", nargs="+", metavar="ROLE",
+                              help="Start ONLY these roles (skip everything else). "
+                                   "Searches both HOT and WARM server lists.")
     start_parser.add_argument("--dev", action="store_true", help="Dev mode (single 0.5B model)")
     start_parser.add_argument(
         "--profile",
