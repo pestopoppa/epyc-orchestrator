@@ -119,7 +119,6 @@ class VLDescribeAnalyzer(Analyzer):
                 str(self.threads),
                 "--temp",
                 "0.0",
-                "--no-display-prompt",
             ]
 
             # Run inference

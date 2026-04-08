@@ -11,7 +11,11 @@ class OpenAIMessage(BaseModel):
     """OpenAI message format."""
 
     role: str = Field(..., description="Role: system, user, assistant")
-    content: str = Field(..., description="Message content")
+    content: str | list = Field(
+        ...,
+        description="Message content: string or multipart content array "
+        '(e.g. [{"type": "text", "text": "..."}, {"type": "image_url", ...}])',
+    )
 
 
 class OpenAIChatRequest(BaseModel):
