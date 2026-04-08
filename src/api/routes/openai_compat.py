@@ -38,6 +38,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _extract_text(content: str | list) -> str:
+    """Extract text from OpenAI content field (string or multipart array)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
 # Available roles/models
 AVAILABLE_ROLES = [
     "orchestrator",  # Auto-routing via frontdoor
@@ -84,7 +97,7 @@ async def openai_chat_completions(
     if not user_messages:
         raise HTTPException(status_code=400, detail="No user message provided")
 
-    prompt = user_messages[-1].content
+    prompt = _extract_text(user_messages[-1].content)
 
     # Build conversation context from message history
     # B2: Apply context compression on structured messages before flattening
@@ -95,7 +108,7 @@ async def openai_chat_completions(
             from src.context_compression import ContextCompressor
             _compressor = ContextCompressor()
             _result = _compressor.compress(
-                [{"role": m.role, "content": m.content or "",
+                [{"role": m.role, "content": _extract_text(m.content) or "",
                   **({"tool_calls": m.tool_calls} if getattr(m, "tool_calls", None) else {}),
                   **({"tool_call_id": m.tool_call_id} if getattr(m, "tool_call_id", None) else {})}
                  for m in history_messages]
@@ -109,11 +122,11 @@ async def openai_chat_completions(
             history_messages_dicts = _result.messages
         except Exception:
             history_messages_dicts = [
-                {"role": m.role, "content": m.content or ""} for m in history_messages
+                {"role": m.role, "content": _extract_text(m.content) or ""} for m in history_messages
             ]
     else:
         history_messages_dicts = [
-            {"role": m.role, "content": m.content or ""} for m in history_messages
+            {"role": m.role, "content": _extract_text(m.content) or ""} for m in history_messages
         ]
 
     context_parts = []
