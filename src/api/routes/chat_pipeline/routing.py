@@ -281,6 +281,20 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         except Exception:
             pass
 
+    # WS-3: Derive task_type from routed role so cascading tool policy can deny
+    # web tools for reasoning domains. Without this, task_type stays "chat" and
+    # NO_WEB_TASK_TYPES never matches.
+    _ROLE_TO_TASK_TYPE = {
+        "worker_math": "math",
+        "coder_escalation": "coder",
+        "coder_primary": "coder",
+        "thinking_reasoning": "thinking",
+    }
+    _routed_role = str(routing_decision[0]) if routing_decision else ""
+    _derived_task_type = _ROLE_TO_TASK_TYPE.get(_routed_role)
+    if _derived_task_type:
+        task_ir["task_type"] = _derived_task_type
+
     return RoutingResult(
         task_id=task_id,
         task_ir=task_ir,
