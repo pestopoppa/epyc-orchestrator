@@ -81,16 +81,20 @@ def _score_exact_match(
 
     Config:
         extract_pattern: Regex with one capture group to extract the answer.
-            Default: ``#### (\\S+)`` (GSM8K standard).
+            Default: ``<answer>...</answer>`` tag extraction.
+            Legacy fallback: ``#### (\\S+)`` (GSM8K standard).
         normalize: If True, strip whitespace and lowercase both sides.
     """
-    pattern = config.get("extract_pattern", r"####[ \t]*\n?(\S+)")
+    pattern = config.get("extract_pattern", r"<answer>(.*?)</answer>")
     normalize = config.get("normalize", True)
 
     # Try to extract via pattern first
     extracted = _extract_answer(answer, pattern)
     if extracted is None:
-        # Fallback: try to find the expected value anywhere in the last line
+        # Legacy fallback: try #### pattern for backward compatibility
+        extracted = _extract_answer(answer, r"####[ \t]*\n?(\S+)")
+    if extracted is None:
+        # Last resort: try to find the expected value anywhere in the last line
         last_line = answer.strip().split("\n")[-1]
         extracted = last_line.strip()
 
@@ -499,24 +503,26 @@ def _score_f1(
     A prediction is considered correct if F1 >= threshold.
 
     Config:
-        extract_pattern: Regex to extract answer (default: #### pattern).
+        extract_pattern: Regex to extract answer (default: <answer> tag).
         threshold: Minimum F1 to count as correct (default: 0.5).
         normalize: Whether to normalize text (default: True).
     """
-    pattern = config.get("extract_pattern", r"####[ \t]*\n?(.+)")
+    pattern = config.get("extract_pattern", r"<answer>(.*?)</answer>")
     threshold = config.get("threshold", 0.5)
     normalize = config.get("normalize", True)
 
-    # Extract answer if pattern provided.
-    # For #### patterns, find the LAST occurrence — models often emit
-    # #### before explanation then #### before the final answer.
-    # Pattern allows optional newline after #### to handle models that
-    # put the marker and answer on separate lines.
-    matches = re.findall(pattern, answer, re.IGNORECASE)
+    # Extract answer: find the LAST occurrence — models may emit
+    # the tag multiple times before settling on a final answer.
+    matches = re.findall(pattern, answer, re.IGNORECASE | re.DOTALL)
     if matches:
         extracted = matches[-1].strip()
     else:
-        extracted = _extract_answer(answer, pattern)
+        # Legacy fallback: try #### pattern for backward compatibility
+        legacy_matches = re.findall(r"####[ \t]*\n?(.+)", answer, re.IGNORECASE)
+        if legacy_matches:
+            extracted = legacy_matches[-1].strip()
+        else:
+            extracted = _extract_answer(answer, pattern)
     if extracted is None:
         # Fallback: use last non-empty line
         lines = [ln.strip() for ln in answer.strip().split("\n") if ln.strip()]

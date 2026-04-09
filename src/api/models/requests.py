@@ -89,6 +89,12 @@ class ChatRequest(BaseModel):
         description="Admission priority: 'interactive' (default) or 'background'. "
         "Interactive requests are prioritized at backend admission gates.",
     )
+    stop_sequences: list[str] | None = Field(
+        default=None,
+        description="Additional stop sequences to halt generation. "
+        "Merged with any pipeline-default stop sequences (e.g. QWEN_STOP). "
+        "Used by benchmark seeding to stop after answer tags.",
+    )
 
 
 class RewardRequest(BaseModel):

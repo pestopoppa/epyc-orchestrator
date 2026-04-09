@@ -97,13 +97,19 @@ def _execute_direct(
             + direct_prompt
         )
 
+    # Merge default stop sequences with any request-level overrides
+    # (e.g. benchmark seeding passes "</answer>" to halt after answer tags).
+    stop_seqs = ["\n\n\n", QWEN_STOP, "</answer>"]
+    if request.stop_sequences:
+        stop_seqs = list(dict.fromkeys(stop_seqs + request.stop_sequences))
+
     try:
         answer = primitives.llm_call(
             direct_prompt,
             role=str(initial_role),
             n_tokens=default_tokens,
             skip_suffix=True,
-            stop_sequences=["\n\n\n", QWEN_STOP],
+            stop_sequences=stop_seqs,
         )
         answer = answer.strip()
     except Exception as e:
@@ -151,7 +157,7 @@ def _execute_direct(
                 role=str(initial_role),
                 n_tokens=retry_tokens,
                 skip_suffix=True,
-                stop_sequences=["\n\n\n", QWEN_STOP],
+                stop_sequences=stop_seqs,
             )
             answer = answer.strip()
         except Exception as e2:

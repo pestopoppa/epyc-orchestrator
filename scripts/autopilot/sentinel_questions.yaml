@@ -130,14 +130,14 @@
 
 - id: sentinel_math_02
   suite: math
-  prompt: "Nik has 200 crayons. He wants to separate them into groups of 8 and put them into boxes. Each box weighs 8 ounces. Each crayon weighs 1 ounce. If he puts all of his crayons into boxes, what is the total weight, in pounds, of the crayons and the boxes, when there are 16 ounces to a pound?\n\nSolve step by step. Put your final numeric answer after ####."
+  prompt: "Nik has 200 crayons. He wants to separate them into groups of 8 and put them into boxes. Each box weighs 8 ounces. Each crayon weighs 1 ounce. If he puts all of his crayons into boxes, what is the total weight, in pounds, of the crayons and the boxes, when there are 16 ounces to a pound?\n\nSolve step by step. Put your final numeric answer inside <answer></answer> tags."
   expected: "25"
   scoring_method: exact_match
   scoring_config: {}
 
 - id: sentinel_math_03
   suite: math
-  prompt: "There are 26 countries in South America and, in each country, there are 5 cities with 1000 people living in each city. If the whole population lives in these cities, how many people are there in South America?\n\nSolve step by step. Put your final numeric answer after ####."
+  prompt: "There are 26 countries in South America and, in each country, there are 5 cities with 1000 people living in each city. If the whole population lives in these cities, how many people are there in South America?\n\nSolve step by step. Put your final numeric answer inside <answer></answer> tags."
   expected: "130000"
   scoring_method: exact_match
   scoring_config: {}
@@ -237,14 +237,14 @@
 
 - id: sentinel_factual_02
   suite: simpleqa
-  prompt: "What were the day, month, and year when the Supreme Court of Korea sentenced the former employee of CJ CheilJedang to four years and six months in prison for blackmail and intimidation?\n\nGive a short, precise answer. Put your final answer after ####."
+  prompt: "What were the day, month, and year when the Supreme Court of Korea sentenced the former employee of CJ CheilJedang to four years and six months in prison for blackmail and intimidation?\n\nGive a short, precise answer. Put your final answer inside <answer></answer> tags."
   expected: "12 April 2018"
   scoring_method: f1
   scoring_config: {}
 
 - id: sentinel_factual_03
   suite: simpleqa
-  prompt: "What were the month and year when Telegram announced that the app had 60 million active users and delivered 12 billion daily messages?\n\nGive a short, precise answer. Put your final answer after ####."
+  prompt: "What were the month and year when Telegram announced that the app had 60 million active users and delivered 12 billion daily messages?\n\nGive a short, precise answer. Put your final answer inside <answer></answer> tags."
   expected: "September 2015"
   scoring_method: f1
   scoring_config: {}
@@ -255,7 +255,7 @@
 
 - id: sentinel_agentic_02
   suite: agentic
-  prompt: "You have access to these tools:\n  read_file(path: str) -> str\n  parse_csv(content: str) -> list[dict]\n  calculate(expression: str) -> float\n\nTask: Read the file at \"/data/expenses.csv\", parse it as CSV,\nthen calculate the total of the \"amount\" column.\n\nShow all 3 tool calls in sequence. For the calculate call, assume\nthe parsed data returned amounts [120.50, 85.00, 234.75, 67.25, 193.50].\nGive the total after ####."
+  prompt: "You have access to these tools:\n  read_file(path: str) -> str\n  parse_csv(content: str) -> list[dict]\n  calculate(expression: str) -> float\n\nTask: Read the file at \"/data/expenses.csv\", parse it as CSV,\nthen calculate the total of the \"amount\" column.\n\nShow all 3 tool calls in sequence. For the calculate call, assume\nthe parsed data returned amounts [120.50, 85.00, 234.75, 67.25, 193.50].\nGive the total inside <answer></answer> tags."
   expected: "701.00"
   scoring_method: exact_match
   scoring_config: {}
@@ -280,7 +280,7 @@
 
 - id: sentinel_escalation_03
   suite: mode_advantage_hard
-  prompt: "The chemical element named after a planet was discovered in the same\nyear that a famous composer died. That composer's most famous symphony\n(by number) was completed how many years before his death?\n\nGive the number of years after ####."
+  prompt: "The chemical element named after a planet was discovered in the same\nyear that a famous composer died. That composer's most famous symphony\n(by number) was completed how many years before his death?\n\nGive the number of years inside <answer></answer> tags."
   expected: "2"
   scoring_method: exact_match
   scoring_config: {}
@@ -291,21 +291,21 @@
 
 - id: sentinel_multihop_02
   suite: hotpotqa
-  prompt: "Context:\n### Stauntonia\nStauntonia is a genus of flowering plant in the Lardizabalaceae family. It is named after George Staunton, who brought it to Britain from China in the 19th Century.\n\n### Sinofranchetia\nSinofranchetia is a genus of flowering plant in the Lardizabalaceae family. It contains a single species, Sinofranchetia chinensis.\n\nQuestion: What family are the genera Sinofranchetia and Stauntonia from?\n\nGive a short, precise answer based on the context. Put your final answer after ####."
+  prompt: "Context:\n### Stauntonia\nStauntonia is a genus of flowering plant in the Lardizabalaceae family. It is named after George Staunton, who brought it to Britain from China in the 19th Century.\n\n### Sinofranchetia\nSinofranchetia is a genus of flowering plant in the Lardizabalaceae family. It contains a single species, Sinofranchetia chinensis.\n\nQuestion: What family are the genera Sinofranchetia and Stauntonia from?\n\nGive a short, precise answer based on the context. Put your final answer inside <answer></answer> tags."
   expected: "Lardizabalaceae"
   scoring_method: f1
   scoring_config: {}
 
 - id: sentinel_multihop_03
   suite: hotpotqa
-  prompt: "Context:\n### Canton of St. Gallen\nThe canton of St. Gallen is a canton of Switzerland. The capital is St. Gallen.\n\n### Selun\nThe Selun is one of the peaks of the Churfirsten range, located in the Appenzell Alps. It lies between the valley of Toggenburg and Lake Walenstadt in the canton of St. Gallen.\n\nQuestion: What country is the Selun located in?\n\nGive a short, precise answer based on the context. Put your final answer after ####."
+  prompt: "Context:\n### Canton of St. Gallen\nThe canton of St. Gallen is a canton of Switzerland. The capital is St. Gallen.\n\n### Selun\nThe Selun is one of the peaks of the Churfirsten range, located in the Appenzell Alps. It lies between the valley of Toggenburg and Lake Walenstadt in the canton of St. Gallen.\n\nQuestion: What country is the Selun located in?\n\nGive a short, precise answer based on the context. Put your final answer inside <answer></answer> tags."
   expected: "Switzerland"
   scoring_method: f1
   scoring_config: {}
 
 - id: sentinel_multihop_04
   suite: hotpotqa
-  prompt: "Context:\n### Boltonia\nBoltonia is a genus of plants in the sunflower family native primarily to North America with one species in eastern Asia.\n\n### Disporum\nDisporum (commonly known as fairy bells) is a genus of about 20 species of perennial flowering plants, found in Asia.\n\nQuestion: Which has more species in Asia, Disporum or Boltonia?\n\nGive a short, precise answer based on the context. Put your final answer after ####."
+  prompt: "Context:\n### Boltonia\nBoltonia is a genus of plants in the sunflower family native primarily to North America with one species in eastern Asia.\n\n### Disporum\nDisporum (commonly known as fairy bells) is a genus of about 20 species of perennial flowering plants, found in Asia.\n\nQuestion: Which has more species in Asia, Disporum or Boltonia?\n\nGive a short, precise answer based on the context. Put your final answer inside <answer></answer> tags."
   expected: "Disporum"
   scoring_method: f1
   scoring_config: {}
