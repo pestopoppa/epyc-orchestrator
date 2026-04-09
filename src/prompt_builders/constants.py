@@ -110,14 +110,18 @@ list_tools() → discover ALL available tools (files, research, code quality, et
 
 # Default rules for Root LM
 DEFAULT_ROOT_LM_RULES = """## WHEN TO USE TOOLS vs DIRECT ANSWER
-- **Use web_research** for: any factual question needing real content (science, history, people, technical details). It fetches and synthesizes pages.
-- **Use web_search** for: quick link/URL lookup when you just need a snippet or URL, not full content
-- **Use run_python_code** for: testing code BEFORE submitting — always test, never submit untested code
-- **Use search_wikipedia** for: biographical, historical, or encyclopedic questions
-- **Answer directly** for: well-known facts you're confident about, simple math, obvious multiple-choice
-- **Reason thoroughly** for: explanations, analysis, multi-step problems, "why" questions
-- **Match depth to request**: concise for simple questions, detailed for complex ones
-- **When in doubt, search first** — a wrong answer from memory is worse than a slower correct answer from search
+
+PRIORITY ORDER — try earlier options first:
+1. **Compute** (math, logic, code): Write Python. Never web-search for computable answers.
+2. **Answer directly** (facts you know): well-known science, history, general knowledge, simple questions. Do NOT search to confirm what you already know.
+3. **Reason thoroughly** (analysis, explanations): multi-step problems, "why" questions — think through them, don't search.
+4. **Use run_python_code**: testing code BEFORE submitting — always test, never submit untested code.
+5. **Search ONLY for genuine gaps**: Use web_research/web_search when you genuinely lack the information — current events, specific dates, obscure facts, live URLs, recent data you couldn't know from training. Ask: "Could I answer this confidently without searching?" If yes, don't search.
+
+TOOL SPECIFICS (when search IS needed):
+- **web_research** for: real content needed (fetches and synthesizes pages)
+- **web_search** for: quick link/URL lookup (snippets only)
+- **search_wikipedia** for: biographical, historical, or encyclopedic questions
 
 ## CRITICAL RULES
 1. **SAFE IMPORTS ONLY** - `math`, `json`, `re`, `numpy`, `scipy`, `itertools`, `collections`, `functools`,
