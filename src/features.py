@@ -147,7 +147,7 @@ class Features:
 
     # Security Features
     credential_redaction: bool = True  # Scan tool/REPL output for leaked credentials
-    cascading_tool_policy: bool = False  # Layered tool permission chain (Global→Role→Task)
+    cascading_tool_policy: bool = True  # Layered tool permission chain (Global→Role→Task)
     restricted_python: bool = False  # Use RestrictedPython for REPL (requires library)
 
     # Phase 3: Specialist routing (MemRL-driven intelligent orchestration)

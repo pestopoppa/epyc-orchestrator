@@ -150,6 +150,7 @@ class REPLEnvironment(
         hybrid_router: Any | None = None,  # HybridRouter for route_advice
         # Structured mode for React-style execution
         structured_mode: bool = False,
+        tool_context: dict[str, Any] | None = None,
     ):
         """Initialize the REPL environment.
 
@@ -166,6 +167,7 @@ class REPLEnvironment(
             retriever: Optional TwoPhaseRetriever for recall/route_advice.
             hybrid_router: Optional HybridRouter for route_advice.
             structured_mode: If True, enforce one-tool-per-turn React-style execution.
+            tool_context: Optional context dict for cascading tool policy (e.g. no_web).
         """
         self.context = context
         self.artifacts = artifacts if artifacts is not None else {}
@@ -176,6 +178,7 @@ class REPLEnvironment(
         self.tool_registry = tool_registry
         self.script_registry = script_registry
         self.role = role or "worker_general"  # Default to restricted role
+        self.tool_context = tool_context or {}
 
         # MemRL components for routing-aware functions (recall, route_advice)
         self._retriever = retriever
