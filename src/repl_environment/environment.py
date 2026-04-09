@@ -34,6 +34,7 @@ from src.repl_environment.parallel_dispatch import (
 )
 from src.repl_environment.security import ASTSecurityVisitor
 from src.repl_environment.unicode_sanitizer import sanitize_code_unicode
+from src.repl_environment.combined_ops import _CombinedOpsMixin
 from src.repl_environment.file_tools import _FileToolsMixin
 from src.repl_environment.document_tools import _DocumentToolsMixin
 from src.repl_environment.routing import _RoutingMixin
@@ -104,6 +105,7 @@ def _get_allowed_file_paths() -> list[str]:
 
 
 class REPLEnvironment(
+    _CombinedOpsMixin,
     _FileToolsMixin,
     _DocumentToolsMixin,
     _RoutingMixin,
@@ -409,6 +411,10 @@ class REPLEnvironment(
             "archive_search": self._archive_search,
             # Web tools
             "web_fetch": self._web_fetch,
+            # Combined operations (feature-gated by REPL_COMBINED_OPS env var)
+            "batch_web_search": self._batch_web_search,
+            "search_and_verify": self._search_and_verify,
+            "peek_grep": self._peek_grep,
             # Memory tools
             "recall": self._recall,
             # Code & document retrieval (NextPLAID multi-vector search)

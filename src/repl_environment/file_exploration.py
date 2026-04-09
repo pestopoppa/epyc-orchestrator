@@ -214,6 +214,28 @@ class _FileExplorationMixin:
             # Sort: directories first, then files
             entries.sort(key=lambda x: (x["type"] == "file", x["name"]))
 
+            # Frecency-weighted re-sort within type groups (feature-flagged)
+            if os.environ.get("REPL_FRECENCY", "").lower() in ("1", "true", "on"):
+                try:
+                    from src.repl_environment.file_recency import FrecencyStore
+
+                    _frecency = getattr(self, "_frecency_store", None)
+                    if _frecency is None:
+                        _frecency = FrecencyStore()
+                        self._frecency_store = _frecency
+                    full_paths = [os.path.join(path, e["name"]) for e in entries]
+                    scores = _frecency.get_scores(full_paths)
+                    # Stable sort: within each type group, sort by descending frecency
+                    entries.sort(
+                        key=lambda x: (
+                            x["type"] == "file",
+                            -scores.get(os.path.join(path, x["name"]), 0.0),
+                        )
+                    )
+                    _frecency.record_access(path)
+                except Exception:
+                    logger.debug("Frecency sorting failed", exc_info=True)
+
             result = {
                 "path": path,
                 "files": entries[:100],  # Cap at 100 entries
