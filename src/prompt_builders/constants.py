@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 
-# Default tool descriptions for Root LM
+# Verbose tool descriptions for Root LM — preserved for A/B testing
 # Following Claude Code pattern: each tool has "when to use" AND "when NOT to use"
-DEFAULT_ROOT_LM_TOOLS = """### Critical Tools — USE THESE FIRST
+VERBOSE_ROOT_LM_TOOLS = """### Critical Tools — USE THESE FIRST
 - `CALL("web_research", query="...", max_pages=3)`: Deep web research — searches, fetches
   top pages, and uses worker models to synthesize relevant content. Returns dense summaries
   per page. USE THIS for any factual question needing real content (science, history, people,
@@ -88,6 +88,48 @@ DEFAULT_ROOT_LM_TOOLS = """### Critical Tools — USE THESE FIRST
 
 ### Completion
 - `FINAL(answer)`: Signal completion with the final answer. REQUIRED for every task."""
+
+# Default tool descriptions for Root LM — compressed (P3b: ~45% token reduction)
+# Deduped, merged related tools, removed negative instructions, dropped section headers.
+# A/B test against VERBOSE_ROOT_LM_TOOLS above.
+DEFAULT_ROOT_LM_TOOLS = """## Tools
+
+**Research & Web**
+- `CALL("web_research", query="...", max_pages=3)`: Deep web research — searches, fetches, synthesizes. USE for factual questions needing real content. Prefer over web_search when you need information, not just URLs.
+- `CALL("web_search", query="...", max_results=5)`: Quick search, returns URLs + snippets only. Use for link lookup or quick fact check.
+- `CALL("search_wikipedia", query="...")`: Search Wikipedia for verified info.
+- `search_arxiv(query)` / `search_papers(query)` / `search_books(query)`: Academic & book search via CALL.
+- `get_wikipedia_article(title)`: Full Wikipedia article by exact title.
+- `fetch_docs(url)`: Fetch content from a URL.
+
+**Context & Files**
+- `context`: str — full input. Use peek/grep to inspect, never pass to llm_call.
+- `artifacts`: dict — store intermediate results between turns.
+- `peek(n, file_path=None)` / `grep(pattern, file_path=None)`: Inspect context or files.
+- `list_dir(path)` / `file_info(path)`: Directory listing, file metadata.
+
+**Code & Documents**
+- `CALL("run_python_code", code="...", stdin_data="...")`: Test code before submitting. ALWAYS test.
+- `ocr_document(path)` / `analyze_figure(image_path, prompt)` / `extract_figure(pdf, page, bbox)`: Document/image processing (returns JSON).
+- `run_tests(path)` / `lint_python(path, fix=False)` / `json_parse(content)`: Code quality via CALL.
+- `run_shell(cmd)`: Sandboxed shell (ls, grep, git status only).
+
+**Routing & Delegation**
+- `my_role()`: Get your role and capabilities.
+- `route_advice(task)` / `delegate(prompt, target_role, reason)`: Get routing advice or delegate subtasks.
+- `escalate(reason, target_role=None)`: Request escalation when task exceeds your tier.
+- `fetch_report(report_id, offset=0, max_chars=2400)`: Load delegation report by handle.
+- `recall(query)`: Search episodic memory for past routing outcomes.
+
+**LLM & Long Context**
+- `llm_call(prompt, role='worker')` / `llm_batch(prompts, role='worker')`: Sub-LM calls. Keep prompts short.
+- `context_len()` / `chunk_context(n_chunks=4)` / `summarize_chunks(task, n_chunks=4)`: Long document processing.
+
+**Invocation & Completion**
+- `CALL(name, **kw)`: Invoke tool, returns JSON string. `TOOL(name, **kw)`: Returns Python object.
+  Example: `result = CALL("search_arxiv", query="transformers"); data = json.loads(result)`
+- `list_tools()`: Discover all available tools.
+- `FINAL(answer)`: Signal completion. REQUIRED for every task."""
 
 # Compact tool descriptions for MINIMAL prompt style (~140 tokens vs ~1450)
 # Core tools only; model calls list_tools() when it needs extras.

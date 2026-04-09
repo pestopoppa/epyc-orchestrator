@@ -1299,11 +1299,11 @@ class TestCompactTools:
         assert "artifacts" in COMPACT_ROOT_LM_TOOLS
 
     def test_compact_tools_smaller(self):
-        """COMPACT should be < 25% of DEFAULT size."""
+        """COMPACT should be < 55% of DEFAULT size (threshold raised after P3b compression)."""
         from src.prompt_builders.constants import COMPACT_ROOT_LM_TOOLS, DEFAULT_ROOT_LM_TOOLS
 
         ratio = len(COMPACT_ROOT_LM_TOOLS) / len(DEFAULT_ROOT_LM_TOOLS)
-        assert ratio < 0.25, f"Compact tools ratio {ratio:.2%} >= 25%"
+        assert ratio < 0.55, f"Compact tools ratio {ratio:.2%} >= 55%"
 
     def test_minimal_style_uses_compact(self):
         """PromptBuilder with MINIMAL style should use compact tools."""

@@ -169,6 +169,24 @@ class _CodeSearchMixin:
                             entry["signature"] = sig[:100]
                     results.append(entry)
 
+            # Frecency boost for search results (feature-flagged)
+            import os as _os
+
+            if results and _os.environ.get("REPL_FRECENCY", "").lower() in ("1", "true", "on"):
+                try:
+                    from src.repl_environment.file_recency import FrecencyStore
+
+                    _frecency = getattr(self, "_frecency_store", None)
+                    if _frecency is None:
+                        _frecency = FrecencyStore()
+                        self._frecency_store = _frecency
+                    for r in results:
+                        boost = _frecency.get_score(r["file"])
+                        r["score"] = round(r["score"] * (1 + 0.3 * boost), 3)
+                    results.sort(key=lambda r: r["score"], reverse=True)
+                except Exception:
+                    logger.debug("Frecency boost failed", exc_info=True)
+
             response = {"results": results, "index": index, "query": query}
 
             self._exploration_log.add_event(
