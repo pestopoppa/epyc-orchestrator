@@ -267,6 +267,7 @@ def _call_orchestrator_with_slot_poll(
     poll_port: int,
     session_id: str = "",
     scoring_method: str = "",
+    stop_sequences: list[str] | None = None,
 ) -> tuple[dict[str, Any], float, dict[str, Any]]:
     """Call orchestrator while polling slot progress for live visibility."""
 
@@ -298,6 +299,7 @@ def _call_orchestrator_with_slot_poll(
             allow_delegation=allow_delegation,
             session_id=session_id,
             scoring_method=scoring_method,
+            stop_sequences=stop_sequences,
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -512,6 +514,7 @@ def call_orchestrator_forced(
     allow_delegation: bool | None = None,
     session_id: str = "",
     scoring_method: str = "",
+    stop_sequences: list[str] | None = None,
 ) -> dict[str, Any]:
     """Call orchestrator with forced role and mode routing.
 
@@ -550,6 +553,8 @@ def call_orchestrator_forced(
         payload["session_id"] = session_id
     if scoring_method:
         payload["scoring_method"] = scoring_method
+    if stop_sequences:
+        payload["stop_sequences"] = stop_sequences
 
     try:
         if client is not None:
