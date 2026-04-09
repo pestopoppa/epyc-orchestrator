@@ -293,6 +293,12 @@ async def _execute_repl(
     if routing.skill_context:
         combined_context = f"{routing.skill_context}\n\n{combined_context}"
 
+    # Derive tool context for cascading policy (WS-3: deny web for reasoning domains)
+    from src.tool_policy import NO_WEB_TASK_TYPES
+
+    _task_type = str(routing.task_ir.get("task_type", "chat"))
+    _tool_context = {"no_web": True} if _task_type in NO_WEB_TASK_TYPES else {}
+
     if routing.document_result and routing.document_result.document_result:
         from src.repl_document import DocumentREPLEnvironment, DocumentContext
 
@@ -314,6 +320,7 @@ async def _execute_repl(
             task_id=task_id,
             retriever=state.hybrid_router.retriever if state.hybrid_router else None,
             hybrid_router=state.hybrid_router,
+            tool_context=_tool_context,
         )
         log.info(
             "Using DocumentREPLEnvironment: %d sections, %d figures",
@@ -332,6 +339,7 @@ async def _execute_repl(
             task_id=task_id,
             retriever=state.hybrid_router.retriever if state.hybrid_router else None,
             hybrid_router=state.hybrid_router,
+            tool_context=_tool_context,
         )
 
     # Phase 3: cross-request globals restore (opt-in via session_id).

@@ -373,3 +373,87 @@ class TestToolRegistryCascading:
             assert result == "content"
         finally:
             reset_features()
+
+    def test_invoke_with_no_web_context_denies_web(self):
+        """invoke() with no_web context raises PermissionError for web tools."""
+        from src.features import Features, set_features, reset_features
+
+        try:
+            set_features(Features(cascading_tool_policy=True))
+            registry = self._make_registry()
+            registry._tools["web_fetch"].handler = lambda: "should not reach"
+            registry.set_role_permissions(
+                "frontdoor",
+                ToolPermissions(
+                    web_access=True,
+                    allowed_categories=[ToolCategory.FILE, ToolCategory.WEB],
+                ),
+            )
+
+            # Without context: web_fetch works
+            result = registry.invoke("web_fetch", "frontdoor")
+            assert result == "should not reach"
+
+            # With no_web context: web_fetch denied
+            with pytest.raises(PermissionError, match="cannot use tool"):
+                registry.invoke("web_fetch", "frontdoor", context={"no_web": True})
+
+            # Non-web tools still work with no_web context
+            registry._tools["read_file"].handler = lambda: "content"
+            result = registry.invoke("read_file", "frontdoor", context={"no_web": True})
+            assert result == "content"
+        finally:
+            reset_features()
+
+    def test_list_tools_with_no_web_context_excludes_web(self):
+        """list_tools() with no_web context excludes web tools."""
+        from src.features import Features, set_features, reset_features
+
+        try:
+            set_features(Features(cascading_tool_policy=True))
+            registry = self._make_registry()
+            registry.set_role_permissions(
+                "frontdoor",
+                ToolPermissions(
+                    web_access=True,
+                    allowed_categories=[ToolCategory.FILE, ToolCategory.WEB],
+                ),
+            )
+
+            # Without context: web_fetch listed
+            tools = registry.list_tools(role="frontdoor")
+            tool_names = {t["name"] for t in tools}
+            assert "web_fetch" in tool_names
+            assert "read_file" in tool_names
+
+            # With no_web context: web_fetch excluded
+            tools = registry.list_tools(role="frontdoor", context={"no_web": True})
+            tool_names = {t["name"] for t in tools}
+            assert "web_fetch" not in tool_names
+            assert "read_file" in tool_names
+        finally:
+            reset_features()
+
+
+class TestNoWebTaskTypes:
+    """Tests for NO_WEB_TASK_TYPES constant."""
+
+    def test_no_web_task_types_is_frozenset(self):
+        from src.tool_policy import NO_WEB_TASK_TYPES
+
+        assert isinstance(NO_WEB_TASK_TYPES, frozenset)
+
+    def test_no_web_task_types_contains_expected_domains(self):
+        from src.tool_policy import NO_WEB_TASK_TYPES
+
+        assert "math" in NO_WEB_TASK_TYPES
+        assert "coder" in NO_WEB_TASK_TYPES
+        assert "thinking" in NO_WEB_TASK_TYPES
+        assert "instruction_precision" in NO_WEB_TASK_TYPES
+
+    def test_no_web_task_types_excludes_factual_domains(self):
+        from src.tool_policy import NO_WEB_TASK_TYPES
+
+        assert "chat" not in NO_WEB_TASK_TYPES
+        assert "general" not in NO_WEB_TASK_TYPES
+        assert "agentic" not in NO_WEB_TASK_TYPES

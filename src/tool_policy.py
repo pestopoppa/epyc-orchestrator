@@ -54,6 +54,13 @@ TOOL_GROUPS: dict[str, frozenset[str]] = {
     "group:all": frozenset(),  # Special: expanded to all_tools at resolution time
 }
 
+# Task types where web tools hurt accuracy (Package B Phase 4 Omega finding).
+# Models web-search instead of reasoning on these domains, degrading REPL accuracy.
+# Used to set no_web=True in tool context for these task types.
+NO_WEB_TASK_TYPES: frozenset[str] = frozenset({
+    "math", "coder", "thinking", "instruction_precision",
+})
+
 
 @dataclass(frozen=True)
 class PolicyLayer:

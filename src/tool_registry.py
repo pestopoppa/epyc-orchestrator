@@ -447,6 +447,7 @@ class ToolRegistry:
         caller_type: str = "direct",
         chain_id: str | None = None,
         chain_index: int = 0,
+        context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
         """Invoke a tool with the given arguments.
@@ -454,6 +455,7 @@ class ToolRegistry:
         Args:
             tool_name: Name of the tool to invoke.
             role: Role making the invocation (for permission check).
+            context: Optional task-level constraints for cascading policy.
             **kwargs: Tool arguments.
 
         Returns:
@@ -475,7 +477,7 @@ class ToolRegistry:
         tool = self._tools[tool_name]
 
         # Check permissions
-        if not self.can_use_tool(role, tool_name):
+        if not self.can_use_tool(role, tool_name, context=context):
             raise PermissionError(f"Role '{role}' cannot use tool '{tool_name}'")
 
         # Validate arguments
@@ -601,18 +603,21 @@ class ToolRegistry:
 
         return call_mcp_tool(self._mcp_configs[server], tool_name, args)
 
-    def list_tools(self, role: str | None = None) -> list[dict[str, Any]]:
+    def list_tools(
+        self, role: str | None = None, context: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         """List available tools, optionally filtered by role permissions.
 
         Args:
             role: Optional role to filter by permissions.
+            context: Optional task-level constraints for cascading policy.
 
         Returns:
             List of tool info dicts.
         """
         result = []
         for tool in self._tools.values():
-            if role is None or self.can_use_tool(role, tool.name):
+            if role is None or self.can_use_tool(role, tool.name, context=context):
                 info: dict[str, Any] = {
                     "name": tool.name,
                     "description": tool.description,

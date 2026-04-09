@@ -153,6 +153,12 @@ def _execute_react(
     react_tool_timings: list[dict] = []
     _react_registry = state.tool_registry if hasattr(state, "tool_registry") else None
     try:
+        # Derive tool context for cascading policy (WS-3: deny web for reasoning domains)
+        from src.tool_policy import NO_WEB_TASK_TYPES
+
+        _task_type = str(routing.task_ir.get("task_type", "chat"))
+        _tool_context = {"no_web": True} if _task_type in NO_WEB_TASK_TYPES else {}
+
         # React mode unified into REPL with structured_mode=True
         react_repl = REPLEnvironment(
             context=f"{request.prompt}\n\nContext:\n{request.context}" if request.context else request.prompt,
@@ -160,6 +166,7 @@ def _execute_react(
             tool_registry=_react_registry,
             role=str(initial_role),
             structured_mode=True,
+            tool_context=_tool_context,
         )
         from src.prompt_builders import build_root_lm_prompt, extract_code_from_response, auto_wrap_final
         answer = ""

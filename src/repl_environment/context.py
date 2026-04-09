@@ -393,6 +393,7 @@ class _ContextMixin:
             caller_type=caller_type,
             chain_id=chain_id,
             chain_index=chain_index,
+            context=getattr(self, "tool_context", None),
             **kwargs,
         )
         if chain_id:
@@ -459,7 +460,9 @@ class _ContextMixin:
         if self.tool_registry is None:
             return []
 
-        return self.tool_registry.list_tools(role=self.role)
+        return self.tool_registry.list_tools(
+            role=self.role, context=getattr(self, "tool_context", None),
+        )
 
     def _invoke_script(self, script_id: str, **kwargs) -> Any:
         """Invoke a prepared script by ID.
