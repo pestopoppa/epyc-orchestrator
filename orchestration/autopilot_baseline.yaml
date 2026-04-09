@@ -12,9 +12,25 @@ cost: 0.5                 # Normalized cost estimate
 reliability: 0.86         # 86% non-error from trial 45
 frontdoor_speed: 12.7     # Frontdoor-only throughput baseline
 
-# Per-suite quality — will be populated from first hybrid eval run.
-# T2 deep evals didn't persist per-suite breakdown in journal.
-per_suite_quality: {}
+# Per-suite quality — populated after Package B Arm B completes.
+# Schema mirrors sentinel_questions.yaml suite coverage (expanded 2026-04-09).
+# AR-3 per_suite_regression gate uses these: Δq < -0.1 any suite → reject.
+per_suite_quality:
+  general: null       # frontdoor direct (4 sentinels)
+  math: null          # worker math (6 sentinels incl. olympiad)
+  coder: null         # REPL path (3 sentinels)
+  thinking: null      # reasoning/HellaSwag (4 sentinels)
+  instruction_precision: null  # constrained output (4 sentinels)
+  agentic: null       # tool use (3 sentinels)
+  hotpotqa: null      # multi-hop (4 sentinels)
+  simpleqa: null      # factual recall (3 sentinels)
+  mode_advantage_hard: null  # escalation-requiring (3 sentinels)
+  gpqa: null          # hard science MCQ (4 sentinels)
+  long_context: null  # summarization (1 sentinel)
+
+# Sentinel pool expanded 10 → 39 on 2026-04-09 to prevent q=3.0 saturation.
+# Original 10 (easy) retained as regression baseline.
+# New 29 span harder tiers (GPQA, olympiad, multi-hop, tool-use).
 
 # Historical T2 quality trend (for reference, not used by gate):
 # Trial 16: 1.30, Trial 20: 1.23, Trial 26: 1.22,
@@ -25,3 +41,4 @@ notes: >
   Recalibrated for hybrid eval (T0 fast-reject + T1 real gate).
   Previous baseline q=1.72 was from 105-question 3-way eval (different methodology).
   Using T2 trial-45 q=1.16 as floor so autopilot can only improve from here.
+  Sentinel pool expanded 10→39 (2026-04-09) — per_suite_quality pending Package B data.

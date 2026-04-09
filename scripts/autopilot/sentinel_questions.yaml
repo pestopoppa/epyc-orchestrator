@@ -1,6 +1,16 @@
-# Sentinel questions for Tier 0 evaluation (10 questions).
-# These are from HF benchmark suites, NOT debug suites (train/validate split).
-# Each covers a major pipeline path.
+# Sentinel questions for autopilot evaluation.
+# Expanded from 10 to 38 questions (2026-04-09) to prevent q=3.0 saturation.
+#
+# Original 10 (easy, T0) retained for regression baseline.
+# New 28 span harder difficulty tiers (GPQA, olympiad math, multi-hop,
+# tool-use reasoning) to give AR-3 scoring headroom.
+#
+# Sources: HF benchmark suites via question_pool.jsonl, NOT debug suites.
+# Each question has a clear expected answer for automated scoring.
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 0 — Original 10 (easy baseline, retained for regression)
+# ═══════════════════════════════════════════════════════════════════
 
 # 1. General knowledge (frontdoor direct)
 - id: sentinel_general_01
@@ -79,5 +89,248 @@
   suite: mode_advantage_hard
   prompt: "Explain the difference between strong and weak typing in programming languages, giving one example of each type of language."
   expected: "Python"
+  scoring_method: substring
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Hard science (GPQA, graduate-level)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_gpqa_01
+  suite: gpqa
+  prompt: "In order to calculate the necessary beam to produce a particle X, we ran the following simulation in a High Energy software $e^{+}e^{-}\\rightarrow X$, where the electron $e^{-}$ is at rest. We found that the beam energy has to be at least equal to $9.6\\times10^{6}$ GeV.\nWhat is the mass of the particle X used for this simulation?\n\nA) 1091 GeV\nB) 99 GeV\nC) 542 GeV\nD) 3132 GeV\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "B"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+- id: sentinel_gpqa_02
+  suite: gpqa
+  prompt: "A chemist performed two reactions by taking two unknown compounds and treated them separately with two different reducing agents. Select the proper starting material for both of the reactions.\nA + LiBH4 + H+ ---> (R)-4-ethyltetrahydro-2H-pyran-2-one\nB + BH3 + H+ ---> (S)-4-ethyltetrahydro-2H-pyran-2-one\n\nA) A = (R)-3-ethyl-5-isobutoxy-5-oxopentanoic acid, B = (S)-3-ethyl-5-isobutoxy-5-oxopentanoic acid\nB) A = (S)-3-ethyl-5-isobutoxy-5-oxopentanoic acid, B = (R)-3-ethyl-5-isobutoxy-5-oxopentanoic acid\nC) A = (R)-3-ethyl-5-isobutoxy-5-oxopentanoic acid , B = (R)-3-ethyl-5-isobutoxy-5-oxopentanoic acid\nD) A = (S)-3-ethyl-5-isobutoxy-5-oxopentanoic acid , B = (S)-3-ethyl-5-isobutoxy-5-oxopentanoic acid\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "D"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+- id: sentinel_gpqa_03
+  suite: gpqa
+  prompt: "When saturated epoxides are reacted with organocuprates, the alkyl group of the reagent is always introduced at less hindered carbon of the epoxide ring. In the disubstituted epoxides, inversion of configuration occurs at a carbon to which Nu is added. Identify the product when (1R,3R,4R,6S)-1,3,4-trimethyl-7-oxabicyclo [4.1.0] heptane is reacted with Me2CuLi:\n\nA) (1R,2S,4R,5R)-1,2,4,5-tetramethylcyclohexan-1-ol\nB) (1R,2R,4R,5R)-1,2,4,5-tetramethylcyclohexan-1-ol\nC) (1R,4R,5R)-2,2,4,5-tetramethylcyclohexan-1-ol\nD) (1S,4R,5S)-2,2,4,5-tetramethylcyclohexan-1-ol\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "B"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+- id: sentinel_gpqa_04
+  suite: gpqa
+  prompt: "Compounds that have the same molecular formula but are different in their structural arrangement are known as isomers. Isomers have two types, constitutional isomers and stereoisomers. Constitutional isomers have the same molecular formula but differ in their structures. In stereoisomers, molecules are connected in the same way, but their arrangements in space are different.\nWhich of the following organic moieties show optical isomerism?\n\n1. dimethyl 6,6'-dinitro-[1,1'-biphenyl]-2,2'-dicarboxylate\n2. methyl 2-hydroxypropanoate\n3. benzophenone\n4. dimethyl fumarate\n\nA) 3 and 4\nB) 1, 2 and 4\nC) 2 and 3\nD) 1 and 2\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "D"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Hard math (olympiad + multi-step)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_math_02
+  suite: math
+  prompt: "Nik has 200 crayons. He wants to separate them into groups of 8 and put them into boxes. Each box weighs 8 ounces. Each crayon weighs 1 ounce. If he puts all of his crayons into boxes, what is the total weight, in pounds, of the crayons and the boxes, when there are 16 ounces to a pound?\n\nSolve step by step. Put your final numeric answer after ####."
+  expected: "25"
+  scoring_method: exact_match
+  scoring_config: {}
+
+- id: sentinel_math_03
+  suite: math
+  prompt: "There are 26 countries in South America and, in each country, there are 5 cities with 1000 people living in each city. If the whole population lives in these cities, how many people are there in South America?\n\nSolve step by step. Put your final numeric answer after ####."
+  expected: "130000"
+  scoring_method: exact_match
+  scoring_config: {}
+
+- id: sentinel_math_04
+  suite: math
+  prompt: "For what real values of $x$ is $-4<x^{4}+4x^{2}<21$ satisfied? Express your answer in interval notation.\n\nPut your final answer in \\boxed{}."
+  expected: "(-\\sqrt{3}, \\sqrt{3})"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: sentinel_math_05
+  suite: math
+  prompt: "In quadrilateral $ABCD$, $m\\angle B + m\\angle D = 270^{\\circ}$. The circumcircle of $\\triangle ABD$ intersects $\\overline{CD}$ at point $E$, distinct from $D$. Given that $BC=4, CE=5$, and $DE=7$, compute the diameter of the circumcircle of $\\triangle ABD$.\n\nSolve step by step. Put your final answer in \\boxed{}."
+  expected: "\\sqrt{130}"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: sentinel_math_06
+  suite: math
+  prompt: "Let $N=888{,}888 \\times 9{,}999{,}999$. Compute the sum of the digits of $N$.\n\nSolve step by step. Put your final answer in \\boxed{}."
+  expected: "63"
+  scoring_method: substring
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Code generation (harder)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_code_02
+  suite: coder
+  prompt: "Write a python function to count the number of prime numbers less than a given non-negative number.\n\nTest cases:\n  assert count_Primes_nums(5) == 2\n  assert count_Primes_nums(10) == 4\n  assert count_Primes_nums(100) == 25\n\nWrite a Python function to solve this."
+  expected: "count_Primes_nums"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: sentinel_code_03
+  suite: coder
+  prompt: "Write a python function to find the frequency of the largest value in a given array.\n\nTest cases:\n  assert frequency_Of_Largest(5,[1,2,3,4,4]) == 2\n  assert frequency_Of_Largest(3,[5,6,5]) == 1\n  assert frequency_Of_Largest(4,[2,7,7,7]) == 3\n\nWrite a Python function to solve this."
+  expected: "frequency_Of_Largest"
+  scoring_method: substring
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Reasoning / common sense (HellaSwag)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_thinking_02
+  suite: thinking
+  prompt: "Choose the most plausible continuation:\n\nContext: A view is seen of snow covered ground and people on the ice. A man sets up a fishing line in a hole in a lake. he\n\nA) then pulls a fish through the hole.\nB) reels in the fish and catches a bigger fish.\nC) reels in the hook and begins reeling in the fish.\nD) stands and catches a fish and throws it in the hole with the other fish.\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "A"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+- id: sentinel_thinking_03
+  suite: thinking
+  prompt: "Choose the most plausible continuation:\n\nContext: A woman is ironing something on an ironing board. She sets the iron down and talks to the camera. A laptop is shown on a table. she\n\nA) puts down an iron and starts to iron a towel.\nB) picks up the iron and continues to iron.\nC) mixes ingredients together in a bowl then returns to ironing.\nD) is talking and twist a tool in her hands.\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "B"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+- id: sentinel_thinking_04
+  suite: thinking
+  prompt: "Choose the most plausible continuation:\n\nContext: A man is sitting in a barber chair. Another man is giving him a hair cut. he\n\nA) takes the hair over the scissors.\nB) then has him cut and styled.\nC) shows off his trimmed hair from a man sitting behind him.\nD) then brushes off the mans neck.\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "D"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — General knowledge (harder MMLU)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_general_02
+  suite: general
+  prompt: "When a claim is supported only by asserting that unidentified experts accept the claim the arguer has committed which of the following fallacies?\n\nA) appeal to tradition\nB) ad vericundiam\nC) appeal to anonymous authority\nD) snob appeal\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "C"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+- id: sentinel_general_03
+  suite: general
+  prompt: "If you think that someone's argument is strong based on their compelling use of language and confident delivery, you've probably committed which fallacy?\n\nA) Amphiboly\nB) Equivocation\nC) Special pleading\nD) Style over substance\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "D"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+- id: sentinel_general_04
+  suite: general
+  prompt: "___________ is based on the idea that customer expectations of the service they will receive shape their perception of the actual service encounter.\n\nA) Service quality.\nB) Service action.\nC) Service recovery.\nD) Service satisfaction.\n\nAnswer with the letter only (A, B, C, or D)."
+  expected: "A"
+  scoring_method: multiple_choice
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Factual recall (harder SimpleQA)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_factual_02
+  suite: simpleqa
+  prompt: "What were the day, month, and year when the Supreme Court of Korea sentenced the former employee of CJ CheilJedang to four years and six months in prison for blackmail and intimidation?\n\nGive a short, precise answer. Put your final answer after ####."
+  expected: "12 April 2018"
+  scoring_method: f1
+  scoring_config: {}
+
+- id: sentinel_factual_03
+  suite: simpleqa
+  prompt: "What were the month and year when Telegram announced that the app had 60 million active users and delivered 12 billion daily messages?\n\nGive a short, precise answer. Put your final answer after ####."
+  expected: "September 2015"
+  scoring_method: f1
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Tool use / agentic (harder)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_agentic_02
+  suite: agentic
+  prompt: "You have access to these tools:\n  read_file(path: str) -> str\n  parse_csv(content: str) -> list[dict]\n  calculate(expression: str) -> float\n\nTask: Read the file at \"/data/expenses.csv\", parse it as CSV,\nthen calculate the total of the \"amount\" column.\n\nShow all 3 tool calls in sequence. For the calculate call, assume\nthe parsed data returned amounts [120.50, 85.00, 234.75, 67.25, 193.50].\nGive the total after ####."
+  expected: "701.00"
+  scoring_method: exact_match
+  scoring_config: {}
+
+- id: sentinel_agentic_03
+  suite: agentic
+  prompt: "You have access to:\n\n```\ndef list_files(directory: str, pattern: str = \"*\") -> list:\n    \"\"\"List files in directory.\"\"\"\n\ndef search_files(directory: str, content: str, recursive: bool = True) -> list:\n    \"\"\"Search for files containing text.\"\"\"\n```\n\nFind all Python files in /home/user/projects that contain \"TODO\".\nRespond with ONLY a JSON function call."
+  expected: "search_files"
+  scoring_method: substring
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Escalation-requiring (mode_advantage_hard)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_escalation_02
+  suite: mode_advantage_hard
+  prompt: "Compare speculative decoding techniques for LLM inference:\n\n1. Draft model speculation (using a smaller model)\n2. Self-speculation (using early exit layers)\n3. Prompt lookup decoding (n-gram matching)\n\nFor each, explain:\n- How it achieves speedup\n- When acceptance rate is high/low\n- Hardware requirements\n\nWhich technique is best for a 32B coding model on a CPU-only system?"
+  expected: "acceptance"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: sentinel_escalation_03
+  suite: mode_advantage_hard
+  prompt: "The chemical element named after a planet was discovered in the same\nyear that a famous composer died. That composer's most famous symphony\n(by number) was completed how many years before his death?\n\nGive the number of years after ####."
+  expected: "2"
+  scoring_method: exact_match
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Multi-hop reasoning (HotpotQA with context)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_multihop_02
+  suite: hotpotqa
+  prompt: "Context:\n### Stauntonia\nStauntonia is a genus of flowering plant in the Lardizabalaceae family. It is named after George Staunton, who brought it to Britain from China in the 19th Century.\n\n### Sinofranchetia\nSinofranchetia is a genus of flowering plant in the Lardizabalaceae family. It contains a single species, Sinofranchetia chinensis.\n\nQuestion: What family are the genera Sinofranchetia and Stauntonia from?\n\nGive a short, precise answer based on the context. Put your final answer after ####."
+  expected: "Lardizabalaceae"
+  scoring_method: f1
+  scoring_config: {}
+
+- id: sentinel_multihop_03
+  suite: hotpotqa
+  prompt: "Context:\n### Canton of St. Gallen\nThe canton of St. Gallen is a canton of Switzerland. The capital is St. Gallen.\n\n### Selun\nThe Selun is one of the peaks of the Churfirsten range, located in the Appenzell Alps. It lies between the valley of Toggenburg and Lake Walenstadt in the canton of St. Gallen.\n\nQuestion: What country is the Selun located in?\n\nGive a short, precise answer based on the context. Put your final answer after ####."
+  expected: "Switzerland"
+  scoring_method: f1
+  scoring_config: {}
+
+- id: sentinel_multihop_04
+  suite: hotpotqa
+  prompt: "Context:\n### Boltonia\nBoltonia is a genus of plants in the sunflower family native primarily to North America with one species in eastern Asia.\n\n### Disporum\nDisporum (commonly known as fairy bells) is a genus of about 20 species of perennial flowering plants, found in Asia.\n\nQuestion: Which has more species in Asia, Disporum or Boltonia?\n\nGive a short, precise answer based on the context. Put your final answer after ####."
+  expected: "Disporum"
+  scoring_method: f1
+  scoring_config: {}
+
+# ═══════════════════════════════════════════════════════════════════
+# TIER 1 — Instruction following (harder, custom)
+# ═══════════════════════════════════════════════════════════════════
+
+- id: sentinel_instruction_02
+  suite: instruction_precision
+  prompt: "Write exactly 4 words where each word starts with a different vowel (A, E, I, O), in alphabetical order by first letter, separated by spaces."
+  expected: "A"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: sentinel_instruction_03
+  suite: instruction_precision
+  prompt: "Answer the question 'What is 15 + 27?' but format your response as a JSON object with keys 'question' and 'answer'. No other text."
+  expected: "42"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: sentinel_instruction_04
+  suite: instruction_precision
+  prompt: "List the months of the year that have exactly 30 days. Output ONLY the month names, one per line, no numbering."
+  expected: "April"
   scoring_method: substring
   scoring_config: {}
