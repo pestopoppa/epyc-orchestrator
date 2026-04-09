@@ -20,12 +20,19 @@ from typing import Union
 from pydantic_graph import BaseNode, End
 
 from src.escalation import ErrorCategory
+from src.features import features as _get_features
 from src.roles import Role
 
 from src.graph.state import (
     TaskDeps,
     TaskResult,
     TaskState,
+)
+from src.graph.langgraph.state import (
+    lg_to_task_state,
+    snapshot_append_lengths,
+    state_update_delta,
+    task_state_to_lg,
 )
 
 # Import all helpers from the extracted module
@@ -58,6 +65,99 @@ from src.graph.helpers import (  # noqa: F401 — re-exported for backward compa
 log = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# LangGraph Phase 3: per-node dispatch helper
+# ---------------------------------------------------------------------------
+
+# Node name → (LG node function, pydantic_graph return type mapping)
+# Lazy-imported to avoid circular imports at module level.
+_LG_NODE_MAP: dict | None = None
+
+
+def _get_lg_node_map():
+    """Lazy-load LangGraph node functions to avoid circular imports."""
+    global _LG_NODE_MAP
+    if _LG_NODE_MAP is None:
+        from src.graph.langgraph.nodes import (
+            frontdoor_node,
+            worker_node,
+            coder_node,
+            coder_escalation_node,
+            ingest_node,
+            architect_node,
+            architect_coding_node,
+        )
+        _LG_NODE_MAP = {
+            "frontdoor": frontdoor_node,
+            "worker": worker_node,
+            "coder": coder_node,
+            "coder_escalation": coder_escalation_node,
+            "ingest": ingest_node,
+            "architect": architect_node,
+            "architect_coding": architect_coding_node,
+        }
+    return _LG_NODE_MAP
+
+
+# Maps next_node string → pydantic_graph node class (populated after class defs)
+_NEXT_NODE_TO_PG: dict[str, type] = {}
+
+
+async def _run_via_langgraph(ctx, node_name: str):
+    """Dispatch a single node execution to the LangGraph backend.
+
+    Converts pydantic_graph ctx to LangGraph state, calls the LG node function,
+    then maps the result back to a pydantic_graph return value (node instance or End).
+
+    This allows per-node migration: the pydantic_graph outer loop remains in control
+    while individual node logic can be swapped to LangGraph functions.
+    """
+    lg_func = _get_lg_node_map()[node_name]
+
+    # Convert TaskState → LangGraph state dict
+    lg_state = task_state_to_lg(ctx.state)
+    snap = snapshot_append_lengths(lg_state)
+
+    # Build RunnableConfig with deps in configurable
+    config = {
+        "configurable": {
+            "deps": ctx.deps,
+            "think_harder_min_expected_roi": getattr(ctx.state, "think_harder_min_expected_roi", 1.2),
+            "think_harder_min_samples": getattr(ctx.state, "think_harder_min_samples", 3),
+            "think_harder_cooldown_turns": getattr(ctx.state, "think_harder_cooldown_turns", 5),
+            "think_harder_ema_alpha": getattr(ctx.state, "think_harder_ema_alpha", 0.3),
+            "think_harder_min_marginal_utility": getattr(ctx.state, "think_harder_min_marginal_utility", 0.05),
+        }
+    }
+
+    # Call LangGraph node function
+    result = await lg_func(lg_state, config)
+
+    # Apply state updates back to the pydantic_graph TaskState
+    lg_to_task_state(result, ctx.state)
+
+    # Map next_node → pydantic_graph return type
+    next_node = result.get("next_node", "__end__")
+    if next_node == "__end__":
+        # Extract result from LG state
+        lg_result = result.get("_result", {})
+        return End(
+            TaskResult(
+                answer=lg_result.get("answer", ""),
+                success=lg_result.get("success", False),
+                role_history=lg_result.get("role_history", list(ctx.state.role_history)),
+                turns=lg_result.get("turns", ctx.state.turns),
+                delegation_events=lg_result.get("delegation_events", list(ctx.state.delegation_events)),
+            )
+        )
+
+    # Return the appropriate pydantic_graph node instance
+    pg_cls = _NEXT_NODE_TO_PG.get(next_node)
+    if pg_cls is None:
+        raise ValueError(f"Unknown next_node from LangGraph: {next_node!r}")
+    return pg_cls()
+
+
 def _record_escalation_role(state: TaskState, role: Role) -> None:
     """Record role transition and attribute architect prewarm hits."""
     state.record_role(role)
@@ -85,6 +185,8 @@ class FrontdoorNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     async def run(
         self, ctx: Ctx
     ) -> Union["FrontdoorNode", "CoderEscalationNode", "WorkerNode", End[TaskResult]]:
+        if _get_features().langgraph_frontdoor:
+            return await _run_via_langgraph(ctx, "frontdoor")
         state = ctx.state
 
         if state.turns >= state.max_turns:
@@ -194,6 +296,8 @@ class WorkerNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     async def run(
         self, ctx: Ctx
     ) -> Union["WorkerNode", "CoderEscalationNode", End[TaskResult]]:
+        if _get_features().langgraph_worker:
+            return await _run_via_langgraph(ctx, "worker")
         state = ctx.state
 
         if state.turns >= state.max_turns:
@@ -291,6 +395,8 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     async def run(
         self, ctx: Ctx
     ) -> Union["CoderNode", "ArchitectNode", End[TaskResult]]:
+        if _get_features().langgraph_coder:
+            return await _run_via_langgraph(ctx, "coder")
         state = ctx.state
 
         if state.turns >= state.max_turns:
@@ -404,6 +510,8 @@ class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     async def run(
         self, ctx: Ctx
     ) -> Union["CoderEscalationNode", "ArchitectCodingNode", End[TaskResult]]:
+        if _get_features().langgraph_coder_escalation:
+            return await _run_via_langgraph(ctx, "coder_escalation")
         state = ctx.state
 
         if state.turns >= state.max_turns:
@@ -503,6 +611,8 @@ class IngestNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     async def run(
         self, ctx: Ctx
     ) -> Union["IngestNode", "ArchitectNode", End[TaskResult]]:
+        if _get_features().langgraph_ingest:
+            return await _run_via_langgraph(ctx, "ingest")
         state = ctx.state
 
         if state.turns >= state.max_turns:
@@ -602,6 +712,8 @@ class ArchitectNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     async def run(
         self, ctx: Ctx
     ) -> Union["ArchitectNode", End[TaskResult]]:
+        if _get_features().langgraph_architect:
+            return await _run_via_langgraph(ctx, "architect")
         state = ctx.state
 
         if state.turns >= state.max_turns:
@@ -687,6 +799,8 @@ class ArchitectCodingNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     async def run(
         self, ctx: Ctx
     ) -> Union["ArchitectCodingNode", End[TaskResult]]:
+        if _get_features().langgraph_architect_coding:
+            return await _run_via_langgraph(ctx, "architect_coding")
         state = ctx.state
 
         if state.turns >= state.max_turns:
@@ -759,6 +873,19 @@ class ArchitectCodingNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             state.consecutive_nudges = 0
             state.last_error = ""
         return ArchitectCodingNode()
+
+
+# ── LangGraph Phase 3: populate next_node → pydantic_graph class mapping ──
+
+_NEXT_NODE_TO_PG.update({
+    "frontdoor": FrontdoorNode,
+    "worker": WorkerNode,
+    "coder": CoderNode,
+    "coder_escalation": CoderEscalationNode,
+    "ingest": IngestNode,
+    "architect": ArchitectNode,
+    "architect_coding": ArchitectCodingNode,
+})
 
 
 # ── Node selection helper ──────────────────────────────────────────────

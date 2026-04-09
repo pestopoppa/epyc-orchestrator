@@ -209,6 +209,15 @@ class Features:
     # LangGraph migration Phase 1: hybrid bridge (run_task dispatches to LG backend)
     langgraph_bridge: bool = False  # Route orchestration through LangGraph instead of pydantic_graph
 
+    # LangGraph migration Phase 3: per-node migration flags
+    langgraph_ingest: bool = False             # Migrate IngestNode to LangGraph backend
+    langgraph_architect: bool = False          # Migrate ArchitectNode to LangGraph backend
+    langgraph_architect_coding: bool = False   # Migrate ArchitectCodingNode to LangGraph backend
+    langgraph_worker: bool = False             # Migrate WorkerNode to LangGraph backend
+    langgraph_frontdoor: bool = False          # Migrate FrontdoorNode to LangGraph backend
+    langgraph_coder: bool = False              # Migrate CoderNode to LangGraph backend
+    langgraph_coder_escalation: bool = False   # Migrate CoderEscalationNode to LangGraph backend
+
     # Budget controls (Fast-RLM)
     worker_call_budget: bool = False  # Cap total REPL executions per task
     task_token_budget: bool = False   # Cap cumulative tokens across all turns
@@ -384,6 +393,13 @@ class Features:
             "state_history_snapshots": self.state_history_snapshots,
             "generalized_interrupts": self.generalized_interrupts,
             "langgraph_bridge": self.langgraph_bridge,
+            "langgraph_ingest": self.langgraph_ingest,
+            "langgraph_architect": self.langgraph_architect,
+            "langgraph_architect_coding": self.langgraph_architect_coding,
+            "langgraph_worker": self.langgraph_worker,
+            "langgraph_frontdoor": self.langgraph_frontdoor,
+            "langgraph_coder": self.langgraph_coder,
+            "langgraph_coder_escalation": self.langgraph_coder_escalation,
             "injection_scanning": self.injection_scanning,
             "context_compression": self.context_compression,
             "user_modeling": self.user_modeling,
@@ -507,6 +523,13 @@ def get_features(
             "state_history_snapshots": False,  # LangGraph pre-migration: full state snapshots
             "generalized_interrupts": False,  # LangGraph pre-migration: pluggable interrupts
             "langgraph_bridge": False,  # LangGraph Phase 1: off until validated
+            "langgraph_ingest": False,  # LangGraph Phase 3: off until per-node validation
+            "langgraph_architect": False,  # LangGraph Phase 3: off until per-node validation
+            "langgraph_architect_coding": False,  # LangGraph Phase 3: off until per-node validation
+            "langgraph_worker": False,  # LangGraph Phase 3: off until per-node validation
+            "langgraph_frontdoor": False,  # LangGraph Phase 3: off until per-node validation
+            "langgraph_coder": False,  # LangGraph Phase 3: off until per-node validation
+            "langgraph_coder_escalation": False,  # LangGraph Phase 3: off until per-node validation
             "injection_scanning": True,  # B7: low risk, always scan loaded context
             "context_compression": False,  # B2: enable after protected-zone quality validation
             "user_modeling": False,  # B1: enable after profile store + deriver validation
@@ -575,6 +598,13 @@ def get_features(
             "state_history_snapshots": False,  # LangGraph pre-migration: off in tests
             "generalized_interrupts": False,  # LangGraph pre-migration: off in tests
             "langgraph_bridge": False,  # LangGraph Phase 1: off in tests
+            "langgraph_ingest": False,  # LangGraph Phase 3: off in tests
+            "langgraph_architect": False,  # LangGraph Phase 3: off in tests
+            "langgraph_architect_coding": False,  # LangGraph Phase 3: off in tests
+            "langgraph_worker": False,  # LangGraph Phase 3: off in tests
+            "langgraph_frontdoor": False,  # LangGraph Phase 3: off in tests
+            "langgraph_coder": False,  # LangGraph Phase 3: off in tests
+            "langgraph_coder_escalation": False,  # LangGraph Phase 3: off in tests
             "injection_scanning": False,  # B7: off in tests
             "context_compression": False,  # B2: off in tests
             "user_modeling": False,  # B1: off in tests
@@ -652,6 +682,13 @@ def get_features(
         "state_history_snapshots": _feature_flag_bool("STATE_HISTORY_SNAPSHOTS", defaults["state_history_snapshots"]),
         "generalized_interrupts": _feature_flag_bool("GENERALIZED_INTERRUPTS", defaults["generalized_interrupts"]),
         "langgraph_bridge": _feature_flag_bool("LANGGRAPH_BRIDGE", defaults["langgraph_bridge"]),
+        "langgraph_ingest": _feature_flag_bool("LANGGRAPH_INGEST", defaults["langgraph_ingest"]),
+        "langgraph_architect": _feature_flag_bool("LANGGRAPH_ARCHITECT", defaults["langgraph_architect"]),
+        "langgraph_architect_coding": _feature_flag_bool("LANGGRAPH_ARCHITECT_CODING", defaults["langgraph_architect_coding"]),
+        "langgraph_worker": _feature_flag_bool("LANGGRAPH_WORKER", defaults["langgraph_worker"]),
+        "langgraph_frontdoor": _feature_flag_bool("LANGGRAPH_FRONTDOOR", defaults["langgraph_frontdoor"]),
+        "langgraph_coder": _feature_flag_bool("LANGGRAPH_CODER", defaults["langgraph_coder"]),
+        "langgraph_coder_escalation": _feature_flag_bool("LANGGRAPH_CODER_ESCALATION", defaults["langgraph_coder_escalation"]),
         "injection_scanning": _feature_flag_bool("INJECTION_SCANNING", defaults["injection_scanning"]),
         "context_compression": _feature_flag_bool("CONTEXT_COMPRESSION", defaults["context_compression"]),
         "user_modeling": _feature_flag_bool("USER_MODELING", defaults["user_modeling"]),
