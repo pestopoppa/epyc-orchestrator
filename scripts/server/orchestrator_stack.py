@@ -96,6 +96,10 @@ _PATHS = _get_paths()
 
 STATE_FILE = _PATHS["log_dir"] / "orchestrator_state.json"
 LLAMA_SERVER = _PATHS["llama_cpp_bin"] / "llama-server"
+# v3 spec decode bug: Qwen2.5 architecture + draft model → "Invalid input batch".
+# Coder-escalation uses v2 binary until fixed. See v3-spec-decode-qwen25-bug.md.
+LLAMA_SERVER_V2 = _PATHS["llama_cpp_bin"].parent / "build-v2" / "bin" / "llama-server"
+_V2_ROLES = frozenset({"coder_escalation"})
 LOG_DIR = _PATHS["log_dir"]
 # DS-3: KV state save/restore directory for dynamic stack management
 SLOT_SAVE_DIR = _PATHS["cache_dir"] / "kv_slots"
@@ -918,8 +922,10 @@ def build_server_command(
     }
     context_size = _KV_CONTEXT_SIZES.get(role_config.name, "32768")
 
+    # Use v2 binary for roles with v3 spec decode bug (Qwen2.5 architecture)
+    _binary = LLAMA_SERVER_V2 if role_config.name in _V2_ROLES and LLAMA_SERVER_V2.exists() else LLAMA_SERVER
     cmd = [
-        str(LLAMA_SERVER),
+        str(_binary),
         "-m", model_path,
         "--host", "127.0.0.1",
         "--port", str(port),
@@ -948,8 +954,9 @@ def build_server_command(
     kv_quant = _KV_QUANT_CONFIGS.get(role_config.name)
     if kv_quant:
         cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1]])
-        # --kv-hadamard removed: upstream v3 (#21038) auto-enables Hadamard rotation
-        # for quantized KV types. Explicit flag no longer exists.
+        # --kv-hadamard: v3 auto-enables (upstream #21038), v2 needs explicit flag
+        if role_config.name in _V2_ROLES and LLAMA_SERVER_V2.exists():
+            cmd.append("--kv-hadamard")
 
     # mlock: lock model weights in RAM to prevent page cache eviction.
     # Validated in S2: 30x latency improvement under memory pressure.
