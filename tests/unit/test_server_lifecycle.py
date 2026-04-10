@@ -84,7 +84,8 @@ class TestLlamaServer:
         assert "q4_0" in cmd
         assert "-ctv" in cmd
         assert "f16" in cmd
-        assert "--kv-hadamard" in cmd
+        # --kv-hadamard no longer passed (upstream v3 auto-enables)
+        assert "--kv-hadamard" not in cmd
 
     def test_build_command_with_extra_args(self):
         lc = LlamaServerLifecycle()

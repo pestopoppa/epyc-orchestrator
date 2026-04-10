@@ -947,7 +947,9 @@ def build_server_command(
     }
     kv_quant = _KV_QUANT_CONFIGS.get(role_config.name)
     if kv_quant:
-        cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1], "--kv-hadamard"])
+        cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1]])
+        # --kv-hadamard removed: upstream v3 (#21038) auto-enables Hadamard rotation
+        # for quantized KV types. Explicit flag no longer exists.
 
     # mlock: lock model weights in RAM to prevent page cache eviction.
     # Validated in S2: 30x latency improvement under memory pressure.
