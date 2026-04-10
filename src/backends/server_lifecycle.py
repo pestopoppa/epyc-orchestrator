@@ -196,8 +196,9 @@ class LlamaServerLifecycle:
             cmd.extend(["-ctk", config.kv_type_k])
         if config.kv_type_v:
             cmd.extend(["-ctv", config.kv_type_v])
-        if config.kv_hadamard:
-            cmd.append("--kv-hadamard")
+        # --kv-hadamard removed: upstream v3 auto-enables Hadamard rotation
+        # for quantized KV types. Field preserved in config for backwards compat
+        # but flag is no longer passed to the binary.
 
         # Extra args (e.g., --slot-save-path, -ub, -ps)
         for key, val in config.extra_args.items():
