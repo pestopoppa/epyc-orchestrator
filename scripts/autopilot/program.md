@@ -230,6 +230,23 @@ Start with highest-expected-impact, lowest-risk experiments. Suggested order (ag
 
 ---
 
+## Validated Decisions (context for mutations)
+
+These findings come from controlled experiments outside autopilot. Mutations that touch these areas should be informed by these results — not blindly undone.
+
+| Area | Decision | Evidence | Date |
+|------|----------|----------|------|
+| Brevity word limits (Action 12) | **KEEP** static per-format limits in worker prompts | TALE dynamic budget eval: static OAA=-3.48 vs TALE OAA=-5.95. Static simpler + better. TALE matches baseline on math (95%) but hurts general (50%). | 2026-04-11 |
+| Tool output compression | **KEEP ON** (default) | Controlled A/B (100q): +4pp REPL overall. Math +25pp, hotpotqa -25pp. Suite-dependent but net positive. | 2026-04-10 |
+| Web search in REPL | **DENY for math/coder/thinking/instruction** via WS-3 cascading policy | Omega audit: 7/10 suites REPL hurt accuracy. Root cause: model web-searched instead of reasoning. WS-3 denies web tools for these task types. | 2026-04-09 |
+| TrimR (think block pruning) | Thinking helps GPQA ~6pp, irrelevant on GSM8K (151 tok avg thinking) | Eval on DeepSeek-R1-7B. Difficulty-adaptive: only prune on easy tasks. | 2026-04-09 |
+| Context folding free-zone | **L3 (60% target → 82% actual)** is the sweet spot | Compaction sweep: faithfulness stable at 2.9/3 across L1-L4. Retention knee at L3→L4 (2.84→2.21). | 2026-04-11 |
+| Summarizer tier | **30B-A3B minimum viable** (3.0/3.0 faith+retain) | 1.5B: 2.55/1.45. 32B: untested (spec decode bug, now fixed). 30B already perfect. | 2026-04-10 |
+
+If PromptForge proposes removing word limits, compressing tool instructions, or changing REPL tool policy — check this table first. Mutations that conflict with validated decisions need a stronger hypothesis than "try something different."
+
+---
+
 ## Known Dead Ends (Do NOT Retry)
 
 These have been empirically tested and found non-viable:
