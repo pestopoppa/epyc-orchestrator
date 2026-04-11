@@ -866,25 +866,26 @@ roles:
     tier: B
     description: System architecture, invariants, acceptance tests - emits IR only
     model:
-      name: Qwen3-235B-A22B
-      huggingface_id: lmstudio-community/Qwen3-235B-A22B-GGUF
-      path: lmstudio-community/Qwen3-235B-A22B-GGUF/Qwen3-235B-A22B-Q4_K_M-00001-of-00004.gguf
+      name: Qwen3.5-122B-A10B
+      huggingface_id: unsloth/Qwen3.5-122B-A10B-GGUF
+      path: unsloth/Qwen3.5-122B-A10B-GGUF/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf
       quant: Q4_K_M
-      size_gb: 133
-      split_count: 4
-      architecture: moe
+      size_gb: 69
+      split_count: 3
+      architecture: moe_hybrid
+      previous_model: Qwen3-235B-A22B-Q4_K_M (swapped 2026-03-19, 122B = quality 2.57/3, -64GB)
     candidate_roles:
     - architect
     - general
     acceleration:
       type: speculative_decoding
-      draft_role: draft_qwen3_0_6b_q8_0
-      k: 16
+      draft_role: draft_qwen35_0_8b_q8_0
+      k: 24
+      p_split: 0  # linear only — tree devastating on hybrid (-25% to -40%)
+      lookup: false  # DISABLED: segfaults on Qwen3.5 hybrids (2026-03-24)
       notes: >
-        0.6B Q8_0 draft VERIFIED (2026-02-13).
-        BOS matched (both 151643). 52-55% acceptance.
-        Full experts + spec = recommended (quality over speed).
-        MoE4+spec was 8.21 t/s but full+spec at 6.08 preserves quality.
+        0.8B Qwen3.5 Q8_0 draft. moe8+spec_q8_k8+lu = 12.6 t/s.
+        Swapped from 235B (133GB) to 122B (69GB) — saves 128GB across 2 instances.
       benchmarked: 2026-02-13
     performance:
       baseline_tps: 5.30
