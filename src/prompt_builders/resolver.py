@@ -129,6 +129,7 @@ _DIRECT_ANSWER_ROLES = frozenset({"worker_explore", "frontdoor"})
 
 _TERSE_PREFIX = "Answer with ONLY the answer. No explanation.\n\n"
 _LIST_PREFIX = "Respond with only the requested items, comma-separated.\n\n"
+_CONCISE_PREFIX = "Be concise. Answer directly in 1-3 sentences. No preamble, no self-correction.\n\n"
 
 # Narrow: "What is <arithmetic>" only — excludes "Solve", "Calculate" etc.
 # that match coding/physics/reasoning questions.
@@ -141,9 +142,13 @@ _LIST_EXACT = re.compile(r"^(list|name)\s+exactly\b", re.IGNORECASE)
 def get_direct_answer_prefix(role: str, question: str = "") -> str:
     """Return a concise-answer directive for roles that need bare output.
 
-    Used by _try_cheap_first in chat.py to prepend a formatting directive.
-    Very selective: only fires for pure arithmetic ("What is 2+3") and
-    explicit list requests ("List exactly ..."). Default is NO prefix.
+    Used by direct_stage.py to prepend a formatting directive that reduces
+    instruction bloat and prevents the self-correcting ramble pattern.
+
+    Priority:
+    1. Pure arithmetic → terse (answer only)
+    2. Explicit list → list format
+    3. Any other question for a direct-answer role → concise directive
     """
     if role not in _DIRECT_ANSWER_ROLES or not question:
         return ""
@@ -152,4 +157,4 @@ def get_direct_answer_prefix(role: str, question: str = "") -> str:
         return _TERSE_PREFIX
     if _LIST_EXACT.search(q):
         return _LIST_PREFIX
-    return ""
+    return _CONCISE_PREFIX
