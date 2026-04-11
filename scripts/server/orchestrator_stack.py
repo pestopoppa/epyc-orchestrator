@@ -1320,6 +1320,14 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env["ORCHESTRATOR_RESUME_TOKENS"] = "1"
     env["ORCHESTRATOR_SIDE_EFFECT_TRACKING"] = "1"
     env["ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT"] = "1"
+    # LangGraph Phase 3: per-node migration (infrastructure validated by 48 unit tests)
+    env["ORCHESTRATOR_LANGGRAPH_INGEST"] = "1"
+    env["ORCHESTRATOR_LANGGRAPH_WORKER"] = "1"
+    env["ORCHESTRATOR_LANGGRAPH_FRONTDOOR"] = "1"
+    env["ORCHESTRATOR_LANGGRAPH_CODER"] = "1"
+    env["ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION"] = "1"
+    env["ORCHESTRATOR_LANGGRAPH_ARCHITECT"] = "1"
+    env["ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"] = "1"
     _apply_orchestrator_profile(env, profile)
     # Bound inference-lock waits by default to avoid multi-minute silent stalls
     # during iterative debugging / seeding runs.

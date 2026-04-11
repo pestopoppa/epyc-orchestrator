@@ -531,6 +531,7 @@ def run_batch_3way(
                             compaction_triggered=rr.compaction_triggered,
                             compaction_tokens_saved=rr.compaction_tokens_saved,
                             think_harder_expected_roi=rr.think_harder_expected_roi,
+                            compression_metrics=rr.compression_metrics,
                         )
                         append_diagnostic(diag)
                         debugger.add_diagnostic(diag)
@@ -670,6 +671,7 @@ def run_batch_3way(
                                     compaction_triggered=rr_diag.compaction_triggered,
                                     compaction_tokens_saved=rr_diag.compaction_tokens_saved,
                                     think_harder_expected_roi=rr_diag.think_harder_expected_roi,
+                                    compression_metrics=rr_diag.compression_metrics,
                                 )
                                 retry_diag["is_retry"] = True
                                 retry_diag["retry_tag"] = tag

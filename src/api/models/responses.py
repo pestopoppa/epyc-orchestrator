@@ -137,6 +137,11 @@ class ChatResponse(BaseModel):
     compaction_tokens_saved: int = Field(
         default=0, description="Tokens saved by context compaction"
     )
+    # Tool output compression metrics
+    compression_metrics: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-turn tool output compression metrics (original/compressed sizes, ratio)",
+    )
     # Web research telemetry (Search-R1 reward design)
     web_research_results: list[dict[str, Any]] = Field(
         default_factory=list,

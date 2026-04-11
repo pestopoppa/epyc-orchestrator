@@ -35,6 +35,7 @@ from src.repl_environment.parallel_dispatch import (
 from src.repl_environment.security import ASTSecurityVisitor
 from src.repl_environment.unicode_sanitizer import sanitize_code_unicode
 from src.repl_environment.combined_ops import _CombinedOpsMixin
+from src.repl_environment.suggestions import _SuggestionsMixin
 from src.repl_environment.file_tools import _FileToolsMixin
 from src.repl_environment.document_tools import _DocumentToolsMixin
 from src.repl_environment.routing import _RoutingMixin
@@ -105,6 +106,7 @@ def _get_allowed_file_paths() -> list[str]:
 
 
 class REPLEnvironment(
+    _SuggestionsMixin,
     _CombinedOpsMixin,
     _FileToolsMixin,
     _DocumentToolsMixin,
@@ -993,6 +995,10 @@ class REPLEnvironment(
 
                 # Spill large output to file with summary
                 observation = self._spill_output(observation)
+
+                # S3a: Append contextual suggestions (feature-gated)
+                _tool_name = tool_calls[0] if tool_calls else ""
+                observation = self._maybe_append_suggestions(_tool_name, observation)
 
                 return ExecutionResult(
                     output=observation,
