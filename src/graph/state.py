@@ -172,6 +172,9 @@ class TaskState:
     # Cache affinity bonus applied during routing
     cache_affinity_bonus: float = 0.0
 
+    # Tool output compression metrics (populated in helpers.py when compression is active)
+    compression_metrics: dict[str, Any] = field(default_factory=dict)
+
     # Global workspace state (shared blackboard across delegation/escalation turns).
     workspace_state: dict[str, Any] = field(
         default_factory=lambda: {

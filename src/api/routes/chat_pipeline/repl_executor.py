@@ -767,6 +767,8 @@ async def _execute_repl(
         # Context window management (C1/C3)
         compaction_triggered=task_state.compaction_count > 0,
         compaction_tokens_saved=task_state.compaction_tokens_saved,
+        # Tool output compression metrics
+        compression_metrics=task_state.compression_metrics,
         # Web research telemetry (Search-R1)
         web_research_results=web_research_results,
         # Scratchpad insights (Search-R1 Step 5)

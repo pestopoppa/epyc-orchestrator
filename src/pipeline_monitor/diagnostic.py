@@ -74,6 +74,8 @@ def build_diagnostic(
     think_harder_expected_roi: float = 0.0,
     # Model-graded subjective eval results (populated post-hoc)
     model_graded_evals: dict[str, Any] | None = None,
+    # Tool output compression metrics
+    compression_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a diagnostic record from evaluation results.
 
@@ -145,6 +147,8 @@ def build_diagnostic(
         "think_harder_expected_roi": think_harder_expected_roi,
         # Model-graded evals (populated post-hoc, not present during live recording)
         "model_graded_evals": model_graded_evals or {},
+        # Tool output compression metrics
+        "compression_metrics": compression_metrics or {},
     }
 
 

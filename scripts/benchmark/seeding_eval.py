@@ -206,6 +206,7 @@ def _build_role_result(
         tool_results_cleared=resp.get("tool_results_cleared", 0),
         compaction_triggered=resp.get("compaction_triggered", False),
         compaction_tokens_saved=resp.get("compaction_tokens_saved", 0),
+        compression_metrics=resp.get("compression_metrics", {}),
         think_harder_expected_roi=resp.get("think_harder_expected_roi", 0.0),
         # Web research telemetry (Search-R1)
         web_research_results=resp.get("web_research_results", []),

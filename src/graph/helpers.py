@@ -1518,6 +1518,24 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 from compress_tool_output import compress_tool_output as _compress
                 _output_for_prompt = _compress(state.last_output, state.last_code)
                 _error_for_prompt = _compress(state.last_error, state.last_code)
+                _out_orig = len(state.last_output)
+                _out_comp = len(_output_for_prompt)
+                _err_orig = len(state.last_error)
+                _err_comp = len(_error_for_prompt)
+                state.compression_metrics = {
+                    "output_original_chars": _out_orig,
+                    "output_compressed_chars": _out_comp,
+                    "output_ratio": round(_out_comp / max(_out_orig, 1), 3),
+                    "error_original_chars": _err_orig,
+                    "error_compressed_chars": _err_comp,
+                    "command": (state.last_code or "")[:80],
+                }
+                if _out_orig > 0 and _out_comp / max(_out_orig, 1) < 0.7:
+                    log.info(
+                        "Tool output compressed: %d → %d chars (%.0f%%)",
+                        _out_orig, _out_comp,
+                        _out_comp / _out_orig * 100,
+                    )
             except Exception:
                 log.debug("Tool output compression failed, using raw output", exc_info=True)
 

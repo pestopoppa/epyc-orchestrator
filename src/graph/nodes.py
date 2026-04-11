@@ -29,6 +29,7 @@ from src.graph.state import (
     TaskState,
 )
 from src.graph.langgraph.state import (
+    APPEND_FIELDS,
     lg_to_task_state,
     snapshot_append_lengths,
     state_update_delta,
@@ -118,6 +119,14 @@ async def _run_via_langgraph(ctx, node_name: str):
     lg_state = task_state_to_lg(ctx.state)
     snap = snapshot_append_lengths(lg_state)
 
+    # Save originals for append-reducer fields before LG call.
+    # LG nodes return deltas (trimmed by state_update_delta), so we must
+    # prepend the originals after lg_to_task_state overwrites them.
+    _append_originals = {
+        field: list(getattr(ctx.state, field, []))
+        for field in APPEND_FIELDS
+    }
+
     # Build RunnableConfig with deps in configurable
     config = {
         "configurable": {
@@ -135,6 +144,12 @@ async def _run_via_langgraph(ctx, node_name: str):
 
     # Apply state updates back to the pydantic_graph TaskState
     lg_to_task_state(result, ctx.state)
+
+    # Restore append-reducer fields: prepend originals to the deltas
+    # that lg_to_task_state set via setattr
+    for field, original in _append_originals.items():
+        delta = getattr(ctx.state, field, [])
+        setattr(ctx.state, field, original + delta)
 
     # Map next_node → pydantic_graph return type
     next_node = result.get("next_node", "__end__")

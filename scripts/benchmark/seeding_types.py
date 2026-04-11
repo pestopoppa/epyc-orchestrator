@@ -224,6 +224,8 @@ class RoleResult:
     compaction_triggered: bool = False
     compaction_tokens_saved: int = 0
     think_harder_expected_roi: float = 0.0
+    # Tool output compression metrics
+    compression_metrics: dict[str, Any] = field(default_factory=dict)
     # Web research telemetry (Search-R1 reward design)
     web_research_results: list[dict] = field(default_factory=list)
     # Scratchpad insights (Search-R1 Step 5)
