@@ -57,10 +57,8 @@ TOOL_GROUPS: dict[str, frozenset[str]] = {
 # Task types where web tools hurt accuracy (Package B Phase 4 Omega finding).
 # Models web-search instead of reasoning on these domains, degrading REPL accuracy.
 # Used to set no_web=True in tool context for these task types.
-# WS-3 relaxation: removed "coder" (benefits from API/doc lookups; compute-first
-# prompt priority prevents search-first regression).
 NO_WEB_TASK_TYPES: frozenset[str] = frozenset({
-    "math", "thinking", "instruction_precision",
+    "math", "coder", "thinking", "instruction_precision",
 })
 
 
