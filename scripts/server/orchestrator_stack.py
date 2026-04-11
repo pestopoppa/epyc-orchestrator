@@ -1575,12 +1575,15 @@ def cmd_start(args: argparse.Namespace) -> int:
             if not args.dev and not is_optional:
                 return 1
 
-        # Brief cooldown between large models to allow mmap settling
-        # With parallel tensor repack enabled, 5s is sufficient
+        # Sequential loading: wait for this server to be healthy before launching
+        # the next one. Concurrent mlock on large models causes crashes even when
+        # total RAM is sufficient (race condition during page fault + lock).
         is_small_model = embedding_mode or (worker_pool_mode and worker_type == "fast") or (vision_mode and vision_type != "escalation")
         if i < len(servers_to_start) - 1 and not args.dev and not is_small_model:
-            print("  Cooldown (5s)...")
-            time.sleep(5)
+            if not wait_for_health(port, timeout=300):
+                print(f"  [!] Server on port {port} did not become healthy within 300s")
+            else:
+                print(f"  Server on port {port} healthy, proceeding to next")
 
     print()
 
