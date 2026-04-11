@@ -61,6 +61,32 @@ NO_WEB_TASK_TYPES: frozenset[str] = frozenset({
     "math", "coder", "thinking", "instruction_precision",
 })
 
+# Task types that REQUIRE web tools — overrides NO_WEB_TASK_TYPES even when
+# routing reclassifies the task_type (e.g. web_research routed to thinking role).
+WEB_REQUIRED_TASK_TYPES: frozenset[str] = frozenset({
+    "web_research",
+})
+
+
+def is_web_denied(task_type: str, original_task_type: str | None = None) -> bool:
+    """Check if web tools should be denied for a task type.
+
+    WS-3 relaxation: if the original task type (from frontdoor/benchmark)
+    requires web, never deny — even if routing reclassified to a no-web type.
+
+    Args:
+        task_type: Current task type (may have been overridden by routing).
+        original_task_type: Original task type before routing override.
+            If None, uses task_type as the original.
+
+    Returns:
+        True if web tools should be denied.
+    """
+    effective_original = original_task_type if original_task_type is not None else task_type
+    if effective_original in WEB_REQUIRED_TASK_TYPES:
+        return False
+    return task_type in NO_WEB_TASK_TYPES
+
 
 @dataclass(frozen=True)
 class PolicyLayer:
