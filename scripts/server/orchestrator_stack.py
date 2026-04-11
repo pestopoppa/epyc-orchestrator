@@ -916,7 +916,7 @@ def build_server_command(
     # KV cache budgets: role-aware context sizes to prevent memory pressure.
     # Total KV ~82GB across all servers, well within 475GB available budget.
     _KV_CONTEXT_SIZES = {
-        "architect_general": "16384",   # 235B MoE → ~32GB KV
+        "architect_general": "16384",   # 122B MoE hybrid → ~16GB KV
         "architect_coding": "16384",    # REAP-246B MoE (139 GB, freed 111 GB vs 480B) → can afford larger KV
         "ingest_long_context": "32768", # 80B SSM, needs long context
     }
