@@ -1,0 +1,116 @@
+# DS-7: Default stack template — matches current hardcoded orchestrator_stack.py config
+# This is the production baseline that AR-3 Pareto frontiers are compared against.
+#
+# System: 2×AMD EPYC 9004, 192 cores (384 threads), 1130 GB RAM
+# NUMA topology: 2 nodes × 2 quarters = 4 quarters (Q0A, Q0B, Q1A, Q1B)
+#
+# Pre-warm roles (frontdoor, coder_escalation, worker_explore):
+#   1×96t full-speed instance + 4×48t quarter instances
+#   ConcurrencyAwareBackend routes single→full, concurrent→quarters
+#
+# Architect roles: 2×96t cross-NUMA replicas (RoundRobinBackend)
+# Single-instance roles: 1×96t or 1×24t dedicated
+
+name: default
+description: Production baseline (2026-04-11) — 30/30 stack, pre-warm 3 roles
+version: "1"
+
+roles:
+  frontdoor:
+    model: Qwen3.5-35B-A3B
+    quant: Q4_K_M
+    tier: HOT
+    ram_gb: 19
+    full:
+      port: 8070
+      numa: NODE0
+      threads: 96
+      slot_save_path: /tmp/kv_frontdoor_full
+      spec_overrides:
+        draft_max: 8
+        p_split: 0.15
+    quarters:
+      - { port: 8080, numa: Q0A, threads: 48 }
+      - { port: 8180, numa: Q0B, threads: 48 }
+      - { port: 8280, numa: Q1A, threads: 48 }
+      - { port: 8380, numa: Q1B, threads: 48 }
+
+  coder_escalation:
+    model: Qwen2.5-Coder-32B
+    quant: Q4_K_M
+    tier: HOT
+    ram_gb: 18.5
+    full:
+      port: 8071
+      numa: NODE0
+      threads: 96
+      slot_save_path: /tmp/kv_coder_esc_full
+    quarters:
+      - { port: 8081, numa: Q0A, threads: 48 }
+      - { port: 8181, numa: Q0B, threads: 48 }
+      - { port: 8281, numa: Q1A, threads: 48 }
+      - { port: 8381, numa: Q1B, threads: 48 }
+
+  worker_explore:
+    model: Qwen3-Coder-30B-A3B
+    quant: Q4_K_M
+    tier: HOT
+    ram_gb: 16
+    full:
+      port: 8072
+      numa: NODE0
+      threads: 96
+      slot_save_path: /tmp/kv_worker_full
+    quarters:
+      - { port: 8082, numa: Q0A, threads: 48 }
+      - { port: 8182, numa: Q0B, threads: 48 }
+      - { port: 8282, numa: Q1A, threads: 48 }
+      - { port: 8382, numa: Q1B, threads: 48 }
+
+  architect_general:
+    model: Qwen3.5-122B-A10B
+    quant: Q4_K_M
+    tier: HOT
+    ram_gb: 69
+    replicas:
+      - { port: 8083, numa: NODE0, threads: 96 }
+      - { port: 8183, numa: NODE1, threads: 96 }
+
+  architect_coding:
+    model: REAP-246B
+    quant: Q4_K_M
+    tier: HOT
+    ram_gb: 139
+    replicas:
+      - { port: 8084, numa: NODE0, threads: 96 }
+      - { port: 8184, numa: NODE1, threads: 96 }
+
+  ingest_long_context:
+    model: Qwen3-Next-80B-A3B
+    quant: Q4_K_M
+    tier: HOT
+    ram_gb: 45
+    full:
+      port: 8085
+      numa: NODE0
+      threads: 96
+
+  worker_vision:
+    model: Qwen2.5-VL-7B
+    quant: Q6_K
+    tier: HOT
+    ram_gb: 6
+    full:
+      port: 8086
+      numa: Q0B
+      threads: 24
+
+  vision_escalation:
+    model: Qwen3-VL-30B-A3B
+    quant: Q4_K_M
+    tier: HOT
+    ram_gb: 18
+    full:
+      port: 8087
+      numa: NODE1
+      threads: 96

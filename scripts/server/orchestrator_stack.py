@@ -1443,6 +1443,52 @@ def start_document_formalizer() -> ProcessInfo | None:
 
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the orchestrator stack."""
+    # DS-7: Stack template validation (before any other work)
+    stack_profile = getattr(args, "stack_profile", None)
+    validate_only = getattr(args, "validate_only", False)
+    if stack_profile:
+        try:
+            from src.config.stack_templates import (
+                load_template, validate_template, _TEMPLATES_DIR,
+            )
+            print(f"[DS-7] Loading stack template: {stack_profile}")
+            template = load_template(stack_profile)
+            print(f"  Name: {template.name}")
+            print(f"  Description: {template.description}")
+            print(f"  Roles: {len(template.roles)} ({', '.join(template.role_names())})")
+            print(f"  Instances: {template.total_instances}")
+            print(f"  RAM: {template.total_ram_gb:.0f} GB")
+            print()
+
+            registry_path = Path(_PATHS.get("model_registry", "")) if _PATHS.get("model_registry") else None
+            result = validate_template(template, registry_path)
+            if result.errors:
+                print(f"  [FAIL] {len(result.errors)} validation errors:")
+                for err in result.errors:
+                    print(f"    ERROR: {err}")
+            if result.warnings:
+                for warn in result.warnings:
+                    print(f"    WARN: {warn}")
+            if result.valid:
+                print("  [OK] Template valid")
+            else:
+                print("\n  Template validation failed. Fix errors and retry.")
+                return 1
+
+            if validate_only:
+                print("\n--validate-only: exiting after validation.")
+                return 0
+
+            print(f"  (Template loaded but not yet used for server launch — "
+                  f"integration pending DS-7 Phase 2)")
+            print()
+        except FileNotFoundError as exc:
+            print(f"[DS-7] ERROR: {exc}")
+            return 1
+        except Exception as exc:
+            print(f"[DS-7] Template load error: {exc}")
+            return 1
+
     print("=" * 60)
     print("ORCHESTRATOR STACK STARTUP")
     print("=" * 60)
@@ -2228,6 +2274,17 @@ def main() -> int:
         "--profile",
         choices=sorted(ORCHESTRATOR_PROFILES.keys()),
         help="Optional orchestrator API env profile",
+    )
+    start_parser.add_argument(
+        "--stack-profile",
+        metavar="NAME",
+        help="Load stack template from stack_templates/<NAME>.yaml (DS-7). "
+             "Use --validate-only to check without launching.",
+    )
+    start_parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Validate stack template and exit (use with --stack-profile)",
     )
 
     # Stop command
