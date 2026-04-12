@@ -14,10 +14,18 @@ import re
 from typing import Any
 from urllib.parse import quote_plus
 
+import threading
+import time
+
 from src.tool_registry import Tool, ToolCategory, ToolRegistry
 from src.tools.base import safe_execute
 
 logger = logging.getLogger(__name__)
+
+# Rate limiter: minimum seconds between DDG requests to avoid bot detection
+_DDG_MIN_INTERVAL = 2.0
+_ddg_last_request: float = 0.0
+_ddg_lock = threading.Lock()
 
 
 def _search_duckduckgo(
@@ -27,6 +35,7 @@ def _search_duckduckgo(
     """Search DuckDuckGo and return results.
 
     Uses the DuckDuckGo HTML interface (no API key required).
+    Rate-limited to avoid bot detection.
 
     Args:
         query: Search query.
@@ -37,76 +46,99 @@ def _search_duckduckgo(
     """
     import subprocess
 
-    # DuckDuckGo HTML search URL
+    # Rate limit: wait if we've searched recently
+    global _ddg_last_request
+    with _ddg_lock:
+        elapsed = time.time() - _ddg_last_request
+        if elapsed < _DDG_MIN_INTERVAL:
+            time.sleep(_DDG_MIN_INTERVAL - elapsed)
+        _ddg_last_request = time.time()
+
     encoded_query = quote_plus(query)
-    url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
 
-    # Use curl — DDG blocks Python urllib/httpx but allows curl
-    try:
-        result = subprocess.run(
-            [
-                "curl", "-s", "-L", "--max-time", "15",
-                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
-                "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "-H", "Accept-Language: en-US,en;q=0.5",
-                url,
-            ],
-            capture_output=True,
-            timeout=20,
-        )
-        if result.returncode != 0:
-            raise Exception(f"curl failed: {result.stderr.decode()[:200]}")
-        html = result.stdout.decode("utf-8", errors="replace")
-    except subprocess.TimeoutExpired:
-        raise Exception("Search request timed out")
-    except FileNotFoundError:
-        raise Exception("curl not found — required for web search")
+    # Try multiple search engines with fallback
+    engines = [
+        ("ddg", f"https://html.duckduckgo.com/html/?q={encoded_query}"),
+        ("brave", f"https://search.brave.com/search?q={encoded_query}&source=web"),
+    ]
 
-    # Parse results from HTML
-    results = []
-    from urllib.parse import unquote
-
-    # Split HTML into result blocks, then extract title/url/snippet from each
-    # DDG wraps each result in <div class="result ...">
-    result_blocks = re.split(r'<div[^>]*class="[^"]*web-result[^"]*"', html)
-
-    for block in result_blocks[1:]:  # skip content before first result
-        if len(results) >= max_results:
-            break
-
-        # Extract title + URL from result__a link
-        link_match = re.search(
-            r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
-            block, re.DOTALL,
-        )
-        if not link_match:
+    html = None
+    engine_used = None
+    for engine_name, url in engines:
+        try:
+            result = subprocess.run(
+                [
+                    "curl", "-s", "-L", "--max-time", "15", "--compressed",
+                    "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+                    "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "-H", "Accept-Language: en-US,en;q=0.5",
+                    url,
+                ],
+                capture_output=True,
+                timeout=20,
+            )
+            fetched = result.stdout.decode("utf-8", errors="replace")
+            if result.returncode != 0 and not fetched.strip():
+                continue  # try next engine (only skip if no output at all)
+            # Check if we got real results (not a bot challenge page)
+            if "result__a" in fetched or "snippet" in fetched:
+                html = fetched
+                engine_used = engine_name
+                break
+        except (subprocess.TimeoutExpired, FileNotFoundError):
             continue
 
-        raw_url = link_match.group(1)
-        title = re.sub(r'<[^>]+>', '', link_match.group(2)).strip()
+    if html is None:
+        raise Exception("All search engines failed or rate-limited")
 
-        # Extract snippet
-        snippet_match = re.search(
-            r'class="result__snippet"[^>]*>(.*?)</(?:a|span|div)',
-            block, re.DOTALL,
-        )
-        snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip() if snippet_match else ""
+    # Parse results from HTML — engine-specific parsers
+    from urllib.parse import unquote
+    results = []
 
-        # Clean up DuckDuckGo redirect URLs
-        if "uddg=" in raw_url:
-            uddg_match = re.search(r"uddg=([^&]+)", raw_url)
-            if uddg_match:
-                raw_url = unquote(uddg_match.group(1))
-        elif raw_url.startswith("//"):
-            raw_url = "https:" + raw_url
+    if engine_used == "ddg":
+        result_blocks = re.split(r'<div[^>]*class="[^"]*web-result[^"]*"', html)
+        for block in result_blocks[1:]:
+            if len(results) >= max_results:
+                break
+            link_match = re.search(
+                r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
+                block, re.DOTALL,
+            )
+            if not link_match:
+                continue
+            raw_url = link_match.group(1)
+            title = re.sub(r'<[^>]+>', '', link_match.group(2)).strip()
+            snippet_match = re.search(
+                r'class="result__snippet"[^>]*>(.*?)</(?:a|span|div)',
+                block, re.DOTALL,
+            )
+            snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip() if snippet_match else ""
+            if "uddg=" in raw_url:
+                uddg_match = re.search(r"uddg=([^&]+)", raw_url)
+                if uddg_match:
+                    raw_url = unquote(uddg_match.group(1))
+            elif raw_url.startswith("//"):
+                raw_url = "https:" + raw_url
+            if raw_url and title:
+                results.append({"title": title, "url": raw_url, "snippet": snippet})
 
-        if raw_url and title:
-            results.append({
-                "title": title,
-                "url": raw_url,
-                "snippet": snippet,
-            })
+    elif engine_used == "brave":
+        # Brave search HTML parser
+        result_blocks = re.split(r'<div[^>]*class="snippet[^"]*"', html)
+        for block in result_blocks[1:]:
+            if len(results) >= max_results:
+                break
+            link_match = re.search(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL)
+            if not link_match:
+                continue
+            raw_url = link_match.group(1)
+            title = re.sub(r'<[^>]+>', '', link_match.group(2)).strip()
+            snippet_match = re.search(r'class="snippet-content[^"]*"[^>]*>(.*?)</p', block, re.DOTALL)
+            snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip() if snippet_match else ""
+            if raw_url and title and "brave.com" not in raw_url:
+                results.append({"title": title, "url": raw_url, "snippet": snippet})
 
+    logger.debug("Search engine=%s, results=%d", engine_used, len(results))
     return results
 
 
