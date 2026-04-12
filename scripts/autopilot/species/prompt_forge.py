@@ -31,6 +31,7 @@ CODE_MUTATION_ALLOWLIST = [
     "src/escalation.py",                     # Escalation policy & retry logic
     "src/graph/escalation_helpers.py",       # Role cycle detection
     "src/tool_policy.py",                    # Tool access control rules
+    "src/api/routes/chat.py",               # Chat pipeline (cheap-first, routing, response)
 ]
 
 MUTATION_TYPES = [
