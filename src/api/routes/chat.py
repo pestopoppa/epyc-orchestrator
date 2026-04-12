@@ -321,6 +321,7 @@ async def _try_cheap_first(
         cheap_first_passed=True,
         skills_retrieved=len(routing.skill_ids),
         skill_ids=routing.skill_ids,
+        tokens_generated=primitives.total_tokens_generated,
     )
 
 
