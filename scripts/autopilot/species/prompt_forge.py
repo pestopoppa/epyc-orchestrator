@@ -39,6 +39,7 @@ MUTATION_TYPES = [
     "few_shot_evolution",  # Add/remove/modify examples
     "crossover",  # Merge sections from two prompts
     "style_transfer",  # Apply patterns from one prompt to another
+    "gepa",  # AP-19: GEPA evolutionary optimization (runs internal eval loop)
 ]
 
 
@@ -105,13 +106,27 @@ class PromptForge:
         failure_context: str = "",
         per_suite_quality: dict[str, float] | None = None,
         description: str = "",
+        eval_tower=None,
+        gepa_max_evals: int = 50,
     ) -> PromptMutation:
-        """Use Claude CLI to propose a prompt mutation.
+        """Propose a prompt mutation via Claude CLI or GEPA.
+
+        When mutation_type="gepa", delegates to GEPA evolutionary optimization
+        (AP-19). Requires eval_tower to be passed for orchestrator-based eval.
 
         Returns PromptMutation with the proposed changes.
         """
         if mutation_type not in MUTATION_TYPES:
             raise ValueError(f"Unknown mutation type: {mutation_type}")
+
+        # AP-19: GEPA evolutionary optimization
+        if mutation_type == "gepa":
+            return self._propose_via_gepa(
+                target_file=target_file,
+                eval_tower=eval_tower,
+                max_evals=gepa_max_evals,
+                description=description,
+            )
 
         original = self.read_prompt(target_file)
 
@@ -135,6 +150,46 @@ class PromptForge:
             mutated_content=mutated_content,
         )
         return mutation
+
+    def _propose_via_gepa(
+        self,
+        target_file: str,
+        eval_tower=None,
+        max_evals: int = 50,
+        description: str = "",
+    ) -> PromptMutation:
+        """AP-19: Use GEPA evolutionary optimization to propose a mutation.
+
+        Runs GEPA's reflective-mutation + Pareto-selection loop through the
+        full orchestrator pipeline (eval_tower), returning the best candidate
+        as a PromptMutation.
+        """
+        from .gepa_optimizer import GEPAPromptOptimizer
+
+        if eval_tower is None:
+            raise ValueError("gepa mutation requires eval_tower to be passed")
+
+        optimizer = GEPAPromptOptimizer(
+            eval_tower=eval_tower,
+            prompt_forge=self,
+        )
+        result = optimizer.run(
+            target_file=target_file,
+            max_evals=max_evals,
+        )
+
+        if result is None:
+            # GEPA failed — return a no-op mutation
+            original = self.read_prompt(target_file)
+            return PromptMutation(
+                file=target_file,
+                mutation_type="gepa",
+                description="GEPA optimization failed — no mutation proposed",
+                original_content=original,
+                mutated_content=original,
+            )
+
+        return result.to_prompt_mutation()
 
     def apply_mutation(self, mutation: PromptMutation) -> dict[str, Any]:
         """Apply a mutation (write file + optional git commit)."""
