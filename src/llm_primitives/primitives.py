@@ -575,9 +575,10 @@ class LLMPrimitives(
             self.call_log.append(log_entry)
 
             # Track tokens for current query cost
+            completion_tokens = self._estimate_completion_tokens(result)
+            self.total_tokens_generated += completion_tokens
             if self._current_query is not None:
                 prompt_tokens = self._estimate_prompt_tokens(full_prompt)
-                completion_tokens = self._estimate_completion_tokens(result)
                 self._current_query.prompt_tokens += prompt_tokens
                 self._current_query.completion_tokens += completion_tokens
                 self._current_query.total_tokens += prompt_tokens + completion_tokens
@@ -683,11 +684,12 @@ class LLMPrimitives(
             self.call_log.append(log_entry)
 
             # Track tokens for current query cost
+            total_completion_tokens = sum(
+                self._estimate_completion_tokens(r) for r in capped_results
+            )
+            self.total_tokens_generated += total_completion_tokens
             if self._current_query is not None:
                 total_prompt_tokens = sum(self._estimate_prompt_tokens(p) for p in prompts)
-                total_completion_tokens = sum(
-                    self._estimate_completion_tokens(r) for r in capped_results
-                )
                 self._current_query.prompt_tokens += total_prompt_tokens
                 self._current_query.completion_tokens += total_completion_tokens
                 self._current_query.total_tokens += total_prompt_tokens + total_completion_tokens
@@ -778,11 +780,12 @@ class LLMPrimitives(
             self.call_log.append(log_entry)
 
             # Track tokens for current query cost
+            total_completion_tokens = sum(
+                self._estimate_completion_tokens(r) for r in capped_results
+            )
+            self.total_tokens_generated += total_completion_tokens
             if self._current_query is not None:
                 total_prompt_tokens = sum(self._estimate_prompt_tokens(p) for p in prompts)
-                total_completion_tokens = sum(
-                    self._estimate_completion_tokens(r) for r in capped_results
-                )
                 self._current_query.prompt_tokens += total_prompt_tokens
                 self._current_query.completion_tokens += total_completion_tokens
                 self._current_query.total_tokens += total_prompt_tokens + total_completion_tokens

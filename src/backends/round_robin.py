@@ -116,6 +116,51 @@ class RoundRobinBackend:
             combined["per_instance"].append(inst_stats)
         return combined
 
+    # DS-6: Dynamic instance management for QuarterScheduler
+
+    def add_instance(self, backend: Any) -> None:
+        """Add a new backend instance to the round-robin pool.
+
+        Thread-safe. The new instance starts receiving requests immediately.
+        """
+        with self._lock:
+            self._backends.append(backend)
+            self._active_per_instance.append(0)
+            self._total_per_instance.append(0)
+        logger.info(
+            "RoundRobin[%s]: added instance (now %d total)",
+            self._role, len(self._backends),
+        )
+
+    def remove_instance(self, idx: int) -> bool:
+        """Remove a backend instance by index. Returns False if index invalid.
+
+        Thread-safe. Refuses removal if the instance has active requests.
+        Caller must drain traffic before calling this.
+        """
+        with self._lock:
+            if idx < 0 or idx >= len(self._backends):
+                return False
+            if self._active_per_instance[idx] > 0:
+                logger.warning(
+                    "RoundRobin[%s]: refusing to remove instance %d with %d active requests",
+                    self._role, idx, self._active_per_instance[idx],
+                )
+                return False
+            self._backends.pop(idx)
+            self._active_per_instance.pop(idx)
+            self._total_per_instance.pop(idx)
+        logger.info(
+            "RoundRobin[%s]: removed instance %d (now %d total)",
+            self._role, idx, len(self._backends),
+        )
+        return True
+
+    def instance_count(self) -> int:
+        """Return current number of backend instances."""
+        with self._lock:
+            return len(self._backends)
+
     def __len__(self) -> int:
         return len(self._backends)
 

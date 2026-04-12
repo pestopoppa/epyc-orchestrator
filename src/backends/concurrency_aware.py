@@ -372,6 +372,68 @@ class ConcurrencyAwareBackend:
             "kv_migration_enabled": _HTTPX_AVAILABLE and bool(self._full_url),
         }
 
+    # DS-6: Dynamic quarter management for QuarterScheduler
+
+    def add_quarter(self, backend: Any) -> int:
+        """Add a quarter backend instance. Returns the new quarter index.
+
+        Thread-safe. The new quarter starts receiving requests immediately.
+        """
+        with self._lock:
+            idx = len(self._quarters)
+            self._quarters.append(backend)
+            self._quarter_active.append(False)
+            self._quarter_urls.append(_get_base_url(backend))
+        logger.info(
+            "ConcurrencyAware[%s]: added quarter %d (now %d quarters)",
+            self._role, idx, len(self._quarters),
+        )
+        return idx
+
+    def remove_quarter(self, idx: int) -> bool:
+        """Remove a quarter backend by index. Returns False if index invalid.
+
+        Thread-safe. Refuses removal if the quarter has active requests.
+        Caller must drain traffic before calling this.
+        Also cleans up any session affinity pointing to this quarter.
+        """
+        with self._lock:
+            if idx < 0 or idx >= len(self._quarters):
+                return False
+            if self._quarter_active[idx]:
+                logger.warning(
+                    "ConcurrencyAware[%s]: refusing to remove active quarter %d",
+                    self._role, idx,
+                )
+                return False
+            self._quarters.pop(idx)
+            self._quarter_active.pop(idx)
+            self._quarter_urls.pop(idx)
+            # Fix up session affinity: remove stale references, shift indices
+            stale = [sid for sid, qidx in self._session_quarter.items() if qidx == idx]
+            for sid in stale:
+                del self._session_quarter[sid]
+            for sid in list(self._session_quarter):
+                if self._session_quarter[sid] > idx:
+                    self._session_quarter[sid] -= 1
+        logger.info(
+            "ConcurrencyAware[%s]: removed quarter %d (now %d quarters)",
+            self._role, idx, len(self._quarters),
+        )
+        return True
+
+    def quarter_count(self) -> int:
+        """Return current number of quarter instances."""
+        with self._lock:
+            return len(self._quarters)
+
+    def is_quarter_active(self, idx: int) -> bool:
+        """Check if a specific quarter has active requests."""
+        with self._lock:
+            if 0 <= idx < len(self._quarter_active):
+                return self._quarter_active[idx]
+            return False
+
     def __len__(self) -> int:
         return 1 + len(self._quarters)
 
