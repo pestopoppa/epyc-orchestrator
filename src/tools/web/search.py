@@ -35,78 +35,77 @@ def _search_duckduckgo(
     Returns:
         List of result dicts with title, url, snippet.
     """
-    import urllib.request
-    from urllib.error import HTTPError, URLError
+    import subprocess
 
     # DuckDuckGo HTML search URL
     encoded_query = quote_plus(query)
     url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; OrchestratorBot/1.0)",
-    }
-
-    req = urllib.request.Request(url, headers=headers)
-
+    # Use curl — DDG blocks Python urllib/httpx but allows curl
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            html = response.read().decode("utf-8", errors="replace")
-    except (HTTPError, URLError) as e:
-        raise Exception(f"Search request failed: {e}")
+        result = subprocess.run(
+            [
+                "curl", "-s", "-L", "--max-time", "15",
+                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+                "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "-H", "Accept-Language: en-US,en;q=0.5",
+                url,
+            ],
+            capture_output=True,
+            timeout=20,
+        )
+        if result.returncode != 0:
+            raise Exception(f"curl failed: {result.stderr.decode()[:200]}")
+        html = result.stdout.decode("utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        raise Exception("Search request timed out")
+    except FileNotFoundError:
+        raise Exception("curl not found — required for web search")
 
     # Parse results from HTML
     results = []
+    from urllib.parse import unquote
 
-    # Simple regex parsing for DuckDuckGo HTML results
-    # Pattern for result blocks
-    result_pattern = re.compile(
-        r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)</a>'
-        r'.*?<a[^>]*class="result__snippet"[^>]*>([^<]*)</a>',
-        re.DOTALL,
-    )
+    # Split HTML into result blocks, then extract title/url/snippet from each
+    # DDG wraps each result in <div class="result ...">
+    result_blocks = re.split(r'<div[^>]*class="[^"]*web-result[^"]*"', html)
 
-    for match in result_pattern.finditer(html):
+    for block in result_blocks[1:]:  # skip content before first result
         if len(results) >= max_results:
             break
 
-        url_match = match.group(1)
-        title = match.group(2).strip()
-        snippet = match.group(3).strip()
+        # Extract title + URL from result__a link
+        link_match = re.search(
+            r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
+            block, re.DOTALL,
+        )
+        if not link_match:
+            continue
+
+        raw_url = link_match.group(1)
+        title = re.sub(r'<[^>]+>', '', link_match.group(2)).strip()
+
+        # Extract snippet
+        snippet_match = re.search(
+            r'class="result__snippet"[^>]*>(.*?)</(?:a|span|div)',
+            block, re.DOTALL,
+        )
+        snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip() if snippet_match else ""
 
         # Clean up DuckDuckGo redirect URLs
-        if "uddg=" in url_match:
-            # Extract actual URL from DDG redirect
-            actual_url_match = re.search(r"uddg=([^&]+)", url_match)
-            if actual_url_match:
-                from urllib.parse import unquote
+        if "uddg=" in raw_url:
+            uddg_match = re.search(r"uddg=([^&]+)", raw_url)
+            if uddg_match:
+                raw_url = unquote(uddg_match.group(1))
+        elif raw_url.startswith("//"):
+            raw_url = "https:" + raw_url
 
-                url_match = unquote(actual_url_match.group(1))
-
-        if url_match and title:
-            results.append(
-                {
-                    "title": title,
-                    "url": url_match,
-                    "snippet": snippet,
-                }
-            )
-
-    # Fallback: try simpler pattern if no results
-    if not results:
-        link_pattern = re.compile(r'<a[^>]*href="(https?://[^"]+)"[^>]*>([^<]+)</a>')
-        for match in link_pattern.finditer(html):
-            if len(results) >= max_results:
-                break
-            url_match = match.group(1)
-            title = match.group(2).strip()
-            if url_match and title and "duckduckgo" not in url_match.lower():
-                results.append(
-                    {
-                        "title": title,
-                        "url": url_match,
-                        "snippet": "",
-                    }
-                )
+        if raw_url and title:
+            results.append({
+                "title": title,
+                "url": raw_url,
+                "snippet": snippet,
+            })
 
     return results
 
