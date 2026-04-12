@@ -129,6 +129,8 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Numeric: {{"type": "numeric_trial", "surface": "memrl_retrieval|think_harder|monitor|escalation", "params": {{}}}}
   (Leave params empty to let Optuna suggest; provide params to test specific values)
 - Prompt: {{"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix|compress|few_shot_evolution", "description": "..."}}
+- GEPA: {{"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50, "description": "..."}}
+  (AP-19: Evolutionary prompt optimization via GEPA — runs ~50 evals internally, returns best candidate)
 - Code: {{"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix", "description": "..."}}
   (Mutate Python code — ONLY files in allowlist: {code_targets})
 - Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
@@ -322,13 +324,13 @@ def _validate_single_variable(action: dict[str, Any]) -> str | None:
     """
     action_type = action.get("type", "")
 
-    if action_type == "prompt_mutation":
+    if action_type in ("prompt_mutation", "gepa_optimize"):
         # Must target exactly one file
         target = action.get("file", "")
         if not target:
-            return "prompt_mutation must specify a single target file"
+            return f"{action_type} must specify a single target file"
         if "," in target or ";" in target:
-            return f"prompt_mutation targets multiple files: {target}"
+            return f"{action_type} targets multiple files: {target}"
 
     elif action_type == "code_mutation":
         target = action.get("file", "")
@@ -511,6 +513,67 @@ def dispatch_action(
 
         # AP-7: Prompt change accepted — invalidate stale Optuna trials
         swarm.mark_epoch(f"prompt_mutation:{target}/{mutation_type}")
+        return eval_result, "prompt_forge"
+
+    elif action_type == "gepa_optimize":
+        # AP-19: GEPA evolutionary prompt optimization
+        target = action.get("file", "frontdoor.md")
+        max_evals = action.get("max_evals", 50)
+        description = action.get("description", f"GEPA optimize {target}")
+
+        log.info("GEPA optimize: %s (max_evals=%d)", target, max_evals)
+
+        mutation = forge.propose_mutation(
+            target_file=target,
+            mutation_type="gepa",
+            description=description,
+            eval_tower=tower,
+            gepa_max_evals=max_evals,
+        )
+
+        # No-op mutation means GEPA failed
+        if mutation.original_content == mutation.mutated_content:
+            log.warning("GEPA produced no mutation for %s", target)
+            eval_result = tower.hybrid_eval()
+            return eval_result, "prompt_forge"
+
+        forge.apply_mutation(mutation)
+        eval_result = tower.hybrid_eval()
+
+        # Safety gate check (same as prompt_mutation)
+        verdict = gate.check(eval_result)
+        if not verdict:
+            log.warning("GEPA mutation failed safety gate, reverting")
+            forge.revert_mutation(mutation)
+            return eval_result, "prompt_forge"
+
+        # Simplicity criterion (AP-10)
+        orig_len = len(mutation.original_content)
+        new_len = len(mutation.mutated_content)
+        if orig_len > 0:
+            size_increase = (new_len - orig_len) / orig_len
+            last_quality = 0.0
+            recent = journal.recent(1)
+            if recent:
+                last_quality = recent[-1].quality
+            quality_delta = eval_result.quality - last_quality
+            if size_increase > 0.20 and quality_delta < 0.02:
+                log.warning(
+                    "GEPA simplicity criterion: prompt grew %.0f%% for %.3f gain, reverting",
+                    size_increase * 100, quality_delta,
+                )
+                forge.revert_mutation(mutation)
+                return eval_result, "prompt_forge"
+            if size_increase < -0.50:
+                log.warning(
+                    "GEPA simplicity criterion: prompt shrank %.0f%%, reverting",
+                    abs(size_increase) * 100,
+                )
+                forge.revert_mutation(mutation)
+                state["_dispatch_deficiency"] = "shrinkage"
+                return eval_result, "prompt_forge"
+
+        swarm.mark_epoch(f"gepa_optimize:{target}")
         return eval_result, "prompt_forge"
 
     elif action_type == "code_mutation":
@@ -1218,6 +1281,10 @@ def _auto_action(
     elif species == "numeric_swarm":
         return {"type": "numeric_trial", "surface": "memrl_retrieval"}
     elif species == "prompt_forge":
+        # AP-19: 30% chance of GEPA evolutionary optimization, 70% LLM mutation
+        import random
+        if random.random() < 0.30:
+            return {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50}
         return {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"}
     elif species == "structural_lab":
         if converged:
