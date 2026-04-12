@@ -1350,8 +1350,28 @@ def main() -> None:
     p_restore.add_argument("--checkpoint", type=str, default=None)
     p_restore.set_defaults(func=cmd_restore)
 
+    # monitor — standalone TUI (read-only, doesn't own autopilot process)
+    p_monitor = subparsers.add_parser(
+        "monitor",
+        help="Live TUI monitor (standalone, read-only — run in a separate terminal)",
+    )
+    p_monitor.set_defaults(func=cmd_monitor)
+
     args = parser.parse_args()
     args.func(args)
+
+
+def cmd_monitor(args: argparse.Namespace) -> None:
+    """Launch standalone TUI monitor (read-only)."""
+    from autopilot_tui import AutoPilotTUI
+    print("Starting standalone TUI monitor (read-only)...")
+    print("Press Ctrl+C to exit.\n")
+    with AutoPilotTUI() as tui:
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
