@@ -148,8 +148,6 @@ def _fetch_url(url: str, max_length: int = 8000, timeout: int = _WEB_FETCH_TIMEO
         Exception: If fetch fails.
     """
     import time
-    import urllib.request
-    from urllib.error import HTTPError, URLError
 
     # Check cache
     cache_key = url
@@ -159,38 +157,51 @@ def _fetch_url(url: str, max_length: int = 8000, timeout: int = _WEB_FETCH_TIMEO
             logger.debug(f"Cache hit for {url}")
             return content
 
-    # Prepare request with headers
-    headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; OrchestratorBot/1.0)",
-        "Accept": "text/html,application/xhtml+xml,text/plain",
-    }
-
-    req = urllib.request.Request(url, headers=headers)
+    # Use curl — handles gzip/deflate decompression and avoids bot detection
+    import subprocess
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            # Check content type
-            content_type = response.headers.get("Content-Type", "")
-            if "text/html" in content_type:
-                html = response.read().decode("utf-8", errors="replace")
-                content = _extract_content(html, url)
-            else:
-                # Plain text or other
-                content = response.read().decode("utf-8", errors="replace")
+        result = subprocess.run(
+            [
+                "curl", "-s", "-L", "--max-time", str(timeout), "--compressed",
+                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+                "-H", "Accept: text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+                "-H", "Accept-Language: en-US,en;q=0.5",
+                "-w", "\n__CONTENT_TYPE__:%{content_type}",
+                url,
+            ],
+            capture_output=True,
+            timeout=timeout + 5,
+        )
+        if result.returncode != 0:
+            raise Exception(f"curl failed: {result.stderr.decode()[:200]}")
+        raw = result.stdout.decode("utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        raise Exception(f"Fetch timed out after {timeout}s")
+    except FileNotFoundError:
+        raise Exception("curl not found")
 
-            # Truncate if needed
-            if len(content) > max_length:
-                content = content[:max_length] + f"\n\n[... truncated at {max_length} chars]"
+    # Split content type from body (appended by -w flag)
+    if "\n__CONTENT_TYPE__:" in raw:
+        body, ct_line = raw.rsplit("\n__CONTENT_TYPE__:", 1)
+        content_type = ct_line.strip()
+    else:
+        body = raw
+        content_type = "text/html"
 
-            # Cache result
-            _fetch_cache[cache_key] = (content, time.time())
+    if "text/html" in content_type:
+        content = _extract_content(body, url)
+    else:
+        content = body
 
-            return content
+    # Truncate if needed
+    if len(content) > max_length:
+        content = content[:max_length] + f"\n\n[... truncated at {max_length} chars]"
 
-    except HTTPError as e:
-        raise Exception(f"HTTP error {e.code}: {e.reason}")
-    except URLError as e:
-        raise Exception(f"URL error: {e.reason}")
+    # Cache result
+    _fetch_cache[cache_key] = (content, time.time())
+
+    return content
 
 
 def fetch_docs(
