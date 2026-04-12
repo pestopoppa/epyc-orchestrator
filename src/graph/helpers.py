@@ -1170,14 +1170,18 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
 
         if cached_text is not None:
             # Cache hit — skip LLM consolidation
-            from src.graph.session_log import ConsolidatedSegment
+            from src.graph.session_log import ConsolidatedSegment, _extract_topic_tags
             import time as _time
+            _now = _time.time()
             segment = ConsolidatedSegment(
                 turn_range=turn_range,
                 granular_blocks=list(state.pending_granular_blocks),
                 consolidated=cached_text,
                 trigger=trigger + "_cached",
-                timestamp=_time.time(),
+                timestamp=_now,
+                validity_timestamp=_now,  # CF-P1
+                source_turn_ids=list(range(turn_range[0], turn_range[1] + 1)),  # CF-P1
+                topic_tags=_extract_topic_tags(cached_text),  # CF-P3
             )
         elif deps.primitives is not None:
             segment = await consolidate_segment(
@@ -1193,14 +1197,19 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
                     state.pending_granular_blocks, segment.consolidated,
                 )
         else:
-            from src.graph.session_log import ConsolidatedSegment
+            from src.graph.session_log import ConsolidatedSegment, _extract_topic_tags
             import time as _time
+            _now = _time.time()
+            _fallback_text = "; ".join(state.pending_granular_blocks)
             segment = ConsolidatedSegment(
                 turn_range=turn_range,
                 granular_blocks=list(state.pending_granular_blocks),
-                consolidated="; ".join(state.pending_granular_blocks),
+                consolidated=_fallback_text,
                 trigger=trigger,
-                timestamp=_time.time(),
+                timestamp=_now,
+                validity_timestamp=_now,  # CF-P1
+                source_turn_ids=list(range(turn_range[0], turn_range[1] + 1)),  # CF-P1
+                topic_tags=_extract_topic_tags(_fallback_text),  # CF-P3
             )
             # Also cache fallback consolidations
             if use_cache and state.segment_cache is not None:

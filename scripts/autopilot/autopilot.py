@@ -45,6 +45,8 @@ from meta_optimizer import MetaOptimizer, SpeciesBudget
 from progress_plots import generate_all_plots
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
 from species.prompt_forge import CODE_MUTATION_ALLOWLIST
+from short_term_memory import ShortTermMemory, TrialOutcome
+from self_criticism import SelfCriticism, generate_self_criticism
 
 # Strategy store for species memory (B1)
 sys.path.insert(0, str(ORCH_ROOT))
@@ -97,6 +99,12 @@ Your job: analyze current system state and propose the SINGLE best next action.
 
 ### Recent Insights (cross-species)
 {insights}
+
+### Short-Term Memory (accumulated learnings this session)
+{short_term_memory}
+
+### Self-Criticism from Last Trial
+{last_criticism}
 
 ### Blacklisted Configurations
 {blacklist_text}
@@ -792,6 +800,10 @@ def _run_loop_inner(
     lab = StructuralLab(orchestrator_url=ORCHESTRATOR_URL)
     evo = EvolutionManager(use_local_model=not use_controller)
 
+    # AP-22: Short-term memory (accumulated learnings across trials)
+    memory = ShortTermMemory()
+    last_criticism_text = "(first trial — no prior criticism)"
+
     # B1: Strategy store for species memory
     strategy_store: StrategyStore | None = None
     try:
@@ -883,6 +895,8 @@ def _run_loop_inner(
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
                 insights=insights_text,
+                short_term_memory=memory.to_text(),  # AP-22
+                last_criticism=last_criticism_text,  # AP-23
                 blacklist_text=blacklist_text,
                 code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
@@ -963,6 +977,26 @@ def _run_loop_inner(
                 blacklist = load_blacklist()  # Reload after append
                 lab.restore_checkpoint()
                 gate.reset_failures()
+
+        # ── 4b. Self-Criticism (AP-23/AP-24) ────────────────────
+        # Get baseline and previous per-suite for comparison
+        baseline_q = gate.baseline.quality if gate.baseline else 0.0
+        prev_suite = {}
+        recent = journal.by_species(species_name)
+        if recent:
+            prev_details = recent[-1].eval_details
+            if isinstance(prev_details, dict):
+                prev_suite = prev_details.get("per_suite_quality", {})
+
+        criticism = generate_self_criticism(
+            action=action,
+            eval_result=eval_result,
+            verdict=verdict,
+            failure_analysis=failure_analysis,
+            baseline_quality=baseline_q,
+            prev_per_suite=prev_suite,
+        )
+        last_criticism_text = criticism.as_text()
 
         # ── 5. Record ────────────────────────────────────────────
         pareto_status = archive.update(
@@ -1073,11 +1107,30 @@ def _run_loop_inner(
                 deficiency_category=deficiency_category,
                 instruction_token_count=eval_result.instruction_token_count,
                 instruction_token_ratio=eval_result.instruction_token_ratio,
+                self_criticism=criticism.as_text(),  # AP-23
+                keep_revert_decision=criticism.keep_or_revert,  # AP-24
+                optimization_directions=criticism.directions_text(),  # AP-24
             )
         )
 
         # AP-16: Track last instruction ratio for structural pruning comparison
         state["_last_instruction_ratio"] = eval_result.instruction_token_ratio
+
+        # AP-22: Update short-term memory with trial outcome
+        memory.update(TrialOutcome(
+            trial_id=trial_counter,
+            species=species_name,
+            action_type=action.get("type", ""),
+            quality=eval_result.quality,
+            speed=eval_result.speed,
+            passed=verdict.passed,
+            hypothesis=hypothesis,
+            failure_analysis=failure_analysis,
+            self_criticism=criticism.as_text(),
+            optimization_directions=criticism.directions_text(),
+            keep_revert=criticism.keep_or_revert,
+            per_suite_quality=eval_result.per_suite_quality or {},
+        ))
 
         # ── 6. Meta-learn ───────────────────────────────────────
         if meta.should_rebalance(trial_counter):
@@ -1357,8 +1410,22 @@ def main() -> None:
     )
     p_monitor.set_defaults(func=cmd_monitor)
 
+    # reset-memory — clear short-term memory (AP-22)
+    p_reset_mem = subparsers.add_parser(
+        "reset-memory",
+        help="Clear short-term memory (start fresh for next session)",
+    )
+    p_reset_mem.set_defaults(func=cmd_reset_memory)
+
     args = parser.parse_args()
     args.func(args)
+
+
+def cmd_reset_memory(args: argparse.Namespace) -> None:
+    """Clear short-term memory."""
+    mem = ShortTermMemory()
+    mem.clear()
+    print("Short-term memory cleared.")
 
 
 def cmd_monitor(args: argparse.Namespace) -> None:

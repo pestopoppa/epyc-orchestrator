@@ -134,6 +134,16 @@ class ConsolidatedSegment:
     trigger: str                 # what triggered consolidation
     timestamp: float = 0.0
     reward_signals: Any = None   # RewardSignals instance (CF Phase 3a), optional
+    # CF-P1: Provenance tracking — trace derived summaries to source turns
+    validity_timestamp: float | None = None  # when this segment was last validated
+    source_turn_ids: list[int] = field(default_factory=list)  # original turn indices
+    # CF-P2: Supersession detection — flag segments with contradicted info
+    superseded: bool = False
+    superseded_by_turn: int | None = None  # turn that contradicted this segment
+    # CF-P3: Metadata filtering — topic tags for retrieval
+    topic_tags: list[str] = field(default_factory=list)  # auto-extracted: code, config, error...
+    # CF-P4: Hybrid raw+derived — keep raw for recent, compressed for older
+    is_raw: bool = False  # True if this segment retains verbatim content
 
     def to_prompt_block(self) -> str:
         """Compact representation for prompt injection."""
@@ -153,6 +163,21 @@ class ConsolidatedSegment:
         }
         if self.reward_signals is not None:
             d["reward_signals"] = self.reward_signals.to_dict()
+        # CF-P1: Provenance
+        if self.validity_timestamp is not None:
+            d["validity_timestamp"] = self.validity_timestamp
+        if self.source_turn_ids:
+            d["source_turn_ids"] = self.source_turn_ids
+        # CF-P2: Supersession
+        if self.superseded:
+            d["superseded"] = True
+            d["superseded_by_turn"] = self.superseded_by_turn
+        # CF-P3: Topic tags
+        if self.topic_tags:
+            d["topic_tags"] = self.topic_tags
+        # CF-P4: Raw flag
+        if self.is_raw:
+            d["is_raw"] = True
         return d
 
     @classmethod
@@ -167,6 +192,16 @@ class ConsolidatedSegment:
             trigger=d.get("trigger", "unknown"),
             timestamp=d.get("timestamp", 0.0),
             reward_signals=reward_signals,
+            # CF-P1
+            validity_timestamp=d.get("validity_timestamp"),
+            source_turn_ids=d.get("source_turn_ids", []),
+            # CF-P2
+            superseded=d.get("superseded", False),
+            superseded_by_turn=d.get("superseded_by_turn"),
+            # CF-P3
+            topic_tags=d.get("topic_tags", []),
+            # CF-P4
+            is_raw=d.get("is_raw", False),
         )
 
 
@@ -646,13 +681,95 @@ async def consolidate_segment(
         # Fallback: join granular blocks (still shorter than full re-summarization)
         consolidated_text = "; ".join(granular_blocks)
 
+    now = time.time()
     return ConsolidatedSegment(
         turn_range=turn_range,
         granular_blocks=list(granular_blocks),
         consolidated=consolidated_text.strip(),
         trigger=trigger,
-        timestamp=time.time(),
+        timestamp=now,
+        # CF-P1: Provenance — track source turns for drift detection
+        validity_timestamp=now,
+        source_turn_ids=list(range(turn_range[0], turn_range[1] + 1)),
+        # CF-P3: Auto-extract topic tags from content
+        topic_tags=_extract_topic_tags(consolidated_text),
     )
+
+
+def check_supersession(
+    new_turn_text: str,
+    segments: list[ConsolidatedSegment],
+    turn_id: int,
+) -> list[ConsolidatedSegment]:
+    """Detect if a new turn contradicts information in compacted segments (CF-P2).
+
+    Scans for explicit correction patterns in the new turn text and flags
+    affected segments for re-derivation or invalidation.
+
+    Returns the list of segments that were flagged as superseded.
+    """
+    import re
+
+    correction_patterns = [
+        r"\bactually\b.*\bis\b",          # "actually X is Y"
+        r"\bcorrection\b",                  # "correction: ..."
+        r"\bnot\s+\d+\b.*\bbut\s+\d+\b",  # "not 30B but 35B"
+        r"\bwrong\b.*\bshould\s+be\b",     # "wrong, should be..."
+        r"\binstead\s+of\b",               # "use X instead of Y"
+        r"\bno\s+longer\b",               # "no longer true"
+        r"\bignore\b.*\bprevious\b",       # "ignore the previous..."
+        r"\bupdate[d]?\b.*\bfrom\b.*\bto\b",  # "updated from X to Y"
+    ]
+
+    lower_text = new_turn_text.lower()
+    is_correction = any(
+        re.search(pattern, lower_text)
+        for pattern in correction_patterns
+    )
+    if not is_correction:
+        return []
+
+    flagged = []
+    for seg in segments:
+        if seg.superseded:
+            continue  # Already flagged
+        # Check if the correction is relevant to this segment's content
+        # Simple heuristic: look for shared substantive words
+        seg_words = set(seg.consolidated.lower().split())
+        new_words = set(lower_text.split())
+        overlap = seg_words & new_words - {"the", "a", "is", "was", "to", "of", "in", "and", "or", "it", "that"}
+        if len(overlap) >= 3:
+            seg.superseded = True
+            seg.superseded_by_turn = turn_id
+            flagged.append(seg)
+            log.info(
+                "CF-P2: Segment turns %d-%d superseded by turn %d (overlap: %s)",
+                seg.turn_range[0], seg.turn_range[1], turn_id,
+                ", ".join(sorted(list(overlap)[:5])),
+            )
+    return flagged
+
+
+def _extract_topic_tags(text: str) -> list[str]:
+    """Extract topic tags from segment content for metadata filtering (CF-P3).
+
+    Simple keyword-based extraction. Returns up to 5 tags.
+    """
+    tags = []
+    lower = text.lower()
+    tag_keywords = {
+        "code": ["function", "class", "import", "def ", "return ", "error:", "traceback"],
+        "config": ["config", "parameter", "setting", "flag", "threshold"],
+        "error": ["error", "failed", "exception", "crash", "timeout"],
+        "routing": ["route", "escalat", "delegat", "role", "specialist"],
+        "eval": ["quality", "accuracy", "benchmark", "score", "eval"],
+        "memory": ["memory", "episode", "recall", "retriev"],
+        "tool": ["tool", "web_search", "code_search", "grep", "peek"],
+    }
+    for tag, keywords in tag_keywords.items():
+        if any(kw in lower for kw in keywords):
+            tags.append(tag)
+    return tags[:5]
 
 
 # ---------------------------------------------------------------------------
