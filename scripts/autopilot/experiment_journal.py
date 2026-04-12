@@ -79,6 +79,9 @@ class JournalEntry:
     deficiency_category: str = ""  # AP-14: DeficiencyCategory value or empty
     instruction_token_count: int = 0  # AP-16: per-request instruction overhead
     instruction_token_ratio: float = 0.0  # AP-16: instruction_tokens / total_input
+    self_criticism: str = ""  # AP-23: structured self-criticism from last trial
+    keep_revert_decision: str = ""  # AP-24: "keep" | "revert" | ""
+    optimization_directions: str = ""  # AP-24: forward-looking next-round guidance
 
 
 class ExperimentJournal:
