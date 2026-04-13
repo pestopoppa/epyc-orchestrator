@@ -295,9 +295,15 @@ class TestListDirTool:
             repl.execute(f'list_dir("{test_dir}")')
 
             output_list = repl.artifacts.get("_tool_outputs", [])
-            import json
+            raw = output_list[-1]
 
-            output_data = json.loads(output_list[-1])
+            # Output may be TOON (tabular) or JSON depending on toon_format availability
+            import json
+            try:
+                output_data = json.loads(raw)
+            except json.JSONDecodeError:
+                from toon_format import decode
+                output_data = decode(raw)
 
             assert len(output_data["files"]) == 100
             assert output_data["total"] == 150
