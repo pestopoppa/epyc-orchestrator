@@ -18,16 +18,16 @@ from src.model_server import InferenceRequest, InferenceResult
 
 @pytest.fixture
 def mock_backend():
-    """Create a mock backend that implements the caching interface."""
-    backend = Mock()
+    """Create a mock backend that implements the caching interface (no streaming)."""
+    backend = Mock(spec=[])  # empty spec prevents auto-creating infer_stream_text
     backend.infer = Mock()
     return backend
 
 
 @pytest.fixture
 def mock_model_server():
-    """Create a mock ModelServer."""
-    server = Mock()
+    """Create a mock ModelServer (batch-only, no streaming)."""
+    server = Mock(spec=[])  # empty spec prevents auto-creating attributes
     server.infer = Mock()
     return server
 

@@ -12,7 +12,7 @@ from scripts.autopilot.safety_gate import (
     EvalResult,
     SafetyGate,
     SafetyVerdict,
-    QUALITY_FLOOR,
+    QUALITY_FLOOR_T0 as QUALITY_FLOOR,
 )
 
 
