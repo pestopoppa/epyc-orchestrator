@@ -550,14 +550,18 @@ class InferenceMixin:
                     result.http_overhead_ms,
                 )
 
-            # Record success/failure for circuit breaker
+            # Record success/failure for circuit breaker.
+            # Partial results (read_timeout with salvaged output) count as
+            # degraded — not a full success for health tracking, but not a
+            # hard failure that should trip the circuit breaker either.
             if backend_url and self.health_tracker:
-                if result.success:
+                if result.success and not result.partial:
                     self.health_tracker.record_success(backend_url)
-                else:
+                elif not result.success and not result.partial:
                     self.health_tracker.record_failure(backend_url)
+                # partial results: skip health tracking (neither success nor failure)
 
-            if not result.success:
+            if not result.success and not result.partial:
                 raise RuntimeError(f"Inference failed: {result.error_message}")
 
             self.total_tokens_generated += result.tokens_generated

@@ -264,7 +264,7 @@ class TestLlamaServerBackend:
         with patch.object(backend.client, "stream", return_value=_StreamResponse()):
             result = backend.infer_stream_text(role_config, request)
 
-        assert result.success is True
+        assert result.success is False
         assert result.partial is True
         assert result.degraded is True
         assert result.failure_reason == "read_timeout"

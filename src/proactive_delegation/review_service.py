@@ -57,7 +57,7 @@ class AggregationService:
         """Simple concatenation with section headers."""
         sections = []
         for result in results:
-            if result.success and result.output:
+            if (result.success or getattr(result, 'partial', False)) and result.output:
                 header = f"## {result.subtask_id} ({result.role})"
                 sections.append(f"{header}\n\n{result.output}")
         return "\n\n---\n\n".join(sections)
@@ -68,7 +68,7 @@ class AggregationService:
         code_blocks = []
 
         for result in results:
-            if not result.success or not result.output:
+            if (not result.success and not getattr(result, 'partial', False)) or not result.output:
                 continue
 
             lines = result.output.split("\n")

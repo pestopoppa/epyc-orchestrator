@@ -522,7 +522,7 @@ async def _execute_repl(
     # Quality review gate (skip when force_role is set —
     # seeding/eval calls should not trigger expensive architect reviews)
     if (
-        graph_result.success
+        (graph_result.success or getattr(graph_result, 'partial', False))
         and request.real_mode
         and not request.force_role
         and _should_review(state, task_id, current_role, answer)
