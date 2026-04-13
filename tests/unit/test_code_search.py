@@ -8,11 +8,34 @@ both-down graceful degradation.
 from __future__ import annotations
 
 import json
+import sys
+import types
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Inject fake next_plaid_client modules so that
+#   `from next_plaid_client.models import SearchParams`
+# succeeds without the real package installed.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _FakeSearchParams:
+    """Stand-in for next_plaid_client.models.SearchParams."""
+    top_k: int = 5
+
+_fake_npc = types.ModuleType("next_plaid_client")
+_fake_npc_models = types.ModuleType("next_plaid_client.models")
+_fake_npc_models.SearchParams = _FakeSearchParams  # type: ignore[attr-defined]
+_fake_npc.models = _fake_npc_models  # type: ignore[attr-defined]
+
+# Register in sys.modules so `from next_plaid_client.models import SearchParams` works
+sys.modules.setdefault("next_plaid_client", _fake_npc)
+sys.modules.setdefault("next_plaid_client.models", _fake_npc_models)
 
 
 # ---------------------------------------------------------------------------

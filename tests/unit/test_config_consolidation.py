@@ -163,7 +163,7 @@ class TestServerURLsDefaults:
             "worker_math",
             "worker_vision",
             "vision_escalation",
-            "worker_code",
+            "worker_coder",
             "worker_fast",
             "worker_summarize",
             "architect_general",
@@ -172,8 +172,10 @@ class TestServerURLsDefaults:
         }
         for role in expected_roles:
             assert role in config_dict, f"Missing role: {role}"
-            assert config_dict[role].startswith("http://"), (
-                f"URL for {role} must be HTTP: got {config_dict[role]}"
+            url = config_dict[role]
+            # Multi-instance URLs use "full:" prefix for ConcurrencyAwareBackend
+            assert url.startswith("http://") or url.startswith("full:http://"), (
+                f"URL for {role} must be HTTP or full:HTTP: got {url}"
             )
 
     def test_as_dict_excludes_services(self):
@@ -192,18 +194,22 @@ class TestServerURLsDefaults:
         assert cfg.vision_api == "http://localhost:8000/v1/vision/analyze"
 
     def test_specific_role_urls(self):
-        """Spot-check specific role->URL mappings."""
+        """Spot-check specific role->URL mappings (multi-instance since ConcurrencyAware)."""
         cfg = ServerURLsConfig()
-        assert cfg.frontdoor == "http://localhost:8080"
-        assert cfg.coder_escalation == "http://localhost:8081"
-        assert cfg.worker_explore == "http://localhost:8082"
+        # Multi-instance roles use "full:" prefix or comma-separated URLs
+        assert "http://localhost:8080" in cfg.frontdoor
+        assert "http://localhost:8081" in cfg.coder_escalation
+        assert "http://localhost:8082" in cfg.worker_explore
+        # Single-instance roles keep simple URLs
         assert cfg.worker_vision == "http://localhost:8086"
         assert cfg.vision_escalation == "http://localhost:8087"
-        assert cfg.architect_general == "http://localhost:8083"
-        assert cfg.architect_coding == "http://localhost:8084"
         assert cfg.ingest_long_context == "http://localhost:8085"
         assert cfg.worker_fast == "http://localhost:8102"
-        assert cfg.worker_summarize == "http://localhost:8081"
+        # Architects use round-robin multi-URL
+        assert "http://localhost:8083" in cfg.architect_general
+        assert "http://localhost:8084" in cfg.architect_coding
+        # Worker summarize shares coder instances
+        assert "http://localhost:8081" in cfg.worker_summarize
 
 
 # ── TimeoutsConfig defaults match ROLE_TIMEOUTS in chat_utils.py ─────────
@@ -254,7 +260,7 @@ class TestTimeoutsDefaults:
         assert cfg.coder_escalation == 120
         # Architects: long (complex reasoning)
         assert cfg.architect_general == 600
-        assert cfg.architect_coding == 600
+        assert cfg.architect_coding == 480
         # Backend: unified 600s timeout
         assert cfg.server_request == 600
         assert cfg.server_connect == 5

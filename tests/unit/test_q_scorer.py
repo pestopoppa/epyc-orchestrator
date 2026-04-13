@@ -152,41 +152,45 @@ def _latency_only_config(**overrides) -> ScoringConfig:
 
 
 class TestComputeRewardWithCost:
+    # NOTE: frontdoor baseline_tps=12.7, architect=4.3 (updated 2026-03-29).
+    # Use 127 tokens for frontdoor (127/12.7=10s expected) and 43 for architect
+    # (43/4.3=10s expected) to produce exact integer cost ratios.
+
     def test_at_expected_speed_no_penalty(self):
         """Running at exactly baseline speed → cost_ratio=1.0 → no latency penalty."""
         s = _scorer(_latency_only_config())
-        # frontdoor at 18.3 t/s, 183 tokens in 10s → exactly expected
-        cost = {"tokens_generated": 183, "elapsed_seconds": 10.0, "role": "frontdoor"}
+        # frontdoor at 12.7 t/s, 127 tokens in 10s → exactly expected
+        cost = {"tokens_generated": 127, "elapsed_seconds": 10.0, "role": "frontdoor"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         assert r == 1.0
 
     def test_faster_than_expected_no_penalty(self):
         """Running faster than baseline → cost_ratio < 1.0 → no penalty."""
         s = _scorer(_latency_only_config())
-        # frontdoor at 18.3 t/s, 183 tokens in 5s → 2x faster
-        cost = {"tokens_generated": 183, "elapsed_seconds": 5.0, "role": "frontdoor"}
+        # frontdoor at 12.7 t/s, 127 tokens in 5s → 2x faster
+        cost = {"tokens_generated": 127, "elapsed_seconds": 5.0, "role": "frontdoor"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         assert r == 1.0
 
     def test_slower_than_expected_penalized(self):
         """Running 2x slower → cost_ratio=2.0 → penalty = 0.15 * (2.0 - 1.0) = 0.15."""
         s = _scorer(_latency_only_config())
-        # frontdoor at 18.3 t/s, 183 tokens in 20s → 2x slower
-        cost = {"tokens_generated": 183, "elapsed_seconds": 20.0, "role": "frontdoor"}
+        # frontdoor at 12.7 t/s, 127 tokens in 20s → 2x slower
+        cost = {"tokens_generated": 127, "elapsed_seconds": 20.0, "role": "frontdoor"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         assert r == pytest.approx(0.85)  # 1.0 - 0.15
 
     def test_much_slower_higher_penalty(self):
         """Running 5x slower → penalty = 0.15 * 4.0 = 0.60."""
         s = _scorer(_latency_only_config())
-        cost = {"tokens_generated": 183, "elapsed_seconds": 50.0, "role": "frontdoor"}
+        cost = {"tokens_generated": 127, "elapsed_seconds": 50.0, "role": "frontdoor"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         assert r == pytest.approx(0.4)  # 1.0 - 0.60
 
     def test_incorrect_no_cost_penalty(self):
         """Failed tasks get failure_reward regardless of cost."""
         s = _scorer(_latency_only_config())
-        cost = {"tokens_generated": 183, "elapsed_seconds": 100.0, "role": "frontdoor"}
+        cost = {"tokens_generated": 127, "elapsed_seconds": 100.0, "role": "frontdoor"}
         r = s._compute_reward(_make_outcome("failure"), [], [], cost_metrics=cost)
         assert r == -0.5  # No cost penalty applied (reward <= 0)
 
@@ -215,7 +219,7 @@ class TestComputeRewardWithCost:
         """Cost penalty stacks with gate failure penalties."""
         s = _scorer(_latency_only_config())
         # 2x slower + 1 gate failure
-        cost = {"tokens_generated": 183, "elapsed_seconds": 20.0, "role": "frontdoor"}
+        cost = {"tokens_generated": 127, "elapsed_seconds": 20.0, "role": "frontdoor"}
         r = s._compute_reward(_make_outcome("success"), [_make_gate_fail()], [], cost_metrics=cost)
         # 1.0 - 0.1 (gate) - 0.15 (cost) = 0.75
         assert r == pytest.approx(0.75)
@@ -224,7 +228,7 @@ class TestComputeRewardWithCost:
         """Extreme cost penalty clamped to -1.0."""
         cfg = _latency_only_config(cost_penalty_lambda=10.0)  # Very aggressive
         s = _scorer(cfg)
-        cost = {"tokens_generated": 183, "elapsed_seconds": 50.0, "role": "frontdoor"}
+        cost = {"tokens_generated": 127, "elapsed_seconds": 50.0, "role": "frontdoor"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         assert r == -1.0
 
@@ -233,22 +237,22 @@ class TestComputeRewardWithCost:
         cfg = _latency_only_config(cost_penalty_lambda=0.5)
         s = _scorer(cfg)
         # 2x slower with lambda=0.5 → penalty = 0.5 * 1.0 = 0.5
-        cost = {"tokens_generated": 183, "elapsed_seconds": 20.0, "role": "frontdoor"}
+        cost = {"tokens_generated": 127, "elapsed_seconds": 20.0, "role": "frontdoor"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         assert r == pytest.approx(0.5)
 
     def test_architect_role_slower_baseline(self):
-        """Architect (6.75 t/s) at expected speed → no latency penalty."""
+        """Architect (4.3 t/s) at expected speed → no latency penalty."""
         s = _scorer(_latency_only_config())
-        # 675 tokens at 6.75 t/s → 100s expected; actual 100s
-        cost = {"tokens_generated": 675, "elapsed_seconds": 100.0, "role": "architect_general"}
+        # 43 tokens at 4.3 t/s → 10s expected; actual 10s
+        cost = {"tokens_generated": 43, "elapsed_seconds": 10.0, "role": "architect_general"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         assert r == 1.0
 
     def test_architect_role_2x_slower(self):
         """Architect at 2x slower → penalty = 0.15 * 1.0 = 0.15."""
         s = _scorer(_latency_only_config())
-        cost = {"tokens_generated": 675, "elapsed_seconds": 200.0, "role": "architect_general"}
+        cost = {"tokens_generated": 43, "elapsed_seconds": 20.0, "role": "architect_general"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         assert r == pytest.approx(0.85)
 
@@ -285,7 +289,8 @@ class TestMultiDimensionalCost:
     def test_quality_gap_penalty_worker(self):
         """Worker (quality=0.745) has minimal quality gap penalty."""
         s = _scorer()
-        cost = {"tokens_generated": 279, "elapsed_seconds": 10.0, "role": "worker_explore"}
+        # worker_explore at 39.1 t/s, 391 tokens in 10s → exactly at expected speed
+        cost = {"tokens_generated": 391, "elapsed_seconds": 10.0, "role": "worker_explore"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         # quality_gap = max(0, 0.745 - 0.75) = 0.0 → no quality penalty
         # memory_cost = 0.5 < 1.0 → no memory penalty

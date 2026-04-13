@@ -39,7 +39,7 @@ class TestChatRequest:
         assert req.context == ""
         assert req.mock_mode is True
         assert req.real_mode is False
-        assert req.max_turns == 10
+        assert req.max_turns == 15
         assert req.role == ""
         assert req.force_role is None
         assert req.force_mode is None

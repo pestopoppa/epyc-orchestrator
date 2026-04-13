@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,7 @@ _REGISTRY_DIAGNOSTICS: dict[str, Any] = {
 def _record_registry_diag(section: str, payload: dict[str, Any]) -> None:
     _REGISTRY_DIAGNOSTICS[section] = {
         **payload,
-        "checked_at": os.times().elapsed,
+        "checked_at": time.time(),
     }
 
 

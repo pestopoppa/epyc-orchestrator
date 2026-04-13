@@ -53,6 +53,20 @@ def test_server_manager_request_error_sets_failure_metadata():
     assert "connection refused" in result.raw_output
 
 
+def test_server_manager_http_status_sets_failure_metadata():
+    manager = ServerManager(port=9999)
+    session = MagicMock()
+    session.post.return_value = MagicMock(status_code=503, text="backend down")
+    manager._http_session = session
+
+    result = manager.run_inference("prompt", timeout=1)
+
+    assert result.success is False
+    assert result.failure_stage == "http_request"
+    assert result.failure_reason == "http_status"
+    assert "HTTP 503" in result.raw_output
+
+
 def test_executor_subprocess_timeout_sets_partial_and_degraded_metadata():
     executor = Executor()
     timeout_error = subprocess.TimeoutExpired(
@@ -86,3 +100,19 @@ def test_executor_subprocess_timeout_sets_partial_and_degraded_metadata():
     assert result.failure_reason == "timeout_partial"
     assert result.raw_output == "partial stdout"
     assert result.stderr == "partial stderr"
+
+
+def test_server_manager_vl_timeout_sets_failure_metadata():
+    manager = ServerManager(port=9999)
+    manager.mmproj_path = "mmproj.gguf"
+    session = MagicMock()
+    session.post.side_effect = requests.exceptions.Timeout("vl timeout")
+    manager._http_session = session
+
+    result = manager.run_inference("prompt", timeout=1)
+
+    assert result.success is False
+    assert result.timed_out is True
+    assert result.degraded is True
+    assert result.failure_stage == "http_request"
+    assert result.failure_reason == "timeout"

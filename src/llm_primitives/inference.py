@@ -649,7 +649,10 @@ class InferenceMixin:
 
         try:
             # Run async batch in sync context
-            loop = asyncio.get_event_loop()
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
             timeout_s = self._remaining_deadline_s()
             batch_coro = self.worker_pool.batch(prompts, task_type=task_type)
             if timeout_s is not None:
@@ -657,7 +660,7 @@ class InferenceMixin:
                 batch_coro = asyncio.wait_for(batch_coro, timeout=timeout_s)
                 self._budget_diagnostics["budget_applied"] = True
                 self._budget_diagnostics["timeout_clamp_events"] += 1
-            if loop.is_running():
+            if loop is not None and loop.is_running():
                 # If we're already in an async context, create a new task
                 import nest_asyncio
 
