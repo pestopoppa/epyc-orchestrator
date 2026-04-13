@@ -20,6 +20,7 @@ class TestMyRole:
     def test_my_role_contains_tier_info(self):
         """Test my_role() includes tier information."""
         repl = REPLEnvironment(context="test", role="coder_escalation")
+        repl.config.use_toon_encoding = False  # Force JSON for test parsing
         # Execute and capture the output
         result = repl.execute("""
 output = my_role()
@@ -40,6 +41,7 @@ print(data['tier'])
     def test_my_role_default_role(self):
         """Test my_role() returns default role when not set."""
         repl = REPLEnvironment(context="test")
+        repl.config.use_toon_encoding = False  # Force JSON for test parsing
         # Default role should be worker_general
         result = repl.execute("""
 output = my_role()
@@ -242,6 +244,7 @@ print('unavailable' in str(data.get('warnings', [])))
         mock_router.route = Mock(return_value=(("coder_escalation", 0.85), "memrl"))
 
         repl = REPLEnvironment(context="test", hybrid_router=mock_router)
+        repl.config.use_toon_encoding = False  # Force JSON for test parsing
         result = repl.execute("""
 output = route_advice('write a function')
 if '<<<TOOL_OUTPUT>>>' in output:

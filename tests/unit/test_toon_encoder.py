@@ -84,7 +84,6 @@ class TestToonEncoder:
         }
         assert should_use_toon(data) is False
 
-    @pytest.mark.xfail(reason="TOON encoder not yet implemented — falls back to JSON")
     def test_encode_list_dir(self):
         """Test directory listing encoding."""
         from src.services.toon_encoder import encode_list_dir, is_available
@@ -149,7 +148,6 @@ class TestToonEncoder:
         assert "FORMAT" in result
 
 
-@pytest.mark.xfail(reason="toon_format library encoder/decoder not yet implemented upstream")
 class TestToonRoundTrip:
     """Round-trip validation tests."""
 
@@ -203,7 +201,6 @@ class TestToonRoundTrip:
         assert decoded == original
 
 
-@pytest.mark.xfail(reason="toon_format library encoder/decoder not yet implemented upstream")
 class TestToonNewEncoders:
     """Tests for new TOON encoding helpers."""
 
@@ -264,7 +261,6 @@ class TestToonNewEncoders:
             assert len(result) < len(json_result)
 
 
-@pytest.mark.xfail(reason="toon_format library encoder/decoder not yet implemented upstream")
 class TestToonTokenReduction:
     """Tests verifying token reduction claims."""
 
