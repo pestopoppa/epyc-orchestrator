@@ -1,2 +1,5 @@
-# Backward-compatible shim — actual module moved to src/inference/prefix_cache.py
-from src.inference.prefix_cache import *  # noqa: F401,F403
+# Backward-compatible shim — actual module at src/inference/prefix_cache.py
+import importlib as _il, sys as _sys
+_real = _il.import_module("src.inference.prefix_cache")
+_real.__name__ = __name__
+_sys.modules[__name__] = _real
