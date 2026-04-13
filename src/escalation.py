@@ -1,2 +1,5 @@
-# Backward-compatible shim — actual module moved to src/orchestration/escalation.py
-from src.orchestration.escalation import *  # noqa: F401,F403
+# Backward-compatible shim — actual module at src/orchestration/escalation.py
+import importlib as _il, sys as _sys
+_real = _il.import_module("src.orchestration.escalation")
+_real.__name__ = __name__
+_sys.modules[__name__] = _real
