@@ -167,36 +167,12 @@ class TestFeaturesValidate:
 # ---------------------------------------------------------------------------
 class TestFeaturesSummary:
     def test_summary_returns_dict_with_all_keys(self):
-        """summary() must return a dict covering every documented flag."""
+        """summary() must return a dict covering every registry entry."""
+        from src.features import _FEATURE_REGISTRY
+
         f = Features()
         s = f.summary()
-        expected_keys = {
-            "memrl", "tools", "scripts", "streaming", "openai_compat",
-            "repl", "caching", "structured_delimiters", "react_mode",
-            "output_formalizer", "parallel_tools", "deferred_tool_results",
-            "escalation_compression", "script_interception",
-            "credential_redaction", "cascading_tool_policy",
-            "restricted_python", "specialist_routing", "graph_router",
-            "plan_review", "architect_delegation", "parallel_execution",
-            "personas", "staged_rewards", "input_formalizer",
-            "generation_monitor", "semantic_classifiers", "unified_streaming",
-            "side_effect_tracking", "structured_tool_output", "model_fallback",
-            "content_cache", "session_compaction", "session_log", "session_scratchpad",
-            "depth_model_overrides", "resume_tokens",
-            "approval_gates", "binding_routing", "routing_classifier", "skillbank",
-            "worker_call_budget", "task_token_budget",
-            "two_level_condensation", "segment_cache_dedup",
-            "helpfulness_scoring", "process_reward_telemetry", "role_aware_compaction",
-            "accurate_token_counting", "tool_result_clearing",
-            "reasoning_length_alarm", "tool_output_compression", "output_spill_to_file",
-            "model_grading", "self_speculation", "hierarchical_speculation",
-            "state_history_snapshots", "generalized_interrupts",
-            "langgraph_bridge",
-            "injection_scanning", "context_compression",
-            "user_modeling", "session_token_budget",
-            "claude_code_mcp_chat",
-            "mock_mode",
-        }
+        expected_keys = {spec.name for spec in _FEATURE_REGISTRY}
         assert set(s.keys()) == expected_keys
 
     def test_summary_values_match_fields(self):
@@ -350,3 +326,60 @@ class TestEnvVarOverride:
         reset_features()
         f = features()
         assert f.streaming is True
+
+
+# ── Registry Consistency ─────────────────────────────────────────────────
+
+
+class TestRegistryConsistency:
+    """Validate that the FeatureSpec registry stays in sync with the Features dataclass."""
+
+    def test_registry_matches_dataclass_fields(self):
+        """Every registry entry must have a matching dataclass field and vice versa."""
+        import dataclasses
+        from src.features import _FEATURE_REGISTRY
+
+        dc_fields = {f.name for f in dataclasses.fields(Features)}
+        reg_names = {spec.name for spec in _FEATURE_REGISTRY}
+        missing_in_registry = dc_fields - reg_names
+        missing_in_dataclass = reg_names - dc_fields
+        assert not missing_in_registry, f"Dataclass fields not in registry: {missing_in_registry}"
+        assert not missing_in_dataclass, f"Registry entries not in dataclass: {missing_in_dataclass}"
+
+    def test_registry_test_defaults_match_get_features(self):
+        """Registry default_test must match get_features(production=False) output."""
+        from src.features import _FEATURE_REGISTRY
+
+        f = get_features(production=False)
+        for spec in _FEATURE_REGISTRY:
+            actual = getattr(f, spec.name)
+            assert actual == spec.default_test, (
+                f"{spec.name}: get_features(production=False)={actual} "
+                f"!= registry default_test={spec.default_test}"
+            )
+
+    def test_registry_prod_defaults_match_get_features(self):
+        """Registry default_prod must match get_features(production=True) output."""
+        from src.features import _FEATURE_REGISTRY
+
+        f = get_features(production=True)
+        for spec in _FEATURE_REGISTRY:
+            actual = getattr(f, spec.name)
+            assert actual == spec.default_prod, (
+                f"{spec.name}: get_features(production=True)={actual} "
+                f"!= registry default_prod={spec.default_prod}"
+            )
+
+    def test_registry_env_vars_are_unique(self):
+        """Each registry entry must have a unique env_var."""
+        from src.features import _FEATURE_REGISTRY
+
+        env_vars = [spec.env_var for spec in _FEATURE_REGISTRY]
+        assert len(env_vars) == len(set(env_vars)), f"Duplicate env_vars: {[v for v in env_vars if env_vars.count(v) > 1]}"
+
+    def test_registry_names_are_unique(self):
+        """Each registry entry must have a unique name."""
+        from src.features import _FEATURE_REGISTRY
+
+        names = [spec.name for spec in _FEATURE_REGISTRY]
+        assert len(names) == len(set(names)), f"Duplicate names: {[n for n in names if names.count(n) > 1]}"

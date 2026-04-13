@@ -47,12 +47,134 @@ Adding New Features:
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.env_parsing import env_bool
 
 # Environment variable prefix for all feature flags
 ENV_PREFIX = "ORCHESTRATOR_"
+
+
+# ── Declarative Feature Registry ──────────────────────────────────────────
+# Single source of truth for feature metadata. Drives summary(), get_features()
+# defaults, and env parsing. The Features dataclass fields must stay in sync
+# (validated by test_features_registry_consistency).
+
+
+@dataclass(frozen=True)
+class FeatureSpec:
+    """Declarative specification for a single feature flag."""
+    name: str
+    default_test: bool
+    default_prod: bool
+    env_var: str  # env var suffix (without ORCHESTRATOR_ prefix)
+    description: str = ""
+    dependencies: tuple[str, ...] = ()
+
+
+_FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
+    # Phase 4: MemRL
+    FeatureSpec("memrl", False, True, "MEMRL", "Memory-based Reinforcement Learning"),
+    # Tool and Script Registries
+    FeatureSpec("tools", False, True, "TOOLS", "Tool Registry for REPL"),
+    FeatureSpec("scripts", False, True, "SCRIPTS", "Script Registry", ("tools",)),
+    # API Features
+    FeatureSpec("streaming", False, True, "STREAMING", "SSE streaming endpoints"),
+    FeatureSpec("openai_compat", False, True, "OPENAI_COMPAT", "OpenAI-compatible API"),
+    # Core Features
+    FeatureSpec("repl", True, True, "REPL", "REPL execution environment"),
+    FeatureSpec("caching", False, True, "CACHING", "Response caching with prefix routing"),
+    # Phase 2: Structured Delimiters
+    FeatureSpec("structured_delimiters", True, True, "STRUCTURED_DELIMITERS", "Wrap tool outputs with delimiters"),
+    FeatureSpec("react_mode", False, True, "REACT_MODE", "ReAct-style tool loop"),
+    FeatureSpec("output_formalizer", False, True, "OUTPUT_FORMALIZER", "Format constraint enforcement"),
+    FeatureSpec("parallel_tools", True, True, "PARALLEL_TOOLS", "Parallel read-only tool dispatch"),
+    FeatureSpec("deferred_tool_results", False, False, "DEFERRED_TOOL_RESULTS", "Deferred tool result wrapping"),
+    FeatureSpec("escalation_compression", False, True, "ESCALATION_COMPRESSION", "LLMLingua-2 BERT for large prompts"),
+    FeatureSpec("script_interception", False, False, "SCRIPT_INTERCEPTION", "Resolve trivial queries locally"),
+    # Security Features
+    FeatureSpec("credential_redaction", True, True, "CREDENTIAL_REDACTION", "Scan for leaked credentials"),
+    FeatureSpec("cascading_tool_policy", False, True, "CASCADING_TOOL_POLICY", "Layered tool permission chain"),
+    FeatureSpec("restricted_python", False, False, "RESTRICTED_PYTHON", "RestrictedPython for REPL"),
+    # Phase 3: Specialist routing
+    FeatureSpec("specialist_routing", False, True, "SPECIALIST_ROUTING", "Q-value specialist routing", ("memrl",)),
+    FeatureSpec("graph_router", False, False, "GRAPH_ROUTER", "GNN-based parallel routing", ("specialist_routing",)),
+    FeatureSpec("plan_review", False, True, "PLAN_REVIEW", "Architect plan review", ("memrl",)),
+    FeatureSpec("architect_delegation", False, True, "ARCHITECT_DELEGATION", "Architect delegation", ("memrl",)),
+    FeatureSpec("parallel_execution", False, True, "PARALLEL_EXECUTION", "Wave-based step execution", ("architect_delegation",)),
+    FeatureSpec("personas", False, False, "PERSONAS", "Persona registry", ("memrl",)),
+    FeatureSpec("staged_rewards", False, False, "STAGED_REWARDS", "PARL-inspired annealing", ("memrl",)),
+    # MemRL Distillation
+    FeatureSpec("routing_classifier", False, False, "ROUTING_CLASSIFIER", "ColBERT-Zero routing classifier"),
+    FeatureSpec("skillbank", False, False, "SKILLBANK", "SkillRL experience distillation", ("memrl",)),
+    # Phase 4: Input formalizer
+    FeatureSpec("input_formalizer", False, True, "INPUT_FORMALIZER", "MathSmith-8B formal spec extraction"),
+    # Unified streaming
+    FeatureSpec("unified_streaming", False, True, "UNIFIED_STREAMING", "Route streaming through pipeline stages"),
+    # Semantic classifiers
+    FeatureSpec("semantic_classifiers", True, True, "SEMANTIC_CLASSIFIERS", "Config-driven classifiers"),
+    # Generation Monitoring
+    FeatureSpec("generation_monitor", False, True, "GENERATION_MONITOR", "Early failure detection"),
+    # OpenClaw/Lobster concepts
+    FeatureSpec("side_effect_tracking", False, True, "SIDE_EFFECT_TRACKING", "Tool side effect declarations"),
+    FeatureSpec("structured_tool_output", False, True, "STRUCTURED_TOOL_OUTPUT", "ToolOutput envelope"),
+    FeatureSpec("model_fallback", False, True, "MODEL_FALLBACK", "Same-tier alternatives on circuit-open"),
+    FeatureSpec("content_cache", False, False, "CONTENT_CACHE", "SHA-256 keyed response cache"),
+    FeatureSpec("session_compaction", False, True, "SESSION_COMPACTION", "Summarize old context"),
+    FeatureSpec("session_log", False, True, "SESSION_LOG", "Append-only processing journal"),
+    FeatureSpec("session_scratchpad", False, True, "SESSION_SCRATCHPAD", "Model-extracted semantic insights"),
+    FeatureSpec("depth_model_overrides", False, True, "DEPTH_MODEL_OVERRIDES", "Map nested depth to cheaper roles"),
+    FeatureSpec("resume_tokens", False, True, "RESUME_TOKENS", "Base64url continuation tokens"),
+    FeatureSpec("approval_gates", False, True, "APPROVAL_GATES", "Human approval at escalation boundaries", ("resume_tokens", "side_effect_tracking")),
+    FeatureSpec("binding_routing", False, False, "BINDING_ROUTING", "Priority-ordered routing overrides"),
+    # Budget controls
+    FeatureSpec("worker_call_budget", False, True, "WORKER_CALL_BUDGET", "Cap total REPL executions per task"),
+    FeatureSpec("task_token_budget", False, True, "TASK_TOKEN_BUDGET", "Cap cumulative tokens per task"),
+    # Context-Folding
+    FeatureSpec("two_level_condensation", False, False, "TWO_LEVEL_CONDENSATION", "CF Phase 1: granular + deep consolidation"),
+    FeatureSpec("segment_cache_dedup", False, False, "SEGMENT_CACHE_DEDUP", "CF Phase 1+: hash-based dedup"),
+    FeatureSpec("helpfulness_scoring", False, False, "HELPFULNESS_SCORING", "CF Phase 2c: heuristic helpfulness scoring"),
+    FeatureSpec("process_reward_telemetry", False, False, "PROCESS_REWARD_TELEMETRY", "CF Phase 3a: process reward telemetry"),
+    FeatureSpec("role_aware_compaction", False, False, "ROLE_AWARE_COMPACTION", "CF Phase 3b: role-aware profiles"),
+    # Context window management
+    FeatureSpec("accurate_token_counting", False, False, "ACCURATE_TOKEN_COUNTING", "Use llama-server /tokenize"),
+    FeatureSpec("tool_result_clearing", False, True, "TOOL_RESULT_CLEARING", "Clear stale tool output blocks"),
+    # Reasoning length alarm
+    FeatureSpec("reasoning_length_alarm", False, True, "REASONING_LENGTH_ALARM", "Retry verbose reasoning"),
+    # Tool output compression
+    FeatureSpec("tool_output_compression", False, False, "TOOL_OUTPUT_COMPRESSION", "Compress verbose output"),
+    # Output spill
+    FeatureSpec("output_spill_to_file", False, True, "OUTPUT_SPILL_TO_FILE", "Spill truncated output to file"),
+    # Pipeline monitoring
+    FeatureSpec("model_grading", False, False, "MODEL_GRADING", "Post-hoc model-graded evals"),
+    # HSD
+    FeatureSpec("self_speculation", False, False, "SELF_SPECULATION", "Self-speculation with layer-exit draft"),
+    FeatureSpec("hierarchical_speculation", False, False, "HIERARCHICAL_SPECULATION", "Hierarchical intermediate verification"),
+    # LangGraph pre-migration
+    FeatureSpec("state_history_snapshots", False, False, "STATE_HISTORY_SNAPSHOTS", "Full TaskState snapshots each turn"),
+    FeatureSpec("generalized_interrupts", False, False, "GENERALIZED_INTERRUPTS", "Pluggable interrupt conditions", ("approval_gates", "resume_tokens")),
+    # LangGraph migration
+    FeatureSpec("langgraph_bridge", False, False, "LANGGRAPH_BRIDGE", "LangGraph Phase 1: hybrid bridge"),
+    FeatureSpec("langgraph_ingest", False, False, "LANGGRAPH_INGEST", "LangGraph Phase 3: IngestNode"),
+    FeatureSpec("langgraph_architect", False, False, "LANGGRAPH_ARCHITECT", "LangGraph Phase 3: ArchitectNode"),
+    FeatureSpec("langgraph_architect_coding", False, False, "LANGGRAPH_ARCHITECT_CODING", "LangGraph Phase 3: ArchitectCodingNode"),
+    FeatureSpec("langgraph_worker", False, False, "LANGGRAPH_WORKER", "LangGraph Phase 3: WorkerNode"),
+    FeatureSpec("langgraph_frontdoor", False, False, "LANGGRAPH_FRONTDOOR", "LangGraph Phase 3: FrontdoorNode"),
+    FeatureSpec("langgraph_coder", False, False, "LANGGRAPH_CODER", "LangGraph Phase 3: CoderNode"),
+    FeatureSpec("langgraph_coder_escalation", False, False, "LANGGRAPH_CODER_ESCALATION", "LangGraph Phase 3: CoderEscalationNode"),
+    # Conversation Management
+    FeatureSpec("injection_scanning", False, True, "INJECTION_SCANNING", "B7: prompt injection scanning"),
+    FeatureSpec("context_compression", False, False, "CONTEXT_COMPRESSION", "B2: protected-zone compression"),
+    FeatureSpec("user_modeling", False, False, "USER_MODELING", "B1: cross-session user preferences", ("injection_scanning",)),
+    FeatureSpec("session_token_budget", False, False, "SESSION_TOKEN_BUDGET", "B5: per-session token budget"),
+    # Claude Code Local
+    FeatureSpec("claude_code_mcp_chat", False, False, "CLAUDE_CODE_MCP_CHAT", "CC Local: MCP chat delegation"),
+    # Debug/Development
+    FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
+)
+
+# Indexed for fast lookup
+_REGISTRY_BY_NAME: dict[str, FeatureSpec] = {s.name: s for s in _FEATURE_REGISTRY}
 
 
 @dataclass
@@ -328,85 +450,12 @@ class Features:
         return errors
 
     def summary(self) -> dict[str, bool]:
-        """Get summary of all feature flags.
+        """Get summary of all feature flags (derived from registry).
 
         Returns:
             Dictionary of feature name -> enabled status.
         """
-        return {
-            "memrl": self.memrl,
-            "tools": self.tools,
-            "scripts": self.scripts,
-            "streaming": self.streaming,
-            "openai_compat": self.openai_compat,
-            "repl": self.repl,
-            "caching": self.caching,
-            "structured_delimiters": self.structured_delimiters,
-            "react_mode": self.react_mode,
-            "output_formalizer": self.output_formalizer,
-            "parallel_tools": self.parallel_tools,
-            "deferred_tool_results": self.deferred_tool_results,
-            "escalation_compression": self.escalation_compression,
-            "script_interception": self.script_interception,
-            "credential_redaction": self.credential_redaction,
-            "cascading_tool_policy": self.cascading_tool_policy,
-            "restricted_python": self.restricted_python,
-            "specialist_routing": self.specialist_routing,
-            "graph_router": self.graph_router,
-            "plan_review": self.plan_review,
-            "architect_delegation": self.architect_delegation,
-            "parallel_execution": self.parallel_execution,
-            "personas": self.personas,
-            "staged_rewards": self.staged_rewards,
-            "input_formalizer": self.input_formalizer,
-            "generation_monitor": self.generation_monitor,
-            "semantic_classifiers": self.semantic_classifiers,
-            "unified_streaming": self.unified_streaming,
-            "side_effect_tracking": self.side_effect_tracking,
-            "structured_tool_output": self.structured_tool_output,
-            "model_fallback": self.model_fallback,
-            "content_cache": self.content_cache,
-            "session_compaction": self.session_compaction,
-            "session_log": self.session_log,
-            "session_scratchpad": self.session_scratchpad,
-            "depth_model_overrides": self.depth_model_overrides,
-            "resume_tokens": self.resume_tokens,
-            "approval_gates": self.approval_gates,
-            "binding_routing": self.binding_routing,
-            "routing_classifier": self.routing_classifier,
-            "skillbank": self.skillbank,
-            "worker_call_budget": self.worker_call_budget,
-            "task_token_budget": self.task_token_budget,
-            "two_level_condensation": self.two_level_condensation,
-            "segment_cache_dedup": self.segment_cache_dedup,
-            "helpfulness_scoring": self.helpfulness_scoring,
-            "process_reward_telemetry": self.process_reward_telemetry,
-            "role_aware_compaction": self.role_aware_compaction,
-            "accurate_token_counting": self.accurate_token_counting,
-            "tool_result_clearing": self.tool_result_clearing,
-            "reasoning_length_alarm": self.reasoning_length_alarm,
-            "tool_output_compression": self.tool_output_compression,
-            "output_spill_to_file": self.output_spill_to_file,
-            "model_grading": self.model_grading,
-            "self_speculation": self.self_speculation,
-            "hierarchical_speculation": self.hierarchical_speculation,
-            "state_history_snapshots": self.state_history_snapshots,
-            "generalized_interrupts": self.generalized_interrupts,
-            "langgraph_bridge": self.langgraph_bridge,
-            "langgraph_ingest": self.langgraph_ingest,
-            "langgraph_architect": self.langgraph_architect,
-            "langgraph_architect_coding": self.langgraph_architect_coding,
-            "langgraph_worker": self.langgraph_worker,
-            "langgraph_frontdoor": self.langgraph_frontdoor,
-            "langgraph_coder": self.langgraph_coder,
-            "langgraph_coder_escalation": self.langgraph_coder_escalation,
-            "injection_scanning": self.injection_scanning,
-            "context_compression": self.context_compression,
-            "user_modeling": self.user_modeling,
-            "session_token_budget": self.session_token_budget,
-            "claude_code_mcp_chat": self.claude_code_mcp_chat,
-            "mock_mode": self.mock_mode,
-        }
+        return {spec.name: getattr(self, spec.name) for spec in _FEATURE_REGISTRY}
 
     def enabled_features(self) -> list[str]:
         """Get list of enabled feature names.
@@ -444,6 +493,10 @@ def get_features(
     In production mode (production=True), most features default to enabled.
     In test mode (production=False), most features default to disabled.
 
+    Defaults, env-var names, and flag inventory are driven by ``_FEATURE_REGISTRY``
+    — the single source of truth. Adding a new flag only requires a new
+    ``FeatureSpec`` entry (plus the matching dataclass field on ``Features``).
+
     Args:
         production: If True, use production defaults (most features on).
         override: Explicit overrides for specific features.
@@ -461,240 +514,16 @@ def get_features(
         # Test with specific features
         features = get_features(override={"memrl": True, "tools": False})
     """
-    # Base defaults depend on production vs test
-    if production:
-        defaults = {
-            "memrl": True,
-            "tools": True,
-            "scripts": True,
-            "streaming": True,
-            "openai_compat": True,
-            "repl": True,
-            "caching": True,
-            "structured_delimiters": True,  # Low risk, always on
-            "react_mode": True,  # Validated: PASS -36.8s latency (2026-02-20)
-            "output_formalizer": True,  # Validated: PASS -21.3s latency (2026-02-20)
-            "parallel_tools": True,  # Parallel read-only tool dispatch enabled
-            "deferred_tool_results": False,  # Keep legacy wrapping unless explicitly enabled
-            "escalation_compression": True,  # BORDERLINE +4.8s but enabled per operator decision (2026-02-20)
-            "script_interception": False,  # Enable after validation of interception accuracy
-            "credential_redaction": True,  # Safety-first: always redact credentials in production
-            "cascading_tool_policy": True,  # Validated: PASS -15.3s latency (2026-02-20)
-            "restricted_python": False,  # AST blocklist is sufficient; RestrictedPython blocks all imports including safe ones (scipy, numpy)
-            "specialist_routing": True,  # Validated: PASS -25.0s latency (2026-02-20)
-            "graph_router": False,  # Enable after GAT training and cold-start validation
-            "plan_review": True,  # Validated: PASS -24.8s latency (2026-02-20)
-            "architect_delegation": True,  # Validated: PASS -24.9s latency (2026-02-20)
-            "parallel_execution": True,  # Validated: PASS -25.5s latency (2026-02-20)
-            "personas": False,  # Enable after persona quality validation
-            "staged_rewards": False,  # Enable after exploration/exploitation validation
-            "routing_classifier": False,  # Enable after classifier training and A/B test
-            "skillbank": False,  # Enable after distillation pipeline validation
-            "input_formalizer": True,  # Validated: PASS -16.2s latency (2026-02-20)
-            "generation_monitor": True,  # Early failure detection in production
-            "semantic_classifiers": True,  # Config-driven classifiers enabled by default
-            "unified_streaming": True,  # Validated: PASS -7.9s latency (2026-02-20)
-            "side_effect_tracking": True,  # Validated: PASS -28.3s latency (2026-02-20)
-            "structured_tool_output": True,  # Validated: PASS -8.1s latency (2026-02-20)
-            "model_fallback": True,  # Validated: PASS -1.5s latency (2026-02-20)
-            "content_cache": False,  # Enable after cache correctness validation
-            "session_compaction": True,  # Low-risk default: compacts long contexts with clear rollback toggle
-            "session_log": True,  # Append-only REPL session journal for multi-turn context
-            "session_scratchpad": True,  # Model-extracted semantic insights from session log
-            "depth_model_overrides": True,  # Enabled with worker-only + max-depth guardrails
-            "resume_tokens": True,  # Validated: PASS -1.1s latency (2026-02-20)
-            "approval_gates": True,  # Validated: PASS -20.6s latency (2026-02-20)
-            "binding_routing": False,  # Enable after routing regression testing
-            "worker_call_budget": True,  # Fast-RLM: cap total REPL executions per task
-            "task_token_budget": True,  # Fast-RLM: cap cumulative tokens per task
-            "two_level_condensation": False,  # CF Phase 1: enable after quality validation
-            "segment_cache_dedup": False,  # CF Phase 1+: enable after two_level_condensation validated
-            "helpfulness_scoring": False,  # CF Phase 2c: enable after calibration
-            "process_reward_telemetry": False,  # CF Phase 3a: enable after two_level_condensation validated
-            "role_aware_compaction": False,  # CF Phase 3b: enable after helpfulness_scoring validated
-            "accurate_token_counting": False,  # Enable after /tokenize validation
-            "tool_result_clearing": True,  # Enabled for production context pressure relief
-            "reasoning_length_alarm": True,  # short-m@k Action 9: retry verbose reasoning
-            "tool_output_compression": False,  # Phase 2 native: enable after quality validation
-            "output_spill_to_file": True,  # CMV Action 11: spill truncated output/error to file
-            "model_grading": False,  # Enable after grading spec validation
-            "self_speculation": False,  # HSD: self-speculation with layer-exit draft
-            "hierarchical_speculation": False,  # HSD: hierarchical intermediate verification
-            "state_history_snapshots": False,  # LangGraph pre-migration: full state snapshots
-            "generalized_interrupts": False,  # LangGraph pre-migration: pluggable interrupts
-            "langgraph_bridge": False,  # LangGraph Phase 1: off until validated
-            "langgraph_ingest": False,  # LangGraph Phase 3: off until per-node validation
-            "langgraph_architect": False,  # LangGraph Phase 3: off until per-node validation
-            "langgraph_architect_coding": False,  # LangGraph Phase 3: off until per-node validation
-            "langgraph_worker": False,  # LangGraph Phase 3: off until per-node validation
-            "langgraph_frontdoor": False,  # LangGraph Phase 3: off until per-node validation
-            "langgraph_coder": False,  # LangGraph Phase 3: off until per-node validation
-            "langgraph_coder_escalation": False,  # LangGraph Phase 3: off until per-node validation
-            "injection_scanning": True,  # B7: low risk, always scan loaded context
-            "context_compression": False,  # B2: enable after protected-zone quality validation
-            "user_modeling": False,  # B1: enable after profile store + deriver validation
-            "session_token_budget": False,  # B5: enable after budget threshold tuning
-            "claude_code_mcp_chat": False,  # CC Local: enable after MCP tool validation
-            "mock_mode": False,  # Real mode in production
-        }
-    else:
-        defaults = {
-            "memrl": False,
-            "tools": False,
-            "scripts": False,
-            "streaming": False,
-            "openai_compat": False,
-            "repl": True,  # REPL is core functionality
-            "caching": False,
-            "structured_delimiters": True,  # Low risk, always on
-            "react_mode": False,
-            "output_formalizer": False,
-            "parallel_tools": True,  # Parallel read-only tool dispatch enabled
-            "deferred_tool_results": False,
-            "escalation_compression": False,  # Disabled in tests by default
-            "script_interception": False,  # Disabled in tests by default
-            "credential_redaction": True,  # Safety-first: always redact in tests too
-            "cascading_tool_policy": False,  # Disabled in tests by default
-            "restricted_python": False,  # Use custom sandbox in tests
-            "specialist_routing": False,  # Disabled in tests by default
-            "graph_router": False,  # Disabled in tests by default
-            "plan_review": False,  # Disabled in tests by default
-            "architect_delegation": False,  # Disabled in tests by default
-            "parallel_execution": False,  # Disabled in tests by default
-            "personas": False,  # Disabled in tests by default
-            "staged_rewards": False,  # Disabled in tests by default
-            "routing_classifier": False,  # Disabled in tests by default
-            "skillbank": False,  # Disabled in tests by default
-            "input_formalizer": False,  # Disabled in tests by default
-            "generation_monitor": False,  # Disabled in tests by default
-            "semantic_classifiers": True,  # Config-driven classifiers enabled by default
-            "unified_streaming": False,  # Disabled in tests by default
-            "side_effect_tracking": False,  # Disabled in tests by default
-            "structured_tool_output": False,  # Disabled in tests by default
-            "model_fallback": False,  # Disabled in tests by default
-            "content_cache": False,  # Disabled in tests by default
-            "session_compaction": False,  # Disabled in tests by default
-            "session_log": False,  # Disabled in tests by default
-            "session_scratchpad": False,  # Disabled in tests by default
-            "depth_model_overrides": False,  # Disabled in tests by default
-            "resume_tokens": False,  # Disabled in tests by default
-            "approval_gates": False,  # Disabled in tests by default
-            "binding_routing": False,  # Disabled in tests by default
-            "worker_call_budget": False,  # Disabled in tests by default
-            "task_token_budget": False,  # Disabled in tests by default
-            "two_level_condensation": False,  # CF Phase 1: off in tests
-            "segment_cache_dedup": False,  # CF Phase 1+: off in tests
-            "helpfulness_scoring": False,  # CF Phase 2c: off in tests
-            "process_reward_telemetry": False,  # CF Phase 3a: off in tests
-            "role_aware_compaction": False,  # CF Phase 3b: off in tests
-            "accurate_token_counting": False,  # Disabled in tests by default
-            "tool_result_clearing": False,  # Disabled in tests by default
-            "reasoning_length_alarm": False,  # Disabled in tests by default
-            "tool_output_compression": False,  # Disabled in tests by default
-            "output_spill_to_file": False,  # Disabled in tests by default
-            "model_grading": False,  # Disabled in tests by default
-            "self_speculation": False,  # HSD: self-speculation with layer-exit draft
-            "hierarchical_speculation": False,  # HSD: hierarchical intermediate verification
-            "state_history_snapshots": False,  # LangGraph pre-migration: off in tests
-            "generalized_interrupts": False,  # LangGraph pre-migration: off in tests
-            "langgraph_bridge": False,  # LangGraph Phase 1: off in tests
-            "langgraph_ingest": False,  # LangGraph Phase 3: off in tests
-            "langgraph_architect": False,  # LangGraph Phase 3: off in tests
-            "langgraph_architect_coding": False,  # LangGraph Phase 3: off in tests
-            "langgraph_worker": False,  # LangGraph Phase 3: off in tests
-            "langgraph_frontdoor": False,  # LangGraph Phase 3: off in tests
-            "langgraph_coder": False,  # LangGraph Phase 3: off in tests
-            "langgraph_coder_escalation": False,  # LangGraph Phase 3: off in tests
-            "injection_scanning": False,  # B7: off in tests
-            "context_compression": False,  # B2: off in tests
-            "user_modeling": False,  # B1: off in tests
-            "session_token_budget": False,  # B5: off in tests
-            "claude_code_mcp_chat": False,  # CC Local: off in tests
-            "mock_mode": True,  # Mock mode in tests
-        }
+    # Derive defaults from registry
+    defaults = {
+        spec.name: (spec.default_prod if production else spec.default_test)
+        for spec in _FEATURE_REGISTRY
+    }
 
     # Read from environment (overrides defaults)
     flags = {
-        "memrl": _feature_flag_bool("MEMRL", defaults["memrl"]),
-        "tools": _feature_flag_bool("TOOLS", defaults["tools"]),
-        "scripts": _feature_flag_bool("SCRIPTS", defaults["scripts"]),
-        "streaming": _feature_flag_bool("STREAMING", defaults["streaming"]),
-        "openai_compat": _feature_flag_bool("OPENAI_COMPAT", defaults["openai_compat"]),
-        "repl": _feature_flag_bool("REPL", defaults["repl"]),
-        "caching": _feature_flag_bool("CACHING", defaults["caching"]),
-        "structured_delimiters": _feature_flag_bool(
-            "STRUCTURED_DELIMITERS", defaults["structured_delimiters"]
-        ),
-        "react_mode": _feature_flag_bool("REACT_MODE", defaults["react_mode"]),
-        "output_formalizer": _feature_flag_bool("OUTPUT_FORMALIZER", defaults["output_formalizer"]),
-        "parallel_tools": _feature_flag_bool("PARALLEL_TOOLS", defaults["parallel_tools"]),
-        "deferred_tool_results": _feature_flag_bool(
-            "DEFERRED_TOOL_RESULTS", defaults["deferred_tool_results"]
-        ),
-        "escalation_compression": _feature_flag_bool("ESCALATION_COMPRESSION", defaults["escalation_compression"]),
-        "script_interception": _feature_flag_bool("SCRIPT_INTERCEPTION", defaults["script_interception"]),
-        "credential_redaction": _feature_flag_bool("CREDENTIAL_REDACTION", defaults["credential_redaction"]),
-        "cascading_tool_policy": _feature_flag_bool("CASCADING_TOOL_POLICY", defaults["cascading_tool_policy"]),
-        "restricted_python": _feature_flag_bool("RESTRICTED_PYTHON", defaults["restricted_python"]),
-        "specialist_routing": _feature_flag_bool("SPECIALIST_ROUTING", defaults["specialist_routing"]),
-        "graph_router": _feature_flag_bool("GRAPH_ROUTER", defaults["graph_router"]),
-        "plan_review": _feature_flag_bool("PLAN_REVIEW", defaults["plan_review"]),
-        "architect_delegation": _feature_flag_bool("ARCHITECT_DELEGATION", defaults["architect_delegation"]),
-        "parallel_execution": _feature_flag_bool("PARALLEL_EXECUTION", defaults["parallel_execution"]),
-        "personas": _feature_flag_bool("PERSONAS", defaults["personas"]),
-        "staged_rewards": _feature_flag_bool("STAGED_REWARDS", defaults["staged_rewards"]),
-        "routing_classifier": _feature_flag_bool("ROUTING_CLASSIFIER", defaults["routing_classifier"]),
-        "skillbank": _feature_flag_bool("SKILLBANK", defaults["skillbank"]),
-        "input_formalizer": _feature_flag_bool("INPUT_FORMALIZER", defaults["input_formalizer"]),
-        "generation_monitor": _feature_flag_bool("GENERATION_MONITOR", defaults["generation_monitor"]),
-        "semantic_classifiers": _feature_flag_bool("SEMANTIC_CLASSIFIERS", defaults["semantic_classifiers"]),
-        "unified_streaming": _feature_flag_bool("UNIFIED_STREAMING", defaults["unified_streaming"]),
-        "side_effect_tracking": _feature_flag_bool("SIDE_EFFECT_TRACKING", defaults["side_effect_tracking"]),
-        "structured_tool_output": _feature_flag_bool(
-            "STRUCTURED_TOOL_OUTPUT", defaults["structured_tool_output"]
-        ),
-        "model_fallback": _feature_flag_bool("MODEL_FALLBACK", defaults["model_fallback"]),
-        "content_cache": _feature_flag_bool("CONTENT_CACHE", defaults["content_cache"]),
-        "session_compaction": _feature_flag_bool("SESSION_COMPACTION", defaults["session_compaction"]),
-        "session_log": _feature_flag_bool("SESSION_LOG", defaults["session_log"]),
-        "session_scratchpad": _feature_flag_bool("SESSION_SCRATCHPAD", defaults["session_scratchpad"]),
-        "depth_model_overrides": _feature_flag_bool(
-            "DEPTH_MODEL_OVERRIDES", defaults["depth_model_overrides"]
-        ),
-        "resume_tokens": _feature_flag_bool("RESUME_TOKENS", defaults["resume_tokens"]),
-        "approval_gates": _feature_flag_bool("APPROVAL_GATES", defaults["approval_gates"]),
-        "binding_routing": _feature_flag_bool("BINDING_ROUTING", defaults["binding_routing"]),
-        "worker_call_budget": _feature_flag_bool("WORKER_CALL_BUDGET", defaults["worker_call_budget"]),
-        "task_token_budget": _feature_flag_bool("TASK_TOKEN_BUDGET", defaults["task_token_budget"]),
-        "two_level_condensation": _feature_flag_bool("TWO_LEVEL_CONDENSATION", defaults["two_level_condensation"]),
-        "segment_cache_dedup": _feature_flag_bool("SEGMENT_CACHE_DEDUP", defaults["segment_cache_dedup"]),
-        "helpfulness_scoring": _feature_flag_bool("HELPFULNESS_SCORING", defaults["helpfulness_scoring"]),
-        "process_reward_telemetry": _feature_flag_bool("PROCESS_REWARD_TELEMETRY", defaults["process_reward_telemetry"]),
-        "role_aware_compaction": _feature_flag_bool("ROLE_AWARE_COMPACTION", defaults["role_aware_compaction"]),
-        "accurate_token_counting": _feature_flag_bool("ACCURATE_TOKEN_COUNTING", defaults["accurate_token_counting"]),
-        "tool_result_clearing": _feature_flag_bool("TOOL_RESULT_CLEARING", defaults["tool_result_clearing"]),
-        "reasoning_length_alarm": _feature_flag_bool("REASONING_LENGTH_ALARM", defaults["reasoning_length_alarm"]),
-        "tool_output_compression": _feature_flag_bool("TOOL_OUTPUT_COMPRESSION", defaults["tool_output_compression"]),
-        "output_spill_to_file": _feature_flag_bool("OUTPUT_SPILL_TO_FILE", defaults["output_spill_to_file"]),
-        "model_grading": _feature_flag_bool("MODEL_GRADING", defaults["model_grading"]),
-        "self_speculation": _feature_flag_bool("SELF_SPECULATION", defaults["self_speculation"]),
-        "hierarchical_speculation": _feature_flag_bool("HIERARCHICAL_SPECULATION", defaults["hierarchical_speculation"]),
-        "state_history_snapshots": _feature_flag_bool("STATE_HISTORY_SNAPSHOTS", defaults["state_history_snapshots"]),
-        "generalized_interrupts": _feature_flag_bool("GENERALIZED_INTERRUPTS", defaults["generalized_interrupts"]),
-        "langgraph_bridge": _feature_flag_bool("LANGGRAPH_BRIDGE", defaults["langgraph_bridge"]),
-        "langgraph_ingest": _feature_flag_bool("LANGGRAPH_INGEST", defaults["langgraph_ingest"]),
-        "langgraph_architect": _feature_flag_bool("LANGGRAPH_ARCHITECT", defaults["langgraph_architect"]),
-        "langgraph_architect_coding": _feature_flag_bool("LANGGRAPH_ARCHITECT_CODING", defaults["langgraph_architect_coding"]),
-        "langgraph_worker": _feature_flag_bool("LANGGRAPH_WORKER", defaults["langgraph_worker"]),
-        "langgraph_frontdoor": _feature_flag_bool("LANGGRAPH_FRONTDOOR", defaults["langgraph_frontdoor"]),
-        "langgraph_coder": _feature_flag_bool("LANGGRAPH_CODER", defaults["langgraph_coder"]),
-        "langgraph_coder_escalation": _feature_flag_bool("LANGGRAPH_CODER_ESCALATION", defaults["langgraph_coder_escalation"]),
-        "injection_scanning": _feature_flag_bool("INJECTION_SCANNING", defaults["injection_scanning"]),
-        "context_compression": _feature_flag_bool("CONTEXT_COMPRESSION", defaults["context_compression"]),
-        "user_modeling": _feature_flag_bool("USER_MODELING", defaults["user_modeling"]),
-        "session_token_budget": _feature_flag_bool("SESSION_TOKEN_BUDGET", defaults["session_token_budget"]),
-        "claude_code_mcp_chat": _feature_flag_bool("CLAUDE_CODE_MCP_CHAT", defaults["claude_code_mcp_chat"]),
-        "mock_mode": _feature_flag_bool("MOCK_MODE", defaults["mock_mode"]),
+        spec.name: _feature_flag_bool(spec.env_var, defaults[spec.name])
+        for spec in _FEATURE_REGISTRY
     }
 
     # Apply explicit overrides
