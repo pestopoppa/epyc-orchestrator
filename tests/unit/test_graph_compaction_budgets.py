@@ -232,6 +232,81 @@ class TestBudgetPressureWarnings:
         assert "token budget" in result
 
 
+class TestMaybeCompactContext:
+    """Tests for _maybe_compact_context async function."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_compaction_disabled(self):
+        from src.graph.compaction import _maybe_compact_context
+
+        ctx = MagicMock()
+        with patch("src.features.features") as mock_feat:
+            mock_feat.return_value.session_compaction = False
+            await _maybe_compact_context(ctx)
+        # Should return immediately — no LLM call made
+        ctx.deps.primitives.llm_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skips_when_no_primitives(self):
+        from src.graph.compaction import _maybe_compact_context
+
+        ctx = MagicMock()
+        ctx.deps.primitives = None
+        with patch("src.features.features") as mock_feat:
+            mock_feat.return_value.session_compaction = True
+            await _maybe_compact_context(ctx)
+
+    @pytest.mark.asyncio
+    async def test_skips_when_too_few_turns(self):
+        from src.graph.compaction import _maybe_compact_context
+
+        ctx = MagicMock()
+        ctx.deps.primitives = MagicMock()
+        ctx.state.turns = 1
+        ctx.state.context = "short"
+        with patch("src.features.features") as mock_feat:
+            mock_feat.return_value.session_compaction = True
+            with patch("src.config.get_config", side_effect=ImportError):
+                await _maybe_compact_context(ctx)
+
+    @pytest.mark.asyncio
+    async def test_compacts_when_context_exceeds_threshold(self, tmp_path, monkeypatch):
+        from src.graph.compaction import _maybe_compact_context
+
+        monkeypatch.setenv("ORCHESTRATOR_PATHS_TMP_DIR", str(tmp_path))
+        monkeypatch.setenv("PYTEST_CURRENT_TEST", "yes")
+
+        ctx = MagicMock()
+        ctx.deps.primitives._count_tokens.return_value = 50000
+        ctx.deps.primitives.llm_call.return_value = "- Summary of old context"
+        ctx.state.turns = 10
+        ctx.state.context = "x" * 20000  # Large enough to trigger
+        ctx.state.current_role = "worker"
+        ctx.state.task_id = "compact-test"
+        ctx.state.compaction_count = 0
+        ctx.state.last_compaction_turn = 0
+        ctx.state.context_file_paths = []
+        ctx.state.compaction_tokens_saved = 0
+        ctx.state.aggregate_tokens = 0
+
+        with patch("src.features.features") as mock_feat:
+            mock_feat.return_value.session_compaction = True
+            mock_feat.return_value.session_token_budget = False
+            with patch("src.config.get_config") as mock_cfg:
+                mock_cfg.return_value.chat.session_compaction_keep_recent_ratio = 0.20
+                mock_cfg.return_value.chat.session_compaction_recompaction_interval = 0
+                mock_cfg.return_value.chat.session_compaction_min_turns = 5
+                mock_cfg.return_value.chat.session_compaction_trigger_ratio = 0.75
+                mock_cfg.return_value.chat.session_compaction_prompt = "Summarize: {context}"
+
+                await _maybe_compact_context(ctx)
+
+        # Should have called llm_call for index generation
+        ctx.deps.primitives.llm_call.assert_called_once()
+        # Context should be replaced with compacted version
+        assert "Context Index" in ctx.state.context or ctx.state.compaction_count == 1
+
+
 # ── concurrency_aware.py ─────────────────────────────────────────────────
 
 
