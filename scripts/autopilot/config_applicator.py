@@ -187,17 +187,52 @@ def restart_api(
     return {"status": "error", "error": "Could not restart API"}
 
 
-def health_check(url: str = ORCHESTRATOR_URL, retries: int = 5) -> bool:
-    """Verify API is healthy after restart."""
+class HealthCheckResult:
+    """Typed health check result — truthy when healthy, carries diagnostics when not."""
+
+    __slots__ = ("ok", "failure_reason", "failure_detail")
+
+    def __init__(self, ok: bool, failure_reason: str = "", failure_detail: str = ""):
+        self.ok = ok
+        self.failure_reason = failure_reason
+        self.failure_detail = failure_detail
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+    def __repr__(self) -> str:
+        if self.ok:
+            return "HealthCheckResult(ok=True)"
+        return f"HealthCheckResult(ok=False, failure_reason={self.failure_reason!r})"
+
+
+def health_check(url: str = ORCHESTRATOR_URL, retries: int = 5) -> HealthCheckResult:
+    """Verify API is healthy after restart.
+
+    Returns a HealthCheckResult that is truthy when healthy. Callers using
+    ``if health_check(...)`` or ``if not health_check(...)`` continue to
+    work unchanged; callers that want diagnostics can read
+    ``.failure_reason`` and ``.failure_detail``.
+    """
+    last_reason, last_detail = "max_retries_exceeded", ""
     for i in range(retries):
         try:
             resp = httpx.get(f"{url}/health", timeout=5)
             if resp.status_code == 200:
-                return True
-        except Exception:
-            pass
+                return HealthCheckResult(ok=True)
+            last_reason = "http_status"
+            last_detail = f"status={resp.status_code}"
+        except httpx.TimeoutException as exc:
+            last_reason = "timeout"
+            last_detail = str(exc)
+        except httpx.ConnectError as exc:
+            last_reason = "connection_refused"
+            last_detail = str(exc)
+        except Exception as exc:
+            last_reason = type(exc).__name__
+            last_detail = str(exc)
         time.sleep(1)
-    return False
+    return HealthCheckResult(ok=False, failure_reason=last_reason, failure_detail=last_detail)
 
 
 def apply_params(

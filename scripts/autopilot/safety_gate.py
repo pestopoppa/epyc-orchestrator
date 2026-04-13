@@ -55,6 +55,8 @@ class EvalResult:
     details: dict[str, Any] = field(default_factory=dict)
     instruction_token_count: int = 0  # AP-16: per-request instruction overhead
     instruction_token_ratio: float = 0.0  # AP-16: instruction_tokens / total_input_tokens
+    partial_count: int = 0  # Inference results with partial=True (read_timeout_partial)
+    degraded_count: int = 0  # Inference results with degraded=True
 
     @property
     def objectives(self) -> tuple[float, float, float, float]:
@@ -82,6 +84,11 @@ class EvalResult:
         # AP-16: Instruction token budget
         lines.append(f"METRIC instruction_tokens: {self.instruction_token_count}")
         lines.append(f"METRIC instruction_ratio: {self.instruction_token_ratio:.4f}")
+        # Degradation metrics from refactored InferenceResult
+        if self.partial_count > 0:
+            lines.append(f"METRIC partial_count: {self.partial_count}")
+        if self.degraded_count > 0:
+            lines.append(f"METRIC degraded_count: {self.degraded_count}")
         return "\n".join(lines)
 
 

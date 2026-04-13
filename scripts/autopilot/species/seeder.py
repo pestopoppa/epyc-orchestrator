@@ -158,6 +158,14 @@ class Seeder:
                         )
                         batch_result.rewards_delivery.append(delivery)
                         batch_result.rewards_injected += int(delivery.get("acknowledged", 0))
+                        _failed = int(delivery.get("failed", 0))
+                        if _failed > 0:
+                            _reasons = delivery.get("failure_reasons", {})
+                            log.warning(
+                                "Reward delivery: %d acknowledged, %d failed for %s — %s",
+                                int(delivery.get("acknowledged", 0)),
+                                _failed, qid, _reasons,
+                            )
 
                     # Track TD error from metadata
                     td = metadata.get("avg_td_error", 0.0)
