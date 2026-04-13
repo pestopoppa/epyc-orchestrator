@@ -201,33 +201,25 @@ class TestArchitectDelegatedAnswer:
         """Architect investigates once, then synthesizes."""
         from src.api.routes.chat_delegation import _architect_delegated_answer
 
-        responses = [
-            # Loop 0 Phase A: architect decides to investigate
-            "I|brief:Check the file src/api.py|to:coder_escalation",
-            # Loop 0 Phase B: specialist ReAct (mocked via _react_mode_answer)
-            # Loop 1 Phase A: architect synthesizes
-            "D|Based on the investigation, the answer is X",
-        ]
-
-        primitives = self._mock_primitives(responses)
+        primitives = MagicMock()
+        primitives._backends = {"test": True}
+        primitives.total_tokens_generated = 0
         state = self._mock_state()
 
-        # Mock REPLEnvironment to avoid needing real REPL loop
-        with patch("src.api.routes.chat_delegation.REPLEnvironment") as mock_repl_cls:
-            mock_repl = MagicMock()
-            mock_repl.get_prompt.return_value = "prompt"
-            mock_repl.execute.return_value = {"final": "File contents: error handling at line 42"}
-            mock_repl._tool_invocations = 2
-            mock_repl.tool_registry = None
-            mock_repl_cls.return_value = mock_repl
+        # Mock _run_architect_decision to return investigate then direct answer
+        decisions = [
+            ("I|brief:Check the file src/api.py|to:coder_escalation", 1, 0),
+            ("D|Based on the investigation, the answer is X", 1, 0),
+        ]
+        decision_iter = iter(decisions)
 
-            # Need to override llm_call side effects to include REPL code call
-            primitives.llm_call.side_effect = [
-                responses[0],  # architect decides to investigate
-                "code here",  # REPL code
-                responses[1],  # architect synthesizes
-            ]
-
+        with patch(
+            "src.api.routes.chat_delegation._run_architect_decision",
+            side_effect=lambda *a, **kw: next(decision_iter),
+        ), patch(
+            "src.api.routes.chat_delegation._run_specialist_loop",
+            return_value=("File contents: error handling at line 42", 2, ["code_search"], [], False, False, {}),
+        ):
             answer, stats = _architect_delegated_answer(
                 question="Where is error handling?",
                 context="",
@@ -343,44 +335,23 @@ class TestArchitectDelegatedAnswer:
         assert stats["loops"] == 2
 
     def test_specialist_document_passthrough(self):
-        """Specialist drafts document, architect says 'Approved' → document is answer."""
+        """Specialist drafts document via rescued report → document is final answer."""
         from src.api.routes.chat_delegation import _architect_delegated_answer
-
-        responses = [
-            # Loop 0: architect requests REPL drafting
-            "I|brief:Draft the implementation|to:coder_escalation|mode:repl",
-            # Loop 1: architect approves
-            "D|Approved",
-        ]
-
-        primitives = self._mock_primitives(responses)
-        state = self._mock_state()
 
         specialist_doc = "def hello():\n    return 'world'"
 
+        primitives = MagicMock()
+        primitives._backends = {"test": True}
+        primitives.total_tokens_generated = 0
+        state = self._mock_state()
+
         with patch(
-            "src.api.routes.chat_delegation.REPLEnvironment",
-        ) as mock_repl_cls:
-            # Mock REPL to produce a document
-            mock_repl = MagicMock()
-            mock_repl.get_prompt.return_value = "prompt"
-            mock_result = MagicMock()
-            mock_result.is_final = True
-            mock_result.final_answer = specialist_doc
-            mock_result.output = ""
-            mock_result.error = None
-            mock_repl.execute.return_value = mock_result
-            mock_repl.get_state.return_value = ""
-            mock_repl._tool_invocations = 0
-            mock_repl_cls.return_value = mock_repl
-
-            # Need to add the REPL primitives call
-            primitives.llm_call.side_effect = [
-                responses[0],  # architect decides to delegate
-                "code here",  # specialist REPL code
-                responses[1],  # architect approves
-            ]
-
+            "src.api.routes.chat_delegation._run_architect_decision",
+            return_value=("I|brief:Draft the implementation|to:coder_escalation|mode:repl", 1, 0),
+        ), patch(
+            "src.api.routes.chat_delegation._run_specialist_loop",
+            return_value=(specialist_doc, 0, [], [], False, True, {}),
+        ):
             answer, stats = _architect_delegated_answer(
                 question="Write a hello function",
                 context="",
@@ -388,8 +359,9 @@ class TestArchitectDelegatedAnswer:
                 state=state,
             )
 
-        # The specialist document should be the final answer
+        # The specialist document should be the final answer (via report_rescued)
         assert answer == specialist_doc
+        assert stats.get("break_reason") == "specialist_report"
 
     def test_delegate_role_validation(self):
         """Invalid delegate role gets clamped to coder_escalation."""
@@ -656,12 +628,23 @@ class RateLimiter:
         state = MagicMock()
         state.tool_registry = None
 
+        decisions = iter([
+            ("I|brief:investigate|to:coder_escalation", 1, 0),
+            ("D|should_not_be_called", 1, 0),
+        ])
+        mock_cache = MagicMock()
+        mock_cache.make_key.return_value = "test-key"
+        mock_cache.get.return_value = None
+
         with patch(
             "src.api.routes.chat_delegation._run_architect_decision",
-            return_value=("I|brief:investigate|to:coder_escalation", 1, 0),
+            side_effect=lambda *a, **kw: next(decisions),
         ), patch(
             "src.api.routes.chat_delegation._run_specialist_loop",
             return_value=("specialist report body", 0, [], [], False, True, {}),
+        ), patch(
+            "src.delegation_cache.get_delegation_cache",
+            return_value=mock_cache,
         ):
             answer, stats = _architect_delegated_answer(
                 question="q",
@@ -762,5 +745,3 @@ class TestFileToolsWhitelist:
 
 
 # ── Seeding Script Tests ─────────────────────────────────────────────────
-
-

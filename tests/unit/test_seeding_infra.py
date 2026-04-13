@@ -81,3 +81,36 @@ def test_run_preflight_records_recovered_api_probe_cause():
     assert diag["status"] == "passed"
     assert diag["stage"] == "completed"
     assert api_diag["failure_reason"] == "http_status"
+
+
+def test_run_preflight_records_api_launch_failure():
+    unhealthy = Mock(status_code=503)
+    client = Mock(get=Mock(return_value=unhealthy))
+    _MOD.state.get_poll_client = Mock(return_value=client)
+    _MOD._check_port = Mock(side_effect=lambda port: port in {8080})
+    _MOD._launch_api_only = Mock(return_value=False)
+
+    assert _MOD.run_preflight("http://localhost:8000", restart_api=False) is False
+
+    diag = _MOD.get_preflight_diagnostics()["last_preflight"]
+    assert diag["status"] == "failed"
+    assert diag["stage"] == "api_launch"
+    assert diag["failure_reason"] == "api_launch_failed"
+
+
+def test_run_preflight_records_smoke_test_timeout():
+    health_response = Mock(status_code=200)
+    client = Mock(
+        get=Mock(side_effect=[health_response, health_response]),
+        post=Mock(side_effect=TimeoutError("request timeout")),
+    )
+    _MOD.state.get_poll_client = Mock(return_value=client)
+    _MOD._check_port = Mock(return_value=False)
+    _MOD._wait_for_workers_ready = Mock()
+
+    assert _MOD.run_preflight("http://localhost:8000", restart_api=False) is False
+
+    diag = _MOD.get_preflight_diagnostics()["last_preflight"]
+    assert diag["status"] == "failed"
+    assert diag["stage"] == "smoke_test"
+    assert diag["failure_reason"] == "timeout"

@@ -204,7 +204,7 @@ class TestServerConfigData:
         cfg = ServerConfigData()
         assert cfg.default_url == "http://localhost:8080"
         assert cfg.timeout == 600
-        assert cfg.num_slots == 4
+        assert cfg.num_slots == 2
         assert cfg.connect_timeout == 5
         assert cfg.retry_count == 3
         assert cfg.retry_backoff == pytest.approx(0.5)
@@ -267,7 +267,6 @@ class TestServerURLsConfig:
             "worker_math",
             "worker_vision",
             "vision_escalation",
-            "worker_code",
             "worker_coder",
             "worker_fast",
             "worker_summarize",
@@ -285,12 +284,15 @@ class TestServerURLsConfig:
 
     def test_default_frontdoor_url(self) -> None:
         cfg = ServerURLsConfig()
-        assert cfg.frontdoor == "http://localhost:8080"
+        # Multi-instance "full:" prefix for ConcurrencyAwareBackend
+        assert cfg.frontdoor.startswith("full:")
+        assert "http://localhost:8080" in cfg.frontdoor
 
     def test_default_architect_urls(self) -> None:
         cfg = ServerURLsConfig()
-        assert cfg.architect_general == "http://localhost:8083"
-        assert cfg.architect_coding == "http://localhost:8084"
+        # Architects use round-robin multi-URL (comma-separated)
+        assert "http://localhost:8083" in cfg.architect_general
+        assert "http://localhost:8084" in cfg.architect_coding
 
 
 # ============================================================================

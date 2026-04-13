@@ -101,12 +101,11 @@ known-first-party = ["src", "orchestration"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short -n 8"
+addopts = "-v --tb=short"
 asyncio_mode = "auto"
-timeout = 30
 
 [tool.coverage.run]
-source = ["src"]
+source = ["src", "scripts/benchmark", "scripts/lib"]
 omit = [
     "src/gradio_ui.py",        # UI module, not testable in CI
     "src/cli_*.py",            # CLI entrypoints

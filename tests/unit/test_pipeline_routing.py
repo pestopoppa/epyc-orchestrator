@@ -121,11 +121,15 @@ class TestRouteRequest:
         assert result.routing_strategy == "classified"
 
     def test_failure_graph_veto_high_risk(self):
-        """High-risk specialist reverted to frontdoor."""
+        """High-risk specialist reverted to frontdoor.
+
+        RI-5: Veto threshold is modulated by factual-risk band.
+        The "low" band sets threshold=0.7, so risk must exceed 0.7.
+        """
         request = ChatRequest(prompt="test", real_mode=True)
         state = MagicMock()
         state.hybrid_router.route.return_value = (["coder_escalation"], "learned")
-        state.failure_graph.get_failure_risk.return_value = 0.7  # > 0.5
+        state.failure_graph.get_failure_risk.return_value = 0.85  # > 0.7 (low-risk threshold)
         state.progress_logger = None
 
         result = _route_request(request, state)

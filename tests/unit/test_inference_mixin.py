@@ -375,12 +375,8 @@ class TestWorkerPoolBatch:
     def test_worker_pool_batch_routes_correctly(self):
         """Test worker pool batch routes to correct task type."""
         mock_pool = Mock()
-
-        # mock_pool.batch returns a coroutine when called by production code
-        async def mock_batch_async(prompts, task_type):
-            return [f"Pool response: {p}" for p in prompts]
-
-        mock_pool.batch = mock_batch_async
+        mock_batch = object()
+        mock_pool.batch = Mock(return_value=mock_batch)
 
         prims = LLMPrimitives(
             mock_mode=False,
@@ -403,7 +399,8 @@ class TestWorkerPoolBatch:
             results = prims._worker_pool_batch(prompts, "worker_explore")
 
         assert len(results) == 2
-        mock_run.assert_called_once()
+        mock_pool.batch.assert_called_once_with(prompts, task_type="worker_explore")
+        mock_run.assert_called_once_with(mock_batch)
 
     def test_worker_pool_batch_fallback_on_error(self, mock_model_server):
         """Test worker pool batch falls back on error."""
