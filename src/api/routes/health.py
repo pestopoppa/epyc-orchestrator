@@ -11,6 +11,7 @@ from src.api.dependencies import dep_health_tracker
 from src.api.health_tracker import BackendHealthTracker
 from src.api.models import HealthResponse
 from src.config import get_config
+from src.observability import classify_exception
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -89,14 +90,26 @@ async def _probe_backend(url: str, timeout: float = 2.0) -> dict[str, Any]:
     import httpx
 
     start = time.perf_counter()
+    status_code: int | None = None
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(f"{url}/health")
+        status_code = resp.status_code
         ok = resp.status_code == 200
-    except Exception:
+        failure_reason = "" if ok else "http_status"
+        failure_detail = "" if ok else f"status={resp.status_code}"
+    except Exception as exc:
         ok = False
+        failure_reason, failure_detail = classify_exception(exc)
     latency_ms = (time.perf_counter() - start) * 1000
-    return {"ok": ok, "latency_ms": round(latency_ms, 1), "url": url}
+    return {
+        "ok": ok,
+        "latency_ms": round(latency_ms, 1),
+        "url": url,
+        "status_code": status_code,
+        "failure_reason": failure_reason,
+        "failure_detail": failure_detail,
+    }
 
 
 async def _probe_core_backends() -> dict[str, Any]:
@@ -121,7 +134,15 @@ async def _probe_core_backends() -> dict[str, Any]:
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for role, result in zip(role_list, results):
         if isinstance(result, Exception):
-            probes[role] = {"ok": False, "latency_ms": None, "url": server_urls.get(role)}
+            reason, detail = classify_exception(result)
+            probes[role] = {
+                "ok": False,
+                "latency_ms": None,
+                "url": server_urls.get(role),
+                "status_code": None,
+                "failure_reason": reason,
+                "failure_detail": detail,
+            }
         else:
             probes[role] = result
     return probes

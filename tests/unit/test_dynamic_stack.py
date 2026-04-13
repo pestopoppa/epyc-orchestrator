@@ -8,7 +8,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.backends.round_robin import RoundRobinBackend
-from src.backends.concurrency_aware import ConcurrencyAwareBackend
+from src.backends.concurrency_aware import (
+    ConcurrencyAwareBackend,
+    _STATE_ASSIGNED_QUARTER,
+    _STATE_MIGRATION_FAILED_COLD,
+)
 
 
 # === DS-6: Backend instance management ===
@@ -60,6 +64,7 @@ class TestConcurrencyAwareDynamicQuarters:
     def _make_backend(self):
         b = MagicMock()
         b.health_check = MagicMock(return_value=True)
+        b.config = MagicMock(base_url="http://localhost:9999")
         return b
 
     def test_add_quarter(self):
@@ -96,6 +101,70 @@ class TestConcurrencyAwareDynamicQuarters:
         assert "sess-a" not in ca._session_quarter
         # sess-b was on quarter 1 → shifted to 0
         assert ca._session_quarter["sess-b"] == 0
+
+    def test_restore_failure_does_not_create_stale_affinity(self, monkeypatch):
+        full = self._make_backend()
+        q1 = self._make_backend()
+        q1.config = MagicMock(base_url="http://localhost:9998")
+        ca = ConcurrencyAwareBackend(full, [q1], role="test")
+        monkeypatch.setattr("src.backends.concurrency_aware._slot_save", lambda *args, **kwargs: True)
+        monkeypatch.setattr("src.backends.concurrency_aware._slot_restore", lambda *args, **kwargs: False)
+
+        ca._select("sess-a")
+        ca._release(-1, True)
+        ca._select("sess-b")
+
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if ca._session_state.get("sess-a", {}).get("state") == _STATE_MIGRATION_FAILED_COLD:
+                break
+            time.sleep(0.01)
+
+        assert "sess-a" not in ca._session_quarter
+        assert ca._session_state["sess-a"]["state"] == _STATE_MIGRATION_FAILED_COLD
+        assert ca._session_state["sess-a"]["quarter"] == 0
+
+        backend, idx, is_full = ca._select("sess-a")
+        assert backend is q1
+        assert idx == 0
+        assert is_full is False
+
+    def test_successful_restore_finalizes_quarter_affinity(self, monkeypatch):
+        full = self._make_backend()
+        q1 = self._make_backend()
+        q1.config = MagicMock(base_url="http://localhost:9998")
+        ca = ConcurrencyAwareBackend(full, [q1], role="test")
+        monkeypatch.setattr("src.backends.concurrency_aware._slot_save", lambda *args, **kwargs: True)
+        monkeypatch.setattr("src.backends.concurrency_aware._slot_restore", lambda *args, **kwargs: True)
+        monkeypatch.setattr("src.backends.concurrency_aware._slot_erase", lambda *args, **kwargs: True)
+
+        ca._select("sess-a")
+        ca._release(-1, True)
+        ca._select("sess-b")
+
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            if ca._session_state.get("sess-a", {}).get("state") == _STATE_ASSIGNED_QUARTER:
+                break
+            time.sleep(0.01)
+
+        assert ca._session_quarter["sess-a"] == 0
+        assert ca._session_state["sess-a"]["state"] == _STATE_ASSIGNED_QUARTER
+        assert ca._session_state["sess-a"]["detail"] == "restored"
+
+    def test_stats_include_session_states(self):
+        full = self._make_backend()
+        q1 = self._make_backend()
+        ca = ConcurrencyAwareBackend(full, [q1], role="test")
+        ca._session_state["sess-a"] = {
+            "state": _STATE_MIGRATION_FAILED_COLD,
+            "quarter": 0,
+            "detail": "restore_failed",
+            "updated_at": time.time(),
+        }
+        stats = ca.get_stats()
+        assert stats["session_states"]["sess-a"]["state"] == _STATE_MIGRATION_FAILED_COLD
+        assert stats["migration_pending"] == {}
 
 
 # === DS-6: QuarterScheduler ===

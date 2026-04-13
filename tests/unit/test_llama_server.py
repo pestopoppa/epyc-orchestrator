@@ -207,6 +207,8 @@ class TestLlamaServerBackend:
         assert result.output == "Hello world"
         assert result.tokens_generated == 5
         assert result.generation_speed == 33.0
+        assert result.partial is False
+        assert result.degraded is False
         assert result.prompt_eval_ms == 100.0
         assert result.generation_ms == 50.0
         assert result.predicted_per_second == 33.0
@@ -222,6 +224,7 @@ class TestLlamaServerBackend:
 
         assert result.success is False
         assert "timed out" in result.error_message.lower()
+        assert result.failure_reason == "timeout"
         assert result.tokens_generated == 0
 
     def test_infer_http_error(self, role_config):
@@ -237,6 +240,35 @@ class TestLlamaServerBackend:
 
         assert result.success is False
         assert "Server request failed" in result.error_message
+        assert result.failure_reason == "request_error"
+
+    def test_infer_stream_text_partial_timeout_sets_partial_flags(self, role_config):
+        """Streaming read timeout with chunks should be marked partial/degraded."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello", timeout=10)
+
+        class _StreamResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"content":"Hel"}'
+                raise httpx.ReadTimeout("timed out")
+
+        with patch.object(backend.client, "stream", return_value=_StreamResponse()):
+            result = backend.infer_stream_text(role_config, request)
+
+        assert result.success is True
+        assert result.partial is True
+        assert result.degraded is True
+        assert result.failure_reason == "read_timeout"
+        assert result.completion_reason == "read_timeout_partial"
 
     def test_health_check_success(self):
         """Test health check with healthy server."""

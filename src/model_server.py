@@ -124,6 +124,10 @@ class InferenceResult:
     elapsed_time: float
     success: bool
     error_message: str | None = None
+    partial: bool = False
+    degraded: bool = False
+    failure_stage: str = ""
+    failure_reason: str = ""
     # Clean timing data from llama.cpp timings object
     prompt_eval_ms: float = 0.0  # Prompt evaluation time
     generation_ms: float = 0.0  # Token generation time (excludes prompt eval)
@@ -147,6 +151,10 @@ class InferenceResult:
             "elapsed_time": self.elapsed_time,
             "success": self.success,
             "error_message": self.error_message,
+            "partial": self.partial,
+            "degraded": self.degraded,
+            "failure_stage": self.failure_stage,
+            "failure_reason": self.failure_reason,
             "prompt_eval_ms": self.prompt_eval_ms,
             "generation_ms": self.generation_ms,
             "predicted_per_second": self.predicted_per_second,

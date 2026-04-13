@@ -1,5 +1,7 @@
 """Tests for server lifecycle abstraction (B6)."""
 
+from unittest.mock import Mock, patch
+
 import pytest
 
 from src.backends.server_lifecycle import (
@@ -111,6 +113,27 @@ class TestLlamaServer:
         cmd = lc.build_launch_command(config)
         assert "-ngl" in cmd
         assert "0" in cmd
+
+    def test_health_check_failure_reason_on_non_200(self):
+        lc = LlamaServerLifecycle()
+        mock_resp = Mock(status_code=503)
+
+        with patch("httpx.get", return_value=mock_resp):
+            status = lc.health_check("http://localhost:8080")
+
+        assert status.healthy is False
+        assert status.failure_reason == "http_status"
+        assert "503" in status.failure_detail
+
+    def test_health_check_failure_reason_on_exception(self):
+        lc = LlamaServerLifecycle()
+
+        with patch("httpx.get", side_effect=RuntimeError("boom")):
+            status = lc.health_check("http://localhost:8080")
+
+        assert status.healthy is False
+        assert status.failure_reason == "runtime_error"
+        assert "boom" in status.failure_detail
 
 
 # ---------------------------------------------------------------------------

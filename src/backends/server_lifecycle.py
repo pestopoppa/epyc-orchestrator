@@ -16,11 +16,14 @@ from __future__ import annotations
 import enum
 import logging
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+from src.observability import classify_exception
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +66,11 @@ class ServerStatus:
     slots_total: int = 0
     slots_active: int = 0
     uptime_seconds: float = 0.0
+    failure_reason: str = ""
+    failure_detail: str = ""
+    degraded: bool = False
+    degradation_source: str = ""
+    checked_at: float = 0.0
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -213,16 +221,22 @@ class LlamaServerLifecycle:
         """Check llama-server health via /health endpoint."""
         import httpx
 
-        status = ServerStatus(url=url)
+        status = ServerStatus(url=url, checked_at=time.time())
         try:
             resp = httpx.get(f"{url}/health", timeout=5.0)
             data = resp.json() if resp.status_code == 200 else {}
             status.healthy = resp.status_code == 200
+            if not status.healthy:
+                status.failure_reason = "http_status"
+                status.failure_detail = f"status={resp.status_code}"
             status.slots_total = data.get("slots_idle", 0) + data.get("slots_processing", 0)
             status.slots_active = data.get("slots_processing", 0)
         except Exception as exc:
-            logger.debug("Health check failed for %s: %s", url, exc)
+            reason, detail = classify_exception(exc)
+            logger.debug("Health check failed for %s [%s]: %s", url, reason, detail)
             status.healthy = False
+            status.failure_reason = reason
+            status.failure_detail = detail
         return status
 
     def get_status(self, url: str) -> ServerStatus:
@@ -244,8 +258,18 @@ class LlamaServerLifecycle:
                 if slots:
                     status.model_loaded = slots[0].get("model", "")
                 status.extra["slots"] = slots
+            else:
+                status.degraded = True
+                status.degradation_source = "slots"
+                status.failure_reason = status.failure_reason or "http_status"
+                status.failure_detail = status.failure_detail or f"slots status={resp.status_code}"
         except Exception as exc:
-            logger.debug("Status check failed for %s: %s", url, exc)
+            reason, detail = classify_exception(exc)
+            logger.debug("Status check failed for %s [%s]: %s", url, reason, detail)
+            status.degraded = True
+            status.degradation_source = "slots"
+            status.failure_reason = status.failure_reason or reason
+            status.failure_detail = status.failure_detail or detail
 
         return status
 
@@ -291,12 +315,18 @@ class VLLMLifecycle:
     def health_check(self, url: str) -> ServerStatus:
         import httpx
 
-        status = ServerStatus(url=url)
+        status = ServerStatus(url=url, checked_at=time.time())
         try:
             resp = httpx.get(f"{url}/health", timeout=5.0)
             status.healthy = resp.status_code == 200
-        except Exception:
+            if not status.healthy:
+                status.failure_reason = "http_status"
+                status.failure_detail = f"status={resp.status_code}"
+        except Exception as exc:
+            reason, detail = classify_exception(exc)
             status.healthy = False
+            status.failure_reason = reason
+            status.failure_detail = detail
         return status
 
     def get_status(self, url: str) -> ServerStatus:
@@ -342,12 +372,18 @@ class TGILifecycle:
     def health_check(self, url: str) -> ServerStatus:
         import httpx
 
-        status = ServerStatus(url=url)
+        status = ServerStatus(url=url, checked_at=time.time())
         try:
             resp = httpx.get(f"{url}/health", timeout=5.0)
             status.healthy = resp.status_code == 200
-        except Exception:
+            if not status.healthy:
+                status.failure_reason = "http_status"
+                status.failure_detail = f"status={resp.status_code}"
+        except Exception as exc:
+            reason, detail = classify_exception(exc)
             status.healthy = False
+            status.failure_reason = reason
+            status.failure_detail = detail
         return status
 
     def get_status(self, url: str) -> ServerStatus:

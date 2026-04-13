@@ -31,6 +31,25 @@ _REGISTRY_TIMEOUTS_CACHE: dict[str, int | float] | None = None
 _REGISTRY_RUNTIME_DEFAULTS_CACHE: dict[str, Any] | None = None
 _LOADING_REGISTRY_TIMEOUTS = False
 _LOADING_RUNTIME_DEFAULTS = False
+_REGISTRY_DIAGNOSTICS: dict[str, Any] = {
+    "runtime_defaults": {},
+    "timeouts": {},
+}
+
+
+def _record_registry_diag(section: str, payload: dict[str, Any]) -> None:
+    _REGISTRY_DIAGNOSTICS[section] = {
+        **payload,
+        "checked_at": os.times().elapsed,
+    }
+
+
+def get_validation_diagnostics() -> dict[str, Any]:
+    """Return cached registry-load diagnostics for config bootstrap."""
+    return {
+        "runtime_defaults": dict(_REGISTRY_DIAGNOSTICS.get("runtime_defaults", {})),
+        "timeouts": dict(_REGISTRY_DIAGNOSTICS.get("timeouts", {})),
+    }
 
 
 def _load_registry_timeouts() -> dict[str, int | float]:
@@ -45,12 +64,17 @@ def _load_registry_timeouts() -> dict[str, int | float]:
         return _REGISTRY_TIMEOUTS_CACHE
     if _LOADING_REGISTRY_TIMEOUTS:
         # Avoid recursive config->registry->config loops during bootstrap.
+        _record_registry_diag(
+            "timeouts",
+            {"status": "recursive_guard", "failure_reason": "recursive_load", "failure_detail": ""},
+        )
         return {}
 
     try:
         _LOADING_REGISTRY_TIMEOUTS = True
         runtime_defaults = _load_registry_runtime_defaults()
         raw_timeouts = runtime_defaults.get("timeouts", {}) if isinstance(runtime_defaults, dict) else {}
+        runtime_diag = _REGISTRY_DIAGNOSTICS.get("runtime_defaults", {})
 
         # Flatten nested structure to "category.key" format
         flat: dict[str, int | float] = {"default": raw_timeouts.get("default", 600)}
@@ -65,10 +89,39 @@ def _load_registry_timeouts() -> dict[str, int | float]:
                 flat[f"{category}.{key}"] = value
 
         _REGISTRY_TIMEOUTS_CACHE = flat
+        if runtime_diag.get("status") and runtime_diag.get("status") != "loaded":
+            _record_registry_diag(
+                "timeouts",
+                {
+                    "status": "fallback",
+                    "failure_reason": runtime_diag.get("failure_reason", ""),
+                    "failure_detail": runtime_diag.get("failure_detail", ""),
+                    "entries": len(flat),
+                },
+            )
+        else:
+            _record_registry_diag(
+                "timeouts",
+                {
+                    "status": "loaded",
+                    "failure_reason": "",
+                    "failure_detail": "",
+                    "entries": len(flat),
+                },
+            )
         return flat
     except Exception as e:
-        logger.debug("Registry timeouts unavailable, using hardcoded fallbacks: %s", e)
+        logger.warning("Registry timeouts unavailable, using hardcoded fallbacks: %s", e)
         _REGISTRY_TIMEOUTS_CACHE = {}
+        _record_registry_diag(
+            "timeouts",
+            {
+                "status": "fallback",
+                "failure_reason": type(e).__name__,
+                "failure_detail": str(e),
+                "entries": 0,
+            },
+        )
         return {}
     finally:
         _LOADING_REGISTRY_TIMEOUTS = False
@@ -103,6 +156,10 @@ def _load_registry_runtime_defaults() -> dict[str, Any]:
     if _REGISTRY_RUNTIME_DEFAULTS_CACHE is not None:
         return _REGISTRY_RUNTIME_DEFAULTS_CACHE
     if _LOADING_RUNTIME_DEFAULTS:
+        _record_registry_diag(
+            "runtime_defaults",
+            {"status": "recursive_guard", "failure_reason": "recursive_load", "failure_detail": ""},
+        )
         return {}
     try:
         _LOADING_RUNTIME_DEFAULTS = True
@@ -114,6 +171,15 @@ def _load_registry_runtime_defaults() -> dict[str, Any]:
         )
         if not registry_path.exists():
             _REGISTRY_RUNTIME_DEFAULTS_CACHE = {}
+            _record_registry_diag(
+                "runtime_defaults",
+                {
+                    "status": "missing",
+                    "failure_reason": "missing_registry",
+                    "failure_detail": str(registry_path),
+                    "entries": 0,
+                },
+            )
             return _REGISTRY_RUNTIME_DEFAULTS_CACHE
 
         import yaml
@@ -124,10 +190,28 @@ def _load_registry_runtime_defaults() -> dict[str, Any]:
         _REGISTRY_RUNTIME_DEFAULTS_CACHE = (
             dict(runtime_defaults) if isinstance(runtime_defaults, dict) else {}
         )
+        _record_registry_diag(
+            "runtime_defaults",
+            {
+                "status": "loaded",
+                "failure_reason": "",
+                "failure_detail": "",
+                "entries": len(_REGISTRY_RUNTIME_DEFAULTS_CACHE),
+            },
+        )
         return _REGISTRY_RUNTIME_DEFAULTS_CACHE
     except Exception as e:
-        logger.debug("Registry runtime defaults unavailable, using hardcoded fallbacks: %s", e)
+        logger.warning("Registry runtime defaults unavailable, using hardcoded fallbacks: %s", e)
         _REGISTRY_RUNTIME_DEFAULTS_CACHE = {}
+        _record_registry_diag(
+            "runtime_defaults",
+            {
+                "status": "fallback",
+                "failure_reason": type(e).__name__,
+                "failure_detail": str(e),
+                "entries": 0,
+            },
+        )
         return {}
     finally:
         _LOADING_RUNTIME_DEFAULTS = False
@@ -153,6 +237,8 @@ def reset_validation_caches() -> None:
     _REGISTRY_RUNTIME_DEFAULTS_CACHE = None
     _LOADING_REGISTRY_TIMEOUTS = False
     _LOADING_RUNTIME_DEFAULTS = False
+    _REGISTRY_DIAGNOSTICS["runtime_defaults"] = {}
+    _REGISTRY_DIAGNOSTICS["timeouts"] = {}
 
 
 def reset_runtime_defaults_cache() -> None:
