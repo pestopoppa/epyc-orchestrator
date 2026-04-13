@@ -685,7 +685,7 @@ class Executor:
                 inference_result = self.server.infer(request)
                 step_result.inference_result = inference_result
 
-                if inference_result.success:
+                if inference_result.success or inference_result.partial:
                     step_result.output = inference_result.output
                     step_result.status = StepStatus.COMPLETED
 

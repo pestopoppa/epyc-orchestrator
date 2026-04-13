@@ -270,7 +270,7 @@ class ProactiveDelegator:
             result.subtask_results,
             strategy="concatenate",
         )
-        result.all_approved = all(r.success for r in result.subtask_results)
+        result.all_approved = all(r.success or getattr(r, 'partial', False) for r in result.subtask_results)
         result.total_iterations = self.iteration_context.total_iterations
 
         # Log completion

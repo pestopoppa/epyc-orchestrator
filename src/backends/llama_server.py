@@ -631,7 +631,7 @@ class LlamaServerBackend(ModelBackend):
                     tokens_generated=len(chunks),
                     generation_speed=len(chunks) / _elapsed if _elapsed > 0 else 0.0,
                     elapsed_time=_elapsed,
-                    success=True,
+                    success=False,
                     partial=True,
                     degraded=True,
                     failure_stage="stream_read",

@@ -594,10 +594,10 @@ class ModelServer:
         # Update status
         if request.role in self.models:
             status = self.models[request.role]
-            status.state = ModelState.READY if result.success else ModelState.ERROR
+            status.state = ModelState.READY if (result.success or result.partial) else ModelState.ERROR
             status.last_inference = time.time()
             status.inference_count += 1
-            if not result.success:
+            if not result.success and not result.partial:
                 status.error_message = result.error_message
 
         return result

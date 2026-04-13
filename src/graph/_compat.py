@@ -39,7 +39,7 @@ def result_to_decision(result: TaskResult) -> EscalationDecision:
 
     Used by callers that expect the old EscalationDecision return type.
     """
-    if result.success:
+    if result.success or getattr(result, 'partial', False):
         last_role = Role.from_string(result.role_history[-1]) if result.role_history else None
         return EscalationDecision(
             action=EscalationAction.RETRY,
