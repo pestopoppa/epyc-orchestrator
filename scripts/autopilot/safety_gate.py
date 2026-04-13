@@ -57,6 +57,9 @@ class EvalResult:
     instruction_token_ratio: float = 0.0  # AP-16: instruction_tokens / total_input_tokens
     partial_count: int = 0  # Inference results with partial=True (read_timeout_partial)
     degraded_count: int = 0  # Inference results with degraded=True
+    # AM KV compaction telemetry (populated when compact action is used)
+    avg_prompt_tokens: float = 0.0  # Average context length across results
+    compaction_events: int = 0  # Number of compacted slots in this eval
 
     @property
     def objectives(self) -> tuple[float, float, float, float]:
@@ -89,6 +92,11 @@ class EvalResult:
             lines.append(f"METRIC partial_count: {self.partial_count}")
         if self.degraded_count > 0:
             lines.append(f"METRIC degraded_count: {self.degraded_count}")
+        # AM compaction telemetry
+        if self.avg_prompt_tokens > 0:
+            lines.append(f"METRIC avg_prompt_tokens: {self.avg_prompt_tokens:.0f}")
+        if self.compaction_events > 0:
+            lines.append(f"METRIC compaction_events: {self.compaction_events}")
         return "\n".join(lines)
 
 

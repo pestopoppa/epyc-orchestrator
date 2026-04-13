@@ -247,6 +247,7 @@ class EvalTower:
             instruction_token_ratio=instruction_ratio,
             partial_count=sum(1 for r in results if r.partial),
             degraded_count=sum(1 for r in results if r.degraded),
+            avg_prompt_tokens=avg_prompt_tokens,
         )
 
     def _count_instruction_tokens(self) -> int:

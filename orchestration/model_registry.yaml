@@ -414,7 +414,7 @@ server_mode:
     slots: 1  # Serial — admission=1, no wasted KV
     model_role: qwen35_122b_q4km
     description: System architecture — Qwen3.5-122B-A10B MoE (quality 2.57/3, -64GB vs 235B)
-    model: Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf
+    model: Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf
     draft_model: Qwen3.5-0.8B-Q8_0.gguf  # 0.8B Qwen3.5 draft (moe8+spec_q8_k8+lu = 12.6 t/s)
     memory_gb: 69
     tier: hot  # promoted from warm — half the RAM, fits NUMA node0
@@ -868,7 +868,7 @@ roles:
     model:
       name: Qwen3.5-122B-A10B
       huggingface_id: unsloth/Qwen3.5-122B-A10B-GGUF
-      path: unsloth/Qwen3.5-122B-A10B-GGUF/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf
+      path: unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf
       quant: Q4_K_M
       size_gb: 69
       split_count: 3

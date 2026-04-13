@@ -143,6 +143,8 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
 - Prune: {{"type": "structural_prune", "file": "frontdoor.md", "block": "## Section Name", "description": "..."}}
   (Delete an instruction block from a .md prompt file — accepted only if quality >= baseline AND instruction_token_ratio decreases)
+- Compact: {{"type": "slot_compact", "port": 8080, "slot_id": 0, "keep_ratio": 0.3, "beta": 0.5, "keep_first": 5, "keep_last": 10}}
+  (AM KV compaction — compress KV cache on a server slot. Use after long-context queries to free memory. Evaluates quality post-compact.)
 - Train: {{"type": "train_routing_models", "min_memories": 500}}
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
@@ -806,6 +808,45 @@ def dispatch_action(
         else:
             log.warning("distill_knowledge requires evo + strategy_store")
         return None, "evolution_manager"
+
+    elif action_type == "slot_compact":
+        # AM KV Compaction: compress KV cache on a model server slot
+        # Calls POST /slots/{id}?action=compact on llama.cpp server
+        import httpx
+
+        port = action.get("port", 8080)  # default: frontdoor primary
+        slot_id = action.get("slot_id", 0)
+        keep_ratio = action.get("keep_ratio", 0.3)
+        beta = action.get("beta", 0.5)
+        keep_first = action.get("keep_first", 5)
+        keep_last = action.get("keep_last", 10)
+
+        compact_url = f"http://localhost:{port}/slots/{slot_id}?action=compact"
+        try:
+            resp = httpx.post(
+                compact_url,
+                json={
+                    "keep_ratio": keep_ratio,
+                    "beta": beta,
+                    "keep_first": keep_first,
+                    "keep_last": keep_last,
+                },
+                timeout=30.0,
+            )
+            compact_result = resp.json() if resp.status_code == 200 else {}
+            pre_tokens = compact_result.get("n_ctx_before", 0)
+            post_tokens = compact_result.get("n_ctx_after", 0)
+            ratio = post_tokens / max(pre_tokens, 1)
+            log.info(
+                "AM compact port=%d slot=%d: %d→%d tokens (%.1f%% kept, keep_ratio=%.2f)",
+                port, slot_id, pre_tokens, post_tokens, ratio * 100, keep_ratio,
+            )
+        except Exception as e:
+            log.warning("AM compact failed on port %d: %s", port, e)
+
+        # Evaluate quality after compaction to measure impact
+        eval_result = tower.hybrid_eval()
+        return eval_result, "slot_management"
 
     else:
         log.warning("Unknown action type: %s", action_type)

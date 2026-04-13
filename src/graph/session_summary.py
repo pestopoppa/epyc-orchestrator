@@ -280,6 +280,34 @@ async def _refresh_two_level_summary(state: TaskState, deps: TaskDeps) -> None:
                         state.compaction_quality_monitor = CompactionQualityMonitor()
                     state.compaction_quality_monitor.record_compaction(len(to_compact))
 
+    # CF Phase 3c: Check if any compacted segment's identifiers appear in
+    # the current turn's content (reference miss = compacted content was needed)
+    if (
+        state.compaction_quality_monitor is not None
+        and state.pending_granular_blocks
+    ):
+        from src.graph.session_log import extract_identifiers
+
+        current_ids = extract_identifiers(
+            " ".join(state.pending_granular_blocks[-2:])
+        )
+        if current_ids:
+            for seg in state.consolidated_segments:
+                if seg.consolidated.startswith("[Compacted]"):
+                    # Check overlap between compacted segment and current turn
+                    compacted_ids = extract_identifiers(seg.consolidated)
+                    overlap = current_ids & compacted_ids
+                    if overlap:
+                        state.compaction_quality_monitor.record_reference_miss()
+                        log.info(
+                            "CF-3c quality monitor: compacted segment referenced "
+                            "(turn_range=%s, overlap=%s, miss_rate=%.1f%%)",
+                            seg.turn_range,
+                            list(overlap)[:3],
+                            state.compaction_quality_monitor.miss_rate * 100,
+                        )
+                        break  # Count once per turn
+
     parts = ["[Session History — Two-Level]"]
     for seg in state.consolidated_segments:
         parts.append(seg.to_prompt_block())
