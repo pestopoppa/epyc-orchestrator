@@ -327,7 +327,7 @@ class LLMPrimitives(
                         role = str(value).strip()
                         if depth >= 1 and role:
                             parsed[depth] = role
-            except Exception:
+            except (json.JSONDecodeError, ValueError, TypeError):
                 parsed = {}
         else:
             # CSV format: "1:worker_general,2:worker_math"
@@ -361,7 +361,7 @@ class LLMPrimitives(
             raw = os.environ.get("ORCHESTRATOR_LLM_DEPTH_OVERRIDE_MAX_DEPTH", "").strip()
         try:
             max_depth = int(raw)
-        except Exception:
+        except (TypeError, ValueError):
             max_depth = self._DEFAULT_DEPTH_OVERRIDE_MAX_DEPTH
         return max(1, max_depth)
 

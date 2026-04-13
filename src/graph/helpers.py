@@ -643,9 +643,9 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 if _budget_status.should_stop:
                     log.warning("B5 session token budget exhausted: %s", _budget_status.message)
             except Exception:
-                pass
+                log.debug("Session token budget check failed", exc_info=True)
     except Exception:
-        pass
+        log.debug("Token tracking failed", exc_info=True)
 
     # Save raw LLM output for FINAL() rescue before code extraction
     raw_llm_output = code

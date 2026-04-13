@@ -144,7 +144,7 @@ def _build_delegation_diagnostics(
                 for e in delegation_events
                 if isinstance(e, dict)
             )
-        except Exception:
+        except (ValueError, TypeError):
             loops = len(delegation_events)
     return {
         "loops": int(loops),
