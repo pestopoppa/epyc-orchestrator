@@ -58,7 +58,7 @@ TOOL_GROUPS: dict[str, frozenset[str]] = {
 # Models web-search instead of reasoning on these domains, degrading REPL accuracy.
 # Used to set no_web=True in tool context for these task types.
 NO_WEB_TASK_TYPES: frozenset[str] = frozenset({
-    "math", "coder", "thinking", "instruction_precision",
+    "math", "coder", "thinking",
 })
 
 
