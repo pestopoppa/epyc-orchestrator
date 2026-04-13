@@ -121,6 +121,18 @@ def resolve_prompt(
     except OSError:
         _log.debug("Prompt file not found: %s, using fallback", default_path)
 
+    # Try family fallback: worker_explore → worker_general, architect_coding → architect_general
+    if "_" in name:
+        family = name.rsplit("_", 1)[0] + "_general"
+        if family != name:
+            family_path = base_dir / f"{family}.md"
+            try:
+                template = family_path.read_text()
+                _log.debug("Loaded family fallback prompt: %s", family_path)
+                return _safe_format(template, template_vars) if template_vars else template
+            except OSError:
+                pass
+
     # Fallback to constant
     return _safe_format(fallback, template_vars) if template_vars else fallback
 
