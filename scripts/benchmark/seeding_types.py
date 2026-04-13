@@ -192,6 +192,7 @@ class RoleResult:
     routing_strategy: str = ""
     turns: int = 0
     tokens_used: int = 0
+    prompt_tokens: int = 0  # Input/context tokens (for compression-vs-quality analysis)
     formalization_applied: bool = False
     cache_stats: dict[str, Any] | None = None
     # Clean timing data from llama.cpp (excludes prompt eval overhead)
