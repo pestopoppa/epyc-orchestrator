@@ -48,6 +48,8 @@ class QuestionResult:
     route_used: str = ""
     cost_tier: int = 0
     scoring_method: str = "exact_match"
+    partial: bool = False  # Inference completed with partial output (read_timeout)
+    degraded: bool = False  # Inference completed in degraded mode
 
 
 class EvalTower:
@@ -148,6 +150,8 @@ class EvalTower:
                 route_used=resp.get("model", ""),
                 cost_tier=resp.get("cost_tier", 0),
                 scoring_method=scoring_method,
+                partial=bool(resp.get("partial", False)),
+                degraded=bool(resp.get("degraded", False)),
             )
         except Exception as e:
             elapsed = time.time() - start
@@ -241,6 +245,8 @@ class EvalTower:
             },
             instruction_token_count=instruction_tokens,
             instruction_token_ratio=instruction_ratio,
+            partial_count=sum(1 for r in results if r.partial),
+            degraded_count=sum(1 for r in results if r.degraded),
         )
 
     def _count_instruction_tokens(self) -> int:

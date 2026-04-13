@@ -915,8 +915,12 @@ def _run_loop_inner(
             continue
 
         # Check orchestrator health
-        if not dry_run and not health_check(ORCHESTRATOR_URL, retries=2):
-            log.error("Orchestrator unhealthy, waiting 30s...")
+        _health = health_check(ORCHESTRATOR_URL, retries=2)
+        if not dry_run and not _health:
+            log.error(
+                "Orchestrator unhealthy [%s]: %s — waiting 30s...",
+                _health.failure_reason, _health.failure_detail,
+            )
             time.sleep(30)
             continue
 
