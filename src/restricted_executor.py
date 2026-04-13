@@ -256,6 +256,7 @@ class RestrictedExecutor:
         restricted_builtins["_getattr_"] = _restricted_getattr
         restricted_builtins["_getitem_"] = _restricted_getitem
         restricted_builtins["_write_"] = _restricted_write
+        restricted_builtins["_getiter_"] = iter  # RestrictedPython v8+ requires explicit iteration guard
         restricted_builtins["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
         restricted_builtins["_unpack_sequence_"] = guarded_unpack_sequence
 
@@ -309,14 +310,8 @@ class RestrictedExecutor:
                 elapsed_seconds=time.perf_counter() - start_time,
             )
 
-        # Check for compilation errors
-        if compiled.errors:
-            return ExecutionResult(
-                output="",
-                is_final=False,
-                error=f"RestrictedPython error: {compiled.errors[0]}",
-                elapsed_seconds=time.perf_counter() - start_time,
-            )
+        # RestrictedPython v8+: compile_restricted raises SyntaxError on
+        # compilation errors (caught above). No .errors attribute on result.
 
         # Build execution environment
         globals_dict = self._build_globals()
@@ -337,7 +332,7 @@ class RestrictedExecutor:
 
             try:
                 with redirect_stderr(stderr_capture):
-                    exec(compiled.code, globals_dict, locals_dict)
+                    exec(compiled, globals_dict, locals_dict)
 
                 # Collect printed output
                 output = ""
