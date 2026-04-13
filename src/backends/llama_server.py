@@ -331,6 +331,8 @@ class LlamaServerBackend(ModelBackend):
                 generation_speed=speed,
                 elapsed_time=elapsed,
                 success=True,
+                partial=False,
+                degraded=False,
                 prompt_eval_ms=prompt_eval_ms,
                 generation_ms=generation_ms,
                 predicted_per_second=predicted_per_second,
@@ -350,6 +352,8 @@ class LlamaServerBackend(ModelBackend):
                 elapsed_time=request.timeout or self.config.timeout,
                 success=False,
                 error_message=f"Request timed out after {request.timeout}s",
+                failure_stage="request",
+                failure_reason="timeout",
                 completion_reason="timeout",
             )
 
@@ -363,6 +367,8 @@ class LlamaServerBackend(ModelBackend):
                 elapsed_time=elapsed,
                 success=False,
                 error_message=f"Server request failed: {e}",
+                failure_stage="transport",
+                failure_reason="request_error",
                 completion_reason="request_error",
             )
 
@@ -593,6 +599,8 @@ class LlamaServerBackend(ModelBackend):
                 generation_speed=speed,
                 elapsed_time=elapsed,
                 success=True,
+                partial=False,
+                degraded=False,
                 prompt_eval_ms=prompt_eval_ms,
                 generation_ms=generation_ms,
                 predicted_per_second=predicted_per_second,
@@ -624,6 +632,10 @@ class LlamaServerBackend(ModelBackend):
                     generation_speed=len(chunks) / _elapsed if _elapsed > 0 else 0.0,
                     elapsed_time=_elapsed,
                     success=True,
+                    partial=True,
+                    degraded=True,
+                    failure_stage="stream_read",
+                    failure_reason="read_timeout",
                     completion_reason="read_timeout_partial",
                 )
             return InferenceResult(
@@ -634,6 +646,8 @@ class LlamaServerBackend(ModelBackend):
                 elapsed_time=_elapsed,
                 success=False,
                 error_message=f"Stream read timed out after {_read_timeout}s with no content",
+                failure_stage="stream_read",
+                failure_reason="timeout",
                 completion_reason="timeout",
             )
 
@@ -646,6 +660,8 @@ class LlamaServerBackend(ModelBackend):
                 elapsed_time=request.timeout or self.config.timeout,
                 success=False,
                 error_message=f"Request timed out after {request.timeout}s",
+                failure_stage="request",
+                failure_reason="timeout",
                 completion_reason="timeout",
             )
 
@@ -659,6 +675,8 @@ class LlamaServerBackend(ModelBackend):
                 elapsed_time=elapsed,
                 success=False,
                 error_message=f"Server request failed: {e}",
+                failure_stage="transport",
+                failure_reason="request_error",
                 completion_reason="request_error",
             )
 

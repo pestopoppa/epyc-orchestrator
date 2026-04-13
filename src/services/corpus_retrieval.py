@@ -41,6 +41,24 @@ from typing import Any
 _log = logging.getLogger(__name__)
 
 
+def _classify_load_error(exc: Exception) -> tuple[str, str]:
+    """Classify a corpus index load error into a stable (reason, detail) pair."""
+    detail = f"{type(exc).__name__}: {exc}"
+    if isinstance(exc, FileNotFoundError):
+        return "file_not_found", detail
+    if isinstance(exc, PermissionError):
+        return "permission_error", detail
+    if isinstance(exc, OSError):
+        return "filesystem_error", detail
+    if isinstance(exc, json.JSONDecodeError):
+        return "invalid_json", detail
+    if isinstance(exc, sqlite3.DatabaseError):
+        return "database_error", detail
+    if isinstance(exc, ValueError):
+        return "invalid_value", detail
+    return "unexpected_error", detail
+
+
 @dataclass
 class CorpusConfig:
     """Configuration for corpus retrieval."""
@@ -78,6 +96,24 @@ class CodeSnippet:
     hash: str = ""
 
 
+@dataclass
+class RetrievalDiagnostics:
+    """Per-retrieval diagnostic metadata for operator observability."""
+
+    loaded: bool = False
+    load_error: str = ""
+    format: str = ""  # "sqlite" | "sharded_sqlite" | "json" | ""
+    query_ngrams: int = 0
+    shards_queried: int = 0
+    shards_failed: int = 0
+    shards_unavailable: int = 0
+    candidates_found: int = 0
+    results_returned: int = 0
+    elapsed_ms: float = 0.0
+    failure_reason: str = ""  # "disabled" | "load_failed" | "no_index" | ""
+    failure_detail: str = ""
+
+
 class CorpusRetriever:
     """Singleton retriever for corpus-augmented prompt stuffing.
 
@@ -101,6 +137,7 @@ class CorpusRetriever:
         self._loaded = False
         self._load_error: str | None = None
         self._ngram_size = 4
+        self.last_diagnostics: RetrievalDiagnostics | None = None
 
     @classmethod
     def get_instance(cls, config: CorpusConfig | None = None) -> CorpusRetriever:
@@ -177,8 +214,9 @@ class CorpusRetriever:
             return True
 
         except Exception as exc:
-            self._load_error = str(exc)
-            _log.warning("Failed to load SQLite corpus index: %s", exc)
+            reason, detail = _classify_load_error(exc)
+            self._load_error = f"[{reason}] {detail}"
+            _log.warning("Failed to load SQLite corpus index [%s]: %s", reason, detail)
             return False
 
     def _load_sharded_sqlite(self, index_path: Path, meta_file: Path) -> bool:
@@ -223,8 +261,9 @@ class CorpusRetriever:
                     conn.execute("PRAGMA mmap_size=1073741824")
                     self._shard_conns.append(conn)
                     available_shards += 1
-                except Exception:
+                except Exception as exc:
                     self._shard_conns.append(None)
+                    _log.debug("Shard %d open failed: %s", i, exc)
 
             if available_shards == 0:
                 self._load_error = "No accessible shards"
@@ -250,8 +289,9 @@ class CorpusRetriever:
             return True
 
         except Exception as exc:
-            self._load_error = str(exc)
-            _log.warning("Failed to load sharded corpus index: %s", exc)
+            reason, detail = _classify_load_error(exc)
+            self._load_error = f"[{reason}] {detail}"
+            _log.warning("Failed to load sharded corpus index [%s]: %s", reason, detail)
             return False
 
     @staticmethod
@@ -288,8 +328,9 @@ class CorpusRetriever:
             return True
 
         except Exception as exc:
-            self._load_error = str(exc)
-            _log.warning("Failed to load corpus index: %s", exc)
+            reason, detail = _classify_load_error(exc)
+            self._load_error = f"[{reason}] {detail}"
+            _log.warning("Failed to load JSON corpus index [%s]: %s", reason, detail)
             return False
 
     def retrieve(
@@ -311,20 +352,32 @@ class CorpusRetriever:
         Returns:
             List of matching CodeSnippets, sorted by relevance score.
         """
+        diag = RetrievalDiagnostics()
+        t0 = time.perf_counter()
+
         if not self.config.enabled:
+            diag.failure_reason = "disabled"
+            self.last_diagnostics = diag
             return []
         if not self._ensure_loaded():
+            diag.failure_reason = "load_failed" if self._load_error else "no_index"
+            diag.failure_detail = self._load_error or ""
+            self.last_diagnostics = diag
             return []
+
+        diag.loaded = True
+        diag.format = self._format
 
         max_n = max_results or self.config.max_snippets
         min_score = min_score_override if min_score_override is not None else self.config.min_score
         query_lower = query.lower()
         query_grams = self._extract_ngrams(query_lower)
+        diag.query_ngrams = len(query_grams)
 
         results: list[CodeSnippet] = []
         if query_grams:
             if self._format == "sharded_sqlite":
-                results = self._retrieve_sharded_sqlite(query_grams, max_n, min_score)
+                results = self._retrieve_sharded_sqlite(query_grams, max_n, min_score, diag)
             elif self._format == "sqlite":
                 results = self._retrieve_sqlite(query_grams, max_n, min_score)
             else:
@@ -336,6 +389,9 @@ class CorpusRetriever:
             if keywords:
                 results = self._retrieve_keywords_json(keywords, max_n, min_score)
 
+        diag.results_returned = len(results)
+        diag.elapsed_ms = (time.perf_counter() - t0) * 1000
+        self.last_diagnostics = diag
         return results
 
     def _retrieve_sqlite(
@@ -402,7 +458,11 @@ class CorpusRetriever:
         return results
 
     def _retrieve_sharded_sqlite(
-        self, query_grams: list[str], max_n: int, min_score: float | None = None,
+        self,
+        query_grams: list[str],
+        max_n: int,
+        min_score: float | None = None,
+        diag: RetrievalDiagnostics | None = None,
     ) -> list[CodeSnippet]:
         """Retrieve from v3 sharded SQLite index.
 
@@ -424,7 +484,11 @@ class CorpusRetriever:
         for shard_id, grams in shard_groups.items():
             conn = self._shard_conns[shard_id] if shard_id < len(self._shard_conns) else None
             if conn is None:
+                if diag is not None:
+                    diag.shards_unavailable += 1
                 continue  # Shard not available yet (in-progress build)
+            if diag is not None:
+                diag.shards_queried += 1
             try:
                 placeholders = ",".join("?" for _ in grams)
                 rows = conn.execute(
@@ -434,7 +498,10 @@ class CorpusRetriever:
                 ).fetchall()
                 for sid, cnt in rows:
                     scores[sid] = scores.get(sid, 0) + cnt
-            except Exception:
+            except Exception as exc:
+                if diag is not None:
+                    diag.shards_failed += 1
+                _log.debug("Shard %d query failed: %s", shard_id, exc)
                 continue  # Shard may be mid-write or unindexed
 
         if not scores:
@@ -448,6 +515,8 @@ class CorpusRetriever:
         ]
         candidates.sort(key=lambda x: x[1], reverse=True)
         candidates = candidates[:max_n * 2]
+        if diag is not None:
+            diag.candidates_found = len(candidates)
 
         if not candidates:
             return []

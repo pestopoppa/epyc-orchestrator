@@ -34,7 +34,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 try:
@@ -48,6 +47,12 @@ logger = logging.getLogger(__name__)
 # Slot save/restore timeout — KV state can be 2-16 GB for production conversations
 _SLOT_SAVE_TIMEOUT = 30.0  # seconds
 _SLOT_RESTORE_TIMEOUT = 30.0
+
+_STATE_UNASSIGNED = "unassigned"
+_STATE_ASSIGNED_FULL = "assigned_full"
+_STATE_MIGRATION_PENDING = "migration_pending"
+_STATE_ASSIGNED_QUARTER = "assigned_quarter"
+_STATE_MIGRATION_FAILED_COLD = "migration_failed_cold"
 
 
 def _get_base_url(backend: Any) -> str | None:
@@ -159,9 +164,10 @@ class ConcurrencyAwareBackend:
         self._full_last_session: str | None = None
 
         # Migration tracking: session_id → quarter_idx
-        # When a session migrates from full to quarter, record it here.
-        # Next request from this session goes to its assigned quarter.
+        # Only populated after restore succeeds or when the session is explicitly
+        # pinned to a cold-start quarter following migration failure.
         self._session_quarter: dict[str, int] = {}
+        self._session_state: dict[str, dict[str, Any]] = {}
 
         logger.info(
             "ConcurrencyAwareBackend[%s]: 1 full (%s) + %d quarters, KV migration %s",
@@ -186,12 +192,28 @@ class ConcurrencyAwareBackend:
 
             # Check session affinity: if this session was migrated to a quarter,
             # route it back to that quarter (preserves KV state from migration).
-            if session_id and session_id in self._session_quarter:
-                q_idx = self._session_quarter[session_id]
-                if 0 <= q_idx < len(self._quarters):
-                    self._quarter_active[q_idx] = True
-                    self._quarter_requests += 1
-                    return self._quarters[q_idx], q_idx, False
+            if session_id:
+                if session_id in self._session_quarter:
+                    q_idx = self._session_quarter[session_id]
+                    if 0 <= q_idx < len(self._quarters):
+                        self._quarter_active[q_idx] = True
+                        self._quarter_requests += 1
+                        self._set_session_state(
+                            session_id,
+                            state=_STATE_ASSIGNED_QUARTER,
+                            quarter=q_idx,
+                        )
+                        return self._quarters[q_idx], q_idx, False
+                pending = self._session_state.get(session_id)
+                if pending and pending.get("state") in {
+                    _STATE_MIGRATION_PENDING,
+                    _STATE_MIGRATION_FAILED_COLD,
+                }:
+                    q_idx = int(pending.get("quarter", -1))
+                    if 0 <= q_idx < len(self._quarters):
+                        self._quarter_active[q_idx] = True
+                        self._quarter_requests += 1
+                        return self._quarters[q_idx], q_idx, False
 
             # If full instance is idle, use it (best per-request speed)
             if not self._full_active:
@@ -211,20 +233,25 @@ class ConcurrencyAwareBackend:
                             break
 
                     if migrate_target is not None:
-                        # Schedule migration (non-blocking — happens before we
-                        # return the full instance to the new session)
                         old_session = self._full_last_session
-                        self._session_quarter[old_session] = migrate_target
                         self._migrations += 1
-                        # Release lock for I/O, then do migration
+                        self._set_session_state(
+                            old_session,
+                            state=_STATE_MIGRATION_PENDING,
+                            quarter=migrate_target,
+                        )
                         self._full_active = True
                         self._full_requests += 1
                         self._full_last_session = session_id
+                        self._set_session_state(
+                            session_id,
+                            state=_STATE_ASSIGNED_FULL,
+                            quarter=None,
+                        )
 
-                        # Do KV migration outside lock
                         threading.Thread(
                             target=self._migrate_kv,
-                            args=(migrate_target,),
+                            args=(old_session, migrate_target),
                             daemon=True,
                             name=f"kv-migrate-{self._role}-{old_session[:8]}",
                         ).start()
@@ -235,6 +262,11 @@ class ConcurrencyAwareBackend:
                 self._full_requests += 1
                 if session_id:
                     self._full_last_session = session_id
+                    self._set_session_state(
+                        session_id,
+                        state=_STATE_ASSIGNED_FULL,
+                        quarter=None,
+                    )
                 return self._full, -1, True
 
             # Full is busy — find an idle quarter
@@ -242,19 +274,62 @@ class ConcurrencyAwareBackend:
                 if not active:
                     self._quarter_active[i] = True
                     self._quarter_requests += 1
+                    if session_id:
+                        self._set_session_state(
+                            session_id,
+                            state=_STATE_ASSIGNED_QUARTER,
+                            quarter=i,
+                        )
+                        self._session_quarter[session_id] = i
                     return self._quarters[i], i, False
 
             # All quarters busy — overflow to least-recently-used quarter
             idx = self._quarter_requests % len(self._quarters)
             self._quarter_active[idx] = True
             self._quarter_requests += 1
+            if session_id:
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_ASSIGNED_QUARTER,
+                    quarter=idx,
+                )
+                self._session_quarter[session_id] = idx
             logger.warning(
                 "All %s instances busy (%d quarters), overflow to quarter %d",
                 self._role, len(self._quarters), idx,
             )
             return self._quarters[idx], idx, False
 
-    def _migrate_kv(self, target_quarter: int) -> None:
+    def _set_session_state(
+        self,
+        session_id: str,
+        *,
+        state: str,
+        quarter: int | None,
+        detail: str = "",
+    ) -> None:
+        if not session_id:
+            return
+        self._session_state[session_id] = {
+            "state": state,
+            "quarter": quarter,
+            "detail": detail,
+            "updated_at": time.time(),
+        }
+
+    def _finalize_quarter_assignment(
+        self,
+        session_id: str,
+        quarter: int,
+        *,
+        state: str,
+        detail: str = "",
+    ) -> None:
+        with self._lock:
+            self._session_quarter[session_id] = quarter
+            self._set_session_state(session_id, state=state, quarter=quarter, detail=detail)
+
+    def _migrate_kv(self, session_id: str, target_quarter: int) -> None:
         """Migrate KV state from full instance to a quarter (background thread).
 
         Best-effort: if save or restore fails, the quarter starts cold.
@@ -268,23 +343,56 @@ class ConcurrencyAwareBackend:
         t0 = time.monotonic()
         saved = _slot_save(self._full_url)
         if not saved:
-            self._migration_failures += 1
-            logger.warning("KV migration save failed for %s, quarter %d starts cold", self._role, target_quarter)
+            with self._lock:
+                self._migration_failures += 1
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_MIGRATION_FAILED_COLD,
+                    quarter=target_quarter,
+                    detail="save_failed",
+                )
+            logger.warning(
+                "KV migration save failed for %s session=%s, quarter %d starts cold",
+                self._role,
+                session_id,
+                target_quarter,
+            )
             return
 
         restored = _slot_restore(target_url)
         if not restored:
-            self._migration_failures += 1
-            logger.warning("KV migration restore failed for %s quarter %d", self._role, target_quarter)
+            with self._lock:
+                self._migration_failures += 1
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_MIGRATION_FAILED_COLD,
+                    quarter=target_quarter,
+                    detail="restore_failed",
+                )
+            logger.warning(
+                "KV migration restore failed for %s session=%s quarter %d; session will run cold",
+                self._role,
+                session_id,
+                target_quarter,
+            )
             return
 
         # Erase KV from full instance (it now belongs to the quarter)
         _slot_erase(self._full_url)
+        self._finalize_quarter_assignment(
+            session_id,
+            target_quarter,
+            state=_STATE_ASSIGNED_QUARTER,
+            detail="restored",
+        )
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(
-            "KV migration complete: %s full → quarter %d (%.0fms)",
-            self._role, target_quarter, elapsed_ms,
+            "KV migration complete: %s session=%s full → quarter %d (%.0fms)",
+            self._role,
+            session_id,
+            target_quarter,
+            elapsed_ms,
         )
 
     def _release(self, idx: int, is_full: bool) -> None:
@@ -298,6 +406,7 @@ class ConcurrencyAwareBackend:
         """Remove session affinity (call when session completes)."""
         with self._lock:
             self._session_quarter.pop(session_id, None)
+            self._session_state.pop(session_id, None)
             if self._full_last_session == session_id:
                 self._full_last_session = None
 
@@ -349,6 +458,10 @@ class ConcurrencyAwareBackend:
             quarter_active = list(self._quarter_active)
             full_active = self._full_active
             session_map = dict(self._session_quarter)
+            session_state = {
+                sid: dict(state)
+                for sid, state in self._session_state.items()
+            }
 
         return {
             "role": self._role,
@@ -369,6 +482,12 @@ class ConcurrencyAwareBackend:
             "migrations": self._migrations,
             "migration_failures": self._migration_failures,
             "session_affinity": session_map,
+            "session_states": session_state,
+            "migration_pending": {
+                sid: data
+                for sid, data in session_state.items()
+                if data.get("state") == _STATE_MIGRATION_PENDING
+            },
             "kv_migration_enabled": _HTTPX_AVAILABLE and bool(self._full_url),
         }
 

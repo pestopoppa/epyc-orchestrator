@@ -129,6 +129,7 @@ class ThreeWayResult:
     rewards: dict[str, float] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     rewards_injected: int = 0
+    rewards_delivery: dict[str, Any] = field(default_factory=dict)
 
 
 # ── RoleResult builder (dedup helper) ────────────────────────────────

@@ -418,6 +418,8 @@ class ServerManager:
                     raw_output=f"HTTP {response.status_code}: {response.text}",
                     exit_code=1,
                     command=f"POST {url}",
+                    failure_stage="http_request",
+                    failure_reason="http_status",
                 )
 
             # Parse SSE stream
@@ -443,6 +445,8 @@ class ServerManager:
                     raw_output=str(e),
                     exit_code=1,
                     command=f"POST {url}",
+                    failure_stage="http_request",
+                    failure_reason="request_error",
                 )
             # If we have partial content, return it despite the error
             timed_out = True
@@ -467,6 +471,10 @@ class ServerManager:
             command=f"POST {url}",
             tokens_per_second=tokens_per_second if tokens_per_second else None,
             timed_out=timed_out,
+            partial=bool(timed_out and collected_content),
+            degraded=timed_out,
+            failure_stage="http_stream" if timed_out else "",
+            failure_reason="timeout_partial" if timed_out and collected_content else ("timeout" if timed_out else ""),
         )
 
     def _run_vl_inference(
@@ -529,6 +537,8 @@ class ServerManager:
                     raw_output=f"HTTP {response.status_code}: {response.text}",
                     exit_code=1,
                     command=f"POST {url}",
+                    failure_stage="http_request",
+                    failure_reason="http_status",
                 )
 
             data = response.json()
@@ -571,12 +581,17 @@ class ServerManager:
                 exit_code=-1,
                 command=f"POST {url}",
                 timed_out=True,
+                degraded=True,
+                failure_stage="http_request",
+                failure_reason="timeout",
             )
         except requests.exceptions.RequestException as e:
             return InferenceResult(
                 raw_output=str(e),
                 exit_code=1,
                 command=f"POST {url}",
+                failure_stage="http_request",
+                failure_reason="request_error",
             )
 
 
@@ -590,6 +605,10 @@ class InferenceResult:
     timed_out: bool = False
     tokens_per_second: Optional[float] = None  # Direct from server response
     stderr: str = ""  # stderr only - for debugging errors
+    partial: bool = False
+    degraded: bool = False
+    failure_stage: str = ""
+    failure_reason: str = ""
 
     @property
     def success(self) -> bool:
@@ -1012,6 +1031,8 @@ class Executor:
                     exit_code=result.returncode,
                     command=cmd_str,
                     stderr=result.stderr,
+                    failure_stage="subprocess" if result.returncode != 0 else "",
+                    failure_reason="nonzero_exit" if result.returncode != 0 else "",
                 )
             except subprocess.TimeoutExpired as e:
                 # Capture partial output if available
@@ -1024,6 +1045,10 @@ class Executor:
                     command=cmd_str,
                     timed_out=True,
                     stderr=partial_stderr,
+                    partial=bool(partial_stdout),
+                    degraded=True,
+                    failure_stage="subprocess",
+                    failure_reason="timeout_partial" if partial_stdout else "timeout",
                 )
 
         finally:

@@ -38,6 +38,7 @@ class SeederBatchResult:
     n_correct: int = 0
     n_errors: int = 0
     rewards_injected: int = 0
+    rewards_delivery: list[dict[str, Any]] = field(default_factory=list)
     avg_td_error: float = 0.0
     memory_count: int = 0
     elapsed_s: float = 0.0
@@ -146,7 +147,7 @@ class Seeder:
                     if not self.dry_run:
                         qid = q.get("id", q.get("question_id", f"q_{i}"))
                         suite = q.get("suite", "unknown")
-                        injected = _inject_3way_rewards_http(
+                        delivery = _inject_3way_rewards_http(
                             prompt=q.get("prompt", ""),
                             suite=suite,
                             question_id=qid,
@@ -155,7 +156,8 @@ class Seeder:
                             url=self.url,
                             client=client,
                         )
-                        batch_result.rewards_injected += injected
+                        batch_result.rewards_delivery.append(delivery)
+                        batch_result.rewards_injected += int(delivery.get("acknowledged", 0))
 
                     # Track TD error from metadata
                     td = metadata.get("avg_td_error", 0.0)
@@ -177,6 +179,7 @@ class Seeder:
                         rewards=rewards,
                         metadata=metadata,
                         rewards_injected=batch_result.rewards_injected,
+                        rewards_delivery=delivery if not self.dry_run else {},
                     )
                     batch_result.results.append(result)
 

@@ -19,6 +19,7 @@ from src.services.corpus_retrieval import (
     CodeSnippet,
     CorpusConfig,
     CorpusRetriever,
+    RetrievalDiagnostics,
     extract_code_query,
 )
 
@@ -461,3 +462,103 @@ class TestShardedRetrieval:
         )
         result = retriever.format_for_prompt(snippets)
         assert "<reference_code" in result
+
+
+# ── Retrieval Diagnostics ───────────────────────────────────────────────
+
+
+class TestRetrievalDiagnostics:
+    """RetrievalDiagnostics metadata populated on every retrieve() call."""
+
+    def test_diagnostics_on_disabled_retrieval(self):
+        config = CorpusConfig(enabled=False)
+        retriever = CorpusRetriever(config)
+        retriever.retrieve("anything")
+        diag = retriever.last_diagnostics
+        assert diag is not None
+        assert diag.failure_reason == "disabled"
+        assert diag.loaded is False
+
+    def test_diagnostics_on_missing_index(self):
+        config = CorpusConfig(enabled=True, index_path="/nonexistent/path")
+        retriever = CorpusRetriever(config)
+        retriever.retrieve("anything")
+        diag = retriever.last_diagnostics
+        assert diag is not None
+        assert diag.failure_reason in ("load_failed", "no_index")
+        assert diag.loaded is False
+
+    def test_diagnostics_on_successful_retrieval(self, mini_index: Path):
+        config = CorpusConfig(
+            enabled=True, index_path=str(mini_index), min_score=0.0,
+        )
+        retriever = CorpusRetriever(config)
+        snippets = retriever.retrieve(
+            "return sum((p - t) ** 2 for p, t in zip(predictions, targets)"
+        )
+        diag = retriever.last_diagnostics
+        assert diag is not None
+        assert diag.loaded is True
+        assert diag.format == "json"
+        assert diag.query_ngrams > 0
+        assert diag.results_returned == len(snippets)
+        assert diag.elapsed_ms >= 0.0
+        assert diag.failure_reason == ""
+
+    def test_diagnostics_on_sharded_retrieval(self, sharded_index: Path):
+        config = CorpusConfig(
+            enabled=True, index_path=str(sharded_index), min_score=0.0,
+        )
+        retriever = CorpusRetriever(config)
+        snippets = retriever.retrieve(
+            "return sum((p - t) ** 2 for p, t in zip(predictions, targets)"
+        )
+        diag = retriever.last_diagnostics
+        assert diag is not None
+        assert diag.loaded is True
+        assert diag.format == "sharded_sqlite"
+        assert diag.shards_queried > 0
+        assert diag.shards_failed == 0
+        assert diag.results_returned == len(snippets)
+
+    def test_shard_query_error_populates_diagnostics(self, sharded_index: Path):
+        """When a shard query raises, shards_failed is incremented."""
+        config = CorpusConfig(
+            enabled=True, index_path=str(sharded_index), min_score=0.0,
+        )
+        retriever = CorpusRetriever(config)
+        retriever._ensure_loaded()
+        assert retriever._format == "sharded_sqlite"
+
+        # Corrupt one shard by closing its connection
+        for i, conn in enumerate(retriever._shard_conns):
+            if conn is not None:
+                conn.close()
+                retriever._shard_conns[i] = sqlite3.connect(":memory:")
+                # memory db has no ngrams table — queries will raise
+                break
+
+        retriever.retrieve("def calculate_loss predictions targets return sum")
+        diag = retriever.last_diagnostics
+        assert diag is not None
+        assert diag.shards_failed >= 1
+
+    def test_shard_unavailable_populates_diagnostics(self, sharded_index: Path):
+        """When a shard connection is None, shards_unavailable is incremented."""
+        config = CorpusConfig(
+            enabled=True, index_path=str(sharded_index), min_score=0.0,
+        )
+        retriever = CorpusRetriever(config)
+        retriever._ensure_loaded()
+
+        # Set one shard to None (simulating unavailable)
+        for i, conn in enumerate(retriever._shard_conns):
+            if conn is not None:
+                conn.close()
+                retriever._shard_conns[i] = None
+                break
+
+        retriever.retrieve("def calculate_loss predictions targets return sum")
+        diag = retriever.last_diagnostics
+        assert diag is not None
+        assert diag.shards_unavailable >= 1

@@ -858,8 +858,8 @@ def build_corpus_context(
         query = extract_code_query(task_description)
         snippets = retriever.retrieve(query)
         return retriever.format_for_prompt(snippets)
-    except Exception:
-        _log.debug("Corpus retrieval failed", exc_info=True)
+    except Exception as exc:
+        _log.warning("Corpus retrieval failed: %s", exc)
         return ""
 
 

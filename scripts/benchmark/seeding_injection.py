@@ -1,17 +1,19 @@
 """Embedder precompute and reward injection via HTTP.
 
-Handles fire-and-forget async reward injection using a background
-ThreadPoolExecutor, and embedding precomputation via the BGE pool.
+Handles reward injection using a background ThreadPoolExecutor, embedding
+precomputation via the BGE pool, and delivery accounting for benchmark runs.
 """
 
 from __future__ import annotations
 
 import concurrent.futures
 import logging
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 __all__ = [
     "EMBEDDER_PORTS",
+    "RewardDeliverySummary",
     "_get_reward_executor",
     "_inject_3way_rewards_http",
     "_inject_single_reward",
@@ -23,8 +25,23 @@ logger = logging.getLogger("seed_specialist_routing")
 # Embedder server ports for precomputing embeddings
 EMBEDDER_PORTS = [8090, 8091, 8092, 8093, 8094, 8095]
 
-# Background executor for async reward injection (fire-and-forget)
+# Background executor for reward injection
 _reward_executor: concurrent.futures.ThreadPoolExecutor | None = None
+_REWARD_WAIT_TIMEOUT_S = 35.0
+
+
+@dataclass
+class RewardDeliverySummary:
+    """Structured delivery accounting for reward injection."""
+
+    submitted: int = 0
+    acknowledged: int = 0
+    failed: int = 0
+    skipped: int = 0
+    failure_reasons: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def _get_reward_executor() -> concurrent.futures.ThreadPoolExecutor:
@@ -41,19 +58,7 @@ def _precompute_embedding(
     task_description: str,
     client: "httpx.Client",
 ) -> list[float] | None:
-    """Precompute embedding for task_description using embedder servers.
-
-    Tries each embedder port until one succeeds. Returns None on failure
-    (caller will fall back to letting the API compute the embedding).
-
-    Args:
-        task_description: Text to embed (will be truncated to 200 chars).
-        client: HTTP client for requests.
-
-    Returns:
-        List of float embeddings, or None on failure.
-    """
-    # Build the text the same way q_scorer does
+    """Precompute embedding for task_description using embedder servers."""
     text = f"type:chat | objective:{task_description[:200]}"
 
     for port in EMBEDDER_PORTS:
@@ -67,13 +72,12 @@ def _precompute_embedding(
                 continue
 
             data = resp.json()
-            # Parse llama-server response format
             if "embedding" in data:
                 embedding_data = data["embedding"]
                 if isinstance(embedding_data[0], list):
                     return embedding_data[0]
                 return embedding_data
-            elif "data" in data and len(data["data"]) > 0:
+            if "data" in data and len(data["data"]) > 0:
                 return data["data"][0]["embedding"]
         except Exception:
             continue
@@ -86,20 +90,20 @@ def _inject_single_reward(
     url: str,
     payload: dict[str, Any],
     action_key: str,
-) -> bool:
+) -> tuple[bool, str]:
     """Inject a single reward (runs in background thread)."""
     import httpx
+
     try:
         with httpx.Client() as client:
             resp = client.post(f"{url}/chat/reward", json=payload, timeout=30)
             if resp.status_code == 200:
-                return True
-            else:
-                logger.debug(f"Reward injection failed for {action_key}: HTTP {resp.status_code}")
-                return False
+                return True, ""
+            logger.warning("Reward injection failed for %s: HTTP %d", action_key, resp.status_code)
+            return False, f"http_{resp.status_code}"
     except Exception as e:
-        logger.debug(f"Reward injection error for {action_key}: {e}")
-        return False
+        logger.warning("Reward injection error for %s: %s", action_key, e)
+        return False, f"{type(e).__name__}: {e}"
 
 
 def _inject_3way_rewards_http(
@@ -110,27 +114,20 @@ def _inject_3way_rewards_http(
     metadata: dict[str, Any],
     url: str,
     client: "httpx.Client",
-) -> int:
-    """Inject 3-way rewards via HTTP API (async, non-blocking).
-
-    Q-values receive binary rewards for faithful probability estimation.
-    Cost metrics are stored in context for later Optuna threshold optimization.
-
-    Precomputes the embedding once and reuses it for all reward injections.
-    Submissions are fire-and-forget to avoid blocking the eval loop.
-
-    Returns number of rewards submitted (not necessarily injected yet).
-    """
+) -> dict[str, Any]:
+    """Inject 3-way rewards via HTTP API with delivery accounting."""
     cost_metrics = metadata.get("cost_metrics", {})
+    summary = RewardDeliverySummary(skipped=0 if rewards else 0)
 
-    # Precompute embedding once for all reward injections (same task_description)
+    if not rewards:
+        return summary.to_dict()
+
     embedding = _precompute_embedding(prompt[:200], client)
 
     executor = _get_reward_executor()
-    submitted = 0
+    futures: dict[concurrent.futures.Future[tuple[bool, str]], str] = {}
 
     for action_key, reward in rewards.items():
-        # Build context with cost metrics for this specific action
         action_cost = cost_metrics.get(action_key, {})
         tokens_generated = int(action_cost.get("tokens_generated", 0) or 0)
         tokens_estimate = int(action_cost.get("tokens_generated_estimate", 0) or 0)
@@ -140,12 +137,10 @@ def _inject_3way_rewards_http(
             "source": "3way_eval",
             "question_id": question_id,
             "action_type": "routing",
-            # Tool value metadata (flat scalars)
             "tools_helped": metadata.get("tools_helped", False),
             "tools_neutral": metadata.get("tools_neutral", False),
             "tools_hurt": metadata.get("tools_hurt", False),
             "tool_advantage": metadata.get("tool_advantage", 0),
-            # Cost metrics for this action (for Optuna later)
             "elapsed_seconds": action_cost.get("elapsed_seconds", 0.0),
             "tokens_generated": tokens_generated,
             "tokens_generated_estimate": tokens_estimate,
@@ -160,11 +155,8 @@ def _inject_3way_rewards_http(
             "slot_progress_source": action_cost.get("slot_progress_source", ""),
         }
 
-        # Inject web research reward dimensions when available (Search-R1)
         if wr_rewards := metadata.get("web_research_rewards", {}).get(action_key):
             context.update(wr_rewards)
-
-        # Inject scratchpad insight rewards when available (Search-R1 Step 5)
         if sp_rewards := metadata.get("scratchpad_rewards", {}).get(action_key):
             context.update(sp_rewards)
 
@@ -174,12 +166,33 @@ def _inject_3way_rewards_http(
             "reward": reward,
             "context": context,
         }
-        # Include precomputed embedding if available
         if embedding is not None:
             payload["embedding"] = embedding
 
-        # Fire-and-forget: submit to background executor
-        executor.submit(_inject_single_reward, url, payload, action_key)
-        submitted += 1
+        futures[executor.submit(_inject_single_reward, url, payload, action_key)] = action_key
+        summary.submitted += 1
 
-    return submitted
+    done, not_done = concurrent.futures.wait(
+        futures.keys(),
+        timeout=_REWARD_WAIT_TIMEOUT_S,
+    )
+    for future in done:
+        action_key = futures[future]
+        try:
+            ok, reason = future.result()
+        except Exception as exc:
+            ok = False
+            reason = f"{type(exc).__name__}: {exc}"
+        if ok:
+            summary.acknowledged += 1
+        else:
+            summary.failed += 1
+            summary.failure_reasons[action_key] = reason
+
+    for future in not_done:
+        action_key = futures[future]
+        future.cancel()
+        summary.failed += 1
+        summary.failure_reasons[action_key] = "wait_timeout"
+
+    return summary.to_dict()

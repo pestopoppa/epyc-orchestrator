@@ -439,8 +439,9 @@ def run_batch_3way(
 
             # Inject rewards
             rewards_injected = 0
+            rewards_delivery: dict[str, Any] = {}
             if not dry_run:
-                rewards_injected = _inject_3way_rewards_http(
+                rewards_delivery = _inject_3way_rewards_http(
                     prompt_info["prompt"][:200],
                     suite,
                     qid,
@@ -449,7 +450,13 @@ def run_batch_3way(
                     url,
                     _client,
                 )
-                logger.info(f"  Injected {rewards_injected} rewards")
+                rewards_injected = int(rewards_delivery.get("acknowledged", 0))
+                logger.info(
+                    "  Rewards submitted=%d acknowledged=%d failed=%d",
+                    rewards_delivery.get("submitted", 0),
+                    rewards_delivery.get("acknowledged", 0),
+                    rewards_delivery.get("failed", 0),
+                )
 
             # Record skill outcomes for evolution tracking
             if outcome_tracker is not None:
@@ -470,6 +477,7 @@ def run_batch_3way(
                 rewards=rewards,
                 metadata=metadata,
                 rewards_injected=rewards_injected,
+                rewards_delivery=rewards_delivery,
             )
             results.append(result)
 
@@ -601,12 +609,14 @@ def run_batch_3way(
 
                             # Inject rewards (post-fix signal)
                             ri_retry = 0
+                            retry_delivery: dict[str, Any] = {}
                             if not dry_run:
-                                ri_retry = _inject_3way_rewards_http(
+                                retry_delivery = _inject_3way_rewards_http(
                                     rpi["prompt"][:200], rpi["suite"],
                                     rpi["id"], rew_retry, meta_retry,
                                     url, _client,
                                 )
+                                ri_retry = int(retry_delivery.get("acknowledged", 0))
 
                             retry_result = ThreeWayResult(
                                 suite=rpi["suite"],
@@ -618,6 +628,7 @@ def run_batch_3way(
                                 rewards=rew_retry,
                                 metadata=meta_retry,
                                 rewards_injected=ri_retry,
+                                rewards_delivery=retry_delivery,
                             )
                             results.append(retry_result)
                             checkpoint_result(session_id, retry_result)

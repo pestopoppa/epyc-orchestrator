@@ -22,12 +22,53 @@ from seeding_types import (
 
 __all__ = [
     "MAX_RECOVERY_ATTEMPTS",
+    "get_preflight_diagnostics",
     "run_preflight",
 ]
 
 logger = logging.getLogger(__name__)
 
 MAX_RECOVERY_ATTEMPTS = 10
+_preflight_diagnostics: dict[str, Any] = {
+    "api_health": {},
+    "idle_probes": {},
+    "last_preflight": {},
+}
+
+
+def _record_diag(section: str, key: str, payload: dict[str, Any]) -> None:
+    bucket = _preflight_diagnostics.setdefault(section, {})
+    bucket[key] = {
+        **payload,
+        "checked_at": time.time(),
+    }
+
+
+def _set_preflight_state(
+    status: str,
+    *,
+    stage: str = "",
+    failure_reason: str = "",
+    failure_detail: str = "",
+) -> None:
+    payload = _preflight_diagnostics.setdefault("last_preflight", {})
+    payload["status"] = status
+    payload["stage"] = stage
+    payload["failure_reason"] = failure_reason
+    payload["failure_detail"] = failure_detail
+    payload["updated_at"] = time.time()
+
+
+def get_preflight_diagnostics() -> dict[str, Any]:
+    """Return the latest compatibility-safe preflight diagnostics."""
+    return {
+        "api_health": dict(_preflight_diagnostics.get("api_health", {})),
+        "idle_probes": {
+            str(port): dict(data)
+            for port, data in _preflight_diagnostics.get("idle_probes", {}).items()
+        },
+        "last_preflight": dict(_preflight_diagnostics.get("last_preflight", {})),
+    }
 
 
 # ── Health / idle checks ─────────────────────────────────────────────
@@ -37,8 +78,29 @@ def _check_server_health(url: str, timeout: int = 5) -> bool:
     """Check if the orchestrator server is healthy."""
     try:
         resp = state.get_poll_client().get(f"{url}/health", timeout=timeout)
-        return resp.status_code == 200
+        ok = resp.status_code == 200
+        _record_diag(
+            "api_health",
+            url,
+            {
+                "ok": ok,
+                "status_code": resp.status_code,
+                "failure_reason": "" if ok else "http_status",
+                "failure_detail": "" if ok else f"status={resp.status_code}",
+            },
+        )
+        return ok
     except Exception as e:
+        _record_diag(
+            "api_health",
+            url,
+            {
+                "ok": False,
+                "status_code": None,
+                "failure_reason": type(e).__name__,
+                "failure_detail": str(e),
+            },
+        )
         return False
 
 
@@ -47,11 +109,54 @@ def _is_server_idle(port: int, timeout: int = 3) -> bool:
     try:
         resp = state.get_poll_client().get(f"http://localhost:{port}/slots", timeout=timeout)
         if resp.status_code != 200:
+            _record_diag(
+                "idle_probes",
+                str(port),
+                {
+                    "idle": True,
+                    "assumed_idle": True,
+                    "status_code": resp.status_code,
+                    "failure_reason": "http_status",
+                    "failure_detail": f"status={resp.status_code}",
+                },
+            )
             return True  # Can't check — assume idle
         slots = resp.json()
-        return not any(s.get("is_processing", False) for s in slots)
+        idle = not any(s.get("is_processing", False) for s in slots)
+        _record_diag(
+            "idle_probes",
+            str(port),
+            {
+                "idle": idle,
+                "assumed_idle": False,
+                "status_code": resp.status_code,
+                "failure_reason": "",
+                "failure_detail": "",
+                "slots_seen": len(slots) if isinstance(slots, list) else 0,
+            },
+        )
+        return idle
     except Exception as e:
+        _record_diag(
+            "idle_probes",
+            str(port),
+            {
+                "idle": True,
+                "assumed_idle": True,
+                "status_code": None,
+                "failure_reason": type(e).__name__,
+                "failure_detail": str(e),
+            },
+        )
         return True  # Server unreachable — assume idle
+
+
+def _latest_api_probe(url: str) -> dict[str, Any]:
+    return dict(_preflight_diagnostics.get("api_health", {}).get(url, {}))
+
+
+def _latest_idle_probe(port: int) -> dict[str, Any]:
+    return dict(_preflight_diagnostics.get("idle_probes", {}).get(str(port), {}))
 
 
 def _wait_for_heavy_models_idle(max_wait: int = 600) -> None:
@@ -382,6 +487,15 @@ def run_preflight(url: str, restart_api: bool = True) -> bool:
     logger.info("=" * 60)
     logger.info("PREFLIGHT CHECKS")
     logger.info("=" * 60)
+    _preflight_diagnostics["last_preflight"] = {
+        "url": url,
+        "restart_api": restart_api,
+        "started_at": time.time(),
+        "status": "running",
+        "stage": "startup",
+        "failure_reason": "",
+        "failure_detail": "",
+    }
 
     # 0. Restart API if requested (ensures code changes are picked up)
     if restart_api and _check_port(8000):
@@ -395,6 +509,7 @@ def run_preflight(url: str, restart_api: bool = True) -> bool:
     # 1. Orchestrator API health (auto-launch if down)
     api_healthy = _check_server_health(url)
     model_ports_up = sum(1 for p in MODEL_PORTS if _check_port(p))
+    api_probe = _latest_api_probe(url)
 
     if api_healthy:
         logger.info(f"  API already running ({url})")
@@ -405,13 +520,32 @@ def run_preflight(url: str, restart_api: bool = True) -> bool:
         )
         if not _launch_api_only():
             logger.error("PREFLIGHT FAILED: Could not start orchestrator API")
+            _set_preflight_state(
+                "failed",
+                stage="api_launch",
+                failure_reason="api_launch_failed",
+                failure_detail=f"model_ports_up={model_ports_up}",
+            )
             return False
     else:
         logger.info("  No stack running — launching full stack...")
         if not _auto_launch_stack():
             logger.error("PREFLIGHT FAILED: Could not start orchestrator stack")
+            _set_preflight_state(
+                "failed",
+                stage="stack_launch",
+                failure_reason="stack_launch_failed",
+                failure_detail="no_model_ports_up",
+            )
             return False
     logger.info(f"  API health: OK ({url})")
+    _set_preflight_state("running", stage="backend_health")
+    if api_probe and not api_healthy:
+        logger.info(
+            "  API recovery path: reason=%s detail=%s",
+            api_probe.get("failure_reason", "unknown"),
+            api_probe.get("failure_detail", ""),
+        )
 
     # 2. Backend health (check ports via /health on orchestrator)
     try:
@@ -428,6 +562,7 @@ def run_preflight(url: str, restart_api: bool = True) -> bool:
         pass  # Health endpoint may not expose backends — continue
 
     # 3. Smoke test (60s timeout — if 2+2 takes longer, something is broken)
+    _set_preflight_state("running", stage="smoke_test")
     logger.info("  Smoke test: 2+2...")
     try:
         resp = state.get_poll_client().post(
@@ -442,19 +577,36 @@ def run_preflight(url: str, restart_api: bool = True) -> bool:
             logger.info(f"  Smoke test OK: routed_to={routed_to}, answer={answer}")
         else:
             logger.error(f"  Smoke test FAIL: HTTP {resp.status_code}")
+            _set_preflight_state(
+                "failed",
+                stage="smoke_test",
+                failure_reason="http_status",
+                failure_detail=f"status={resp.status_code}",
+            )
             return False
     except Exception as e:
         if "timeout" in str(e).lower() or "Timeout" in type(e).__name__:
             logger.error("  Smoke test TIMEOUT (60s) — API may be misconfigured for real_mode")
             logger.error("  Try: kill API on :8000 and relaunch, or check orchestrator_autolaunch.log")
+            failure_reason = "timeout"
         else:
             logger.error(f"  Smoke test FAIL: {e}")
+            failure_reason = type(e).__name__
+        _set_preflight_state(
+            "failed",
+            stage="smoke_test",
+            failure_reason=failure_reason,
+            failure_detail=str(e),
+        )
         return False
 
     # 4. Wait for all workers to finish initializing (FAISS / Kuzu loading)
+    _set_preflight_state("running", stage="worker_stabilization")
     logger.info("  Waiting for all workers to stabilize...")
     _wait_for_workers_ready(url)
 
     logger.info("PREFLIGHT PASSED")
     logger.info("=" * 60)
+    _set_preflight_state("passed", stage="completed")
+    _preflight_diagnostics["last_preflight"]["completed_at"] = time.time()
     return True

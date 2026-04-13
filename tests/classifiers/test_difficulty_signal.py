@@ -219,11 +219,11 @@ class TestBandAdaptiveTokenCap:
 
     def test_no_band_returns_flat_default(self):
         from src.graph.helpers import _repl_turn_token_cap
-        assert _repl_turn_token_cap("") == 5000
+        assert _repl_turn_token_cap("") == 768
 
     def test_no_arg_returns_flat_default(self):
         from src.graph.helpers import _repl_turn_token_cap
-        assert _repl_turn_token_cap() == 5000
+        assert _repl_turn_token_cap() == 768
 
     def test_easy_band_enforce_mode(self, monkeypatch):
         monkeypatch.setattr(
@@ -255,7 +255,7 @@ class TestBandAdaptiveTokenCap:
             lambda cfg=None: "shadow",
         )
         from src.graph.helpers import _repl_turn_token_cap
-        assert _repl_turn_token_cap("easy") == 5000
+        assert _repl_turn_token_cap("easy") == 768
 
     def test_unknown_band_enforce_returns_flat(self, monkeypatch):
         monkeypatch.setattr(
@@ -263,4 +263,4 @@ class TestBandAdaptiveTokenCap:
             lambda cfg=None: "enforce",
         )
         from src.graph.helpers import _repl_turn_token_cap
-        assert _repl_turn_token_cap("unknown") == 5000
+        assert _repl_turn_token_cap("unknown") == 768
