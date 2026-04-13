@@ -1848,8 +1848,8 @@ def cmd_reload(args: argparse.Namespace) -> int:
                             for pid_str in result.stdout.strip().split("\n"):
                                 kill_process(int(pid_str))
                                 print(f"    Killed stale process on port {port}")
-                    except Exception:
-                        pass
+                    except (subprocess.TimeoutExpired, OSError, ValueError):
+                        pass  # Best-effort stale process cleanup
 
             time.sleep(2)  # Wait for ports to free
 
@@ -2059,8 +2059,8 @@ def init_memrl_and_tools() -> bool:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     if resp.status == 200:
                         healthy_count += 1
-            except Exception:
-                pass
+            except (urllib.error.URLError, TimeoutError, OSError):
+                pass  # Expected during warmup — server may still be starting
         print(f"  [OK] Embedding servers warmed up: {healthy_count}/{len(EMBEDDER_PORTS)} healthy")
     except Exception as e:
         print(f"  [WARN] Embedding warmup failed: {e}")
@@ -2222,8 +2222,8 @@ def checkpoint_list(limit: int = 10) -> list[dict[str, Any]]:
                 "created_at": data.get("created_at"),
                 "path": str(cp_path),
             })
-        except Exception as e:
-            pass
+        except (json.JSONDecodeError, OSError, KeyError):
+            pass  # Skip malformed or unreadable checkpoint files
 
     return checkpoints
 

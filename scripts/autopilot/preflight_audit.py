@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from pathlib import Path
+
+log = logging.getLogger("autopilot.preflight")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 BENCHMARK_DIR = SCRIPT_DIR.parent / "benchmark"
@@ -63,7 +66,7 @@ def audit_model_servers() -> bool:
                 capture_output=True, timeout=5,
             )
             ok = r.returncode == 0
-        except Exception:
+        except (subprocess.TimeoutExpired, OSError):
             ok = False
         all_ok &= _check(f"{name} ({port})", ok)
     return all_ok
@@ -136,10 +139,11 @@ def audit_question_pool() -> bool:
         pool_path = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl")
 
     usaco_tc = skill_tags = web_tags = 0
-    for line in open(pool_path):
+    for line_num, line in enumerate(open(pool_path), 1):
         try:
             q = json.loads(line)
         except Exception:
+            log.debug("Skipping malformed JSONL line %d", line_num)
             continue
         if q.get("suite") == "usaco" and q.get("scoring_config", {}).get("test_code"):
             usaco_tc += 1

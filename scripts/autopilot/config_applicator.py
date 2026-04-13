@@ -228,7 +228,7 @@ def health_check(url: str = ORCHESTRATOR_URL, retries: int = 5) -> HealthCheckRe
         except httpx.ConnectError as exc:
             last_reason = "connection_refused"
             last_detail = str(exc)
-        except Exception as exc:
+        except (httpx.HTTPError, OSError) as exc:
             last_reason = type(exc).__name__
             last_detail = str(exc)
         time.sleep(1)

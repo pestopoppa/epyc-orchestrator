@@ -253,7 +253,7 @@ def run_live_benchmark(config: BenchmarkConfig) -> BenchmarkResult:
                     response = caching.infer(role_config, request)
                     req_elapsed = (time.time() - req_start) * 1000  # ms
 
-                    if response.success:
+                    if response.success or getattr(response, "partial", False):
                         latencies.append(req_elapsed)
                         result.total_requests += 1
                         result.tokens_generated += response.tokens_generated

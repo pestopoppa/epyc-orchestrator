@@ -97,7 +97,7 @@ def optimize_temperature(
             timeout=timeout,
         )
 
-        if not result.success:
+        if not result.success and not getattr(result, "partial", False):
             return 0
 
         parsed = parse_output(result.raw_output)
@@ -200,7 +200,7 @@ def quick_temperature_sweep(
             timeout=timeout,
         )
 
-        if result.success:
+        if result.success or getattr(result, "partial", False):
             parsed = parse_output(result.raw_output)
             score_result = score_response(suite, question_id, parsed.response)
             score = score_result.score
