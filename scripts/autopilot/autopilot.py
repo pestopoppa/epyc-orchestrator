@@ -48,6 +48,13 @@ from species.prompt_forge import CODE_MUTATION_ALLOWLIST
 from short_term_memory import ShortTermMemory, TrialOutcome
 from self_criticism import SelfCriticism, generate_self_criticism
 
+# Preflight diagnostics from seeding infra
+sys.path.insert(0, str(SCRIPT_DIR.parent / "benchmark"))
+try:
+    from seeding_infra import get_preflight_diagnostics
+except ImportError:
+    get_preflight_diagnostics = None  # type: ignore[assignment]
+
 # Strategy store for species memory (B1)
 sys.path.insert(0, str(ORCH_ROOT))
 from orchestration.repl_memory.strategy_store import StrategyStore
@@ -178,7 +185,7 @@ def load_blacklist() -> list[dict[str, Any]]:
     try:
         data = yaml.safe_load(BLACKLIST_PATH.read_text()) or {}
         return data.get("blacklist", [])
-    except Exception as e:
+    except (yaml.YAMLError, OSError) as e:
         log.warning("Could not load blacklist: %s", e)
         return []
 
@@ -221,7 +228,7 @@ def append_blacklist(action: dict[str, Any], trial_id: int, reason: str) -> None
         try:
             data = yaml.safe_load(BLACKLIST_PATH.read_text()) or {"blacklist": []}
         except Exception:
-            pass
+            log.debug("Blacklist write failed", exc_info=True)
     data.setdefault("blacklist", []).append(entry)
     BLACKLIST_PATH.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
     log.info("Blacklisted pattern: %s (reason: %s)", pattern, reason)
@@ -924,6 +931,21 @@ def _run_loop_inner(
             time.sleep(30)
             continue
 
+        # Check preflight diagnostics for stack-level issues
+        if get_preflight_diagnostics is not None:
+            try:
+                _pf = get_preflight_diagnostics()
+                _last = _pf.get("last_preflight", {})
+                if _last.get("status") == "failed":
+                    log.warning(
+                        "Preflight failed [%s]: %s — %s",
+                        _last.get("stage", "?"),
+                        _last.get("failure_reason", "?"),
+                        _last.get("failure_detail", ""),
+                    )
+            except Exception:
+                pass  # Preflight diagnostics are optional
+
         # ── 1. Observe ───────────────────────────────────────────
         memory_count = seeder.get_memory_count() if not dry_run else 0
         converged = seeder.is_converged
@@ -1308,7 +1330,7 @@ def _git_tag(tag: str, message: str) -> None:
             cwd=str(ORCH_ROOT),
         )
     except Exception:
-        pass
+        log.debug("Git tagging failed", exc_info=True)
 
 
 # ── CLI Commands ─────────────────────────────────────────────────

@@ -317,7 +317,17 @@ class StructuralLab:
         sys.path.insert(0, str(ORCH_ROOT / "src"))
 
         try:
-            from features import Features
+            from features import Features, _REGISTRY_BY_NAME
+
+            # Validate all flags exist in the declarative registry
+            unknown = set(flags.keys()) - set(_REGISTRY_BY_NAME.keys())
+            if unknown:
+                return {
+                    "status": "invalid",
+                    "errors": [f"Unknown flags not in registry: {sorted(unknown)}"],
+                    "proposed_flags": flags,
+                }
+
             test_features = Features(**flags)
             errors = test_features.validate()
             if errors:
