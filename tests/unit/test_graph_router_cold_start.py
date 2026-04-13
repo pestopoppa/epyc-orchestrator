@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytest.importorskip("kuzu", reason="kuzu not installed")
+
 
 class MockEmbedder:
     """Mock embedder for cold-start tests."""

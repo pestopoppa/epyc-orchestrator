@@ -1510,10 +1510,14 @@ def _architect_delegated_answer_inner(
         from src.delegation_cache import get_delegation_cache as _get_deleg_cache
         _deleg_cache = _get_deleg_cache()
         _cache_key = _deleg_cache.make_key(brief, delegate_to)
+        phase_tool_timings: list[dict] = []
         _cached = _deleg_cache.get(_cache_key)
         if _cached is not None:
             report = _cached.report
             report_handle = _cached.report_handle
+            specialist_timed_out = False
+            report_rescued = False
+            specialist_infer_meta: dict = {}
             if report_handle:
                 stats["report_handles"].append(report_handle)
             stats.setdefault("delegation_cache_hits", 0)

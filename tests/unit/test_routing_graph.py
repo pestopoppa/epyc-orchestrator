@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pytest
 
+pytest.importorskip("kuzu", reason="kuzu not installed")
+
 
 @dataclass
 class MockMemory:
