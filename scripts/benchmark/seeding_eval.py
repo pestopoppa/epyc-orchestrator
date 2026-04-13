@@ -169,7 +169,7 @@ def _build_role_result(
         elapsed_seconds=elapsed,
         error=error,
         error_type=error_type,
-        tokens_generated=resp.get("tokens_generated", 0),
+        tokens_generated=resp.get("tokens_generated", 0) or resp.get("tokens_generated_estimate", 0) or (len(answer) // 4 if answer else 0),
         tool_output_tokens=resp.get("tool_output_tokens", 0),
         tools_used=resp.get("tools_used", 0),
         tools_called=resp.get("tools_called", []),
