@@ -667,9 +667,19 @@ def _run_architect_decision(
         # answers.  MCQ answers (D|A through D|D) still fire immediately
         # via the lookahead shortcut.
         _toon_re = re.compile(r"D\|[A-D](?=[^a-zA-Z]|$)|D\|[^\n]+\n|I\|.+\|to:\w+")
-        primitives._early_stop_check = lambda text: bool(
-            _toon_re.search(_strip_think(text))
-        )
+        # Qwen3 CoT is strictly one <think>...</think> then the answer.
+        # A second <think> after </think> is always a degenerate loop —
+        # kill generation and keep whatever answer appeared between them.
+        _think_reentry_re = re.compile(r"</think>.*<think>", re.DOTALL)
+
+        def _architect_early_stop(text: str) -> bool:
+            if _toon_re.search(_strip_think(text)):
+                return True
+            if _think_reentry_re.search(text):
+                return True
+            return False
+
+        primitives._early_stop_check = _architect_early_stop
         try:
             raw = primitives.llm_call(
                 full_prompt,
