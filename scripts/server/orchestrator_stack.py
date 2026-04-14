@@ -1694,19 +1694,24 @@ def cmd_start(args: argparse.Namespace) -> int:
 
         print()
 
-        # Start Docker services (NextPLAID retrieval containers)
+        # Start Docker services (NextPLAID retrieval + SearXNG metasearch)
         if _docker_available():
-            print("[5.5] Starting Docker services (NextPLAID retrieval)...")
+            print("[5.5] Starting Docker services (NextPLAID retrieval + SearXNG metasearch)...")
             for service in DOCKER_SERVICES:
                 info = start_docker_container(service)
                 if info:
                     state[service["name"]] = info
                 else:
-                    print(f"  [!] {service['name']} failed (non-fatal, code_search degrades gracefully)")
+                    svc_name = service["name"]
+                    if svc_name == "searxng":
+                        print(f"  [!] {svc_name} failed (non-fatal, web_search falls back to DDG HTML scraping)")
+                    else:
+                        print(f"  [!] {svc_name} failed (non-fatal, code_search degrades gracefully)")
             print()
         else:
-            print("[5.5] Docker not available, skipping NextPLAID containers")
+            print("[5.5] Docker not available, skipping Docker containers")
             print("  code_search/doc_search will be unavailable")
+            print("  web_search will use DDG HTML scraping fallback")
             print()
 
         # Initialize MemRL databases and tool registry
@@ -1998,7 +2003,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         if info.pid == -1:
             # Docker-managed container
             alive = docker_container_running(info.role)
-            healthy = wait_for_health(info.port, timeout=3) if alive else False
+            # Look up health_path for this service (SearXNG uses /, others use /health)
+            health_path = "/health"
+            for svc in DOCKER_SERVICES:
+                if svc["name"] == info.role:
+                    health_path = svc.get("health_path", "/health")
+                    break
+            healthy = wait_for_health(info.port, timeout=3, path=health_path) if alive else False
             status = "healthy" if healthy else ("running" if alive else "stopped")
             pid_str = "docker"
         else:

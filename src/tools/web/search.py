@@ -28,7 +28,7 @@ from src.tools.base import safe_execute
 logger = logging.getLogger(__name__)
 
 # Feature flag: use SearXNG as default search backend (SX-6)
-_SEARXNG_DEFAULT = os.environ.get("ORCHESTRATOR_SEARXNG_DEFAULT", "0") == "1"
+_SEARXNG_DEFAULT = os.environ.get("ORCHESTRATOR_SEARXNG_DEFAULT", "1") == "1"
 _SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://localhost:8090")
 
 # Rate limiter: minimum seconds between DDG requests to avoid bot detection
