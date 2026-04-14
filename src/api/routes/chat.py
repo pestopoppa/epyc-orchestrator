@@ -478,6 +478,13 @@ async def _handle_chat(
 
         # 8c: Direct LLM call mode
         if execution_mode == "direct" and request.real_mode:
+            # Wrap prompt in Qwen3 ChatML turn markers for /completion endpoint.
+            # Without this, bare text is treated as continuation, not user query —
+            # causing rambling self-correction instead of clean assistant response.
+            request.prompt = (
+                "<|im_start|>user\n" + request.prompt
+                + "<|im_end|>\n<|im_start|>assistant\n"
+            )
             return _finalize(
                 await asyncio.to_thread(
                     _execute_direct,
