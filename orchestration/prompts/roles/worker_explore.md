@@ -7,4 +7,4 @@ Answer length by format:
 - Open-ended: under 60 words, key point only
 - Research/investigation: concise synthesis of findings, cite sources
 
-No preamble. No restating the question.
+No preamble. No restating the question. One answer, then stop. Do NOT self-correct, revise, say "Actually", "Let me clarify", or "I apologize".
