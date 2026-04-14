@@ -864,39 +864,44 @@ def dispatch_action(
         return None, "evolution_manager"
 
     elif action_type == "slot_compact":
-        # AM KV Compaction: compress KV cache on a model server slot
-        # Calls POST /slots/{id}?action=compact on llama.cpp server
-        import httpx
+        # Expected Attention KV Compression: score and evict KV cache entries
+        # Uses the kv_compress module for telemetry, gap guardrails, and structured results.
+        from kv_compress import compress_slot, auto_compress_all
 
-        port = action.get("port", 8080)  # default: frontdoor primary
+        port = action.get("port")
         slot_id = action.get("slot_id", 0)
-        keep_ratio = action.get("keep_ratio", 0.3)
-        beta = action.get("beta", 0.5)
-        keep_first = action.get("keep_first", 5)
-        keep_last = action.get("keep_last", 10)
+        keep_ratio = action.get("keep_ratio", 0.5)
+        keep_first = action.get("keep_first", 4)
+        scorer = action.get("scorer", "expected_attention")
+        layer_weights = action.get("layer_weights")
+        n_future = action.get("n_future", 128)
+        use_covariance = action.get("use_covariance", True)
 
-        compact_url = f"http://localhost:{port}/slots/{slot_id}?action=compact"
-        try:
-            resp = httpx.post(
-                compact_url,
-                json={
-                    "keep_ratio": keep_ratio,
-                    "beta": beta,
-                    "keep_first": keep_first,
-                    "keep_last": keep_last,
-                },
-                timeout=30.0,
+        if port:
+            # Single-port compression
+            result = compress_slot(
+                port=port, slot_id=slot_id, keep_ratio=keep_ratio,
+                scorer=scorer, keep_first=keep_first, n_future=n_future,
+                use_covariance=use_covariance, layer_weights=layer_weights,
             )
-            compact_result = resp.json() if resp.status_code == 200 else {}
-            pre_tokens = compact_result.get("n_ctx_before", 0)
-            post_tokens = compact_result.get("n_ctx_after", 0)
-            ratio = post_tokens / max(pre_tokens, 1)
-            log.info(
-                "AM compact port=%d slot=%d: %d→%d tokens (%.1f%% kept, keep_ratio=%.2f)",
-                port, slot_id, pre_tokens, post_tokens, ratio * 100, keep_ratio,
+            if result.success:
+                log.info(
+                    "KV compact port=%d slot=%d: evicted=%d keep=%.0f%% scorer=%s time=%.1fms",
+                    port, slot_id, result.n_evicted, keep_ratio * 100, scorer, result.elapsed_ms,
+                )
+            else:
+                log.warning("KV compact failed on port %d: %s", port, result.error)
+        else:
+            # Compress all production slots
+            results = auto_compress_all(
+                threshold=action.get("threshold", 0.80),
+                keep_ratio=keep_ratio, scorer=scorer, keep_first=keep_first,
+                n_future=n_future, use_covariance=use_covariance,
+                layer_weights=layer_weights,
             )
-        except Exception as e:
-            log.warning("AM compact failed on port %d: %s", port, e)
+            for role, r in results.items():
+                if r and r.success:
+                    log.info("KV compact %s: evicted=%d", role, r.n_evicted)
 
         # Evaluate quality after compaction to measure impact
         eval_result = tower.hybrid_eval()
