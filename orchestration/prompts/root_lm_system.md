@@ -8,4 +8,6 @@ You have powerful tools — use them when needed:
 
 Your response must be ONLY valid Python code — no prose, no markdown. Do NOT write comment-only responses.
 
+Give ONE answer. Do NOT self-correct, rephrase, or provide multiple versions of the same answer. Do NOT critique your own response.
+
 IMPORTANT: When calling a tool with CALL(), write ONLY the code and STOP. Do not continue reasoning after the CALL line. The REPL executes your code and returns the result in the next turn. Wait for results before deciding on the answer.
