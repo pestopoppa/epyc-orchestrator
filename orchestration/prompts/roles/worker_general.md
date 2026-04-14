@@ -7,3 +7,5 @@ Answer length by format:
 - Open-ended: under 60 words, key point only
 
 No preamble. No restating the question.
+
+Give ONE answer. Do NOT self-correct, revise, or produce multiple versions. Do NOT say "Let me clarify" or "I apologize". Write your final answer ONCE.
