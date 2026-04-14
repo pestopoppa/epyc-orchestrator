@@ -98,6 +98,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 - Memory count: {memory_count}
 - Q-value converged: {converged}
 
+### Slot Memory (KV cache usage — consider slot_compact if tokens > 4000)
+{slot_memory}
+
 ### Species Budget
 {budget}
 
@@ -127,6 +130,8 @@ Your job: analyze current system state and propose the SINGLE best next action.
 4. If stagnating (hv_slope < 0.001): try prompt_mutation or widen numeric search
 5. If quality regression after changes: rollback to last good checkpoint
 6. Consider the species budget allocation when choosing actions
+7. If any slot shows >4000 tokens cached, consider slot_compact to free KV memory
+   (use keep_ratio=0.3, target the port with the highest token count)
 
 ## Available Actions
 
@@ -234,6 +239,55 @@ def append_blacklist(action: dict[str, Any], trial_id: int, reason: str) -> None
     data.setdefault("blacklist", []).append(entry)
     BLACKLIST_PATH.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
     log.info("Blacklisted pattern: %s (reason: %s)", pattern, reason)
+
+
+# ── Slot Memory Visibility (AM KV Compaction) ──────────────────
+
+
+# Primary production ports by role — query these for slot memory stats.
+_SLOT_QUERY_PORTS: dict[str, list[int]] = {
+    "frontdoor": [8070],
+    "coder": [8071],
+    "worker": [8072],
+    "architect_general": [8083],
+    "architect_coding": [8084],
+}
+
+
+def _query_slot_memory() -> str:
+    """Query llama-server /slots on production ports and return a summary.
+
+    Returns a compact text block showing per-role slot memory usage so the
+    controller can decide when slot_compact is worthwhile.
+    """
+    import httpx
+
+    lines: list[str] = []
+    for role, ports in _SLOT_QUERY_PORTS.items():
+        for port in ports:
+            try:
+                resp = httpx.get(
+                    f"http://localhost:{port}/slots", timeout=3.0
+                )
+                if resp.status_code != 200:
+                    lines.append(f"  {role}:{port} — unreachable ({resp.status_code})")
+                    continue
+                slots = resp.json()
+                if not isinstance(slots, list):
+                    continue
+                for s in slots:
+                    sid = s.get("id", "?")
+                    state = s.get("state", "?")
+                    n_past = s.get("n_past", 0)
+                    if n_past > 0:
+                        lines.append(
+                            f"  {role}:{port}/slot{sid} — {state}, {n_past} tokens cached"
+                        )
+            except Exception:
+                lines.append(f"  {role}:{port} — offline")
+    if not lines:
+        return "  (all slots empty or servers offline)"
+    return "\n".join(lines)
 
 
 # ── Claude CLI Controller ────────────────────────────────────────
@@ -1011,6 +1065,12 @@ def _run_loop_inner(
             else:
                 blacklist_text = "  (none)"
 
+            # AM compaction: query slot memory so controller can decide on compaction
+            try:
+                slot_memory_text = _query_slot_memory() if not dry_run else "  (dry run)"
+            except Exception:
+                slot_memory_text = "  (query failed)"
+
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 program=program_text,
                 pareto_summary=archive.summary_text(),
@@ -1022,6 +1082,7 @@ def _run_loop_inner(
                 health_status="OK" if not dry_run else "dry_run",
                 memory_count=memory_count,
                 converged=converged,
+                slot_memory=slot_memory_text,
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
                 insights=insights_text,
