@@ -129,6 +129,10 @@ def resolve_prompt(
             try:
                 template = family_path.read_text()
                 _log.debug("Loaded family fallback prompt: %s", family_path)
+                # Anti-self-correction: worker roles via family fallback
+                # generate 3x rewrites ("Let me clarify", "I apologize").
+                if name.startswith("worker_"):
+                    template += "\n\nGive ONE answer. Do NOT self-correct, revise, or produce multiple versions. Do NOT say \"Let me clarify\" or \"I apologize\"."
                 return _safe_format(template, template_vars) if template_vars else template
             except OSError:
                 pass
