@@ -436,6 +436,7 @@ DOCKER_SERVICES = [
             f"{_PATHS['project_root']}/config/searxng:/etc/searxng:Z",
         ],
         "args": [],  # Config via mounted settings.yml, not CLI args
+        "health_path": "/",  # SearXNG serves HTML on /, not /health
     },
 ]
 
@@ -748,8 +749,9 @@ def start_docker_container(service: dict) -> ProcessInfo | None:
     print(f"    Container: {container_id}")
 
     # Wait for health
+    health_path = service.get("health_path", "/health")
     print(f"    Waiting for health...")
-    if wait_for_health(port, timeout=60):
+    if wait_for_health(port, timeout=60, path=health_path):
         print(f"    [OK] {name} ready ({service['description']})")
         # Use container_id as PID placeholder (Docker manages the actual process)
         return ProcessInfo(
@@ -782,12 +784,12 @@ def stop_docker_container(name: str) -> bool:
     return result.returncode == 0
 
 
-def wait_for_health(port: int, timeout: int = _HEALTH_SERVER_STARTUP) -> bool:
+def wait_for_health(port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str = "/health") -> bool:
     """Wait for server health endpoint."""
     import urllib.request
     import urllib.error
 
-    url = f"http://localhost:{port}/health"
+    url = f"http://localhost:{port}{path}"
     start = time.time()
     while time.time() - start < timeout:
         try:
