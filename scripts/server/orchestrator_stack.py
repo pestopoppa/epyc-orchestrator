@@ -395,7 +395,7 @@ ORCHESTRATOR_PROFILES: dict[str, dict[str, str]] = {
 }
 
 # =============================================================================
-# Docker Services (NextPLAID multi-vector retrieval)
+# Docker Services (NextPLAID multi-vector retrieval + SearXNG metasearch)
 # =============================================================================
 
 DOCKER_SERVICES = [
@@ -426,6 +426,16 @@ DOCKER_SERVICES = [
         ],
         "args": ["--host", "0.0.0.0", "--port", "8080", "--index-dir", "/data/indices",
                  "--model", "/models/gte-moderncolbert-v1-onnx", "--int8"],
+    },
+    {
+        "name": "searxng",
+        "port": 8090,
+        "image": "docker.io/searxng/searxng:latest",
+        "description": "Metasearch aggregator (JSON API for web_search)",
+        "volumes": [
+            f"{_PATHS['project_root']}/config/searxng:/etc/searxng:Z",
+        ],
+        "args": [],  # Config via mounted settings.yml, not CLI args
     },
 ]
 
