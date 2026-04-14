@@ -117,6 +117,10 @@ def resolve_prompt(
     try:
         template = default_path.read_text()
         _log.debug("Loaded prompt: %s", default_path)
+        # Anti-self-correction for worker roles (primary path).
+        # Without this, models generate 3x rewrites (389 tokens).
+        if name.startswith("worker_"):
+            template += '\n\nGive ONE answer. Do NOT self-correct, revise, or produce multiple versions. Write your final answer ONCE.'
         return _safe_format(template, template_vars) if template_vars else template
     except OSError:
         _log.debug("Prompt file not found: %s, using fallback", default_path)
