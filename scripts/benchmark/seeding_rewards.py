@@ -394,6 +394,7 @@ def extract_web_research_telemetry(
 
     total_pages_fetched = 0
     total_pages_synthesized = 0
+    total_pages_irrelevant = 0
     total_elapsed_ms = 0.0
     queries: list[str] = []
     source_urls: list[str] = []
@@ -403,6 +404,7 @@ def extract_web_research_telemetry(
             continue
         total_pages_fetched += int(wr.get("pages_fetched", 0) or 0)
         total_pages_synthesized += int(wr.get("pages_synthesized", 0) or 0)
+        total_pages_irrelevant += int(wr.get("pages_irrelevant", 0) or 0)
         total_elapsed_ms += float(wr.get("total_elapsed_ms", 0.0) or 0.0)
         q = wr.get("query", "")
         if q:
@@ -427,6 +429,7 @@ def extract_web_research_telemetry(
         call_count=len(tool_results),
         total_pages_fetched=total_pages_fetched,
         total_pages_synthesized=total_pages_synthesized,
+        total_pages_irrelevant=total_pages_irrelevant,
         total_elapsed_ms=total_elapsed_ms,
         unique_domains=len(domains),
         queries=queries,

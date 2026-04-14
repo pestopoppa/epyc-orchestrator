@@ -40,6 +40,35 @@ _MAX_SYNTH_WORKERS = 3
 _CONTENT_PER_PAGE = 6000  # chars of page content to send to worker
 _SYNTH_MAX_TOKENS = 512   # worker output cap
 
+# Relevance detection patterns for synthesis output instrumentation
+_IRRELEVANT_PHRASES = (
+    "not relevant",
+    "does not contain",
+    "no relevant information",
+    "not related to",
+    "does not address",
+    "no information about",
+    "doesn't contain",
+    "doesn't address",
+    "not directly relevant",
+    "unable to find relevant",
+)
+_IRRELEVANT_MAX_CHARS = 120  # synthesis shorter than this is likely a "not relevant" dismissal
+
+
+def _is_irrelevant_synthesis(synthesis: str) -> bool:
+    """Detect if worker synthesis indicates the page was not relevant.
+
+    Heuristic: the worker prompt instructs "If the page is not relevant,
+    say so briefly", producing short dismissals containing negation phrases.
+    """
+    if not synthesis.strip():
+        return True
+    lower = synthesis.lower()
+    if len(synthesis) < _IRRELEVANT_MAX_CHARS:
+        return any(phrase in lower for phrase in _IRRELEVANT_PHRASES)
+    return False
+
 
 def _fetch_page(url: str, max_length: int = _CONTENT_PER_PAGE) -> dict[str, Any]:
     """Fetch a single URL and extract text content.
@@ -344,6 +373,32 @@ def _web_research_impl(
                     meta = futures[future]
                     logger.warning(f"Synthesis failed for {meta['url']}: {e}")
 
+    # Step 3b: Relevance instrumentation — classify synthesis results
+    irrelevant_pages = []
+    relevant_pages = []
+    for s in synthesized:
+        if not s.get("success"):
+            continue
+        synthesis_text = s.get("synthesis", "")
+        if _is_irrelevant_synthesis(synthesis_text):
+            irrelevant_pages.append(s["url"])
+            logger.info(
+                "web_research relevance: IRRELEVANT page=%s query=%r synthesis_len=%d",
+                s["url"], query, len(synthesis_text),
+            )
+        else:
+            relevant_pages.append(s["url"])
+
+    total_synth = len(relevant_pages) + len(irrelevant_pages)
+    irrelevant_rate = len(irrelevant_pages) / total_synth if total_synth > 0 else 0.0
+    if irrelevant_pages:
+        logger.info(
+            "web_research relevance summary: query=%r total=%d relevant=%d "
+            "irrelevant=%d rate=%.1f%%",
+            query, total_synth, len(relevant_pages),
+            len(irrelevant_pages), irrelevant_rate * 100,
+        )
+
     # Step 4: Build structured output
     sources = []
     for r in results:
@@ -358,6 +413,7 @@ def _web_research_impl(
         for s in synthesized:
             if s["url"] == url and s.get("success") and s.get("synthesis"):
                 source["synthesis"] = s["synthesis"]
+                source["relevant"] = url not in irrelevant_pages
                 break
 
         # Fall back to snippet-only for unfetched/failed pages
@@ -372,6 +428,8 @@ def _web_research_impl(
         "sources": sources,
         "pages_fetched": len(to_synthesize),
         "pages_synthesized": synth_count,
+        "pages_irrelevant": len(irrelevant_pages),
+        "irrelevant_rate": round(irrelevant_rate, 3),
         "dedup_paragraphs_removed": dedup_stats["paragraphs_removed"],
         "dedup_chars_saved": dedup_stats["chars_saved"],
         "total_elapsed_ms": total_elapsed,
