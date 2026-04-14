@@ -2,25 +2,34 @@
 """Web search tool for knowledge retrieval.
 
 Provides web search functionality with:
-- DuckDuckGo as default backend (no API key required)
+- SearXNG as primary backend (self-hosted JSON API, no scraping)
+- DuckDuckGo/Brave as fallback (HTML scraping, used when SearXNG unavailable)
 - Source registry filtering for trusted results
 - Result summarization
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import threading
 import time
+import urllib.request
+import urllib.error
 
 from src.tool_registry import Tool, ToolCategory, ToolRegistry
 from src.tools.base import safe_execute
 
 logger = logging.getLogger(__name__)
+
+# Feature flag: use SearXNG as default search backend (SX-6)
+_SEARXNG_DEFAULT = os.environ.get("ORCHESTRATOR_SEARXNG_DEFAULT", "0") == "1"
+_SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://localhost:8090")
 
 # Rate limiter: minimum seconds between DDG requests to avoid bot detection
 _DDG_MIN_INTERVAL = 2.0
@@ -142,6 +151,62 @@ def _search_duckduckgo(
     return results
 
 
+def _search_searxng(
+    query: str,
+    max_results: int = 5,
+) -> list[dict[str, str]]:
+    """Search via self-hosted SearXNG JSON API.
+
+    Returns structured results with multi-engine provenance. Requires
+    SearXNG container running on _SEARXNG_URL with JSON format enabled.
+
+    Args:
+        query: Search query.
+        max_results: Maximum number of results.
+
+    Returns:
+        List of result dicts with title, url, snippet, score, engines.
+    """
+    params = {"q": query, "format": "json"}
+    url = f"{_SEARXNG_URL}/search?{urlencode(params)}"
+
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/json",
+    })
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, Exception) as e:
+        raise Exception(f"SearXNG request failed: {e}")
+
+    # SX-4: Log unresponsive engines for telemetry
+    unresponsive = data.get("unresponsive_engines", [])
+    if unresponsive:
+        engine_names = [entry[0] if isinstance(entry, list) else str(entry)
+                        for entry in unresponsive]
+        logger.info(
+            "searxng unresponsive_engines: %s (query=%r)",
+            ", ".join(engine_names), query,
+        )
+
+    results = []
+    for r in data.get("results", [])[:max_results]:
+        results.append({
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("content", ""),
+            "score": r.get("score", 0),
+            "engines": r.get("engines", []),
+        })
+
+    logger.debug(
+        "SearXNG search: results=%d, unresponsive=%d, query=%r",
+        len(results), len(unresponsive), query,
+    )
+    return results
+
+
 def web_search(
     query: str,
     max_results: int = 5,
@@ -161,6 +226,26 @@ def web_search(
     search_query = query
     if domain_filter:
         search_query = f"site:{domain_filter} {query}"
+
+    # SX-6: Use SearXNG when enabled, fall back to DDG HTML scraping
+    if _SEARXNG_DEFAULT:
+        result = safe_execute(
+            _search_searxng,
+            search_query,
+            max_results=max_results,
+            timeout_seconds=15,
+        )
+        if result.success:
+            return {
+                "success": True,
+                "results": result.data,
+                "query": query,
+                "result_count": len(result.data),
+                "elapsed_ms": result.elapsed_ms,
+                "backend": "searxng",
+            }
+        # SearXNG failed — fall through to DDG as fallback
+        logger.warning("SearXNG failed (%s), falling back to DDG", result.error)
 
     result = safe_execute(
         _search_duckduckgo,
@@ -182,6 +267,7 @@ def web_search(
         "query": query,
         "result_count": len(result.data),
         "elapsed_ms": result.elapsed_ms,
+        "backend": "duckduckgo",
     }
 
 

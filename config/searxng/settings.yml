@@ -1,0 +1,62 @@
+# SearXNG settings for EPYC orchestrator backend use
+# See: https://docs.searxng.org/admin/settings/
+# Intake reference: intake-359/360 in epyc-root/research/intake_index.yaml
+
+use_default_settings: true
+
+server:
+  secret_key: "epyc-orchestrator-searxng-local-backend-2026"
+  bind_address: "0.0.0.0"
+  limiter: false              # MUST be false — API_MAX=4/hr blocks programmatic use
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+search:
+  formats:
+    - html
+    - json                    # MUST be present or JSON API returns 403
+  default_lang: "en"
+  safe_search: 0
+
+outgoing:
+  request_timeout: 3.0
+  max_request_timeout: 10.0
+  enable_http2: true
+
+# Engine tuning (SX-3): disable Google (TLS fingerprinting blocks SearXNG),
+# keep DDG/Brave/Wikipedia/Qwant as primary engine set
+engines:
+  - name: google
+    engine: google
+    shortcut: go
+    inactive: true            # Completely removed — TLS fingerprint blocking (issue #2515)
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+    weight: 1.2               # Slight boost — proven reliable in current search.py
+    timeout: 3.0
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+    weight: 1.1               # Secondary preferred — fallback engine in current search.py
+    timeout: 3.0
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+    weight: 1.0
+    timeout: 3.0
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: false
+    weight: 0.9
+    timeout: 3.0
+    retry_on_http_error: true
