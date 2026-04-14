@@ -209,6 +209,29 @@ Start with highest-expected-impact, lowest-risk experiments. Suggested order (ag
 - Cascade depth (2-tier vs 3-tier with fast filter)
 - **CONSTRAINT**: Only restart the specific role's server, not the full stack. Model selection and quantization have been extensively benchmarked — only explore alternatives with clear hypothesis from quality data.
 
+### Tier 4.5: KV Compaction (zero-restart, zero-risk, operational)
+
+AM KV compaction compresses the KV cache on active model server slots. This is an **operational** action, not an experiment — it frees memory without changing system behavior.
+
+**When to use**: After evaluating long-context question batches (GPQA, multi-hop, agentic) or when the Slot Memory section shows >4000 tokens cached on a production port.
+
+**Validated parameters** (from AM P2 testing on Coder-32B, 7B, and SSM-hybrid):
+- `keep_ratio=0.3` — 5x compression with zero quality degradation
+- `beta=0.5` — attention-matching bias strength
+- `keep_first=5` — preserve system prompt tokens
+- `keep_last=10` — preserve recent context tokens
+
+**Target ports** (primary instances only — quarter instances share no state):
+- frontdoor: 8070
+- coder: 8071
+- worker: 8072
+- architect_general: 8083
+- architect_coding: 8084
+
+**How it works**: The llama-server's `POST /slots/{id}?action=compact` endpoint uses attention-weighted KV selection to keep the most important cache entries. Post-compact, the server continues generating from the compressed cache. Quality impact is measured via `tower.hybrid_eval()` after each compact.
+
+**Constraints**: Only compact idle slots (state != "processing"). Compacting during inference will corrupt the generation. The Slot Memory section in your prompt shows slot state — only target slots marked "idle" with high token counts.
+
 ### Tier 5: Stack Topology (requires full restart, already well-optimized)
 - Instance counts per role (currently optimized for NUMA 4-way)
 - NUMA quarter assignments (currently optimal)
