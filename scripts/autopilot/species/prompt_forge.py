@@ -82,21 +82,29 @@ class PromptForge:
         self._session_id: str | None = None
 
     def list_prompts(self) -> list[str]:
-        """List all hot-swappable prompt files."""
+        """List all hot-swappable prompt files (flat + roles/ subdirectory)."""
         if not self.prompts_dir.exists():
             return []
-        return sorted(f.name for f in self.prompts_dir.glob("*.md"))
+        return sorted(f.name for f in self.prompts_dir.rglob("*.md"))
+
+    def _resolve_prompt_path(self, filename: str) -> Path:
+        """Resolve prompt file, checking flat dir then roles/ subdirectory."""
+        path = self.prompts_dir / filename
+        if path.exists():
+            return path
+        # Check roles/ subdirectory (post-refactoring layout)
+        roles_path = self.prompts_dir / "roles" / filename
+        if roles_path.exists():
+            return roles_path
+        raise FileNotFoundError(f"Prompt not found: {path} or {roles_path}")
 
     def read_prompt(self, filename: str) -> str:
         """Read a prompt file."""
-        path = self.prompts_dir / filename
-        if not path.exists():
-            raise FileNotFoundError(f"Prompt not found: {path}")
-        return path.read_text()
+        return self._resolve_prompt_path(filename).read_text()
 
     def write_prompt(self, filename: str, content: str) -> None:
         """Write a prompt file (picked up on next request)."""
-        path = self.prompts_dir / filename
+        path = self._resolve_prompt_path(filename)
         path.write_text(content)
         log.info("Wrote prompt: %s (%d chars)", filename, len(content))
 
