@@ -169,6 +169,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("session_token_budget", False, False, "SESSION_TOKEN_BUDGET", "B5: per-session token budget"),
     # Claude Code Local
     FeatureSpec("claude_code_mcp_chat", False, False, "CLAUDE_CODE_MCP_CHAT", "CC Local: MCP chat delegation"),
+    # Web research reranking
+    FeatureSpec("web_research_rerank", False, False, "WEB_RESEARCH_RERANK", "ColBERT snippet reranking in web_research pipeline"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -387,6 +389,9 @@ class Features:
 
     # Claude Code Local Integration (CC Local)
     claude_code_mcp_chat: bool = False  # MCP tools for delegating chat to running orchestrator
+
+    # Web research reranking (ColBERT snippet pre-fetch filtering)
+    web_research_rerank: bool = False  # Rerank DDG snippets via ColBERT before page fetch
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety

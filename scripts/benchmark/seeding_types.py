@@ -245,6 +245,7 @@ class WebResearchTelemetry:
     call_count: int = 0
     total_pages_fetched: int = 0
     total_pages_synthesized: int = 0
+    total_pages_irrelevant: int = 0
     total_elapsed_ms: float = 0.0
     unique_domains: int = 0
     queries: list[str] = field(default_factory=list)

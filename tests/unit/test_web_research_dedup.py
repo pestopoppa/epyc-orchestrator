@@ -3,7 +3,37 @@
 
 import pytest
 
-from src.tools.web.research import _dedup_pages, _MIN_PARAGRAPH_LEN
+from src.tools.web.research import (
+    _dedup_pages,
+    _is_irrelevant_synthesis,
+    _MIN_PARAGRAPH_LEN,
+)
+
+
+class TestIrrelevantSynthesisDetection:
+    """Test _is_irrelevant_synthesis() heuristic for relevance instrumentation."""
+
+    def test_empty_synthesis_is_irrelevant(self):
+        assert _is_irrelevant_synthesis("") is True
+        assert _is_irrelevant_synthesis("   ") is True
+
+    def test_short_not_relevant_phrases(self):
+        assert _is_irrelevant_synthesis("This page is not relevant to the query.") is True
+        assert _is_irrelevant_synthesis("The page does not contain information about X.") is True
+        assert _is_irrelevant_synthesis("No relevant information found.") is True
+
+    def test_long_synthesis_is_relevant(self):
+        """A substantial synthesis is never marked irrelevant regardless of content."""
+        long_text = "This is a detailed synthesis. " * 20
+        assert _is_irrelevant_synthesis(long_text) is False
+
+    def test_short_but_substantive_is_relevant(self):
+        """Short synthesis without negation phrases is relevant."""
+        assert _is_irrelevant_synthesis("The paper proposes a 150M ColBERT model.") is False
+
+    def test_case_insensitive_detection(self):
+        assert _is_irrelevant_synthesis("NOT RELEVANT to the query.") is True
+        assert _is_irrelevant_synthesis("Does Not Contain the information.") is True
 
 
 class TestDedupPages:

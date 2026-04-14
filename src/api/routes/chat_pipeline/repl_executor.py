@@ -712,9 +712,12 @@ async def _execute_repl(
                 "query": wr.get("query", ""),
                 "pages_fetched": wr.get("pages_fetched", 0),
                 "pages_synthesized": wr.get("pages_synthesized", 0),
+                "pages_irrelevant": wr.get("pages_irrelevant", 0),
+                "irrelevant_rate": wr.get("irrelevant_rate", 0.0),
                 "total_elapsed_ms": wr.get("total_elapsed_ms", 0.0),
                 "sources": [
-                    {"url": s.get("url", ""), "title": s.get("title", "")}
+                    {"url": s.get("url", ""), "title": s.get("title", ""),
+                     "relevant": s.get("relevant", True)}
                     for s in wr.get("sources", [])
                     if isinstance(s, dict)
                 ],
