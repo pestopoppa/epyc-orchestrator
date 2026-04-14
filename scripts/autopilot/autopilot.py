@@ -527,13 +527,17 @@ def dispatch_action(
             if last_entries else None
         )
 
-        mutation = forge.propose_mutation(
-            target_file=target,
-            mutation_type=mutation_type,
-            failure_context=failure_context,
-            per_suite_quality=last_per_suite,
-            description=description,
-        )
+        try:
+            mutation = forge.propose_mutation(
+                target_file=target,
+                mutation_type=mutation_type,
+                failure_context=failure_context,
+                per_suite_quality=last_per_suite,
+                description=description,
+            )
+        except FileNotFoundError:
+            log.warning("Prompt file not found: %s (may have been removed in refactoring)", target)
+            return None, "prompt_forge"
         forge.apply_mutation(mutation)
         eval_result = tower.hybrid_eval()
 
@@ -586,13 +590,17 @@ def dispatch_action(
 
         log.info("GEPA optimize: %s (max_evals=%d)", target, max_evals)
 
-        mutation = forge.propose_mutation(
-            target_file=target,
-            mutation_type="gepa",
-            description=description,
-            eval_tower=tower,
-            gepa_max_evals=max_evals,
-        )
+        try:
+            mutation = forge.propose_mutation(
+                target_file=target,
+                mutation_type="gepa",
+                description=description,
+                eval_tower=tower,
+                gepa_max_evals=max_evals,
+            )
+        except FileNotFoundError:
+            log.warning("Prompt file not found: %s", target)
+            return None, "prompt_forge"
 
         # No-op mutation means GEPA failed
         if mutation.original_content == mutation.mutated_content:

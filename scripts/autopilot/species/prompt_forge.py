@@ -88,15 +88,22 @@ class PromptForge:
         return sorted(f.name for f in self.prompts_dir.rglob("*.md"))
 
     def _resolve_prompt_path(self, filename: str) -> Path:
-        """Resolve prompt file, checking flat dir then roles/ subdirectory."""
+        """Resolve prompt file, searching multiple locations."""
+        # Try exact path first (handles roles/worker_explore.md from controller)
         path = self.prompts_dir / filename
         if path.exists():
             return path
-        # Check roles/ subdirectory (post-refactoring layout)
+        # Try roles/ subdirectory (flat filename like worker_explore.md)
         roles_path = self.prompts_dir / "roles" / filename
         if roles_path.exists():
             return roles_path
-        raise FileNotFoundError(f"Prompt not found: {path} or {roles_path}")
+        # Try stripping roles/ prefix if controller included it redundantly
+        basename = Path(filename).name
+        if basename != filename:
+            for candidate in [self.prompts_dir / basename, self.prompts_dir / "roles" / basename]:
+                if candidate.exists():
+                    return candidate
+        raise FileNotFoundError(f"Prompt not found: {path}")
 
     def read_prompt(self, filename: str) -> str:
         """Read a prompt file."""
