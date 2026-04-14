@@ -209,17 +209,46 @@ Start with highest-expected-impact, lowest-risk experiments. Suggested order (ag
 - Cascade depth (2-tier vs 3-tier with fast filter)
 - **CONSTRAINT**: Only restart the specific role's server, not the full stack. Model selection and quantization have been extensively benchmarked — only explore alternatives with clear hypothesis from quality data.
 
-### Tier 4.5: KV Compaction (zero-restart, zero-risk, operational)
+### Tier 4.5: KV Compression (zero-restart, operational, tunable)
 
-AM KV compaction compresses the KV cache on active model server slots. This is an **operational** action, not an experiment — it frees memory without changing system behavior.
+Expected Attention KV compression scores each KV cache entry by predicted future attention importance and evicts the lowest-scoring entries. This extends effective context without restart.
 
-**When to use**: After evaluating long-context question batches (GPQA, multi-hop, agentic) or when the Slot Memory section shows >4000 tokens cached on a production port.
+**When to use**: After evaluating long-context question batches (GPQA, multi-hop, agentic) or when the Slot Memory section shows >4000 tokens cached on a production port. Also use proactively to free memory before large batches.
 
-**Validated parameters** (from AM P2 testing on Coder-32B, 7B, and SSM-hybrid):
-- `keep_ratio=0.3` — 5x compression with zero quality degradation
-- `beta=0.5` — attention-matching bias strength
-- `keep_first=5` — preserve system prompt tokens
-- `keep_last=10` — preserve recent context tokens
+**Endpoint**: `POST http://localhost:{port}/slots/{id}?action=compact`
+
+**Tunable parameters** (autopilot search space):
+
+| Parameter | Type | Range | Default | Description |
+|-----------|------|-------|---------|-------------|
+| `keep_ratio` | float | [0.10, 0.90] | 0.50 | Fraction of KV entries to KEEP. Safe range: [0.50, 0.90]. Below 0.25 format degrades. |
+| `scorer` | string | "expected_attention", "knorm" | "expected_attention" | Scoring algorithm. EA is superior; knorm is legacy fallback. |
+| `keep_first` | int | [2, 16] | 4 | Sink tokens (never evicted). Protects system prompt. |
+| `n_future` | int | [64, 1024] | 128 | Future positions for RoPE averaging. Higher = more stable scores, slower. |
+| `use_covariance` | bool | true, false | true | Full EA (with query covariance) vs mean-only. True is more accurate, ~2x slower. |
+| `layer_weights` | float[] | each in [0.1, 5.0] | uniform | Per-attention-layer importance weights. Length = number of attention layers. Higher weight = that layer's scores contribute more. **Key tuning surface**: learn per-role weight vectors. |
+
+**Example requests**:
+```bash
+# Standard 50% compression
+curl -X POST "http://localhost:8070/slots/0?action=compact" \
+  -H "Content-Type: application/json" \
+  -d '{"keep_ratio": 0.5, "scorer": "expected_attention", "keep_first": 4}'
+
+# Aggressive with deep-layer emphasis (for coder role)
+curl -X POST "http://localhost:8071/slots/0?action=compact" \
+  -H "Content-Type: application/json" \
+  -d '{"keep_ratio": 0.3, "keep_first": 8, "layer_weights": [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.5,1.5,1.5,2.0,2.0,2.0,2.5,3.0]}'
+```
+
+**Quality data** (from multi-ratio sweep on Qwen3.5-35B-A3B frontdoor):
+- 90% keep: identical output to baseline
+- 75% keep: identical output to baseline
+- 50% keep: slight reword, semantically equivalent
+- 25% keep: different phrasing, coherent
+- 10% keep: format shift, quality cliff onset
+
+**PPL gate** (Qwen3.5-35B-A3B at 50% eviction): ratio = 1.096 (<1.10 threshold).
 
 **Target ports** (primary instances only — quarter instances share no state):
 - frontdoor: 8070
@@ -228,7 +257,7 @@ AM KV compaction compresses the KV cache on active model server slots. This is a
 - architect_general: 8083
 - architect_coding: 8084
 
-**How it works**: The llama-server's `POST /slots/{id}?action=compact` endpoint uses attention-weighted KV selection to keep the most important cache entries. Post-compact, the server continues generating from the compressed cache. Quality impact is measured via `tower.hybrid_eval()` after each compact.
+**NumericSwarm integration**: Treat `keep_ratio` as a continuous parameter and `layer_weights` as a per-role vector. Evaluate quality post-compact via `tower.hybrid_eval()`. The 4D Pareto archive (quality × speed × -cost × reliability) captures the compression/quality tradeoff naturally — speed improves with compression (fewer KV entries = less memory bandwidth), quality may degrade.
 
 **Constraints**: Only compact idle slots (state != "processing"). Compacting during inference will corrupt the generation. The Slot Memory section in your prompt shows slot state — only target slots marked "idle" with high token counts.
 
