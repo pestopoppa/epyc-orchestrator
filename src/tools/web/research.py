@@ -303,6 +303,7 @@ def _web_research_impl(
             "query": query,
         }
 
+    search_backend = search_result.get("backend", "unknown")
     results = search_result["results"]
     if not results:
         return {
@@ -394,9 +395,9 @@ def _web_research_impl(
     if irrelevant_pages:
         logger.info(
             "web_research relevance summary: query=%r total=%d relevant=%d "
-            "irrelevant=%d rate=%.1f%%",
+            "irrelevant=%d rate=%.1f%% backend=%s",
             query, total_synth, len(relevant_pages),
-            len(irrelevant_pages), irrelevant_rate * 100,
+            len(irrelevant_pages), irrelevant_rate * 100, search_backend,
         )
 
     # Step 4: Build structured output
@@ -433,6 +434,7 @@ def _web_research_impl(
         "dedup_paragraphs_removed": dedup_stats["paragraphs_removed"],
         "dedup_chars_saved": dedup_stats["chars_saved"],
         "total_elapsed_ms": total_elapsed,
+        "search_backend": search_backend,
     }
 
 
