@@ -945,8 +945,16 @@ def build_server_command(
         "-c", context_size,     # Role-aware context size
         "-t", thread_count,     # NUMA-aware thread count (48 for quarter, 96 for node)
         "--flash-attn", "on",   # Flash attention
-        "--jinja",              # Use model's native chat template (enables thinking on Qwen3/3.5)
     ]
+
+    # --jinja: Use model's native chat template (enables thinking on Qwen3/3.5).
+    # SKIP for architect_general — Qwen3.5 hybrids enter infinite <think> loops.
+    # --reasoning off was insufficient: the jinja template itself primes the model
+    # into think mode. Without --jinja, llama-server falls back to generic ChatML
+    # which has no thinking scaffolding. architect_coding (REAP-246B, pure MoE)
+    # keeps --jinja + default reasoning (no loop issue on non-hybrid architectures).
+    if role_config.name != "architect_general":
+        cmd.append("--jinja")
 
     # KV cache quantization: reduces KV memory with negligible quality impact.
     # Phase 0 benchmarks (2026-03-25): generation speed neutral, memory savings significant at 65K+.
@@ -969,12 +977,6 @@ def build_server_command(
         # --kv-hadamard: v3 auto-enables (upstream #21038), v2 needs explicit flag
         if role_config.name in _V2_ROLES and LLAMA_SERVER_V2.exists():
             cmd.append("--kv-hadamard")
-
-    # Disable reasoning for architect_general — Qwen3.5 hybrids enter infinite
-    # <think> loops even with budget cap. architect_coding (REAP-246B, pure MoE)
-    # keeps default reasoning (no loop issue on non-hybrid architectures).
-    if role_config.name == "architect_general":
-        cmd.extend(["--reasoning", "off"])
 
     # mlock: lock model weights in RAM to prevent page cache eviction.
     # Validated in S2: 30x latency improvement under memory pressure.
