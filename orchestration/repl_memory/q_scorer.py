@@ -14,6 +14,7 @@ keeping Q-value computation off the critical inference path.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,6 +22,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+# DAR-2: Contrastive Q-value updates (decision-aware-routing.md).
+# When enabled, routing Q-updates include a contrastive adjustment that
+# sharpens decision boundaries between alternative models. The adjustment
+# is additive to the reward signal, capped at ±0.1, and zero when the
+# ranking is already correct with sufficient margin.
+CONTRASTIVE_Q_UPDATES = os.environ.get("CONTRASTIVE_Q_UPDATES", "1") == "1"
 
 from .embedder import TaskEmbedder
 from .episodic_store import EpisodicStore
@@ -257,23 +265,40 @@ class QScorer:
                     reward, action_str, task_type, self.store,
                 )
 
+        # DAR-2: Contrastive ranking adjustment (feature-flagged).
+        # Sharpens decision boundaries by adjusting reward based on alternative
+        # model Q-values. Zero when flag is off or no alternatives available.
+        contrastive_adj = 0.0
+        if CONTRASTIVE_Q_UPDATES and routing_decision and task_started:
+            contrastive_adj = self._compute_contrastive_adjustment(
+                task_started, routing_decision, reward,
+            )
+            if abs(contrastive_adj) > 0.001:
+                logger.info(
+                    "DAR-2 contrastive: adj=%.4f reward=%.3f→%.3f task=%s",
+                    contrastive_adj, reward, reward + contrastive_adj, task_id,
+                )
+
+        reward_for_update = max(-1.0, min(1.0, reward + contrastive_adj))
+
         result = {
             "memories_updated": 0,
             "memories_created": 0,
             "reward": reward,
+            "contrastive_adj": contrastive_adj,
         }
 
-        # Update or create routing memory
+        # Update or create routing memory (uses contrastive-adjusted reward)
         if routing_decision:
             memory_result = self._update_routing_memory(
                 task_id,
                 task_started,
                 routing_decision,
-                reward,
+                reward_for_update,
             )
             result.update(memory_result)
 
-        # Update escalation memories
+        # Update escalation memories (use base reward, not contrastive-adjusted)
         for escalation in escalations:
             esc_result = self._update_escalation_memory(task_id, escalation, reward)
             result["memories_updated"] += esc_result.get("memories_updated", 0)
@@ -428,6 +453,84 @@ class QScorer:
 
         # Final reward (clamped to [-1, 1])
         return max(-1.0, min(1.0, reward))
+
+    def _compute_contrastive_adjustment(
+        self,
+        task_started: ProgressEntry,
+        routing_decision: ProgressEntry,
+        reward: float,
+        margin: float = 0.05,
+        max_adj: float = 0.1,
+    ) -> float:
+        """DAR-2: Compute contrastive ranking adjustment for Q-value update.
+
+        Sharpens decision boundaries between alternative models:
+        - Success: if selected model's Q is below alternatives, boost reward
+          so the TD update pushes its Q above competitors.
+        - Failure: if selected model's Q is above alternatives, penalize more
+          so the TD update pushes its Q below competitors.
+
+        The adjustment is zero when:
+        - The ranking is already correct with sufficient margin
+        - No alternative memories with learned Q-values exist
+        - The feature flag CONTRASTIVE_Q_UPDATES is off (checked by caller)
+
+        Bounded to [-max_adj, +max_adj] to prevent runaway drift.
+        With α=0.1 and max_adj=0.1, the maximum extra Q-shift per update
+        is 0.01 — negligible individually, significant cumulatively.
+        """
+        task_context = task_started.data if task_started and task_started.data else {}
+        if not task_context:
+            return 0.0
+
+        # Generate embedding for this task
+        try:
+            embedding = self.embedder.embed_task_ir(task_context)
+        except Exception:
+            return 0.0
+
+        # Retrieve similar routing memories
+        candidates = self.store.retrieve_by_similarity(
+            embedding, k=10, action_type="routing",
+        )
+        if not candidates:
+            return 0.0
+
+        # Identify the selected action
+        routing = routing_decision.data.get("routing", [])
+        selected_action = routing[0] if isinstance(routing, list) and routing else str(routing)
+
+        # Get selected memory's current Q-value
+        selected_q = 0.5
+        memory_id = routing_decision.memory_id
+        if memory_id:
+            mem = self.store.get_by_id(memory_id)
+            if mem:
+                selected_q = mem.q_value
+
+        # Collect alternative Q-values (different actions, skip unlearned defaults)
+        alt_q_values = []
+        for c in candidates:
+            if c.action != selected_action and abs(c.q_value - 0.5) > 0.001:
+                alt_q_values.append(c.q_value)
+
+        if not alt_q_values:
+            return 0.0
+
+        if reward > 0:
+            # Success: push selected Q above the best alternative
+            max_alt_q = max(alt_q_values)
+            gap = max_alt_q + margin - selected_q
+            if gap > 0:
+                return min(max_adj, margin * gap)
+        else:
+            # Failure: push selected Q below the worst alternative
+            min_alt_q = min(alt_q_values)
+            gap = selected_q + margin - min_alt_q
+            if gap > 0:
+                return max(-max_adj, -margin * gap)
+
+        return 0.0
 
     def _update_routing_memory(
         self,

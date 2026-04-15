@@ -63,6 +63,7 @@ def score_answer(
         "substring": _score_substring,
         "f1": _score_f1,
         "llm_judge": _score_llm_judge,
+        "math_verify": _score_math_verify,
     }
 
     scorer = scorers.get(scoring_method)
@@ -637,6 +638,51 @@ def _score_llm_judge(
     except Exception:
         # If judge is unavailable, fall back to substring match
         return expected.strip().lower() in candidate.lower()
+
+
+def _score_math_verify(
+    answer: str, expected: str, config: dict[str, Any]
+) -> bool:
+    """Score using Math-Verify library for symbolic mathematical comparison.
+
+    Used for: MATH-500 — where equivalent expressions should match
+    (e.g. \\frac{mg}{2} ≡ mg/2, x^2+1 ≡ 1+x^2, {1,2,3} ≡ {3,1,2}).
+
+    Requires: pip install math-verify (Apache-2.0, HuggingFace).
+    Falls back to exact_match if not installed.
+
+    Config:
+        extraction_mode: "latex" (default), "expr", or "string"
+    """
+    try:
+        from math_verify import parse, verify
+    except ImportError:
+        # Fallback to exact_match if math-verify not installed
+        return _score_exact_match(answer, expected, config)
+
+    # Extract answer from \boxed{} if present
+    boxed = re.search(r'\\boxed\{(.+?)\}', answer, re.DOTALL)
+    candidate = boxed.group(1).strip() if boxed else answer.strip()
+
+    # Also try extracting from common answer patterns
+    if not boxed:
+        for pattern in [
+            r'(?:answer|result)\s*(?:is|=)\s*[:\s]*(.+?)(?:\.|$)',
+            r'####\s*(.+?)$',
+            r'=\s*(.+?)$',
+        ]:
+            m = re.search(pattern, answer, re.IGNORECASE | re.MULTILINE)
+            if m:
+                candidate = m.group(1).strip()
+                break
+
+    try:
+        gold = parse(expected)
+        pred = parse(candidate)
+        return verify(gold, pred)
+    except Exception:
+        # If parsing fails, fall back to exact_match
+        return _score_exact_match(answer, expected, config)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
