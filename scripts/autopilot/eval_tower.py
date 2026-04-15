@@ -33,6 +33,36 @@ sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
 from seeding_orchestrator import call_orchestrator_forced  # noqa: E402
 from seeding_scoring import score_answer_deterministic  # noqa: E402
 
+# Branching density: intake-378 deep-dive (arxiv:2604.01702).
+# High branching (>0.30 Propose step ratio) = unproductive exploration.
+import re as _re
+
+_THINK_RE = _re.compile(r"<think>(.*?)</think>", _re.DOTALL)
+_BRANCH_KEYWORDS = _re.compile(
+    r"\b(?:perhaps|another\s+approach|alternatively|let\s+me\s+try|"
+    r"wait[\s,]|let\s+me\s+reconsider|maybe\s+(?:I|we)\s+should|"
+    r"on\s+second\s+thought|what\s+if)\b",
+    _re.IGNORECASE,
+)
+# Approximate reasoning step boundary: sentence-ending punctuation or newlines.
+_STEP_BOUNDARY = _re.compile(r"[.!?\n]")
+
+
+def _compute_branching_density(answer: str) -> float:
+    """Compute fraction of reasoning steps containing branching keywords.
+
+    Returns 0.0 if no <think> blocks are present.
+    """
+    blocks = _THINK_RE.findall(answer)
+    if not blocks:
+        return 0.0
+    think_text = " ".join(blocks)
+    steps = [s.strip() for s in _STEP_BOUNDARY.split(think_text) if len(s.strip()) > 10]
+    if not steps:
+        return 0.0
+    branching_steps = sum(1 for s in steps if _BRANCH_KEYWORDS.search(s))
+    return branching_steps / len(steps)
+
 
 @dataclass
 class QuestionResult:
@@ -51,6 +81,7 @@ class QuestionResult:
     partial: bool = False  # Inference completed with partial output (read_timeout)
     degraded: bool = False  # Inference completed in degraded mode
     confidence: float = 0.0  # EV-1: Model confidence proxy (0-1). Initially float(correct); upgraded to logprobs when available.
+    branching_density: float = 0.0  # Fraction of <think> steps with branching keywords (intake-378)
 
 
 # EV-6: Cross-family verification constraint.
@@ -191,6 +222,7 @@ class EvalTower:
                 partial=bool(resp.get("partial", False)),
                 degraded=bool(resp.get("degraded", False)),
                 confidence=confidence,
+                branching_density=_compute_branching_density(answer),
             )
         except Exception as e:
             elapsed = time.time() - start
@@ -297,6 +329,10 @@ class EvalTower:
                 instruction_tokens,
             )
 
+        # Branching density: average across questions with <think> blocks
+        bd_vals = [r.branching_density for r in results if r.branching_density > 0]
+        avg_branching = sum(bd_vals) / len(bd_vals) if bd_vals else 0.0
+
         return EvalResult(
             tier=tier,
             quality=quality,
@@ -319,6 +355,7 @@ class EvalTower:
             ece=ece,
             auroc=auroc,
             calibration_violations=cal_violations,
+            branching_density=avg_branching,
         )
 
     def _count_instruction_tokens(self) -> int:

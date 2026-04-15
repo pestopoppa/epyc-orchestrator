@@ -64,6 +64,10 @@ class EvalResult:
     ece: float = 0.0  # Expected Calibration Error (10-bin). Lower = better calibrated.
     auroc: float = 0.0  # Area Under ROC Curve. Higher = better discrimination. 0 if degenerate.
     calibration_violations: int = 0  # Questions where |confidence - correctness| > 0.5
+    # Branching density: fraction of reasoning steps that are divergent/exploratory.
+    # From intake-378 deep-dive: high branching (>0.30) = unproductive exploration.
+    # 0.0 when no <think> blocks are present in eval answers.
+    branching_density: float = 0.0
 
     @property
     def objectives(self) -> tuple[float, float, float, float]:
@@ -102,6 +106,9 @@ class EvalResult:
             lines.append(f"METRIC auroc: {self.auroc:.4f}")
         if self.calibration_violations > 0:
             lines.append(f"METRIC calibration_violations: {self.calibration_violations}")
+        # Branching density (intake-378)
+        if self.branching_density > 0:
+            lines.append(f"METRIC branching_density: {self.branching_density:.4f}")
         # AM compaction telemetry
         if self.avg_prompt_tokens > 0:
             lines.append(f"METRIC avg_prompt_tokens: {self.avg_prompt_tokens:.0f}")
