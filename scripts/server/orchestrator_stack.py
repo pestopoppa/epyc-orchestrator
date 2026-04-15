@@ -1319,6 +1319,7 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env["TMPDIR"] = str(_PATHS["tmp_dir"])
     # Feature flags: enable production capabilities
     env["ORCHESTRATOR_MEMRL"] = "1"
+    env["ORCHESTRATOR_ROUTING_CLASSIFIER"] = "1"
     env["ORCHESTRATOR_TOOLS"] = "1"
     env["ORCHESTRATOR_SCRIPTS"] = "1"
     # NOTE: Do NOT set ORCHESTRATOR_REPL here — it collides with
