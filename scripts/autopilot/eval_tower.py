@@ -50,6 +50,37 @@ class QuestionResult:
     scoring_method: str = "exact_match"
     partial: bool = False  # Inference completed with partial output (read_timeout)
     degraded: bool = False  # Inference completed in degraded mode
+    confidence: float = 0.0  # EV-1: Model confidence proxy (0-1). Initially float(correct); upgraded to logprobs when available.
+
+
+# EV-6: Cross-family verification constraint.
+# Verifier model must be from a different family than generator to avoid confirmation bias.
+# See eval-tower-verification.md for research basis (confirmation bias amplifies 52%→87%).
+VERIFICATION_FAMILIES = {
+    "qwen": {"Qwen", "qwen", "QwQ"},
+    "llama": {"Llama", "llama", "Meta-Llama"},
+    "deepseek": {"DeepSeek", "deepseek"},
+    "ouro": {"Ouro", "ouro", "ByteDance"},
+    "mistral": {"Mistral", "mistral"},
+    "gemma": {"Gemma", "gemma", "Google"},
+}
+
+
+def check_cross_family(generator_model: str, verifier_model: str) -> bool:
+    """Ensure verifier is from a different model family than generator.
+
+    Returns True if cross-family constraint is satisfied (safe to proceed).
+    Returns True if either model family is unknown (permissive default).
+    """
+    def _get_family(model_name: str) -> str:
+        for family, patterns in VERIFICATION_FAMILIES.items():
+            if any(p.lower() in model_name.lower() for p in patterns):
+                return family
+        return "unknown"
+
+    gen_family = _get_family(generator_model)
+    ver_family = _get_family(verifier_model)
+    return gen_family != ver_family or gen_family == "unknown"
 
 
 class EvalTower:
@@ -137,6 +168,13 @@ class EvalTower:
                     scoring_config=scoring_config,
                 )
 
+            # EV-1: Confidence proxy. Binary for now (correct=1.0, incorrect=0.0).
+            # When logprob passthrough lands, replace with model output confidence.
+            # For code_execution, scoring_config may contain a pass_rate (0-1).
+            confidence = float(correct)
+            if scoring_method == "code_execution":
+                confidence = float(scoring_config.get("pass_rate", correct))
+
             return QuestionResult(
                 question_id=qid,
                 suite=suite,
@@ -152,6 +190,7 @@ class EvalTower:
                 scoring_method=scoring_method,
                 partial=bool(resp.get("partial", False)),
                 degraded=bool(resp.get("degraded", False)),
+                confidence=confidence,
             )
         except Exception as e:
             elapsed = time.time() - start
@@ -214,6 +253,35 @@ class EvalTower:
         total_routed = sum(route_counts.values()) or 1
         routing_dist = {k: v / total_routed for k, v in route_counts.items()}
 
+        # EV-2: Calibration metrics (ECE, AUC, calibration violations)
+        confidences = [r.confidence for r in results if not r.error]
+        correctness_vals = [float(r.correct) for r in results if not r.error]
+        ece = 0.0
+        auroc = 0.0
+        cal_violations = 0
+        if confidences:
+            n_bins = 10
+            for i in range(n_bins):
+                lo = i / n_bins
+                hi = (i + 1) / n_bins
+                mask = [lo <= c < hi for c in confidences]
+                bin_count = sum(mask)
+                if bin_count > 0:
+                    bin_acc = sum(cr for cr, m in zip(correctness_vals, mask) if m) / bin_count
+                    bin_conf = sum(c for c, m in zip(confidences, mask) if m) / bin_count
+                    ece += (bin_count / len(confidences)) * abs(bin_acc - bin_conf)
+            # AUC: only meaningful with non-degenerate confidence (>2 distinct values)
+            distinct_conf = len(set(round(c, 6) for c in confidences))
+            if distinct_conf > 2 and len(set(correctness_vals)) > 1:
+                try:
+                    from sklearn.metrics import roc_auc_score
+                    auroc = roc_auc_score(correctness_vals, confidences)
+                except (ImportError, ValueError):
+                    auroc = 0.0
+            cal_violations = sum(
+                1 for c, cr in zip(confidences, correctness_vals) if abs(c - cr) > 0.5
+            )
+
         # AP-16: Instruction token budget
         instruction_tokens = self._count_instruction_tokens()
         avg_prompt_tokens = sum(len(r.prompt) // 4 for r in results) / len(results)
@@ -248,6 +316,9 @@ class EvalTower:
             partial_count=sum(1 for r in results if r.partial),
             degraded_count=sum(1 for r in results if r.degraded),
             avg_prompt_tokens=avg_prompt_tokens,
+            ece=ece,
+            auroc=auroc,
+            calibration_violations=cal_violations,
         )
 
     def _count_instruction_tokens(self) -> int:

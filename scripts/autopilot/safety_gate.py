@@ -60,6 +60,10 @@ class EvalResult:
     # AM KV compaction telemetry (populated when compact action is used)
     avg_prompt_tokens: float = 0.0  # Average context length across results
     compaction_events: int = 0  # Number of compacted slots in this eval
+    # EV-2: Calibration metrics (from eval-tower-verification.md)
+    ece: float = 0.0  # Expected Calibration Error (10-bin). Lower = better calibrated.
+    auroc: float = 0.0  # Area Under ROC Curve. Higher = better discrimination. 0 if degenerate.
+    calibration_violations: int = 0  # Questions where |confidence - correctness| > 0.5
 
     @property
     def objectives(self) -> tuple[float, float, float, float]:
@@ -92,6 +96,12 @@ class EvalResult:
             lines.append(f"METRIC partial_count: {self.partial_count}")
         if self.degraded_count > 0:
             lines.append(f"METRIC degraded_count: {self.degraded_count}")
+        # EV-2: Calibration metrics
+        lines.append(f"METRIC ece: {self.ece:.4f}")
+        if self.auroc > 0:
+            lines.append(f"METRIC auroc: {self.auroc:.4f}")
+        if self.calibration_violations > 0:
+            lines.append(f"METRIC calibration_violations: {self.calibration_violations}")
         # AM compaction telemetry
         if self.avg_prompt_tokens > 0:
             lines.append(f"METRIC avg_prompt_tokens: {self.avg_prompt_tokens:.0f}")
