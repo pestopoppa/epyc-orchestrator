@@ -89,50 +89,72 @@ def train(
         batch_size=batch_size,
     )
 
-    # Final evaluation
-    probs, _ = clf.forward(X)
-    preds = np.argmax(probs, axis=1)
-    train_acc = float((preds == y).mean())
+    # ── Evaluation on held-out validation set ──
+    # Re-split to get a clean val set for evaluation + calibration
+    rng = np.random.default_rng(42)
+    indices = np.arange(X.shape[0])
+    rng.shuffle(indices)
+    n_val = max(1, int(X.shape[0] * 0.2))
+    val_idx = indices[:n_val]
+    train_idx = indices[n_val:]
 
-    # Per-action accuracy
-    logger.info("\nPer-action accuracy:")
+    X_val, y_val = X[val_idx], y[val_idx]
+
+    # Train accuracy
+    probs_train, _ = clf.forward(X[train_idx])
+    preds_train = np.argmax(probs_train, axis=1)
+    train_acc = float((preds_train == y[train_idx]).mean())
+
+    # Val accuracy
+    probs_val, _ = clf.forward(X_val)
+    preds_val = np.argmax(probs_val, axis=1)
+    val_acc = float((preds_val == y_val).mean())
+
+    # Per-action accuracy (on val set)
+    logger.info("\nPer-action accuracy (validation set, %d samples):", len(y_val))
     for idx, action in sorted(label_map.items()):
-        mask = y == idx
+        mask = y_val == idx
         if mask.sum() > 0:
-            acc = float((preds[mask] == y[mask]).mean())
+            acc = float((preds_val[mask] == y_val[mask]).mean())
             logger.info("  [%d] %s: %.1f%% (%d samples)", idx, action, acc * 100, int(mask.sum()))
 
-    # Confusion matrix (compact)
+    # Confusion matrix on val set
     n_actions = len(label_map)
     confusion = np.zeros((n_actions, n_actions), dtype=np.int32)
-    for true, pred in zip(y, preds):
+    for true, pred in zip(y_val, preds_val):
         confusion[true, pred] += 1
 
-    logger.info("\nConfusion matrix (rows=true, cols=predicted):")
+    logger.info("\nConfusion matrix — validation (rows=true, cols=predicted):")
     header = "      " + "".join(f"{i:>6}" for i in range(n_actions))
     logger.info(header)
     for i in range(n_actions):
+        if confusion[i].sum() == 0:
+            continue
         row = f"  [{i}] " + "".join(f"{confusion[i, j]:>6}" for j in range(n_actions))
         logger.info(row)
+
+    # ── Calibrate per-class confidence thresholds ──
+    logger.info("\nCalibrating per-class confidence thresholds...")
+    thresholds = clf.calibrate_thresholds(X_val, y_val, target_precision=0.9)
 
     # Random baseline
     random_baseline = 1.0 / max(n_actions, 1)
 
-    # Save weights
+    # Save weights + thresholds
     clf.save(output_path)
 
     elapsed = time.time() - t0
     logger.info(
         "\n=== Training complete in %.1fs ===\n"
-        "  Train accuracy: %.1f%% (random baseline: %.1f%%)\n"
+        "  Train accuracy: %.1f%%\n"
+        "  Val accuracy: %.1f%% (random baseline: %.1f%%)\n"
         "  Best val loss: %.4f\n"
-        "  Final val acc: %.1f%%\n"
         "  Weights: %s",
         elapsed,
         train_acc * 100,
+        val_acc * 100,
         random_baseline * 100,
         min(history["val_loss"]) if history["val_loss"] else float("inf"),
-        history["val_acc"][-1] * 100 if history["val_acc"] else 0.0,
         output_path,
     )
 

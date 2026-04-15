@@ -189,7 +189,26 @@ class StructuralLab:
 
         results: dict[str, Any] = {"memory_count": memory_count}
 
-        # Train MLP classifier
+        # Extract training data (applies label normalization, uses reembedded.npz if available)
+        try:
+            extract_script = ORCH_ROOT / "scripts" / "graph_router" / "extract_training_data.py"
+            if extract_script.exists():
+                proc = subprocess.run(
+                    ["python", str(extract_script)],
+                    capture_output=True, text=True, timeout=120,
+                    cwd=str(ORCH_ROOT),
+                )
+                results["extraction"] = {
+                    "status": "ok" if proc.returncode == 0 else "error",
+                    "stdout": proc.stdout[-500:],
+                    "stderr": proc.stderr[-500:],
+                }
+            else:
+                results["extraction"] = {"status": "script_not_found"}
+        except Exception as e:
+            results["extraction"] = {"status": "error", "error": str(e)}
+
+        # Train MLP classifier (depends on extracted data above)
         try:
             classifier_script = ORCH_ROOT / "scripts" / "graph_router" / "train_routing_classifier.py"
             if classifier_script.exists():

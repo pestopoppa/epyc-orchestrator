@@ -243,3 +243,52 @@ class TestRoutingClassifier:
         probs, cache = classifier.forward(X)
         assert probs.shape == (16, 4)
         assert np.allclose(probs.sum(axis=1), 1.0, atol=1e-5)
+
+    def test_predict_action_with_class_thresholds(self):
+        from orchestration.repl_memory.routing_classifier import RoutingClassifier
+        clf = RoutingClassifier(
+            input_dim=1031, n_actions=4,
+            label_map={0: "frontdoor", 1: "coder", 2: "architect", 3: "worker"},
+            class_thresholds={0: 0.99, 1: 0.99, 2: 0.99, 3: 0.99},  # Very high
+        )
+        x = np.random.randn(1031).astype(np.float32)
+        # With near-impossible thresholds, most predictions should return None
+        action, conf = clf.predict_action(x)
+        # Either it's None (below threshold) or the model is extremely confident
+        if action is not None:
+            assert conf >= 0.99
+
+    def test_predict_action_no_thresholds_always_returns_action(self, classifier):
+        x = np.random.randn(1031).astype(np.float32)
+        action, conf = classifier.predict_action(x)
+        # Without thresholds, should always return an action
+        assert action is not None
+        assert action in ["frontdoor", "coder", "architect", "worker"]
+
+    def test_calibrate_thresholds(self, classifier):
+        rng = np.random.default_rng(42)
+        X = rng.standard_normal((200, 1031)).astype(np.float32)
+        y = rng.integers(0, 4, 200)
+        q = np.ones(200, dtype=np.float32)
+        classifier.train(X, y, q, epochs=30, lr=0.01, patience=100, batch_size=32)
+
+        thresholds = classifier.calibrate_thresholds(X, y, target_precision=0.8)
+        assert len(thresholds) == 4
+        for cls_idx, thr in thresholds.items():
+            assert 0.0 <= thr <= 1.0
+
+    def test_save_load_roundtrip_with_thresholds(self, tmp_path):
+        from orchestration.repl_memory.routing_classifier import RoutingClassifier
+        clf = RoutingClassifier(
+            input_dim=1031, n_actions=4,
+            label_map={0: "a", 1: "b", 2: "c", 3: "d"},
+            class_thresholds={0: 0.5, 1: 0.6, 2: 0.7, 3: 0.8},
+        )
+        path = tmp_path / "weights_with_thresholds.npz"
+        clf.save(path)
+
+        loaded = RoutingClassifier.load(path)
+        assert loaded is not None
+        assert len(loaded.class_thresholds) == 4
+        for cls_idx in range(4):
+            assert abs(loaded.class_thresholds[cls_idx] - clf.class_thresholds[cls_idx]) < 1e-5

@@ -768,7 +768,9 @@ class HybridRouter:
             features = self._build_classifier_features(task_ir)
             if features is not None:
                 action, confidence = self.routing_classifier.predict_action(features)
-                if confidence >= self.classifier_confidence_threshold:
+                # Per-class thresholds: action is None when below threshold
+                # Global threshold: fallback for classifiers without per-class calibration
+                if action is not None and confidence >= self.classifier_confidence_threshold:
                     routing = self._parse_routing_action(action)
                     if routing:
                         self.retriever.update_last_role(routing[0])
@@ -856,7 +858,7 @@ class HybridRouter:
             features = self._build_classifier_features(task_ir)
             if features is not None:
                 action, confidence = self.routing_classifier.predict_action(features)
-                if confidence >= self.classifier_confidence_threshold:
+                if action is not None and confidence >= self.classifier_confidence_threshold:
                     routing, mode = self._parse_routing_action_with_mode(action)
                     if routing:
                         self.retriever.update_last_role(routing[0])
