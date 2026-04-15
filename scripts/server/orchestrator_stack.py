@@ -970,13 +970,11 @@ def build_server_command(
         if role_config.name in _V2_ROLES and LLAMA_SERVER_V2.exists():
             cmd.append("--kv-hadamard")
 
-    # Cap reasoning budget for architect roles. Uncapped thinking causes infinite
-    # <think> loops on Qwen3.5 hybrids. Budget allows useful reasoning (plan design,
-    # dependency analysis) while preventing runaway loops.
-    _REASONING_BUDGET_ROLES = {"architect_general": 1024, "architect_coding": 1024}
-    if role_config.name in _REASONING_BUDGET_ROLES:
-        budget = _REASONING_BUDGET_ROLES[role_config.name]
-        cmd.extend(["--reasoning-budget", str(budget)])
+    # Disable reasoning for architect_general — Qwen3.5 hybrids enter infinite
+    # <think> loops even with budget cap. architect_coding (REAP-246B, pure MoE)
+    # keeps default reasoning (no loop issue on non-hybrid architectures).
+    if role_config.name == "architect_general":
+        cmd.extend(["--reasoning", "off"])
 
     # mlock: lock model weights in RAM to prevent page cache eviction.
     # Validated in S2: 30x latency improvement under memory pressure.
