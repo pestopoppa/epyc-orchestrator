@@ -55,16 +55,33 @@ The orchestrator includes an autonomous optimization loop (AutoPilot) that conti
 
 ### Diagnostic Plots
 
-| | |
-|:---:|:---:|
-| ![Objectives Overview](docs/autopilot/objectives_2x2.png) | ![Pareto Frontier](docs/autopilot/pareto_frontier_2d.png) |
-| **Objectives Overview** — 4-objective optimization progress | **Pareto Frontier** — quality vs speed tradeoff |
-| ![Hypervolume Trend](docs/autopilot/hypervolume_trend.png) | ![Species Effectiveness](docs/autopilot/species_effectiveness.png) |
-| **Hypervolume Trend** — optimization progress over trials | **Species Effectiveness** — which mutation strategies produce gains |
-| ![Per-Suite Quality](docs/autopilot/per_suite_quality.png) | ![Trial Timeline](docs/autopilot/trial_timeline.png) |
-| **Per-Suite Quality** — breakdown by benchmark | **Trial Timeline** — chronological trial outcomes |
-| ![Memory Convergence](docs/autopilot/memory_convergence.png) | |
-| **Memory Convergence** — episodic memory utilization | |
+#### Objectives Overview
+![Objectives Overview](docs/autopilot/objectives_2x2.png)
+Four-objective optimization tracked over 192 trials: quality (Claude-as-Judge 0-3), speed (end-to-end tokens/s), cost (normalized 0-1), and reliability (fraction of successful completions). Quality converged at 2.1/3.0 by trial ~10, speed climbed from near-zero (cold start, broken telemetry in early trials) to 64 t/s by trial ~50, and reliability stabilized at 80%.
+
+#### Pareto Frontier: Quality vs Speed
+![Pareto Frontier](docs/autopilot/pareto_frontier_2d.png)
+Quality-speed tradeoff across all Pareto-optimal configurations. Speed values (47-65 t/s) represent **end-to-end pipeline throughput**, not single-model generation speed. These exceed individual model speeds (4-39 t/s) because the orchestrator blends tiers: most requests route to fast workers (39 t/s), REPL tool-use tasks amortize inference latency across code execution rounds, multi-instance routing parallelizes concurrent sessions across 15 HOT instances, and speculative decoding accelerates all tiers. The frontier shows two clusters: a dominated region at ~48 t/s / quality ~1.2, and the optimal cluster at ~64 t/s / quality ~2.1 discovered by NumericSwarm and PromptForge species.
+
+#### Hypervolume Trend
+![Hypervolume Trend](docs/autopilot/hypervolume_trend.png)
+Hypervolume indicator (higher = better) measures the volume of objective space dominated by the Pareto archive. The step increases around trials 115 and 125 correspond to PromptForge discovering prompt mutations that improved quality without sacrificing speed. The plateau after trial ~130 indicates the optimization frontier has converged — further trials explore but do not expand the dominated region.
+
+#### Species Effectiveness
+![Species Effectiveness](docs/autopilot/species_effectiveness.png)
+Pareto improvement rate per mutation species — the fraction of trials from each species that expanded the Pareto frontier. Seeder (baseline configurations) leads at 36% (27/75 trials) because early exploration covers uncharted space. StructuralLab (24%, 6/25) tests structural prompt changes. NumericSwarm (26%, 11/42) tunes numeric hyperparameters (temperature, token budgets, timeouts). PromptForge (20%, 9/46) mutates system prompt phrasing. All four species contribute, confirming that no single strategy dominates.
+
+#### Per-Suite Quality
+![Per-Suite Quality](docs/autopilot/per_suite_quality.png)
+Quality breakdown by benchmark suite for the current best configuration. Scores are Claude-as-Judge (0-3 scale) evaluated against reference answers. Variation across suites highlights which domains benefit most from prompt optimization and which remain challenging.
+
+#### Trial Timeline
+![Trial Timeline](docs/autopilot/trial_timeline.png)
+Chronological view of all 192 trials, colored by species. Bar height shows quality delta versus baseline. The dense cluster of high-delta trials (0.93+) after trial ~25 indicates the optimizer found a strong prompt region early and subsequent species refine within it. Negative-delta bars (below zero) represent regressions caught and rejected by the safety gate.
+
+#### Memory Convergence
+![Memory Convergence](docs/autopilot/memory_convergence.png)
+Q-value temporal difference (TD) error magnitude for the episodic memory system's routing policy. The moving average (MA-10) sits at zero with the convergence threshold (dashed green) never breached, indicating the MemRL routing weights have fully converged — the system's learned routing preferences are stable and no longer updating.
 
 ## Quick Start
 
