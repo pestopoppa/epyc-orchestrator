@@ -10,7 +10,16 @@ The orchestrator includes an autonomous optimization loop (AutoPilot) that conti
 
 **192 trials completed** — quality stable at 2.1/3.0, speed at 64 t/s, 80% reliability. AutoPilot uses 4 species (Seeder, NumericSwarm, PromptForge, StructuralLab) to explore prompt mutations, hyperparameter tuning, and feature flag combinations.
 
-![Per-Suite Quality](docs/autopilot/per_suite_quality.png)
+### Diagnostic Plots
+
+| | |
+|:---:|:---:|
+| ![Pareto Frontier](docs/autopilot/pareto_frontier_2d.png) | ![Hypervolume Trend](docs/autopilot/hypervolume_trend.png) |
+| **Pareto Frontier** — quality vs speed tradeoff | **Hypervolume Trend** — optimization progress over trials |
+| ![Per-Suite Quality](docs/autopilot/per_suite_quality.png) | ![Species Effectiveness](docs/autopilot/species_effectiveness.png) |
+| **Per-Suite Quality** — breakdown by benchmark | **Species Effectiveness** — which mutation strategies produce gains |
+| ![Trial Timeline](docs/autopilot/trial_timeline.png) | ![Memory Convergence](docs/autopilot/memory_convergence.png) |
+| **Trial Timeline** — chronological trial outcomes | **Memory Convergence** — episodic memory utilization |
 
 ## Production Stack
 
