@@ -18,6 +18,15 @@ FINAL_VAR(var_name)
     Use when the answer is stored in a variable.
     Example: FINAL_VAR("combined_summary")
 
+web_search(query, max_results=5)
+    Search the web and return results. USE THIS for any factual question
+    where you are not 100% certain of the answer.
+    Example: results = web_search("Kazimierz Bartel birthplace")
+
+web_fetch(url, max_chars=10000)
+    Fetch the content of a specific URL.
+    Example: page = web_fetch("https://en.wikipedia.org/wiki/Kazimierz_Bartel")
+
 peek(n=500)
     Return the first n characters of context.
     Use this to understand the structure of the input before processing.

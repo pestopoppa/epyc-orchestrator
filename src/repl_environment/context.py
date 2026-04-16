@@ -387,15 +387,24 @@ class _ContextMixin:
         chain_index = int(getattr(self, "_active_tool_chain_index", 0))
         caller_type = "chain" if chain_id else "direct"
 
-        result = self.tool_registry.invoke(
-            tool_name,
-            self.role,
-            caller_type=caller_type,
-            chain_id=chain_id,
-            chain_index=chain_index,
-            context=getattr(self, "tool_context", None),
-            **kwargs,
-        )
+        # Fall back to REPL globals for tools like run_python_code that are
+        # registered as direct REPL functions, not in the tool registry.
+        try:
+            result = self.tool_registry.invoke(
+                tool_name,
+                self.role,
+                caller_type=caller_type,
+                chain_id=chain_id,
+                chain_index=chain_index,
+                context=getattr(self, "tool_context", None),
+                **kwargs,
+            )
+        except ValueError:
+            repl_globals = getattr(self, "_globals", None)
+            if repl_globals and tool_name in repl_globals and callable(repl_globals[tool_name]):
+                result = repl_globals[tool_name](**kwargs)
+            else:
+                raise
         if chain_id:
             self._active_tool_chain_index = chain_index + 1
 

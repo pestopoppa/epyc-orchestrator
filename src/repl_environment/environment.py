@@ -412,6 +412,7 @@ class REPLEnvironment(
             "archive_file": self._archive_file,
             "archive_search": self._archive_search,
             # Web tools
+            "web_search": self._web_search,
             "web_fetch": self._web_fetch,
             # Combined operations (feature-gated by REPL_COMBINED_OPS env var)
             "batch_web_search": self._batch_web_search,
