@@ -58,8 +58,9 @@ TOOL_GROUPS: dict[str, frozenset[str]] = {
 # Models web-search instead of reasoning on these domains, degrading REPL accuracy.
 # Used to set no_web=True in tool context for these task types.
 # Explicitly excluded: long_context, agentic (permanently 0.00 — web search is EXPLORE).
+# coder removed: with compute-first prompt priority, web search helps for API/library refs.
 NO_WEB_TASK_TYPES: frozenset[str] = frozenset({
-    "math", "coder", "thinking", "instruction_precision",
+    "math", "thinking", "instruction_precision",
 })
 
 
