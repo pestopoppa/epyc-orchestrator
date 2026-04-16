@@ -107,6 +107,8 @@ SIGNAL_WEIGHTS: dict[str, float] = {
     "tool_discovery_missing": 0.3,
     "malformed_delegation": 0.5,
     "coder_on_knowledge_task": 0.5,
+    # Specialist REPL wasted turns (errors during delegation)
+    "specialist_repl_errors": 0.5,
 }
 
 # ── Restart phrases for self-doubt detection ──
@@ -535,6 +537,19 @@ def detect_distill_batch_latency(
     return False
 
 
+def detect_specialist_repl_errors(delegation_events: list[dict]) -> bool:
+    """Specialist REPL loop had errors that wasted inference turns.
+
+    Fires when any delegation event contains repl_turn_errors, indicating the
+    specialist hit errors (NameError, unknown tool, dedup, etc.) that burned
+    LLM calls without producing useful output.
+    """
+    for ev in delegation_events:
+        if ev.get("repl_turn_errors"):
+            return True
+    return False
+
+
 # ── Aggregation ──
 
 
@@ -610,6 +625,8 @@ def compute_anomaly_signals(
         "coder_on_knowledge_task": detect_coder_on_knowledge_task(
             scoring_method, role, deleg,
         ),
+        # Specialist REPL wasted turns
+        "specialist_repl_errors": detect_specialist_repl_errors(deleg),
     }
 
 

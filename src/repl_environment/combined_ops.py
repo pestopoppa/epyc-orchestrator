@@ -44,6 +44,33 @@ class _CombinedOpsMixin:
         _validate_file_path: Callable[[str], tuple[bool, str | None]] — path validation
     """
 
+    def _web_search(self, query: str, max_results: int = 5) -> str:
+        """Search the web for a query and return results.
+
+        Args:
+            query: Search query string.
+            max_results: Maximum number of results (default 5).
+
+        Returns:
+            Search results as formatted text.
+        """
+        if self.tool_registry is None:
+            return "[ERROR: No tool registry configured — cannot invoke web_search]"
+        try:
+            result = self.tool_registry.invoke(
+                "web_search",
+                self.role,
+                caller_type="direct",
+                query=query,
+                max_results=max_results,
+            )
+            import json as _json
+            if isinstance(result, (dict, list)):
+                return _json.dumps(result, indent=2, default=str)
+            return str(result)
+        except Exception as exc:
+            return f"[ERROR: web_search failed: {exc}]"
+
     def _batch_web_search(self, queries: list[str], max_results: int = 3) -> str:
         """Run multiple web searches and return consolidated results.
 

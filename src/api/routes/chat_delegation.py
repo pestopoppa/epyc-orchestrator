@@ -231,6 +231,24 @@ def _to_report_handle_text(handle: dict[str, str], summary: str) -> str:
     )
 
 
+_CODER_ROLES = frozenset({"coder_escalation", "worker_coder", "coder_primary"})
+_SEARCH_ROLES = frozenset({"worker_explore", "worker_fast", "worker_general"})
+
+_CODER_PREAMBLE = "You are {role}. Execute the delegated coding task quickly.\n\n"
+
+_SEARCH_PREAMBLE = (
+    "You are {role}. Execute the delegated task.\n\n"
+    "You have a Python REPL with these tools:\n"
+    "  web_search(query)        — search the web, returns results\n"
+    "  web_fetch(url)           — fetch a URL's content\n"
+    "  CALL(\"web_research\", query=\"...\") — deep web research with synthesis\n"
+    "For factual questions, ALWAYS use web_search() before answering.\n"
+    "For math/computation, write Python code — do NOT compute in your head.\n\n"
+)
+
+_DEFAULT_PREAMBLE = "You are {role}. Execute the delegated task.\n\n"
+
+
 def _build_compact_specialist_prompt(
     delegate_to: str,
     question: str,
@@ -249,8 +267,17 @@ def _build_compact_specialist_prompt(
             role_instructions = role_text.strip() + "\n\n"
     except Exception:
         pass
+
+    # Role-appropriate preamble
+    if delegate_to in _CODER_ROLES:
+        preamble = _CODER_PREAMBLE.format(role=delegate_to)
+    elif delegate_to in _SEARCH_ROLES:
+        preamble = _SEARCH_PREAMBLE.format(role=delegate_to)
+    else:
+        preamble = _DEFAULT_PREAMBLE.format(role=delegate_to)
+
     prompt = (
-        f"You are {delegate_to}. Execute the delegated coding task quickly.\n\n"
+        f"{preamble}"
         f"{role_instructions}"
         f"User question:\n{question}\n\n"
         f"Architect guidance:\n{brief}\n\n"
@@ -945,6 +972,7 @@ def _run_specialist_loop(
     timed_out = False
     report_rescued = False
     infer_meta_last: dict[str, Any] = {}
+    repl_turn_errors: list[dict] = []  # Per-turn error tracking for observability
     cfg = _delegation_config()
 
     # Both react and repl modes use the same REPL loop
@@ -1095,14 +1123,18 @@ def _run_specialist_loop(
             # another turn on the same silent execution.
             _code_hash = hashlib.sha256(code.encode()).hexdigest()
             if _code_hash == _prev_code_hash:
-                deleg_last_error = (
-                    "You generated the exact same code as last turn. "
-                    "It didn't work because FINAL() was never reached at top level. "
-                    "Do NOT wrap code in main(). Write flat top-level code ending with FINAL(answer)."
-                )
-                deleg_last_output = ""
-                _prev_code_hash = _code_hash
-                continue
+                # Identical code won't produce a different result — stop looping.
+                # Return the raw output as a rescued report instead of burning
+                # another LLM call that will likely repeat the same code again.
+                repl_turn_errors.append({"turn": _turn, "error": "dedup_identical_code"})
+                report = (raw_deleg_output or deleg_last_output or "").strip()
+                if report:
+                    report_rescued = True
+                    log.info(
+                        "Dedup guard: identical code on turn %d, returning existing output as report (%d chars)",
+                        _turn, len(report),
+                    )
+                break
             _prev_code_hash = _code_hash
             # Prose report rescue: specialist answered in prose without
             # code or FINAL().  In delegation, the specialist's prose IS
@@ -1156,6 +1188,7 @@ def _run_specialist_loop(
                     "Your output was all comments — no executable code ran. "
                     "Write Python code that computes the answer and call FINAL(answer)."
                 )
+                repl_turn_errors.append({"turn": _turn, "error": "comment_only"})
                 deleg_last_output = ""
                 continue
             exec_started = time.perf_counter()
@@ -1178,6 +1211,24 @@ def _run_specialist_loop(
                 break
             deleg_last_output = result.output or ""
             deleg_last_error = result.error or ""
+            if deleg_last_error:
+                # Classify the error for observability
+                _err = deleg_last_error
+                if "NameError" in _err:
+                    _err_type = "name_error"
+                elif "Unknown tool" in _err or "ValueError" in _err:
+                    _err_type = "tool_error"
+                elif "SyntaxError" in _err:
+                    _err_type = "syntax_error"
+                elif "Timeout" in _err or "timeout" in _err:
+                    _err_type = "timeout"
+                else:
+                    _err_type = "runtime_error"
+                repl_turn_errors.append({
+                    "turn": _turn,
+                    "error": _err_type,
+                    "detail": _err[:200],
+                })
         else:
             log.warning(
                 "Specialist loop turn cap reached: role=%s mode=%s turns=%d",
@@ -1225,10 +1276,10 @@ def _run_specialist_loop(
             marker in err_text
             for marker in ("timeout", "timed out", "deadline", "lock timeout", "cancel")
         )
-        return report, 0, tools_called, phase_tool_timings, timed_out, report_rescued, infer_meta_last
+        return report, 0, tools_called, phase_tool_timings, timed_out, report_rescued, infer_meta_last, repl_turn_errors
     except Exception as e:
         report = f"[Delegation failed (unexpected): {e}]"
-        return report, 0, tools_called, phase_tool_timings, timed_out, report_rescued, infer_meta_last
+        return report, 0, tools_called, phase_tool_timings, timed_out, report_rescued, infer_meta_last, repl_turn_errors
 
     return (
         report,
@@ -1238,6 +1289,7 @@ def _run_specialist_loop(
         timed_out,
         report_rescued,
         infer_meta_last,
+        repl_turn_errors,
     )
 
 
@@ -1553,7 +1605,7 @@ def _architect_delegated_answer_inner(
                 task_id=primitives.get_request_task_id(),
                 priority=primitives.get_request_priority(),
             ):
-                report, deleg_tools, deleg_tools_called, phase_tool_timings, specialist_timed_out, report_rescued, specialist_infer_meta = _run_specialist_loop(
+                report, deleg_tools, deleg_tools_called, phase_tool_timings, specialist_timed_out, report_rescued, specialist_infer_meta, specialist_repl_errors = _run_specialist_loop(
                     question,
                     context,
                     brief,
@@ -1624,6 +1676,7 @@ def _architect_delegated_answer_inner(
                     "tokens": specialist_infer_meta.get("tokens"),
                     "llm_elapsed_ms": specialist_infer_meta.get("llm_elapsed_ms"),
                 },
+                "repl_turn_errors": specialist_repl_errors,
             }
         )
 

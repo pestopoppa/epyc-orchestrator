@@ -287,6 +287,9 @@ def extract_code_from_response(response: str) -> str:
             return True
         if ("=" in stripped or "()" in stripped) and not re.match(r"^[A-Z][a-z]+(?:\s+[a-z]+)+", stripped):
             return True
+        # Bare triple-quote lines (closing a multi-line string) are valid code.
+        if already_in_code and stripped in ('"""', "'''"):
+            return True
         if already_in_code and (
             raw_line.startswith((" ", "\t"))
             or stripped.endswith(":")
