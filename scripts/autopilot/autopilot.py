@@ -1356,6 +1356,7 @@ def _run_loop_inner(
                     "ece": eval_result.ece,
                     "auroc": eval_result.auroc,
                     "calibration_violations": eval_result.calibration_violations,
+                    "gepa_ratio": state.get("gepa_ratio", 0.30),
                 },
                 reasoning=json.dumps(action),
                 hypothesis=hypothesis,
@@ -1474,9 +1475,13 @@ def _auto_action(
     elif species == "numeric_swarm":
         return {"type": "numeric_trial", "surface": "memrl_retrieval"}
     elif species == "prompt_forge":
-        # AP-19: 30% chance of GEPA evolutionary optimization, 70% LLM mutation
+        # AP-21: GEPA ratio knob — dynamic proportion of GEPA vs LLM mutation.
+        # Default 0.30 (30% GEPA). Tunable via autopilot_state["gepa_ratio"].
+        # Set to 1.0 after AR-3 data confirms GEPA dominance on Pareto frontier.
         import random
-        if random.random() < 0.30:
+        _state = load_state()
+        gepa_ratio = float(_state.get("gepa_ratio", 0.30))
+        if random.random() < gepa_ratio:
             return {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50}
         return {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"}
     elif species == "structural_lab":

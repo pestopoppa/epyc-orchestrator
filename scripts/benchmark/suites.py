@@ -208,6 +208,25 @@ def get_inference_params(suite: Suite, timeout_multiplier: float = 1.0) -> dict[
 
 # Role to suite mapping - comprehensive testing
 # Models get all applicable suites based on their role
+def load_scoring_verifiers_suite(dataset_name: str) -> Optional[Suite]:
+    """Load a Scoring Verifiers dataset as a Suite.
+
+    Args:
+        dataset_name: One of "HE-R", "HE-R+", "MBPP-R", "MBPP-R+".
+
+    Returns:
+        Suite object or None if dataset not available.
+    """
+    try:
+        try:
+            from scoring_verifiers_adapter import load_scoring_verifiers_suite as _load
+        except ImportError:
+            from .scoring_verifiers_adapter import load_scoring_verifiers_suite as _load
+        return _load(dataset_name)
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 ROLE_SUITE_MAP = {
     # Specialists - focused suites
     "coder": ["coder", "thinking", "general", "agentic", "instruction_precision"],

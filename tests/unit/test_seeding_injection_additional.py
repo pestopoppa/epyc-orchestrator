@@ -50,6 +50,16 @@ def test_precompute_embedding_supports_multiple_response_shapes():
     assert emb2 == [0.3, 0.4]
 
 
+def test_precompute_embedding_supports_flat_embedding_list():
+    client = Mock()
+    client.post.return_value = SimpleNamespace(
+        status_code=200,
+        json=lambda: {"embedding": [0.7, 0.8, 0.9]},
+    )
+    emb = _MOD._precompute_embedding("task", client)
+    assert emb == [0.7, 0.8, 0.9]
+
+
 def test_precompute_embedding_returns_none_when_all_ports_fail():
     client = Mock()
     client.post.side_effect = RuntimeError("embedder unavailable")
@@ -190,3 +200,114 @@ def test_inject_3way_rewards_http_tracks_done_exceptions_and_timeout():
     assert self_payload["context"]["wr_bonus"] == 1.0
     assert arch_payload["context"]["tokens_generated_effective"] == 11
     assert arch_payload["context"]["sp_bonus"] == 2.0
+
+
+def test_inject_per_role_rewards_http_empty_rewards():
+    summary = _MOD._inject_per_role_rewards_http(
+        prompt="hello",
+        suite="general",
+        question_id="q1",
+        rewards={},
+        metadata={},
+        url="http://localhost:8000",
+        client=Mock(),
+    )
+    assert summary["submitted"] == 0
+    assert summary["acknowledged"] == 0
+    assert summary["failed"] == 0
+
+
+def test_inject_per_role_rewards_http_tracks_delivery():
+    rewards = {"frontdoor": 1.0, "architect_general": 0.0}
+    done_ok = _Future(result=(True, ""))
+    done_fail = _Future(result=(False, "http_503"))
+    payloads: list[dict] = []
+    futures = {
+        "frontdoor": done_ok,
+        "architect_general": done_fail,
+    }
+
+    def _wait(keys, timeout):  # noqa: ANN001
+        return {done_ok, done_fail}, set()
+
+    metadata = {
+        "cost_metrics": {
+            "frontdoor": {
+                "tokens_generated": 42,
+                "elapsed_seconds": 1.5,
+                "predicted_tps": 12.7,
+                "prompt_eval_ms": 100.0,
+                "generation_ms": 300.0,
+                "tools_used": 2,
+            },
+            "architect_general": {
+                "tokens_generated": 100,
+                "elapsed_seconds": 5.0,
+            },
+        },
+    }
+
+    with (
+        patch("seeding_injection_additional._precompute_embedding", return_value=[0.5, 0.6]),
+        patch(
+            "seeding_injection_additional._get_reward_executor",
+            return_value=_Executor(futures, payloads),
+        ),
+        patch("seeding_injection_additional.concurrent.futures.wait", side_effect=_wait),
+    ):
+        summary = _MOD._inject_per_role_rewards_http(
+            prompt="test prompt",
+            suite="coder",
+            question_id="q99",
+            rewards=rewards,
+            metadata=metadata,
+            url="http://localhost:8000",
+            client=Mock(),
+        )
+
+    assert summary["submitted"] == 2
+    assert summary["acknowledged"] == 1
+    assert summary["failed"] == 1
+    assert summary["failure_reasons"]["architect_general"] == "http_503"
+
+    # Verify per-role context shaping
+    fd_payload = next(x["payload"] for x in payloads if x["action"] == "frontdoor")
+    assert fd_payload["context"]["source"] == "per_role_eval"
+    assert fd_payload["context"]["tokens_generated"] == 42
+    assert fd_payload["context"]["predicted_tps"] == 12.7
+    assert fd_payload["embedding"] == [0.5, 0.6]
+
+
+def test_inject_per_role_rewards_http_timeout_handling():
+    rewards = {"worker_explore": 0.5}
+    not_done = _Future(result=(False, "late"))
+    payloads: list[dict] = []
+    futures = {"worker_explore": not_done}
+
+    def _wait(keys, timeout):  # noqa: ANN001
+        return set(), {not_done}
+
+    with (
+        patch("seeding_injection_additional._precompute_embedding", return_value=None),
+        patch(
+            "seeding_injection_additional._get_reward_executor",
+            return_value=_Executor(futures, payloads),
+        ),
+        patch("seeding_injection_additional.concurrent.futures.wait", side_effect=_wait),
+    ):
+        summary = _MOD._inject_per_role_rewards_http(
+            prompt="test",
+            suite="general",
+            question_id="q1",
+            rewards=rewards,
+            metadata={},
+            url="http://localhost:8000",
+            client=Mock(),
+        )
+
+    assert summary["submitted"] == 1
+    assert summary["failed"] == 1
+    assert summary["failure_reasons"]["worker_explore"] == "wait_timeout"
+    # Verify no embedding when precompute returns None
+    payload = payloads[0]["payload"]
+    assert "embedding" not in payload

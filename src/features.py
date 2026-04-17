@@ -171,6 +171,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("claude_code_mcp_chat", False, False, "CLAUDE_CODE_MCP_CHAT", "CC Local: MCP chat delegation"),
     # Web research reranking
     FeatureSpec("web_research_rerank", False, False, "WEB_RESEARCH_RERANK", "ColBERT snippet reranking in web_research pipeline"),
+    # Routing telemetry
+    FeatureSpec("logit_probe", False, False, "LOGIT_PROBE", "First-token logprob capture for learned routing P1.5"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -392,6 +394,9 @@ class Features:
 
     # Web research reranking (ColBERT snippet pre-fetch filtering)
     web_research_rerank: bool = False  # Rerank DDG snippets via ColBERT before page fetch
+
+    # Routing telemetry: capture first-token logprobs for learned routing P1.5
+    logit_probe: bool = False  # Log top-64 first-token logprobs from frontdoor to JSONL
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
