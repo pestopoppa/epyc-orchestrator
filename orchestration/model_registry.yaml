@@ -1246,6 +1246,130 @@ roles:
     notes: Quality ceiling reference. Large (35GB) — may be slower than Q4/Q5 variants.
 
   # =============================================================================
+  # MiniMax M2.7 (MoE 230B-A10B, 256 experts)
+  # =============================================================================
+  minimax_m27_q8:
+    tier: A
+    description: MiniMax-M2.7 Q8_0 — architect replacement candidate, MoE 230B-A10B
+    model:
+      name: MiniMax-M2.7
+      path: MiniMax-M2.7-GGUF/Q8_0/MiniMax-M2.7-Q8_0-00001-of-00006.gguf
+      quant: Q8_0
+      size_gb: 227
+      architecture: minimax-m2
+      baseline_experts: 8
+      total_experts: 256
+      active_params: 10B
+      total_params: 230B
+      vocab_size: 200064
+      context_length: 196608
+    candidate_roles:
+    - architect_general
+    - architect_coding
+    acceleration:
+      type: none  # ngram-simple has zero effect (sweep-verified 2026-04-17)
+      ngram_tested: true
+      ngram_result: "0% improvement across dm=16-128, all within noise of 14 tps baseline"
+    constraints:
+      forbid:
+      - speculative_decoding
+      reason: 200K vocab — no compatible draft model exists. Ngram lookup also ineffective.
+    performance:
+      baseline_tps: 11.1   # 1×96t interleave (2026-04-17)
+      optimized_tps: 11.1  # no effective acceleration available
+      dual_per_inst_tps: 5.3   # 2×96t concurrent — bandwidth saturated at 227GB×2
+      dual_aggregate_tps: 9.5  # worse than single instance
+      speedup: 1.0x
+    memory:
+      residency: cold
+      pinned: false
+    benchmark_date: 2026-04-17
+    notes: >
+      Architect replacement candidate: 11.1 tps vs architect_general 9.14 (1.2x) and architect_coding 3.79 (2.9x).
+      Could consolidate both architect roles into one model, freeing ~380GB RAM.
+      Q4_K_XL was faster (14.0 tps) but DELETED — Q8 preferred for quality on this bandwidth-rich system.
+      Multi-instance not viable (227GB saturates per-node bandwidth under concurrent load).
+      M2.7 scored 56.22% SWE-Pro. Quality eval (G9) pending.
+
+  minimax_m27_q4_kxl:
+    tier: X
+    description: DEPRECATED — deleted from system 2026-04-17. Q8 preferred (simpler dequant, better quality).
+    model:
+      name: MiniMax-M2.7
+      path: DELETED
+      quant: UD-Q4_K_XL
+      size_gb: 132
+    performance:
+      baseline_tps: 14.0  # was faster than Q8 but quality tradeoff not worth it
+    benchmark_date: 2026-04-17
+    notes: Deleted. Q8_0 chosen over Q4_K_XL for architect replacement eval.
+
+  # =============================================================================
+  # Qwen3.6 MoE Models (35B-A3B)
+  # =============================================================================
+  qwen36_q8_0:
+    tier: B
+    description: Qwen3.6-35B-A3B Q8_0 — MoE successor to Qwen3.5-35B-A3B, thinking model
+    model:
+      name: Qwen3.6-35B-A3B
+      path: Qwen3.6-35B-A3B-Q8_0.gguf
+      quant: Q8_0
+      size_gb: 37
+      architecture: qwen3
+      baseline_experts: 0  # dense-like MoE (3B active)
+    candidate_roles:
+    - frontdoor
+    - coder
+    - general
+    - ingest
+    acceleration:
+      type: ngram_lookup
+      spec_type: ngram-simple
+      draft_max: 64  # sweep-verified 2026-04-17: dm=64 best (+10.1% over baseline)
+    thinking_quirks:
+      disable_trick: "<think>\n</think>\n"
+      disable_suites:
+      - agentic
+      - instruction_precision
+    performance:
+      baseline_tps: 25.6   # 1×96t interleave, no spec (2026-04-17)
+      node0_tps: 27.2      # 1×96t node0, no spec — faster (fits in single node)
+      ngram_interleave_tps: 27.4  # 1×96t interleave + ngram dm=64
+      ngram_node0_tps: 28.1      # 1×96t node0 + ngram dm=64 (optimal single-instance)
+      optimized_tps: 27.4  # production config: interleave + ngram dm=64 (simpler ops)
+      dual_per_inst_tps: 12.6   # 2×96t concurrent, per-instance avg
+      dual_aggregate_tps: 25.3  # 2×96t concurrent aggregate (no scaling gain)
+      quad_per_inst_tps: 14.4   # 4×48t concurrent, per-instance avg
+      quad_aggregate_tps: 57.4  # 4×48t concurrent aggregate (2.2x)
+      eight_per_inst_tps: 9.6   # 8×24t concurrent, per-instance avg
+      eight_aggregate_tps: 76.8 # 8×24t concurrent aggregate (3.0x)
+      prompt_processing_tps: 219.2  # 22K context, 1×96t node0
+      long_context_gen_tps: 21.3    # generation at 22K context
+      speedup: 1.10x  # ngram dm=64 vs baseline
+    memory:
+      residency: cold
+      pinned: false
+    benchmark_date: 2026-04-17
+    notes: >
+      Q8 is FASTER than Q4_K_M (27.2 vs 24.4 tps) due to simpler dequant on bandwidth-rich hardware.
+      Q4_K_M deleted from system. Thinking model — disable thinking for non-reasoning tasks.
+      Ngram lookup gives +10% (unlike M2.7 where it had zero effect).
+      Best aggregate throughput at 8×24t (76.8 tps) but 4×48t (57.4 tps) is the practical sweet spot.
+
+  qwen36_q4km:
+    tier: X
+    description: DEPRECATED — deleted from system 2026-04-17. Q8 is faster due to simpler dequant.
+    model:
+      name: Qwen3.6-35B-A3B
+      path: DELETED
+      quant: Q4_K_M
+      size_gb: 22
+    performance:
+      baseline_tps: 24.4  # slower than Q8 (25.6) due to dequant overhead
+    benchmark_date: 2026-04-17
+    notes: Deleted. Q8_0 faster on bandwidth-rich EPYC 9655 hardware.
+
+  # =============================================================================
   # Qwen3.5 Dense Models (2B, 4B, 9B, 27B)
   # =============================================================================
   qwen35_2b_q4km:
