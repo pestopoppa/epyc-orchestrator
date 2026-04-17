@@ -1370,6 +1370,170 @@ roles:
     notes: Deleted. Q8_0 faster on bandwidth-rich EPYC 9655 hardware.
 
   # =============================================================================
+  # SuperGemma4 Models (abliterated Gemma 4 fine-tunes by Jiunsong)
+  # =============================================================================
+  supergemma4_31b_q4km:
+    tier: C
+    description: SuperGemma4-31b-abliterated Q4_K_M — dense 31B, abliterated, slow for size
+    model:
+      name: SuperGemma4-31b-abliterated
+      path: SuperGemma4-31b-abliterated.Q4_K_M.gguf
+      quant: Q4_K_M
+      size_gb: 18.7
+      architecture: gemma4
+      baseline_experts: 0  # dense
+    candidate_roles:
+    - general
+    acceleration:
+      type: ngram_lookup
+      spec_type: ngram-simple
+      draft_max: 128  # sweep-verified 2026-04-17: dm=128 best (+6% over baseline)
+      ngram_result: "modest +6%, trend still climbing at dm=128 — larger dm not yet tested"
+    performance:
+      baseline_tps: 8.47   # 1×96t interleave, no spec
+      optimized_tps: 9.00  # 1×96t interleave + ngram dm=128
+      dual_per_inst_tps: 2.3   # 2×96t concurrent — severe degradation
+      dual_aggregate_tps: 4.6  # worse than single instance
+      speedup: 1.06x
+    memory:
+      residency: cold
+      pinned: false
+    benchmark_date: 2026-04-17
+    notes: >
+      Dense 31B at Q4_K_M — only 9.0 tps optimized. Slow for its size (Qwen3.6-35B-A3B Q8 does 27 tps).
+      NUMA scaling fails completely — Config C aggregate worse than single instance.
+      Only Q4_K_M available from Jiunsong (no Q8). Limited production utility.
+
+  supergemma4_26b_q4km:
+    tier: B
+    description: SuperGemma4-26b-uncensored Q4_K_M — MoE 26B-A3.8B, fast, abliterated
+    model:
+      name: SuperGemma4-26b-uncensored-fast-v2
+      path: supergemma4-26b-uncensored-fast-v2-Q4_K_M.gguf
+      quant: Q4_K_M
+      size_gb: 16.8
+      architecture: gemma4  # MoE variant
+      active_params: 3.8B
+      total_params: 26B
+    candidate_roles:
+    - frontdoor
+    - worker
+    - general
+    acceleration:
+      type: none  # ngram has zero effect (sweep-verified 2026-04-17)
+      ngram_tested: true
+      ngram_result: "0% improvement across dm=16-128, all within 0.7 tps noise of 42 tps baseline"
+    performance:
+      baseline_tps: 42.0   # 1×96t interleave
+      optimized_tps: 42.0  # no effective acceleration
+      dual_per_inst_tps: 20.1   # 2×96t concurrent
+      dual_aggregate_tps: 40.2  # 0.96x — no scaling
+      quad_per_inst_tps: 17.8   # 4×48t concurrent
+      quad_aggregate_tps: 71.4  # 1.7x
+      eight_per_inst_tps: 12.1  # 8×24t concurrent
+      eight_aggregate_tps: 96.9 # 2.3x
+      speedup: 1.0x
+    memory:
+      residency: cold
+      pinned: false
+    benchmark_date: 2026-04-17
+    notes: >
+      Very fast MoE (42 tps single-instance). Abliterated/uncensored.
+      NUMA: 4×48t = 71 tps (1.7x), 8×24t = 97 tps (2.3x). 2×96t barely breaks even.
+      Ngram lookup has zero effect. Strong frontdoor/worker candidate at 3.8B active params.
+
+  # =============================================================================
+  # Gemma 4 Models (Google DeepMind)
+  # =============================================================================
+  gemma4_e2b_q8:
+    tier: X
+    description: DEPRECATED — deleted 2026-04-17. 34 tps but no NUMA scaling, 2.3B too small for quality
+    model:
+      name: Gemma-4-E2B-it
+      path: gemma-4-E2B-it-Q8_0.gguf
+      quant: Q8_0
+      size_gb: 5.3
+      architecture: gemma4
+      effective_params: 2.3B
+      total_params: 5.1B
+      context_length: 131072
+      vocab_size: 262144
+      modalities: [text, image, audio]
+    candidate_roles:
+    - draft
+    - worker
+    acceleration:
+      type: none  # ngram has zero effect (sweep-verified 2026-04-17)
+      ngram_tested: true
+      ngram_result: "0% improvement, all dm values within noise of 34 tps baseline"
+    performance:
+      baseline_tps: 34.0   # 1×96t interleave
+      optimized_tps: 34.0  # no effective acceleration
+      dual_per_inst_tps: 13.3   # 2×96t concurrent
+      dual_aggregate_tps: 26.6  # 0.78x — scaling gate FAILED
+      speedup: 1.0x
+    memory:
+      residency: cold
+      pinned: false
+    benchmark_date: 2026-04-17
+    notes: >
+      Fast small model (34 tps) but NUMA scaling fails — Config C aggregate worse than single instance.
+      Multimodal (image+audio) but untested on non-text modalities.
+      200K vocab makes spec-dec draft matching difficult.
+
+  gemma4_e4b_q8:
+    tier: X
+    description: DEPRECATED — deleted 2026-04-17. 15.5 tps, no ngram benefit, no NUMA scaling
+    model:
+      name: Gemma-4-E4B-it
+      path: DELETED
+      quant: Q8_0
+      size_gb: 7.7
+    performance:
+      baseline_tps: 15.5
+      dual_aggregate_tps: 13.5  # 0.87x — worse than single
+      quad_aggregate_tps: 26.0  # 1.67x but gate failed
+    benchmark_date: 2026-04-17
+    notes: Deleted. Slower than E2B despite being larger. No scaling.
+
+  supergemma4_26b_mm_q8:
+    tier: C
+    description: SuperGemma4-26b-abliterated-multimodal Q8_0 — MoE 26B-A3.8B, multimodal, abliterated
+    model:
+      name: SuperGemma4-26b-abliterated-multimodal
+      path: supergemma4-26b-abliterated-multimodal-8bit/supergemma4-26b-abliterated-multimodal-Q8_0.gguf
+      quant: Q8_0
+      size_gb: 26
+      architecture: gemma4
+      active_params: 3.8B
+      total_params: 26B
+      mmproj: supergemma4-26b-abliterated-multimodal-8bit/mmproj-supergemma4-26b-abliterated-multimodal-f16.gguf
+      modalities: [text, image]
+    candidate_roles:
+    - vision
+    - general
+    acceleration:
+      type: none  # ngram near-zero effect, early stopped at dm=48
+      ngram_tested: true
+      ngram_result: "dm=16 best at 21.15 but within noise of baseline 21.08"
+    performance:
+      baseline_tps: 21.1   # 1×96t interleave
+      optimized_tps: 21.1  # no effective acceleration
+      dual_per_inst_tps: 11.1   # 2×96t concurrent
+      dual_aggregate_tps: 22.3  # poor scaling
+      quad_per_inst_tps: 8.8    # 4×48t concurrent
+      quad_aggregate_tps: 35.3  # 1.67x but gate failed
+      speedup: 1.0x
+    memory:
+      residency: cold
+      pinned: false
+    benchmark_date: 2026-04-17
+    notes: >
+      Half the speed of text-only Q4 variant (21 vs 42 tps) — Q8 dequant overhead on MoE.
+      Multimodal (image) with mmproj. Abliterated. NUMA scaling poor (D gate failed, E skipped).
+      Vision role candidate but needs multimodal quality eval.
+
+  # =============================================================================
   # Qwen3.5 Dense Models (2B, 4B, 9B, 27B)
   # =============================================================================
   qwen35_2b_q4km:
