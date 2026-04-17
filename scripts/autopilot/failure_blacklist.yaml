@@ -1,49 +1,31 @@
 blacklist:
-- pattern:
-    type: structural_experiment
-    flags:
-      hybrid_speculation: true
-  reason: "Qwen3.5 hybrid self-acceleration exhausted \u2014 ALL 6 approaches net-negative\
-    \ (0.50-0.72x). Recurrent layers don't benefit from batching."
-  added: '2026-04-01T00:00:00Z'
-  source_trial: -1
+# ─────────────────────────────────────────────────────────────────────
+# CRITICAL PATH BUGS (crash/segfault)
+# ─────────────────────────────────────────────────────────────────────
+
 - pattern:
     type: structural_experiment
     flags:
       lookup_cache: true
-  reason: Lookup table segfaults on Qwen3.5 hybrids after 1-3 prompts (disabled 2026-03-19).
-    Only works on dense models.
+  reason: "Lookup table segfaults on Qwen3.5 hybrids after 1-3 prompts (2026-03-19).\
+    \ Hardware-level architectural incompatibility — only works on dense models."
   added: '2026-04-01T00:00:00Z'
-  source_trial: -1
-- pattern:
-    type: structural_experiment
-    flags:
-      dflash_block_diffusion: true
-  reason: DFlash block diffusion not viable on Q4_K_M (27% per-token acceptance, 1.4%
-    block). AR drafter wins at 36.5 t/s.
-  added: '2026-04-01T00:00:00Z'
-  source_trial: -1
-- pattern:
-    type: structural_experiment
-    flags:
-      tree_speculation: true
-  reason: "Tree speculation -53 to -66% on hybrids. Architectural limitation \u2014\
-    \ recurrent layers process tokens sequentially."
-  added: '2026-04-01T00:00:00Z'
-  source_trial: -1
-- pattern:
-    type: structural_experiment
-    flags:
-      nemotron_mamba2: true
-  reason: "Nemotron Mamba2 69% quality \u2014 insufficient for any production role.\
-    \ No deployment."
-  added: '2026-04-01T00:00:00Z'
-  source_trial: -1
-- pattern:
-    type: structural_experiment
-    flags:
-      tool_permissions_legacy: true
-  reason: Legacy tool_permissions path has no role definitions. Only cascading_tool_policy=True
-    is viable.
-  added: '2026-04-01T00:00:00Z'
-  source_trial: -1
+  severity: crash
+  notes: "Server launch flag — not runtime-tunable. Prevents restart-based experiments."
+
+# ─────────────────────────────────────────────────────────────────────
+# ARCHIVED / REMOVED
+# ─────────────────────────────────────────────────────────────────────
+# tree_speculation, dflash_block_diffusion, hybrid_speculation:
+#   - Server launch-time flags, not runtime-tunable
+#   - Require infrastructure restart, not in autopilot's effective tunable space
+#   - Removed 2026-04-16
+#
+# tool_permissions_legacy:
+#   - Potentially poisoned by 2026-04-16 REPL/tool routing bug fixes
+#   - Needs re-validation post-infrastructure stabilization
+#   - Removed 2026-04-16 pending re-assessment
+#
+# nemotron_mamba2:
+#   - Not in active model_registry — non-actionable
+#   - Removed 2026-04-16

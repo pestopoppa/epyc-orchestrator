@@ -1,7 +1,11 @@
-"""Species 0 — Seeder: 3-way evaluation + Q-value reward injection.
+"""Species 0 — Seeder: per-role evaluation + Q-value reward injection.
 
 Wraps the seed_specialist_routing.py pipeline as a callable species,
 monitoring memory accumulation and Q-value convergence.
+
+Phase 5 refactor: replaced 3-way eval (SELF:direct, SELF:repl, ARCHITECT)
+with dynamic per-role eval that discovers active roles from model_registry.yaml
+and tests each individually with natural mode selection.
 """
 
 from __future__ import annotations
@@ -18,8 +22,9 @@ log = logging.getLogger("autopilot.seeder")
 _orch_root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
 
-from seeding_eval import ThreeWayResult, evaluate_question_3way  # noqa: E402
-from seeding_injection import _inject_3way_rewards_http  # noqa: E402
+from seeding_eval import evaluate_question_per_role  # noqa: E402
+from seeding_injection import _inject_per_role_rewards_http  # noqa: E402
+from seeding_types import discover_active_roles  # noqa: E402
 
 # Import sample_unseen_questions from the main seeding script
 from seed_specialist_routing import sample_unseen_questions  # noqa: E402
@@ -43,11 +48,15 @@ class SeederBatchResult:
     memory_count: int = 0
     elapsed_s: float = 0.0
     per_action_stats: dict[str, dict[str, int]] = field(default_factory=dict)
-    results: list[ThreeWayResult] = field(default_factory=list)
+    results: list[dict[str, Any]] = field(default_factory=list)
+
+
+# How often to re-discover active roles (in batches)
+_ROLE_REFRESH_INTERVAL = 10
 
 
 class Seeder:
-    """Species 0: 3-way seeding with Q-value convergence monitoring."""
+    """Species 0: per-role seeding with Q-value convergence monitoring."""
 
     def __init__(
         self,
@@ -71,6 +80,17 @@ class Seeder:
         self._td_errors: list[tuple[int, float]] = []  # (batch_num, avg_td_error)
         self._batch_count = 0
         self._consecutive_converged = 0
+        self._active_roles: list[dict[str, Any]] = []
+        self._refresh_roles()
+
+    def _refresh_roles(self) -> None:
+        """Discover active roles from model_registry.yaml."""
+        self._active_roles = discover_active_roles()
+        log.info(
+            "Discovered %d active roles: %s",
+            len(self._active_roles),
+            [r["name"] for r in self._active_roles],
+        )
 
     @property
     def td_errors(self) -> list[tuple[int, float]]:
@@ -88,8 +108,16 @@ class Seeder:
         suites: list[str] | None = None,
         seed: int | None = None,
     ) -> SeederBatchResult:
-        """Run a batch of 3-way evaluations and inject rewards."""
+        """Run a batch of per-role evaluations and inject rewards."""
         import httpx
+
+        # Periodic role refresh to pick up stack changes
+        if self._batch_count > 0 and self._batch_count % _ROLE_REFRESH_INTERVAL == 0:
+            self._refresh_roles()
+
+        if not self._active_roles:
+            log.error("No active roles discovered — cannot seed")
+            return SeederBatchResult()
 
         n = n_questions or self.batch_size
         suites = suites or self.suites
@@ -109,7 +137,10 @@ class Seeder:
             return SeederBatchResult()
 
         questions = questions[:n]
-        log.info("Seeding batch %d: %d questions across %s", self._batch_count, len(questions), suites)
+        log.info(
+            "Seeding batch %d: %d questions × %d roles across %s",
+            self._batch_count, len(questions), len(self._active_roles), suites,
+        )
 
         start = time.time()
         batch_result = SeederBatchResult(n_questions=len(questions))
@@ -124,30 +155,32 @@ class Seeder:
                     prompt_text = q.get("prompt", "")
                     self.on_question(f"[{suite}] {qid}\n\n{prompt_text}")
                 try:
-                    role_results, rewards, metadata = evaluate_question_3way(
+                    role_results, rewards, metadata = evaluate_question_per_role(
                         prompt_info=q,
+                        active_roles=self._active_roles,
                         url=self.url,
                         timeout=self.timeout,
                         client=client,
                         dry_run=self.dry_run,
                     )
 
-                    # Track per-action stats
-                    for action, reward in rewards.items():
-                        if action not in batch_result.per_action_stats:
-                            batch_result.per_action_stats[action] = {
+                    # Track per-role stats
+                    for role_name, reward in rewards.items():
+                        if role_name not in batch_result.per_action_stats:
+                            batch_result.per_action_stats[role_name] = {
                                 "total": 0, "correct": 0
                             }
-                        batch_result.per_action_stats[action]["total"] += 1
+                        batch_result.per_action_stats[role_name]["total"] += 1
                         if reward > 0.5:
-                            batch_result.per_action_stats[action]["correct"] += 1
+                            batch_result.per_action_stats[role_name]["correct"] += 1
                             batch_result.n_correct += 1
 
                     # Inject rewards
+                    delivery: dict[str, Any] = {}
                     if not self.dry_run:
                         qid = q.get("id", q.get("question_id", f"q_{i}"))
                         suite = q.get("suite", "unknown")
-                        delivery = _inject_3way_rewards_http(
+                        delivery = _inject_per_role_rewards_http(
                             prompt=q.get("prompt", ""),
                             suite=suite,
                             question_id=qid,
@@ -177,19 +210,13 @@ class Seeder:
                     if qid:
                         self._seen.add(qid)
 
-                    # Build ThreeWayResult for logging
-                    result = ThreeWayResult(
-                        suite=q.get("suite", "unknown"),
-                        question_id=qid,
-                        prompt=q.get("prompt", ""),
-                        expected=q.get("expected", ""),
-                        role_results=role_results,
-                        rewards=rewards,
-                        metadata=metadata,
-                        rewards_injected=batch_result.rewards_injected,
-                        rewards_delivery=delivery if not self.dry_run else {},
-                    )
-                    batch_result.results.append(result)
+                    # Store result for logging
+                    batch_result.results.append({
+                        "suite": q.get("suite", "unknown"),
+                        "question_id": qid,
+                        "rewards": rewards,
+                        "roles_tested": metadata.get("roles_tested", []),
+                    })
 
                 except Exception as e:
                     log.error("Error on question %d: %s", i, e)
@@ -220,7 +247,7 @@ class Seeder:
         self._batch_count += 1
         log.info(
             "Seeder batch %d done: %d/%d correct, %d rewards, "
-            "TD=%.4f, converged=%d/%d, memories=%d",
+            "TD=%.4f, converged=%d/%d, memories=%d, roles=%d",
             self._batch_count - 1,
             batch_result.n_correct,
             batch_result.n_questions,
@@ -229,6 +256,7 @@ class Seeder:
             self._consecutive_converged,
             CONVERGENCE_WINDOW,
             batch_result.memory_count,
+            len(self._active_roles),
         )
         return batch_result
 

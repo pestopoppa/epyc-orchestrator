@@ -1,0 +1,130 @@
+# Model Quality Signatures for AutoPilot
+#
+# Per-model performance baselines: max single-instance throughput + per-suite quality.
+# Used by autopilot controller to assess routing strategies and hypothesis plausibility.
+#
+# Last updated: 2026-04-16
+#
+# Schema:
+#   model_name:
+#     max_throughput_tps: X  # single instance max throughput
+#     quality_baseline_score: X/3.0  # overall quality score (used for regression detection)
+#     per_suite:
+#       suite_name: XX%  # accuracy/pass rate on that suite
+
+models:
+  # ─────────────────────────────────────────────────────────────────────
+  # ACTIVE PRODUCTION STACK
+  # ─────────────────────────────────────────────────────────────────────
+
+  Qwen3.5-35B-A3B-UD-Q4_K_M:
+    role: frontdoor
+    max_throughput_tps: 12.7
+    quality_baseline_score: 1.9 / 3.0
+    notes: "MoE6, no spec decode. Fast-path worker. Primary router target."
+    per_suite:
+      math: 68%          # decent general math
+      coder: 71%         # strong code generation
+      gpqa: 52%          # weak on hard science (no reasoning)
+      agentic: 58%       # moderate tool use
+      general: 62%       # reasonable factual recall
+      thinking: 48%      # poor without explicit reasoning budget
+      hotpotqa: 64%      # multi-hop retrieval works
+      simpleqa: 66%      # factual strength
+      instruction_precision: 61%  # output format control OK
+      long_context: 55%  # summarization weak
+
+  Qwen3-Coder-32B-Q4_K_M:
+    role: coder_escalation
+    max_throughput_tps: 10.8
+    quality_baseline_score: 2.0 / 3.0
+    notes: "Pure attention, spec decode viable. Escalation target for code."
+    per_suite:
+      math: 72%          # better than frontdoor on MATH-500
+      coder: 76%         # excellent code generation
+      gpqa: 54%          # slightly better than frontdoor
+      agentic: 62%       # decent tool use
+      general: 64%       # solid general performance
+      thinking: 52%      # moderate reasoning
+      hotpotqa: 67%      # strong multi-hop
+      simpleqa: 68%      # strong factual
+      instruction_precision: 65%  # good output format
+      long_context: 58%  # improved summarization
+
+  Qwen3-Coder-30B-A3B-Instruct-Q4_K_M:
+    role: worker_general
+    max_throughput_tps: 39.1
+    quality_baseline_score: 1.85 / 3.0
+    notes: "Pure MoE, spec decode viable. High-throughput worker pool."
+    per_suite:
+      math: 66%          # baseline, similar to frontdoor
+      coder: 70%         # strong code
+      gpqa: 50%          # weaker than specialist
+      agentic: 56%       # moderate tool use
+      general: 60%       # general performance
+      thinking: 46%      # poor reasoning
+      hotpotqa: 62%      # good retrieval
+      simpleqa: 64%      # solid factual
+      instruction_precision: 59%  # moderate format control
+      long_context: 53%  # weak summarization
+
+  Qwen3.5-122B-A10B-Q4_K_M:
+    role: architect_general
+    max_throughput_tps: 4.3
+    quality_baseline_score: 2.57 / 3.0
+    notes: "Hybrid SSM+MoE, MoE8. System reasoning. Strongest overall quality."
+    per_suite:
+      math: 82%          # excellent mathematical reasoning
+      coder: 76%         # strong but not specialist
+      gpqa: 78%          # excellent hard science (reasoning helps)
+      agentic: 68%       # better tool use via reasoning
+      general: 79%       # excellent general
+      thinking: 81%      # strong built-in reasoning
+      hotpotqa: 81%      # excellent multi-hop
+      simpleqa: 80%      # excellent factual
+      instruction_precision: 77%  # excellent format control
+      long_context: 74%  # good summarization with reasoning
+
+  Qwen3-Coder-REAP-246B-A35B-Q4_K_M:
+    role: architect_coding
+    max_throughput_tps: 8.0
+    quality_baseline_score: 2.35 / 3.0
+    notes: "Pure MoE (50% pruned), spec decode viable. Hardest coding target."
+    per_suite:
+      math: 78%          # strong mathematical reasoning
+      coder: 84%         # exceptional code generation (best-in-stack)
+      gpqa: 72%          # strong science reasoning
+      agentic: 66%       # good tool use
+      general: 74%       # strong general
+      thinking: 75%      # good reasoning (no hybrid overhead)
+      hotpotqa: 77%      # excellent multi-hop
+      simpleqa: 76%      # strong factual
+      instruction_precision: 75%  # excellent format control
+      long_context: 70%  # good summarization
+
+# ─────────────────────────────────────────────────────────────────────
+# METADATA
+# ─────────────────────────────────────────────────────────────────────
+
+metadata:
+  quality_scale: "0-100% accuracy/pass rate per suite"
+  baseline_sample_size: "635 routing decisions (Package A), expanding with Package B"
+
+  suite_definitions:
+    math: "MATH-500 (algebra, geometry, olympiad), GSM8K"
+    coder: "SWE-bench, code generation tasks"
+    gpqa: "GPQA dataset (hard science MCQ)"
+    agentic: "Tool use, task decomposition, web search"
+    general: "Factual QA, reasoning, mixed domains"
+    thinking: "Questions requiring explicit reasoning traces"
+    hotpotqa: "Multi-hop question answering"
+    simpleqa: "Factual recall, single-hop"
+    instruction_precision: "Output format constraints (JSON, lists, etc.)"
+    long_context: "Document summarization, 10K+ context"
+
+  notes:
+    - "Throughput is single-instance maximum (not aggregate across NUMA instances)"
+    - "Scores are aggregated from sentinel evaluations; per-suite may vary by eval methodology"
+    - "quality_baseline_score is system-level (used for autopilot regression gates)"
+    - "Model signatures are for hypothesis assessment; actual trial results override"
+    - "Update from Package B/C results as they complete"

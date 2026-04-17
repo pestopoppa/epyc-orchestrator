@@ -116,6 +116,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Self-Criticism from Last Trial
 {last_criticism}
 
+### Active Model Performance Signatures
+{model_signatures}
+
 ### Blacklisted Configurations
 {blacklist_text}
 
@@ -195,6 +198,47 @@ def load_blacklist() -> list[dict[str, Any]]:
     except (yaml.YAMLError, OSError) as e:
         log.warning("Could not load blacklist: %s", e)
         return []
+
+
+def load_model_signatures() -> dict[str, Any]:
+    """Load model quality signatures from YAML."""
+    signatures_path = ORCH_ROOT / "orchestration" / "model_quality_signatures.yaml"
+    if not signatures_path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(signatures_path.read_text()) or {}
+        return data.get("models", {})
+    except (yaml.YAMLError, OSError) as e:
+        log.warning("Could not load model signatures: %s", e)
+        return {}
+
+
+def format_model_signatures(signatures: dict[str, Any]) -> str:
+    """Format model signatures for controller prompt."""
+    if not signatures:
+        return "  (no model signatures available)"
+
+    lines = ["| Model | Role | Speed (t/s) | Strengths | Weaknesses |"]
+    lines.append("|-------|------|------------|-----------|------------|")
+
+    for model_name, sig in sorted(signatures.items()):
+        role = sig.get("role", "unknown")
+        speed = sig.get("max_throughput_tps", 0)
+        per_suite = sig.get("per_suite", {})
+
+        # Find top 2 suites (highest scores)
+        sorted_suites = sorted(per_suite.items(), key=lambda x: int(x[1].rstrip("%")), reverse=True)
+        strengths = ", ".join(f"{s[0]} ({s[1]})" for s in sorted_suites[:2])
+
+        # Find bottom 2 suites (lowest scores)
+        weaknesses = ", ".join(f"{s[0]} ({s[1]})" for s in sorted_suites[-2:])
+
+        short_name = model_name.split("-")[0:3]  # First 3 parts for brevity
+        short_name = "-".join(short_name)
+
+        lines.append(f"| {short_name} | {role} | {speed:.1f} | {strengths} | {weaknesses} |")
+
+    return "\n".join(lines)
 
 
 def check_blacklist(action: dict[str, Any], blacklist: list[dict[str, Any]]) -> str | None:
@@ -1084,6 +1128,10 @@ def _run_loop_inner(
             except Exception:
                 slot_memory_text = "  (query failed)"
 
+            # Load model signatures for hypothesis assessment
+            model_sigs = load_model_signatures()
+            model_signatures_text = format_model_signatures(model_sigs)
+
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 program=program_text,
                 pareto_summary=archive.summary_text(),
@@ -1101,6 +1149,7 @@ def _run_loop_inner(
                 insights=insights_text,
                 short_term_memory=memory.to_text(),  # AP-22
                 last_criticism=last_criticism_text,  # AP-23
+                model_signatures=model_signatures_text,
                 blacklist_text=blacklist_text,
                 code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
