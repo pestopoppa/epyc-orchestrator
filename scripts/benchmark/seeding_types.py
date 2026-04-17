@@ -25,6 +25,8 @@ __all__ = [
     # Phase 4: 3-way routing action keys
     "ACTION_SELF_DIRECT", "ACTION_SELF_REPL", "ACTION_ARCHITECT", "ACTION_WORKER",
     "THREE_WAY_ACTIONS", "THREE_WAY_COST_TIER",
+    # Phase 5: dynamic per-role discovery
+    "SEEDING_EXCLUDED_ROLES", "discover_active_roles",
 ]
 
 
@@ -149,6 +151,98 @@ ROLE_PORT: dict[str, int] = {
 MODEL_PORTS = [8080, 8081, 8082, 8083, 8084, 8085, 8086, 8087, 8090]
 
 STACK_SCRIPT = PROJECT_ROOT / "scripts" / "server" / "orchestrator_stack.py"
+
+
+# ── Phase 5: Dynamic role discovery ─────────────────────────────────
+# Roles excluded from seeding evaluation (non-LLM infrastructure).
+# When changing the stack, update this set for new non-LLM services.
+# See adaptation surface docs in wiki/autopilot-seeder-roles.md.
+
+SEEDING_EXCLUDED_ROLES = frozenset({
+    "voice_server", "document_formalizer",
+    "nextplaid_code", "nextplaid_docs",
+    "dev", "reap_25b",
+})
+
+# Map registry keys to the role names the orchestrator accepts for force_role.
+# Most keys match directly; add entries here only for mismatches.
+# When renaming roles, update this mapping.
+_REGISTRY_KEY_TO_ROLE = {
+    "worker": "worker_general",
+}
+
+
+def discover_active_roles(
+    registry_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Discover active LLM inference roles from model_registry.yaml.
+
+    Parses the production roles section and returns metadata for each
+    active role suitable for seeding evaluation.
+
+    Adaptation surface:
+        - Add non-LLM services to SEEDING_EXCLUDED_ROLES
+        - Port mappings read from ROLE_PORT (update when roles are renamed)
+        - Heavy port classification from HEAVY_PORTS
+
+    Returns:
+        List of dicts: [{name, port, is_heavy, cost_tier, model_role}, ...]
+        Sorted by cost_tier (cheapest first for interleaving).
+    """
+    if registry_path is None:
+        registry_path = PROJECT_ROOT / "orchestration" / "model_registry.yaml"
+
+    try:
+        with registry_path.open() as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+
+    # Production roles live under server_mode (not roles, which has quant variants)
+    roles_section = data.get("server_mode", {})
+    if not roles_section:
+        return []
+
+    active: list[dict[str, Any]] = []
+
+    for role_key, role_def in roles_section.items():
+        if not isinstance(role_def, dict):
+            continue
+
+        # Skip excluded roles
+        if role_key in SEEDING_EXCLUDED_ROLES:
+            continue
+
+        # Skip non-LLM services (no model field)
+        if "model" not in role_def and "model_type" not in role_def:
+            continue
+
+        # Skip non-GGUF model types (whisper, onnx, docker, etc.)
+        model_type = role_def.get("model_type", "gguf")
+        if model_type not in ("gguf", "gguf_vlm"):
+            continue
+
+        # Resolve the role name the orchestrator accepts for force_role
+        role_name = _REGISTRY_KEY_TO_ROLE.get(role_key, role_key)
+        model_role = role_def.get("model_role", role_name)
+
+        # Get port from role definition or ROLE_PORT fallback
+        port = role_def.get("port", ROLE_PORT.get(role_key, ROLE_PORT.get(role_name, 0)))
+        if port == 0:
+            continue  # No port → can't evaluate
+
+        active.append({
+            "name": role_name,       # Use for force_role
+            "registry_key": role_key,  # Original key in model_registry.yaml
+            "model_role": model_role,
+            "port": port,
+            "is_heavy": port in HEAVY_PORTS,
+            "cost_tier": ROLE_COST_TIER.get(role_name, ROLE_COST_TIER.get(role_key, 3)),
+        })
+
+    # Sort by cost tier (cheapest first) for interleaving
+    active.sort(key=lambda r: r["cost_tier"])
+    return active
 
 
 # ── Exceptions ────────────────────────────────────────────────────────

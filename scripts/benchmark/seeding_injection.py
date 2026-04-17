@@ -16,6 +16,7 @@ __all__ = [
     "RewardDeliverySummary",
     "_get_reward_executor",
     "_inject_3way_rewards_http",
+    "_inject_per_role_rewards_http",
     "_inject_single_reward",
     "_precompute_embedding",
 ]
@@ -194,5 +195,87 @@ def _inject_3way_rewards_http(
         future.cancel()
         summary.failed += 1
         summary.failure_reasons[action_key] = "wait_timeout"
+
+    return summary.to_dict()
+
+
+def _inject_per_role_rewards_http(
+    prompt: str,
+    suite: str,
+    question_id: str,
+    rewards: dict[str, float],
+    metadata: dict[str, Any],
+    url: str,
+    client: "httpx.Client",
+) -> dict[str, Any]:
+    """Inject per-role rewards via HTTP API with delivery accounting.
+
+    Same mechanism as _inject_3way_rewards_http but with:
+    - Action keys are role names (e.g., "frontdoor", "architect_general")
+    - source: "per_role_eval"
+    - No tool comparison fields (tools_helped, etc.)
+    """
+    cost_metrics = metadata.get("cost_metrics", {})
+    summary = RewardDeliverySummary()
+
+    if not rewards:
+        return summary.to_dict()
+
+    embedding = _precompute_embedding(prompt[:200], client)
+
+    executor = _get_reward_executor()
+    futures: dict[concurrent.futures.Future[tuple[bool, str]], str] = {}
+
+    for role_name, reward in rewards.items():
+        action_cost = cost_metrics.get(role_name, {})
+        tokens_generated = int(action_cost.get("tokens_generated", 0) or 0)
+
+        context = {
+            "task_type": suite,
+            "source": "per_role_eval",
+            "question_id": question_id,
+            "action_type": "routing",
+            "elapsed_seconds": action_cost.get("elapsed_seconds", 0.0),
+            "tokens_generated": tokens_generated,
+            "predicted_tps": action_cost.get("predicted_tps", 0.0),
+            "prompt_eval_ms": action_cost.get("prompt_eval_ms", 0.0),
+            "generation_ms": action_cost.get("generation_ms", 0.0),
+            "tools_used": action_cost.get("tools_used", 0),
+        }
+
+        payload = {
+            "task_description": prompt[:200],
+            "action": role_name,
+            "reward": reward,
+            "context": context,
+        }
+        if embedding is not None:
+            payload["embedding"] = embedding
+
+        futures[executor.submit(_inject_single_reward, url, payload, role_name)] = role_name
+        summary.submitted += 1
+
+    done, not_done = concurrent.futures.wait(
+        futures.keys(),
+        timeout=_REWARD_WAIT_TIMEOUT_S,
+    )
+    for future in done:
+        role_name = futures[future]
+        try:
+            ok, reason = future.result()
+        except Exception as exc:
+            ok = False
+            reason = f"{type(exc).__name__}: {exc}"
+        if ok:
+            summary.acknowledged += 1
+        else:
+            summary.failed += 1
+            summary.failure_reasons[role_name] = reason
+
+    for future in not_done:
+        role_name = futures[future]
+        future.cancel()
+        summary.failed += 1
+        summary.failure_reasons[role_name] = "wait_timeout"
 
     return summary.to_dict()

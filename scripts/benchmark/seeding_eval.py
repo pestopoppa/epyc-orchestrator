@@ -20,6 +20,7 @@ from seeding_types import (
     HEAVY_PORTS,
     ROLE_PORT,
     RoleResult,
+    VISION_ROLES,
     state,
 )
 from seeding_scoring import (
@@ -54,6 +55,8 @@ __all__ = [
     "_compute_3way_metadata",
     "_eval_single_config",
     "evaluate_question_3way",
+    # Phase 5: dynamic per-role evaluation
+    "evaluate_question_per_role",
 ]
 
 logger = logging.getLogger("seed_specialist_routing")
@@ -757,5 +760,144 @@ def evaluate_question_3way(
 
     for action, reward in sorted(rewards.items()):
         logger.info(f"    reward[{action}] = {reward:.1f}")
+
+    return role_results, rewards, metadata
+
+
+# ── Phase 5: Dynamic per-role evaluation ─────────────────────────────
+
+
+def _interleave_roles(roles: list[dict]) -> list[dict]:
+    """Interleave heavy and light roles to reduce heavy-model contention.
+
+    Also separates roles that share the same port (e.g., worker_general
+    and worker_math both on 8082) to avoid back-to-back slot conflicts.
+    """
+    heavy = [r for r in roles if r["is_heavy"]]
+    light = [r for r in roles if not r["is_heavy"]]
+    result: list[dict] = []
+    hi, li = 0, 0
+    while hi < len(heavy) or li < len(light):
+        if hi < len(heavy):
+            result.append(heavy[hi])
+            hi += 1
+        if li < len(light):
+            result.append(light[li])
+            li += 1
+    return result
+
+
+def evaluate_question_per_role(
+    prompt_info: dict,
+    active_roles: list[dict],
+    url: str,
+    timeout: int,
+    client: "httpx.Client",
+    dry_run: bool = False,
+) -> tuple[dict[str, RoleResult], dict[str, float], dict[str, Any]]:
+    """Evaluate one question across all active roles dynamically.
+
+    Each role is tested with force_role=role_name and force_mode=""
+    (natural mode — the orchestrator's _select_mode() chooses direct
+    or repl based on question characteristics).  All roles can
+    delegate/escalate freely (allow_delegation=True).
+
+    Returns:
+        (role_results, rewards, metadata) where:
+        - role_results: {role_name: RoleResult} for each tested role
+        - rewards: {role_name: 0.0|1.0} binary per-role rewards
+        - metadata: {suite, cost_metrics, ...}
+    """
+    prompt = prompt_info["prompt"]
+    expected = prompt_info.get("expected", "")
+    scoring_method = prompt_info.get("scoring_method", "exact_match")
+    scoring_config = prompt_info.get("scoring_config", {})
+    suite = prompt_info["suite"]
+    image_path = prompt_info.get("image_path", "")
+    is_vl = bool(image_path)
+
+    role_results: dict[str, RoleResult] = {}
+    rewards: dict[str, float] = {}
+    cost_metrics: dict[str, dict] = {}
+
+    # Filter roles for VL capability
+    if is_vl:
+        eval_roles = [r for r in active_roles if r["name"] in VISION_ROLES]
+    else:
+        eval_roles = [r for r in active_roles if r["name"] not in VISION_ROLES]
+
+    if not eval_roles:
+        logger.warning("No eligible roles for suite=%s is_vl=%s", suite, is_vl)
+        return role_results, rewards, {"suite": suite, "all_infra": True}
+
+    # Interleave heavy/light to reduce contention
+    eval_roles = _interleave_roles(eval_roles)
+
+    logger.info(
+        "  Per-role eval: %d roles [%s]",
+        len(eval_roles),
+        ", ".join(r["name"] for r in eval_roles),
+    )
+
+    for role_info in eval_roles:
+        if state.shutdown:
+            break
+
+        role_name = role_info["name"]
+
+        # Adaptive timeout per role
+        role_timeout = _adaptive_timeout_s(
+            role=role_name,
+            mode="repl",  # Conservative default for timeout estimation
+            prompt=prompt,
+            is_vl=is_vl,
+            hard_timeout_s=timeout,
+        )
+
+        rr, resp = _eval_single_config(
+            prompt=prompt,
+            expected=expected,
+            scoring_method=scoring_method,
+            scoring_config=scoring_config,
+            role=role_name,
+            mode="",                  # Natural mode — orchestrator decides
+            url=url,
+            timeout=role_timeout,
+            client=client,
+            allow_delegation=True,    # All roles can delegate/escalate
+            image_path=image_path,
+            log_label=role_name,
+        )
+
+        role_results[role_name] = rr
+
+        # Cost metrics for this role
+        cost_metrics[role_name] = {
+            "elapsed_seconds": rr.elapsed_seconds,
+            "tokens_generated": rr.tokens_generated,
+            "predicted_tps": rr.predicted_tps,
+            "prompt_eval_ms": rr.prompt_eval_ms,
+            "generation_ms": rr.generation_ms,
+            "tools_used": rr.tools_used,
+        }
+
+        # Binary reward (skip infrastructure errors)
+        if rr.error_type == "infrastructure":
+            logger.info("    [INFRA_SKIP] %s", role_name)
+        else:
+            rewards[role_name] = success_reward(rr.passed)
+
+    # Metadata
+    metadata: dict[str, Any] = {
+        "suite": suite,
+        "cost_metrics": cost_metrics,
+        "all_infra": all(
+            rr.error_type == "infrastructure" for rr in role_results.values()
+        ),
+        "roles_tested": list(role_results.keys()),
+    }
+
+    for role_name, reward in sorted(rewards.items()):
+        logger.info("    reward[%s] = %.1f", role_name, reward)
 
     return role_results, rewards, metadata
