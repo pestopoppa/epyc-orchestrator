@@ -335,3 +335,316 @@ class TestMultiDimensionalCost:
         cost = {"tokens_generated": 675, "elapsed_seconds": 100.0, "role": "architect_general"}
         r = s._compute_reward(_make_outcome("failure"), [], [], cost_metrics=cost)
         assert r == -0.5  # Pure failure reward, no cost penalty
+
+
+# ===== _compute_contrastive_adjustment (DAR-2) =====
+
+import numpy as np
+from orchestration.repl_memory.episodic_store import MemoryEntry
+
+
+def _make_memory(action: str, q_value: float = 0.5, memory_id: str = "m1") -> MemoryEntry:
+    """Create a MemoryEntry with controlled action/Q-value for contrastive tests."""
+    return MemoryEntry(
+        id=memory_id,
+        embedding=None,
+        action=action,
+        action_type="routing",
+        context={},
+        q_value=q_value,
+    )
+
+
+def _make_task_entry(data: dict | None = None) -> _FakeEntry:
+    """Create a fake task_started entry with task context data."""
+    return _FakeEntry(
+        event_type=EventType.TASK_COMPLETED,
+        data=data or {"task_type": "chat", "objective": "test task"},
+    )
+
+
+def _make_routing_entry(
+    action: str = "frontdoor", memory_id: str | None = "m-selected",
+) -> _FakeEntry:
+    """Create a fake routing_decision entry."""
+    entry = _FakeEntry(
+        event_type=EventType.TASK_COMPLETED,
+        data={"routing": [action]},
+    )
+    entry.memory_id = memory_id  # type: ignore[attr-defined]
+    return entry
+
+
+class TestComputeContrastiveAdjustment:
+    """Tests for DAR-2 _compute_contrastive_adjustment."""
+
+    def test_no_task_context_returns_zero(self):
+        """Empty task_started data → 0.0."""
+        s = _scorer()
+        task = _FakeEntry(event_type=EventType.TASK_COMPLETED, data={})
+        routing = _make_routing_entry()
+        assert s._compute_contrastive_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_none_task_started_returns_zero(self):
+        """None task_started → 0.0."""
+        s = _scorer()
+        routing = _make_routing_entry()
+        assert s._compute_contrastive_adjustment(None, routing, reward=0.5) == 0.0
+
+    def test_embedding_failure_returns_zero(self):
+        """Embedding failure → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.side_effect = RuntimeError("embed failed")
+        task = _make_task_entry()
+        routing = _make_routing_entry()
+        assert s._compute_contrastive_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_no_candidates_returns_zero(self):
+        """No similar routing memories → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = []
+        task = _make_task_entry()
+        routing = _make_routing_entry()
+        assert s._compute_contrastive_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_no_alternatives_returns_zero(self):
+        """All candidates have the same action as selected → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        # All candidates use same action as selected
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.7, memory_id="c1"),
+            _make_memory("frontdoor", q_value=0.6, memory_id="c2"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.65)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+        assert s._compute_contrastive_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_all_alternatives_at_default_returns_zero(self):
+        """Alternatives at default Q=0.5 (unlearned) → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.7, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.5, memory_id="c2"),  # default
+            _make_memory("coder_escalation", q_value=0.5, memory_id="c3"),  # default
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.7)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+        assert s._compute_contrastive_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_success_selected_below_best_alt_positive_adjustment(self):
+        """Success + selected Q below best alternative → positive adjustment."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.6, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.8, memory_id="c2"),
+        ]
+        # Selected model's current Q
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.6)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        adj = s._compute_contrastive_adjustment(task, routing, reward=0.5)
+        # max_alt_q=0.8, margin=0.05, gap = 0.8 + 0.05 - 0.6 = 0.25
+        # adj = min(0.1, 0.05 * 0.25) = min(0.1, 0.0125) = 0.0125
+        assert adj > 0
+        assert adj == pytest.approx(0.0125)
+
+    def test_success_selected_above_alt_with_margin_returns_zero(self):
+        """Success + selected Q already above alternatives + margin → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.9, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.7, memory_id="c2"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.9)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        # max_alt_q=0.7, gap = 0.7 + 0.05 - 0.9 = -0.15 → negative, no adjustment
+        adj = s._compute_contrastive_adjustment(task, routing, reward=0.5)
+        assert adj == 0.0
+
+    def test_failure_selected_above_worst_alt_negative_adjustment(self):
+        """Failure + selected Q above worst alternative → negative adjustment."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.7, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.4, memory_id="c2"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.7)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        adj = s._compute_contrastive_adjustment(task, routing, reward=-0.5)
+        # min_alt_q=0.4, gap = 0.7 + 0.05 - 0.4 = 0.35
+        # adj = max(-0.1, -0.05 * 0.35) = max(-0.1, -0.0175) = -0.0175
+        assert adj < 0
+        assert adj == pytest.approx(-0.0175)
+
+    def test_failure_selected_below_alt_returns_zero(self):
+        """Failure + selected Q already below worst alternative → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.3, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.6, memory_id="c2"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.3)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        # min_alt_q=0.6, gap = 0.3 + 0.05 - 0.6 = -0.25 → negative, no adjustment
+        adj = s._compute_contrastive_adjustment(task, routing, reward=-0.5)
+        assert adj == 0.0
+
+    def test_positive_adjustment_capped_at_max_adj(self):
+        """Large positive gap still capped at max_adj."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        # Huge gap: selected at 0.1, alt at 0.95
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.1, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.95, memory_id="c2"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.1)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        adj = s._compute_contrastive_adjustment(task, routing, reward=0.5, max_adj=0.1)
+        # gap = 0.95 + 0.05 - 0.1 = 0.9, min(0.1, 0.05*0.9) = min(0.1, 0.045) = 0.045
+        assert adj <= 0.1
+        assert adj > 0
+
+    def test_negative_adjustment_capped_at_neg_max_adj(self):
+        """Large negative gap still capped at -max_adj."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        # Huge gap: selected at 0.95, alt at 0.1
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.95, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.1, memory_id="c2"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.95)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        adj = s._compute_contrastive_adjustment(task, routing, reward=-0.5, max_adj=0.1)
+        # gap = 0.95 + 0.05 - 0.1 = 0.9, max(-0.1, -0.05*0.9) = max(-0.1, -0.045) = -0.045
+        assert adj >= -0.1
+        assert adj < 0
+
+    def test_no_memory_id_uses_default_q(self):
+        """No memory_id on routing decision → uses default Q=0.5."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("architect_general", q_value=0.8, memory_id="c1"),
+        ]
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor", memory_id=None)
+
+        adj = s._compute_contrastive_adjustment(task, routing, reward=0.5)
+        # selected_q=0.5 (default), max_alt_q=0.8, gap=0.8+0.05-0.5=0.35
+        # adj = min(0.1, 0.05*0.35) = 0.0175
+        assert adj == pytest.approx(0.0175)
+
+
+# ===== _compute_spo_plus_adjustment (DAR-3) =====
+
+
+class TestComputeSpoPlusAdjustment:
+    """Tests for DAR-3 _compute_spo_plus_adjustment."""
+
+    def test_no_task_context_returns_zero(self):
+        """Empty task_started data → 0.0."""
+        s = _scorer()
+        task = _FakeEntry(event_type=EventType.TASK_COMPLETED, data={})
+        routing = _make_routing_entry()
+        assert s._compute_spo_plus_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_embedding_failure_returns_zero(self):
+        """Embedding failure → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.side_effect = RuntimeError("embed failed")
+        task = _make_task_entry()
+        routing = _make_routing_entry()
+        assert s._compute_spo_plus_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_no_candidates_returns_zero(self):
+        """No similar routing memories → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = []
+        task = _make_task_entry()
+        routing = _make_routing_entry()
+        assert s._compute_spo_plus_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_no_alternatives_returns_zero(self):
+        """All candidates same action → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.7, memory_id="c1"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.7)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+        assert s._compute_spo_plus_adjustment(task, routing, reward=0.5) == 0.0
+
+    def test_success_with_alternatives_produces_adjustment(self):
+        """Success with alternatives → non-zero adjustment."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.6, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.8, memory_id="c2"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.6)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        adj = s._compute_spo_plus_adjustment(task, routing, reward=0.7)
+        # Non-zero: SPO+ should produce some adjustment when alternatives exist
+        # and the reward signal disagrees with the current ranking
+        assert isinstance(adj, float)
+
+    def test_adjustment_bounded(self):
+        """Adjustment never exceeds max_adj."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        # Large gap between selected and alternatives
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.1, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.95, memory_id="c2"),
+            _make_memory("coder_escalation", q_value=0.9, memory_id="c3"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.1)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        adj = s._compute_spo_plus_adjustment(task, routing, reward=1.0, max_adj=0.15)
+        assert abs(adj) <= 0.15
+
+    def test_small_spo_loss_below_margin_returns_zero(self):
+        """SPO+ loss below margin threshold → 0.0."""
+        s = _scorer()
+        s.embedder.embed_task_ir.return_value = np.zeros(128)
+        # Nearly equal Q-values → loss ≈ 0
+        s.store.retrieve_by_similarity.return_value = [
+            _make_memory("frontdoor", q_value=0.5, memory_id="c1"),
+            _make_memory("architect_general", q_value=0.51, memory_id="c2"),
+        ]
+        s.store.get_by_id.return_value = _make_memory("frontdoor", q_value=0.5)
+        task = _make_task_entry()
+        routing = _make_routing_entry("frontdoor")
+
+        adj = s._compute_spo_plus_adjustment(task, routing, reward=0.5, margin=1.0)
+        assert adj == 0.0

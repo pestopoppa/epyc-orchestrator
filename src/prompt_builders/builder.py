@@ -155,14 +155,29 @@ class PromptBuilder:
     def _resolve_tools(self) -> str:
         """Resolve tools prompt text from file, style, or default.
 
-        Priority: tools_file > style-based selection > DEFAULT.
+        Priority: tools_file > TOOL_DEFINITION_VARIANT env > style-based > DEFAULT.
         File read is ~1ms — no caching needed (enables hot-swap).
+
+        P3d A/B harness: set TOOL_DEFINITION_VARIANT=verbose|default|compact
+        to override style-based selection for A/B testing.
         """
         if self.config.tools_file:
             try:
                 return Path(self.config.tools_file).read_text().strip()
             except OSError as exc:
                 _log.warning("Failed to read tools_file %s: %s", self.config.tools_file, exc)
+
+        # P3d: A/B variant override via env var
+        import os
+        variant = os.environ.get("TOOL_DEFINITION_VARIANT", "").strip().lower()
+        if variant == "verbose":
+            from src.prompt_builders.constants import VERBOSE_ROOT_LM_TOOLS
+            return VERBOSE_ROOT_LM_TOOLS
+        elif variant == "compact":
+            return COMPACT_ROOT_LM_TOOLS
+        elif variant == "default":
+            return DEFAULT_ROOT_LM_TOOLS
+
         if self.config.style == PromptStyle.MINIMAL:
             return COMPACT_ROOT_LM_TOOLS
         return DEFAULT_ROOT_LM_TOOLS

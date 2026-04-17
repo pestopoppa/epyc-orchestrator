@@ -30,6 +30,45 @@ from src.registry_loader import RoleConfig
 
 logger = logging.getLogger(__name__)
 
+# Logit probe output file (append-only JSONL)
+_LOGIT_PROBE_PATH = "/mnt/raid0/llm/epyc-orchestrator/data/logit_probe.jsonl"
+
+
+def _write_logit_probe(prompt: str, first_token_probs: dict) -> None:
+    """Append first-token log-probabilities to JSONL for routing classifier P1.5.
+
+    Args:
+        prompt: The input prompt (hashed, not stored raw).
+        first_token_probs: First token probability data from llama.cpp completion_probabilities.
+    """
+    import hashlib
+    import json
+    from pathlib import Path
+
+    try:
+        probs = first_token_probs.get("probs", [])
+        if not probs:
+            return
+
+        entry = {
+            "timestamp": time.time(),
+            "prompt_hash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "prompt_len": len(prompt),
+            "first_token": first_token_probs.get("content", ""),
+            "top_k_probs": [
+                {"tok": p.get("tok_str", ""), "prob": p.get("prob", 0.0)}
+                for p in probs[:64]
+            ],
+        }
+
+        path = Path(_LOGIT_PROBE_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    except Exception:
+        logger.debug("logit_probe write failed", exc_info=True)
+
 
 def _server_cfg():
     from src.config import get_config
@@ -323,6 +362,16 @@ class LlamaServerBackend(ModelBackend):
                     "Spec accept: %d/%d (%.1f%%) for %s",
                     n_accepted, n_drafted, accept_rate * 100, role_config.name,
                 )
+
+            # Logit probe: capture first-token probabilities for routing classifier
+            from src.features import features
+            if features().logit_probe and role_config.name == "frontdoor":
+                completion_probs = result_data.get("completion_probabilities", [])
+                if completion_probs:
+                    _write_logit_probe(
+                        prompt=request.prompt or "",
+                        first_token_probs=completion_probs[0] if completion_probs else {},
+                    )
 
             return InferenceResult(
                 role=role_config.name,
@@ -727,6 +776,11 @@ class LlamaServerBackend(ModelBackend):
         # Prefix cache slot routing (id_slot=-1 means auto-assign)
         if request.slot_id is not None:
             payload["id_slot"] = request.slot_id
+
+        # Logit probe: request top-k token probabilities for routing classifier
+        from src.features import features
+        if features().logit_probe and role_config.name == "frontdoor":
+            payload["n_probs"] = 64
 
         return payload
 

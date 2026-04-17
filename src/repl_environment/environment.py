@@ -399,6 +399,7 @@ class REPLEnvironment(
             "grep": self._grep,
             "FINAL": self._final,
             "FINAL_VAR": self._final_var,
+            "STUCK": self._stuck,
             # Document processing tools
             "ocr_document": self._ocr_document,
             "analyze_figure": self._analyze_figure,
@@ -418,6 +419,8 @@ class REPLEnvironment(
             "batch_web_search": self._batch_web_search,
             "search_and_verify": self._search_and_verify,
             "peek_grep": self._peek_grep,
+            "batch_llm_query": self._batch_llm_query,
+            "workspace_scan": self._workspace_scan,
             # Memory tools
             "recall": self._recall,
             # Code & document retrieval (NextPLAID multi-vector search)

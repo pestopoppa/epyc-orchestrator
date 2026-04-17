@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import math
 import subprocess
+import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -215,6 +216,40 @@ class PDFRouter:
             logger.error(f"pdftotext not found at {self.pdftotext_path}")
             return "", 0.0
 
+    def _extract_with_opendataloader(self, pdf_path: Path) -> tuple[str, float]:
+        """Extract text using OpenDataLoader (markdown output with structure).
+
+        Requires opendataloader-pdf package and Java 11+ runtime.
+        Falls back to empty string if unavailable.
+
+        Returns:
+            (markdown_text, latency_ms)
+        """
+        start = time.perf_counter()
+
+        try:
+            from opendataloader_pdf.wrapper import convert as odl_convert
+
+            result = odl_convert(str(pdf_path), format="markdown")
+            latency_ms = (time.perf_counter() - start) * 1000
+
+            if not result or not result.strip():
+                logger.warning("OpenDataLoader returned empty output for %s", pdf_path.name)
+                return "", latency_ms
+
+            return result, latency_ms
+
+        except ImportError:
+            logger.warning(
+                "opendataloader-pdf not installed. "
+                "Install with: pip install opendataloader-pdf"
+            )
+            return "", 0.0
+        except Exception as e:
+            latency_ms = (time.perf_counter() - start) * 1000
+            logger.warning("OpenDataLoader extraction failed for %s: %s", pdf_path.name, e)
+            return "", latency_ms
+
     def _extract_figures_pymupdf(
         self, pdf_path: Path, output_dir: Optional[Path] = None
     ) -> list[ExtractedFigure]:
@@ -396,9 +431,20 @@ class PDFRouter:
             except Exception as e:
                 logger.debug("Failed to get page count: %s", e)
 
-        # Step 1: Try pdftotext (fast path)
+        # Step 1: Try text extraction (pdftotext or OpenDataLoader)
         if not force_ocr:
-            text, pdftotext_latency = self._extract_with_pdftotext(pdf_path)
+            use_odl = os.environ.get("PDF_EXTRACTOR", "pdftotext").lower() == "opendataloader"
+            if use_odl:
+                text, extract_latency = self._extract_with_opendataloader(pdf_path)
+                extract_method = "opendataloader"
+                # Fall back to pdftotext if ODL returns empty
+                if not text:
+                    text, extract_latency = self._extract_with_pdftotext(pdf_path)
+                    extract_method = "pdftotext"
+            else:
+                text, extract_latency = self._extract_with_pdftotext(pdf_path)
+                extract_method = "pdftotext"
+
             quality_score, needs_ocr = self._assess_text_quality(text)
 
             if not needs_ocr and text:
@@ -413,7 +459,7 @@ class PDFRouter:
                 total_latency = (time.perf_counter() - total_start) * 1000
 
                 logger.info(
-                    f"PDF extracted via pdftotext: {len(text)} chars, "
+                    f"PDF extracted via {extract_method}: {len(text)} chars, "
                     f"{len(figures)} figures in {total_latency:.0f}ms"
                 )
 
@@ -421,7 +467,7 @@ class PDFRouter:
                     text=text,
                     figures=figures,
                     page_count=page_count,
-                    method="pdftotext",
+                    method=extract_method,
                     quality_score=quality_score,
                     latency_ms=total_latency,
                     ocr_required=False,

@@ -34,6 +34,18 @@ def _make_repl_with_registry(use_toon=False):
     return repl, registry
 
 
+def _make_repl_with_llm(use_toon=False):
+    """Create a REPLEnvironment with mocked llm_primitives."""
+    from src.repl_environment.types import REPLConfig
+
+    config = REPLConfig(use_toon_encoding=use_toon)
+    llm = MagicMock()
+    repl = REPLEnvironment(
+        context="test", llm_primitives=llm, role="worker_general", config=config,
+    )
+    return repl, llm
+
+
 def _make_repl(use_toon=False):
     """Create a plain REPLEnvironment with TOON disabled for JSON tests."""
     from src.repl_environment.types import REPLConfig
@@ -280,3 +292,210 @@ class TestPeekGrep:
             assert "1 matches" in result
         finally:
             os.unlink(tmp_path)
+
+
+class TestBatchLlmQueryDisabled:
+    """Tests for batch_llm_query when feature flag is off."""
+
+    def test_batch_llm_query_disabled(self):
+        """Flag off returns feature disabled message."""
+        repl = _make_repl()
+        result = repl._batch_llm_query(["summarize this", "translate that"])
+        assert "Combined ops disabled" in result
+
+    def test_batch_llm_query_disabled_explicit_off(self):
+        """Explicit '0' value keeps feature disabled."""
+        os.environ["REPL_COMBINED_OPS"] = "0"
+        repl = _make_repl()
+        result = repl._batch_llm_query(["prompt"])
+        assert "Combined ops disabled" in result
+
+
+class TestBatchLlmQueryEnabled:
+    """Tests for batch_llm_query when feature flag is on."""
+
+    def test_batch_llm_query_enabled(self):
+        """Flag on, mock LLM, returns structured results."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm(use_toon=False)
+
+        llm.llm_batch.return_value = ["Summary of doc A", "Translation of doc B"]
+
+        result = repl._batch_llm_query(["summarize doc A", "translate doc B"], role="worker")
+        parsed = json.loads(result)
+
+        assert parsed["operation"] == "batch_llm_query"
+        assert parsed["prompt_count"] == 2
+        assert parsed["role"] == "worker"
+        assert len(parsed["results"]) == 2
+        assert parsed["results"][0]["response"] == "Summary of doc A"
+        assert parsed["results"][1]["response"] == "Translation of doc B"
+        llm.llm_batch.assert_called_once_with(
+            ["summarize doc A", "translate doc B"], role="worker", persona=None,
+        )
+
+    def test_batch_llm_query_caps_at_5(self):
+        """More than 5 prompts gets capped to 5."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm(use_toon=False)
+
+        llm.llm_batch.return_value = [f"response_{i}" for i in range(5)]
+        prompts = [f"prompt_{i}" for i in range(8)]
+
+        result = repl._batch_llm_query(prompts)
+        parsed = json.loads(result)
+
+        assert parsed["prompt_count"] == 5
+        assert parsed["capped"] is True
+        # Verify only 5 prompts were passed to the backend
+        call_args = llm.llm_batch.call_args
+        assert len(call_args[0][0]) == 5
+
+    def test_batch_llm_query_empty_prompts(self):
+        """Empty prompt list returns error."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, _ = _make_repl_with_llm()
+        result = repl._batch_llm_query([])
+        assert "[ERROR: No prompts provided]" in result
+
+    def test_batch_llm_query_no_llm_primitives(self):
+        """No LLM primitives returns error."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl = _make_repl()
+        result = repl._batch_llm_query(["prompt"])
+        assert "No LLM primitives" in result
+
+    def test_batch_llm_query_with_persona(self):
+        """Persona is passed through to llm_batch."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm(use_toon=False)
+
+        llm.llm_batch.return_value = ["response"]
+
+        result = repl._batch_llm_query(["prompt"], role="coder", persona="analyst")
+        parsed = json.loads(result)
+
+        assert parsed["persona"] == "analyst"
+        assert parsed["role"] == "coder"
+        llm.llm_batch.assert_called_once_with(
+            ["prompt"], role="coder", persona="analyst",
+        )
+
+    def test_batch_llm_query_toon_encoding(self):
+        """TOON encoding produces text format with headers."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm(use_toon=True)
+
+        llm.llm_batch.return_value = ["The answer is 42"]
+
+        result = repl._batch_llm_query(["what is the meaning?"], role="worker")
+        assert "=== batch_llm_query" in result
+        assert "role=worker" in result
+        assert "The answer is 42" in result
+        assert '--- prompt 1:' in result
+
+    def test_batch_llm_query_increments_exploration(self):
+        """Exploration counter is incremented."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm()
+
+        llm.llm_batch.return_value = ["response"]
+        initial = repl._exploration_calls
+
+        repl._batch_llm_query(["prompt"])
+
+        assert repl._exploration_calls == initial + 1
+
+
+class TestWorkspaceScanDisabled:
+    """Tests for workspace_scan when feature flag is off."""
+
+    def test_workspace_scan_disabled(self):
+        """Flag off returns feature disabled message."""
+        repl = _make_repl()
+        result = repl._workspace_scan()
+        assert "Combined ops disabled" in result
+
+
+class TestWorkspaceScanEnabled:
+    """Tests for workspace_scan when feature flag is on."""
+
+    def test_workspace_scan_no_history(self):
+        """Empty frecency store returns informative message."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl = _make_repl(use_toon=False)
+
+        # Use in-memory DB so it's empty
+        from src.repl_environment.file_recency import FrecencyStore
+        repl._frecency_store = FrecencyStore(db_path=":memory:")
+
+        result = repl._workspace_scan()
+        assert "No file access history" in result
+
+    def test_workspace_scan_returns_ranked_files(self):
+        """Returns frecency-ranked file list."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl = _make_repl(use_toon=False)
+
+        from src.repl_environment.file_recency import FrecencyStore
+        store = FrecencyStore(db_path=":memory:")
+        # Record accesses to build history
+        store.record_access("/src/main.py")
+        store.record_access("/src/main.py")  # accessed twice → higher score
+        store.record_access("/src/utils.py")
+        repl._frecency_store = store
+
+        result = repl._workspace_scan(limit=10)
+        parsed = json.loads(result)
+
+        assert parsed["operation"] == "workspace_scan"
+        assert parsed["file_count"] == 2
+        # main.py accessed twice, should rank first
+        assert parsed["files"][0]["path"] == "/src/main.py"
+        assert parsed["files"][0]["frecency_score"] > parsed["files"][1]["frecency_score"]
+
+    def test_workspace_scan_query_reranks(self):
+        """Query re-ranks results by filename relevance."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl = _make_repl(use_toon=False)
+
+        from src.repl_environment.file_recency import FrecencyStore
+        store = FrecencyStore(db_path=":memory:")
+        # utils.py has more accesses but query matches router.py
+        for _ in range(5):
+            store.record_access("/src/utils.py")
+        store.record_access("/src/router.py")
+        repl._frecency_store = store
+
+        result = repl._workspace_scan(query="router", limit=10)
+        parsed = json.loads(result)
+
+        # router.py should rank first due to query relevance despite fewer accesses
+        assert parsed["files"][0]["path"] == "/src/router.py"
+
+    def test_workspace_scan_toon_encoding(self):
+        """TOON encoding produces text format with scores."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl = _make_repl(use_toon=True)
+
+        from src.repl_environment.file_recency import FrecencyStore
+        store = FrecencyStore(db_path=":memory:")
+        store.record_access("/src/main.py")
+        repl._frecency_store = store
+
+        result = repl._workspace_scan()
+        assert "=== workspace_scan" in result
+        assert "/src/main.py" in result
+
+    def test_workspace_scan_increments_exploration(self):
+        """Exploration counter is incremented."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl = _make_repl()
+
+        from src.repl_environment.file_recency import FrecencyStore
+        repl._frecency_store = FrecencyStore(db_path=":memory:")
+        initial = repl._exploration_calls
+
+        repl._workspace_scan()
+
+        assert repl._exploration_calls == initial + 1

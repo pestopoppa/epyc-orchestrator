@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "name": "vision",
+  "version": "1.0.0",
+  "description": "Vision analysis tools for image understanding, face recognition, and visual search. Model-agnostic: requires an active model with mmproj (multimodal projector) for VL operations.",
+  "enabled": true,
+  "dependencies": ["pillow", "insightface", "onnxruntime"],
+  "settings_schema": {
+    "max_image_dimension": {
+      "type": "integer",
+      "default": 2048,
+      "description": "Maximum image dimension before resizing"
+    },
+    "default_analyzers": {
+      "type": "string",
+      "default": "exif,vl_describe",
+      "description": "Comma-separated default analyzer list"
+    }
+  },
+  "tools": [
+    {
+      "name": "vision_analyze",
+      "description": "Analyze an image using the vision pipeline. Returns EXIF data, VL description, face detection, and/or CLIP embeddings depending on enabled analyzers. Requires a multimodal model (with mmproj) to be active for VL operations.",
+      "module": "src.tools.vision.analyze",
+      "function": "vision_analyze",
+      "category": "specialized",
+      "parameters": {
+        "image_path": {
+          "type": "string",
+          "required": true,
+          "description": "Path to image file to analyze"
+        },
+        "analyzers": {
+          "type": "string",
+          "required": false,
+          "description": "Comma-separated analyzer names: exif, face_detect, face_embed, vl_describe, vl_ocr, vl_structured, clip_embed. Default: exif,vl_describe"
+        },
+        "vl_prompt": {
+          "type": "string",
+          "required": false,
+          "description": "Custom prompt for VL description (default: 'Describe this image in detail')"
+        }
+      }
+    },
+    {
+      "name": "vision_search",
+      "description": "Search previously analyzed images by text query using CLIP embeddings. Requires prior analysis with clip_embed analyzer.",
+      "module": "src.tools.vision.analyze",
+      "function": "vision_search",
+      "category": "specialized",
+      "parameters": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Natural language search query"
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum results to return (default 5)"
+        }
+      }
+    },
+    {
+      "name": "vision_face_identify",
+      "description": "Identify known faces in an image by matching against the face database. Requires prior face clustering/labeling.",
+      "module": "src.tools.vision.analyze",
+      "function": "vision_face_identify",
+      "category": "specialized",
+      "parameters": {
+        "image_path": {
+          "type": "string",
+          "required": true,
+          "description": "Path to image file"
+        },
+        "threshold": {
+          "type": "string",
+          "required": false,
+          "description": "Similarity threshold for face matching (default 0.6)"
+        }
+      }
+    }
+  ]
+}

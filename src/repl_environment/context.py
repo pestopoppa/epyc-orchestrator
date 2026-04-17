@@ -219,6 +219,92 @@ class _ContextMixin:
         raise FinalSignal(str(self.artifacts[var_name]))
 
     # ------------------------------------------------------------------
+    # Stuck signal (non-terminating recovery aid)
+    # ------------------------------------------------------------------
+
+    def _stuck(self, reason: str) -> str:
+        """Signal that the REPL is stuck and request recovery guidance.
+
+        Unlike FINAL() which terminates execution, STUCK() is a non-terminating
+        signal that:
+        1. Logs the stuck reason to the exploration log
+        2. Queries episodic memory for similar stuck situations (if available)
+        3. Suggests recovery actions based on tool co-occurrence patterns
+        4. Partially resets the turn counter to allow more exploration
+
+        Args:
+            reason: Why the REPL is stuck (free-form description).
+
+        Returns:
+            Recovery guidance string with suggested next actions.
+        """
+        self._exploration_calls += 1
+
+        # Build exploration summary for context
+        strategy_summary = self._exploration_log.get_strategy_summary()
+        last_tools = [
+            e.function for e in self._exploration_log.events[-5:]
+        ] if self._exploration_log.events else []
+
+        # Query episodic memory for similar stuck situations
+        memory_guidance = ""
+        if hasattr(self, "_recall") and callable(getattr(self, "_recall", None)):
+            try:
+                recall_result = self._recall(f"stuck: {reason}", limit=3)
+                if recall_result and "No memories" not in recall_result:
+                    memory_guidance = f"\n## Similar past situations\n{recall_result}"
+            except Exception:
+                pass  # Recall is best-effort
+
+        # Query tool co-occurrence for recovery suggestions
+        tool_suggestions = ""
+        if last_tools:
+            last_tool = last_tools[-1]
+            try:
+                from src.repl_environment.suggestions import generate_suggestions
+                suggestions = generate_suggestions(last_tool, max_suggestions=3)
+                if suggestions:
+                    tool_suggestions = f"\n## Suggested next tools\n{suggestions}"
+            except Exception:
+                pass  # Suggestions are best-effort
+
+        # Build recovery guidance
+        lines = [
+            f"## Stuck: {reason}",
+            f"Exploration so far: {strategy_summary.get('total_events', 0)} calls, "
+            f"strategy: {strategy_summary.get('strategy_type', 'none')}",
+        ]
+        if last_tools:
+            lines.append(f"Recent tools: {', '.join(last_tools)}")
+
+        lines.append("\n## Recovery options")
+        lines.append("1. Try a different search query or approach angle")
+        lines.append("2. Use `recall('your question')` to check episodic memory")
+        lines.append("3. Use `escalate('reason')` to hand off to a specialist model")
+        lines.append("4. Use `FINAL('partial answer')` if you have a partial result")
+
+        if memory_guidance:
+            lines.append(memory_guidance)
+        if tool_suggestions:
+            lines.append(tool_suggestions)
+
+        guidance = "\n".join(lines)
+
+        # Log the stuck event
+        self._exploration_log.add_event(
+            "stuck",
+            {
+                "reason": reason,
+                "exploration_calls": self._exploration_calls,
+                "last_tools": last_tools,
+                "strategy": strategy_summary.get("strategy_type", "none"),
+            },
+            {"guidance_length": len(guidance)},
+        )
+
+        return guidance
+
+    # ------------------------------------------------------------------
     # Session persistence (findings)
     # ------------------------------------------------------------------
 

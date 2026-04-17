@@ -197,6 +197,8 @@ def auto_compress_if_needed(
     threshold: float = 0.80,
     keep_ratio: float = 0.50,
     gap_warn_threshold: float = GAP_WARN_THRESHOLD,
+    role: str = "",
+    layer_adaptive_profile: str = "",
     **kwargs,
 ) -> CompressResult | None:
     """Auto-trigger compression when KV utilization exceeds threshold.
@@ -207,6 +209,9 @@ def auto_compress_if_needed(
         threshold: Utilization fraction that triggers compression (0.80 = 80%)
         keep_ratio: Target keep ratio when compressing
         gap_warn_threshold: Warn if post-compress utilization still above this
+        role: Model role name (enables layer-adaptive compression when set)
+        layer_adaptive_profile: Layer weight profile ("balanced", "aggressive", "conservative").
+            Empty string disables layer-adaptive; uses uniform weights.
         **kwargs: Additional args passed to compress_slot()
 
     Returns:
@@ -220,7 +225,15 @@ def auto_compress_if_needed(
         "Auto-compress triggered: port=%d slot=%d util=%.1f%% > threshold=%.1f%%",
         port, slot_id, utilization * 100, threshold * 100,
     )
-    result = compress_slot(port, slot_id, keep_ratio=keep_ratio, **kwargs)
+
+    # Use layer-adaptive compression when role is known and profile specified
+    if role and layer_adaptive_profile and role in MODEL_LAYER_COUNTS:
+        result = compress_slot_adaptive(
+            port, role, slot_id=slot_id, keep_ratio=keep_ratio,
+            profile=layer_adaptive_profile, **kwargs,
+        )
+    else:
+        result = compress_slot(port, slot_id, keep_ratio=keep_ratio, **kwargs)
 
     # Gap accumulation guardrail: if post-compress utilization is still high,
     # gaps are consuming the context window. Recommend slot erase + re-prefill.
@@ -239,6 +252,115 @@ def auto_compress_if_needed(
     return result
 
 
+# ── Layer-Adaptive Compression ──────────────────────────────────
+
+# Layer-adaptive keep ratios from AM P2 validation (Qwen2.5-7B):
+#   Early layers (L0): tolerate 10x compression (keep_ratio ≈ 0.10)
+#   Middle layers (L14): tolerate 5x compression (keep_ratio ≈ 0.20)
+#   Deep layers (L27): tolerate 2x compression (keep_ratio ≈ 0.50)
+#
+# The EA scorer uses layer_weights to bias which layers' importance
+# scores contribute most to the eviction decision. Higher weight =
+# that layer's per-token scores contribute more to the aggregated
+# ranking. Deep layers get higher weight because their tokens are
+# harder to compress without quality loss.
+
+# Preset profiles mapping layer depth to importance weight
+LAYER_PROFILES = {
+    "conservative": {"early": 1.0, "mid": 2.0, "deep": 5.0},
+    "aggressive": {"early": 0.5, "mid": 1.0, "deep": 5.0},
+    "balanced": {"early": 1.0, "mid": 3.0, "deep": 10.0},
+}
+
+
+def compute_layer_adaptive_weights(
+    n_layers: int,
+    profile: str = "balanced",
+) -> list[float]:
+    """Compute per-layer importance weights for EA scoring.
+
+    Divides layers into three zones (early/mid/deep, each ~1/3) and
+    assigns importance weights from the named profile. Deep layers
+    get higher weights because their attention patterns are more
+    sensitive to token eviction.
+
+    Args:
+        n_layers: Number of attention layers in the model.
+        profile: One of "conservative", "aggressive", "balanced".
+
+    Returns:
+        List of n_layers floats — per-layer importance weights.
+    """
+    if profile not in LAYER_PROFILES:
+        log.warning("Unknown layer profile %r, using balanced", profile)
+        profile = "balanced"
+
+    p = LAYER_PROFILES[profile]
+    third = max(1, n_layers // 3)
+
+    weights = []
+    for i in range(n_layers):
+        if i < third:
+            weights.append(p["early"])
+        elif i < 2 * third:
+            weights.append(p["mid"])
+        else:
+            weights.append(p["deep"])
+
+    return weights
+
+
+# Known model layer counts (attention layers only, from model_registry.yaml)
+MODEL_LAYER_COUNTS = {
+    "frontdoor": 28,          # Qwen3.5-35B-A3B (28 attention layers)
+    "coder_escalation": 64,   # Qwen2.5-Coder-32B
+    "architect_general": 64,  # Qwen3.5-122B-A10B
+    "architect_coding": 64,   # REAP-246B
+    "worker_explore": 28,     # Qwen3-Coder-30B-A3B
+    "ingest_long_context": 32,  # Qwen3-Next-80B-A3B (SSM layers excluded)
+}
+
+
+def compress_slot_adaptive(
+    port: int,
+    role: str,
+    slot_id: int = 0,
+    keep_ratio: float = 0.50,
+    profile: str = "balanced",
+    **kwargs,
+) -> CompressResult:
+    """Compress KV cache with layer-adaptive importance weighting.
+
+    Computes per-layer weights based on the model's layer count and
+    the specified profile, then delegates to compress_slot().
+
+    Args:
+        port: llama-server port.
+        role: Model role name (for layer count lookup).
+        slot_id: Slot ID (usually 0).
+        keep_ratio: Fraction of KV entries to keep.
+        profile: Layer weight profile ("conservative", "aggressive", "balanced").
+        **kwargs: Additional args for compress_slot().
+
+    Returns:
+        CompressResult with eviction details.
+    """
+    n_layers = MODEL_LAYER_COUNTS.get(role)
+    if n_layers is None:
+        log.info("No layer count for role %r, using uniform weights", role)
+        return compress_slot(port, slot_id, keep_ratio=keep_ratio, **kwargs)
+
+    weights = compute_layer_adaptive_weights(n_layers, profile)
+    log.info(
+        "Layer-adaptive compress: role=%s n_layers=%d profile=%s weights=[%.1f..%.1f..%.1f]",
+        role, n_layers, profile, weights[0], weights[len(weights) // 2], weights[-1],
+    )
+    return compress_slot(
+        port, slot_id, keep_ratio=keep_ratio,
+        layer_weights=weights, **kwargs,
+    )
+
+
 # Production port assignments (from orchestrator_stack.py)
 PRODUCTION_PORTS = {
     "frontdoor": 8070,
@@ -252,15 +374,20 @@ PRODUCTION_PORTS = {
 def auto_compress_all(
     threshold: float = 0.80,
     keep_ratio: float = 0.50,
+    layer_adaptive_profile: str = "",
     **kwargs,
 ) -> dict[str, CompressResult | None]:
     """Auto-compress all production slots above threshold.
+
+    Args:
+        layer_adaptive_profile: If non-empty, use layer-adaptive weights for all roles.
 
     Returns dict of role → CompressResult (or None if below threshold).
     """
     results = {}
     for role, port in PRODUCTION_PORTS.items():
         results[role] = auto_compress_if_needed(
-            port, slot_id=0, threshold=threshold, keep_ratio=keep_ratio, **kwargs,
+            port, slot_id=0, threshold=threshold, keep_ratio=keep_ratio,
+            role=role, layer_adaptive_profile=layer_adaptive_profile, **kwargs,
         )
     return results

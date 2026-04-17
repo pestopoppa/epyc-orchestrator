@@ -314,6 +314,19 @@ def _web_research_impl(
             "search_elapsed_ms": search_result.get("elapsed_ms", 0),
         }
 
+    # Step 1.5: Rerank by semantic relevance (feature-gated)
+    reranked = False
+    try:
+        from src.features import features
+        if features().web_research_rerank:
+            from src.tools.web.colbert_reranker import rerank_snippets, is_available
+            if is_available():
+                results = rerank_snippets(query, results, top_k=max_pages)
+                reranked = True
+                logger.info("ColBERT reranked %d results for query: %s", len(results), query[:60])
+    except Exception as e:
+        logger.debug("ColBERT rerank skipped: %s", e)
+
     # Step 2: Fetch top pages in parallel
     pages_to_fetch = results[:max_pages]
     fetched = {}
@@ -435,6 +448,7 @@ def _web_research_impl(
         "dedup_chars_saved": dedup_stats["chars_saved"],
         "total_elapsed_ms": total_elapsed,
         "search_backend": search_backend,
+        "reranked": reranked,
     }
 
 

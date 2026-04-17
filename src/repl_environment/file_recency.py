@@ -149,6 +149,27 @@ class FrecencyStore:
         pair_count = row[0]
         return 1.0 + self.combo_weight * math.log(pair_count + 1)
 
+    def top_files(self, limit: int = 20) -> list[tuple[str, float]]:
+        """Return the top-K files ranked by current frecency score.
+
+        Recomputes scores at query time to account for recency decay.
+
+        Args:
+            limit: Maximum number of files to return.
+
+        Returns:
+            List of (path, score) tuples, highest score first.
+        """
+        rows = self._conn.execute(
+            "SELECT path, access_count, last_access FROM file_access"
+        ).fetchall()
+        if not rows:
+            return []
+        scored = [(path, self._compute_score(count, last_access))
+                  for path, count, last_access in rows]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:limit]
+
     def _compute_score(self, access_count: int, last_access: float) -> float:
         """Compute the frecency score from raw data."""
         age_hours = (time.time() - last_access) / 3600.0

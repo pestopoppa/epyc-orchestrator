@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import os
+import random
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -559,6 +561,7 @@ class HybridRouter:
         graph_router_weight: float = 0.3,
         routing_classifier: Optional["RoutingClassifier"] = None,
         classifier_confidence_threshold: float = 0.8,
+        exploration_epsilon: float = 0.0,
     ):
         self.retriever = retriever
         self.rule_based = rule_based_router
@@ -566,7 +569,35 @@ class HybridRouter:
         self.graph_router_weight = graph_router_weight
         self.routing_classifier = routing_classifier
         self.classifier_confidence_threshold = classifier_confidence_threshold
+        # DAR-3: Epsilon-greedy exploration for counterfactual data collection.
+        # When > 0, with probability epsilon, pick a random alternative from
+        # retrieval results instead of the best. Set via SPO_PLUS_EPSILON env var.
+        self.exploration_epsilon = float(
+            os.environ.get("SPO_PLUS_EPSILON", str(exploration_epsilon))
+        )
         self.last_decision_meta: Dict[str, Any] = {}
+
+        # DAR-4: Bilinear scorer for zero cold-start model routing.
+        # Initialized lazily on first use when BILINEAR_SCORER_ENABLED=1.
+        self._bilinear_scorer = None
+        if os.environ.get("BILINEAR_SCORER_ENABLED", "0") == "1":
+            try:
+                from orchestration.repl_memory.bilinear_scorer import (
+                    BilinearScorer,
+                    extract_model_features,
+                    extract_prompt_features,
+                )
+                from orchestration.repl_memory.q_scorer import ScoringConfig
+                features = extract_model_features(ScoringConfig())
+                self._bilinear_scorer = BilinearScorer(features)
+                # Try loading saved weights
+                import pathlib
+                weights_path = str(pathlib.Path(__file__).parent / "bilinear_scorer_weights.npz")
+                self._bilinear_scorer.load(weights_path)
+                logger.info("DAR-4 bilinear scorer initialized (%d models)", len(features))
+            except Exception as e:
+                logger.warning("DAR-4 bilinear scorer init failed: %s", e)
+                self._bilinear_scorer = None
 
     def _record_decision_meta(
         self,
@@ -782,6 +813,19 @@ class HybridRouter:
                         }
                         return (routing, "classifier")
 
+        # DAR-4: Bilinear scorer provides a prior from model features.
+        # Log scores for telemetry; blending into retrieval is future work.
+        if self._bilinear_scorer is not None:
+            try:
+                from orchestration.repl_memory.bilinear_scorer import extract_prompt_features
+                prompt_features = extract_prompt_features(task_ir)
+                bilinear_scores = self._bilinear_scorer.predict_all(prompt_features)
+                self.last_decision_meta["bilinear_scores"] = {
+                    k: round(v, 4) for k, v in list(bilinear_scores.items())[:5]
+                }
+            except Exception:
+                pass
+
         # Try learned routing first
         results = self.retriever.retrieve_for_routing(task_ir)
         results = self._apply_priors(results, priors)
@@ -809,18 +853,40 @@ class HybridRouter:
             if best_action:
                 action = best_action[0]
                 confidence = best_action[1]
+                strategy = "learned"
+
+                # DAR-3: Epsilon-greedy exploration for counterfactual data.
+                # With probability epsilon, pick a random alternative action.
+                if (
+                    self.exploration_epsilon > 0
+                    and random.random() < self.exploration_epsilon
+                    and len(results) > 1
+                ):
+                    # Collect unique alternative actions
+                    alt_actions = [
+                        r.memory.action for r in results[1:]
+                        if r.memory.action != action
+                    ]
+                    if alt_actions:
+                        action = random.choice(alt_actions)
+                        strategy = "learned_explore"
+                        logger.info(
+                            "DAR-3 epsilon-greedy: exploring %s instead of best %s",
+                            action, best_action[0],
+                        )
+
                 # Parse action as routing decision
                 routing = self._parse_routing_action(action)
                 # Track last role for cache affinity (Phase 2.5)
                 if routing:
                     self.retriever.update_last_role(routing[0])
                 self._record_decision_meta(
-                    strategy="learned",
+                    strategy=strategy,
                     chosen_action=action,
                     results=results,
                     risk_gate=risk_gate,
                 )
-                return (routing, "learned")
+                return (routing, strategy)
 
         # Fall back to rule-based routing
         routing = self.rule_based.route(task_ir)
