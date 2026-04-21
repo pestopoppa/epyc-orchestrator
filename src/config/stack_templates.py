@@ -34,6 +34,24 @@ TOTAL_SYSTEM_RAM_GB = 1130
 RESERVED_RAM_GB = 200
 MAX_STACK_RAM_GB = TOTAL_SYSTEM_RAM_GB - RESERVED_RAM_GB
 
+# Default budget split: HOT tier mlocks; WARM tier is loaded but evictable.
+DEFAULT_MAX_MLOCK_GB = int(MAX_STACK_RAM_GB * 0.8)  # 744 GB
+DEFAULT_MAX_TOTAL_GB = MAX_STACK_RAM_GB             # 930 GB
+DEFAULT_RESERVE_KV_GB = 100                          # minimum headroom for KV caches
+
+
+@dataclass
+class ResourceBudget:
+    """Fine-grained memory budget for a stack template (NIB2-19 / DS-7 Gap 4).
+
+    Separates HOT-tier mlock'd memory from total loaded memory (HOT + WARM)
+    and reserves a floor for KV caches. Any of these fields being exceeded
+    causes template validation to fail-fast.
+    """
+    max_mlock_gb: float = DEFAULT_MAX_MLOCK_GB
+    max_total_gb: float = DEFAULT_MAX_TOTAL_GB
+    reserve_kv_gb: float = DEFAULT_RESERVE_KV_GB
+
 
 @dataclass
 class InstanceConfig:
@@ -79,6 +97,7 @@ class StackTemplate:
     description: str = ""
     version: str = "1"
     roles: dict[str, RoleConfig] = field(default_factory=dict)
+    resource_budget: ResourceBudget = field(default_factory=ResourceBudget)
 
     @property
     def total_ram_gb(self) -> float:
@@ -87,6 +106,16 @@ class StackTemplate:
     @property
     def total_instances(self) -> int:
         return sum(r.instance_count for r in self.roles.values())
+
+    @property
+    def hot_ram_gb(self) -> float:
+        """RAM consumed by HOT-tier roles only (the mlock'd set)."""
+        return sum(r.total_ram_gb for r in self.roles.values() if r.tier == "HOT")
+
+    @property
+    def loaded_ram_gb(self) -> float:
+        """RAM consumed by HOT + WARM roles (loaded but possibly evictable)."""
+        return sum(r.total_ram_gb for r in self.roles.values() if r.tier in ("HOT", "WARM"))
 
     def role_names(self) -> list[str]:
         return list(self.roles.keys())
@@ -120,10 +149,18 @@ def load_template(name: str, templates_dir: Path | None = None) -> StackTemplate
     if not isinstance(data, dict):
         raise ValueError(f"Template {name}: expected dict, got {type(data).__name__}")
 
+    budget_data = data.get("resource_budget") or {}
+    budget = ResourceBudget(
+        max_mlock_gb=float(budget_data.get("max_mlock_gb", DEFAULT_MAX_MLOCK_GB)),
+        max_total_gb=float(budget_data.get("max_total_gb", DEFAULT_MAX_TOTAL_GB)),
+        reserve_kv_gb=float(budget_data.get("reserve_kv_gb", DEFAULT_RESERVE_KV_GB)),
+    )
+
     template = StackTemplate(
         name=data.get("name", name),
         description=data.get("description", ""),
         version=str(data.get("version", "1")),
+        resource_budget=budget,
     )
 
     for role_name, role_data in data.get("roles", {}).items():
@@ -217,15 +254,30 @@ def validate_template(
     errors: list[str] = []
     warnings: list[str] = []
 
-    # 1. Memory budget
-    total_ram = template.total_ram_gb
-    if total_ram > MAX_STACK_RAM_GB:
+    # 1. Memory budget (fine-grained: HOT mlock vs total loaded vs KV reserve)
+    budget = template.resource_budget
+    hot_ram = template.hot_ram_gb
+    loaded_ram = template.loaded_ram_gb
+    if hot_ram > budget.max_mlock_gb:
         errors.append(
-            f"Memory budget exceeded: {total_ram:.0f} GB > {MAX_STACK_RAM_GB} GB limit"
+            f"HOT mlock budget exceeded: {hot_ram:.0f} GB > "
+            f"{budget.max_mlock_gb:.0f} GB limit"
         )
-    elif total_ram > MAX_STACK_RAM_GB * 0.85:
+    elif hot_ram > budget.max_mlock_gb * 0.85:
         warnings.append(
-            f"Memory usage high: {total_ram:.0f} GB ({total_ram/MAX_STACK_RAM_GB*100:.0f}% of limit)"
+            f"HOT mlock usage high: {hot_ram:.0f} GB "
+            f"({hot_ram / budget.max_mlock_gb * 100:.0f}% of mlock limit)"
+        )
+    if loaded_ram > budget.max_total_gb:
+        errors.append(
+            f"Total loaded budget exceeded: {loaded_ram:.0f} GB > "
+            f"{budget.max_total_gb:.0f} GB limit"
+        )
+    remaining_gb = TOTAL_SYSTEM_RAM_GB - loaded_ram
+    if remaining_gb < budget.reserve_kv_gb:
+        errors.append(
+            f"KV reserve below minimum: {remaining_gb:.0f} GB headroom < "
+            f"{budget.reserve_kv_gb:.0f} GB required for KV caches + OS"
         )
 
     # 2. Port conflicts
