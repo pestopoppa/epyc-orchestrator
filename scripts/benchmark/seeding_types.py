@@ -330,6 +330,10 @@ class RoleResult:
     factual_risk_adjusted: float = 0.0
     factual_risk_band: str = ""
     factual_risk_features: dict[str, float] = field(default_factory=dict)
+    # Difficulty signal (reasoning-compression Action 3 / NIB2-35)
+    # Populated from routing_meta so NIB2-32 re-validation has queryable data.
+    difficulty_score: float = 0.0
+    difficulty_band: str = ""
 
 
 @dataclass

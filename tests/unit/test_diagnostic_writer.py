@@ -36,6 +36,41 @@ class TestBuildDiagnostic:
         assert isinstance(diag["anomaly_score"], float)
         assert "ts" in diag
         assert diag["delegation_diagnostics"] == {}
+        # NIB2-35: shadow routing telemetry defaults
+        assert diag["difficulty_score"] == 0.0
+        assert diag["difficulty_band"] == ""
+        assert diag["factual_risk_score"] == 0.0
+        assert diag["factual_risk_band"] == ""
+
+    def test_shadow_routing_telemetry_populated(self):
+        """NIB2-35: shadow routing fields flow from build_diagnostic to output."""
+        diag = build_diagnostic(
+            question_id="simpleqa/q42",
+            suite="simpleqa",
+            config="SELF:direct",
+            role="frontdoor",
+            mode="direct",
+            passed=False,
+            answer="Napoleon",
+            expected="Wellington",
+            scoring_method="f1",
+            error=None,
+            error_type="none",
+            tokens_generated=10,
+            elapsed_s=2.0,
+            role_history=["frontdoor"],
+            delegation_events=[],
+            tools_used=0,
+            tools_called=[],
+            difficulty_score=0.27,
+            difficulty_band="medium",
+            factual_risk_score=0.82,
+            factual_risk_band="high",
+        )
+        assert diag["difficulty_score"] == 0.27
+        assert diag["difficulty_band"] == "medium"
+        assert diag["factual_risk_score"] == 0.82
+        assert diag["factual_risk_band"] == "high"
 
     def test_delegation_diagnostics_included(self):
         diag = build_diagnostic(

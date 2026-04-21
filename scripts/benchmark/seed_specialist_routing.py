@@ -548,6 +548,11 @@ def run_batch_3way(
                             compaction_tokens_saved=rr.compaction_tokens_saved,
                             think_harder_expected_roi=rr.think_harder_expected_roi,
                             compression_metrics=rr.compression_metrics,
+                            # Shadow routing telemetry (NIB2-35)
+                            difficulty_score=rr.difficulty_score,
+                            difficulty_band=rr.difficulty_band,
+                            factual_risk_score=rr.factual_risk_score,
+                            factual_risk_band=rr.factual_risk_band,
                         )
                         append_diagnostic(diag)
                         debugger.add_diagnostic(diag)
@@ -692,6 +697,11 @@ def run_batch_3way(
                                     compaction_tokens_saved=rr_diag.compaction_tokens_saved,
                                     think_harder_expected_roi=rr_diag.think_harder_expected_roi,
                                     compression_metrics=rr_diag.compression_metrics,
+                                    # Shadow routing telemetry (NIB2-35)
+                                    difficulty_score=rr_diag.difficulty_score,
+                                    difficulty_band=rr_diag.difficulty_band,
+                                    factual_risk_score=rr_diag.factual_risk_score,
+                                    factual_risk_band=rr_diag.factual_risk_band,
                                 )
                                 retry_diag["is_retry"] = True
                                 retry_diag["retry_tag"] = tag
@@ -1567,7 +1577,7 @@ Examples (legacy mode - DEPRECATED):
         # Save JSON output (legacy format for backwards compat)
         output_path = args.output
         if output_path is None:
-            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             output_path = str(
                 PROJECT_ROOT / "benchmarks" / "results" / "orchestrator"
                 / f"seeding_{ts}.json"
@@ -1587,7 +1597,7 @@ Examples (legacy mode - DEPRECATED):
                 "alias_map": alias_map,
             },
             "results": [asdict(r) for r in results],
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)

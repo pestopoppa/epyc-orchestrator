@@ -217,6 +217,12 @@ def _build_role_result(
         web_research_results=resp.get("web_research_results", []),
         # Scratchpad insights (Search-R1 Step 5)
         scratchpad_insights=resp.get("scratchpad_insights", []),
+        # Factual-risk shadow telemetry (NIB2-35, routing-intelligence Phase 5)
+        factual_risk_score=float(resp.get("factual_risk_score", 0.0) or 0.0),
+        factual_risk_band=str(resp.get("factual_risk_band", "") or ""),
+        # Difficulty signal shadow telemetry (NIB2-35, reasoning-compression Action 3)
+        difficulty_score=float(resp.get("difficulty_score", 0.0) or 0.0),
+        difficulty_band=str(resp.get("difficulty_band", "") or ""),
     )
     return rr, error_type
 
