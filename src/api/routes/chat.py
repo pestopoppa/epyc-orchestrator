@@ -380,8 +380,23 @@ async def _handle_chat(
             else "interactive"
         ),
     ):
+        def _attach_routing_telemetry(resp: ChatResponse) -> ChatResponse:
+            """NIB2-35: stamp shadow routing signals onto the response so
+            seeding_diagnostics.jsonl can persist them for offline analysis."""
+            try:
+                resp.factual_risk_score = float(getattr(routing, "factual_risk_score", 0.0) or 0.0)
+                resp.factual_risk_band = str(getattr(routing, "factual_risk_band", "") or "")
+                resp.difficulty_score = float(getattr(routing, "difficulty_score", 0.0) or 0.0)
+                resp.difficulty_band = str(getattr(routing, "difficulty_band", "") or "")
+            except Exception:
+                # Best-effort telemetry attachment; never break the response.
+                pass
+            return resp
+
         def _finalize(resp: ChatResponse) -> ChatResponse:
-            return _annotate_error(_attach_budget_diagnostics(resp, primitives))
+            return _annotate_error(
+                _attach_routing_telemetry(_attach_budget_diagnostics(resp, primitives))
+            )
 
         # Stage 5: Architect plan review gate
         _plan_review_gate(request, routing, primitives, state)
@@ -432,7 +447,7 @@ async def _handle_chat(
                 request, routing, primitives, state, start_time, initial_role, execution_mode,
             )
             if vision_mm is not None:
-                return _annotate_error(vision_mm)
+                return _finalize(vision_mm)
 
         # Stage 7.9: Try-cheap-first speculative pre-filter.
         # Attempts the task with the cheapest HOT model (7B, 44 t/s) before
@@ -442,7 +457,7 @@ async def _handle_chat(
             request, routing, primitives, state, start_time, initial_role, execution_mode,
         )
         if cheap_result is not None:
-            return _annotate_error(cheap_result)
+            return _finalize(cheap_result)
 
         # Stage 8: Execute selected mode (with fallthrough on failure)
 

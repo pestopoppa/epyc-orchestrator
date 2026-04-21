@@ -32,6 +32,23 @@ class DelegationEvent(BaseModel):
 class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
 
+    # Routing-intelligence shadow telemetry (NIB2-35). Populated from the
+    # RoutingResult so seeding benchmarks can persist difficulty/risk
+    # signals into seeding_diagnostics.jsonl for offline analysis
+    # (NIB2-32, reasoning-compression Action 3).
+    factual_risk_score: float = Field(
+        default=0.0, description="Prompt-side factual-risk score [0, 1] (shadow)"
+    )
+    factual_risk_band: str = Field(
+        default="", description="Factual-risk band: low | medium | high"
+    )
+    difficulty_score: float = Field(
+        default=0.0, description="Prompt-side difficulty score [0, 1] (shadow)"
+    )
+    difficulty_band: str = Field(
+        default="", description="Difficulty band: easy | medium | hard"
+    )
+
     answer: str = Field(..., description="The final answer")
     turns: int = Field(..., description="Number of orchestration turns used")
     tokens_used: int = Field(default=0, description="Approximate tokens used")

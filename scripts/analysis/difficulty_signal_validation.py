@@ -9,28 +9,23 @@ on moving the difficulty signal from shadow to enforce mode.
 Required inputs (the script auto-detects whichever are present):
 
 1. ``orchestrator/logs/seeding_diagnostics.jsonl`` — per-question eval
-   results with ``passed`` / ``expected`` / ``suite`` / ``config``.
+   results with ``passed``, ``difficulty_score``, ``difficulty_band``.
+   Fields populated by NIB2-35 persistence fix (2026-04-21); pre-fix
+   records will lack the fields and be skipped automatically.
 2. ``orchestrator/logs/progress/*.jsonl`` — routing decisions with
-   ``routing_meta.difficulty_score`` and ``routing_meta.difficulty_band``.
+   ``routing_meta.difficulty_score`` and ``routing_meta.difficulty_band``
+   (fallback source when diagnostics lack the fields).
 3. Optional: raw Package A / Package D output JSONL at any user-specified
    path via ``--raw-routing-decisions``.
 
-Important data-availability note (2026-04-21):
+Data-availability note (2026-04-21):
 
-The reasoning-compression handoff (L93) references 635 Package A routing
-decisions with shadow difficulty predictions, analyzed 2026-04-06 to
-produce "92.3% easy, 0% hard at old thresholds." Those raw decisions
-were analyzed in-session and NOT committed to disk — the `data/package_a/`
-directories now contain only `env_flags.txt`. Additionally,
-`seeding_diagnostics.jsonl` does not currently persist
-`routing_meta.difficulty_score`, so the diagnostic stream alone cannot
-be joined to shadow predictions.
-
-Running this script today therefore reports INSUFFICIENT_DATA. The
-script is deliverable-ready for when either:
-  (a) a persistence fix lands that routes `routing_meta.difficulty_*`
-      into `seeding_diagnostics.jsonl`, or
-  (b) a fresh Package A/D run writes routing-decision JSONL to disk.
+NIB2-35 landed the persistence fix: ``seeding_diagnostics.jsonl`` now
+carries ``difficulty_score``/``difficulty_band`` directly on each record
+(sourced from ``ChatResponse`` which mirrors ``RoutingResult``). Records
+written before the fix lacked these fields and this script falls back to
+``INSUFFICIENT_DATA`` on those. Run a fresh benchmark to accumulate new
+records; once n >= 100 the script produces a live verdict.
 
 Verdict thresholds (from plan NIB2-32):
   - **ENFORCE-READY**    Spearman rho >= 0.3 between band ordinal
@@ -85,17 +80,22 @@ def parse_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _extract_difficulty(entry: dict[str, Any]) -> tuple[float | None, str | None]:
-    """Return (difficulty_score, difficulty_band) from whichever place they live."""
+    """Return (difficulty_score, difficulty_band) from whichever place they live.
+
+    Prefers the NIB2-35 top-level fields (written by seeding_diagnostics
+    post-2026-04-21); falls back to ``routing_meta.difficulty_*`` nested
+    under a progress-log entry.
+    """
+    s = entry.get("difficulty_score")
+    b = entry.get("difficulty_band")
+    if isinstance(s, (int, float)) and b:
+        return float(s), str(b)
     rm = entry.get("routing_meta") or {}
     if isinstance(rm, dict):
         s = rm.get("difficulty_score")
         b = rm.get("difficulty_band")
         if isinstance(s, (int, float)) and b:
             return float(s), str(b)
-    s = entry.get("difficulty_score")
-    b = entry.get("difficulty_band")
-    if isinstance(s, (int, float)) and b:
-        return float(s), str(b)
     return None, None
 
 
@@ -112,8 +112,36 @@ def join_diagnostics_with_progress(
     diagnostics: list[dict[str, Any]],
     progress: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Attempt a best-effort join by question_id."""
-    # Index progress entries with difficulty data by question_id
+    """Merge difficulty telemetry with pass/fail outcomes.
+
+    Two paths:
+      1. Post-NIB2-35 diagnostics already carry ``difficulty_*`` on each
+         record — use them directly.
+      2. Pre-NIB2-35 diagnostics lack the fields — fall back to joining
+         against progress logs by ``question_id`` (legacy path).
+    """
+    joined: list[dict[str, Any]] = []
+
+    # Path 1: diagnostics with inline difficulty_* (NIB2-35 format).
+    direct_qids: set[str] = set()
+    for d in diagnostics:
+        score, band = _extract_difficulty(d)
+        passed = _extract_outcome(d)
+        if score is None or band is None or passed is None:
+            continue
+        qid = d.get("question_id")
+        if qid:
+            direct_qids.add(str(qid))
+        joined.append({
+            "question_id": qid,
+            "suite": d.get("suite"),
+            "difficulty_score": score,
+            "difficulty_band": band,
+            "passed": passed,
+        })
+
+    # Path 2: legacy join by question_id for diagnostics that predate
+    # NIB2-35. Skip any qid we've already covered via path 1.
     prog_by_qid: dict[str, tuple[float, str]] = {}
     for p in progress:
         qid = p.get("question_id") or p.get("task_id") or p.get("id")
@@ -124,15 +152,16 @@ def join_diagnostics_with_progress(
             continue
         prog_by_qid[str(qid)] = (s, b)
 
-    joined: list[dict[str, Any]] = []
     for d in diagnostics:
         qid = d.get("question_id")
-        if not qid or qid not in prog_by_qid:
+        if not qid or str(qid) in direct_qids:
+            continue
+        if str(qid) not in prog_by_qid:
             continue
         passed = _extract_outcome(d)
         if passed is None:
             continue
-        score, band = prog_by_qid[qid]
+        score, band = prog_by_qid[str(qid)]
         joined.append({
             "question_id": qid,
             "suite": d.get("suite"),
@@ -140,6 +169,7 @@ def join_diagnostics_with_progress(
             "difficulty_band": band,
             "passed": passed,
         })
+
     return joined
 
 

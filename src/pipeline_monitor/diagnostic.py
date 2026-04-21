@@ -76,6 +76,13 @@ def build_diagnostic(
     model_graded_evals: dict[str, Any] | None = None,
     # Tool output compression metrics
     compression_metrics: dict[str, Any] | None = None,
+    # Shadow routing telemetry (NIB2-35): difficulty + factual-risk signals
+    # pulled from RoutingResult so offline analyzers (NIB2-32) have a
+    # queryable data stream.
+    difficulty_score: float = 0.0,
+    difficulty_band: str = "",
+    factual_risk_score: float = 0.0,
+    factual_risk_band: str = "",
 ) -> dict[str, Any]:
     """Build a diagnostic record from evaluation results.
 
@@ -149,6 +156,11 @@ def build_diagnostic(
         "model_graded_evals": model_graded_evals or {},
         # Tool output compression metrics
         "compression_metrics": compression_metrics or {},
+        # Shadow routing telemetry (NIB2-35)
+        "difficulty_score": float(difficulty_score or 0.0),
+        "difficulty_band": str(difficulty_band or ""),
+        "factual_risk_score": float(factual_risk_score or 0.0),
+        "factual_risk_band": str(factual_risk_band or ""),
     }
 
 
