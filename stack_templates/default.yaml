@@ -15,6 +15,13 @@ name: default
 description: Production baseline (2026-04-11) — 30/30 stack, pre-warm 3 roles
 version: "1"
 
+# Fine-grained resource budget (NIB2-19 / DS-7 Gap 4). Omitting this block
+# falls back to system defaults (744 / 930 / 100). System total is 1130 GB.
+resource_budget:
+  max_mlock_gb: 800    # HOT tier ceiling (production stack uses ~752 GB)
+  max_total_gb: 930    # HOT + WARM combined ceiling
+  reserve_kv_gb: 100   # minimum headroom for KV caches + OS
+
 roles:
   frontdoor:
     model: Qwen3.5-35B-A3B

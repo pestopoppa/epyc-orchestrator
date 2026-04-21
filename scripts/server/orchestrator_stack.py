@@ -1464,6 +1464,25 @@ def start_document_formalizer() -> ProcessInfo | None:
 
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the orchestrator stack."""
+    # DS-7 / NIB2-19: --migrate-to handler (runs before any start path)
+    migrate_to = getattr(args, "migrate_to", None)
+    if migrate_to:
+        dry_run = getattr(args, "dry_run", False)
+        try:
+            from src.config.stack_migration import migrate_to_template
+        except Exception as exc:  # noqa: BLE001
+            print(f"[DS-7] Migration module unavailable: {exc}")
+            return 1
+        print(f"[DS-7] Migrating stack → template '{migrate_to}' "
+              f"({'DRY-RUN' if dry_run else 'LIVE'})")
+        registry_path = (
+            Path(_PATHS.get("model_registry", ""))
+            if _PATHS.get("model_registry") else None
+        )
+        result = migrate_to_template(migrate_to, dry_run=dry_run, registry_path=registry_path)
+        print(result.summary())
+        return 0 if result.ok else 1
+
     # DS-7: Stack template validation (before any other work)
     stack_profile = getattr(args, "stack_profile", None)
     validate_only = getattr(args, "validate_only", False)
@@ -2317,6 +2336,17 @@ def main() -> int:
         "--validate-only",
         action="store_true",
         help="Validate stack template and exit (use with --stack-profile)",
+    )
+    start_parser.add_argument(
+        "--migrate-to",
+        metavar="NAME",
+        help="Migrate running stack to stack_templates/<NAME>.yaml via full "
+             "restart (DS-7 / NIB2-19). Use with --dry-run to plan only.",
+    )
+    start_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With --migrate-to, plan the migration without stopping any servers.",
     )
 
     # Stop command
