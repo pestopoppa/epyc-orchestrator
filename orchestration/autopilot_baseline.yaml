@@ -42,3 +42,47 @@ notes: >
   Previous baseline q=1.72 was from 105-question 3-way eval (different methodology).
   Using T2 trial-45 q=1.16 as floor so autopilot can only improve from here.
   Sentinel pool expanded 10→39 (2026-04-09) — per_suite_quality pending Package B data.
+
+# Diversity baseline (NIB2-42 / EV-8 amended). Populated by the one-day
+# baseline pass: 4 production roles × 20 open-ended prompts × 4 completions
+# at T=0.7 + T=1.0 ladder point. All values null until that run lands.
+# SafetyGate operates in warn-only mode until this table is filled in AND
+# Verbalized Sampling replication on Qwen3-30B-A3B produces recovery data.
+diversity_baseline:
+  frontdoor:
+    diversity_entropy: null
+    diversity_distinct2: null
+    diversity_self_bleu: null
+    diversity_ttr: null
+    diversity_semantic_embedding_agreement: null
+    vs_recovery_ratio: null
+  worker:
+    diversity_entropy: null
+    diversity_distinct2: null
+    diversity_self_bleu: null
+    diversity_ttr: null
+    diversity_semantic_embedding_agreement: null
+    vs_recovery_ratio: null
+  coder:
+    diversity_entropy: null
+    diversity_distinct2: null
+    diversity_self_bleu: null
+    diversity_ttr: null
+    diversity_semantic_embedding_agreement: null
+    vs_recovery_ratio: null
+  architect_general:
+    diversity_entropy: null
+    diversity_distinct2: null
+    diversity_self_bleu: null
+    diversity_ttr: null
+    diversity_semantic_embedding_agreement: null
+    vs_recovery_ratio: null
+
+diversity_baseline_meta:
+  captured_at: null
+  n_prompts: 20
+  n_completions_per_prompt: 4
+  temperature_baseline: 0.7
+  temperature_ladder_point: 1.0
+  vs_prompt_version: "v1 (intake-441 Tier 2b 2026-04-22)"
+  ceiling_distinct2: 1.0   # uncalibrated upper bound — replace with base-model measurement when available
