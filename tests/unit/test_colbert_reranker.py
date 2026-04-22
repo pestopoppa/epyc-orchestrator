@@ -144,3 +144,29 @@ class TestIsAvailable:
         # This checks the actual filesystem
         result = is_available()
         assert isinstance(result, bool)
+
+
+class TestLateonModelPathOverride:
+    """Test LATEON_MODEL_PATH env var override (NIB2-47)."""
+
+    def test_default_points_to_gte_moderncolbert(self, monkeypatch):
+        """With no env var, module resolves to the GTE-ModernColBERT-v1 directory."""
+        monkeypatch.delenv("LATEON_MODEL_PATH", raising=False)
+        import importlib
+        import src.tools.web.colbert_reranker as cr
+        importlib.reload(cr)
+        assert str(cr._MODEL_DIR) == "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx"
+        assert cr._MODEL_PATH.name == "model_int8.onnx"
+
+    def test_env_var_overrides_to_lateon(self, monkeypatch):
+        """LATEON_MODEL_PATH redirects the module-level constants."""
+        monkeypatch.setenv("LATEON_MODEL_PATH", "/mnt/raid0/llm/models/lateon-onnx-int8")
+        import importlib
+        import src.tools.web.colbert_reranker as cr
+        importlib.reload(cr)
+        assert str(cr._MODEL_DIR) == "/mnt/raid0/llm/models/lateon-onnx-int8"
+        assert cr._MODEL_PATH == cr._MODEL_DIR / "model_int8.onnx"
+        assert cr._TOKENIZER_PATH == cr._MODEL_DIR / "tokenizer.json"
+        # Restore default for subsequent tests.
+        monkeypatch.delenv("LATEON_MODEL_PATH", raising=False)
+        importlib.reload(cr)

@@ -72,6 +72,14 @@ sandbox = [
     # Python sandboxing for REPL code execution
     "RestrictedPython>=7.0",
 ]
+colbert-export = [
+    # One-off ColBERT/LateOn ONNX export + parity validation (NIB2-47).
+    # Not needed at runtime — onnxruntime + tokenizers alone handle inference.
+    "transformers>=4.45.0",
+    "torch>=2.2.0",
+    "optimum[onnxruntime]>=1.21.0",
+    "pylate>=1.2.0",
+]
 
 [project.scripts]
 orch = "src.cli_orch:main"
