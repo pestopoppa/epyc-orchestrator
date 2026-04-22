@@ -66,6 +66,14 @@ class EvalResult:
     # recovery" → favours WARN over REJECT in multi-signal decisions.
     vs_recovery_ratio: float = math.nan
 
+    # NIB2-45 MD-7 / EV-9 rubric stubs (populated by LLM-as-judge scoring
+    # when deep_research_mode is on; otherwise left NaN). SafetyGate is
+    # NaN-safe on every dimension, so these default to unavailable.
+    rubric_reasoning_trajectory: float = math.nan
+    rubric_tool_calls: float = math.nan
+    rubric_outline: float = math.nan
+    rubric_content_stage: float = math.nan
+
     # Free-form annotations (trial_id, commit, role, etc.).
     metadata: dict[str, Any] = field(default_factory=dict)
 
