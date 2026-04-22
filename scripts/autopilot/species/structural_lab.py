@@ -424,3 +424,243 @@ class StructuralLab:
             "checkpoints": len(self.list_checkpoints()),
             "has_production_best": (CHECKPOINT_DIR / "production_best").exists(),
         }
+
+    # ── NIB2-41: MDL distillation + staleness mutation primitives ─────
+
+    def mdl_compress_strategies(
+        self,
+        *,
+        strategy_store: Any = None,
+        window_trials: int | None = None,
+        min_cluster_size: int = 3,
+        jaccard_threshold: float = 0.60,
+        compression_threshold: float = 0.20,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Cluster near-duplicate strategies and promote clusters whose MDL
+        compresses by >= ``compression_threshold`` into conventions.
+
+        Based on `research/deep-dives/token-savior-extractable-patterns.md` §3.
+        MDL proxied by ``zlib.compress(text.encode())`` length.
+        """
+        import zlib
+
+        if strategy_store is None:
+            import sys as _sys
+            _sys.path.insert(0, str(ORCH_ROOT / "orchestration" / "repl_memory"))
+            from strategy_store import StrategyStore  # type: ignore
+            strategy_store = StrategyStore()
+            _owns_store = True
+        else:
+            _owns_store = False
+
+        try:
+            rows = strategy_store._conn.execute(
+                "SELECT id, insight, source_trial_id FROM strategies ORDER BY source_trial_id DESC"
+            ).fetchall()
+            if window_trials is not None:
+                rows = rows[:window_trials]
+
+            if not rows:
+                return {"status": "ok", "clusters_examined": 0, "conventions_promoted": 0,
+                        "total_compression_saved_bytes": 0}
+
+            # Tokenize once.
+            def tokens(text: str) -> set[str]:
+                return {t for t in text.lower().split() if len(t) >= 3}
+
+            entries = [
+                {"id": r["id"], "insight": r["insight"], "trial": r["source_trial_id"],
+                 "toks": tokens(r["insight"])}
+                for r in rows
+            ]
+
+            # Agglomerative Jaccard clustering (simple O(n^2), fine for <10k entries).
+            clusters: list[list[int]] = []
+            assigned: set[int] = set()
+            for i, e_i in enumerate(entries):
+                if i in assigned:
+                    continue
+                cluster = [i]
+                assigned.add(i)
+                for j in range(i + 1, len(entries)):
+                    if j in assigned:
+                        continue
+                    if not e_i["toks"] or not entries[j]["toks"]:
+                        continue
+                    jac = len(e_i["toks"] & entries[j]["toks"]) / max(
+                        len(e_i["toks"] | entries[j]["toks"]), 1
+                    )
+                    if jac >= jaccard_threshold:
+                        cluster.append(j)
+                        assigned.add(j)
+                if len(cluster) >= min_cluster_size:
+                    clusters.append(cluster)
+
+            conventions_promoted = 0
+            bytes_saved = 0
+            for cluster in clusters:
+                insights = [entries[idx]["insight"] for idx in cluster]
+                ids = [entries[idx]["id"] for idx in cluster]
+                trials = [entries[idx]["trial"] for idx in cluster]
+
+                # Representative = longest insight (most tokens of the shared semantics).
+                rep = max(insights, key=len)
+                rep_bytes = len(zlib.compress(rep.encode()))
+
+                mdl_before = sum(len(zlib.compress(ins.encode())) for ins in insights)
+                # Delta = insight with rep tokens removed (coarse but fast).
+                rep_toks = set(rep.lower().split())
+                deltas = [
+                    " ".join(t for t in ins.split() if t.lower() not in rep_toks)
+                    for ins in insights
+                ]
+                delta_bytes = sum(len(zlib.compress(d.encode())) if d else 0 for d in deltas)
+                mdl_after = rep_bytes + delta_bytes
+
+                if mdl_before == 0:
+                    continue
+                ratio = (mdl_before - mdl_after) / mdl_before
+                if ratio < compression_threshold:
+                    continue
+
+                if not dry_run:
+                    strategy_store.add_convention(
+                        representative=rep,
+                        member_ids=ids,
+                        compression_ratio=ratio,
+                        span_trials=(min(trials), max(trials)),
+                    )
+                conventions_promoted += 1
+                bytes_saved += (mdl_before - mdl_after)
+
+            return {
+                "status": "ok",
+                "clusters_examined": len(clusters),
+                "conventions_promoted": conventions_promoted,
+                "total_compression_saved_bytes": bytes_saved,
+                "dry_run": dry_run,
+            }
+        finally:
+            if _owns_store:
+                strategy_store.close()
+
+    def staleness_invalidate_strategies(
+        self,
+        *,
+        strategy_store: Any = None,
+        scan_targets: list[str] | None = None,
+        quarantine_threshold: float = 0.40,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Content-hash scan: when a referenced file's hash changes, bump the
+        Bayesian validity counter on every strategy whose metadata cites it.
+
+        Cascade: quarantined strategies invalidate the routing-classifier
+        checkpoint if its metadata trail references the quarantined id.
+        """
+        from ._content_hash import hash_file
+
+        if scan_targets is None:
+            scan_targets = [
+                str(PROMPTS_DIR),
+                str(CLASSIFIER_CONFIG),
+                str(ORCH_ROOT / "orchestration" / "model_registry.yaml"),
+            ]
+
+        if strategy_store is None:
+            import sys as _sys
+            _sys.path.insert(0, str(ORCH_ROOT / "orchestration" / "repl_memory"))
+            from strategy_store import StrategyStore  # type: ignore
+            strategy_store = StrategyStore()
+            _owns_store = True
+        else:
+            _owns_store = False
+
+        try:
+            from pathlib import Path as _P
+            # Collect current hashes for every scan target (file or dir).
+            current: dict[str, str] = {}
+            for target in scan_targets:
+                tp = _P(target)
+                if tp.is_dir():
+                    for f in tp.rglob("*"):
+                        if f.is_file():
+                            h = hash_file(f)
+                            if h is not None:
+                                current[str(f)] = h
+                elif tp.is_file():
+                    h = hash_file(tp)
+                    if h is not None:
+                        current[str(tp)] = h
+
+            changed: list[str] = []
+            for path, h_now in current.items():
+                h_prev = strategy_store.get_content_hash(path)
+                if h_prev is not None and h_prev != h_now:
+                    changed.append(path)
+                if not dry_run:
+                    strategy_store.upsert_content_hash(path, h_now)
+
+            # For each strategy referencing a changed path, bump validity failure.
+            import json as _json
+            rows = strategy_store._conn.execute(
+                "SELECT id, metadata_json FROM strategies"
+            ).fetchall()
+
+            strategies_checked = len(rows)
+            quarantined_count = 0
+            suspected_count = 0
+            touched_ids: list[str] = []
+
+            if changed:
+                changed_set = set(changed)
+                for r in rows:
+                    meta = _json.loads(r["metadata_json"] or "{}")
+                    refs = meta.get("refs", []) or meta.get("content_refs", [])
+                    if not any(ref in changed_set for ref in refs):
+                        continue
+                    if dry_run:
+                        touched_ids.append(r["id"])
+                        continue
+                    validity, quarantined = strategy_store.update_validity(
+                        r["id"], failure=True, quarantine_threshold=quarantine_threshold,
+                    )
+                    touched_ids.append(r["id"])
+                    if quarantined:
+                        quarantined_count += 1
+                    elif validity < 0.60:
+                        suspected_count += 1
+
+            # Cascade: if any routing_classifier_weights.npz metadata references
+            # the quarantined ids, flag the checkpoint for retrain.
+            cascade_invalidated = 0
+            if not dry_run and quarantined_count:
+                quarantined_ids = strategy_store.quarantined_ids()
+                classifier_meta = ORCH_ROOT / "orchestration" / "repl_memory" / "routing_classifier_meta.json"
+                if classifier_meta.exists():
+                    try:
+                        meta = _json.loads(classifier_meta.read_text())
+                        referenced = set(meta.get("training_strategy_ids", []))
+                        if referenced & quarantined_ids:
+                            meta["stale"] = True
+                            meta["stale_at"] = datetime.now(timezone.utc).isoformat()
+                            classifier_meta.write_text(_json.dumps(meta, indent=2))
+                            cascade_invalidated = 1
+                    except Exception as e:  # corrupt json shouldn't crash sweep
+                        log.warning("classifier meta cascade check failed: %s", e)
+
+            return {
+                "status": "ok",
+                "targets_scanned": len(current),
+                "hashes_changed": len(changed),
+                "strategies_checked": strategies_checked,
+                "strategies_touched": len(touched_ids),
+                "quarantined": quarantined_count,
+                "suspected": suspected_count,
+                "cascade_invalidated": cascade_invalidated,
+                "dry_run": dry_run,
+            }
+        finally:
+            if _owns_store:
+                strategy_store.close()

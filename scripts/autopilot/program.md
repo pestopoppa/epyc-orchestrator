@@ -267,6 +267,15 @@ curl -X POST "http://localhost:8071/slots/0?action=compact" \
 - Acceleration flag combinations (already tuned per-model from isolated benchmarks)
 - **NOTE**: Entire stack fits in HOT tier with mlock on 512GB RAM. WARM tier demotion is unnecessary and should not be explored. Acceleration flags are the product of extensive isolated benchmarking — do not change without reading the benchmark data in `epyc-inference-research/data/`.
 
+### Tier 6: StructuralLab Memory Mutations (hot-swap, NIB2-41 / intake-414 Token Savior)
+
+Two mutation primitives on the strategy store (`orchestration/repl_memory/strategy_store.py`). Both are zero-restart and operate over existing data only — no model or server changes.
+
+- **`mdl_compress_strategies`**: cluster near-duplicate strategies by Jaccard (default threshold 0.60) and promote clusters with MDL compression ratio ≥ 0.20 into a `strategy_conventions` row. Representative = longest insight; member deltas are token-removed insights. Run cadence: after every 50 new strategies.
+- **`staleness_invalidate_strategies`**: sha256-scan prompts / classifier config / model registry; when a referenced file's hash changes, bump the Bayesian failure counter (`β_fail += 1`) on each strategy that cites it. Below `α/(α+β_fail) = 0.40` the strategy is quarantined (omitted from default `retrieve()` results); between 0.40 and 0.60 it is flagged `suspected`. Cascade: a quarantined strategy cited in `routing_classifier_meta.json` marks that checkpoint stale. Run cadence: every trial boundary (fast, sha256s only).
+
+Both methods are available via `StructuralLab.mdl_compress_strategies(...)` and `StructuralLab.staleness_invalidate_strategies(...)`. Dry-run supported (`dry_run=True`). See `handoffs/active/meta-harness-optimization.md` § NIB2-41 for the full rationale and schema additions.
+
 ---
 
 ## Constraints
