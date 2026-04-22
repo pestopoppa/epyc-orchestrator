@@ -1,8 +1,10 @@
 """ColBERT snippet reranker using ONNX Runtime.
 
 Provides semantic reranking of search snippets via late-interaction
-MaxSim scoring. Uses GTE-ModernColBERT-v1 ONNX (128-dim per-token
-embeddings, INT8 quantized, 144MB).
+MaxSim scoring. Default: GTE-ModernColBERT-v1 ONNX (128-dim per-token
+embeddings, INT8 quantized, 144MB). Set ``LATEON_MODEL_PATH`` env var
+to point at the LightOn LateOn model (`lightonai/LateOn`) for a
+same-architecture drop-in upgrade (+2.55pp BEIR).
 
 Model loaded lazily on first call, cached as module-level singleton.
 ONNX inference session is thread-safe for prediction.
@@ -26,6 +28,7 @@ Feature-gated: ORCHESTRATOR_WEB_RESEARCH_RERANK=1
 from __future__ import annotations
 
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -34,8 +37,11 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Default model path (GTE-ModernColBERT-v1 INT8 ONNX, already on disk)
-_MODEL_DIR = Path("/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx")
+# Model path resolution: LATEON_MODEL_PATH overrides to the LateOn ONNX INT8 drop-in
+# (intake-430, +2.55pp BEIR vs GTE-ModernColBERT-v1; same ModernBERT backbone, same
+# 128-dim output). Defaults to GTE-ModernColBERT-v1 so legacy deployments stay pinned.
+_DEFAULT_MODEL_DIR = Path("/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx")
+_MODEL_DIR = Path(os.environ.get("LATEON_MODEL_PATH") or _DEFAULT_MODEL_DIR)
 _MODEL_PATH = _MODEL_DIR / "model_int8.onnx"
 _TOKENIZER_PATH = _MODEL_DIR / "tokenizer.json"
 
