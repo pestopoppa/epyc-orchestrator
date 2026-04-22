@@ -115,7 +115,145 @@ class StrategyStore:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_strategies_trial ON strategies(source_trial_id)"
         )
+
+        # NIB2-41: MDL conventions + Bayesian validity + content-hash staleness.
+        # All additive; existing rows stay unaffected.
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS strategy_conventions (
+                id TEXT PRIMARY KEY,
+                representative TEXT NOT NULL,
+                member_ids TEXT NOT NULL,
+                compression_ratio REAL NOT NULL,
+                span_trials TEXT NOT NULL,
+                promoted_at TEXT NOT NULL
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS strategy_validity (
+                strategy_id TEXT PRIMARY KEY,
+                alpha INTEGER NOT NULL DEFAULT 2,
+                beta_fail INTEGER NOT NULL DEFAULT 0,
+                quarantined INTEGER NOT NULL DEFAULT 0,
+                last_checked_at TEXT,
+                FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS content_hashes (
+                target_path TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )
+        """)
         self._conn.commit()
+
+    # ── NIB2-41 helpers ──────────────────────────────────────────
+
+    def add_convention(
+        self,
+        representative: str,
+        member_ids: list[str],
+        compression_ratio: float,
+        span_trials: tuple[int, int],
+    ) -> str:
+        """Persist a promoted MDL convention."""
+        conv_id = str(uuid.uuid4())
+        self._conn.execute(
+            """INSERT INTO strategy_conventions
+               (id, representative, member_ids, compression_ratio, span_trials, promoted_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                conv_id,
+                representative,
+                json.dumps(member_ids),
+                float(compression_ratio),
+                json.dumps(list(span_trials)),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self._conn.commit()
+        return conv_id
+
+    def list_conventions(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT id, representative, member_ids, compression_ratio, span_trials, promoted_at "
+            "FROM strategy_conventions ORDER BY promoted_at DESC"
+        ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "representative": r["representative"],
+                "member_ids": json.loads(r["member_ids"]),
+                "compression_ratio": r["compression_ratio"],
+                "span_trials": json.loads(r["span_trials"]),
+                "promoted_at": r["promoted_at"],
+            }
+            for r in rows
+        ]
+
+    def update_validity(
+        self,
+        strategy_id: str,
+        *,
+        failure: bool,
+        quarantine_threshold: float = 0.40,
+    ) -> tuple[float, bool]:
+        """Bump Bayesian validity counters; return (validity, is_quarantined).
+
+        Alpha starts at 2 (mild success prior); each failure increments beta_fail.
+        Validity = alpha / (alpha + beta_fail). Below ``quarantine_threshold``
+        we flip the quarantined flag so ``retrieve()`` can skip the entry.
+        """
+        self._conn.execute(
+            """INSERT INTO strategy_validity (strategy_id, alpha, beta_fail, quarantined, last_checked_at)
+               VALUES (?, 2, 0, 0, ?)
+               ON CONFLICT(strategy_id) DO NOTHING""",
+            (strategy_id, datetime.now(timezone.utc).isoformat()),
+        )
+        if failure:
+            self._conn.execute(
+                "UPDATE strategy_validity SET beta_fail = beta_fail + 1, last_checked_at = ? "
+                "WHERE strategy_id = ?",
+                (datetime.now(timezone.utc).isoformat(), strategy_id),
+            )
+        row = self._conn.execute(
+            "SELECT alpha, beta_fail FROM strategy_validity WHERE strategy_id = ?",
+            (strategy_id,),
+        ).fetchone()
+        alpha = row["alpha"]
+        beta = row["beta_fail"]
+        validity = alpha / (alpha + beta)
+        quarantine = validity < quarantine_threshold
+        self._conn.execute(
+            "UPDATE strategy_validity SET quarantined = ? WHERE strategy_id = ?",
+            (1 if quarantine else 0, strategy_id),
+        )
+        self._conn.commit()
+        return validity, quarantine
+
+    def get_content_hash(self, target_path: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT content_hash FROM content_hashes WHERE target_path = ?",
+            (target_path,),
+        ).fetchone()
+        return row["content_hash"] if row else None
+
+    def upsert_content_hash(self, target_path: str, content_hash: str) -> None:
+        self._conn.execute(
+            """INSERT INTO content_hashes (target_path, content_hash, last_seen_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(target_path) DO UPDATE SET
+                   content_hash = excluded.content_hash,
+                   last_seen_at = excluded.last_seen_at""",
+            (target_path, content_hash, datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+
+    def quarantined_ids(self) -> set[str]:
+        rows = self._conn.execute(
+            "SELECT strategy_id FROM strategy_validity WHERE quarantined = 1"
+        ).fetchall()
+        return {r["strategy_id"] for r in rows}
 
     def _embed(self, text: str) -> np.ndarray:
         """Generate embedding for text."""
@@ -171,15 +309,22 @@ class StrategyStore:
         query_text: str,
         k: int = 5,
         species: Optional[str] = None,
+        include_quarantined: bool = False,
     ) -> list[StrategyEntry]:
-        """Retrieve strategies by semantic similarity, optionally filtered by species."""
+        """Retrieve strategies by semantic similarity, optionally filtered by species.
+
+        Quarantined entries (NIB2-41 staleness) are excluded by default.
+        """
         if self._faiss.count == 0:
             return []
 
         embedding = self._embed(query_text)
-        # Retrieve more candidates than k to account for species filtering
-        fetch_k = k * 3 if species else k
+        # Retrieve more candidates than k to account for species filtering.
+        # Quarantine may also drop entries, so widen the pool again when active.
+        fetch_k = k * 3 if (species or not include_quarantined) else k
         faiss_results = self._faiss.search(embedding, k=fetch_k)
+
+        quarantined = set() if include_quarantined else self.quarantined_ids()
 
         entries: list[StrategyEntry] = []
         for memory_id, score in faiss_results:
@@ -189,6 +334,8 @@ class StrategyStore:
             if row is None:
                 continue
             if species and row["species"] != species:
+                continue
+            if row["id"] in quarantined:
                 continue
             entries.append(StrategyEntry(
                 id=row["id"],
