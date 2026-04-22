@@ -173,6 +173,8 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("web_research_rerank", False, False, "WEB_RESEARCH_RERANK", "ColBERT snippet reranking in web_research pipeline"),
     # Routing telemetry
     FeatureSpec("logit_probe", False, False, "LOGIT_PROBE", "First-token logprob capture for learned routing P1.5"),
+    # NIB2-45 MindDR deep research mode (three-agent pipeline, feature-flag-gated at pipeline entry)
+    FeatureSpec("deep_research_mode", False, False, "DEEP_RESEARCH_MODE", "NIB2-45 MindDR Phase 1: three-agent research pipeline"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -397,6 +399,11 @@ class Features:
 
     # Routing telemetry: capture first-token logprobs for learned routing P1.5
     logit_probe: bool = False  # Log top-64 first-token logprobs from frontdoor to JSONL
+
+    # NIB2-45 MindDR: feature-flag-gated three-agent research pipeline (Planning → DeepSearch → Report).
+    # When on, research-like queries (per classifier.is_research_like) route through the MindDR subgraph
+    # instead of the direct flow. Phase 1 is prompt-level only; Phase 2 training is GPU-gated.
+    deep_research_mode: bool = False
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety

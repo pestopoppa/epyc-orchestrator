@@ -212,6 +212,25 @@ classification_exemplars:
     - prompt: "Evaluate the trade-offs between these two approaches"
       expected_role: architect_general
 
+  # NIB2-45 MindDR: research-like queries triggering the three-agent pipeline.
+  # Classifier emits is_research_like=True when the prompt matches this category;
+  # the deep_research_mode feature flag then decides whether to route into MindDR.
+  research_like:
+    - prompt: "Compare transformer architectures across parameter scales and their tradeoffs"
+      expected_role: architect_general
+    - prompt: "Do a deep dive on the current state of long-context retrieval augmented generation"
+      expected_role: architect_general
+    - prompt: "Research and synthesize: how do recent reasoning-model training recipes differ"
+      expected_role: architect_general
+    - prompt: "Walk me through the landscape of speculative decoding techniques and their limits"
+      expected_role: architect_general
+    - prompt: "Compare X vs Y vs Z across benchmark performance, latency, and cost; produce a report"
+      expected_role: architect_general
+    - prompt: "Investigate: what are the leading approaches to post-training diversity collapse"
+      expected_role: architect_general
+    - prompt: "Give me a comprehensive survey of mixture-of-experts routing strategies"
+      expected_role: architect_general
+
 # Tier 5: Factual-risk scoring (Phase 3)
 # Scores prompts for hallucination risk based on input features.
 # Complementary to conformal prediction (which gates on output uncertainty).
