@@ -41,17 +41,25 @@ _RESEARCH_VERBS = (
     "overview of",
     "review the",
     "state of the",
-    "state of the art",
+    "state-of-the-art",
+    "current state",
     "literature",
 )
 
 _COMPARISON_PATTERNS = (
     re.compile(r"\b\S+\s+vs\.?\s+\S+", re.IGNORECASE),
     re.compile(r"\bcompare\s+\S+\s+(?:and|to|with|against)\s+\S+", re.IGNORECASE),
+    # "Compare X, Y, Z across A, B" — explicit axis list.
+    re.compile(r"\bcompare\s+[\w\-]+(?:\s*,\s*[\w\-]+){1,}\s+(?:and|across)\b", re.IGNORECASE),
+    # Looser "compare ... across" — anything between compare and across.
+    re.compile(r"\bcompare\s+.+?\s+across\b", re.IGNORECASE),
     re.compile(r"\btradeoffs?\b", re.IGNORECASE),
     re.compile(r"\bhow\s+do\s+.+?\s+differ\b", re.IGNORECASE),
+    re.compile(r"\bhow\s+do\s+.+?\s+compare\b", re.IGNORECASE),
     re.compile(r"\bwhen\s+should\s+(?:each|one|you|we)\b", re.IGNORECASE),
     re.compile(r"\bacross\s+(?:multiple|several|various)\b", re.IGNORECASE),
+    # "across X, Y, and Z" or "across A loss, B footprint, C speed" — cross-axis list.
+    re.compile(r"\bacross\s+[\w\-]+(?:\s*(?:loss|footprint|speed|quality|cost|latency|scales|sizes|families))?(?:\s*,\s*\S+){2,}", re.IGNORECASE),
 )
 
 _DECOMPOSITION_PATTERNS = (

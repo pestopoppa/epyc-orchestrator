@@ -1,0 +1,210 @@
+# MindDR deep-research sentinel suite (NIB2-45 MD-8).
+#
+# 20 research-like queries for sanity-checking the three-agent pipeline
+# (Planning → DeepSearch fan-out → Report). Used when deep_research_mode
+# is enabled AND is_research_like(prompt) triggers.
+#
+# Stratification (per handoff MD-8 L88-93):
+#   - 7 BrowseComp-style (broad web research with definitive answers)
+#   - 7 WideSearch-style (comparative analysis, requires synthesis)
+#   - 6 mixed / agentic (multi-tool / multi-step)
+#
+# Scoring is rubric-based (EV-9 / MD-7) — NOT substring. Each question
+# carries a rubric with 4 dimensions (reasoning_trajectory, tool_calls,
+# outline, content_stage) scored by LLM-as-judge; deterministic fallback
+# per-dimension lives in EvalTower's scoring_regex_fallback.
+#
+# Expected answers here are structural hints (what the final report must
+# contain), not literal strings. The judge consults them when grading.
+
+# ═══════════════════════════════════════════════════════════════════
+# BROWSECOMP-STYLE — Broad web research, definitive answers
+# ═══════════════════════════════════════════════════════════════════
+
+- id: dr_browsecomp_01
+  suite: deep_research_browsecomp
+  style: browsecomp
+  prompt: "What is the current state-of-the-art result on the AIME 2025 benchmark, and which model achieved it?"
+  expected_contains:
+    - "model name and publisher"
+    - "numeric score with date"
+    - "benchmark methodology caveats (AIME25 is 30 questions, single-seed variance)"
+
+- id: dr_browsecomp_02
+  suite: deep_research_browsecomp
+  style: browsecomp
+  prompt: "Investigate: what are the leading open-source approaches to extending context windows beyond 128k tokens?"
+  expected_contains:
+    - "at least 3 named techniques (YaRN, LongRoPE, RWKV, SSM, etc.)"
+    - "specific models + achieved context lengths"
+    - "quality degradation characteristics"
+
+- id: dr_browsecomp_03
+  suite: deep_research_browsecomp
+  style: browsecomp
+  prompt: "Research the current landscape of speculative decoding techniques — which are production-ready and which are experimental?"
+  expected_contains:
+    - "vanilla drafter vs self-speculation vs Medusa vs Eagle"
+    - "latency gains and quality impact per technique"
+    - "hardware / architecture constraints"
+
+- id: dr_browsecomp_04
+  suite: deep_research_browsecomp
+  style: browsecomp
+  prompt: "Survey the open-source mixture-of-experts models released in 2025-2026 and their activation patterns."
+  expected_contains:
+    - "at least 4 named MoE models"
+    - "active param ratio per model"
+    - "routing strategy per model"
+
+- id: dr_browsecomp_05
+  suite: deep_research_browsecomp
+  style: browsecomp
+  prompt: "Deep dive on retrieval-augmented generation decontamination protocols used by leading benchmark publishers."
+  expected_contains:
+    - "specific hashing / n-gram containment methods"
+    - "named benchmarks that publish decontamination scores"
+    - "gap between contaminated and decontaminated scores on BEIR / BRIGHT"
+
+- id: dr_browsecomp_06
+  suite: deep_research_browsecomp
+  style: browsecomp
+  prompt: "Walk me through the literature on test-time compute scaling for reasoning models."
+  expected_contains:
+    - "majority-vote / best-of-k / tree-of-thoughts / self-consistency"
+    - "quality-per-token curves from at least 2 papers"
+    - "domain dependence (math vs code vs factual)"
+
+- id: dr_browsecomp_07
+  suite: deep_research_browsecomp
+  style: browsecomp
+  prompt: "What is the current state of process reward models (PRMs) for step-level scoring in reasoning chains?"
+  expected_contains:
+    - "PRM vs ORM distinction with named examples"
+    - "training data generation strategies"
+    - "limitations (reward hacking, domain specificity)"
+
+# ═══════════════════════════════════════════════════════════════════
+# WIDESEARCH-STYLE — Comparative analysis, synthesis-heavy
+# ═══════════════════════════════════════════════════════════════════
+
+- id: dr_widesearch_01
+  suite: deep_research_widesearch
+  style: widesearch
+  prompt: "Compare Qwen3 vs Llama3 vs Mistral across parameter scales, quality, license, and deployment cost."
+  expected_contains:
+    - "side-by-side table with at least 4 columns"
+    - "license terms per family"
+    - "cost-per-token or latency-per-token comparison"
+
+- id: dr_widesearch_02
+  suite: deep_research_widesearch
+  style: widesearch
+  prompt: "Compare ColBERT-style late-interaction reranking vs dense bi-encoder retrieval — which dominates on which benchmarks?"
+  expected_contains:
+    - "BEIR / MTEB / BRIGHT results"
+    - "latency and index-size tradeoffs"
+    - "recency (2025 vs 2026 numbers)"
+
+- id: dr_widesearch_03
+  suite: deep_research_widesearch
+  style: widesearch
+  prompt: "How do the four leading autopilot / autonomous research frameworks (EvoScientist, AgentRxiv, MindDR, Agent-World) compare?"
+  expected_contains:
+    - "architecture diagram or description for each"
+    - "validated benchmark gains per framework"
+    - "infrastructure requirements (GPU / training / budget)"
+
+- id: dr_widesearch_04
+  suite: deep_research_widesearch
+  style: widesearch
+  prompt: "Compare post-training diversity collapse findings across OLMo-3, Qwen, and Llama model families."
+  expected_contains:
+    - "OLMo-3 three-lineage data"
+    - "what evidence does/does not exist for Qwen and Llama"
+    - "inference-time recovery techniques (temperature, Verbalized Sampling)"
+
+- id: dr_widesearch_05
+  suite: deep_research_widesearch
+  style: widesearch
+  prompt: "Compare FP16, INT8, INT4, and 2-bit quantization schemes across quality loss, memory footprint, and inference speed."
+  expected_contains:
+    - "per-scheme quality delta vs FP16"
+    - "named implementations (AWQ, GPTQ, GGUF Q4_K_M, TQ3)"
+    - "dense vs MoE behaviour differences"
+
+- id: dr_widesearch_06
+  suite: deep_research_widesearch
+  style: widesearch
+  prompt: "Compare RLHF, DPO, and KTO as preference-alignment methods — tradeoffs and when to use each."
+  expected_contains:
+    - "data requirements per method"
+    - "stability / convergence behaviour"
+    - "named empirical comparisons"
+
+- id: dr_widesearch_07
+  suite: deep_research_widesearch
+  style: widesearch
+  prompt: "How do agent frameworks (CrewAI, AutoGen, LangGraph, Qwen-Agent) differ in state management and failure recovery?"
+  expected_contains:
+    - "state model per framework (stateless / stateful / graph)"
+    - "retry / compensation patterns"
+    - "benchmarks on agentic tasks"
+
+# ═══════════════════════════════════════════════════════════════════
+# MIXED / AGENTIC — Multi-tool, multi-step queries
+# ═══════════════════════════════════════════════════════════════════
+
+- id: dr_mixed_01
+  suite: deep_research_mixed
+  style: mixed
+  prompt: "Analyse the inference-cost / quality tradeoffs for CPU-only deployment of 30B-parameter models across llama.cpp, vLLM, and TGI."
+  expected_contains:
+    - "CPU-specific optimizations (NUMA, AMX, mlock)"
+    - "throughput numbers with hardware"
+    - "feature support matrix (speculation, KV compression, etc.)"
+
+- id: dr_mixed_02
+  suite: deep_research_mixed
+  style: mixed
+  prompt: "Research and synthesize: what is the current best practice for building a multi-model local-inference stack on consumer-class EPYC hardware?"
+  expected_contains:
+    - "tier / role topology"
+    - "NUMA layout considerations"
+    - "failure-mode handling (OOM, health checks, fallback)"
+
+- id: dr_mixed_03
+  suite: deep_research_mixed
+  style: mixed
+  prompt: "Investigate STOP (Super TOken for Pruning) and related early-path-pruning techniques for parallel reasoning."
+  expected_contains:
+    - "mechanism description with taxonomy (internal vs external × learnable vs heuristic)"
+    - "published gains with sample-size caveats"
+    - "competitor techniques (DeepConf, TrimR, SlimSC)"
+
+- id: dr_mixed_04
+  suite: deep_research_mixed
+  style: mixed
+  prompt: "Deep dive on the state of environment synthesis for LLM agents — what are Agent-World, ETD, and similar approaches actually producing?"
+  expected_contains:
+    - "mechanism per framework"
+    - "arena sizes (environments / tools / tasks)"
+    - "training infrastructure requirements"
+
+- id: dr_mixed_05
+  suite: deep_research_mixed
+  style: mixed
+  prompt: "How does the tradeoff landscape change when going from a single GPU to CPU-only local inference for research workloads?"
+  expected_contains:
+    - "what changes in model selection (quantization tiers, MoE vs dense)"
+    - "what changes in workflow (batch vs streaming, speculation viability)"
+    - "what stays the same (quality gates, eval tower)"
+
+- id: dr_mixed_06
+  suite: deep_research_mixed
+  style: mixed
+  prompt: "Research the current best practices for diversity measurement in LLM outputs — what metrics are load-bearing vs superficial?"
+  expected_contains:
+    - "distinct-n vs self-BLEU vs semantic embedding agreement"
+    - "known gaming / failure modes per metric (ACL W19-2311, arXiv 2506.00514)"
+    - "when composite / multi-signal gates are needed"
