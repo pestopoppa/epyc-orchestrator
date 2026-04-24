@@ -40,6 +40,21 @@ DEFAULT_DB_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memo
 DEFAULT_EMBEDDINGS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/embeddings.npy")
 
 
+class _ClosingSQLiteConnection(sqlite3.Connection):
+    """Connection wrapper that closes at context-manager exit."""
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ) -> bool | None:
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 @dataclass
 class MemoryEntry:
     """A single episodic memory entry."""
@@ -148,7 +163,7 @@ class EpisodicStore:
 
     def _init_db(self) -> None:
         """Initialize SQLite database schema."""
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY,
@@ -249,7 +264,7 @@ class EpisodicStore:
         embedding_idx = self._embedding_store.add(memory_id, embedding)
 
         # Store metadata in SQLite
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             conn.execute(
                 """
                 INSERT INTO memories
@@ -399,7 +414,7 @@ class EpisodicStore:
         if filters:
             query += " AND " + " AND ".join(filters)
 
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             rows = conn.execute(query, params).fetchall()
 
         if not rows:
@@ -468,7 +483,7 @@ class EpisodicStore:
         now = datetime.now(timezone.utc)
         now_iso = now.isoformat()
 
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             # Get current Q-value and updated_at for decay calculation
             row = conn.execute(
                 "SELECT q_value, update_count, updated_at FROM memories WHERE id = ?",
@@ -512,7 +527,7 @@ class EpisodicStore:
 
     def get_by_id(self, memory_id: str) -> Optional[MemoryEntry]:
         """Retrieve a specific memory by ID."""
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             row = conn.execute(
                 """
                 SELECT id, embedding_idx, action, action_type, context, outcome, q_value,
@@ -587,7 +602,7 @@ class EpisodicStore:
 
         query += " ORDER BY created_at ASC"
 
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             rows = conn.execute(query, params).fetchall()
 
         results = []
@@ -617,7 +632,7 @@ class EpisodicStore:
 
     def count(self, action_type: Optional[str] = None) -> int:
         """Count memories, optionally filtered by action type."""
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             if action_type:
                 row = conn.execute(
                     "SELECT COUNT(*) FROM memories WHERE action_type = ?",
@@ -642,7 +657,7 @@ class EpisodicStore:
         Returns:
             Count of matching memories.
         """
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             if task_type:
                 row = conn.execute(
                     "SELECT COUNT(*) FROM memories WHERE action = ? "
@@ -658,7 +673,7 @@ class EpisodicStore:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get memory statistics."""
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
             by_type = conn.execute(
                 """
@@ -697,7 +712,7 @@ class EpisodicStore:
         Returns:
             List of MemoryEntry sorted by Q-value (lowest first, then highest)
         """
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             rows = conn.execute(
                 """
                 SELECT id, embedding_idx, action, action_type, context, outcome, q_value,
@@ -744,7 +759,7 @@ class EpisodicStore:
             Dict mapping action -> (count, mean_q, std_q).
             Useful for understanding learned routing preferences.
         """
-        with sqlite3.connect(self.sqlite_path) as conn:
+        with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             rows = conn.execute(
                 """
                 SELECT action,

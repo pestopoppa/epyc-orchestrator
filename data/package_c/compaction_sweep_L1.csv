@@ -1,0 +1,22 @@
+trace,level,ratio,faithfulness,retention,compression_achieved,tokens_before,tokens_after,status
+session_log_validation.jsonl,1,0.2,-1,-1,0.0,0,0,"error: Client error '400 Bad Request' for url 'http://localhost:8082/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400"
+session_chat-bddd59dc.md,1,0.2,3,3,0.531,732,343,live
+session_chat-85976843.md,1,0.2,3,3,0.645,726,258,live
+session_chat-dc9369ac.md,1,0.2,-1,-1,0.0,0,0,error: timed out
+session_chat-b5e88ba4.md,1,0.2,3,3,0.771,721,165,live
+session_chat-edd232fd.md,1,0.2,3,3,0.652,718,250,live
+session_chat-099e1aca.md,1,0.2,3,3,0.719,713,200,live
+session_chat-cb781d0a.md,1,0.2,2,3,0.823,713,126,live
+session_chat-8023f1c5.md,1,0.2,3,3,0.766,704,165,live
+session_chat-c167316d.md,1,0.2,3,3,0.717,704,199,live
+session_chat-e110b2db.md,1,0.2,3,3,0.803,704,139,live
+session_chat-7549299d.md,1,0.2,3,3,0.772,696,159,live
+session_chat-e1b5ec58.md,1,0.2,3,3,0.676,695,225,live
+session_chat-5c5f2634.md,1,0.2,3,3,0.486,696,358,live
+session_chat-6a5ad72c.md,1,0.2,3,0,0.857,694,99,live
+session_chat-b7384676.md,1,0.2,3,0,-5.398,694,4440,live
+session_chat-e2381e86.md,1,0.2,3,3,0.695,694,212,live
+session_chat-1142aed9.md,1,0.2,3,3,0.726,689,189,live
+session_chat-51b5ce25.md,1,0.2,3,3,0.67,688,227,live
+session_chat-041b1180.md,1,0.2,3,0,-5.603,685,4523,live

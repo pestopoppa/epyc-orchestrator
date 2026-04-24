@@ -92,6 +92,10 @@ def parse_response(raw_output: str) -> str:
         if not in_response and not line.strip():
             continue
 
+        # common_perf_print marks end of model response content.
+        if "common_perf_print" in line:
+            break
+
         # Skip llama.cpp log lines
         skip = False
         for pattern in skip_patterns:
@@ -101,10 +105,6 @@ def parse_response(raw_output: str) -> str:
 
         if skip:
             continue
-
-        # Check for common perf print which signals end of response
-        if "common_perf_print" in line:
-            break
 
         # Found response content
         in_response = True

@@ -43,6 +43,26 @@ DEFAULT_DB_PATH = DEFAULT_SESSIONS_DIR / "sessions.db"
 DEFAULT_EMBEDDINGS_PATH = DEFAULT_SESSIONS_DIR / "session_embeddings.npy"
 
 
+class _ClosingSQLiteConnection(sqlite3.Connection):
+    """SQLite connection that closes on context-manager exit.
+
+    sqlite3.Connection.__exit__ commits/rolls back but does not close.
+    This wrapper keeps existing call sites (`with self._get_connection()`) and
+    guarantees file descriptors are released deterministically.
+    """
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ) -> bool | None:
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 class SQLiteSessionStore(BaseSessionStore):
     """SQLite-backed session store with numpy embeddings.
 
@@ -80,7 +100,7 @@ class SQLiteSessionStore(BaseSessionStore):
 
     def _init_db(self) -> None:
         """Initialize SQLite database schema with WAL mode."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, factory=_ClosingSQLiteConnection) as conn:
             # Enable WAL mode for better concurrency and crash safety
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
@@ -252,7 +272,7 @@ class SQLiteSessionStore(BaseSessionStore):
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get a database connection with row factory."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, factory=_ClosingSQLiteConnection)
         conn.row_factory = sqlite3.Row
         return conn
 

@@ -18,9 +18,17 @@ if os.environ.get("CI") == "true" or os.environ.get("ORCHESTRATOR_MOCK_MODE") ==
 from src.api import create_app
 
 
-# Create test client
-app = create_app()
-client = TestClient(app)
+client: TestClient
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_client():
+    """Create and close module-scoped test client deterministically."""
+    app = create_app()
+    with TestClient(app) as c:
+        global client
+        client = c
+        yield
 
 
 class TestSessionEndpoints:

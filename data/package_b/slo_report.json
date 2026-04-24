@@ -1,0 +1,70 @@
+{
+  "period": {
+    "tasks_total": 2510,
+    "completed": 2433,
+    "failed": 63,
+    "in_flight": 14,
+    "timeout": 0
+  },
+  "rates": {
+    "success_rate": 96.9,
+    "failure_rate": 2.5,
+    "timeout_rate": 0.0
+  },
+  "latency_all": {
+    "p50": 25.42,
+    "p95": 146.12,
+    "p99": 226.07,
+    "mean": 47.95,
+    "count": 2496
+  },
+  "latency_success": {
+    "p50": 24.82,
+    "p95": 132.97,
+    "p99": 189.78,
+    "mean": 43.39,
+    "count": 2433
+  },
+  "delegation": {
+    "lineage_distribution": {
+      "1": 2052,
+      "2": 380,
+      "3": 1
+    },
+    "final_role_distribution": {
+      "architect_coding": 970,
+      "frontdoor": 927,
+      "architect_general": 510,
+      "coder_escalation": 26
+    }
+  },
+  "escalation": {
+    "total": 120,
+    "paths": {
+      "frontdoor \u2192 coder_escalation": 103,
+      "coder_escalation \u2192 architect_coding": 17
+    }
+  },
+  "per_role_latency": {
+    "architect_coding": {
+      "p50": 21.14,
+      "p95": 88.18,
+      "count": 970
+    },
+    "architect_general": {
+      "p50": 23.6,
+      "p95": 114.62,
+      "count": 510
+    },
+    "coder_escalation": {
+      "p50": 116.22,
+      "p95": 165.22,
+      "count": 26
+    },
+    "frontdoor": {
+      "p50": 40.12,
+      "p95": 137.37,
+      "count": 927
+    }
+  }
+}

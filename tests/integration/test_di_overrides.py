@@ -25,6 +25,17 @@ from src.api.dependencies import (
 from src.gate_runner import GateRunner
 
 
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.filterwarnings(
+        r"ignore:Exception ignored in.*socket\.socket.*family=1, type=1, proto=0:pytest.PytestUnraisableExceptionWarning"
+    ),
+    pytest.mark.filterwarnings(
+        r"ignore:Exception ignored in.*BaseEventLoop\.__del__.*:pytest.PytestUnraisableExceptionWarning"
+    ),
+]
+
+
 # Stub classes for testing (lightweight, no external dependencies)
 @dataclass
 class StubLLMPrimitives:
@@ -100,7 +111,8 @@ class TestDIOverrides:
     @pytest.fixture
     def client(self, app):
         """Create test client from app."""
-        return TestClient(app)
+        with TestClient(app) as client:
+            yield client
 
     def test_override_health_tracker(self, app, client):
         """Overriding dep_health_tracker injects stub into /health."""

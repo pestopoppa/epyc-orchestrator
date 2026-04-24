@@ -487,7 +487,7 @@ class SeedingTUI:
         self._tailer = TapTailer(tap_path, name="tap-inference")
         self._repl_tailer = TapTailer(
             repl_tap_path, name="tap-repl",
-            section_aware=False,  # REPL tap is append-only, no ======== sections
+            section_aware=True,
         )
         self._progress = TUIProgress(session_id=session_id)
         self._live: Live | None = None

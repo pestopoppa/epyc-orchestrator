@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
+import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+import scripts.lib.onboard as onboard_mod
 from scripts.lib.onboard import (
     HealthCheckResult,
     ModelInfo,
@@ -51,6 +54,8 @@ def test_detect_helpers_cover_key_patterns():
     assert detect_architecture("Qwen3-VL-30B-A3B-Q4_K_M.gguf") == "qwen3vlmoe"
     assert detect_architecture("Qwen3-Next-80B-Q4_K_M.gguf") == "ssm_moe_hybrid"
     assert detect_architecture("Mixtral-8x7B-Q4_K_M.gguf") == "mixtral"
+    assert detect_architecture("DeepSeek-MoE-16x20B-Q4_K_M.gguf") == "deepseek2"
+    assert detect_architecture("GLM-MoE-32B-Q4_K_M.gguf") == "glm4moe"
     assert detect_architecture("DenseModel-Q8_0.gguf") == "dense"
 
     assert detect_family("Qwen2.5-Coder-7B-Q4_K_M.gguf") == "Qwen2.5-Coder"
@@ -137,7 +142,106 @@ def test_draft_target_compatibility_helpers():
 
     blocked = _model_info(architecture="qwen3moe")
     assert find_compatible_drafts(blocked, reg) == []
-    assert find_compatible_drafts(_model_info(is_draft=True), reg) == []
+    assert find_compatible_drafts(_model_info(is_draft=True, architecture="dense"), reg) == []
+
+
+def test_detect_family_and_patterns_cover_additional_branches():
+    assert detect_family("Qwen2.5-Math-7B.gguf") == "Qwen2.5-Math"
+    assert detect_family("Qwen2.5-VL-7B.gguf") == "Qwen2.5-VL"
+    assert detect_family("Qwen2.5-7B.gguf") == "Qwen2.5"
+    assert detect_family("Qwen3-Next-80B.gguf") == "Qwen3-Next"
+    assert detect_family("Qwen3-7B.gguf") == "Qwen3"
+    assert detect_family("Qwen2-7B.gguf") == "Qwen2"
+    assert detect_family("DeepSeek-R1-Distill-Qwen-7B.gguf") == "DeepSeek-R1-Distill-Qwen"
+    assert detect_family("DeepSeek-R1-Distill-7B.gguf") == "DeepSeek-R1-Distill"
+    assert detect_family("DeepSeek-67B.gguf") == "DeepSeek"
+    assert detect_family("Meta-Llama-3.2-3B.gguf") == "Llama-3.2"
+    assert detect_family("Meta-Llama-3-8B.gguf") == "Llama-3"
+    assert detect_family("Llama-2-7B.gguf") == "Llama"
+    assert detect_family("Gemma-3-12B.gguf") == "Gemma"
+    assert detect_family("GLM-4-32B.gguf") == "GLM"
+    assert detect_family("Hermes-3.gguf") == "Hermes"
+
+    assert generate_compatible_targets_patterns(_model_info(is_draft=False)) == []
+    assert generate_compatible_targets_patterns(_model_info(is_draft=True, family="Qwen3")) == ["Qwen3"]
+    assert generate_compatible_targets_patterns(_model_info(is_draft=True, family="Qwen2")) == ["Qwen2"]
+    assert generate_compatible_targets_patterns(
+        _model_info(is_draft=True, family="DeepSeek-R1-Distill-Qwen")
+    ) == ["DeepSeek-R1-Distill-Qwen", "Qwen"]
+    assert generate_compatible_targets_patterns(
+        _model_info(is_draft=True, family="DeepSeek-R1-Distill-Llama")
+    ) == ["DeepSeek-R1-Distill-Llama", "Llama"]
+    assert generate_compatible_targets_patterns(_model_info(is_draft=True, family="Llama-3.1")) == ["Llama"]
+    assert generate_compatible_targets_patterns(_model_info(is_draft=True, family="Gemma")) == ["Gemma"]
+
+
+def test_find_compatible_drafts_skips_missing_role_configs():
+    reg = MagicMock()
+    reg.get_all_roles.return_value = ["missing_cfg", "draft_ok"]
+    reg.get_role_config.side_effect = [
+        None,
+        {"tier": "D", "compatible_targets": ["qwen3"]},
+    ]
+    target = _model_info(architecture="dense", is_draft=False, name="Qwen3-30B")
+    assert find_compatible_drafts(target, reg) == ["draft_ok"]
+
+
+def test_read_registry_timeout_uses_raw_timeout_map_when_available():
+    class _Reg:
+        _raw = {
+            "runtime_defaults": {"timeouts": {"scripts": {"onboard_health": 123}, "default": 7}}
+        }
+
+    with patch("scripts.lib.onboard.load_registry", return_value=_Reg()):
+        assert onboard_mod._read_registry_timeout("scripts", "onboard_health", 60) == 123
+
+
+def test_onboard_module_standalone_import_uses_fallback_imports():
+    module_path = Path(__file__).resolve().parents[2] / "scripts" / "lib" / "onboard.py"
+    module_name = "onboard_fallback_test"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+
+    stub_registry = ModuleType("registry")
+    stub_registry.ModelRegistry = type("ModelRegistry", (), {})
+    stub_registry.load_registry = lambda: None
+
+    stub_executor = ModuleType("executor")
+    stub_executor.Executor = type("Executor", (), {})
+    stub_executor.Config = type("Config", (), {})
+    stub_executor.get_binary = lambda *args, **kwargs: "/bin/llama-completion"
+    stub_executor.validate_binaries = lambda *args, **kwargs: {}
+
+    stub_output_parser = ModuleType("output_parser")
+    stub_output_parser.parse_output = lambda *args, **kwargs: None
+
+    prev_registry = sys.modules.get("registry")
+    prev_executor = sys.modules.get("executor")
+    prev_output_parser = sys.modules.get("output_parser")
+    sys.modules[module_name] = module
+    sys.modules["registry"] = stub_registry
+    sys.modules["executor"] = stub_executor
+    sys.modules["output_parser"] = stub_output_parser
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(module_name, None)
+        if prev_registry is None:
+            sys.modules.pop("registry", None)
+        else:
+            sys.modules["registry"] = prev_registry
+        if prev_executor is None:
+            sys.modules.pop("executor", None)
+        else:
+            sys.modules["executor"] = prev_executor
+        if prev_output_parser is None:
+            sys.modules.pop("output_parser", None)
+        else:
+            sys.modules["output_parser"] = prev_output_parser
+
+    assert hasattr(module, "ModelRegistry")
+    assert module.HEALTH_CHECK_TIMEOUT == 60
+
 
 
 def test_run_health_check_handles_binary_missing():
@@ -223,6 +327,18 @@ def test_role_suggestion_and_role_name_generation():
     assert role_name.startswith("thinking_")
     assert len(role_name) > 10
 
+    assert generate_role_name(_model_info(name="x"), ["draft"]).startswith("draft_")
+    assert generate_role_name(_model_info(name="x"), ["coder"]).startswith("coder_")
+    assert generate_role_name(_model_info(name="x"), ["math"]).startswith("math_")
+    assert generate_role_name(_model_info(name="x"), ["vision"]).startswith("vision_")
+    assert generate_role_name(_model_info(name="x"), ["architect"]).startswith("architect_")
+    assert generate_role_name(_model_info(name="x"), ["ingest"]).startswith("ingest_")
+    assert generate_role_name(_model_info(name="x"), []).startswith("general_")
+
+    long_name = _model_info(name="this-is-a-very-very-very-long-model-name-that-needs-truncation")
+    role_long = generate_role_name(long_name, ["general"])
+    assert len(role_long.split("_", 1)[1]) <= 30
+
 
 def test_build_registry_entry_for_moe_and_draft_paths():
     info_moe = _model_info(architecture="qwen3moe", is_draft=False)
@@ -293,3 +409,25 @@ def test_onboard_model_rejects_existing_path_and_handles_draft_and_target(tmp_pa
 
     assert result_draft.compatible_drafts == []
     assert result_draft.compatible_targets == ["Qwen3"]
+
+
+def test_onboard_model_loads_registry_when_not_provided(tmp_path: Path):
+    model = tmp_path / "target.gguf"
+    model.write_bytes(b"x")
+    reg = MagicMock()
+    reg.path_exists_in_registry.return_value = None
+
+    with (
+        patch("scripts.lib.onboard.load_registry", return_value=reg) as load_reg,
+        patch("scripts.lib.onboard.collect_model_info", return_value=_model_info(path=str(model), is_draft=False)),
+        patch("scripts.lib.onboard.generate_optimization_options", return_value=[]),
+        patch("scripts.lib.onboard.find_compatible_drafts", return_value=[]),
+        patch("scripts.lib.onboard.run_health_check", return_value=HealthCheckResult(success=True)),
+        patch("scripts.lib.onboard.suggest_candidate_roles", return_value=["general"]),
+        patch("scripts.lib.onboard.generate_role_name", return_value="general_target"),
+        patch("scripts.lib.onboard.build_registry_entry", return_value={"ok": True}),
+    ):
+        result = onboard_model(str(model), registry=None, model_base=str(tmp_path))
+
+    load_reg.assert_called_once()
+    assert result.suggested_role_name == "general_target"

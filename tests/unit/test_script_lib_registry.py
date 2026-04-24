@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -219,3 +220,134 @@ def test_module_level_helpers_use_load_registry(monkeypatch):
     assert get_all_roles() == ["a"]
     assert get_all_roles(include_deprecated=True) == ["a", "b"]
     assert resolve_model_path("worker") == "/models/worker.gguf"
+
+
+def test_missing_registry_file_raises_file_not_found(tmp_path: Path):
+    with pytest.raises(FileNotFoundError):
+        ModelRegistry(str(tmp_path / "missing.yaml"))
+
+
+def test_path_and_acceleration_null_and_absolute_branches(tmp_path: Path):
+    payload = {
+        "runtime_defaults": {"model_base_path": str(tmp_path / "models")},
+        "roles": {
+            "no_model_path": {"tier": "C", "model": {"name": "x", "architecture": "dense"}},
+            "with_abs_mmproj": {
+                "tier": "B",
+                "model": {"name": "y", "path": "y.gguf", "mmproj_path": "/abs/mmproj.gguf"},
+            },
+            "no_accel": {"tier": "C", "model": {"name": "z", "path": "z.gguf", "architecture": "dense"}},
+        },
+    }
+    reg = ModelRegistry(str(_write_registry(tmp_path, payload)))
+    assert reg.get_model_path("missing") is None
+    assert reg.get_model_path("no_model_path") is None
+    assert reg.get_mmproj_path("no_model_path") is None
+    assert reg.get_mmproj_path("with_abs_mmproj") == "/abs/mmproj.gguf"
+    assert reg.get_acceleration("no_accel") == {"type": "none"}
+
+
+def test_quirk_key_mapping_covers_all_known_patterns(sample_registry: ModelRegistry):
+    name = (
+        "qwen2.5-coder-32b qwen3-coder-30b qwen3-coder-53b qwen3-coder-480b "
+        "qwen3-next-80b qwen3-235b meta-llama-3-8b qwen2.5-math-7b "
+        "qwen2.5-vl-7b qwen3-vl-30b qwen2.5-coder-0.5b qwen2.5-0.5b"
+    )
+    keys = set(sample_registry._get_quirk_keys_for_model(name))
+    assert {
+        "qwen25_coder_32b_instruct",
+        "qwen3_coder_30b_a3b",
+        "qwen3_coder_53b_a3b",
+        "qwen3_coder_480b",
+        "qwen3_next_80b",
+        "qwen3_235b_a22b",
+        "meta_llama_3_8b",
+        "qwen25_math_7b",
+        "qwen25_vl_7b",
+        "qwen3_vl_30b",
+        "qwen25_coder_0_5b",
+        "qwen25_0_5b",
+    } <= keys
+
+
+def test_draft_and_target_resolution_additional_missing_config_paths(tmp_path: Path):
+    payload = {
+        "runtime_defaults": {"model_base_path": str(tmp_path / "models")},
+        "roles": {
+            "target": {"tier": "B", "model": {"name": "Qwen3-Target", "path": "t.gguf"}},
+            "draft_without_targets": {"tier": "D", "model": {"name": "draft-a", "path": "d1.gguf"}},
+            "draft_with_targets": {
+                "tier": "D",
+                "model": {"name": "draft-b", "path": "d2.gguf"},
+                "compatible_targets": ["Qwen3"],
+            },
+        },
+    }
+    reg = ModelRegistry(str(_write_registry(tmp_path, payload)))
+    assert reg.get_drafts_for_model("missing-target") == []
+    with patch.object(
+        reg,
+        "get_all_roles",
+        return_value=["missing_cfg", "draft_without_targets", "draft_with_targets"],
+    ):
+        assert reg.get_drafts_for_model("target") == ["draft_with_targets"]
+    assert reg.get_targets_for_draft("draft_without_targets") == []
+    with patch.object(reg, "get_all_roles", return_value=["missing_cfg", "target"]):
+        assert reg.get_targets_for_draft("draft_with_targets") == ["target"]
+
+
+def test_moe_helpers_and_context_family_fallback_branches(tmp_path: Path):
+    payload = {
+        "runtime_defaults": {
+            "model_base_path": str(tmp_path / "models"),
+            "context_limits": {
+                "llama3_instruct": 131072,
+                "llama3": 8192,
+                "llama2": 4096,
+                "qwen2": 65536,
+                "deepseek_r1": 32768,
+                "gemma3": 16384,
+                "default": 2048,
+            },
+            "server_defaults": {},
+        },
+        "roles": {
+            "llama31": {
+                "tier": "B",
+                "model": {"name": "Meta-Llama-3.1-8B-Instruct", "path": "a.gguf"},
+                "acceleration": {"override_key": "x.key", "baseline_experts": 12},
+            },
+            "llama3i": {"tier": "B", "model": {"name": "Meta-Llama-3-Instruct", "path": "b.gguf"}},
+            "llama3b": {"tier": "B", "model": {"name": "Meta-Llama-3-Base", "path": "c.gguf"}},
+            "llama2": {"tier": "B", "model": {"name": "Llama-2-7B", "path": "d.gguf"}},
+            "qwen2": {"tier": "B", "model": {"name": "Qwen2-7B", "path": "e.gguf"}},
+            "deepseek": {"tier": "B", "model": {"name": "DeepSeek-R1-Distill-Qwen-7B", "path": "f.gguf"}},
+            "gemma3": {"tier": "B", "model": {"name": "Gemma-3-12B", "path": "g.gguf"}},
+            "unknown": {"tier": "B", "model": {"name": "Mistral-7B", "path": "h.gguf"}},
+        },
+    }
+    reg = ModelRegistry(str(_write_registry(tmp_path, payload)))
+
+    assert reg.get_moe_override_key("llama31") == "x.key"
+    assert reg.get_baseline_experts("llama31") == 12
+    assert reg.get_max_context("llama31") == 131072
+    assert reg.get_max_context("llama3i") == 8192
+    assert reg.get_max_context("llama3b") == 8192
+    assert reg.get_max_context("llama2") == 4096
+    assert reg.get_max_context("qwen2") == 65536
+    assert reg.get_max_context("deepseek") == 32768
+    assert reg.get_max_context("gemma3") == 16384
+    assert reg.get_max_context("unknown") == 2048
+
+
+def test_add_entry_creates_roles_map_when_missing(tmp_path: Path):
+    payload = {
+        "runtime_defaults": {"model_base_path": str(tmp_path / "models")},
+    }
+    reg = ModelRegistry(str(_write_registry(tmp_path, payload)))
+    reg.add_model_entry(
+        "new_role",
+        {"tier": "D", "model": {"name": "n", "path": "n.gguf", "architecture": "dense"}},
+    )
+    reg.reload()
+    assert reg.role_exists("new_role")

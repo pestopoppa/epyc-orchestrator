@@ -63,6 +63,13 @@ def test_parse_timing_last_resort_eval_line_tokens_per_second():
     assert parsed["total_time_ms"] == 10.0
 
 
+def test_parse_timing_final_fallback_handles_nonstandard_eval_line():
+    raw = "eval time: decoder summary, observed 321.5 tokens per second"
+    parsed = parse_timing(raw)
+    assert parsed["tokens_per_second"] == 321.5
+    assert parsed["total_time_ms"] is None
+
+
 def test_parse_token_counts_extracts_prompt_and_completion_tokens():
     raw = """
 prompt eval time = 123.00 ms / 42 tokens

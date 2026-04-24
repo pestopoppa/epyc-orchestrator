@@ -315,6 +315,27 @@ class ParallelEmbedderClient:
             self._sync_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         return self._sync_pool
 
+    async def _embed_and_close(self, text: str) -> np.ndarray:
+        """Run one embed request and always close async HTTP resources."""
+        try:
+            return await self.embed_async(text)
+        finally:
+            await self.close()
+
+    async def _embed_batch_and_close(self, texts: list[str]) -> np.ndarray:
+        """Run one batch request and always close async HTTP resources."""
+        try:
+            return await self.embed_batch_async(texts)
+        finally:
+            await self.close()
+
+    async def _health_check_and_close(self) -> dict[str, bool]:
+        """Run one health check and always close async HTTP resources."""
+        try:
+            return await self.health_check_all()
+        finally:
+            await self.close()
+
     def embed_sync(self, text: str) -> np.ndarray:
         """Synchronous wrapper for embed_async.
 
@@ -332,11 +353,11 @@ class ParallelEmbedderClient:
         if loop is not None:
             # Already in an event loop - use reusable thread pool
             pool = self._get_sync_pool()
-            future = pool.submit(asyncio.run, self.embed_async(text))
+            future = pool.submit(asyncio.run, self._embed_and_close(text))
             return future.result()
         else:
             # No event loop - create one
-            return asyncio.run(self.embed_async(text))
+            return asyncio.run(self._embed_and_close(text))
 
     def embed_batch_sync(self, texts: list[str]) -> np.ndarray:
         """Synchronous wrapper for embed_batch_async.
@@ -354,10 +375,10 @@ class ParallelEmbedderClient:
 
         if loop is not None:
             pool = self._get_sync_pool()
-            future = pool.submit(asyncio.run, self.embed_batch_async(texts))
+            future = pool.submit(asyncio.run, self._embed_batch_and_close(texts))
             return future.result()
         else:
-            return asyncio.run(self.embed_batch_async(texts))
+            return asyncio.run(self._embed_batch_and_close(texts))
 
     def _generate_fallback(self, text: str) -> np.ndarray:
         """Generate hash-based pseudo-embedding as fallback.
@@ -414,10 +435,10 @@ class ParallelEmbedderClient:
 
         if loop is not None:
             pool = self._get_sync_pool()
-            future = pool.submit(asyncio.run, self.health_check_all())
+            future = pool.submit(asyncio.run, self._health_check_and_close())
             return future.result()
         else:
-            return asyncio.run(self.health_check_all())
+            return asyncio.run(self._health_check_and_close())
 
     async def close(self) -> None:
         """Close the HTTP client and release resources."""
@@ -436,7 +457,7 @@ class ParallelEmbedderClient:
 
             if loop is not None:
                 pool = self._get_sync_pool()
-                pool.submit(asyncio.run, self.close())
+                pool.submit(asyncio.run, self.close()).result()
             else:
                 asyncio.run(self.close())
         if self._sync_pool is not None:

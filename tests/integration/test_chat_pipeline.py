@@ -27,6 +27,24 @@ from src.exceptions import InferenceError
 from src.graph.state import TaskResult
 from src.roles import Role
 
+pytestmark = [
+    pytest.mark.filterwarnings(
+        "ignore:builtin type SwigPyPacked has no __module__ attribute:DeprecationWarning"
+    ),
+    pytest.mark.filterwarnings(
+        "ignore:builtin type SwigPyObject has no __module__ attribute:DeprecationWarning"
+    ),
+    pytest.mark.filterwarnings(
+        "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning"
+    ),
+    pytest.mark.filterwarnings(
+        r"ignore:Exception ignored in.*socket\.socket.*family=1, type=1, proto=0:pytest.PytestUnraisableExceptionWarning"
+    ),
+    pytest.mark.filterwarnings(
+        r"ignore:Exception ignored in.*BaseEventLoop\.__del__.*:pytest.PytestUnraisableExceptionWarning"
+    ),
+]
+
 
 class TestClassifyAndRoute:
     """Test _classify_and_route() keyword-based routing."""
@@ -150,7 +168,8 @@ class TestChatEndpoint:
     def client(self):
         """Create test client with fresh app instance."""
         app = create_app()
-        return TestClient(app)
+        with TestClient(app) as client:
+            yield client
 
     def test_mock_mode_returns_200(self, client):
         """Mock mode should return 200 with valid response structure."""
@@ -953,7 +972,8 @@ class TestRewardEndpoint:
     def client(self):
         """Create test client with fresh app instance."""
         app = create_app()
-        return TestClient(app)
+        with TestClient(app) as client:
+            yield client
 
     def test_reward_endpoint_with_valid_data(self, client):
         """Reward endpoint should accept valid reward data."""
@@ -1009,7 +1029,8 @@ class TestStreamEndpoint:
     def client(self):
         """Create test client with fresh app instance."""
         app = create_app()
-        return TestClient(app)
+        with TestClient(app) as client:
+            yield client
 
     def test_stream_mock_mode(self, client):
         """Stream endpoint should return valid SSE events in mock mode."""
