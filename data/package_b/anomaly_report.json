@@ -1,0 +1,17 @@
+[
+  {
+    "type": "escalation_concentration",
+    "severity": "warning",
+    "message": "Escalation path 'frontdoor \u2192 coder_escalation' accounts for 86% of all escalations (103/120)",
+    "path": "frontdoor \u2192 coder_escalation",
+    "count": 103,
+    "fraction": 0.858
+  },
+  {
+    "type": "failure_pattern",
+    "severity": "info",
+    "message": "Failure pattern 'other' occurred 61 times",
+    "pattern": "other",
+    "count": 61
+  }
+]

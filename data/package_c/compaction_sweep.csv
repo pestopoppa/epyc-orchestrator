@@ -1,0 +1,106 @@
+trace,level,ratio,faithfulness,retention,compression_achieved,tokens_before,tokens_after,status
+session_log_validation.jsonl,1,0.2,-1,-1,0.0,0,0,"error: Client error '400 Bad Request' for url 'http://localhost:8082/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400"
+session_chat-bddd59dc.md,1,0.2,3,3,0.531,732,343,live
+session_chat-85976843.md,1,0.2,3,3,0.645,726,258,live
+session_chat-dc9369ac.md,1,0.2,-1,-1,0.0,0,0,error: timed out
+session_chat-b5e88ba4.md,1,0.2,3,3,0.771,721,165,live
+session_chat-edd232fd.md,1,0.2,3,3,0.652,718,250,live
+session_chat-099e1aca.md,1,0.2,3,3,0.719,713,200,live
+session_chat-cb781d0a.md,1,0.2,2,3,0.823,713,126,live
+session_chat-8023f1c5.md,1,0.2,3,3,0.766,704,165,live
+session_chat-c167316d.md,1,0.2,3,3,0.717,704,199,live
+session_chat-e110b2db.md,1,0.2,3,3,0.803,704,139,live
+session_chat-7549299d.md,1,0.2,3,3,0.772,696,159,live
+session_chat-e1b5ec58.md,1,0.2,3,3,0.676,695,225,live
+session_chat-5c5f2634.md,1,0.2,3,3,0.486,696,358,live
+session_chat-6a5ad72c.md,1,0.2,3,0,0.857,694,99,live
+session_chat-b7384676.md,1,0.2,3,0,-5.398,694,4440,live
+session_chat-e2381e86.md,1,0.2,3,3,0.695,694,212,live
+session_chat-1142aed9.md,1,0.2,3,3,0.726,689,189,live
+session_chat-51b5ce25.md,1,0.2,3,3,0.67,688,227,live
+session_chat-041b1180.md,1,0.2,3,0,-5.603,685,4523,live
+session_log_validation.jsonl,2,0.4,-1,-1,0.0,0,0,"error: Client error '400 Bad Request' for url 'http://localhost:8182/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400"
+session_chat-bddd59dc.md,2,0.4,-1,-1,0.0,0,0,error: timed out
+session_chat-85976843.md,2,0.4,3,3,0.771,726,166,live
+session_chat-dc9369ac.md,2,0.4,3,3,0.822,723,129,live
+session_chat-b5e88ba4.md,2,0.4,3,3,0.641,721,259,live
+session_chat-edd232fd.md,2,0.4,2,3,0.719,718,202,live
+session_chat-099e1aca.md,2,0.4,3,3,0.815,713,132,live
+session_chat-cb781d0a.md,2,0.4,2,3,0.815,713,132,live
+session_chat-8023f1c5.md,2,0.4,3,3,0.759,704,170,live
+session_chat-c167316d.md,2,0.4,3,3,-5.599,704,4646,live
+session_chat-e110b2db.md,2,0.4,3,0,0.804,704,138,live
+session_chat-7549299d.md,2,0.4,3,3,0.852,696,103,live
+session_chat-e1b5ec58.md,2,0.4,3,3,0.813,695,130,live
+session_chat-5c5f2634.md,2,0.4,3,3,0.731,696,187,live
+session_chat-6a5ad72c.md,2,0.4,3,3,0.762,694,165,live
+session_chat-b7384676.md,2,0.4,3,3,0.826,694,121,live
+session_chat-e2381e86.md,2,0.4,3,3,0.787,694,148,live
+session_chat-1142aed9.md,2,0.4,3,3,0.714,689,197,live
+session_chat-51b5ce25.md,2,0.4,3,3,0.76,688,165,live
+session_chat-041b1180.md,2,0.4,3,0,0.842,685,108,live
+session_log_validation.jsonl,3,0.6,-1,-1,0.0,0,0,"error: Client error '400 Bad Request' for url 'http://localhost:8282/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400"
+session_chat-bddd59dc.md,3,0.6,3,3,0.842,732,116,live
+session_chat-85976843.md,3,0.6,3,3,0.84,726,116,live
+session_chat-dc9369ac.md,3,0.6,3,0,0.905,723,69,live
+session_chat-b5e88ba4.md,3,0.6,3,3,0.753,721,178,live
+session_chat-edd232fd.md,3,0.6,2,3,0.889,718,80,live
+session_chat-099e1aca.md,3,0.6,3,3,0.874,713,90,live
+session_chat-cb781d0a.md,3,0.6,3,3,0.832,713,120,live
+session_chat-8023f1c5.md,3,0.6,3,3,0.831,704,119,live
+session_chat-c167316d.md,3,0.6,3,3,0.845,704,109,live
+session_chat-e110b2db.md,3,0.6,3,3,0.847,704,108,live
+session_chat-7549299d.md,3,0.6,3,3,0.83,696,118,live
+session_chat-e1b5ec58.md,3,0.6,3,3,0.843,695,109,live
+session_chat-5c5f2634.md,3,0.6,3,3,0.708,696,203,live
+session_chat-6a5ad72c.md,3,0.6,3,3,0.752,694,172,live
+session_chat-b7384676.md,3,0.6,2,3,0.844,694,108,live
+session_chat-e2381e86.md,3,0.6,3,3,0.687,694,217,live
+session_chat-1142aed9.md,3,0.6,3,3,0.84,689,110,live
+session_chat-51b5ce25.md,3,0.6,3,3,0.779,688,152,live
+session_chat-041b1180.md,3,0.6,3,3,0.813,685,128,live
+session_log_validation.jsonl,4,0.8,-1,-1,0.0,0,0,"error: Client error '400 Bad Request' for url 'http://localhost:8382/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400"
+session_chat-bddd59dc.md,4,0.8,3,3,0.884,732,85,live
+session_chat-85976843.md,4,0.8,3,3,0.868,726,96,live
+session_chat-dc9369ac.md,4,0.8,3,0,0.877,723,89,live
+session_chat-b5e88ba4.md,4,0.8,3,3,0.853,721,106,live
+session_chat-edd232fd.md,4,0.8,2,3,0.903,718,70,live
+session_chat-099e1aca.md,4,0.8,3,0,0.885,713,82,live
+session_chat-cb781d0a.md,4,0.8,3,3,0.857,713,102,live
+session_chat-8023f1c5.md,4,0.8,3,0,0.874,704,89,live
+session_chat-c167316d.md,4,0.8,3,3,0.865,704,95,live
+session_chat-e110b2db.md,4,0.8,3,3,0.92,704,56,live
+session_chat-7549299d.md,4,0.8,3,3,0.885,696,80,live
+session_chat-e1b5ec58.md,4,0.8,2,3,0.882,695,82,live
+session_chat-5c5f2634.md,4,0.8,3,3,0.853,696,102,live
+session_chat-6a5ad72c.md,4,0.8,3,3,0.89,694,76,live
+session_chat-b7384676.md,4,0.8,3,0,0.882,694,82,live
+session_chat-e2381e86.md,4,0.8,3,0,0.859,694,98,live
+session_chat-1142aed9.md,4,0.8,3,3,0.872,689,88,live
+session_chat-51b5ce25.md,4,0.8,3,3,0.868,688,91,live
+session_chat-041b1180.md,4,0.8,3,3,0.889,685,76,live
+session_log_validation.jsonl,5,0.95,-1,-1,0.0,0,0,"error: Client error '400 Bad Request' for url 'http://localhost:8072/v1/chat/completions'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400"
+session_chat-bddd59dc.md,5,0.95,3,3,0.923,732,56,live
+session_chat-85976843.md,5,0.95,3,3,0.887,726,82,live
+session_chat-dc9369ac.md,5,0.95,3,0,0.946,723,39,live
+session_chat-b5e88ba4.md,5,0.95,3,3,0.896,721,75,live
+session_chat-edd232fd.md,5,0.95,2,3,0.939,718,44,live
+session_chat-099e1aca.md,5,0.95,3,0,0.926,713,53,live
+session_chat-cb781d0a.md,5,0.95,2,0,0.878,713,87,live
+session_chat-8023f1c5.md,5,0.95,3,0,0.902,704,69,live
+session_chat-c167316d.md,5,0.95,2,0,0.942,704,41,live
+session_chat-e110b2db.md,5,0.95,3,0,0.939,704,43,live
+session_chat-7549299d.md,5,0.95,3,3,0.891,696,76,live
+session_chat-e1b5ec58.md,5,0.95,2,3,0.928,695,50,live
+session_chat-5c5f2634.md,5,0.95,3,3,0.593,696,283,live
+session_chat-6a5ad72c.md,5,0.95,3,0,0.927,694,51,live
+session_chat-b7384676.md,5,0.95,3,3,0.88,694,83,live
+session_chat-e2381e86.md,5,0.95,2,0,0.928,694,50,live
+session_chat-1142aed9.md,5,0.95,3,3,0.865,689,93,live
+session_chat-51b5ce25.md,5,0.95,3,3,0.916,688,58,live
+session_chat-041b1180.md,5,0.95,3,0,0.918,685,56,live

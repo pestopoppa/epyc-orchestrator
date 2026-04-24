@@ -8,11 +8,16 @@
 # Run specific:  make shellcheck
 
 SHELL := /usr/bin/env bash
-.PHONY: all gates schema shellcheck shfmt mdlint format lint typecheck coverage unit integration security bench clean help setup bootstrap download-models validate-paths docker-build docker-build-dev docker-run docker-dev docker-test docker-lint docker-clean nix-develop nix-build nix-shell nextplaid-reindex check-agent-config check-numerics report-numerics
+.PHONY: all gates schema shellcheck shfmt mdlint format lint typecheck coverage coverage-orchestrator-slice warnings-orchestrator-slice integration-sanity unit integration security bench clean help setup bootstrap download-models validate-paths docker-build docker-build-dev docker-run docker-dev docker-test docker-lint docker-clean nix-develop nix-build nix-shell nextplaid-reindex check-agent-config check-numerics report-numerics
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 PY ?= python3
+
+GATES_DEPS := schema shellcheck format lint nextplaid-reindex
+ifneq ($(CI),)
+GATES_DEPS += integration-sanity
+endif
 
 # Shell scripts to check (limit to key directories)
 SHELL_SCRIPTS := $(shell find scripts/ -name '*.sh' 2>/dev/null)
@@ -25,7 +30,7 @@ MD_FILES := $(shell find . -maxdepth 2 -name '*.md' -not -path './tmp/*' -not -p
 all: gates
 
 # Full gate chain (ordered)
-gates: schema shellcheck format lint nextplaid-reindex
+gates: $(GATES_DEPS)
 	@echo ""
 	@echo "✅ All gates passed"
 
@@ -63,6 +68,9 @@ help:
 	@echo "  make check-agent-config - Validate agent prompt structure and CLAUDE matrix"
 	@echo "  make check-numerics - Enforce numeric literal policy on changed Python files"
 	@echo "  make report-numerics - Print numeric literal policy report (non-blocking)"
+	@echo "  make coverage-orchestrator-slice - Focused per-file coverage gate for benchmark/runtime seeding slice"
+	@echo "  make warnings-orchestrator-slice - Focused warning gate (ResourceWarning + DeprecationWarning as errors)"
+	@echo "  make integration-sanity - Integration suite with strict warning policy (CI-enforced)"
 	@echo ""
 	@echo "Formatting:"
 	@echo "  make shfmt      - Format shell scripts (in-place)"
@@ -172,6 +180,66 @@ coverage:
 	@echo "==> coverage"
 	@$(PY) -m pytest tests/ -q --cov=src --cov-report=term-missing --cov-fail-under=30 \
 		&& echo "  ✓ coverage passed (≥30%)"
+
+coverage-orchestrator-slice:
+	@echo "==> coverage-orchestrator-slice"
+	@$(PY) -m pytest -q \
+		tests/unit/test_seeding_infra.py \
+		tests/unit/test_seeding_infra_additional.py \
+		tests/unit/test_seeding_infra_branching.py \
+		tests/unit/test_benchmark_executor.py \
+		tests/unit/test_benchmark_executor_additional.py \
+		tests/unit/test_benchmark_executor_branching.py \
+		tests/unit/test_seeding_injection.py \
+		tests/unit/test_seeding_injection_additional.py \
+		tests/unit/test_seeding_orchestrator.py \
+		tests/unit/test_script_lib_registry.py \
+		tests/unit/test_script_lib_output_parser.py \
+		tests/unit/test_script_lib_onboard.py \
+		tests/unit/test_seed_specialist_routing_main_and_retry.py \
+		tests/unit/test_seed_specialist_routing_helpers.py \
+		tests/unit/test_seed_specialist_routing_v2_helpers.py \
+		--cov=scripts/benchmark \
+		--cov=scripts/lib \
+		--cov-report=term-missing \
+		--cov-report=json:/tmp/orchestrator_slice_coverage.json \
+		--cov-fail-under=0
+	@$(PY) scripts/analysis/check_orchestrator_slice_coverage.py --coverage-json /tmp/orchestrator_slice_coverage.json
+	@echo "  ✓ orchestrator slice per-file coverage thresholds satisfied"
+
+warnings-orchestrator-slice:
+	@echo "==> warnings-orchestrator-slice"
+	@$(PY) -m pytest -q \
+		tests/unit/test_seeding_infra.py \
+		tests/unit/test_seeding_infra_additional.py \
+		tests/unit/test_seeding_infra_branching.py \
+		tests/unit/test_benchmark_executor.py \
+		tests/unit/test_benchmark_executor_additional.py \
+		tests/unit/test_benchmark_executor_branching.py \
+		tests/unit/test_seeding_injection.py \
+		tests/unit/test_seeding_injection_additional.py \
+		tests/unit/test_seeding_orchestrator.py \
+		tests/unit/test_script_lib_registry.py \
+		tests/unit/test_script_lib_output_parser.py \
+		tests/unit/test_script_lib_onboard.py \
+		tests/unit/test_seed_specialist_routing_main_and_retry.py \
+		tests/unit/test_seed_specialist_routing_helpers.py \
+		tests/unit/test_seed_specialist_routing_v2_helpers.py \
+		tests/unit/test_seeding_legacy.py \
+		-W error::ResourceWarning \
+		-W error::DeprecationWarning \
+		-W error::PendingDeprecationWarning
+	@echo "  ✓ orchestrator slice warning gate passed"
+
+integration-sanity:
+	@echo "==> integration-sanity"
+	@$(PY) -m pytest -q tests/integration -ra \
+		-W error::pytest.PytestUnraisableExceptionWarning \
+		-W error::RuntimeWarning \
+		-W error::ResourceWarning \
+		-W error::DeprecationWarning \
+		-W error::PendingDeprecationWarning
+	@echo "  ✓ integration sanity passed"
 
 unit:
 	@echo "==> unit tests"

@@ -8,7 +8,7 @@ build/
 *.egg
 
 # Virtual environments
-.venv/
+.venv*/
 venv/
 env/
 
@@ -69,3 +69,40 @@ orchestration/repl_memory/sessions/
 
 # Benchmark images (large, not tracked)
 benchmarks/images/
+
+# Binary data artifacts (FAISS indexes, numpy arrays, model weights, embeddings)
+*.faiss
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.safetensors
+*.bin
+
+# Core dumps + perf captures
+core
+core.*
+perf.data
+perf.data.*
+perf-*.data
+
+# Model files (should be in /mnt/raid0/llm/models/, not repos)
+*.gguf
+*.ggml
+
+# Autopilot runtime state (checkpoints can be multi-GB; journals + plots are ephemeral)
+orchestration/.autopilot.lock
+orchestration/autopilot_checkpoints/
+orchestration/autopilot_journal.*
+orchestration/autopilot_plots/
+orchestration/autopilot_state.json*
+
+# Test artifacts (MagicMock-as-path, etc.)
+MagicMock/
+
+# Editor backups
+*~
+\#*\#
+.\#*

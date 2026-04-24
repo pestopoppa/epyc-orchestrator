@@ -132,7 +132,7 @@ class AutoPilotTUI:
         self._log_tailer = LogTailer(log_path)
         self._inference_tailer = TapTailer(tap_path, name="tap-inference")
         self._repl_tailer = TapTailer(
-            repl_tap_path, name="tap-repl", section_aware=False,
+            repl_tap_path, name="tap-repl", section_aware=True,
         )
 
         self._lock = threading.Lock()

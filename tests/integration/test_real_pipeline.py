@@ -52,7 +52,8 @@ def client_and_primitives(app, primitives):
     while using mock LLM responses instead of real inference.
     """
     with patch("src.api.routes.chat._init_primitives", return_value=primitives):
-        yield TestClient(app), primitives
+        with TestClient(app) as client:
+            yield client, primitives
 
 
 # ── Group 1: Direct mode through full pipeline ───────────────────────────
@@ -598,24 +599,24 @@ class TestQualityCheckIntegration:
 
         with patch("src.api.routes.chat._init_primitives", return_value=prims):
             with patch.object(prims, "_mock_call", side_effect=failing_mock):
-                client = TestClient(app)
-                response = client.post(
-                    "/chat",
-                    json={
-                        "prompt": "test error capture",
-                        "mock_mode": False,
-                        "real_mode": True,
-                        "force_mode": "direct",
-                    },
-                )
-                data = response.json()
-                # Errors now return proper HTTP status codes (not silent 200)
-                assert response.status_code == 502
-                # llm_call catches exceptions and returns [ERROR:...]
-                assert "[ERROR:" in data["answer"]
-                assert "Simulated backend failure" in data["answer"]
-                # Error annotation detects "failed" → 502 (backend error pattern)
-                assert data.get("error_code") == 502
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/chat",
+                        json={
+                            "prompt": "test error capture",
+                            "mock_mode": False,
+                            "real_mode": True,
+                            "force_mode": "direct",
+                        },
+                    )
+                    data = response.json()
+                    # Errors now return proper HTTP status codes (not silent 200)
+                    assert response.status_code == 502
+                    # llm_call catches exceptions and returns [ERROR:...]
+                    assert "[ERROR:" in data["answer"]
+                    assert "Simulated backend failure" in data["answer"]
+                    # Error annotation detects "failed" → 502 (backend error pattern)
+                    assert data.get("error_code") == 502
 
 
 # ── Group 8: Pipeline stage interaction tests ─────────────────────────
@@ -629,71 +630,70 @@ class TestPipelineStageInteraction:
         prims = LLMPrimitives(mock_mode=True)
 
         with patch("src.api.routes.chat._init_primitives", return_value=prims):
-            client = TestClient(app)
+            with TestClient(app) as client:
+                # First request with one role
+                client.post(
+                    "/chat",
+                    json={
+                        "prompt": "test1",
+                        "mock_mode": False,
+                        "real_mode": True,
+                        "force_mode": "direct",
+                        "force_role": "coder_escalation",
+                    },
+                )
 
-            # First request with one role
-            client.post(
-                "/chat",
-                json={
-                    "prompt": "test1",
-                    "mock_mode": False,
-                    "real_mode": True,
-                    "force_mode": "direct",
-                    "force_role": "coder_escalation",
-                },
-            )
+                # Second request with different role
+                client.post(
+                    "/chat",
+                    json={
+                        "prompt": "test2",
+                        "mock_mode": False,
+                        "real_mode": True,
+                        "force_mode": "direct",
+                        "force_role": "worker_explore",
+                    },
+                )
 
-            # Second request with different role
-            client.post(
-                "/chat",
-                json={
-                    "prompt": "test2",
-                    "mock_mode": False,
-                    "real_mode": True,
-                    "force_mode": "direct",
-                    "force_role": "worker_explore",
-                },
-            )
-
-            # Verify both calls recorded with correct roles
-            assert len(prims.call_log) >= 2
-            roles_used = {entry.role for entry in prims.call_log}
-            assert "coder_escalation" in roles_used
-            assert "worker_explore" in roles_used
+                # Verify both calls recorded with correct roles
+                assert len(prims.call_log) >= 2
+                roles_used = {entry.role for entry in prims.call_log}
+                assert "coder_escalation" in roles_used
+                assert "worker_explore" in roles_used
 
     def test_mock_mode_bypasses_real_pipeline(self, app):
         """mock_mode=True should return early without calling _init_primitives."""
         with patch("src.api.routes.chat._init_primitives") as mock_init:
-            client = TestClient(app)
-            response = client.post(
-                "/chat",
-                json={
-                    "prompt": "mock test",
-                    "mock_mode": True,
-                },
-            )
-            assert response.status_code == 200
-            data = response.json()
-            assert data["mode"] == "mock"
-            # _init_primitives should NOT have been called
-            mock_init.assert_not_called()
+            with TestClient(app) as client:
+                response = client.post(
+                    "/chat",
+                    json={
+                        "prompt": "mock test",
+                        "mock_mode": True,
+                    },
+                )
+                assert response.status_code == 200
+                data = response.json()
+                assert data["mode"] == "mock"
+                # _init_primitives should NOT have been called
+                mock_init.assert_not_called()
 
     def test_real_mode_calls_init_primitives(self, app):
         """real_mode=True should call _init_primitives."""
         prims = LLMPrimitives(mock_mode=True)
         with patch("src.api.routes.chat._init_primitives", return_value=prims) as mock_init:
-            client = TestClient(app)
-            response = client.post(
-                "/chat",
-                json={
-                    "prompt": "real test",
-                    "mock_mode": False,
-                    "real_mode": True,
-                    "force_mode": "direct",
-                },
-            )
-            assert response.status_code == 200
-            mock_init.assert_called_once()
+            with TestClient(app) as client:
+                response = client.post(
+                    "/chat",
+                    json={
+                        "prompt": "real test",
+                        "mock_mode": False,
+                        "real_mode": True,
+                        "force_mode": "direct",
+                    },
+                )
+                assert response.status_code == 200
+                mock_init.assert_called_once()
 
     def test_response_model_validates(self, client_and_primitives):
         """Response should be valid according to ChatResponse pydantic model."""

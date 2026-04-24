@@ -1016,8 +1016,8 @@ class TestDocumentAPIEndpoints:
             app = FastAPI()
             app.include_router(router)
 
-            client = TestClient(app)
-            response = client.get("/documents/health")
+            with TestClient(app) as client:
+                response = client.get("/documents/health")
 
             assert response.status_code == 200
             data = response.json()
@@ -1033,7 +1033,7 @@ class TestDocumentAPIEndpoints:
         app = FastAPI()
         app.include_router(router)
 
-        client = TestClient(app)
-        response = client.post("/documents/process", json={})
+        with TestClient(app) as client:
+            response = client.post("/documents/process", json={})
 
         assert response.status_code == 400

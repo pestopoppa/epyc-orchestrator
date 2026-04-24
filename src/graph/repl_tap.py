@@ -29,7 +29,14 @@ def tap_write_repl_exec(code: str, turn: int) -> None:
         preview = code[:4000]
         if len(code) > 4000:
             preview += f"\n... [{len(code) - 4000} chars truncated]"
+        # Section marker so the TUI (section_aware=True) clears old content
+        # and always shows the most recent REPL execution.
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         text = (
+            f"{'=' * 72}\n"
+            f"[{ts}] REPL turn {turn}\n"
+            f"{'-' * 72}\n"
             f"[turn {turn}] $ python3 <<'CODE'\n"
             f"{preview}\n"
             f"CODE\n"

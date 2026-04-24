@@ -25,8 +25,12 @@ SKILLS_DIR = ORCH_ROOT / "orchestration" / "repl_memory"
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
 CLASSIFIER_CONFIG = ORCH_ROOT / "orchestration" / "classifier_config.yaml"
 
-# Files to checkpoint
+AUTOPILOT_STATE = ORCH_ROOT / "orchestration" / "autopilot_state.json"
+
+# Files to checkpoint — autopilot_state.json is CRITICAL (contains Pareto frontier
+# with trial configs, HV history, all entries). Without it, frontier is lost on restart.
 CHECKPOINT_FILES = {
+    "autopilot_state.json": AUTOPILOT_STATE,
     "episodic.db": MEMORY_DIR / "episodic.db",
     "embeddings.faiss": MEMORY_DIR / "embeddings.faiss",
     "id_map.npy": MEMORY_DIR / "id_map.npy",

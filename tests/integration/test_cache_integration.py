@@ -415,8 +415,8 @@ class TestCachingErrorHandling:
         """Errors from backend should propagate to caller."""
         primitives = LLMPrimitives(mock_mode=False)
 
-        error_backend = MagicMock()
-        error_backend.infer.return_value = InferenceResult(
+        error_backend = MagicMock(spec=["infer", "infer_stream_text"])
+        error_result = InferenceResult(
             role="worker",
             output="",
             tokens_generated=0,
@@ -425,6 +425,8 @@ class TestCachingErrorHandling:
             success=False,
             error_message="Server error",
         )
+        error_backend.infer.return_value = error_result
+        error_backend.infer_stream_text.return_value = error_result
 
         primitives._backends = {"worker": error_backend}
 

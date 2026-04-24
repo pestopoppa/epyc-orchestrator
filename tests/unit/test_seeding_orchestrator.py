@@ -80,6 +80,15 @@ def test_busy_heavy_ports_and_read_slot_progress_cover_mixed_paths():
     assert prog == {"is_processing": True, "task_id": 7, "n_decoded": 9, "n_remain": 3}
 
 
+def test_read_slot_progress_coercion_failures_fallback_to_zero():
+    payload = [
+        {"id_task": "bad", "is_processing": False, "next_token": [{"n_decoded": "x", "n_remain": "y"}]},
+    ]
+    with patch("httpx.get", return_value=_Resp(200, payload)):
+        prog = _MOD._read_slot_progress(8080)
+    assert prog == {"is_processing": False, "task_id": 0, "n_decoded": 0, "n_remain": 0}
+
+
 def test_erase_slots_and_force_erase_paths():
     _MOD._SLOT_ERASE_CAPABILITY.clear()
     slot_payload = [{"id": 1, "is_processing": True}]
@@ -114,6 +123,31 @@ def test_erase_slots_and_force_erase_paths():
         assert _MOD._force_erase_and_verify(8080, max_attempts=2) is False
 
 
+def test_erase_slots_non200_cached_reset_and_exception_paths():
+    # Non-200 /slots probe: early return.
+    with patch("httpx.get", return_value=_Resp(503, {})):
+        _MOD._erase_slots(8080)
+
+    # Cached strategy failure resets cache to unknown for reprobe.
+    _MOD._SLOT_ERASE_CAPABILITY.clear()
+    _MOD._SLOT_ERASE_CAPABILITY[8080] = "POST_QUERY"
+    with (
+        patch("httpx.get", return_value=_Resp(200, [{"id": 1, "is_processing": True}])),
+        patch("httpx.post", return_value=_Resp(500, {})),
+    ):
+        _MOD._erase_slots(8080)
+    assert _MOD._SLOT_ERASE_CAPABILITY[8080] is None
+
+    # Explicit unsupported cache disables attempts for this port.
+    _MOD._SLOT_ERASE_CAPABILITY[8081] = False
+    with patch("httpx.get", return_value=_Resp(200, [{"id": 1, "is_processing": True}])):
+        _MOD._erase_slots(8081)
+
+    # Outer probe exception is swallowed/logged.
+    with patch("httpx.get", side_effect=RuntimeError("probe failed")):
+        _MOD._erase_slots(8082)
+
+
 def test_recover_heavy_ports_if_stuck_handles_disabled_fail_and_success(tmp_path: Path):
     assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", []) is True
 
@@ -136,6 +170,20 @@ def test_recover_heavy_ports_if_stuck_handles_disabled_fail_and_success(tmp_path
             patch.object(_MOD, "_busy_heavy_ports", return_value=[]),
         ):
             assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8080, 8081]) is True
+
+        with (
+            patch("subprocess.run", side_effect=RuntimeError("reload boom")),
+            patch.object(_MOD, "_wait_for_heavy_models_idle"),
+            patch.object(_MOD, "_busy_heavy_ports", return_value=[]),
+        ):
+            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8080]) is False
+
+        with (
+            patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stderr="")),
+            patch.object(_MOD, "_wait_for_heavy_models_idle"),
+            patch.object(_MOD, "_busy_heavy_ports", return_value=[8083]),
+        ):
+            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8080]) is False
     finally:
         os.environ.pop("SEEDING_ENABLE_TARGETED_RELOAD", None)
 
@@ -166,6 +214,31 @@ def test_call_orchestrator_forced_normalizes_tool_data_and_handles_errors():
     with patch("httpx.post", side_effect=RuntimeError("network down")):
         err = _MOD.call_orchestrator_forced(prompt="hello", force_role="worker", client=None)
     assert "network down" in err["error"]
+
+
+def test_call_orchestrator_forced_includes_optional_payload_fields():
+    client = Mock()
+    client.post.return_value = _Resp(200, {"answer": "ok"})
+
+    _MOD.call_orchestrator_forced(
+        prompt="hello",
+        force_role="worker",
+        client=client,
+        image_path="/tmp/img.png",
+        cache_prompt=False,
+        allow_delegation=True,
+        session_id="sess-1",
+        scoring_method="score-x",
+        stop_sequences=["</answer>"],
+    )
+
+    payload = client.post.call_args.kwargs["json"]
+    assert payload["image_path"] == "/tmp/img.png"
+    assert payload["cache_prompt"] is False
+    assert payload["allow_delegation"] is True
+    assert payload["session_id"] == "sess-1"
+    assert payload["scoring_method"] == "score-x"
+    assert payload["stop_sequences"] == ["</answer>"]
 
 
 class _Future:
@@ -248,5 +321,198 @@ def test_call_orchestrator_with_slot_poll_timeout_erase_branch():
             poll_port=8080,
         )
     assert "timeout after slot erase" in resp["error"]
+    assert elapsed >= 0.0
+    assert progress["max_decoded"] == 0
+
+
+def test_call_orchestrator_with_slot_poll_timeout_erase_then_success():
+    fut = _Future([concurrent.futures.TimeoutError(), {"answer": "ok-after-erase"}])
+    with (
+        patch("seeding_orchestrator_test.concurrent.futures.ThreadPoolExecutor", return_value=_Executor(fut)),
+        patch("seeding_orchestrator_test._force_erase_and_verify"),
+        patch.object(_MOD.time, "perf_counter", side_effect=[0.0, 1.0, 2.0]),
+    ):
+        resp, elapsed, _progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=10,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=8080,
+        )
+    assert resp["answer"] == "ok-after-erase"
+    assert elapsed >= 0.0
+
+
+def test_call_orchestrator_with_slot_poll_port_zero_heartbeat_path():
+    fut = _Future([concurrent.futures.TimeoutError(), {"answer": "ok"}])
+    with (
+        patch("seeding_orchestrator_test.concurrent.futures.ThreadPoolExecutor", return_value=_Executor(fut)),
+        patch.object(_MOD.time, "perf_counter", side_effect=[0.0, 10.0, 130.0, 131.0]),
+    ):
+        resp, elapsed, progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=300,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=0,
+        )
+    assert resp["answer"] == "ok"
+    assert elapsed >= 0.0
+    assert progress["max_decoded"] == 0
+
+
+def test_call_orchestrator_with_slot_poll_future_exception_path():
+    fut = _Future([RuntimeError("worker crash")])
+    with (
+        patch("seeding_orchestrator_test.concurrent.futures.ThreadPoolExecutor", return_value=_Executor(fut)),
+        patch.object(_MOD.time, "perf_counter", side_effect=[0.0, 0.2]),
+    ):
+        resp, elapsed, _progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=30,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=8080,
+        )
+    assert "worker crash" in resp["error"]
+    assert elapsed >= 0.0
+
+
+def test_erase_slots_covers_skip_invalid_strategy_and_transient_exception_paths():
+    # all_slots=False skips idle slots.
+    with (
+        patch("httpx.get", return_value=_Resp(200, [{"id": 1, "is_processing": False}])),
+        patch("httpx.post") as post,
+    ):
+        _MOD._erase_slots(8080, all_slots=False)
+    post.assert_not_called()
+
+    # Unknown cached strategy returns None from _erase_slot_with_strategy.
+    _MOD._SLOT_ERASE_CAPABILITY.clear()
+    _MOD._SLOT_ERASE_CAPABILITY[8081] = "INVALID"
+    with patch("httpx.get", return_value=_Resp(200, [{"id": 2, "is_processing": True}])):
+        _MOD._erase_slots(8081)
+    assert _MOD._SLOT_ERASE_CAPABILITY[8081] is None
+
+    # Transient strategy exception is swallowed and probing continues.
+    _MOD._SLOT_ERASE_CAPABILITY.clear()
+    with (
+        patch("httpx.get", side_effect=[_Resp(200, [{"id": 3, "is_processing": True}]), _Resp(404, {})]),
+        patch("httpx.post", side_effect=[RuntimeError("transient"), _Resp(404, {})]),
+    ):
+        _MOD._erase_slots(8082)
+
+
+def test_force_erase_and_verify_short_circuit_and_verify_exception():
+    assert _MOD._force_erase_and_verify(0) is True
+
+    with (
+        patch.object(_MOD, "_erase_slots"),
+        patch.object(_MOD.time, "sleep"),
+        patch("httpx.get", side_effect=RuntimeError("probe failed")),
+    ):
+        assert _MOD._force_erase_and_verify(8080, max_attempts=1) is False
+
+
+def test_busy_heavy_ports_non_200_and_read_slot_progress_exception_paths():
+    with patch.object(_MOD, "HEAVY_PORTS", [8080]):
+        with patch("httpx.get", return_value=_Resp(503, {})):
+            assert _MOD._busy_heavy_ports() == []
+
+    with patch("httpx.get", side_effect=RuntimeError("slots down")):
+        assert _MOD._read_slot_progress(8080) is None
+
+
+def test_call_orchestrator_with_slot_poll_progress_none_continues():
+    fut = _Future([concurrent.futures.TimeoutError(), {"answer": "ok"}])
+    with (
+        patch("seeding_orchestrator_test.concurrent.futures.ThreadPoolExecutor", return_value=_Executor(fut)),
+        patch("seeding_orchestrator_test._read_slot_progress", return_value=None),
+        patch.object(_MOD.time, "perf_counter", side_effect=[0.0, 1.0, 2.0]),
+    ):
+        resp, elapsed, progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=300,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=8080,
+        )
+    assert resp["answer"] == "ok"
+    assert elapsed >= 0.0
+    assert progress["source"] == ""
+
+
+def test_call_orchestrator_with_slot_poll_logs_progress_and_heartbeat():
+    fut = _Future([concurrent.futures.TimeoutError(), {"answer": "ok"}])
+    with (
+        patch("seeding_orchestrator_test.concurrent.futures.ThreadPoolExecutor", return_value=_Executor(fut)),
+        patch(
+            "seeding_orchestrator_test._read_slot_progress",
+            return_value={"n_decoded": 256, "n_remain": 3, "task_id": 7},
+        ),
+        patch.object(_MOD.time, "perf_counter", side_effect=[0.0, 1.0, 2.0, 130.0, 131.0]),
+    ):
+        resp, elapsed, progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=300,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=8080,
+        )
+    assert resp["answer"] == "ok"
+    assert elapsed >= 0.0
+    assert progress["max_decoded"] == 256
+    assert progress["source"] == "slots_poll"
+
+
+def test_call_orchestrator_with_slot_poll_real_executor_invokes_call_path():
+    with patch(
+        "seeding_orchestrator_test.call_orchestrator_forced",
+        return_value={"answer": "ok-direct"},
+    ):
+        resp, elapsed, progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=60,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=0,
+        )
+    assert resp["answer"] == "ok-direct"
     assert elapsed >= 0.0
     assert progress["max_decoded"] == 0

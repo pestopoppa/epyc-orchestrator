@@ -6,10 +6,13 @@ Objectives: quality (↑), speed (↑), -cost (↑ i.e. lower cost is better), r
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from itertools import combinations
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 DEFAULT_STATE_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_state.json"
@@ -83,6 +86,22 @@ class ParetoArchive:
         self._hypervolume_history = [
             tuple(h) for h in archive_data.get("hypervolume_history", [])
         ]
+
+        # Integrity check: detect lost frontier
+        trial_counter = data.get("trial_counter", 0)
+        if trial_counter > 10 and not self._frontier and not self._all_entries:
+            log.error(
+                "PARETO FRONTIER LOST: trial_counter=%d but frontier is empty. "
+                "This means autopilot_state.json was not checkpointed or was "
+                "overwritten. Restore from a checkpoint that includes "
+                "autopilot_state.json, or reconstruct from autopilot.log.",
+                trial_counter,
+            )
+            raise RuntimeError(
+                f"Pareto frontier empty at trial {trial_counter}. "
+                f"Refusing to start — would discard all prior optimization. "
+                f"Restore from checkpoint or reconstruct from logs."
+            )
 
     def save(self, state: dict[str, Any] | None = None) -> None:
         """Save archive to state file, merging with existing state."""

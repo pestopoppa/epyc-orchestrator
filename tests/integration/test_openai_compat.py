@@ -21,7 +21,8 @@ from src.api import create_app
 def client():
     """Create test client for the FastAPI app."""
     app = create_app()
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 
 class TestModelsEndpoint:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -209,3 +208,78 @@ def test_get_configs_for_ssm_moe_hybrid_adds_only_moe_variants():
 
     names = [cfg.name for cfg in configs]
     assert names == ["baseline", "moe4"]
+
+
+def test_compound_moe_spec_uses_draft_stem_when_name_missing():
+    cfg = Config.compound_moe_spec(
+        experts=4,
+        override_key="qwen3moe.expert_used_count",
+        k=8,
+        draft_path="/models/draft-small.gguf",
+        draft_name="",
+    )
+    assert cfg.name == "moe4_spec_draft-small_k8"
+
+
+def test_get_configs_for_moe_adds_lookup_and_spec_compounds_from_drafts():
+    executor = Executor(registry=MagicMock(), validate=False)
+    reg = MagicMock()
+    reg.get_forbidden_configs.return_value = []
+    reg.get_moe_override_key.return_value = "qwen3moe.expert_used_count"
+    reg.get_baseline_experts.return_value = 8
+    reg.get_drafts_for_model.return_value = ["draft_role"]
+    reg.get_model_path.side_effect = (
+        lambda role: "/models/main.gguf" if role == "worker" else "/models/draft.gguf"
+    )
+    reg.get_role_config.side_effect = (
+        lambda role: {"model": {"size_gb": 0}} if role == "worker" else {"tier": "D"}
+    )
+
+    with (
+        patch("os.path.exists", return_value=True),
+        patch("os.path.getsize", return_value=10 * (1024**3)),
+    ):
+        configs = executor.get_configs_for_architecture("qwen3moe", "worker", registry=reg)
+
+    names = {cfg.name for cfg in configs}
+    assert "moe4_lookup_n4" in names
+    assert "moe4_spec_draft_role_k8" in names
+    assert "moe4_spec_draft_role_k16" in names
+    assert "moe4_spec_draft_role_k24" in names
+
+
+def test_build_command_completion_moe_and_moe_spec_flags():
+    executor = Executor(registry=MagicMock(), validate=False)
+
+    def _binary(name, registry=None):  # noqa: ANN001
+        mapping = {
+            "speculative": "/bin/llama-speculative",
+            "lookup": "/bin/llama-lookup",
+            "completion": "/bin/llama-completion",
+        }
+        return mapping[name]
+
+    with (
+        patch("scripts.lib.executor._numa_prefix", return_value=[]),
+        patch("scripts.lib.executor.get_binary", side_effect=_binary),
+    ):
+        baseline_cmd = executor.build_command("model.gguf", Config.baseline(), "/tmp/prompt.txt")
+        moe_cmd = executor.build_command(
+            "model.gguf",
+            Config.moe(4, "qwen3moe.expert_used_count"),
+            "/tmp/prompt.txt",
+        )
+        moe_spec_cmd = executor.build_command(
+            "model.gguf",
+            Config.compound_moe_spec(
+                4, "qwen3moe.expert_used_count", 8, "/models/draft.gguf", "draft"
+            ),
+            "/tmp/prompt.txt",
+        )
+
+    assert baseline_cmd[0] == "/bin/llama-completion"
+    assert "--no-conversation" in baseline_cmd
+    assert "--override-kv" in moe_cmd
+    assert "qwen3moe.expert_used_count=int:4" in moe_cmd
+    assert "-md" in moe_spec_cmd and "/models/draft.gguf" in moe_spec_cmd
+    assert "--override-kv" in moe_spec_cmd
