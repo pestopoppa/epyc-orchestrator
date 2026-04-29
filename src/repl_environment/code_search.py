@@ -12,12 +12,26 @@ Phase 5 architecture: two NextPLAID containers with specialized models.
   :8089  nextplaid-docs   answerai-colbert-small-v1-onnx      → docs index
 
 Degrades gracefully: if docs container down, falls back to code container.
+
+code_search() routes through the ColGREP CLI binary
+(github.com/lightonai/next-plaid) by default. ColGREP is the same ColBERT
+family with hybrid FTS5 keyword fusion + tree-sitter chunking, runs as a
+single Rust binary, and falls back to CPU on hosts without CUDA. To opt
+back into NextPLAID for code_search, set REPL_COLGREP=0 (also accepts
+"false"/"off"). doc_search() always uses NextPLAID (ColGREP is code-focused).
+
+Default flipped 2026-04-29 after a 14-query paired A/B showed colgrep
+top-1 = 10/14 (71%) vs NextPLAID top-1 = 2/14 (14%) on canonical
+production-code queries. See handoffs/active/repl-turn-efficiency.md S7.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
+import subprocess
 from typing import Any
 
 
@@ -26,6 +40,21 @@ logger = logging.getLogger(__name__)
 CODE_SEARCH_URL = "http://localhost:8088"
 DOC_SEARCH_URL = "http://localhost:8089"
 VALID_INDICES = frozenset({"code", "docs"})
+
+# ColGREP CLI integration (default ON; set REPL_COLGREP=0 to use NextPLAID).
+# Subprocess-per-query: every call pays full ONNX runtime + ColBERT model
+# load (~770 ms p50, ~2.3 s worst-case). Acceptable for human-paced REPL;
+# if soak telemetry shows the hit is real for high-frequency tool loops,
+# see handoffs/active/repl-turn-efficiency.md "S7: Cold-start daemon options"
+# for the two evaluated paths (homegrown sidecar vs upstream next-plaid SDK CLI).
+COLGREP_BIN = "/mnt/raid0/llm/UTILS/bin/colgrep"
+COLGREP_DEFAULT_PATH = "/mnt/raid0/llm/epyc-orchestrator/src"
+COLGREP_TIMEOUT_S = 10
+
+
+def _colgrep_enabled() -> bool:
+    """ColGREP is the default code_search engine. Explicit opt-out via REPL_COLGREP=0."""
+    return os.environ.get("REPL_COLGREP", "1").lower() not in ("0", "false", "off")
 
 
 class _CodeSearchMixin:
@@ -104,6 +133,8 @@ class _CodeSearchMixin:
         Returns:
             JSON with matching code passages, file paths, and line ranges.
         """
+        if _colgrep_enabled():
+            return self._colgrep_search(query, limit=limit)
         return self._nextplaid_search(query, index="code", limit=limit)
 
     def _doc_search(self, query: str, limit: int = 5) -> str:
@@ -212,3 +243,111 @@ class _CodeSearchMixin:
             logger.warning("NextPLAID search failed: %s", e)
             output = json.dumps({"results": [], "error": str(e)})
             return self._maybe_wrap_tool_output(output)
+
+    def _colgrep_search(self, query: str, limit: int) -> str:
+        """Internal: execute code_search via the ColGREP CLI binary.
+
+        Subprocess-per-query (no daemon mode upstream). Falls back to
+        NextPLAID on missing binary, timeout, or non-zero exit so callers
+        always get a valid response shape.
+        """
+        lock = getattr(self, "_state_lock", None)
+        if lock:
+            with lock:
+                self._exploration_calls += 1
+        else:
+            self._exploration_calls += 1
+
+        bin_path = os.environ.get("REPL_COLGREP_BIN", COLGREP_BIN)
+        proj_path = os.environ.get("REPL_COLGREP_PATH", COLGREP_DEFAULT_PATH)
+        if not shutil.which(bin_path) and not os.path.isfile(bin_path):
+            logger.warning("ColGREP binary not found at %s, falling back to NextPLAID", bin_path)
+            return self._nextplaid_search(query, index="code", limit=limit)
+
+        env = {**os.environ, "NEXT_PLAID_FORCE_CPU": "1"}
+        # alpha=0.95 weights semantic ColBERT over FTS5 keyword. Default 0.75
+        # over-ranks __init__.py re-exports for symbol queries in this corpus
+        # (validated 2026-04-29: alpha 0.95 recovers correct top-1 on
+        # FinalSignal/ASTSecurityVisitor/create_repl_environment).
+        alpha = os.environ.get("REPL_COLGREP_ALPHA", "0.95")
+        cmd = [
+            bin_path, "search", query,
+            "-k", str(min(limit, 20)),
+            "--alpha", alpha,
+            "--json",
+            proj_path,
+        ]
+        try:
+            proc = subprocess.run(
+                cmd, env=env, capture_output=True, text=True,
+                timeout=COLGREP_TIMEOUT_S, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("ColGREP timed out after %ds, falling back to NextPLAID", COLGREP_TIMEOUT_S)
+            return self._nextplaid_search(query, index="code", limit=limit)
+        except OSError as e:
+            logger.warning("ColGREP subprocess failed: %s, falling back to NextPLAID", e)
+            return self._nextplaid_search(query, index="code", limit=limit)
+
+        if proc.returncode != 0:
+            logger.warning("ColGREP exit %d: %s", proc.returncode, proc.stderr[:500])
+            return self._nextplaid_search(query, index="code", limit=limit)
+
+        try:
+            raw = json.loads(proc.stdout) if proc.stdout.strip() else []
+        except json.JSONDecodeError as e:
+            logger.warning("ColGREP JSON parse failed: %s", e)
+            return self._nextplaid_search(query, index="code", limit=limit)
+
+        results = []
+        for item in raw[:limit]:
+            unit = item.get("unit", {}) if isinstance(item, dict) else {}
+            file_path = unit.get("file", "unknown")
+            try:
+                rel = os.path.relpath(file_path, proj_path)
+            except ValueError:
+                rel = file_path
+            entry = {
+                "file": rel,
+                "lines": f"{unit.get('line', '?')}-{unit.get('end_line', '?')}",
+                "score": round(float(item.get("score", 0.0)), 3),
+            }
+            unit_name = unit.get("name")
+            unit_type = unit.get("unit_type")
+            if unit_name and unit_type and unit_type != "rawcode":
+                entry["unit"] = f"{unit_type}:{unit_name}"
+                sig = unit.get("signature") or ""
+                if sig:
+                    entry["signature"] = sig[:100]
+            results.append(entry)
+
+        # Frecency boost (same flag as NextPLAID path)
+        if results and os.environ.get("REPL_FRECENCY", "").lower() in ("1", "true", "on"):
+            try:
+                from src.repl_environment.file_recency import FrecencyStore
+
+                _frecency = getattr(self, "_frecency_store", None)
+                if _frecency is None:
+                    _frecency = FrecencyStore()
+                    self._frecency_store = _frecency
+                for r in results:
+                    boost = _frecency.get_score(r["file"])
+                    r["score"] = round(r["score"] * (1 + 0.3 * boost), 3)
+                results.sort(key=lambda r: r["score"], reverse=True)
+            except Exception:
+                logger.debug("Frecency boost failed", exc_info=True)
+
+        response = {"results": results, "index": "code", "query": query, "engine": "colgrep"}
+        self._exploration_log.add_event(
+            "code_search", {"query": query, "index": "code", "engine": "colgrep"}, response,
+        )
+        node_id = self._research_context.add(
+            tool="code_search",
+            query=query[:100],
+            content=json.dumps(results[:3]),
+            parent_id=self._last_research_node,
+        )
+        self._last_research_node = node_id
+
+        output = json.dumps(response, indent=2)
+        return self._maybe_wrap_tool_output(output)

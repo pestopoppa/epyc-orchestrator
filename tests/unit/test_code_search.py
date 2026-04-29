@@ -8,6 +8,7 @@ both-down graceful degradation.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import types
 from dataclasses import dataclass
@@ -137,10 +138,15 @@ class FakeConnectionErrorClient:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def repl():
-    """Create a REPLEnvironment with mocked NextPLAID client."""
+def repl(monkeypatch):
+    """Create a REPLEnvironment with mocked NextPLAID client.
+
+    Default-disables colgrep (REPL_COLGREP=0) so legacy tests get NextPLAID-shape
+    behavior. ColGREP-specific tests override per-test via monkeypatch.setenv.
+    """
     from src.repl_environment.environment import REPLEnvironment
 
+    monkeypatch.setenv("REPL_COLGREP", "0")
     env = REPLEnvironment(context="test context", role="frontdoor")
     # Reset any cached clients from previous tests
     env._code_client = None
@@ -447,3 +453,191 @@ class TestCodeSearchRepl:
 
         result = repl.execute('result = code_search("FAISS index")')
         assert result.error is None, f"REPL exec failed: {result.error}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: ColGREP CLI integration (REPL_COLGREP feature flag)
+# ---------------------------------------------------------------------------
+
+class TestColgrepIntegration:
+    """code_search() routes to ColGREP CLI when REPL_COLGREP=1."""
+
+    _SAMPLE_COLGREP_JSON = json.dumps([
+        {
+            "unit": {
+                "name": "frecency_score",
+                "qualified_name": "file_recency.py::frecency_score",
+                "file": "/proj/src/repl_environment/file_recency.py",
+                "line": 42,
+                "end_line": 58,
+                "language": "python",
+                "unit_type": "function",
+                "signature": "def frecency_score(access_count, last_access):",
+            },
+            "score": 0.873,
+        },
+        {
+            "unit": {
+                "name": "raw_code_1",
+                "file": "/proj/src/repl_environment/__init__.py",
+                "line": 1, "end_line": 12,
+                "unit_type": "rawcode",
+                "signature": "\"\"\"Sandboxed Python REPL.",
+            },
+            "score": 0.214,
+        },
+    ])
+
+    def _fake_proc(self, stdout: str = "", returncode: int = 0, stderr: str = ""):
+        proc = MagicMock()
+        proc.stdout = stdout
+        proc.stderr = stderr
+        proc.returncode = returncode
+        return proc
+
+    def test_flag_unset_uses_colgrep_by_default(self, repl, monkeypatch, tmp_path):
+        """REPL_COLGREP unset → colgrep path (default ON as of 2026-04-29)."""
+        monkeypatch.delenv("REPL_COLGREP", raising=False)
+        fake_bin = tmp_path / "colgrep"
+        fake_bin.write_text("#!/bin/sh\necho '[]'\n")
+        fake_bin.chmod(0o755)
+        monkeypatch.setenv("REPL_COLGREP_BIN", str(fake_bin))
+        with patch("src.repl_environment.code_search.subprocess.run") as mock_run:
+            mock_run.return_value = self._fake_proc(stdout="[]")
+            repl._code_search("anything")
+            mock_run.assert_called_once()
+
+    def test_explicit_off_uses_nextplaid(self, repl, monkeypatch):
+        """REPL_COLGREP=0 → NextPLAID path (explicit opt-out)."""
+        monkeypatch.setenv("REPL_COLGREP", "0")
+        with patch("src.repl_environment.code_search.subprocess.run") as mock_run, \
+             patch("src.repl_environment.code_search._CodeSearchMixin._get_nextplaid_client") as mock_get:
+            mock_get.return_value = FakeNextPlaidClient("http://localhost:8088")
+            repl._code_search("anything")
+            mock_run.assert_not_called()
+
+    def test_explicit_false_uses_nextplaid(self, repl, monkeypatch):
+        """REPL_COLGREP=false → NextPLAID path."""
+        monkeypatch.setenv("REPL_COLGREP", "false")
+        with patch("src.repl_environment.code_search.subprocess.run") as mock_run, \
+             patch("src.repl_environment.code_search._CodeSearchMixin._get_nextplaid_client") as mock_get:
+            mock_get.return_value = FakeNextPlaidClient("http://localhost:8088")
+            repl._code_search("anything")
+            mock_run.assert_not_called()
+
+    def test_flag_on_uses_colgrep(self, repl, monkeypatch, tmp_path):
+        """REPL_COLGREP=1 routes through subprocess.run with the colgrep binary."""
+        monkeypatch.setenv("REPL_COLGREP", "1")
+        # Create a fake binary path that os.path.isfile() will accept.
+        fake_bin = tmp_path / "colgrep"
+        fake_bin.write_text("#!/bin/sh\necho '[]'\n")
+        fake_bin.chmod(0o755)
+        monkeypatch.setenv("REPL_COLGREP_BIN", str(fake_bin))
+        monkeypatch.setenv("REPL_COLGREP_PATH", "/proj/src")
+
+        with patch("src.repl_environment.code_search.subprocess.run") as mock_run:
+            mock_run.return_value = self._fake_proc(stdout=self._SAMPLE_COLGREP_JSON)
+            raw = repl._code_search("frecency", limit=5)
+
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == str(fake_bin)
+            assert cmd[1] == "search"
+            assert cmd[2] == "frecency"
+            assert "--json" in cmd
+            # alpha=0.95 default biases hybrid toward semantic to avoid
+            # FTS5 over-ranking __init__.py re-exports.
+            assert "--alpha" in cmd and cmd[cmd.index("--alpha") + 1] == "0.95"
+            assert mock_run.call_args.kwargs["env"]["NEXT_PLAID_FORCE_CPU"] == "1"
+
+        output = raw.replace("<<<TOOL_OUTPUT>>>", "").replace("<<<END_TOOL_OUTPUT>>>", "").strip()
+        result = json.loads(output)
+        assert result["index"] == "code"
+        assert result["engine"] == "colgrep"
+        assert result["query"] == "frecency"
+        assert len(result["results"]) == 2
+        # File path is relativized against REPL_COLGREP_PATH
+        assert result["results"][0]["file"] == "repl_environment/file_recency.py"
+        assert result["results"][0]["lines"] == "42-58"
+        assert result["results"][0]["score"] == 0.873
+        assert result["results"][0]["unit"] == "function:frecency_score"
+        # rawcode unit_type → no "unit" field (matches NextPLAID rawcode behavior)
+        assert "unit" not in result["results"][1]
+
+    def test_colgrep_missing_binary_falls_back(self, repl, monkeypatch):
+        """Missing colgrep binary → falls back to NextPLAID, no exception."""
+        monkeypatch.setenv("REPL_COLGREP", "1")
+        monkeypatch.setenv("REPL_COLGREP_BIN", "/nonexistent/colgrep")
+
+        with patch("src.repl_environment.code_search._CodeSearchMixin._get_nextplaid_client") as mock_get:
+            mock_get.return_value = FakeNextPlaidClient("http://localhost:8088")
+            raw = repl._code_search("frecency")
+
+        output = raw.replace("<<<TOOL_OUTPUT>>>", "").replace("<<<END_TOOL_OUTPUT>>>", "").strip()
+        result = json.loads(output)
+        # NextPLAID engine path → no "engine" key (only colgrep sets it)
+        assert "engine" not in result
+        assert result["index"] == "code"
+
+    def test_colgrep_timeout_falls_back(self, repl, monkeypatch, tmp_path):
+        """Subprocess timeout → falls back to NextPLAID."""
+        monkeypatch.setenv("REPL_COLGREP", "1")
+        fake_bin = tmp_path / "colgrep"
+        fake_bin.write_text("#!/bin/sh\nsleep 60\n")
+        fake_bin.chmod(0o755)
+        monkeypatch.setenv("REPL_COLGREP_BIN", str(fake_bin))
+
+        with patch("src.repl_environment.code_search.subprocess.run") as mock_run, \
+             patch("src.repl_environment.code_search._CodeSearchMixin._get_nextplaid_client") as mock_get:
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="colgrep", timeout=10)
+            mock_get.return_value = FakeNextPlaidClient("http://localhost:8088")
+            raw = repl._code_search("anything")
+
+        output = raw.replace("<<<TOOL_OUTPUT>>>", "").replace("<<<END_TOOL_OUTPUT>>>", "").strip()
+        result = json.loads(output)
+        assert "engine" not in result  # fell back to NextPLAID
+
+    def test_colgrep_nonzero_exit_falls_back(self, repl, monkeypatch, tmp_path):
+        """Non-zero colgrep exit → falls back to NextPLAID."""
+        monkeypatch.setenv("REPL_COLGREP", "1")
+        fake_bin = tmp_path / "colgrep"
+        fake_bin.write_text("#!/bin/sh\nexit 2\n")
+        fake_bin.chmod(0o755)
+        monkeypatch.setenv("REPL_COLGREP_BIN", str(fake_bin))
+
+        with patch("src.repl_environment.code_search.subprocess.run") as mock_run, \
+             patch("src.repl_environment.code_search._CodeSearchMixin._get_nextplaid_client") as mock_get:
+            mock_run.return_value = self._fake_proc(stdout="", returncode=2, stderr="boom")
+            mock_get.return_value = FakeNextPlaidClient("http://localhost:8088")
+            raw = repl._code_search("anything")
+
+        output = raw.replace("<<<TOOL_OUTPUT>>>", "").replace("<<<END_TOOL_OUTPUT>>>", "").strip()
+        result = json.loads(output)
+        assert "engine" not in result
+
+    def test_colgrep_bad_json_falls_back(self, repl, monkeypatch, tmp_path):
+        """Malformed colgrep stdout → falls back to NextPLAID."""
+        monkeypatch.setenv("REPL_COLGREP", "1")
+        fake_bin = tmp_path / "colgrep"
+        fake_bin.write_text("#!/bin/sh\necho not-json\n")
+        fake_bin.chmod(0o755)
+        monkeypatch.setenv("REPL_COLGREP_BIN", str(fake_bin))
+
+        with patch("src.repl_environment.code_search.subprocess.run") as mock_run, \
+             patch("src.repl_environment.code_search._CodeSearchMixin._get_nextplaid_client") as mock_get:
+            mock_run.return_value = self._fake_proc(stdout="not-json", returncode=0)
+            mock_get.return_value = FakeNextPlaidClient("http://localhost:8088")
+            raw = repl._code_search("anything")
+
+        output = raw.replace("<<<TOOL_OUTPUT>>>", "").replace("<<<END_TOOL_OUTPUT>>>", "").strip()
+        result = json.loads(output)
+        assert "engine" not in result
+
+    def test_colgrep_doc_search_unaffected(self, repl, monkeypatch):
+        """REPL_COLGREP=1 does NOT route doc_search through colgrep (code-only)."""
+        monkeypatch.setenv("REPL_COLGREP", "1")
+        with patch("src.repl_environment.code_search.subprocess.run") as mock_run, \
+             patch("src.repl_environment.code_search._CodeSearchMixin._get_nextplaid_client") as mock_get:
+            mock_get.return_value = FakeNextPlaidClient("http://localhost:8089")
+            repl._doc_search("anything")
+            mock_run.assert_not_called()
