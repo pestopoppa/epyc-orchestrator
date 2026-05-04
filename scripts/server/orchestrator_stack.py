@@ -571,6 +571,255 @@ def check_free_memory() -> int:
     return 0
 
 
+# =============================================================================
+# Host prerequisites — applied at session start before any llama-server launch.
+# Source: handoffs/active/cpu-kernel-env-flags-inventory.md §211 +
+#         handoffs/active/model-registry-v5-deployment-draft.yaml host_prerequisites.
+# Single source of truth for canonical inference host state.
+# =============================================================================
+
+# Required sysctl values. /etc/sysctl.d/99-epyc-inference.conf gives the boot-time
+# default; these are re-verified per session per feedback_numa_balancing_self_reset.
+_HOST_PREREQ_SYSCTLS = {
+    "kernel.numa_balancing": "0",
+    "kernel.perf_event_paranoid": "1",
+}
+
+# Required THP state — both enabled and defrag must read "always".
+_HOST_PREREQ_THP = {
+    "/sys/kernel/mm/transparent_hugepage/enabled": "always",
+    "/sys/kernel/mm/transparent_hugepage/defrag": "always",
+}
+
+# Required CPU governor.
+_HOST_PREREQ_GOVERNOR = "performance"
+
+
+# =============================================================================
+# Per-role env blocks — applied to every llama-server launch.
+# Source: handoffs/active/model-registry-v5-deployment-draft.yaml roles section.
+# Universally-applied OMP env stack + per-arch-class GGML_* opt-ins.
+# =============================================================================
+
+# Always applied to every llama-server launch (the canonical OMP recipe).
+# Source: cpu-kernel-env-flags-inventory.md §28-30. Without these, post-reboot
+# Coder-30B drops 17 → 48.8 t/s (3-4× degraded, per feedback_omp_env_stack_required).
+_CANONICAL_OMP_ENV = {
+    "OMP_PROC_BIND": "spread",
+    "OMP_PLACES": "cores",
+    "OMP_WAIT_POLICY": "active",
+}
+
+# Per-role env blocks. Keyed by role name (matches NUMA_CONFIG keys + registry roles).
+# Roles not listed inherit only the canonical OMP env.
+# Source: model-registry-v5-deployment-draft.yaml §roles, validated under v5 audit.
+_ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
+    # MoE Q4 sync-bound (CPU1 stack +1.8% on Coder-30B Q4_K_M tg32, stable).
+    # NB: GGML_NUMA_WEIGHTS deliberately excluded — DEPRECATED per CPU21 P3 isolation
+    # (unstable, 19-22σ at warmed state). Uses 3-flag stable stack.
+    "worker": {
+        "GGML_CCD_POOLS": "1",
+        "GGML_CCD_WORK_DIST": "1",
+        "GGML_BARRIER_LOCAL_BETWEEN_OPS": "1",
+    },
+    # MoE Q8 BW-bound frontdoor — EP stack (+17% honest baseline g.1 = drone+shard, N=2).
+    "frontdoor": {
+        "GGML_EP_N_INSTANCES": "2",
+        "GGML_EP_NUMA_PIN": "1",
+        "GGML_EP_MASTER_ALL_NODES": "1",
+        "GGML_EP_WORKER_DRONE": "1",
+        "GGML_EP_SHARD": "1",
+    },
+    # MoE Q4 DRAM-bound (REAP-246B / architect_coding) — default v5, no opt-in.
+    # CPU22 -0.8% (noise). MoE-Spec budget is plumbed via separate CLI flag.
+    "architect_coding": {},
+    # architect_general (Qwen3.5-122B-A10B Q4_K_M) — Probe B closed 2026-05-04.
+    # Arch class: moe_q4_bw_bound_mbind_sensitive. c2 wins at +1.28% (σ ~0.4%, z ~3)
+    # vs default v5 at 96t canonical. CPU1 stack net-neutral, c3 (combined) regresses to
+    # noise. Source bundle: data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/
+    "architect_general": {
+        "GGML_NUMA_REPACK_INTERLEAVE": "0",
+    },
+    # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
+    # Activate when a hybrid_ssm_dense model is rostered.
+    "hybrid_ssm_dense": {
+        "GGML_CCD_POOLS": "1",
+        "GGML_CCD_WORK_DIST": "1",
+        "GGML_BARRIER_LOCAL_BETWEEN_OPS": "1",
+        "GGML_NUMA_REPACK_INTERLEAVE": "0",
+    },
+    # Hybrid SSM MoE (Qwen3-Next-80B-A3B-class) — default v5 (c3 +1.7% noise floor).
+    "hybrid_ssm_moe": {},
+    # Dense Q8 (Qwen3.6-27B Q8) — DEFAULT v5; CPU1 stack actively HURTS.
+    # All probed CPU1/mbind-off configs negative (c1=-4.7%, c2=-3.3%, c3=-1.6%).
+    "dense_q8": {},
+    # Dense Q4 (gemma-4-31B / SuperGemma4-31B class) — default v5 within ±2% noise.
+    "dense_q4": {},
+}
+
+
+def _role_env_overrides(role: str) -> dict[str, str]:
+    """Return per-role env block for a given role. Empty dict if role not registered.
+    Falls back through arch-class aliases (e.g. coder_escalation → worker)."""
+    if role in _ROLE_ENV_BLOCKS:
+        return dict(_ROLE_ENV_BLOCKS[role])
+    # Aliases — production roles that map to v5 arch_class names.
+    arch_aliases = {
+        "coder_escalation": "worker",
+        "worker_explore": "worker",
+        "worker_summarize": "worker",
+        "thinking_reasoning": "worker",
+        "general_gemma_3_27b_it_qat": "dense_q4",
+        "ingest_long_context": "architect_coding",
+        "formalizer": "architect_coding",
+        "toolrunner": "worker",
+    }
+    aliased = arch_aliases.get(role)
+    if aliased and aliased in _ROLE_ENV_BLOCKS:
+        return dict(_ROLE_ENV_BLOCKS[aliased])
+    return {}
+
+
+def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """Compose the full env dict for a llama-server launch.
+
+    Order (later overrides earlier):
+        1. base_env (parent process env, typically os.environ.copy())
+        2. canonical OMP env stack (always applied)
+        3. per-role GGML_* env block (from v5 deployment draft)
+
+    The per-role block is allowed to override OMP if it must, though no current
+    role does so.
+    """
+    env: dict[str, str] = dict(base_env) if base_env else {}
+    env.update(_CANONICAL_OMP_ENV)
+    env.update(_role_env_overrides(role))
+    return env
+
+
+def _read_sysctl(key: str) -> str | None:
+    path = "/proc/sys/" + key.replace(".", "/")
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _read_thp_active(path: str) -> str | None:
+    # /sys/kernel/mm/transparent_hugepage/enabled has format e.g. "always [madvise] never"
+    # The bracketed token is the active value.
+    try:
+        with open(path) as f:
+            content = f.read().strip()
+    except OSError:
+        return None
+    for token in content.split():
+        if token.startswith("[") and token.endswith("]"):
+            return token[1:-1]
+    return content
+
+
+def _read_governor() -> str | None:
+    try:
+        with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def check_host_prerequisites() -> tuple[bool, list[str]]:
+    """Audit canonical host state. Returns (all_pass, list_of_drift_messages)."""
+    drift: list[str] = []
+
+    for key, want in _HOST_PREREQ_SYSCTLS.items():
+        got = _read_sysctl(key)
+        if got != want:
+            drift.append(f"sysctl {key}={got} (want {want})")
+
+    for path, want in _HOST_PREREQ_THP.items():
+        got = _read_thp_active(path)
+        if got != want:
+            drift.append(f"{path} active={got} (want {want})")
+
+    gov = _read_governor()
+    if gov != _HOST_PREREQ_GOVERNOR:
+        drift.append(f"cpu0 scaling_governor={gov} (want {_HOST_PREREQ_GOVERNOR})")
+
+    return (len(drift) == 0, drift)
+
+
+def apply_host_prerequisites(auto_fix: bool = True) -> bool:
+    """Verify and (optionally) apply canonical host settings.
+
+    Returns True if host is canonical (or was successfully fixed). Returns False
+    if any prereq could not be applied — caller should refuse to launch.
+    """
+    print("[host_prereq] Auditing canonical host state...")
+    ok, drift = check_host_prerequisites()
+    if ok:
+        print("  [OK] All host prerequisites satisfied "
+              "(numa_balancing=0, THP=always, governor=performance, perf_paranoid=1)")
+        return True
+
+    print(f"  [DRIFT] {len(drift)} setting(s) need correction:")
+    for msg in drift:
+        print(f"    - {msg}")
+
+    if not auto_fix:
+        print("  [SKIP] auto_fix disabled. Pass --apply-host-prereqs or fix manually.")
+        return False
+
+    print("  [FIX] Applying canonical settings (sudo -n)...")
+    ok_fix = True
+    for key, val in _HOST_PREREQ_SYSCTLS.items():
+        if _read_sysctl(key) == val:
+            continue
+        try:
+            subprocess.run(["sudo", "-n", "sysctl", "-w", f"{key}={val}"],
+                           check=True, capture_output=True, text=True, timeout=5)
+            print(f"    ✓ sysctl {key}={val}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            print(f"    ✗ FAILED to set sysctl {key}: {exc}")
+            ok_fix = False
+
+    for path, val in _HOST_PREREQ_THP.items():
+        if _read_thp_active(path) == val:
+            continue
+        try:
+            # tee with sudo: echo "always" | sudo tee /sys/kernel/...
+            proc = subprocess.run(
+                ["sudo", "-n", "tee", path],
+                input=val + "\n", check=True, capture_output=True, text=True, timeout=5,
+            )
+            print(f"    ✓ {path} = {val}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            print(f"    ✗ FAILED to set {path}: {exc}")
+            ok_fix = False
+
+    if _read_governor() != _HOST_PREREQ_GOVERNOR:
+        try:
+            subprocess.run(
+                ["sudo", "-n", "cpupower", "frequency-set", "-g", _HOST_PREREQ_GOVERNOR],
+                check=True, capture_output=True, text=True, timeout=10,
+            )
+            print(f"    ✓ cpu governor = {_HOST_PREREQ_GOVERNOR}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            print(f"    ✗ FAILED to set governor: {exc}")
+            ok_fix = False
+
+    # Re-audit
+    ok, drift_after = check_host_prerequisites()
+    if ok:
+        print("  [OK] All host prerequisites now satisfied after fix")
+        return True
+
+    print(f"  [FAIL] {len(drift_after)} setting(s) STILL drifted after fix attempt:")
+    for msg in drift_after:
+        print(f"    - {msg}")
+    return False
+
+
 def is_port_in_use(port: int) -> bool:
     """Check if a port is in use."""
     import socket
@@ -1110,7 +1359,7 @@ def start_server(
         print(f"    Command: {' '.join(cmd[:6])}...")
 
         with open(log_file, "w") as log:
-            env = os.environ.copy()
+            env = build_launch_env(roles[0], os.environ.copy())
             proc = subprocess.Popen(
                 _numa_prefix(roles[0]) + cmd,
                 stdout=log,
@@ -1153,7 +1402,7 @@ def start_server(
         print(f"    Command: {' '.join(cmd[:6])}...")
 
         with open(log_file, "w") as log:
-            env = os.environ.copy()
+            env = build_launch_env(roles[0], os.environ.copy())
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
             proc = subprocess.Popen(
                 _numa_prefix(roles[0]) + cmd,
@@ -1201,7 +1450,8 @@ def start_server(
         print(f"    Command: {' '.join(cmd[:6])}...")
 
         with open(log_file, "w") as log:
-            env = os.environ.copy()
+            # Worker pool roles map their worker_type to the canonical "worker" role for env.
+            env = build_launch_env("worker", os.environ.copy())
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
             proc = subprocess.Popen(
                 _numa_prefix(roles[0]) + cmd,
@@ -1256,9 +1506,9 @@ def start_server(
     print(f"    Roles: {', '.join(roles)}")
     print(f"    Command: {' '.join(cmd[:5])}...")
 
-    # Start process — taskset CPU-pinned per NUMA config
+    # Start process — taskset CPU-pinned per NUMA config + canonical OMP env + per-role GGML
     with open(log_file, "w") as log:
-        env = os.environ.copy()
+        env = build_launch_env(primary_role, os.environ.copy())
         # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
         proc = subprocess.Popen(
             _numa_prefix(primary_role, numa_instance) + cmd,
@@ -1532,6 +1782,18 @@ def cmd_start(args: argparse.Namespace) -> int:
     print("=" * 60)
     print("ORCHESTRATOR STACK STARTUP")
     print("=" * 60)
+    print()
+
+    # Host prerequisites — applied before any llama-server launch.
+    # See cpu-kernel-env-flags-inventory.md §211 + model-registry-v5-deployment-draft.yaml.
+    skip_host_prereqs = getattr(args, "skip_host_prereqs", False)
+    if skip_host_prereqs:
+        print("[host_prereq] SKIPPED (--skip-host-prereqs). Canonical state NOT enforced.")
+    else:
+        if not apply_host_prerequisites(auto_fix=True):
+            print("[!] Host prerequisites could not be applied. Refusing to launch.")
+            print("    Override with --skip-host-prereqs (NOT recommended for benchmarks).")
+            return 1
     print()
 
     # Check memory
@@ -2321,6 +2583,11 @@ def main() -> int:
                               help="Start ONLY these roles (skip everything else). "
                                    "Searches both HOT and WARM server lists.")
     start_parser.add_argument("--dev", action="store_true", help="Dev mode (single 0.5B model)")
+    start_parser.add_argument(
+        "--skip-host-prereqs",
+        action="store_true",
+        help="Skip host_prereq audit/apply (numa_balancing, THP, governor). NOT recommended for benchmarks.",
+    )
     start_parser.add_argument(
         "--profile",
         choices=sorted(ORCHESTRATOR_PROFILES.keys()),
