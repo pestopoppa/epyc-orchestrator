@@ -451,11 +451,20 @@ server_mode:
       type: speculative_decoding
       draft_max: 32   # sweep-verified 2026-03-26 (REAP-246B optimal)
       p_split: 0      # linear only — tree harmful at all ps values, sweep-verified 2026-03-26
+                      # NB: --draft-p-split flag stripped in production-consolidated-v5 binary;
+                      # field retained for documentation. Linear is the default.
       lookup: true  # safe on pure MoE (no hybrid segfault)
       corpus_retrieval: true
+      moe_spec_budget: 40  # MoE-Spec budget (arXiv:2602.16052) +13-16% pp32 / +3% e2e on REAP-246B.
+                           # Plumbed via env var LLAMA_ARG_MOE_SPEC_BUDGET in
+                           # orchestrator_stack.py _ROLE_ENV_BLOCKS["architect_coding"].
+                           # Fires only when n_tokens >= 4 (prefill batches); decode unaffected.
     numa_instances: 2  # 2×96t cross-NUMA (2026-03-29). Benchmarked: 16.5 t/s agg (1.92x).
     numa_ports: [8084, 8184]
     throughput: 8.0    # t/s per instance at 96t (sweep 2026-03-26). 2×96t = 16.5 t/s agg.
+                       # Probe B 2026-05-04 single-instance canonical: 6.35 ± 0.003 t/s
+                       # (default v5; all c0/c1/c2/c3 within ±0.25%, arch class confirmed
+                       # moe_q4_dram_bound).
     previous_model: Qwen3-Coder-480B-A35B-Instruct-Q4_K_M.gguf  # swapped 2026-03-29 (REAP-246B: +9pp quality, +14% speed, -44% RAM)
 
   ingest_long_context:
