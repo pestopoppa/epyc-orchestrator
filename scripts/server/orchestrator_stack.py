@@ -652,9 +652,17 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
         "GGML_EP_WORKER_DRONE": "1",
         "GGML_EP_SHARD": "1",
     },
-    # MoE Q4 DRAM-bound (REAP-246B / architect_coding) — default v5, no opt-in.
-    # CPU22 -0.8% (noise). MoE-Spec budget is plumbed via separate CLI flag.
-    "architect_coding": {},
+    # MoE Q4 DRAM-bound (REAP-246B / architect_coding) — default v5 GGML config
+    # confirmed by Probe B 2026-05-04 (all c0/c1/c2/c3 within ±0.25%).
+    # MoE-Spec budget=40 plumbed via env var (LLAMA_ARG_MOE_SPEC_BUDGET) — equivalent
+    # to --moe-spec-budget 40 CLI flag. Per v5 deployment draft acceleration.moe_spec_budget=40:
+    # +13-16% pp32 / +3% e2e on REAP-246B. Fires only when n_tokens >= 4 (prefill
+    # batches), so this is primarily a prefill optimization. Decode (n_tokens=1) is
+    # unaffected. Default-on for architect_coding only; do NOT enable for non-MoE-Spec
+    # validated arch classes.
+    "architect_coding": {
+        "LLAMA_ARG_MOE_SPEC_BUDGET": "40",
+    },
     # architect_general (Qwen3.5-122B-A10B Q4_K_M) — Probe B closed 2026-05-04.
     # Arch class: moe_q4_bw_bound_mbind_sensitive. c2 wins at +1.28% (σ ~0.4%, z ~3)
     # vs default v5 at 96t canonical. CPU1 stack net-neutral, c3 (combined) regresses to
@@ -686,14 +694,18 @@ def _role_env_overrides(role: str) -> dict[str, str]:
     if role in _ROLE_ENV_BLOCKS:
         return dict(_ROLE_ENV_BLOCKS[role])
     # Aliases — production roles that map to v5 arch_class names.
+    # NB: ingest_long_context (Qwen3-Next-80B-A3B hybrid SSM MoE) is INTENTIONALLY routed to
+    # hybrid_ssm_moe (not architect_coding) — MoE-Spec budget=40 was validated on REAP-246B
+    # only and behavior on hybrid SSM is unmeasured. formalizer (MathSmith-Qwen3-8B Q8 dense)
+    # routes to dense_q8 — it's not MoE at all.
     arch_aliases = {
         "coder_escalation": "worker",
         "worker_explore": "worker",
         "worker_summarize": "worker",
         "thinking_reasoning": "worker",
         "general_gemma_3_27b_it_qat": "dense_q4",
-        "ingest_long_context": "architect_coding",
-        "formalizer": "architect_coding",
+        "ingest_long_context": "hybrid_ssm_moe",  # Qwen3-Next-80B-A3B; NOT architect_coding (REAP-246B-specific MoE-Spec)
+        "formalizer": "dense_q8",                 # MathSmith-Qwen3-8B Q8 dense; NOT MoE at all
         "toolrunner": "worker",
     }
     aliased = arch_aliases.get(role)
@@ -1161,8 +1173,8 @@ def build_server_command(
                 "-m", model_path,
                 "-md", EXPLORE_DRAFT_MODEL,  # Spec decode with DRAFT-0.75B
                 "--draft-max", "8",    # sweep-verified 2026-03-21 (dm irrelevant: 38-39 across all)
-                "--draft-p-split", "0",  # linear only (tree net-negative at 48t)
-                "--lookup",  # Prompt n-gram lookup as fallback
+                # NB: --draft-p-split stripped in production-consolidated-v5 (linear is default).
+                # NB: --lookup stripped in v5 too (replaced by --lookup-cache-static/dynamic FNAME).
                 "--host", "127.0.0.1",
                 "--port", str(port),
                 "-np", "2",  # 2 parallel slots
@@ -1332,10 +1344,16 @@ def build_server_command(
             if not replaced and overrides["p_split"] > 0:
                 cmd.extend(["--draft-p-split", str(overrides["p_split"])])
 
-    # Add prompt n-gram lookup (spec-first, lookup-fallback) when enabled in registry
-    # Per-role flag: beneficial on dense/small-MoE models (30B: +27%), net-negative on large MoE (480B)
-    # Combined mode: 5.4x vs 5.2x spec-only (production-consolidated commit 8e35dbc01)
-    if accel.lookup:
+    # Prompt n-gram lookup decode — disabled 2026-05-04: production-consolidated-v5 binary
+    # stripped the bare `--lookup` boolean flag. Replaced by `--lookup-cache-static FNAME` /
+    # `--lookup-cache-dynamic FNAME` (file-based) and `--spec-ngram-size-n/m N` parameters
+    # for ngram-simple/ngram-map speculative-decoding modes. Per-role registry `lookup: true`
+    # is now informational; emission would crash the server with `error: invalid argument: --lookup`.
+    # Historical: dense/small-MoE +27% (30B), net-negative on large MoE (480B); combined with
+    # spec-decode 5.4x vs 5.2x spec-only (production-consolidated commit 8e35dbc01).
+    # Re-enable by writing a static cache file and emitting --lookup-cache-static if the
+    # quality/speed lever is wanted back.
+    if False and accel.lookup:  # disabled — bare --lookup stripped in v5 binary
         cmd.append("--lookup")
 
     # DS-3: KV state save/restore — enables dynamic stack slot persistence.
