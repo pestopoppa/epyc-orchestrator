@@ -1301,14 +1301,14 @@ def build_server_command(
         if accel.n_layer_exit_intermediate:
             cmd.extend(["--n-layer-exit-intermediate", str(accel.n_layer_exit_intermediate)])
 
-    # Tree speculation: --draft-p-split enables DySpec branching
-    # Coder Q4KM: tree beneficial (+2.7% at 48t). Hybrids: tree HARMFUL (-25% to -40%)
-    # IMPORTANT: binary defaults p_split=0.1 (tree ON). Must explicitly pass 0 for linear.
-    if accel.p_split is not None:
+    # Tree speculation: --draft-p-split was the DySpec branching probability flag.
+    # REMOVED 2026-05-04: production-consolidated-v5 kernel push stripped tree-speculation
+    # support; the binary no longer accepts --draft-p-split. Spec-decode is now linear-only,
+    # which matches the registry config (all 4 spec-decode roles use p_split=0 = linear).
+    # Re-introduce only if a future binary restores tree speculation.
+    # Historical: Coder Q4KM tree was +2.7% at 48t; hybrids tree HARMFUL (-25% to -40%).
+    if False and accel.p_split is not None:  # disabled — flag stripped in v5
         cmd.extend(["--draft-p-split", str(accel.p_split)])
-    elif accel.type in ("speculative_decoding", "moe_expert_reduction") and accel.draft_role:
-        # No p_split in registry = linear speculation. Explicit 0 prevents silent tree activation.
-        cmd.extend(["--draft-p-split", "0"])
 
     # NUMA-specific spec param overrides: when NUMA thread count differs from 192t,
     # the optimal draft_max/p_split may differ. Override the registry defaults with
@@ -1321,7 +1321,7 @@ def build_server_command(
                 if arg == "--draft-max" and i + 1 < len(cmd):
                     cmd[i + 1] = str(overrides["draft_max"])
                     break
-        if "p_split" in overrides:
+        if False and "p_split" in overrides:  # disabled — --draft-p-split stripped in v5 binary
             # Replace or add --draft-p-split
             replaced = False
             for i, arg in enumerate(cmd):
