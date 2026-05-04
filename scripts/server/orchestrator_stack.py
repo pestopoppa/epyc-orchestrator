@@ -163,6 +163,11 @@ NUMA_Q1A = ("48-71,144-167", 48)
 NUMA_Q1B = ("72-95,168-191", 48)
 NUMA_NODE0 = ("0-47,96-143", 96)
 NUMA_NODE1 = ("48-95,144-191", 96)
+# Full-machine physical-cores-only (no SMT) — for canonical-recipe wiring
+# (single-instance latency-optimal). 96 physical cores spanning all 4 NPS4 nodes.
+# Pair with numactl_policy="interleave=all" so memory distributes across all 4 nodes
+# (matches the canonical bench recipe used by Probe B 2026-05-04).
+NUMA_FULL = ("0-95", 96)
 
 # Per-role NUMA configurations.
 # "instances" is a list of (cpu_list, port, threads) tuples.
@@ -197,15 +202,20 @@ NUMA_CONFIG: dict[str, dict] = {
         "mlock": True,
         "spec_overrides": {"draft_max": 32, "p_split": 0.05},  # sweep-verified
     },
-    # Qwen3.5-122B-A10B Q4_K_M (69 GB) — 2×96t cross-NUMA
-    # Sweep-verified 2026-03-21: dm=24, ps=0, 4.3 t/s (1×96t).
-    # 2×96t estimated ~8.3 t/s agg (1.92x, extrapolated from REAP-246B scaling).
+    # Qwen3.5-122B-A10B Q4_K_M (69 GB) — 1×96t canonical (Probe B 2026-05-04)
+    # Switched 2026-05-04 from 2× cross-NUMA (4.3 t/s/instance, 8.6 t/s agg) to
+    # 1× full-machine canonical with numactl --interleave=all + GGML_NUMA_REPACK_INTERLEAVE=0
+    # (c2 env block, see _ROLE_ENV_BLOCKS). Measured 12.19 t/s single-instance = +184%
+    # per-request latency vs prior 2× wiring. Bundle:
+    # epyc-inference-research/data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/
+    # Reopen 4× per-NUMA-node wiring (16.86 t/s aggregate) ONLY if architect_general workload
+    # shifts to 4+ concurrent batch eval — see findings_phase2.md.
     "architect_general": {
         "instances": [
-            (NUMA_NODE0[0], 8083, NUMA_NODE0[1]),
-            (NUMA_NODE1[0], 8183, NUMA_NODE1[1]),
+            (NUMA_FULL[0], 8083, NUMA_FULL[1]),  # 1×96t physical cores, all 4 NUMA nodes
         ],
         "mlock": True,
+        "numactl_policy": "interleave=all",  # wraps launch with `numactl --interleave=all --`
         "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified
     },
     # REAP-246B Q4KM (139 GB) — 2×96t cross-NUMA. Replaces 480B (2026-03-29).
@@ -266,15 +276,26 @@ NUMA_REPLICA_PORTS = {
 
 
 def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
-    """Return taskset CPU-pinning prefix for a role instance.
+    """Return CPU-pinning + memory-policy prefix for a role instance.
 
-    Uses taskset -c for CPU pinning (validated: numactl adds no benefit over
-    taskset + first-touch memory policy, per S4 benchmark results).
+    Default: taskset -c <cpu_list> (S4 benchmark: numactl --membind adds no benefit
+    over taskset + first-touch memory policy for per-NUMA-node-bound roles).
+
+    If the role's NUMA_CONFIG entry has a "numactl_policy" key (e.g. "interleave=all"),
+    wraps the launch with `numactl --<policy> --` ahead of taskset. Used for
+    canonical-recipe roles like architect_general (Probe B 2026-05-04: numactl
+    --interleave=all + taskset -c 0-95 = 12.19 t/s single-instance vs 4.3 t/s under
+    legacy 2× cross-NUMA + first-touch).
     """
     cfg = NUMA_CONFIG.get(role)
     if cfg and instance_idx < len(cfg["instances"]):
         cpu_list = cfg["instances"][instance_idx][0]
-        return ["taskset", "-c", cpu_list]
+        prefix: list[str] = []
+        policy = cfg.get("numactl_policy")
+        if policy:
+            prefix.extend(["numactl", f"--{policy}", "--"])
+        prefix.extend(["taskset", "-c", cpu_list])
+        return prefix
     # Fallback: no pinning (embedders, fast workers, dev mode)
     return []
 
@@ -300,7 +321,7 @@ SERIAL_ROLES = {
 #   frontdoor (19GB): 1×96t(8070) + 4×48t(8080-8380) = 95 GB, moe6
 #   coder (18.5GB): 1×96t(8071) + 4×48t(8081-8381) = 92.5 GB, spec+tree+lu
 #   worker (16GB): 1×96t(8072) + 4×48t(8082-8382) = 80 GB, spec dm=8
-#   arch_gen (69GB): 2×96t(8083,8183) = 138 GB
+#   arch_gen (69GB): 1×96t(8083) = 69 GB  (Probe B 2026-05-04: 1× canonical = +184% per-req latency vs prior 2×)
 #   arch_code (139GB): 2×96t(8084,8184) = 278 GB
 #   ingest (46GB): 1×96t(8085) = 46 GB
 # Total: ~730 GB (~65% of RAM), 400 GB free for KV caches + OS
@@ -338,9 +359,10 @@ HOT_SERVERS = [
     {"port": 8093, "roles": ["embedder_3"], "embedding": True},
     {"port": 8094, "roles": ["embedder_4"], "embedding": True},
     {"port": 8095, "roles": ["embedder_5"], "embedding": True},
-    # Architects in HOT tier (2×96t cross-NUMA each)
+    # Architects in HOT tier
+    # architect_general: 1×96t canonical full-machine (Probe B 2026-05-04, see NUMA_CONFIG)
     {"port": 8083, "roles": ["architect_general"], "numa_instance": 0},
-    {"port": 8183, "roles": ["architect_general"], "numa_instance": 1},
+    # architect_coding: 2×96t cross-NUMA (legacy wiring; benchmarked 16.5 t/s agg, not yet revalidated under Probe B)
     {"port": 8084, "roles": ["architect_coding"], "numa_instance": 0},
     {"port": 8184, "roles": ["architect_coding"], "numa_instance": 1},
     {"port": 8085, "roles": ["ingest_long_context"]},

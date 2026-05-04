@@ -97,7 +97,7 @@ runtime_defaults:
       coder_escalation: 120    # 32B Q4KM @ 10.8 t/s — 500 tok ~46s. 120s = 2.6x headroom
       vision_escalation: 120   # 30B MoE VL, multimodal processing
       ingest_long_context: 300 # 80B SSM, long document ingestion
-      architect_general: 600   # 122B MoE hybrid @ 4.3 t/s, complex multi-step reasoning
+      architect_general: 600   # 122B MoE hybrid @ 12.19 t/s (1× canonical, Probe B 2026-05-04), complex multi-step reasoning
       architect_coding: 480    # REAP-246B MoE @ 8.0 t/s (was 600 for 480B @ 7.0 t/s)
 
     # Server/connection timeouts
@@ -426,10 +426,16 @@ server_mode:
       draft_max: 24   # sweep-verified 2026-03-21 (was 8; dm flat 8-48, 24 marginally best)
       p_split: 0      # linear only — tree devastating on hybrid (-25% to -40%), sweep-verified
       lookup: false  # DISABLED: --lookup segfaults on Qwen3.5 hybrids after 1-3 prompts (2026-03-24). Was +25% (9.2→11.5) but crashes.
-    numa_instances: 2  # 2×96t cross-NUMA (2026-03-29)
-    numa_ports: [8083, 8183]
-    throughput: 4.3    # t/s per instance at 96t (sweep 2026-03-21). 2×96t estimated ~8.3 agg.
+    numa_instances: 1  # 1×96t canonical full-machine + c2 env (Probe B 2026-05-04)
+    numa_ports: [8083]
+    throughput: 12.19  # t/s single-instance canonical: numactl --interleave=all + taskset -c 0-95
+                       # + GGML_NUMA_REPACK_INTERLEAVE=0 (n=5, σ ~0.4%, z ~3 vs default v5).
+                       # +184% per-request latency vs prior 2× cross-NUMA (was 4.3 t/s/instance).
+                       # Bundle: epyc-inference-research/data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/
+                       # 4× per-NUMA-node 24t aggregate (16.86 t/s) is the throughput-optimal
+                       # alternative — reopen ONLY if architect_general workload shifts to 4+ concurrent.
     previous_model: Qwen3-235B-A22B-Q4_K_M.gguf  # swapped 2026-03-19
+    previous_wiring: 2x_cross_numa_8083_8183  # 4.3 t/s/instance (2026-03-29 → 2026-05-04)
 
   architect_coding:
     url: http://localhost:8084
