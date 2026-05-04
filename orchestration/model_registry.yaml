@@ -4098,7 +4098,7 @@ routing_hints:
   preprocess: formalizer
   use:
   - worker_math
-  - thinking_reasoning
+  - architect_general  # thinking_reasoning role removed 2026-05-04 (GGUF deleted); fall through to architect
 - if: '''algorithm'' in objective and ''design'' in objective'
   preprocess: formalizer
   use:
