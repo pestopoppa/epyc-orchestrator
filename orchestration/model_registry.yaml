@@ -3388,8 +3388,11 @@ roles:
     candidate_roles:
     - draft
     memory:
-      residency: cold
-      pinned: false
+      # Loaded inside target server's llama-server process via --draft-model;
+      # never runs standalone. Active targets: worker (8082), coder_escalation
+      # (8081), architect_coding (8084+8184).
+      residency: co_resident_with_target
+      pinned: true  # mlock'd as part of target server's pinned memory
     compatible_targets:
     - qwen3-coder-30b-a3b
     - qwen3-coder-480b-a35b
@@ -3590,8 +3593,10 @@ roles:
     candidate_roles:
     - draft
     memory:
-      residency: cold
-      pinned: false
+      # Loaded inside target server's llama-server process via --draft-model;
+      # never runs standalone. Active target: architect_general (8083).
+      residency: co_resident_with_target
+      pinned: true  # mlock'd as part of target server's pinned memory
     compatible_targets:
     - qwen3.5-35b-a3b
     - qwen3.5-27b
@@ -4000,19 +4005,21 @@ roles:
       temperature: 0.2
 
 process_layout:
+  # Drafts are NOT listed here — they're loaded inside their target server's
+  # llama-server process via --draft-model and pinned with mlock. They never
+  # run as standalone processes. See per-server `draft_model:` field in
+  # `server_mode:` for the actual draft-to-target wiring.
   hot_resident:
-  - frontdoor
-  - draft_qwen25_coder
-  - draft_qwen25
-  - worker_general
-  - worker_math
-  - toolrunner
+  - frontdoor              # Qwen3.6-35B-A3B Q8 (post-2026-05-04 swap; 4×48t NUMA)
+  - worker_general         # Qwen3-Coder-30B-A3B Q4 + DRAFT-0.75B (consolidated)
+  - worker_math            # Qwen2.5-Math-7B Q4 + draft_qwen25 (math-only spec)
+  - toolrunner             # shared GGUF mmap with worker_general (Qwen3-Coder-30B-A3B Q4)
   warm_mmap:
-  - ingest_long_context
-  - architect_general
-  - architect_coding
-  - worker_vision
-  - worker_summarize
+  - ingest_long_context    # Qwen3-Next-80B-A3B Q4 (no spec — SSM hybrid)
+  - architect_general      # Qwen3.5-122B-A10B Q4 + Qwen3.5-0.8B Q8 draft
+  - architect_coding       # REAP-246B Q4 + Qwen3-Coder-DRAFT-0.75B
+  - worker_vision          # Qwen2.5-VL-7B (no spec — VL+mmproj)
+  - worker_summarize       # Qwen2.5-Coder-32B Q4
 escalation_chains:
   coder:
     description: Code generation escalation path
