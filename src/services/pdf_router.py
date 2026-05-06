@@ -65,10 +65,13 @@ class PDFExtractionResult:
     text: str
     figures: list[ExtractedFigure] = field(default_factory=list)
     page_count: int = 0
-    method: str = "unknown"  # "pdftotext", "lightonocr", "hybrid"
+    method: str = "unknown"  # "pdftotext", "lightonocr", "hybrid", "opendataloader_structured"
     quality_score: float = 0.0  # 0-1, higher = better text quality
     latency_ms: float = 0.0
     ocr_required: bool = False
+    # Phase 2 ODL JSON path (None unless ORCHESTRATOR_ODL_STRUCTURED=1 and ODL ran).
+    # Type lazily resolved to avoid bloating the import chain — see _build_structured_result().
+    structured_data: object | None = None
 
 
 class PDFRouter:
@@ -249,6 +252,77 @@ class PDFRouter:
             latency_ms = (time.perf_counter() - start) * 1000
             logger.warning("OpenDataLoader extraction failed for %s: %s", pdf_path.name, e)
             return "", latency_ms
+
+    def _extract_with_opendataloader_structured(
+        self, pdf_path: Path
+    ) -> tuple[str, "ODLStructuredDocument | None", float]:
+        """Extract text + structured JSON via OpenDataLoader (Phase 2).
+
+        Returns markdown text plus a normalized ODLStructuredDocument
+        (figures, tables, headings) parsed from ODL's JSON output.
+
+        Feature-gated: callers gate on ORCHESTRATOR_ODL_STRUCTURED=1
+        before invoking. When ODL or its JSON output is unavailable,
+        returns (text, None, latency) so callers fall through to the
+        existing markdown-only path with no structured context.
+
+        Per handoffs/active/opendataloader-pipeline-integration.md Phase 2.
+
+        Returns:
+            (markdown_text, structured_doc_or_None, latency_ms)
+        """
+        from src.models.odl_structured import ODLStructuredDocument
+        import json
+        import tempfile
+
+        start = time.perf_counter()
+
+        try:
+            from opendataloader_pdf.wrapper import convert as odl_convert
+        except ImportError:
+            logger.warning("opendataloader-pdf not installed; structured path unavailable")
+            return "", None, 0.0
+
+        # ODL writes outputs to disk; request both md + json into a temp dir.
+        try:
+            with tempfile.TemporaryDirectory(prefix="odl_struct_") as tmp:
+                # Request both formats; ODL will emit <stem>.md and <stem>.json.
+                odl_convert(
+                    str(pdf_path),
+                    output_dir=tmp,
+                    format=["markdown", "json"],
+                    quiet=True,
+                )
+
+                md_path = Path(tmp) / f"{pdf_path.stem}.md"
+                json_path = Path(tmp) / f"{pdf_path.stem}.json"
+
+                text = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+                if not text.strip():
+                    logger.warning(
+                        "OpenDataLoader returned empty markdown for %s", pdf_path.name
+                    )
+
+                structured: ODLStructuredDocument | None = None
+                if json_path.exists():
+                    try:
+                        payload = json.loads(json_path.read_text(encoding="utf-8"))
+                        structured = ODLStructuredDocument.from_json(payload)
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.warning("ODL JSON parse failed for %s: %s", pdf_path.name, e)
+                        structured = None
+                else:
+                    logger.debug("ODL did not emit JSON for %s", pdf_path.name)
+
+                latency_ms = (time.perf_counter() - start) * 1000
+                return text, structured, latency_ms
+
+        except Exception as e:
+            latency_ms = (time.perf_counter() - start) * 1000
+            logger.warning(
+                "OpenDataLoader structured extraction failed for %s: %s", pdf_path.name, e
+            )
+            return "", None, latency_ms
 
     def _extract_figures_pymupdf(
         self, pdf_path: Path, output_dir: Optional[Path] = None
@@ -432,9 +506,24 @@ class PDFRouter:
                 logger.debug("Failed to get page count: %s", e)
 
         # Step 1: Try text extraction (pdftotext or OpenDataLoader)
+        structured_data = None
         if not force_ocr:
             use_odl = os.environ.get("PDF_EXTRACTOR", "pdftotext").lower() == "opendataloader"
-            if use_odl:
+            use_odl_structured = (
+                use_odl
+                and os.environ.get("ORCHESTRATOR_ODL_STRUCTURED", "0") == "1"
+            )
+            if use_odl_structured:
+                # Phase 2: text + structured JSON in one ODL invocation.
+                text, structured_data, extract_latency = (
+                    self._extract_with_opendataloader_structured(pdf_path)
+                )
+                extract_method = "opendataloader_structured"
+                if not text:
+                    # Fall through to pdftotext if ODL returned nothing usable.
+                    text, extract_latency = self._extract_with_pdftotext(pdf_path)
+                    extract_method = "pdftotext"
+            elif use_odl:
                 text, extract_latency = self._extract_with_opendataloader(pdf_path)
                 extract_method = "opendataloader"
                 # Fall back to pdftotext if ODL returns empty
@@ -471,6 +560,7 @@ class PDFRouter:
                     quality_score=quality_score,
                     latency_ms=total_latency,
                     ocr_required=False,
+                    structured_data=structured_data,
                 )
 
         # Step 2: Fall back to LightOnOCR

@@ -47,6 +47,51 @@ DEFAULT_FIGURE_PROMPT = (
 )
 
 
+def build_figure_prompt_with_context(
+    base_prompt: str,
+    figure_context: "FigureContext | None",
+) -> str:
+    """Enrich a VL-model prompt with structured figure context from ODL JSON.
+
+    When the ODL structured-output path is active (Phase 2), each figure has
+    a FigureContext with semantic_type, caption, surrounding_text, and the
+    nearest heading_breadcrumb. Folding these into the prompt grounds the
+    VL model in document context instead of analyzing a cropped image in
+    isolation.
+
+    When `figure_context` is None (legacy path / ODL absent / structured
+    parse failed), returns `base_prompt` unchanged so callers can degrade
+    gracefully without branching.
+
+    Per handoffs/active/opendataloader-pipeline-integration.md Phase 2.
+    """
+    if figure_context is None:
+        return base_prompt
+
+    parts = [base_prompt.rstrip(".") + "."]
+    if figure_context.heading_breadcrumb:
+        parts.append(
+            f"This figure appears under: {' > '.join(figure_context.heading_breadcrumb)}."
+        )
+    if figure_context.semantic_type and figure_context.semantic_type != "figure":
+        parts.append(f"Type: {figure_context.semantic_type}.")
+    if figure_context.caption:
+        parts.append(f'Caption: "{figure_context.caption.strip()}"')
+    if figure_context.surrounding_text:
+        excerpt = figure_context.surrounding_text.strip().replace("\n", " ")
+        parts.append(f"Surrounding text: {excerpt[:300]}")
+    return " ".join(parts)
+
+
+# Lazy import for type-only reference; avoids hard dependency on the model
+# at module load time (figure_analyzer is imported by services that may
+# never touch ODL-structured outputs).
+try:
+    from src.models.odl_structured import FigureContext  # noqa: F401
+except ImportError:  # pragma: no cover — defensive; module is sibling
+    pass
+
+
 class FigureAnalyzer:
     """Analyze figures using the vision model.
 

@@ -322,3 +322,124 @@ def chunk_document(
         chunker = get_document_chunker()
 
     return chunker.process(ocr_result, original_path)
+
+
+# ─── ODL-driven structural chunking (Phase 2 additive helper) ─────────────────
+# Use this when ODLStructuredDocument is available from pdf_router. The
+# heading hierarchy is authoritative: each heading anchors a chunk that ends
+# at the next sibling/parent heading (or EOF). This is more reliable than the
+# regex header split because ODL's heading detection uses XY-Cut++ + structure
+# tree analysis instead of just character matching.
+
+def chunk_by_odl_headings(
+    text: str,
+    structured_doc: object,  # ODLStructuredDocument; typed as object to avoid hard import here
+    max_section_length: int = 10000,
+) -> list[Section]:
+    """Heading-anchored chunker using ODL JSON structure.
+
+    For each heading in the doc-order list, slice `text` from this heading's
+    title (substring match, first occurrence after previous slice cursor) up
+    to the next heading's title. Sections that exceed `max_section_length`
+    are sub-split at paragraph boundaries (blank-line splits).
+
+    Returns Section objects (compatible with the existing pipeline contract).
+
+    When the structured doc has no headings, returns a single Section
+    spanning the full text — caller can fall through to the regex chunker.
+
+    Per handoffs/active/opendataloader-pipeline-integration.md Phase 2.
+    """
+    from src.models.odl_structured import ODLStructuredDocument, build_heading_tree, flatten_heading_tree
+
+    if not isinstance(structured_doc, ODLStructuredDocument) or not structured_doc.headings:
+        # Single-section fallback. Caller should prefer the regex chunker.
+        return [Section(id="s1", title="(unstructured)", content=text, level=1)]
+
+    # Walk headings in document order with breadcrumbs.
+    tree = build_heading_tree(list(structured_doc.headings))
+    nodes_with_crumbs = flatten_heading_tree(tree)
+
+    sections: list[Section] = []
+    cursor = 0
+    n = len(nodes_with_crumbs)
+
+    for i, (node, crumb) in enumerate(nodes_with_crumbs):
+        if not node.text.strip():
+            continue
+
+        # Find this heading's title in the text starting at cursor.
+        idx = text.find(node.text, cursor)
+        if idx < 0:
+            # Heading text not found verbatim — happens when ODL-detected
+            # heading differs slightly from the markdown rendering. Skip
+            # this heading rather than emit a wrong slice.
+            continue
+
+        # Find next heading's title in the text to bound this section.
+        next_idx = len(text)
+        for j in range(i + 1, n):
+            nxt_node = nodes_with_crumbs[j][0]
+            if not nxt_node.text.strip():
+                continue
+            cand = text.find(nxt_node.text, idx + len(node.text))
+            if cand >= 0:
+                next_idx = cand
+                break
+
+        body = text[idx:next_idx].strip()
+        if not body:
+            cursor = next_idx
+            continue
+
+        # Hard sub-split if too long.
+        if len(body) > max_section_length:
+            for chunk in _split_long_body(body, max_section_length):
+                sections.append(
+                    Section(
+                        id=f"s{len(sections) + 1}",
+                        title=" > ".join(crumb),
+                        content=chunk,
+                        level=int(node.level),
+                    )
+                )
+        else:
+            sections.append(
+                Section(
+                    id=f"s{len(sections) + 1}",
+                    title=" > ".join(crumb),
+                    content=body,
+                    level=int(node.level),
+                )
+            )
+
+        cursor = next_idx
+
+    if not sections:
+        return [Section(id="s1", title="(unstructured)", content=text, level=1)]
+    return sections
+
+
+def _split_long_body(body: str, max_chars: int) -> list[str]:
+    """Split body at paragraph (blank-line) boundaries when over `max_chars`."""
+    if len(body) <= max_chars:
+        return [body]
+    paragraphs = re.split(r"\n\s*\n", body)
+    out: list[str] = []
+    buffer = ""
+    for p in paragraphs:
+        if len(buffer) + len(p) + 2 > max_chars and buffer:
+            out.append(buffer.strip())
+            buffer = p
+        else:
+            buffer = (buffer + "\n\n" + p) if buffer else p
+        # Hard cap: if a single paragraph exceeds max_chars, force-split at line break.
+        while len(buffer) > max_chars:
+            cut = buffer.rfind("\n", 0, max_chars)
+            if cut <= 0:
+                cut = max_chars
+            out.append(buffer[:cut].strip())
+            buffer = buffer[cut:].lstrip("\n")
+    if buffer.strip():
+        out.append(buffer.strip())
+    return out
