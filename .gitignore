@@ -22,6 +22,13 @@ htmlcov/
 
 # Databases
 *.db
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Trace + KB-RAG derived data (rebuildable from sources)
+data/trace/
+data/kb_rag/
 
 # Logs and runtime data
 logs/
