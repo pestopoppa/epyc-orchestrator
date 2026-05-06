@@ -1,0 +1,30 @@
+# Internal KB-RAG corpus configuration.
+#
+# Per handoffs/active/internal-kb-rag.md K2.
+#
+# Roots are walked with the include_globs; matches that contain any
+# substring in exclude_patterns are dropped. Encoded chunks land in
+# data/kb_rag/index/ (gitignored).
+
+roots:
+  - /workspace/wiki
+  - /workspace/handoffs/active
+  - /workspace/handoffs/completed
+  - /workspace/research
+  - /workspace/progress
+  # Cross-repo (optional but useful):
+  - /workspace/repos/epyc-inference-research/docs
+
+include_globs:
+  - "**/*.md"
+
+exclude_patterns:
+  # archived/ is intentionally excluded — archived state is misleading by design.
+  - /handoffs/archived/
+  # Editor backups, bytecode dirs.
+  - /__pycache__/
+  - .swp
+  # Don't index this fixture (contains shape-realistic fake secrets).
+  - /research/fixtures/pii_
+
+max_chunk_chars: 4000
