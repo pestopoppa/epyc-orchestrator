@@ -96,10 +96,13 @@ _PATHS = _get_paths()
 
 STATE_FILE = _PATHS["log_dir"] / "orchestrator_state.json"
 LLAMA_SERVER = _PATHS["llama_cpp_bin"] / "llama-server"
-# v3 spec decode bug: Qwen2.5 architecture + draft model → "Invalid input batch".
-# Coder-escalation uses v2 binary until fixed. See v3-spec-decode-qwen25-bug.md.
+# v2 binary retained for emergency fallback only. As of 2026-05-06 stack-swap,
+# all hot-tier roles use the v5 binary (production-consolidated-v5). Previously
+# coder_escalation needed v2 due to a Qwen2.5 spec-decode bug, but
+# coder_escalation now runs Qwen3.6-35B-A3B Q8 (same model as frontdoor) which
+# is v5-compatible.
 LLAMA_SERVER_V2 = _PATHS["llama_cpp_bin"].parent / "build-v2" / "bin" / "llama-server"
-_V2_ROLES = frozenset({"coder_escalation"})
+_V2_ROLES: frozenset[str] = frozenset()  # was {"coder_escalation"}; empty since 2026-05-06
 LOG_DIR = _PATHS["log_dir"]
 # DS-3: KV state save/restore directory for dynamic stack management
 SLOT_SAVE_DIR = _PATHS["cache_dir"] / "kv_slots"
@@ -110,16 +113,16 @@ SLOT_SAVE_DIR = _PATHS["cache_dir"] / "kv_slots"
 PORT_MAP = {
     "frontdoor": 8070,           # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
     "coder_escalation": 8071,    # Full-speed 1×96t (quarters: 8081, 8181, 8281, 8381)
-    "worker_explore": 8072,      # Full-speed 1×96t (quarters: 8082, 8182, 8282, 8382)
-    "worker_general": 8072,      # Alias -> worker_explore
-    "worker_math": 8072,         # Shares with worker_explore
+    "worker_general": 8072,      # Full-speed 1×96t (quarters: 8082, 8182, 8282, 8382)
+    "worker_explore": 8072,      # Alias -> worker_general (legacy name; pre-2026-03-19)
+    "worker_math": 8072,         # Shares with worker_general
     "worker_vision": 8086,       # Dedicated VL server
     "vision_escalation": 8087,   # VL escalation (Qwen3-VL-30B MoE)
-    "worker_coder": 8102,        # Fast coding worker semantic role (1.5B backend)
-    "worker_fast": 8102,         # Fast worker (1.5B, WARM, 4 slots)
+    "worker_coder": 8102,        # Fast coding worker semantic role (1.5B backend) — DEPRECATED (worker_pool)
+    "worker_fast": 8102,         # Fast worker (1.5B, WARM, 4 slots) — DEPRECATED (worker_pool)
     # Specialists (no pre-warm — already multi-instance or too large for quarters)
     "architect_general": 8083,
-    "architect_coding": 8084,
+    # architect_coding REMOVED 2026-05-06 — REAP-246B 70% coder < frontdoor 97%; role eliminated. 139 GB freed.
     "ingest_long_context": 8085,
     # Embedding servers (6 parallel instances for redundancy)
     "embedder": 8090,  # Primary embedding server
@@ -134,10 +137,11 @@ PORT_MAP = {
 
 # NUMA_REPLICA_PORTS defined after NUMA_CONFIG below (line order dependency)
 
-# HOT roles (always started) - NUMA-optimized (~515GB total, 46% of 1130GB RAM)
+# HOT roles (always started) - NUMA-optimized
+# 2026-05-06: architect_coding removed, ingest_long_context promoted (see registry).
 HOT_ROLES = {
-    "frontdoor", "coder_escalation", "worker_explore", "embedder",
-    "architect_general", "architect_coding", "ingest_long_context",
+    "frontdoor", "coder_escalation", "worker_general", "embedder",
+    "architect_general", "ingest_long_context",
     "worker_vision", "vision_escalation",
 }
 
@@ -218,28 +222,22 @@ NUMA_CONFIG: dict[str, dict] = {
         "numactl_policy": "interleave=all",  # wraps launch with `numactl --interleave=all --`
         "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified
     },
-    # REAP-246B Q4KM (139 GB) — 2×96t cross-NUMA. Replaces 480B (2026-03-29).
-    # 82% quality (+9pp), 16.5 t/s agg (1.92x), 139 GB (-44%). Sweep-verified dm=32, ps=0.
-    # NUMA benchmark: 2×96t = 16.5 t/s (1.92x vs 1×96t = 8.0 t/s).
-    "architect_coding": {
-        "instances": [
-            (NUMA_NODE0[0], 8084, NUMA_NODE0[1]),
-            (NUMA_NODE1[0], 8184, NUMA_NODE1[1]),
-        ],
-        "mlock": True,
-        "spec_overrides": {"draft_max": 32, "p_split": 0},  # sweep-verified 2026-03-26
-    },
-    # 2×96t: ~24 t/s aggregate (2x)
+    # architect_coding REMOVED 2026-05-06 — REAP-246B Q4KM scored 7/10 (70%) on coder
+    # under canonical recipe, WORSE than worker_general (Qwen3-Coder-30B-A3B Q4 at 77%)
+    # AND far worse than frontdoor (Qwen3.6-35B-A3B Q8 at 97%). 139 GB warm freed.
+    # Hard coding escalations now route to coder_escalation, which uses the same
+    # Qwen3.6-35B-A3B Q8 model as frontdoor (shared GGUF mmap).
     "ingest_long_context": {
         "instances": [
             (NUMA_NODE0[0], 8085, NUMA_NODE0[1]),
         ],
-        "mlock": True,    # ~46 GB — latency-critical for ingest pipeline
+        "mlock": True,    # ~46 GB — latency-critical for ingest pipeline (Stage 1 of three_stage_summarization since 2026-05-06)
     },
     # Worker: Qwen3-Coder-30B-A3B Q4KM (16 GB) — pre-warm: 1×96t + 4×48t
     # Replaced 7B f16 (2026-03-21): 30B-A3B is 2x faster (39 vs 19 t/s), better quality.
     # Sweep-verified: dm=8, ps=0, 39.1 t/s at 48t. 4×48t = ~156 t/s agg.
-    "worker_explore": {
+    # Renamed worker_explore → worker_general 2026-05-06 to match registry / dispatcher.
+    "worker_general": {
         "instances": [
             (NUMA_NODE0[0], 8072, NUMA_NODE0[1]),  # full: 1×96t
             (NUMA_Q0A[0], 8082, NUMA_Q0A[1]),      # quarter 0
@@ -303,70 +301,84 @@ def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
 # Roles that must never run concurrently (large/latency-sensitive paths).
 # Note: frontdoor intentionally runs with 2 slots by default for better
 # interactive responsiveness under concurrent traffic.
+# 2026-05-06: removed architect_coding (role eliminated) + thinking_reasoning (role eliminated, no GGUF).
 SERIAL_ROLES = {
     "coder_escalation",
     "worker_summarize",
     "architect_general",
-    "architect_coding",
     "ingest_long_context",
     "vision_escalation",
-    "thinking_reasoning",
     "formalizer",
     "toolrunner",
 }
 
 # Servers to start (unique ports only)
-# Pre-warm deployment (2026-03-29): 1×96t full-speed + 4×48t quarter instances per role.
+# Pre-warm deployment (2026-03-29; updated 2026-05-06 stack swap):
+# 1×96t full-speed + 4×48t quarter instances per role.
 # Full-speed instances on 807x, quarter instances on 808x/818x/828x/838x.
-#   frontdoor (19GB): 1×96t(8070) + 4×48t(8080-8380) = 95 GB, moe6
-#   coder (18.5GB): 1×96t(8071) + 4×48t(8081-8381) = 92.5 GB, spec+tree+lu
-#   worker (16GB): 1×96t(8072) + 4×48t(8082-8382) = 80 GB, spec dm=8
-#   arch_gen (69GB): 1×96t(8083) = 69 GB  (Probe B 2026-05-04: 1× canonical = +184% per-req latency vs prior 2×)
-#   arch_code (139GB): 2×96t(8084,8184) = 278 GB
-#   ingest (46GB): 1×96t(8085) = 46 GB
-# Total: ~730 GB (~65% of RAM), 400 GB free for KV caches + OS
-HOT_SERVERS = [
-    # Frontdoor: 1×96t full-speed + 4×48t quarter instances
-    {"port": 8070, "roles": ["frontdoor"], "numa_instance": 0},   # full: 96t
-    {"port": 8080, "roles": ["frontdoor"], "numa_instance": 1},   # quarter 0
-    {"port": 8180, "roles": ["frontdoor"], "numa_instance": 2},   # quarter 1
-    {"port": 8280, "roles": ["frontdoor"], "numa_instance": 3},   # quarter 2
-    {"port": 8380, "roles": ["frontdoor"], "numa_instance": 4},   # quarter 3
-    # Coder escalation: 1×96t full-speed + 4×48t quarter instances
-    {"port": 8071, "roles": ["coder_escalation", "worker_summarize"], "numa_instance": 0},
-    {"port": 8081, "roles": ["coder_escalation"], "numa_instance": 1},
-    {"port": 8181, "roles": ["coder_escalation"], "numa_instance": 2},
-    {"port": 8281, "roles": ["coder_escalation"], "numa_instance": 3},
-    {"port": 8381, "roles": ["coder_escalation"], "numa_instance": 4},
-    # Worker: 1×96t full-speed + 4×48t quarter instances
-    {"port": 8072, "roles": ["worker_explore", "worker_general", "worker_math"],
-     "worker_pool": True, "worker_type": "explore"},  # full: 96t
-    {"port": 8082, "roles": ["worker_explore", "worker_general", "worker_math"],
-     "worker_pool": True, "worker_type": "explore", "numa_instance": 1},
-    {"port": 8182, "roles": ["worker_explore"],
-     "worker_pool": True, "worker_type": "explore", "numa_instance": 2},
-    {"port": 8282, "roles": ["worker_explore"],
-     "worker_pool": True, "worker_type": "explore", "numa_instance": 3},
-    {"port": 8382, "roles": ["worker_explore"],
-     "worker_pool": True, "worker_type": "explore", "numa_instance": 4},
-    # Vision servers (VL models with multimodal projector, NO spec decode)
-    {"port": 8086, "roles": ["worker_vision"], "vision": True, "vision_type": "worker"},
-    {"port": 8087, "roles": ["vision_escalation"], "vision": True, "vision_type": "escalation"},
-    # Parallel BGE embedder instances (6 for redundancy, ~4GB total)
-    {"port": 8090, "roles": ["embedder"], "embedding": True},
-    {"port": 8091, "roles": ["embedder_1"], "embedding": True},
-    {"port": 8092, "roles": ["embedder_2"], "embedding": True},
-    {"port": 8093, "roles": ["embedder_3"], "embedding": True},
-    {"port": 8094, "roles": ["embedder_4"], "embedding": True},
-    {"port": 8095, "roles": ["embedder_5"], "embedding": True},
-    # Architects in HOT tier
-    # architect_general: 1×96t canonical full-machine (Probe B 2026-05-04, see NUMA_CONFIG)
-    {"port": 8083, "roles": ["architect_general"], "numa_instance": 0},
-    # architect_coding: 2×96t cross-NUMA (legacy wiring; benchmarked 16.5 t/s agg, not yet revalidated under Probe B)
-    {"port": 8084, "roles": ["architect_coding"], "numa_instance": 0},
-    {"port": 8184, "roles": ["architect_coding"], "numa_instance": 1},
-    {"port": 8085, "roles": ["ingest_long_context"]},
-]
+#   frontdoor (37 GB Qwen3.6-35B-A3B Q8): 1×96t(8070) + 4×48t(8080-8380) = ~37 GB shared mmap
+#   coder_escalation (shares frontdoor GGUF): 1×96t(8071) + 4×48t(8081-8381)
+#     also hosts worker_summarize on port 8071 (same model as frontdoor since 2026-05-06)
+#   worker_general (16 GB Qwen3-Coder-30B-A3B Q4): 1×96t(8072) + 4×48t(8082-8382) = ~16 GB
+#   arch_gen (69 GB Qwen3.5-122B-A10B Q4): 1×96t(8083)  (Probe B 2026-05-04: 1× canonical wiring)
+#   ingest (45 GB Qwen3-Next-80B-A3B Q4 SSM): 1×96t(8085)  (promoted to hot 2026-05-06: Stage 1 of three_stage_summarization)
+# Total resident model footprint: ~167 GB (well under 1.13 TB host); 600+ GB free for KV caches + OS.
+# architect_coding REMOVED 2026-05-06 (REAP-246B 70% coder < frontdoor 97%; 139 GB freed).
+#
+# =============================================================================
+# Single source of truth for "which roles run where" (refactored 2026-05-06)
+# =============================================================================
+# Pre-2026-05-06: HOT_SERVERS + WARM_SERVERS were two parallel hand-edited lists
+# of dicts that duplicated wiring data already in NUMA_CONFIG. This made it easy
+# to forget one when adding/removing/renaming a role and ship a broken config.
+#
+# Post-2026-05-06: HOT_SERVERS / WARM_SERVERS are COMPUTED from:
+#   1. ROLE_LAUNCH_META (below) — small classification dict: per-role tier +
+#      launch mode + aliases + mode-specific kwargs.
+#   2. NUMA_CONFIG (above) — wiring spec: per-role NUMA instances list.
+#
+# Adding a new role now requires editing TWO places consistently:
+#   a) Add the role's NUMA wiring in NUMA_CONFIG (or set "no_numa": True in
+#      ROLE_LAUNCH_META if the role doesn't need NUMA pinning, e.g. embedders).
+#   b) Add a ROLE_LAUNCH_META entry with tier/mode/aliases.
+# A consistency check (`_validate_role_classification()` below) catches
+# common mismatches at module load time.
+
+# Per-role launch metadata. Source of truth for tier classification + launch mode.
+# Aliases (shared_with) are alternate role names that should resolve to the same
+# server entries — used for --only filtering and routing fallthrough.
+ROLE_LAUNCH_META: dict[str, dict] = {
+    # ---- HOT tier (always started) ----
+    "frontdoor":            {"tier": "hot",  "mode": "default"},
+    "coder_escalation":     {"tier": "hot",  "mode": "default",
+                             "shared_with_first_n": ["worker_summarize"]},  # worker_summarize co-hosts only on the full-speed instance (port 8071)
+    "worker_general":       {"tier": "hot",  "mode": "worker_pool",
+                             "worker_type": "explore",
+                             # Aliases that share the worker_general process: worker_explore is the
+                             # legacy name (pre-2026-03-19 worker pool design); worker_math + toolrunner
+                             # share the GGUF mmap and process for routing fan-out.
+                             "shared_with_first_n": ["worker_explore", "worker_math", "toolrunner"],
+                             "shared_with_first_n_count": 2},  # aliases on full + first quarter
+    "architect_general":    {"tier": "hot",  "mode": "default"},
+    "ingest_long_context":  {"tier": "hot",  "mode": "default"},
+    "worker_vision":        {"tier": "hot",  "mode": "vision", "vision_type": "worker"},
+    "vision_escalation":    {"tier": "hot",  "mode": "vision", "vision_type": "escalation"},
+    # Embedders — no NUMA pinning, fixed single port each
+    "embedder":             {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8090},
+    "embedder_1":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8091},
+    "embedder_2":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8092},
+    "embedder_3":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8093},
+    "embedder_4":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8094},
+    "embedder_5":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8095},
+    # ---- WARM tier (optional, --include-warm) ----
+    # 2026-05-06: worker_pool deprecated in registry; warm 1.5B worker retained as inert.
+    "worker_fast":          {"tier": "warm", "mode": "worker_pool", "worker_type": "fast",
+                             "no_numa": True, "port": 8102},
+    # architect_coding REMOVED 2026-05-06 (REAP-246B role eliminated; 139 GB freed)
+    # ingest_long_context PROMOTED to HOT 2026-05-06 (Stage 1 of three_stage_summarization)
+    # thinking_reasoning REMOVED 2026-05-06 (GGUF deleted from disk 2026-03-06)
+}
+
 
 # Embedding model: BGE-large-en-v1.5 (purpose-built for embeddings, 1024 dims)
 # 6 parallel instances provide redundancy and reduce latency via fan-out
@@ -391,14 +403,196 @@ VISION_WORKER_MMPROJ = str(_PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL
 VISION_ESCALATION_MODEL = str(_PATHS["model_base"] / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf")
 VISION_ESCALATION_MMPROJ = str(_PATHS["model_base"] / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf")
 
-WARM_SERVERS = [
-    {"port": 8083, "roles": ["architect_general"]},
-    {"port": 8084, "roles": ["architect_coding"]},
-    {"port": 8085, "roles": ["ingest_long_context"]},
-    # Worker pool WARM tier (single fast worker with 4 slots for burst capacity)
-    {"port": 8102, "roles": ["worker_fast"],
-     "worker_pool": True, "worker_type": "fast"},
-]
+
+def _build_servers_from_classification() -> tuple[list[dict], list[dict]]:
+    """Compute HOT_SERVERS + WARM_SERVERS from ROLE_LAUNCH_META + NUMA_CONFIG.
+
+    For each role in ROLE_LAUNCH_META:
+      - If "no_numa": True, emit a single server entry at meta["port"].
+      - Else look up NUMA_CONFIG[role]["instances"] and emit one entry per instance.
+    Mode-specific flags (vision/worker_pool/embedding) get added to each entry,
+    plus mode-specific kwargs (vision_type, worker_type).
+    Aliases (shared_with_first_n) are added to the first N entries only.
+    """
+    hot: list[dict] = []
+    warm: list[dict] = []
+
+    for role, meta in ROLE_LAUNCH_META.items():
+        target = hot if meta["tier"] == "hot" else warm
+        mode = meta.get("mode", "default")
+        aliases = meta.get("shared_with_first_n", [])
+        alias_count = meta.get("shared_with_first_n_count", 1)  # default: aliases on first instance only
+
+        # Mode-specific flag dict applied to every entry for this role
+        mode_flags: dict = {}
+        if mode == "worker_pool":
+            mode_flags["worker_pool"] = True
+            if "worker_type" in meta:
+                mode_flags["worker_type"] = meta["worker_type"]
+        elif mode == "vision":
+            mode_flags["vision"] = True
+            if "vision_type" in meta:
+                mode_flags["vision_type"] = meta["vision_type"]
+        elif mode == "embedding":
+            mode_flags["embedding"] = True
+
+        if meta.get("no_numa"):
+            # Single port, no NUMA pinning (embedders, worker_fast, etc.)
+            entry = {"port": meta["port"], "roles": [role]}
+            entry.update(mode_flags)
+            target.append(entry)
+            continue
+
+        # NUMA-pinned: one entry per instance in NUMA_CONFIG[role]["instances"]
+        cfg = NUMA_CONFIG.get(role)
+        if not cfg:
+            raise ValueError(
+                f"Role '{role}' in ROLE_LAUNCH_META requires NUMA_CONFIG entry "
+                f"(or set 'no_numa': True if no pinning needed)"
+            )
+        for idx, instance in enumerate(cfg["instances"]):
+            _cpus, port, _threads = instance
+            roles_list: list[str] = [role]
+            if idx < alias_count:
+                roles_list.extend(aliases)
+            entry = {"port": port, "roles": roles_list}
+            if "full_instance_idx" in cfg or len(cfg["instances"]) > 1:
+                entry["numa_instance"] = idx
+            entry.update(mode_flags)
+            target.append(entry)
+
+    return hot, warm
+
+
+def _validate_role_classification() -> None:
+    """Sanity checks on ROLE_LAUNCH_META + NUMA_CONFIG agreement.
+
+    Catches the common bugs that hand-edited HOT_SERVERS used to allow:
+      - Role in ROLE_LAUNCH_META but missing NUMA_CONFIG (and no "no_numa" flag)
+      - Role in NUMA_CONFIG but missing ROLE_LAUNCH_META classification
+      - Same port assigned to two different role primaries
+    Raises ValueError on any inconsistency.
+    """
+    errors: list[str] = []
+
+    # Check 1: every NUMA_CONFIG role has a ROLE_LAUNCH_META entry
+    for role in NUMA_CONFIG:
+        if role not in ROLE_LAUNCH_META:
+            errors.append(
+                f"NUMA_CONFIG['{role}'] has no matching ROLE_LAUNCH_META entry — "
+                f"add tier/mode classification or remove from NUMA_CONFIG"
+            )
+
+    # Check 2: every NUMA-pinned ROLE_LAUNCH_META role has NUMA_CONFIG instances
+    for role, meta in ROLE_LAUNCH_META.items():
+        if meta.get("no_numa"):
+            if "port" not in meta:
+                errors.append(f"ROLE_LAUNCH_META['{role}'] no_numa=True requires 'port' field")
+        else:
+            if role not in NUMA_CONFIG:
+                errors.append(
+                    f"ROLE_LAUNCH_META['{role}'] has no_numa=False but no NUMA_CONFIG entry"
+                )
+
+    # Check 3: no port collisions between role primaries
+    primary_ports: dict[int, str] = {}
+    for role, meta in ROLE_LAUNCH_META.items():
+        if meta.get("no_numa"):
+            ports = [meta["port"]]
+        else:
+            cfg = NUMA_CONFIG.get(role, {})
+            ports = [inst[1] for inst in cfg.get("instances", [])]
+        for port in ports:
+            if port in primary_ports and primary_ports[port] != role:
+                errors.append(
+                    f"Port {port} assigned to both '{primary_ports[port]}' and '{role}'"
+                )
+            primary_ports[port] = role
+
+    if errors:
+        msg = "Role classification inconsistencies detected:\n  " + "\n  ".join(errors)
+        raise ValueError(msg)
+
+
+# Validate at module load (fails fast on misconfiguration)
+_validate_role_classification()
+
+# Computed server lists. Single source of truth: ROLE_LAUNCH_META + NUMA_CONFIG.
+HOT_SERVERS, WARM_SERVERS = _build_servers_from_classification()
+
+
+def validate_against_registry(registry_yaml_path: str | None = None) -> list[str]:
+    """Cross-check ROLE_LAUNCH_META against orchestration/model_registry.yaml.
+
+    Returns list of warning strings (empty if everything is consistent).
+    Called from `start` command but non-fatal: prints warnings, does not abort.
+    Useful for catching drift between launcher classification and registry's
+    process_layout / server_mode sections.
+    """
+    if registry_yaml_path is None:
+        # Default: orchestration/model_registry.yaml relative to repo root
+        registry_yaml_path = str(Path(__file__).parent.parent.parent / "orchestration" / "model_registry.yaml")
+    warnings: list[str] = []
+    try:
+        import yaml
+        with open(registry_yaml_path) as f:
+            registry = yaml.safe_load(f)
+    except Exception as e:
+        return [f"could not load registry from {registry_yaml_path}: {e}"]
+
+    pl = registry.get("process_layout", {})
+    reg_hot = set(pl.get("hot_resident", []))
+    reg_warm = set(pl.get("warm_mmap", []))
+
+    # Compute launcher's HOT tier including aliases (shared_with_first_n).
+    # Aliases share the same process as their primary, so for tier comparison
+    # they count as HOT too.
+    launcher_hot: set[str] = set()
+    launcher_warm: set[str] = set()
+    for role, meta in ROLE_LAUNCH_META.items():
+        target = launcher_hot if meta["tier"] == "hot" else launcher_warm
+        target.add(role)
+        for alias in meta.get("shared_with_first_n", []):
+            target.add(alias)
+
+    # Production roles to cross-check — skip pure launcher-internal names.
+    # worker_explore is a legacy alias kept for backwards-compat; embedders
+    # aren't in the registry's process_layout (they're infrastructure roles);
+    # worker_fast is the deprecated worker_pool warm tier.
+    skip = {"worker_explore"} | {f"embedder_{i}" for i in range(6)} | {"embedder", "worker_fast"}
+    launcher_hot_filtered = launcher_hot - skip
+
+    only_in_launcher = launcher_hot_filtered - reg_hot - reg_warm
+    only_in_registry_hot = reg_hot - launcher_hot - launcher_warm
+
+    for r in sorted(only_in_launcher):
+        warnings.append(f"role '{r}' is HOT in launcher but absent from registry process_layout")
+    for r in sorted(only_in_registry_hot):
+        # Roles that the registry says should be hot but launcher doesn't classify hot
+        warnings.append(f"role '{r}' is hot_resident in registry but not in launcher's HOT tier")
+
+    # Cross-check NUMA_CONFIG ports vs registry server_mode ports (where present)
+    sm = registry.get("server_mode", {})
+    for role, srv in sm.items():
+        if not isinstance(srv, dict): continue
+        reg_port = srv.get("port")
+        if reg_port is None: continue
+        cfg = NUMA_CONFIG.get(role)
+        if cfg:
+            launcher_ports = [inst[1] for inst in cfg["instances"]]
+            if reg_port not in launcher_ports:
+                warnings.append(
+                    f"role '{role}': registry server_mode says port {reg_port}, "
+                    f"but launcher NUMA_CONFIG ports are {launcher_ports}"
+                )
+        else:
+            meta = ROLE_LAUNCH_META.get(role)
+            if meta and meta.get("no_numa") and meta.get("port") != reg_port:
+                warnings.append(
+                    f"role '{role}': registry server_mode says port {reg_port}, "
+                    f"but launcher ROLE_LAUNCH_META says port {meta.get('port')}"
+                )
+    return warnings
 
 DEV_MODEL = "Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf"
 DEV_MODEL_PATH = str(_PATHS["models_dir"] / DEV_MODEL)
@@ -488,15 +682,16 @@ def validate_model_paths() -> list[str]:
     if not Path(EXPLORE_DRAFT_MODEL).exists():
         errors.append(f"[HOT] Explore draft: {EXPLORE_DRAFT_MODEL}")
 
-    # Frontdoor model (swapped to Qwen3.5-35B-A3B, 2026-03-19)
-    frontdoor_model = str(_PATHS["model_base"] / "unsloth/Qwen3.5-35B-A3B-GGUF/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf")
+    # Frontdoor model (swapped to Qwen3.6-35B-A3B Q8 2026-05-04; same file shared by
+    # coder_escalation + worker_summarize via mmap)
+    frontdoor_model = "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf"
     if not Path(frontdoor_model).exists():
         errors.append(f"[HOT] frontdoor: {frontdoor_model}")
 
     # Architect/ingest models
+    # 2026-05-06: architect_coding REMOVED (REAP-246B role eliminated; 139 GB freed).
     architect_models = [
         ("architect_general", str(_PATHS["model_base"] / "unsloth/Qwen3.5-122B-A10B-GGUF/")),  # swapped 2026-03-19
-        ("architect_coding", "/mnt/raid0/llm/models/Qwen3-Coder-REAP-246B-A35B-Q4_K_M.gguf"),  # REAP-246B replaces 480B (2026-03-29)
         ("ingest_long_context", str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/")),
     ]
     for role, path in architect_models:
@@ -652,17 +847,11 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
         "GGML_EP_WORKER_DRONE": "1",
         "GGML_EP_SHARD": "1",
     },
-    # MoE Q4 DRAM-bound (REAP-246B / architect_coding) — default v5 GGML config
-    # confirmed by Probe B 2026-05-04 (all c0/c1/c2/c3 within ±0.25%).
-    # MoE-Spec budget=40 plumbed via env var (LLAMA_ARG_MOE_SPEC_BUDGET) — equivalent
-    # to --moe-spec-budget 40 CLI flag. Per v5 deployment draft acceleration.moe_spec_budget=40:
-    # +13-16% pp32 / +3% e2e on REAP-246B. Fires only when n_tokens >= 4 (prefill
-    # batches), so this is primarily a prefill optimization. Decode (n_tokens=1) is
-    # unaffected. Default-on for architect_coding only; do NOT enable for non-MoE-Spec
-    # validated arch classes.
-    "architect_coding": {
-        "LLAMA_ARG_MOE_SPEC_BUDGET": "40",
-    },
+    # architect_coding env block REMOVED 2026-05-06 — REAP-246B role eliminated.
+    # MoE-Spec budget=40 plumbing (LLAMA_ARG_MOE_SPEC_BUDGET) was REAP-246B-specific
+    # (validated +13-16% pp32 / +3% e2e on that model only). If a future role rosters
+    # a comparable MoE-Q4 DRAM-bound model, re-add the env block AT THAT TIME using
+    # benchmark data on the new model — do NOT blanket-apply the budget=40 setting.
     # architect_general (Qwen3.5-122B-A10B Q4_K_M) — Probe B closed 2026-05-04.
     # Arch class: moe_q4_bw_bound_mbind_sensitive. c2 wins at +1.28% (σ ~0.4%, z ~3)
     # vs default v5 at 96t canonical. CPU1 stack net-neutral, c3 (combined) regresses to
@@ -694,19 +883,21 @@ def _role_env_overrides(role: str) -> dict[str, str]:
     if role in _ROLE_ENV_BLOCKS:
         return dict(_ROLE_ENV_BLOCKS[role])
     # Aliases — production roles that map to v5 arch_class names.
-    # NB: ingest_long_context (Qwen3-Next-80B-A3B hybrid SSM MoE) is INTENTIONALLY routed to
-    # hybrid_ssm_moe (not architect_coding) — MoE-Spec budget=40 was validated on REAP-246B
-    # only and behavior on hybrid SSM is unmeasured. formalizer (MathSmith-Qwen3-8B Q8 dense)
-    # routes to dense_q8 — it's not MoE at all.
+    # 2026-05-06: coder_escalation + worker_summarize now use the SAME GGUF as frontdoor
+    # (Qwen3.6-35B-A3B Q8) and should inherit frontdoor's EP-stack env block.
+    # 2026-05-06: thinking_reasoning alias REMOVED (role eliminated).
+    # NB: ingest_long_context (Qwen3-Next-80B-A3B hybrid SSM MoE) routes to hybrid_ssm_moe
+    # (default v5 — MoE-Spec budget=40 was REAP-246B-specific, NOT validated on hybrid SSM).
+    # formalizer (MathSmith-Qwen3-8B Q8 dense) routes to dense_q8 — it's not MoE at all.
     arch_aliases = {
-        "coder_escalation": "worker",
-        "worker_explore": "worker",
-        "worker_summarize": "worker",
-        "thinking_reasoning": "worker",
+        "coder_escalation": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
+        "worker_summarize": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
+        "worker_general": "worker",         # Qwen3-Coder-30B-A3B Q4 MoE — default v5 (no specific env block)
+        "worker_explore": "worker",         # Legacy alias for worker_general
         "general_gemma_3_27b_it_qat": "dense_q4",
-        "ingest_long_context": "hybrid_ssm_moe",  # Qwen3-Next-80B-A3B; NOT architect_coding (REAP-246B-specific MoE-Spec)
+        "ingest_long_context": "hybrid_ssm_moe",  # Qwen3-Next-80B-A3B
         "formalizer": "dense_q8",                 # MathSmith-Qwen3-8B Q8 dense; NOT MoE at all
-        "toolrunner": "worker",
+        "toolrunner": "worker",                   # Qwen3-Coder-30B-A3B Q4 (shares with worker_general)
     }
     aliased = arch_aliases.get(role)
     if aliased and aliased in _ROLE_ENV_BLOCKS:
@@ -1209,11 +1400,10 @@ def build_server_command(
         thread_count = "96"
 
     # KV cache budgets: role-aware context sizes to prevent memory pressure.
-    # Total KV ~82GB across all servers, well within 475GB available budget.
+    # 2026-05-06: architect_coding REMOVED (role eliminated; entry stripped).
     _KV_CONTEXT_SIZES = {
         "architect_general": "16384",   # 122B MoE hybrid → ~16GB KV
-        "architect_coding": "16384",    # REAP-246B MoE (139 GB, freed 111 GB vs 480B) → can afford larger KV
-        "ingest_long_context": "32768", # 80B SSM, needs long context
+        "ingest_long_context": "32768", # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
     }
     context_size = _KV_CONTEXT_SIZES.get(role_config.name, "32768")
 
@@ -1248,11 +1438,13 @@ def build_server_command(
     # --kv-hadamard: production binary rebuilt with Hadamard support (commit b51c905ec, 2026-03-28).
     # Closes q4_0 K PPL gap from +0.055 to +0.017 vs f16. Zero throughput overhead.
     _KV_QUANT_CONFIGS = {
-        "frontdoor":            ("q4_0", "q4_0"),   # hybrid model (75% SSM), prefill regression amortized
-        "coder_escalation":     ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
+        # 2026-05-06: frontdoor + coder_escalation now share Qwen3.6-35B-A3B Q8 GGUF
+        # (qwen35moe MoE-attention, NOT SSM hybrid). Per registry kv_quant {q8_0/q8_0}.
+        "frontdoor":            ("q8_0", "q8_0"),   # Qwen3.6-35B-A3B Q8: q8_0 K/V (Qwen trained bf16)
+        "coder_escalation":     ("q8_0", "q8_0"),   # same model as frontdoor
         "architect_general":    ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
-        "architect_coding":     ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
-        "ingest_long_context":  ("q4_0", "q4_0"),   # hybrid model (SSM), long context, max compression
+        # architect_coding REMOVED 2026-05-06 (REAP-246B role eliminated)
+        "ingest_long_context":  ("q4_0", "q4_0"),   # SSM-hybrid, long context, max compression
     }
     kv_quant = _KV_QUANT_CONFIGS.get(role_config.name)
     if kv_quant:
@@ -1862,6 +2054,18 @@ def cmd_start(args: argparse.Namespace) -> int:
             return 1
         print("  [OK] All model paths validated")
         print()
+
+    # Cross-check launcher classification vs registry process_layout / server_mode.
+    # Non-fatal: prints warnings but does not abort. Useful for catching drift
+    # between the launcher's ROLE_LAUNCH_META and the registry's source-of-truth
+    # process_layout section.
+    if not args.dev:
+        registry_warnings = validate_against_registry()
+        if registry_warnings:
+            print("[0] Registry classification warnings:")
+            for w in registry_warnings:
+                print(f"  ⚠ {w}")
+            print()
 
     # Determine which servers to start
     servers_to_start = []
