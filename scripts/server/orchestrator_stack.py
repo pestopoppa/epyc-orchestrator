@@ -324,50 +324,61 @@ SERIAL_ROLES = {
 #   ingest (45 GB Qwen3-Next-80B-A3B Q4 SSM): 1×96t(8085)  (promoted to hot 2026-05-06: Stage 1 of three_stage_summarization)
 # Total resident model footprint: ~167 GB (well under 1.13 TB host); 600+ GB free for KV caches + OS.
 # architect_coding REMOVED 2026-05-06 (REAP-246B 70% coder < frontdoor 97%; 139 GB freed).
-HOT_SERVERS = [
-    # Frontdoor: 1×96t full-speed + 4×48t quarter instances (Qwen3.6-35B-A3B Q8)
-    {"port": 8070, "roles": ["frontdoor"], "numa_instance": 0},   # full: 96t
-    {"port": 8080, "roles": ["frontdoor"], "numa_instance": 1},   # quarter 0
-    {"port": 8180, "roles": ["frontdoor"], "numa_instance": 2},   # quarter 1
-    {"port": 8280, "roles": ["frontdoor"], "numa_instance": 3},   # quarter 2
-    {"port": 8380, "roles": ["frontdoor"], "numa_instance": 4},   # quarter 3
-    # Coder escalation: 1×96t full-speed + 4×48t quarter instances (Qwen3.6-35B-A3B Q8, shared GGUF mmap with frontdoor)
-    # worker_summarize co-hosted on port 8071 (same model since 2026-05-06)
-    {"port": 8071, "roles": ["coder_escalation", "worker_summarize"], "numa_instance": 0},
-    {"port": 8081, "roles": ["coder_escalation"], "numa_instance": 1},
-    {"port": 8181, "roles": ["coder_escalation"], "numa_instance": 2},
-    {"port": 8281, "roles": ["coder_escalation"], "numa_instance": 3},
-    {"port": 8381, "roles": ["coder_escalation"], "numa_instance": 4},
-    # Worker: 1×96t full-speed + 4×48t quarter instances (Qwen3-Coder-30B-A3B Q4)
-    # Renamed worker_explore → worker_general 2026-05-06 (registry/dispatcher consistency).
-    # `worker_explore` retained as alias in the roles list for backwards-compat.
-    {"port": 8072, "roles": ["worker_general", "worker_explore", "worker_math"],
-     "worker_pool": True, "worker_type": "explore"},  # full: 96t
-    {"port": 8082, "roles": ["worker_general", "worker_explore", "worker_math"],
-     "worker_pool": True, "worker_type": "explore", "numa_instance": 1},
-    {"port": 8182, "roles": ["worker_general"],
-     "worker_pool": True, "worker_type": "explore", "numa_instance": 2},
-    {"port": 8282, "roles": ["worker_general"],
-     "worker_pool": True, "worker_type": "explore", "numa_instance": 3},
-    {"port": 8382, "roles": ["worker_general"],
-     "worker_pool": True, "worker_type": "explore", "numa_instance": 4},
-    # Vision servers (VL models with multimodal projector, NO spec decode)
-    {"port": 8086, "roles": ["worker_vision"], "vision": True, "vision_type": "worker"},
-    {"port": 8087, "roles": ["vision_escalation"], "vision": True, "vision_type": "escalation"},
-    # Parallel BGE embedder instances (6 for redundancy, ~4GB total)
-    {"port": 8090, "roles": ["embedder"], "embedding": True},
-    {"port": 8091, "roles": ["embedder_1"], "embedding": True},
-    {"port": 8092, "roles": ["embedder_2"], "embedding": True},
-    {"port": 8093, "roles": ["embedder_3"], "embedding": True},
-    {"port": 8094, "roles": ["embedder_4"], "embedding": True},
-    {"port": 8095, "roles": ["embedder_5"], "embedding": True},
-    # Architects in HOT tier
-    # architect_general: 1×96t canonical full-machine (Probe B 2026-05-04, see NUMA_CONFIG)
-    {"port": 8083, "roles": ["architect_general"], "numa_instance": 0},
-    # architect_coding REMOVED 2026-05-06 (REAP-246B 70% coder < frontdoor 97%; 139 GB freed)
-    # ingest_long_context: 1×96t (promoted from warm 2026-05-06 — now Stage 1 of three_stage_summarization)
-    {"port": 8085, "roles": ["ingest_long_context"]},
-]
+#
+# =============================================================================
+# Single source of truth for "which roles run where" (refactored 2026-05-06)
+# =============================================================================
+# Pre-2026-05-06: HOT_SERVERS + WARM_SERVERS were two parallel hand-edited lists
+# of dicts that duplicated wiring data already in NUMA_CONFIG. This made it easy
+# to forget one when adding/removing/renaming a role and ship a broken config.
+#
+# Post-2026-05-06: HOT_SERVERS / WARM_SERVERS are COMPUTED from:
+#   1. ROLE_LAUNCH_META (below) — small classification dict: per-role tier +
+#      launch mode + aliases + mode-specific kwargs.
+#   2. NUMA_CONFIG (above) — wiring spec: per-role NUMA instances list.
+#
+# Adding a new role now requires editing TWO places consistently:
+#   a) Add the role's NUMA wiring in NUMA_CONFIG (or set "no_numa": True in
+#      ROLE_LAUNCH_META if the role doesn't need NUMA pinning, e.g. embedders).
+#   b) Add a ROLE_LAUNCH_META entry with tier/mode/aliases.
+# A consistency check (`_validate_role_classification()` below) catches
+# common mismatches at module load time.
+
+# Per-role launch metadata. Source of truth for tier classification + launch mode.
+# Aliases (shared_with) are alternate role names that should resolve to the same
+# server entries — used for --only filtering and routing fallthrough.
+ROLE_LAUNCH_META: dict[str, dict] = {
+    # ---- HOT tier (always started) ----
+    "frontdoor":            {"tier": "hot",  "mode": "default"},
+    "coder_escalation":     {"tier": "hot",  "mode": "default",
+                             "shared_with_first_n": ["worker_summarize"]},  # worker_summarize co-hosts only on the full-speed instance (port 8071)
+    "worker_general":       {"tier": "hot",  "mode": "worker_pool",
+                             "worker_type": "explore",
+                             # Aliases that share the worker_general process: worker_explore is the
+                             # legacy name (pre-2026-03-19 worker pool design); worker_math + toolrunner
+                             # share the GGUF mmap and process for routing fan-out.
+                             "shared_with_first_n": ["worker_explore", "worker_math", "toolrunner"],
+                             "shared_with_first_n_count": 2},  # aliases on full + first quarter
+    "architect_general":    {"tier": "hot",  "mode": "default"},
+    "ingest_long_context":  {"tier": "hot",  "mode": "default"},
+    "worker_vision":        {"tier": "hot",  "mode": "vision", "vision_type": "worker"},
+    "vision_escalation":    {"tier": "hot",  "mode": "vision", "vision_type": "escalation"},
+    # Embedders — no NUMA pinning, fixed single port each
+    "embedder":             {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8090},
+    "embedder_1":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8091},
+    "embedder_2":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8092},
+    "embedder_3":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8093},
+    "embedder_4":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8094},
+    "embedder_5":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8095},
+    # ---- WARM tier (optional, --include-warm) ----
+    # 2026-05-06: worker_pool deprecated in registry; warm 1.5B worker retained as inert.
+    "worker_fast":          {"tier": "warm", "mode": "worker_pool", "worker_type": "fast",
+                             "no_numa": True, "port": 8102},
+    # architect_coding REMOVED 2026-05-06 (REAP-246B role eliminated; 139 GB freed)
+    # ingest_long_context PROMOTED to HOT 2026-05-06 (Stage 1 of three_stage_summarization)
+    # thinking_reasoning REMOVED 2026-05-06 (GGUF deleted from disk 2026-03-06)
+}
+
 
 # Embedding model: BGE-large-en-v1.5 (purpose-built for embeddings, 1024 dims)
 # 6 parallel instances provide redundancy and reduce latency via fan-out
@@ -392,15 +403,196 @@ VISION_WORKER_MMPROJ = str(_PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL
 VISION_ESCALATION_MODEL = str(_PATHS["model_base"] / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf")
 VISION_ESCALATION_MMPROJ = str(_PATHS["model_base"] / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf")
 
-WARM_SERVERS = [
-    {"port": 8083, "roles": ["architect_general"]},
-    # architect_coding REMOVED 2026-05-06 (registry role eliminated; 139 GB freed)
-    # ingest_long_context PROMOTED to HOT 2026-05-06 (entry now in HOT_SERVERS, port 8085)
-    # Worker pool WARM tier (single fast worker with 4 slots for burst capacity)
-    # 2026-05-06: worker_pool deprecated in registry; entry retained as inert.
-    {"port": 8102, "roles": ["worker_fast"],
-     "worker_pool": True, "worker_type": "fast"},
-]
+
+def _build_servers_from_classification() -> tuple[list[dict], list[dict]]:
+    """Compute HOT_SERVERS + WARM_SERVERS from ROLE_LAUNCH_META + NUMA_CONFIG.
+
+    For each role in ROLE_LAUNCH_META:
+      - If "no_numa": True, emit a single server entry at meta["port"].
+      - Else look up NUMA_CONFIG[role]["instances"] and emit one entry per instance.
+    Mode-specific flags (vision/worker_pool/embedding) get added to each entry,
+    plus mode-specific kwargs (vision_type, worker_type).
+    Aliases (shared_with_first_n) are added to the first N entries only.
+    """
+    hot: list[dict] = []
+    warm: list[dict] = []
+
+    for role, meta in ROLE_LAUNCH_META.items():
+        target = hot if meta["tier"] == "hot" else warm
+        mode = meta.get("mode", "default")
+        aliases = meta.get("shared_with_first_n", [])
+        alias_count = meta.get("shared_with_first_n_count", 1)  # default: aliases on first instance only
+
+        # Mode-specific flag dict applied to every entry for this role
+        mode_flags: dict = {}
+        if mode == "worker_pool":
+            mode_flags["worker_pool"] = True
+            if "worker_type" in meta:
+                mode_flags["worker_type"] = meta["worker_type"]
+        elif mode == "vision":
+            mode_flags["vision"] = True
+            if "vision_type" in meta:
+                mode_flags["vision_type"] = meta["vision_type"]
+        elif mode == "embedding":
+            mode_flags["embedding"] = True
+
+        if meta.get("no_numa"):
+            # Single port, no NUMA pinning (embedders, worker_fast, etc.)
+            entry = {"port": meta["port"], "roles": [role]}
+            entry.update(mode_flags)
+            target.append(entry)
+            continue
+
+        # NUMA-pinned: one entry per instance in NUMA_CONFIG[role]["instances"]
+        cfg = NUMA_CONFIG.get(role)
+        if not cfg:
+            raise ValueError(
+                f"Role '{role}' in ROLE_LAUNCH_META requires NUMA_CONFIG entry "
+                f"(or set 'no_numa': True if no pinning needed)"
+            )
+        for idx, instance in enumerate(cfg["instances"]):
+            _cpus, port, _threads = instance
+            roles_list: list[str] = [role]
+            if idx < alias_count:
+                roles_list.extend(aliases)
+            entry = {"port": port, "roles": roles_list}
+            if "full_instance_idx" in cfg or len(cfg["instances"]) > 1:
+                entry["numa_instance"] = idx
+            entry.update(mode_flags)
+            target.append(entry)
+
+    return hot, warm
+
+
+def _validate_role_classification() -> None:
+    """Sanity checks on ROLE_LAUNCH_META + NUMA_CONFIG agreement.
+
+    Catches the common bugs that hand-edited HOT_SERVERS used to allow:
+      - Role in ROLE_LAUNCH_META but missing NUMA_CONFIG (and no "no_numa" flag)
+      - Role in NUMA_CONFIG but missing ROLE_LAUNCH_META classification
+      - Same port assigned to two different role primaries
+    Raises ValueError on any inconsistency.
+    """
+    errors: list[str] = []
+
+    # Check 1: every NUMA_CONFIG role has a ROLE_LAUNCH_META entry
+    for role in NUMA_CONFIG:
+        if role not in ROLE_LAUNCH_META:
+            errors.append(
+                f"NUMA_CONFIG['{role}'] has no matching ROLE_LAUNCH_META entry — "
+                f"add tier/mode classification or remove from NUMA_CONFIG"
+            )
+
+    # Check 2: every NUMA-pinned ROLE_LAUNCH_META role has NUMA_CONFIG instances
+    for role, meta in ROLE_LAUNCH_META.items():
+        if meta.get("no_numa"):
+            if "port" not in meta:
+                errors.append(f"ROLE_LAUNCH_META['{role}'] no_numa=True requires 'port' field")
+        else:
+            if role not in NUMA_CONFIG:
+                errors.append(
+                    f"ROLE_LAUNCH_META['{role}'] has no_numa=False but no NUMA_CONFIG entry"
+                )
+
+    # Check 3: no port collisions between role primaries
+    primary_ports: dict[int, str] = {}
+    for role, meta in ROLE_LAUNCH_META.items():
+        if meta.get("no_numa"):
+            ports = [meta["port"]]
+        else:
+            cfg = NUMA_CONFIG.get(role, {})
+            ports = [inst[1] for inst in cfg.get("instances", [])]
+        for port in ports:
+            if port in primary_ports and primary_ports[port] != role:
+                errors.append(
+                    f"Port {port} assigned to both '{primary_ports[port]}' and '{role}'"
+                )
+            primary_ports[port] = role
+
+    if errors:
+        msg = "Role classification inconsistencies detected:\n  " + "\n  ".join(errors)
+        raise ValueError(msg)
+
+
+# Validate at module load (fails fast on misconfiguration)
+_validate_role_classification()
+
+# Computed server lists. Single source of truth: ROLE_LAUNCH_META + NUMA_CONFIG.
+HOT_SERVERS, WARM_SERVERS = _build_servers_from_classification()
+
+
+def validate_against_registry(registry_yaml_path: str | None = None) -> list[str]:
+    """Cross-check ROLE_LAUNCH_META against orchestration/model_registry.yaml.
+
+    Returns list of warning strings (empty if everything is consistent).
+    Called from `start` command but non-fatal: prints warnings, does not abort.
+    Useful for catching drift between launcher classification and registry's
+    process_layout / server_mode sections.
+    """
+    if registry_yaml_path is None:
+        # Default: orchestration/model_registry.yaml relative to repo root
+        registry_yaml_path = str(Path(__file__).parent.parent.parent / "orchestration" / "model_registry.yaml")
+    warnings: list[str] = []
+    try:
+        import yaml
+        with open(registry_yaml_path) as f:
+            registry = yaml.safe_load(f)
+    except Exception as e:
+        return [f"could not load registry from {registry_yaml_path}: {e}"]
+
+    pl = registry.get("process_layout", {})
+    reg_hot = set(pl.get("hot_resident", []))
+    reg_warm = set(pl.get("warm_mmap", []))
+
+    # Compute launcher's HOT tier including aliases (shared_with_first_n).
+    # Aliases share the same process as their primary, so for tier comparison
+    # they count as HOT too.
+    launcher_hot: set[str] = set()
+    launcher_warm: set[str] = set()
+    for role, meta in ROLE_LAUNCH_META.items():
+        target = launcher_hot if meta["tier"] == "hot" else launcher_warm
+        target.add(role)
+        for alias in meta.get("shared_with_first_n", []):
+            target.add(alias)
+
+    # Production roles to cross-check — skip pure launcher-internal names.
+    # worker_explore is a legacy alias kept for backwards-compat; embedders
+    # aren't in the registry's process_layout (they're infrastructure roles);
+    # worker_fast is the deprecated worker_pool warm tier.
+    skip = {"worker_explore"} | {f"embedder_{i}" for i in range(6)} | {"embedder", "worker_fast"}
+    launcher_hot_filtered = launcher_hot - skip
+
+    only_in_launcher = launcher_hot_filtered - reg_hot - reg_warm
+    only_in_registry_hot = reg_hot - launcher_hot - launcher_warm
+
+    for r in sorted(only_in_launcher):
+        warnings.append(f"role '{r}' is HOT in launcher but absent from registry process_layout")
+    for r in sorted(only_in_registry_hot):
+        # Roles that the registry says should be hot but launcher doesn't classify hot
+        warnings.append(f"role '{r}' is hot_resident in registry but not in launcher's HOT tier")
+
+    # Cross-check NUMA_CONFIG ports vs registry server_mode ports (where present)
+    sm = registry.get("server_mode", {})
+    for role, srv in sm.items():
+        if not isinstance(srv, dict): continue
+        reg_port = srv.get("port")
+        if reg_port is None: continue
+        cfg = NUMA_CONFIG.get(role)
+        if cfg:
+            launcher_ports = [inst[1] for inst in cfg["instances"]]
+            if reg_port not in launcher_ports:
+                warnings.append(
+                    f"role '{role}': registry server_mode says port {reg_port}, "
+                    f"but launcher NUMA_CONFIG ports are {launcher_ports}"
+                )
+        else:
+            meta = ROLE_LAUNCH_META.get(role)
+            if meta and meta.get("no_numa") and meta.get("port") != reg_port:
+                warnings.append(
+                    f"role '{role}': registry server_mode says port {reg_port}, "
+                    f"but launcher ROLE_LAUNCH_META says port {meta.get('port')}"
+                )
+    return warnings
 
 DEV_MODEL = "Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf"
 DEV_MODEL_PATH = str(_PATHS["models_dir"] / DEV_MODEL)
@@ -1862,6 +2054,18 @@ def cmd_start(args: argparse.Namespace) -> int:
             return 1
         print("  [OK] All model paths validated")
         print()
+
+    # Cross-check launcher classification vs registry process_layout / server_mode.
+    # Non-fatal: prints warnings but does not abort. Useful for catching drift
+    # between the launcher's ROLE_LAUNCH_META and the registry's source-of-truth
+    # process_layout section.
+    if not args.dev:
+        registry_warnings = validate_against_registry()
+        if registry_warnings:
+            print("[0] Registry classification warnings:")
+            for w in registry_warnings:
+                print(f"  ⚠ {w}")
+            print()
 
     # Determine which servers to start
     servers_to_start = []
