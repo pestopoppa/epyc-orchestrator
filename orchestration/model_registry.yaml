@@ -89,7 +89,7 @@ runtime_defaults:
       worker_explore: 60       # 30B-A3B @ 39 t/s — expected <5s, 60s = 12x headroom
       worker_math: 60
       worker_vision: 60
-      worker_summarize: 120    # 32B summarization, longer outputs
+      worker_summarize: 120    # Qwen3.6-35B-A3B Q8 (post-2026-05-06 swap; same model as frontdoor); longer outputs justify higher timeout
       worker_general: 60
       worker_coder: 30         # semantic alias for fast coding worker (port 8102)
       worker_fast: 30          # 1.5B — expected <2s, 30s = 15x headroom
@@ -2159,41 +2159,48 @@ roles:
       WARNING: 0% agentic - cannot do tool calls.
   worker_summarize:
     tier: C
-    description: Document summarization (96% quality) - fastest with spec decode or
-      prompt lookup
+    description: Short-context document summarization (sub-5000 tokens; longer inputs
+      trigger three_stage_summarization). Qwen3.6-35B-A3B Q8 — same model as
+      frontdoor, shared GGUF mmap.
     model:
-      name: Qwen2.5-Coder-32B-Instruct
-      path: lmstudio-community/Qwen2.5-Coder-32B-Instruct-GGUF/Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf
-      quant: Q4_K_M
-      size_gb: 18.5
-      architecture: dense
+      name: Qwen3.6-35B-A3B-Q8_0
+      path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+      quant: Q8_0
+      size_gb: 37
+      architecture: qwen35moe
+      previous_model: Qwen2.5-Coder-32B-Instruct-Q4_K_M (swapped 2026-05-06; +16pp canonical quality, shared mmap with frontdoor/coder_escalation)
+      use_chat_api: true
+      disable_thinking: true
+      reasoning: auto
+      max_tokens_multiplier: 4
     candidate_roles:
     - coder
     - frontdoor
     - ingest
     - general
     acceleration:
-      type: speculative_decoding
-      draft_role: draft_qwen25_coder
-      k: 8
-      alternative:
-        type: prompt_lookup
-        ngram_min: 3
-        optimized_tps: 95.18
-        best_for: Document QA, summarization where output contains source excerpts
+      type: none  # Q8 baseline; matches frontdoor configuration
+      lookup: false
     performance:
-      baseline_tps: 3.1
-      optimized_tps: 172.4
-      speedup: 55.9x
-      quality_score: 66/69 (96%)
-      lookup_tps: 95.18
-      lookup_speedup: 12.7x
+      baseline_tps: 24.3  # Aggregate frontdoor target (May-4 canonical)
+      optimized_tps: 24.3
+      quality_pct: 93  # 170/183 May-4 Claude-as-Judge (same model as frontdoor)
+      general_suite: "30/30 (100%)"
+      coder_suite: "29/30 (97%)"
+      thinking_suite: "28/30 (93%)"
+      long_context: "27/27 (100%) — beats prior worker_summarize on every dimension"
+      speedup: shares_frontdoor_gguf
     memory:
-      residency: warm
-      pinned: false
-    benchmark_date: 2026-01-06
-    notes: Spec decode 172 t/s for general tasks; prompt lookup 95 t/s for document
-      QA with source material
+      residency: hot  # promoted from warm (shared mmap with frontdoor + coder_escalation)
+      pinned: true
+    benchmark_date: 2026-05-04
+    notes: |
+      Replaces Qwen2.5-Coder-32B-Instruct Q4_K_M (was 77% canonical, 3.1 t/s baseline).
+      Long-document summarization (>=5000 tokens, or >=3500 multi-doc) is handled
+      by three_stage_summarization which routes Stage 1 to ingest_long_context
+      (Qwen3-Next-80B-A3B Q4, SSM-hybrid linear attention) and Stage 2 back to
+      frontdoor (this same model). worker_summarize handles the short-context
+      single-pass summarization cases that don't trigger the three-stage pipeline.
     generation_defaults:
       n_tokens: -1
       temperature: 0.2
@@ -4019,7 +4026,7 @@ process_layout:
   - architect_general      # Qwen3.5-122B-A10B Q4 + Qwen3.5-0.8B Q8 draft
   # architect_coding REMOVED 2026-05-06 (REAP-246B 70% coder < frontdoor 97%); 139 GB freed
   - worker_vision          # Qwen2.5-VL-7B (no spec — VL+mmproj)
-  - worker_summarize       # Qwen2.5-Coder-32B Q4
+  # worker_summarize REMOVED from warm_mmap 2026-05-06 — swapped to Qwen3.6-35B-A3B Q8 (same model as frontdoor; shared GGUF mmap, no separate warm allocation needed); 18.5 GB freed
 escalation_chains:
   coder:
     description: Code generation escalation path
