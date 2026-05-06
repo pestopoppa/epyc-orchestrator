@@ -274,8 +274,21 @@ runtime_defaults:
     threshold_tokens: 5000         # Minimum tokens to trigger (estimated from chars/4)
     multi_doc_discount: 0.7        # Lower threshold for multi-document tasks
     context_reduction_target: 0.15 # Stage 2 receives ~15% of original context
-    stage1_role: frontdoor         # Fast draft generation
-    stage2_role: ingest_long_context  # Quality review with large model
+    # Stage roles inverted 2026-05-06 — better matches each model to its stage's
+    # demand profile. Pre-2026-05-06: stage1=frontdoor, stage2=ingest_long_context.
+    # Rationale per long_context bench (May 4-6):
+    #   - Stage 1 demand: SPEED at full long context (every token costs).
+    #     Qwen3-Next-80B's SSM-hybrid linear attention scales O(n) per token,
+    #     beating Qwen3.6-35B-A3B's pure-attention scaling at extreme contexts.
+    #     Bench: ingest 14.4-20.8 t/s @ 12K vs frontdoor 6.5-16.6 t/s.
+    #   - Stage 2 demand: QUALITY on reduced context (~15% of original ≈ 7-8K).
+    #     Qwen3.6-35B-A3B Q8 scored 27/27 (100%) on long_context suite vs
+    #     Qwen3-Next-80B's 25/27 (93%). At 7-8K context, frontdoor's lower
+    #     long-context throughput is acceptable for the quality-review pass.
+    # Architectural diversity preserved: SSM-hybrid (stage 1) + MoE-attention
+    # (stage 2). Three_stage_summarization design intent unchanged.
+    stage1_role: ingest_long_context  # SSM-hybrid linear attention; fast draft on full context
+    stage2_role: frontdoor             # Higher quality review on reduced context (~15%)
     compression:  # Stage 0: LLMLingua-2 extractive compression
       enabled: false               # DISABLED - causes quality regression
       model: microsoft/llmlingua-2-bert-base-multilingual-cased-meetingbank
@@ -457,16 +470,17 @@ server_mode:
     port: 8085
     slots: 1  # Serial — admission=1, no wasted KV
     model_role: ingest_long_context
-    description: Long document synthesis & summarization - SSM+MoE hybrid (NO speculation!)
+    description: Long document ingestion + Stage 1 of three_stage_summarization - SSM+MoE hybrid linear attention (NO speculation!)
     model: Qwen3-Next-80B-A3B-Q4_K_M.gguf
     memory_gb: 46
-    tier: warm
+    tier: hot  # promoted from warm 2026-05-06 — now Stage 1 of three_stage_summarization (was Stage 2). Full-context fast draft on hot path.
     acceleration:
       type: moe_expert_reduction
       experts: 4  # MoE4 for quality (MoE2 degrades output)
       override_key: qwen3next.expert_used_count
-    throughput: 6.3  # t/s measured 2026-01-26 on 10K context summarization
-    notes: "SSM architecture - incompatible with speculative decoding. Best summarization quality (tested vs Qwen2.5-Coder-32B, Qwen3-32B)."
+    throughput: 14.4-20.8  # May-4 long_context bench at ~12K context. Pre-2026: 6.3 (10K context, MoE4) — older measurement.
+    benchmark_score: "25/27 (93%) on canonical long_context suite, May-4"
+    notes: "SSM-hybrid linear attention scales O(n) per token — at extreme contexts (50K+) outperforms pure-attention models. Best Stage-1 candidate for three_stage_summarization (full-context fast draft). Stage-2 review now uses frontdoor (Qwen3.6-35B-A3B Q8, 100% long_context)."
 
   # Voice recognition service (separate from LLM inference)
   voice_server:
@@ -848,11 +862,15 @@ roles:
     performance:
       baseline_tps: 10.12
       optimized_tps: 6.29  # MoE4 on 10K context (2026-01-26)
+      long_context_tps_range: "14.4-20.8 t/s @ ~12K context (May-4 long_context suite)"
       speedup: n/a  # MoE4 trades speed for quality
       summarization_benchmark: "73.8s for 464 tokens on Twyne whitepaper (10K context)"
+      long_context_quality: "25/27 (93%) on canonical long_context suite, May-4 Claude-as-Judge"
     memory:
-      residency: warm
-      pinned: false
+      # Promoted from warm to hot 2026-05-06 — now Stage 1 of three_stage_summarization
+      # (was Stage 2). Full-context draft on hot path needs no load latency.
+      residency: hot
+      pinned: true
     generation_defaults:
       n_tokens: -1
       temperature: 0.2
@@ -3943,12 +3961,12 @@ process_layout:
   # run as standalone processes. See per-server `draft_model:` field in
   # `server_mode:` for the actual draft-to-target wiring.
   hot_resident:
-  - frontdoor              # Qwen3.6-35B-A3B Q8 (post-2026-05-04 swap; 4×48t NUMA)
+  - frontdoor              # Qwen3.6-35B-A3B Q8 (post-2026-05-04 swap; 4×48t NUMA); Stage 2 of three_stage_summarization
   - worker_general         # Qwen3-Coder-30B-A3B Q4 + DRAFT-0.75B (consolidated)
   - worker_math            # Qwen2.5-Math-7B Q4 + draft_qwen25 (math-only spec)
   - toolrunner             # shared GGUF mmap with worker_general (Qwen3-Coder-30B-A3B Q4)
+  - ingest_long_context    # Qwen3-Next-80B-A3B Q4 (SSM-hybrid; promoted from warm 2026-05-06 — now Stage 1 of three_stage_summarization, on hot path for ingest traffic)
   warm_mmap:
-  - ingest_long_context    # Qwen3-Next-80B-A3B Q4 (no spec — SSM hybrid)
   - architect_general      # Qwen3.5-122B-A10B Q4 + Qwen3.5-0.8B Q8 draft
   # architect_coding REMOVED 2026-05-06 (REAP-246B 70% coder < frontdoor 97%); 139 GB freed
   - worker_vision          # Qwen2.5-VL-7B (no spec — VL+mmproj)
