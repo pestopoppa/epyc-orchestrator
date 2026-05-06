@@ -98,7 +98,7 @@ runtime_defaults:
       vision_escalation: 120   # 30B MoE VL, multimodal processing
       ingest_long_context: 300 # 80B SSM, long document ingestion
       architect_general: 600   # 122B MoE hybrid @ 12.19 t/s (1× canonical, Probe B 2026-05-04), complex multi-step reasoning
-      architect_coding: 480    # REAP-246B MoE @ 8.0 t/s (was 600 for 480B @ 7.0 t/s)
+      # architect_coding REMOVED 2026-05-06 — role eliminated; hard coding routes to coder_escalation
 
     # Server/connection timeouts
     server:
@@ -346,23 +346,22 @@ server_mode:
     url: http://localhost:8081
     port: 8081
     slots: 1
-    model_role: coder_qwen3_coder_30b_a3b
-    description: Coding escalation — consolidated onto Qwen3-Coder-30B-A3B Q4 (May-4 swap; 84% overall, 87% agentic, shares GGUF with worker)
-    model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
-    draft_model: Qwen3-Coder-Instruct-DRAFT-0.75B-32k-Q4_0.gguf
-    kv_quant: {k: q4_0, v: f16}  # pure attention: q4_0 K (4x compression, PPL +0.017), f16 V (zero prefill regression)
-    memory_gb: 16  # shared mmap with worker — net incremental cost ~0
+    model_role: qwen36_q8_0
+    description: Coding escalation — Qwen3.6-35B-A3B Q8 (May-6 swap; shares GGUF with frontdoor; 97% coder vs 77% on Qwen3-Coder-30B-A3B; REAP-246B 70% architect_coding eliminated)
+    model: Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+    model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+    # No draft model — pure MoE; spec decode worth investigating but unverified
+    kv_quant: {k: q8_0, v: q8_0}
+    memory_gb: 37  # shared mmap with frontdoor — net incremental cost ~0
     tier: hot
     acceleration:
-      type: speculative_decoding
-      draft_max: 8    # sweep-verified 2026-03-21 (matches worker)
-      p_split: 0      # linear only, tree net-negative at 48t (sweep-verified)
-      lookup: true
+      type: none  # Q8 baseline; revisit moe_expert_reduction after sweep
+      lookup: false
       corpus_retrieval: true
-    throughput: 43.4   # May-4 measured tg128 under canonical recipe
-    previous_model: Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf  # swapped 2026-05-04 (consolidation: +7pp, +1300% t/s, GGUF shared with worker)
-    benchmark_score: "153/183 (84%)"  # 6-suite Claude-as-Judge May 2
-    benchmark_date: 2026-05-02
+    throughput: 24.3   # aggregate target (May-4 baseline; canonical recipe + preflight gate)
+    previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf  # swapped 2026-05-06 (frontdoor model dominates: +20pp coder vs Qwen3-Coder, +27pp coder vs REAP-246B; shares mmap with frontdoor)
+    benchmark_score: "170/183 (93%)"  # same model as frontdoor; Claude-as-Judge May 4 6-suite
+    benchmark_date: 2026-05-04
 
   worker:
     url: http://localhost:8082
@@ -441,36 +440,18 @@ server_mode:
     previous_model: Qwen3-235B-A22B-Q4_K_M.gguf  # swapped 2026-03-19
     previous_wiring: 2x_cross_numa_8083_8183  # 4.3 t/s/instance (2026-03-29 → 2026-05-04)
 
-  architect_coding:
-    url: http://localhost:8084
-    port: 8084
-    slots: 1  # Serial — admission=1, no wasted KV
-    model_role: architect_coding
-    description: Hardest coding escalation - REAP-246B (50% pruned from 480B). 82% quality, 8.0 t/s, 139 GB.
-    model: /mnt/raid0/llm/models/Qwen3-Coder-REAP-246B-A35B-Q4_K_M.gguf
-    draft_model: Qwen3-Coder-Instruct-DRAFT-0.75B-32k-Q4_0.gguf
-    memory_gb: 139
-    tier: warm
-    acceleration:
-      type: speculative_decoding
-      draft_max: 32   # sweep-verified 2026-03-26 (REAP-246B optimal)
-      p_split: 0      # linear only — tree harmful at all ps values, sweep-verified 2026-03-26
-                      # NB: --draft-p-split flag stripped in production-consolidated-v5 binary;
-                      # field retained for documentation. Linear is the default.
-      lookup: true  # safe on pure MoE (no hybrid segfault)
-      corpus_retrieval: true
-      moe_spec_budget: 40  # MoE-Spec budget (arXiv:2602.16052) +13-16% pp32 / +3% e2e on REAP-246B.
-                           # Plumbed via env var LLAMA_ARG_MOE_SPEC_BUDGET in
-                           # orchestrator_stack.py _ROLE_ENV_BLOCKS["architect_coding"].
-                           # Fires only when n_tokens >= 4 (prefill batches); decode unaffected.
-    numa_instances: 2  # 2×96t cross-NUMA (2026-03-29). Benchmarked: 16.5 t/s agg (1.92x).
-    numa_ports: [8084, 8184]
-    throughput: 8.0    # t/s per instance at 96t (sweep 2026-03-26). 2×96t = 16.5 t/s agg.
-                       # Probe B 2026-05-04 single-instance canonical: 6.35 ± 0.003 t/s
-                       # (default v5; all c0/c1/c2/c3 within ±0.25%, arch class confirmed
-                       # moe_q4_dram_bound).
-    previous_model: Qwen3-Coder-480B-A35B-Instruct-Q4_K_M.gguf  # swapped 2026-03-29 (REAP-246B: +9pp quality, +14% speed, -44% RAM)
-
+  # architect_coding REMOVED 2026-05-06.
+  # REAP-246B Q4_K_M scored only 7/10 (70%) on coder suite under canonical recipe,
+  # WORSE than the consolidated worker (Qwen3-Coder-30B-A3B Q4 at 23/30 = 77%) AND
+  # FAR worse than the frontdoor model (Qwen3.6-35B-A3B Q8 at 29/30 = 97%). Speed
+  # was 6.35 t/s under canonical (May-4 Probe B) — 4× slower than the frontdoor.
+  # The role's purpose ("hardest coding escalation") is no longer served by REAP-246B
+  # because both frontdoor (97%) and worker (77%) outperform it on coder. Hard coding
+  # escalations now route to frontdoor (Qwen3.6-35B-A3B Q8) via coder_escalation,
+  # which shares its GGUF mmap with frontdoor. Saves 139 GB of warm-tier RAM.
+  # Earlier MoE-Spec budget=40 plumbing (commit fee69b8) is retained in
+  # orchestrator_stack.py _ROLE_ENV_BLOCKS but is now inert without an
+  # architect_coding server entry to apply to.
   ingest_long_context:
     url: http://localhost:8085
     port: 8085
@@ -738,42 +719,42 @@ roles:
       Be direct — avoid filler, repetition, and unnecessary preamble.
   coder_escalation:
     tier: B
-    description: Coding escalation — Qwen3-Coder-30B-A3B Q4 MoE (consolidated with worker, May-4 swap)
+    description: Coding escalation — Qwen3.6-35B-A3B Q8 MoE (May-6 swap; same model as frontdoor, shares GGUF mmap; absorbs eliminated architect_coding role)
     model:
-      name: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M
-      huggingface_id: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF
-      path: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
-      quant: Q4_K_M
-      size_gb: 16
-      architecture: moe
-      previous_model: Qwen2.5-Coder-32B-Instruct-Q4_K_M (swapped 2026-05-04; consolidation onto Qwen3-Coder-30B-A3B)
+      name: Qwen3.6-35B-A3B-Q8_0
+      path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+      quant: Q8_0
+      size_gb: 37
+      architecture: qwen35moe
+      previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M (swapped 2026-05-06; +20pp coder, beats REAP-246B by 27pp)
+      use_chat_api: true
+      disable_thinking: true
+      reasoning: auto
+      max_tokens_multiplier: 4
     candidate_roles:
     - coder
     - general
     acceleration:
-      type: speculative_decoding
-      draft_role: draft_qwen3_coder_0_75b
-      k: 8
-      p_split: 0
-      lookup: true
+      type: none  # Q8 baseline (matches frontdoor); revisit moe_expert_reduction after sweep
+      lookup: false
     performance:
-      baseline_tps: 43.4  # May-4 canonical recipe tg128
-      optimized_tps: 43.4
-      quality_pct: 84  # 153/183 May-2 Claude-as-Judge 6-suite
-      coder_suite: "23/30 (77%)"
+      baseline_tps: 24.3  # May-4 canonical (matches frontdoor)
+      optimized_tps: 24.3
+      quality_pct: 93  # 170/183 May-4 Claude-as-Judge (same model as frontdoor)
+      coder_suite: "29/30 (97%)"
       agentic_suite: "26/30 (87%)"
-      math_suite: "27/30 (90%)"
-      speedup: shares_worker_gguf
+      math_suite: "29/30 (97%)"
+      speedup: shares_frontdoor_gguf
     memory:
-      residency: hot  # promoted with consolidation; shares mmap with worker
+      residency: hot  # shares mmap with frontdoor (same GGUF)
       pinned: true
     escalation_from: frontdoor
     use_cases:
-    - First failure from frontdoor on code tasks
+    - First failure from frontdoor on code tasks (separate slot)
     - Multi-file refactoring requiring broader context
-    - Architecture-level code decisions
+    - Hardest coding/architecture escalation (absorbs eliminated architect_coding role)
     - Complex debugging spanning multiple components
-    benchmark_date: 2026-05-02
+    benchmark_date: 2026-05-04
     generation_defaults:
       n_tokens: -1
       temperature: 0.2
@@ -928,64 +909,16 @@ roles:
       Be maximally concise. Use bullet points, not prose.
       Output structured plans, not narrative.
       Other agents will elaborate — stop once the decision is clear.
-  architect_coding:
-    tier: B
-    description: Hardest coding/architecture escalation — REAP-246B (50% pruned from 480B, 2026-03-29)
-    model:
-      name: Qwen3-Coder-REAP-246B-A35B-Q4_K_M
-      path: /mnt/raid0/llm/models/Qwen3-Coder-REAP-246B-A35B-Q4_K_M.gguf
-      quant: Q4_K_M
-      size_gb: 139
-      architecture: moe
-      max_context: 131072
-    candidate_roles:
-    - architect
-    - coder
-    acceleration:
-      type: speculative_decoding
-      draft_role: draft_qwen3_coder_0_75b
-      k: 32    # sweep-verified 2026-03-26 for REAP-246B
-      lookup: true  # safe on pure MoE (no hybrid segfault)
-      notes: >
-        REAP-246B (50% expert-pruned from 480B). 82% quality (+9pp), 8.0 t/s (96t).
-        dm=32, ps=0 sweep-verified 2026-03-26. 2×96t = 16.5 t/s agg.
-      benchmarked: 2026-03-26
-    constraints:
-      notes: >
-        Pure MoE — lookup safe (no hybrid segfault). Linear spec only (tree harmful).
-        Spec decode (74-82% accept) is the correct acceleration method.
-        SSM ban does NOT apply — MoE is architecture-agnostic for lookup.
-    performance:
-      baseline_tps: 6.53
-      full_spec_tps: 9.00
-      moe3_baseline_tps: 5.91
-      moe3_spec_tps: 12.74
-      moe3_spec_lookup_tps: 13.05
-      optimized_tps: 9.00
-      speedup: 1.38x
-      spec_acceptance_full: 80.5%
-      spec_acceptance_refactor: 74.2%
-      spec_acceptance_novel: 57.4%
-      spec_acceptance_summarize: 46.7%
-      moe2_tps: 11.51
-      moe4_tps: 9.25
-      moe5_tps: 8.5
-      legacy_baseline_tps: 2.25
-    memory:
-      residency: warm
-      pinned: false
-    paged_attention:
-      recommended: true
-      block_size: 64
-      reason: "271GB model is heavily memory-bound, estimated +15-25% speedup"
-    benchmark_date: 2025-12-21
-    generation_defaults:
-      n_tokens: -1
-      temperature: 0.1
-    system_prompt_suffix: |
-      Be maximally concise. Use bullet points, not prose.
-      Output structured plans with file paths.
-      Specialists will implement details — stop once the design is clear.
+  # architect_coding ROLE REMOVED 2026-05-06.
+  # Quality data falsified the role's purpose:
+  #   - REAP-246B Q4 coder suite: 7/10 (70%) — WORSE than worker_general's
+  #     Qwen3-Coder-30B-A3B Q4 at 23/30 (77%) and FAR worse than frontdoor's
+  #     Qwen3.6-35B-A3B Q8 at 29/30 (97%).
+  #   - Speed: 6.35 t/s under canonical (May-4 Probe B) vs 24.3 t/s frontdoor
+  #     (3.8× slower) and 43.4 t/s worker (6.8× slower).
+  #   - RAM: 139 GB warm-tier slot reclaimed.
+  # Hard coding escalations now route to coder_escalation, which uses the same
+  # GGUF as frontdoor (Qwen3.6-35B-A3B Q8) — see coder_escalation role + server.
   # thinking_reasoning role REMOVED 2026-05-04 — Qwen3-Next-80B-A3B-Thinking GGUF deleted
   # from disk 2026-03-06; no replacement chosen. Thinking traffic absorbed by frontdoor
   # (Qwen3.6-35B-A3B Q8) and architect_general (Qwen3.5-122B). Routing hints updated.
@@ -1249,7 +1182,7 @@ roles:
       context_length: 196608
     candidate_roles:
     - architect_general
-    - architect_coding
+    # architect_coding role removed 2026-05-06
     acceleration:
       type: none  # ngram-simple has zero effect (sweep-verified 2026-04-17)
       ngram_tested: true
@@ -4017,7 +3950,7 @@ process_layout:
   warm_mmap:
   - ingest_long_context    # Qwen3-Next-80B-A3B Q4 (no spec — SSM hybrid)
   - architect_general      # Qwen3.5-122B-A10B Q4 + Qwen3.5-0.8B Q8 draft
-  - architect_coding       # REAP-246B Q4 + Qwen3-Coder-DRAFT-0.75B
+  # architect_coding REMOVED 2026-05-06 (REAP-246B 70% coder < frontdoor 97%); 139 GB freed
   - worker_vision          # Qwen2.5-VL-7B (no spec — VL+mmproj)
   - worker_summarize       # Qwen2.5-Coder-32B Q4
 escalation_chains:
@@ -4025,8 +3958,8 @@ escalation_chains:
     description: Code generation escalation path
     chain:
     - frontdoor
-    - coder_escalation
-    - architect_coding
+    - coder_escalation  # Qwen3.6-35B-A3B Q8 — same model as frontdoor, separate slot
+    # architect_coding (REAP-246B) REMOVED 2026-05-06: 70% coder vs frontdoor 97%
     triggers:
     - error_categories:
       - timeout
@@ -4034,7 +3967,7 @@ escalation_chains:
       - internal_error
     - output_too_short: 50
     - explicit_request: true
-    max_escalations: 2
+    max_escalations: 1  # was 2 — chain shortened by 1 with architect_coding removal
   general:
     description: General task escalation path
     chain:
@@ -4054,16 +3987,16 @@ routing_hints:
 - if: task_type == 'code'
   use:
   - coder_escalation
-  escalate_to: architect_coding
+  # architect_coding removed 2026-05-06; coder_escalation (Qwen3.6-35B-A3B Q8) is terminal for code
 - if: task_type == 'code' and 'refactor' in objective
   use:
   - coder_escalation
   - worker_general
-  escalate_to: architect_coding
+  # architect_coding removed 2026-05-06; coder_escalation (Qwen3.6-35B-A3B Q8) is terminal for code
 - if: task_type == 'code' and escalation.triggered
   use:
   - coder_escalation
-  escalate_to: architect_coding
+  # architect_coding removed 2026-05-06; coder_escalation (Qwen3.6-35B-A3B Q8) is terminal for code
 - if: task_type == 'ingest'
   use:
   - ingest_long_context
@@ -4119,7 +4052,8 @@ routing_hints:
   - architect_general
 - if: escalation.max_level == 'B3' and task_type == 'code'
   use:
-  - architect_coding
+  - coder_escalation  # was architect_coding (REAP-246B); removed 2026-05-06 — frontdoor model dominates coder
+  - architect_general  # secondary fallback for design questions on B3 code escalation
 command_templates:
   speculative_decoding: "numactl --interleave=all \\\n  /mnt/raid0/llm/llama.cpp/build/bin/llama-speculative\
     \ \\\n  -m {model_path} \\\n  -md {draft_path} \\\n  --draft-max {k} \\\n  -t\
