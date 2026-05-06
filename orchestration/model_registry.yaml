@@ -4018,15 +4018,20 @@ process_layout:
   # `server_mode:` for the actual draft-to-target wiring.
   hot_resident:
   - frontdoor              # Qwen3.6-35B-A3B Q8 (post-2026-05-04 swap; 4×48t NUMA); Stage 2 of three_stage_summarization
+  - coder_escalation       # Qwen3.6-35B-A3B Q8 (same model as frontdoor; shared GGUF mmap, separate slot)
+  - worker_summarize       # Qwen3.6-35B-A3B Q8 (same model as frontdoor; co-hosted on coder_escalation server port 8071)
   - worker_general         # Qwen3-Coder-30B-A3B Q4 + DRAFT-0.75B (consolidated)
-  - worker_math            # Qwen2.5-Math-7B Q4 + draft_qwen25 (math-only spec)
+  - worker_math            # Qwen2.5-Math-7B Q4 + draft_qwen25 (math-only spec); shares worker_general server
   - toolrunner             # shared GGUF mmap with worker_general (Qwen3-Coder-30B-A3B Q4)
   - ingest_long_context    # Qwen3-Next-80B-A3B Q4 (SSM-hybrid; promoted from warm 2026-05-06 — now Stage 1 of three_stage_summarization, on hot path for ingest traffic)
+  - worker_vision          # Qwen2.5-VL-7B (no spec — VL+mmproj); dedicated VL server port 8086
+  - vision_escalation      # Qwen3-VL-30B-A3B (no spec — VL+mmproj); dedicated VL MoE server port 8087
   warm_mmap:
   - architect_general      # Qwen3.5-122B-A10B Q4 + Qwen3.5-0.8B Q8 draft
   # architect_coding REMOVED 2026-05-06 (REAP-246B 70% coder < frontdoor 97%); 139 GB freed
-  - worker_vision          # Qwen2.5-VL-7B (no spec — VL+mmproj)
-  # worker_summarize REMOVED from warm_mmap 2026-05-06 — swapped to Qwen3.6-35B-A3B Q8 (same model as frontdoor; shared GGUF mmap, no separate warm allocation needed); 18.5 GB freed
+  # worker_vision PROMOTED from warm to hot 2026-05-06 — listed in HOT_SERVERS as hot tier
+  # vision_escalation PROMOTED from warm to hot 2026-05-06 — listed in HOT_SERVERS as hot tier
+  # worker_summarize was here pre-2026-05-06; now hot via shared mmap with frontdoor
 escalation_chains:
   coder:
     description: Code generation escalation path
