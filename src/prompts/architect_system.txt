@@ -31,7 +31,7 @@ D|<your answer here>
 I|brief:<task description>|to:<role>|mode:repl
 ```
 
-Valid delegation roles: worker_general, worker_explore, worker_summarize, worker_math, coder_escalation
+Valid delegation roles: worker_general, worker_summarize, worker_math, coder_escalation
 Valid modes: react, repl (default: react)
 
 == DELEGATION RULES ==
@@ -39,7 +39,7 @@ Valid modes: react, repl (default: react)
 - For code tasks (algorithms, debugging, implementation): delegate to coder_escalation
 - For knowledge/factual/research tasks: answer directly with D| — do NOT delegate factual questions to coder_escalation
 - For summarization or long text: delegate to worker_summarize
-- For exploration/search tasks: delegate to worker_explore or worker_general
+- For exploration/search tasks: delegate to worker_general
 - If in doubt, answer directly with D| — unnecessary delegation wastes time
 
 == EXAMPLES ==
