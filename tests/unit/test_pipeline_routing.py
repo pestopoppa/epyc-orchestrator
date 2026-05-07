@@ -655,3 +655,77 @@ class TestPlanReviewGate:
                         _plan_review_gate(request, routing, primitives, state)
 
         mock_store.assert_not_called()
+
+
+class TestTrinityRoleShadow:
+    """TR-3.2: classifier wires through _route_request and populates
+    RoutingResult.assigned_role in shadow mode (no flag check).
+    """
+
+    def _state(self):
+        s = MagicMock()
+        s.hybrid_router = None
+        s.failure_graph = None
+        s.progress_logger = None
+        return s
+
+    def test_assigned_role_default_worker(self):
+        request = ChatRequest(prompt="Write hello world.", mock_mode=True, real_mode=False)
+        result = _route_request(request, self._state())
+        assert result.assigned_role == "worker"
+
+    def test_assigned_role_thinker_on_plan_keyword(self):
+        request = ChatRequest(
+            prompt="Plan how to migrate the database to Postgres.",
+            mock_mode=True,
+            real_mode=False,
+        )
+        result = _route_request(request, self._state())
+        assert result.assigned_role == "thinker"
+
+    def test_assigned_role_verifier_on_review_with_prior_content(self):
+        request = ChatRequest(
+            prompt="Review my answer above and verify it is correct.",
+            mock_mode=True,
+            real_mode=False,
+        )
+        result = _route_request(request, self._state())
+        assert result.assigned_role == "verifier"
+
+    def test_assigned_role_thinker_on_architect_force_role(self):
+        request = ChatRequest(
+            prompt="Quick task.",
+            real_mode=True,
+            force_role="architect_general",
+        )
+        result = _route_request(request, self._state())
+        assert result.assigned_role == "thinker"
+
+    def test_assigned_role_thinker_on_thinking_budget(self):
+        request = ChatRequest(
+            prompt="Quick task.",
+            mock_mode=True,
+            real_mode=False,
+            thinking_budget=2048,
+        )
+        result = _route_request(request, self._state())
+        assert result.assigned_role == "thinker"
+
+    def test_assigned_role_populated_when_flag_off(self, monkeypatch):
+        # Shadow mode: flag is OFF but field is still populated.
+        monkeypatch.delenv("ORCHESTRATOR_ROLE_AWARE_ROUTING", raising=False)
+        request = ChatRequest(prompt="Plan a migration.", mock_mode=True, real_mode=False)
+        result = _route_request(request, self._state())
+        assert result.assigned_role == "thinker"  # Always populated.
+
+    def test_classifier_failure_falls_back_to_worker(self):
+        """If the classifier import or call raises, _route_request must not
+        crash — it falls back to "worker" (the safe default).
+        """
+        request = ChatRequest(prompt="anything.", mock_mode=True, real_mode=False)
+        with patch(
+            "src.classifiers.role_classifier.classify_role",
+            side_effect=RuntimeError("synthetic failure"),
+        ):
+            result = _route_request(request, self._state())
+        assert result.assigned_role == "worker"
