@@ -297,6 +297,13 @@ class RoleResult:
     # Inference tap byte range for this call (0/0 = not captured)
     tap_offset_bytes: int = 0
     tap_length_bytes: int = 0
+    # Trinity tri-role axis (TR-2.1 of tri-role-coordinator-architecture.md).
+    # Per-call assignment {"thinker", "worker", "verifier"}, ORTHOGONAL to the
+    # `role` field above (which is the model role like "frontdoor"/"worker_30b").
+    # Naming: NOT named `role` to avoid colliding with the existing model-role
+    # field. Default `"worker"` for backward compat. Logged in shadow mode
+    # regardless of feature flag; only acted on when ROLE_AWARE_ROUTING=1.
+    assigned_role: str = "worker"
     # REPL tap byte range (code execution output/errors)
     repl_tap_offset_bytes: int = 0
     repl_tap_length_bytes: int = 0

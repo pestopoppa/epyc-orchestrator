@@ -64,6 +64,12 @@ class RoutingResult:
     difficulty_band: str = ""
     # Estimated pre-inference cost (relative units: tier_weight × estimated_tokens / 1M)
     estimated_cost: float = 0.0
+    # Trinity tri-role axis (TR-2.1 of tri-role-coordinator-architecture.md).
+    # Per-call assignment {"thinker", "worker", "verifier"}, orthogonal to
+    # routing_decision (which selects the model). Default "worker" for backward
+    # compat with pre-TR-2 callers. Logged in shadow mode regardless of feature
+    # flag; only acted on when ORCHESTRATOR_ROLE_AWARE_ROUTING=1.
+    assigned_role: str = "worker"
 
     @property
     def role(self) -> str:
