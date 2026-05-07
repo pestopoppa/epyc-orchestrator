@@ -114,6 +114,11 @@ class Dispatcher:
         # Input formalizer (MathSmith-8B)
         "formalizer": "formalizer",
         "formalize": "formalizer",
+        # Image generation (virtual role — execution lives in the Hermes plugin)
+        "image": "image_worker",
+        "image_worker": "image_worker",
+        "generate_image": "image_worker",
+        "image_generate": "image_worker",
     }
 
     def __init__(

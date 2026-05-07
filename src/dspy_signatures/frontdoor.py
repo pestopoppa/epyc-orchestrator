@@ -30,10 +30,12 @@ class FrontdoorClassifier(dspy.Signature):
     )
 
     task_type: str = dspy.OutputField(
-        desc="One of: chat, code, math, ingest, vision, manage, research",
+        desc="One of: chat, code, math, ingest, vision, image, manage, research. "
+        "'vision' = image *understanding* (caption/analyze/OCR an image input). "
+        "'image' = image *generation* (create/draw/render an image output via ERNIE-Image-Turbo).",
     )
     primary_role: str = dspy.OutputField(
-        desc="Best specialist role for this request (e.g. coder, architect, math)",
+        desc="Best specialist role for this request (e.g. coder, architect, math, image_worker for image generation)",
     )
     priority: str = dspy.OutputField(
         desc="'interactive' (user waiting) or 'batch' (async OK)",

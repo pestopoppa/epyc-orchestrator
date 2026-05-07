@@ -133,6 +133,8 @@ PORT_MAP = {
     "embedder_5": 8095,
     "orchestrator": 8000,
     "document_formalizer": 9001,
+    "sd_server": 8190,         # ERNIE-Image-Turbo via stable-diffusion.cpp native (replaced ComfyUI 2026-05-07; ~1.7-3.4× CPU speedup)
+    "whisper": 9000,           # faster-whisper STT (transcription service, not llama-server)
 }
 
 # NUMA_REPLICA_PORTS defined after NUMA_CONFIG below (line order dependency)
@@ -1939,6 +1941,115 @@ def start_document_formalizer() -> ProcessInfo | None:
         return None
 
 
+def start_sd_server() -> ProcessInfo | None:
+    """Start the sd-server diffusion inference service (stable-diffusion.cpp native).
+
+    Replaces the ComfyUI-GGUF + PyTorch path 2026-05-07 — sd.cpp's native
+    ggml backend keeps Q8_0 weights packed and uses native quantized GEMM
+    kernels, skipping ComfyUI-GGUF's per-layer dequant-to-BF16 step.
+    Measured ~1.74× wall-clock and ~3.43× sampler s/iter speedup at 512² /
+    4 steps; expected ~2× wall-clock at production 1024² / 8 steps.
+    Stack-managed per feedback_stack_managed_services. Health probe uses
+    /sdapi/v1/samplers (sd-server has no dedicated /health endpoint).
+    """
+    log_file = LOG_DIR / "sd_server.log"
+    port = 8190
+    launcher = _PATHS["project_root"] / "scripts/diffusion/start_sd_server.sh"
+
+    print(f"  Starting sd_server (ERNIE-Image-Turbo, ggml native) on port {port}")
+
+    if not launcher.exists():
+        print(f"    [FAIL] Launcher not found: {launcher}")
+        return None
+
+    env = os.environ.copy()
+    env["SD_SERVER_PORT"] = str(port)
+
+    with open(log_file, "w") as log:
+        proc = subprocess.Popen(
+            ["bash", str(launcher)],
+            cwd=str(_PATHS["project_root"]),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+    print(f"    PID: {proc.pid}")
+    print(f"    Waiting for health (path=/sdapi/v1/samplers, timeout=120s)...")
+
+    if wait_for_health(port, timeout=120, path="/sdapi/v1/samplers"):
+        print(f"    [OK] sd-server ready")
+        return ProcessInfo(
+            role="sd_server",
+            pid=proc.pid,
+            port=port,
+            started_at=datetime.now().isoformat(),
+            model_path="ernie-image-turbo-Q8_0.gguf + ministral-3-3b + flux2-vae (sd.cpp ggml native)",
+            log_file=str(log_file),
+        )
+    else:
+        print(f"    [FAIL] sd-server did not start")
+        print(f"    Check log: {log_file}")
+        kill_process(proc.pid)
+        return None
+
+
+def start_whisper() -> ProcessInfo | None:
+    """Start the faster-whisper STT server (large-v3-turbo, int8).
+
+    Promoted from sidecar to stack-managed 2026-05-06 per
+    feedback_stack_managed_services. Reuses the existing launch script in
+    epyc-inference-research; no rewrite needed.
+    """
+    log_file = LOG_DIR / "whisper.log"
+    port = 9000
+    # Whisper launcher lives in the inference-research repo (was a sidecar)
+    launcher = Path("/mnt/raid0/llm/epyc-inference-research/scripts/voice/start_whisper_server.sh")
+
+    print(f"  Starting whisper (faster-whisper large-v3-turbo) on port {port}")
+
+    if not launcher.exists():
+        print(f"    [FAIL] Launcher not found: {launcher}")
+        return None
+
+    env = os.environ.copy()
+    env["WHISPER_PORT"] = str(port)
+
+    with open(log_file, "w") as log:
+        proc = subprocess.Popen(
+            ["bash", str(launcher)],
+            cwd=str(launcher.parent),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+    print(f"    PID: {proc.pid}")
+    print(f"    Waiting for health (path=/health, timeout=60s)...")
+
+    if wait_for_health(port, timeout=60, path="/health"):
+        print(f"    [OK] Whisper ready")
+        return ProcessInfo(
+            role="whisper",
+            pid=proc.pid,
+            port=port,
+            started_at=datetime.now().isoformat(),
+            model_path="faster-whisper-large-v3-turbo (int8)",
+            log_file=str(log_file),
+        )
+    else:
+        print(f"    [FAIL] Whisper did not start")
+        print(f"    Check log: {log_file}")
+        kill_process(proc.pid)
+        return None
+
+
 # =============================================================================
 # Commands
 # =============================================================================
@@ -2217,6 +2328,39 @@ def cmd_start(args: argparse.Namespace) -> int:
             state["document_formalizer"] = info
         else:
             print("  [!] Document formalizer failed (non-fatal, continuing)")
+
+        print()
+
+        # Start sd-server diffusion service (optional, non-fatal)
+        # ERNIE-Image-Turbo Q8 GGUF + Mistral3 + flux2 VAE via stable-diffusion.cpp.
+        # Replaced ComfyUI 2026-05-07 — see start_sd_server() for context.
+        if 8190 in already_healthy_ports:
+            print("[5a] Starting sd-server (ggml native diffusion)...")
+            print("  Already healthy, skipping")
+            state["sd_server"] = {"port": 8190, "status": "preserved"}
+        else:
+            print("[5a] Starting sd-server (ggml native diffusion)...")
+            info = start_sd_server()
+            if info:
+                state["sd_server"] = info
+            else:
+                print("  [!] sd-server failed (non-fatal, image generation unavailable)")
+
+        print()
+
+        # Start Whisper STT service (optional, non-fatal)
+        # Promoted from sidecar 2026-05-06.
+        if 9000 in already_healthy_ports:
+            print("[5b] Starting Whisper STT server...")
+            print("  Already healthy, skipping")
+            state["whisper"] = {"port": 9000, "status": "preserved"}
+        else:
+            print("[5b] Starting Whisper STT server...")
+            info = start_whisper()
+            if info:
+                state["whisper"] = info
+            else:
+                print("  [!] Whisper failed (non-fatal, STT unavailable)")
 
         print()
 
