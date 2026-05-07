@@ -295,6 +295,33 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
     if _derived_task_type:
         task_ir["task_type"] = _derived_task_type
 
+    # TR-3.2: Trinity tri-role classification (shadow mode). Always populates
+    # `assigned_role` regardless of the ROLE_AWARE_ROUTING flag — TR-4 gates
+    # acting on the role; TR-3.3 uses shadow telemetry to decide promotion.
+    try:
+        from src.classifiers.role_classifier import classify_role as _classify_trinity_role
+        _trinity_result = _classify_trinity_role(
+            request.prompt,
+            routing_decision=routing_decision,
+            force_role=request.force_role,
+            thinking_budget=request.thinking_budget,
+            context=request.context or "",
+        )
+        _assigned_role = _trinity_result.role
+        log.info(
+            "Trinity role classified: role=%s reason=%s",
+            _trinity_result.role,
+            _trinity_result.reason,
+            extra=task_extra(
+                task_id=task_id,
+                stage="routing",
+                strategy="trinity_role_shadow",
+            ),
+        )
+    except Exception as _trinity_exc:
+        log.debug("Trinity role classification skipped: %s", _trinity_exc)
+        _assigned_role = "worker"
+
     return RoutingResult(
         task_id=task_id,
         task_ir=task_ir,
@@ -311,6 +338,7 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         difficulty_score=_difficulty_score,
         difficulty_band=_difficulty_band,
         estimated_cost=_estimated_cost,
+        assigned_role=_assigned_role,
     )
 
 
