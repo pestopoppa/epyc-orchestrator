@@ -1860,6 +1860,17 @@ def start_server(
                     del env[k]
                 if stripped:
                     print(f"    [binary_override] stripped GGML_* env: {stripped}")
+                # Force OMP_WAIT_POLICY=passive for binary_override (gemma4 MTP via
+                # ik_llama.cpp PR #1744). The default canonical 'active' busy-waits
+                # the entire 96-thread OMP team during idle slots — measured 95
+                # cores spinning indefinitely with zero in-flight inference
+                # (2026-05-08 evening). Production llama.cpp's OMP integration
+                # releases idle threads correctly with 'active'; ik_llama.cpp
+                # PR #1744's fork point apparently regresses this. Latency cost
+                # of 'passive' is a few µs first-token wakeup per request —
+                # negligible vs continuous 96-core idle waste.
+                env["OMP_WAIT_POLICY"] = "passive"
+                print(f"    [binary_override] OMP_WAIT_POLICY=passive (gemma4 MTP idle-spin fix)")
             # Prepend role-specific LD_LIBRARY_PATH entries (Phase 2): ik_llama.cpp
             # PR #1744 build needs its own libllama.so / libggml.so on the resolver
             # path. Prepend so the override beats system libs without touching the
