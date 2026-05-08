@@ -101,3 +101,116 @@ class TestStrategyStore:
         store.close()
         # Double close should not raise
         store.close()
+
+
+class TestAP28HybridRetrieval:
+    """AP-28: FTS5 + RRF fusion, content-hash staleness, validity weighting."""
+
+    def test_fts5_index_present(self, store):
+        # FTS5 virtual table should exist after _init_schema
+        rows = store._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='strategies_fts'"
+        ).fetchall()
+        assert len(rows) == 1
+        assert getattr(store, "_fts_enabled", False) is True
+
+    def test_entry_type_default_raw(self, store):
+        sid = store.store("desc", "insight", source_trial_id=1, species="alpha")
+        row = store._conn.execute(
+            "SELECT entry_type FROM strategies WHERE id=?", (sid,)
+        ).fetchone()
+        assert row["entry_type"] == "raw"
+
+    def test_entry_type_explicit(self, store):
+        sid = store.store(
+            "desc", "insight", source_trial_id=1, species="alpha", entry_type="pattern"
+        )
+        row = store._conn.execute(
+            "SELECT entry_type FROM strategies WHERE id=?", (sid,)
+        ).fetchone()
+        assert row["entry_type"] == "pattern"
+
+    def test_context_hash_recorded(self, store):
+        sid = store.store("desc", "insight", source_trial_id=1, species="alpha")
+        row = store._conn.execute(
+            "SELECT context_hash FROM strategies WHERE id=?", (sid,)
+        ).fetchone()
+        # context files may not exist in tests → hash of empty input is fine,
+        # we just need a non-NULL string value (incl. empty).
+        assert row["context_hash"] is not None
+
+    def test_bm25_exact_term_match(self, store):
+        # FAISS via MockEmbedder is hash-based and has zero semantic fidelity.
+        # BM25 must surface the entry that contains the exact query term.
+        store.store("Speculation tuning for Qwen3.5", "Disable HSD",
+                     source_trial_id=1, species="config_tuner")
+        store.store("Increase ubatch size", "Throughput +20%",
+                     source_trial_id=2, species="config_tuner")
+        store.store("Cache hit rate optimisation", "Use prefix cache",
+                     source_trial_id=3, species="config_tuner")
+
+        results = store.retrieve("Qwen3.5 speculation", k=1)
+        assert len(results) == 1
+        assert "Qwen3.5" in results[0].description
+
+    def test_rrf_fuses_both_signals(self, store):
+        # Even when FAISS+BM25 disagree, RRF should produce a deterministic
+        # ordering and never error.
+        for i in range(8):
+            store.store(f"Strategy {i}", f"Insight {i}",
+                        source_trial_id=i, species="explorer")
+        results = store.retrieve("Strategy 3", k=3)
+        assert 1 <= len(results) <= 3
+        # All returned entries must carry the diagnostic fields.
+        for r in results:
+            assert r.entry_type == "raw"
+            assert r.staleness == 1.0
+            assert 0.0 <= r.validity_score <= 1.0
+
+    def test_quarantined_entries_excluded(self, store):
+        sid = store.store("Quarantine me", "should be hidden",
+                          source_trial_id=1, species="alpha")
+        # Force quarantine via repeated failures (NIB2-41 pathway)
+        for _ in range(20):
+            store.update_validity(sid, failure=True)
+        results = store.retrieve("Quarantine", k=5)
+        assert all(r.id != sid for r in results)
+        # And re-includable when explicitly requested
+        results_full = store.retrieve("Quarantine", k=5, include_quarantined=True)
+        assert any(r.id == sid for r in results_full)
+
+    def test_staleness_penalises_old_entries(self, store):
+        # Insert with fixed hash, then pretend the world moved on by
+        # rewriting compute_context_hash to return a different string.
+        sid = store.store("Old entry", "from epoch A",
+                          source_trial_id=1, species="alpha")
+        # Confirm it's currently fresh
+        results = store.retrieve("Old entry", k=1)
+        assert results[0].staleness == 1.0
+        # Force a different epoch by monkeypatching the helper
+        store.compute_context_hash = lambda *a, **kw: "DIFFERENTHASH0001"
+        results = store.retrieve("Old entry", k=1)
+        assert results[0].staleness == 0.5
+
+    def test_backfill_fts_idempotent(self, store):
+        # Insert directly into ``strategies`` bypassing the store() FTS path,
+        # then call backfill_fts to populate the index.
+        store._conn.execute(
+            "INSERT INTO strategies(id, description, insight, source_trial_id, species, "
+            "created_at, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("legacy-1", "legacy desc", "legacy insight", 1, "old", "now", "{}"),
+        )
+        store._conn.commit()
+        n1 = store.backfill_fts()
+        assert n1 >= 1
+        # Idempotent: second call should not double-insert.
+        n2 = store.backfill_fts()
+        assert n2 == 0
+
+    def test_bm25_handles_punctuation_safely(self, store):
+        # FTS5 MATCH chokes on raw punctuation; sanitiser must handle it.
+        store.store("Mutation type=targeted_fix", "boost q",
+                    source_trial_id=1, species="prompt_forge")
+        # Punctuation-heavy query should not raise.
+        results = store.retrieve("type=targeted_fix?!", k=2)
+        assert isinstance(results, list)
