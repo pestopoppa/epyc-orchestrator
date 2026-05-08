@@ -14,10 +14,16 @@ Usage:
     )
     results = store.retrieve("speculation configuration", k=3)
     store.close()
+
+AP-28 upgrade: FTS5 keyword index + Reciprocal Rank Fusion with FAISS,
+per-entry context-hash staleness, validity-weighted ranking, and
+``entry_type`` (raw / pattern / convention) for the L1/L2/L3 hierarchy
+consumed by ``knowledge_distiller`` (AP-29).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -35,6 +41,18 @@ DEFAULT_STRATEGY_PATH = Path(
     "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/strategies"
 )
 
+# AP-28: files whose contents define the configuration epoch. Hash of these
+# files is recorded on every store(); entries whose stored hash differs from
+# the current hash get a validity penalty at retrieve time.
+DEFAULT_CONTEXT_FILES: tuple[Path, ...] = (
+    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"),
+    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/frontdoor.md"),
+    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/roles/worker_explore.md"),
+)
+
+# Reciprocal Rank Fusion default constant (Cormack et al. 2009).
+_RRF_K = 60
+
 
 @dataclass
 class StrategyEntry:
@@ -48,6 +66,11 @@ class StrategyEntry:
     created_at: str
     metadata: dict[str, Any] = field(default_factory=dict)
     similarity_score: float = 0.0
+    # AP-28 diagnostics (default 0/0/empty so to_dict round-trips cleanly)
+    entry_type: str = "raw"
+    validity_score: float = 0.5
+    staleness: float = 1.0
+    rrf_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -115,6 +138,45 @@ class StrategyStore:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_strategies_trial ON strategies(source_trial_id)"
         )
+
+        # AP-28: additive columns for entry_type (raw/pattern/convention) and
+        # per-entry context_hash. ALTER TABLE … ADD COLUMN with DEFAULT is a
+        # zero-downtime migration; the existing tests / runtime keep working
+        # because every read goes through ``SELECT *`` and old INSERT paths
+        # rely on column defaults.
+        for col, ddl in (
+            ("entry_type", "ALTER TABLE strategies ADD COLUMN entry_type TEXT DEFAULT 'raw'"),
+            ("context_hash", "ALTER TABLE strategies ADD COLUMN context_hash TEXT DEFAULT ''"),
+        ):
+            try:
+                self._conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # Column already present
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_strategies_entry_type ON strategies(entry_type)"
+        )
+
+        # AP-28: FTS5 keyword index parallel to ``strategies``. ``content=''``
+        # contentless mode keeps ``strategies`` authoritative; we maintain the
+        # FTS5 rows ourselves on store() / soft-delete paths instead of using
+        # SQLite triggers, so the model fits in a single ``store()`` write.
+        try:
+            self._conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS strategies_fts
+                USING fts5(
+                    id UNINDEXED,
+                    description,
+                    insight,
+                    species,
+                    tokenize='porter unicode61'
+                )
+            """)
+            self._fts_enabled = True
+        except sqlite3.OperationalError as exc:
+            # FTS5 missing is rare on stock CPython but degrade gracefully —
+            # retrieve() falls back to FAISS-only.
+            logger.warning("FTS5 not available, BM25 retrieval disabled: %s", exc)
+            self._fts_enabled = False
 
         # NIB2-41: MDL conventions + Bayesian validity + content-hash staleness.
         # All additive; existing rows stay unaffected.
@@ -255,6 +317,110 @@ class StrategyStore:
         ).fetchall()
         return {r["strategy_id"] for r in rows}
 
+    # ── AP-28 helpers ────────────────────────────────────────────
+
+    def compute_context_hash(
+        self, context_files: tuple[Path, ...] = DEFAULT_CONTEXT_FILES
+    ) -> str:
+        """SHA-256 of concatenated context-file contents, truncated to 16 hex.
+
+        Files that don't exist are skipped (so a missing prompt file does not
+        invalidate the entire store). 16 hex chars = 64 bits of collision
+        resistance — safe for the small number of distinct configurations we
+        ever see.
+        """
+        h = hashlib.sha256()
+        for p in context_files:
+            try:
+                if p.exists():
+                    h.update(p.read_bytes())
+            except OSError:
+                continue
+        return h.hexdigest()[:16]
+
+    def _validity_score(self, strategy_id: str) -> float:
+        """Read Bayesian validity for a strategy as a 0–1 score.
+
+        Uses the existing ``strategy_validity`` table (alpha/beta_fail). Falls
+        back to a 0.5 prior for entries that have never been touched.
+        """
+        row = self._conn.execute(
+            "SELECT alpha, beta_fail FROM strategy_validity WHERE strategy_id = ?",
+            (strategy_id,),
+        ).fetchone()
+        if row is None:
+            return 0.5
+        alpha = row["alpha"] or 2
+        beta = row["beta_fail"] or 0
+        return alpha / (alpha + beta)
+
+    def _retrieve_bm25(
+        self, query_text: str, k: int, species: str | None = None
+    ) -> list[tuple[str, float]]:
+        """BM25 keyword retrieval via FTS5.
+
+        Returns ``[(strategy_id, bm25_score), …]`` with the highest-relevance
+        entry first. FTS5 ``rank`` is negative-by-convention, so we negate it
+        to keep ``score`` monotonic with relevance.
+        """
+        if not getattr(self, "_fts_enabled", False):
+            return []
+        # Sanitise the query: FTS5 reserved punctuation can blow up the parser.
+        sanitised = " ".join(
+            tok for tok in "".join(c if c.isalnum() else " " for c in query_text).split() if tok
+        )
+        if not sanitised:
+            return []
+        sql = (
+            "SELECT id, rank FROM strategies_fts WHERE strategies_fts MATCH ? "
+            "ORDER BY rank LIMIT ?"
+        )
+        try:
+            rows = self._conn.execute(sql, (sanitised, k)).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        results: list[tuple[str, float]] = []
+        for row in rows:
+            sid = row[0]
+            if species is not None:
+                row2 = self._conn.execute(
+                    "SELECT species FROM strategies WHERE id = ?", (sid,)
+                ).fetchone()
+                if row2 is None or row2["species"] != species:
+                    continue
+            results.append((sid, -float(row[1])))
+        return results
+
+    def backfill_fts(self) -> int:
+        """One-time FTS5 backfill for entries created before AP-28 landed.
+
+        Idempotent: skips entries already present in the FTS index. Returns
+        the number of rows inserted.
+        """
+        if not getattr(self, "_fts_enabled", False):
+            return 0
+        existing = {
+            row[0]
+            for row in self._conn.execute("SELECT id FROM strategies_fts").fetchall()
+        }
+        rows = self._conn.execute(
+            "SELECT id, description, insight, species FROM strategies"
+        ).fetchall()
+        inserted = 0
+        for row in rows:
+            if row["id"] in existing:
+                continue
+            self._conn.execute(
+                "INSERT INTO strategies_fts(id, description, insight, species) "
+                "VALUES (?, ?, ?, ?)",
+                (row["id"], row["description"], row["insight"], row["species"]),
+            )
+            inserted += 1
+        if inserted:
+            self._conn.commit()
+            logger.info("FTS5 backfill: inserted %d rows", inserted)
+        return inserted
+
     def _embed(self, text: str) -> np.ndarray:
         """Generate embedding for text."""
         if self._embedder is not None and hasattr(self._embedder, "embed_text"):
@@ -278,11 +444,19 @@ class StrategyStore:
         source_trial_id: int,
         species: str,
         metadata: dict[str, Any] | None = None,
+        entry_type: str = "raw",
     ) -> str:
-        """Store a strategy entry. Returns the UUID."""
+        """Store a strategy entry. Returns the UUID.
+
+        AP-28: ``entry_type`` (default ``"raw"``) selects the L1/L2/L3 tier
+        used by the knowledge distiller; the current configuration epoch's
+        ``context_hash`` is recorded alongside the row so future retrievals
+        can detect staleness.
+        """
         entry_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
         metadata = metadata or {}
+        context_hash = self.compute_context_hash()
 
         # Embed description + insight for retrieval
         embed_text = f"{description} {insight}"
@@ -295,11 +469,21 @@ class StrategyStore:
         # SQLite
         self._conn.execute(
             """INSERT INTO strategies
-               (id, description, insight, source_trial_id, species, created_at, metadata_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+               (id, description, insight, source_trial_id, species, created_at,
+                metadata_json, entry_type, context_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (entry_id, description, insight, source_trial_id, species,
-             created_at, json.dumps(metadata)),
+             created_at, json.dumps(metadata), entry_type, context_hash),
         )
+        if getattr(self, "_fts_enabled", False):
+            try:
+                self._conn.execute(
+                    "INSERT INTO strategies_fts(id, description, insight, species) "
+                    "VALUES (?, ?, ?, ?)",
+                    (entry_id, description, insight, species),
+                )
+            except sqlite3.OperationalError as exc:
+                logger.warning("FTS5 insert failed for %s: %s", entry_id, exc)
         self._conn.commit()
 
         return entry_id
@@ -310,33 +494,84 @@ class StrategyStore:
         k: int = 5,
         species: Optional[str] = None,
         include_quarantined: bool = False,
+        rrf_k: int = _RRF_K,
+        stale_penalty: float = 0.5,
     ) -> list[StrategyEntry]:
-        """Retrieve strategies by semantic similarity, optionally filtered by species.
+        """Retrieve strategies via Reciprocal Rank Fusion of FAISS + BM25.
 
-        Quarantined entries (NIB2-41 staleness) are excluded by default.
+        AP-28: hybrid retrieval. The FAISS rank captures semantic similarity;
+        the FTS5 rank captures exact-term matches (species names, mutation
+        types, file names) that the embedder cannot resolve. We fuse them
+        with RRF (``score = Σ 1 / (rrf_k + rank_i)``) and weight the fused
+        score by Bayesian validity and a content-hash staleness factor
+        (``stale_penalty`` = 0.5 by default).
+
+        Existing callers pass only ``query_text``/``k``/``species``/
+        ``include_quarantined``; the new parameters default to values
+        equivalent to the prior behaviour for those callers.
         """
         if self._faiss.count == 0:
             return []
 
-        embedding = self._embed(query_text)
-        # Retrieve more candidates than k to account for species filtering.
-        # Quarantine may also drop entries, so widen the pool again when active.
-        fetch_k = k * 3 if (species or not include_quarantined) else k
-        faiss_results = self._faiss.search(embedding, k=fetch_k)
+        # Wider candidate pool to absorb species filtering, quarantine, and
+        # FTS5/FAISS asymmetry.
+        fetch_k = max(k * 3, k + 5) if species or not include_quarantined else k * 2
 
+        # FAISS (vector similarity)
+        embedding = self._embed(query_text)
+        faiss_results = self._faiss.search(embedding, k=fetch_k)
+        faiss_ranking: dict[str, int] = {}
+        faiss_scores: dict[str, float] = {}
+        for rank, (mid, score) in enumerate(faiss_results):
+            faiss_ranking[mid] = rank
+            faiss_scores[mid] = float(score)
+
+        # BM25 (FTS5 keyword) — silently empty if FTS5 unavailable
+        bm25_results = self._retrieve_bm25(query_text, k=fetch_k, species=species)
+        bm25_ranking = {mid: rank for rank, (mid, _) in enumerate(bm25_results)}
+
+        all_ids = set(faiss_ranking) | set(bm25_ranking)
+        fused: list[tuple[str, float]] = []
+        current_hash = self.compute_context_hash()
         quarantined = set() if include_quarantined else self.quarantined_ids()
 
+        for sid in all_ids:
+            score = 0.0
+            if sid in faiss_ranking:
+                score += 1.0 / (rrf_k + faiss_ranking[sid])
+            if sid in bm25_ranking:
+                score += 1.0 / (rrf_k + bm25_ranking[sid])
+            fused.append((sid, score))
+        fused.sort(key=lambda x: x[1], reverse=True)
+
         entries: list[StrategyEntry] = []
-        for memory_id, score in faiss_results:
+        for sid, rrf_score in fused:
             row = self._conn.execute(
-                "SELECT * FROM strategies WHERE id = ?", (memory_id,)
+                "SELECT * FROM strategies WHERE id = ?", (sid,)
             ).fetchone()
             if row is None:
                 continue
             if species and row["species"] != species:
                 continue
-            if row["id"] in quarantined:
+            if sid in quarantined:
                 continue
+
+            validity = self._validity_score(sid)
+            # Stored row predates the ``context_hash`` column on legacy DBs.
+            try:
+                stored_hash = row["context_hash"] or ""
+            except (IndexError, KeyError):
+                stored_hash = ""
+            staleness = 1.0 if (not stored_hash or stored_hash == current_hash) else stale_penalty
+
+            adjusted = rrf_score * (0.5 + validity) * staleness
+
+            meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+            try:
+                entry_type = row["entry_type"] or "raw"
+            except (IndexError, KeyError):
+                entry_type = "raw"
+
             entries.append(StrategyEntry(
                 id=row["id"],
                 description=row["description"],
@@ -344,8 +579,12 @@ class StrategyStore:
                 source_trial_id=row["source_trial_id"],
                 species=row["species"],
                 created_at=row["created_at"],
-                metadata=json.loads(row["metadata_json"]),
-                similarity_score=float(score),
+                metadata=meta,
+                similarity_score=adjusted,
+                entry_type=entry_type,
+                validity_score=validity,
+                staleness=staleness,
+                rrf_score=rrf_score,
             ))
             if len(entries) >= k:
                 break
