@@ -225,7 +225,7 @@ NUMA_CONFIG: dict[str, dict] = {
         "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified
     },
     # architect_coding REMOVED 2026-05-06 — REAP-246B Q4KM scored 7/10 (70%) on coder
-    # under canonical recipe, WORSE than worker_general (Qwen3-Coder-30B-A3B Q4 at 77%)
+    # under canonical recipe, WORSE than worker_general (gemma4-26B-A4B Q4_K_M MTP at 96%)
     # AND far worse than frontdoor (Qwen3.6-35B-A3B Q8 at 97%). 139 GB warm freed.
     # Hard coding escalations now route to coder_escalation, which uses the same
     # Qwen3.6-35B-A3B Q8 model as frontdoor (shared GGUF mmap).
@@ -235,13 +235,23 @@ NUMA_CONFIG: dict[str, dict] = {
         ],
         "mlock": True,    # ~46 GB — latency-critical for ingest pipeline (Stage 1 of three_stage_summarization since 2026-05-06)
     },
-    # Worker: Qwen3-Coder-30B-A3B Q4KM (16 GB) — pre-warm: 1×96t + 4×48t
-    # Replaced 7B f16 (2026-03-21): 30B-A3B is 2x faster (39 vs 19 t/s), better quality.
-    # Sweep-verified: dm=8, ps=0, 39.1 t/s at 48t. 4×48t = ~156 t/s agg.
-    # Renamed worker_explore → worker_general 2026-05-06 to match registry / dispatcher.
+    # Worker: gemma4-26B-A4B Q4_K_M MTP (16 GB) — pre-warm: 1×96t + 4×48t.
+    # Swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M (was 39 t/s at 48t).
+    # gemma4-26B-A4B + ik_llama.cpp PR #1744 MTP: 76.5 t/s at 96t (full canonical), 95.2% draft acceptance.
+    # +18pp on tool_compliance (96% vs 78%), +6pp on full suite (90% vs 84%).
+    # Pre-2026-05-08: 7B f16 (until 2026-03-21), then Qwen3-Coder-30B-A3B Q4_K_M.
+    # NB: full + 4 quarters share overlapping CPU sets — pick one mode at start time
+    # (full instance uses 0-95; 4 quarters together also cover 0-95). See task #57.
     "worker_general": {
         "instances": [
-            (NUMA_NODE0[0], 8072, NUMA_NODE0[1]),  # full: 1×96t
+            # 2026-05-08 swap to gemma4-26B-A4B MTP via ik_llama.cpp PR #1744:
+            # full instance MUST use "0-95" (both NUMA nodes' physical cores) +
+            # numactl --interleave=all to satisfy MTP's tensor-buffer NUMA expectation.
+            # NUMA_NODE0's "0-47,96-143" (one-socket-with-SMT) crashed the MTP draft
+            # path with "tensor buffer not set" assertion. Quarter instances retain
+            # their per-quarter pinning since the full canonical recipe is incompatible
+            # with the 4×concurrent design — they may need separate debugging.
+            ("0-95", 8072, 96),                    # full canonical (replaces NUMA_NODE0)
             (NUMA_Q0A[0], 8082, NUMA_Q0A[1]),      # quarter 0
             (NUMA_Q0B[0], 8182, NUMA_Q0B[1]),      # quarter 1
             (NUMA_Q1A[0], 8282, NUMA_Q1A[1]),      # quarter 2
@@ -249,7 +259,8 @@ NUMA_CONFIG: dict[str, dict] = {
         ],
         "full_instance_idx": 0,
         "mlock": True,
-        "spec_overrides": {"draft_max": 8, "p_split": 0},  # sweep-verified (dm irrelevant 38-39 t/s)
+        "spec_overrides": {"draft_max": 2, "p_split": 0},  # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
+        "numactl_policy": "interleave=all",  # 2026-05-08: required for gemma4 MTP buffer allocation
     },
     # Qwen2.5-VL-7B Q4_K_M (~4 GB) — 24 threads
     "worker_vision": {
@@ -321,7 +332,7 @@ SERIAL_ROLES = {
 #   frontdoor (37 GB Qwen3.6-35B-A3B Q8): 1×96t(8070) + 4×48t(8080-8380) = ~37 GB shared mmap
 #   coder_escalation (shares frontdoor GGUF): 1×96t(8071) + 4×48t(8081-8381)
 #     also hosts worker_summarize on port 8071 (same model as frontdoor since 2026-05-06)
-#   worker_general (16 GB Qwen3-Coder-30B-A3B Q4): 1×96t(8072) + 4×48t(8082-8382) = ~16 GB
+#   worker_general (16 GB gemma4-26B-A4B Q4_K_M MTP): 1×96t(8072) + 4×48t(8082-8382) = ~16 GB (post 2026-05-08)
 #   arch_gen (69 GB Qwen3.5-122B-A10B Q4): 1×96t(8083)  (Probe B 2026-05-04: 1× canonical wiring)
 #   ingest (45 GB Qwen3-Next-80B-A3B Q4 SSM): 1×96t(8085)  (promoted to hot 2026-05-06: Stage 1 of three_stage_summarization)
 # Total resident model footprint: ~167 GB (well under 1.13 TB host); 600+ GB free for KV caches + OS.
@@ -390,14 +401,20 @@ EMBEDDER_PORTS = [8090, 8091, 8092, 8093, 8094, 8095]
 # Worker pool models (FIXED paths to existing files)
 # NOTE: worker_coder uses the fast 1.5B worker backend on port 8102.
 WORKER_POOL_MODELS = {
-    # Qwen3-Coder-30B-A3B Q4KM — replaced 7B f16 (2026-03-21): 2x faster, better quality
-    "explore": str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Coder-30B-A3B-Instruct-GGUF/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"),
+    # gemma4-26B-A4B Q4_K_M MTP — swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M.
+    # +18pp on tool_compliance (96% vs 78%), +6pp on full suite (90% vs 84%),
+    # +36% tps on tool_compliance (60.7 vs 44.7), 3× more concise output.
+    # NB: requires ik_llama.cpp PR #1744 binary (Phase 2 wires runtime_requirements
+    # through the launcher; until then this path is informational only — production
+    # launcher still uses default LLAMA_SERVER and will fail on gemma4 arch).
+    "explore": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
     "fast": str(_PATHS["model_base"] / "QuantFactory/Qwen2.5-Coder-1.5B-GGUF/Qwen2.5-Coder-1.5B.Q4_K_M.gguf"),
 }
 
-# Draft model for speculative decoding on explore worker
-# Qwen3-Coder-DRAFT-0.75B (matched to 30B-A3B, sweep-verified dm=8 ps=0)
-EXPLORE_DRAFT_MODEL = str(_PATHS["models_dir"] / "Qwen3-Coder-Instruct-DRAFT-0.75B-32k-Q4_0.gguf")
+# Draft model for MTP speculative decoding on explore worker.
+# gemma4 assistant Q8 — in-house GGUF converted from google/gemma-4-26B-A4B-it-assistant
+# safetensors (no community GGUF existed). 4-layer drafter, 58% acceptance at draft_max=2.
+EXPLORE_DRAFT_MODEL = "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf"
 
 # Vision models (VL) with multimodal projector
 VISION_WORKER_MODEL = str(_PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf")
@@ -827,7 +844,20 @@ _CANONICAL_OMP_ENV = {
     "OMP_PROC_BIND": "spread",
     "OMP_PLACES": "cores",
     "OMP_WAIT_POLICY": "active",
+    # OMP_DYNAMIC=false: prevents the runtime from quietly trimming the team
+    # below OMP_NUM_THREADS. Required by canonical recipe (canonical_recipe.py:43-48
+    # in epyc-inference-research). Without this, ik_llama.cpp's MTP draft path
+    # asserts on "tensor buffer not set" because draft thread-team init races with
+    # buffer allocation. (2026-05-08 Phase 3.)
+    "OMP_DYNAMIC": "false",
 }
+
+# clang-20's libomp directory — prepended to LD_LIBRARY_PATH for any role that
+# resolves OpenMP at runtime. The orchestrator's binaries (and the per-role
+# ik_llama.cpp PR #1744 build for worker_general) would otherwise fall through
+# to AOCC's libomp.so on disk; AOCC has different thread-pinning behavior that
+# triggers the MTP buffer assertion. Mirrors canonical_recipe.LLVM20_LIBDIR.
+_LLVM20_LIBDIR = "/usr/lib/llvm-20/lib"
 
 # Per-role env blocks. Keyed by role name (matches NUMA_CONFIG keys + registry roles).
 # Roles not listed inherit only the canonical OMP env.
@@ -894,12 +924,12 @@ def _role_env_overrides(role: str) -> dict[str, str]:
     arch_aliases = {
         "coder_escalation": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
         "worker_summarize": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
-        "worker_general": "worker",         # Qwen3-Coder-30B-A3B Q4 MoE — default v5 (no specific env block)
+        "worker_general": "worker",         # gemma4-26B-A4B Q4_K_M MTP — GGML_* env stripped at launch when binary_override is in effect (ik_llama.cpp PR #1744 forked at different ggml commit)
         "worker_explore": "worker",         # Legacy alias for worker_general
         "general_gemma_3_27b_it_qat": "dense_q4",
         "ingest_long_context": "hybrid_ssm_moe",  # Qwen3-Next-80B-A3B
         "formalizer": "dense_q8",                 # MathSmith-Qwen3-8B Q8 dense; NOT MoE at all
-        "toolrunner": "worker",                   # Qwen3-Coder-30B-A3B Q4 (shares with worker_general)
+        "toolrunner": "worker",                   # gemma4-26B-A4B Q4_K_M MTP (shares with worker_general)
     }
     aliased = arch_aliases.get(role)
     if aliased and aliased in _ROLE_ENV_BLOCKS:
@@ -912,16 +942,52 @@ def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[
 
     Order (later overrides earlier):
         1. base_env (parent process env, typically os.environ.copy())
-        2. canonical OMP env stack (always applied)
-        3. per-role GGML_* env block (from v5 deployment draft)
+        2. LLVM-20 libomp prepended to LD_LIBRARY_PATH (canonical recipe)
+        3. canonical OMP env stack (always applied)
+        4. per-role GGML_* env block (from v5 deployment draft)
 
     The per-role block is allowed to override OMP if it must, though no current
     role does so.
     """
     env: dict[str, str] = dict(base_env) if base_env else {}
+    # LLVM-20 libomp must win over AOCC libomp at runtime. Prepend to LD_LIBRARY_PATH
+    # so the dynamic loader resolves libomp.so to clang-20's. AOCC libomp has different
+    # thread-pinning + dynamic-team behavior that breaks ik_llama.cpp PR #1744's MTP
+    # path (2026-05-08 Phase 3).
+    existing_ld = env.get("LD_LIBRARY_PATH", "")
+    if _LLVM20_LIBDIR not in existing_ld.split(":"):
+        env["LD_LIBRARY_PATH"] = (
+            f"{_LLVM20_LIBDIR}:{existing_ld}" if existing_ld else _LLVM20_LIBDIR
+        )
     env.update(_CANONICAL_OMP_ENV)
     env.update(_role_env_overrides(role))
     return env
+
+
+def _runtime_requirements_for_role(
+    registry: "RegistryLoader", role_name: str
+) -> tuple[str | None, list[str] | None]:
+    """Return (binary_dir, ld_library_paths) for a role from server_mode.<x>.runtime_requirements.
+
+    Walks `registry._raw["server_mode"]` looking for the entry whose `model_role`
+    matches `role_name`. Returns (None, None) when no entry has runtime_requirements
+    or when the role isn't found — caller falls back to default LLAMA_SERVER + the
+    canonical env without LD_LIBRARY_PATH overrides.
+
+    Used by the worker_pool launch branch (currently only worker_general / gemma4
+    MTP via ik_llama.cpp PR #1744). Other workers stay on the default binary.
+    """
+    if not registry or not hasattr(registry, "_raw"):
+        return None, None
+    sm = registry._raw.get("server_mode", {}) or {}
+    for entry in sm.values():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("model_role") != role_name:
+            continue
+        rt = entry.get("runtime_requirements") or {}
+        return rt.get("binary_dir"), rt.get("ld_library_path")
+    return None, None
 
 
 def _read_sysctl(key: str) -> str | None:
@@ -1292,8 +1358,15 @@ def build_server_command(
     worker_type: str = None,
     vision_mode: bool = False,
     vision_type: str = None,
+    binary_override: str | None = None,
 ) -> list[str]:
-    """Build llama-server command from role config."""
+    """Build llama-server command from role config.
+
+    `binary_override` (Phase 2): when set, replaces `LLAMA_SERVER` for the worker_pool
+    explore branch. Used by worker_general (gemma4 MTP) to launch ik_llama.cpp PR #1744
+    instead of the production llama.cpp build. Other branches ignore this argument
+    today — extend as needed.
+    """
     # Vision server mode - VL models with multimodal projector
     if vision_mode:
         if vision_type == "escalation":
@@ -1359,20 +1432,59 @@ def build_server_command(
                 "--flash-attn", "on",
             ]
         else:
-            # explore workers: Qwen3-Coder-30B-A3B Q4KM with spec decode + lookup
-            # Replaced 7B f16 (2026-03-21): 2x faster, better quality, similar RAM
+            # explore worker: gemma4-26B-A4B Q4_K_M MTP (swapped 2026-05-08 from
+            # Qwen3-Coder-30B-A3B Q4_K_M). Tool_compliance 96% vs 78% prior, +36% tps.
+            # Binary defaults to str(LLAMA_SERVER); start_server overrides via
+            # binary_override (from server_mode.worker.runtime_requirements.binary_dir)
+            # for gemma4 MTP because it needs ik_llama.cpp PR #1744 build, not the
+            # production llama.cpp build.
+            binary = binary_override if binary_override else str(LLAMA_SERVER)
+            # Derive thread count from NUMA_CONFIG by matching this instance's port.
+            # Pre-2026-05-08 was hardcoded -t 24 (1.5B-era leftover), then briefly -t 96
+            # which over-subscribed the 4 quarter instances (24 cores each) and crashed
+            # the load average to 420. Per-instance lookup gets full=96 + quarters=48.
+            _numa_thread_count = 96  # default fallback (full canonical instance)
+            for cpu_list, inst_port, threads in NUMA_CONFIG.get("worker_general", {}).get("instances", []):
+                if inst_port == port:
+                    _numa_thread_count = threads
+                    break
             return [
-                str(LLAMA_SERVER),
+                binary,
                 "-m", model_path,
-                "-md", EXPLORE_DRAFT_MODEL,  # Spec decode with DRAFT-0.75B
-                "--draft-max", "8",    # sweep-verified 2026-03-21 (dm irrelevant: 38-39 across all)
-                # NB: --draft-p-split stripped in production-consolidated-v5 (linear is default).
-                # NB: --lookup stripped in v5 too (replaced by --lookup-cache-static/dynamic FNAME).
+                "-md", EXPLORE_DRAFT_MODEL,  # MTP draft (gemma4 assistant Q8)
+                "--spec-type", "mtp",        # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
+                                             # Without this, -md is treated as standard spec decode and
+                                             # MTP-arch draft tensors are loaded but never assigned to a
+                                             # backend buffer → "tensor buffer not set" assertion.
+                "--draft-max", "2",          # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
+                "--draft-p-min", "0.0",      # greedy: accept top-1 drafts, verifier rejects mismatches
+                "--threads-draft", "16",     # dedicate 16 threads to small 4-layer drafter
+                "-ub", "512",                # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
+                "--no-mmap",                 # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
+                "--reasoning", "off",        # disable gemma4 thinking-channel (output otherwise lands in
+                                             # reasoning_content not content; registry: gemma4_26b reasoning=off)
+                "--jinja",                   # gemma4 ships a custom chat template embedded in the gguf;
+                                             # without --jinja, llama.cpp rejects /v1/chat/completions
+                                             # with "this custom template is not supported"
                 "--host", "127.0.0.1",
                 "--port", str(port),
-                "-np", "2",  # 2 parallel slots
-                "-c", "8192",  # 4K per slot
-                "-t", "24",  # 24 threads for 7B model
+                # -np 1 (single slot): MTP shares state with the target across slots in a
+                # way that the ik_llama.cpp PR #1744 build asserts on with -np 2 ("tensor
+                # buffer not set" at ggml-backend.cpp:236 during inference). Single slot
+                # matches the working benchmark recipe. Pre-gemma4 worker_general used
+                # -np 2 because external-draft spec decode (Qwen3-Coder + 0.75B draft)
+                # had per-slot draft state; MTP fuses draft + target, hence -np 1.
+                "-np", "1",
+                "-c", "16384",  # match research-registry max_context; 8192 causes MTP buffer mismatches
+                # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
+                # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
+                # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
+                # "tensor buffer not set" MTP assertion.
+                "-t", str(_numa_thread_count),
+                # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
+                # allocation. f16 default left some MTP tensor buffers uninitialized.
+                "-ctk", "q8_0",
+                "-ctv", "q8_0",
                 "--flash-attn", "on",
             ]
 
@@ -1674,18 +1786,52 @@ def start_server(
             print(f"  [!] Unknown worker type: {worker_type}")
             return None
 
+        # Per-role binary + LD_LIBRARY_PATH override (Phase 2). worker_general (gemma4
+        # MTP) needs ik_llama.cpp PR #1744 binary; other workers fall back to default.
+        # Lookup keyed on the primary role (e.g. "worker_general"), not worker_type.
+        binary_dir, ld_paths = _runtime_requirements_for_role(registry, roles[0])
+        binary_override = (
+            str(Path(binary_dir) / "llama-server") if binary_dir else None
+        )
+
         cmd = build_server_command(
-            None, port, worker_pool_mode=True, worker_type=worker_type
+            None, port, worker_pool_mode=True, worker_type=worker_type,
+            binary_override=binary_override,
         )
         model_name = Path(model_path).stem
 
         print(f"  Starting worker pool [{worker_type}] on port {port}: {model_name}")
         print(f"    Roles: {', '.join(roles)}")
+        if binary_override:
+            print(f"    Binary override: {binary_override}")
         print(f"    Command: {' '.join(cmd[:6])}...")
 
         with open(log_file, "w") as log:
             # Worker pool roles map their worker_type to the canonical "worker" role for env.
             env = build_launch_env("worker", os.environ.copy())
+            # When a per-role binary override is in effect (gemma4 MTP via ik_llama.cpp
+            # PR #1744), strip the production-llama.cpp-tuned GGML_* env block. Those
+            # flags (GGML_CCD_POOLS / GGML_CCD_WORK_DIST / GGML_BARRIER_LOCAL_BETWEEN_OPS)
+            # were validated for Qwen3-Coder-30B on the production ggml fork; the
+            # ik_llama.cpp gemma-mtp branch is forked at a different ggml commit and
+            # leaves MTP draft tensors with no buffer assignment when these flags are
+            # set, triggering "tensor buffer not set" assertion at ggml-backend.cpp:236.
+            # Bench launches confirm: gemma4 MTP works with bare OMP env, no GGML_*.
+            if binary_override:
+                stripped = [k for k in list(env.keys()) if k.startswith("GGML_")]
+                for k in stripped:
+                    del env[k]
+                if stripped:
+                    print(f"    [binary_override] stripped GGML_* env: {stripped}")
+            # Prepend role-specific LD_LIBRARY_PATH entries (Phase 2): ik_llama.cpp
+            # PR #1744 build needs its own libllama.so / libggml.so on the resolver
+            # path. Prepend so the override beats system libs without touching the
+            # canonical-recipe LLVM-20 libomp path that already lives in env.
+            if ld_paths:
+                existing = env.get("LD_LIBRARY_PATH", "")
+                merged = ":".join(ld_paths) + (f":{existing}" if existing else "")
+                env["LD_LIBRARY_PATH"] = merged
+                print(f"    LD_LIBRARY_PATH += {ld_paths}")
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
             proc = subprocess.Popen(
                 _numa_prefix(roles[0]) + cmd,
