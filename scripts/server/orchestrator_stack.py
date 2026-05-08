@@ -423,6 +423,43 @@ VISION_ESCALATION_MODEL = str(_PATHS["model_base"] / "lmstudio-community/Qwen3-V
 VISION_ESCALATION_MMPROJ = str(_PATHS["model_base"] / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf")
 
 
+def _filter_by_numa_mode(servers: list[dict], mode: str) -> list[dict]:
+    """Filter server list by --numa-mode {full,quarter,both}.
+
+    For roles whose NUMA_CONFIG has both `full_instance_idx` AND multiple
+    instances (i.e., a full-NUMA-node instance + per-NUMA-quarter siblings on
+    overlapping CPU sets), pick one mode:
+      - "full":    keep only the full instance (max single-stream tps)
+      - "quarter": skip the full, keep the quarters (max aggregate under load)
+      - "both":    return input unchanged (CPU oversubscription — only useful
+                   when the role's per-instance -t is light enough not to
+                   over-subscribe; pre-2026-05-08 Qwen3-Coder -t 24 fit this,
+                   gemma4 -t 96 does NOT — see launcher-numa-mode-gating
+                   handoff)
+
+    Roles without a full+quarter mix (single-instance roles like
+    architect_general / frontdoor, or single-quarter roles like
+    vision_escalation) pass through untouched.
+    """
+    if mode == "both":
+        return servers
+    out: list[dict] = []
+    for srv in servers:
+        # The primary role is roles[0]; aliases share its NUMA_CONFIG.
+        role = srv["roles"][0]
+        cfg = NUMA_CONFIG.get(role)
+        if not cfg or "full_instance_idx" not in cfg or len(cfg["instances"]) <= 1:
+            out.append(srv)
+            continue
+        full_idx = cfg["full_instance_idx"]
+        srv_idx = srv.get("numa_instance", 0)
+        if mode == "full" and srv_idx == full_idx:
+            out.append(srv)
+        elif mode == "quarter" and srv_idx != full_idx:
+            out.append(srv)
+    return out
+
+
 def _build_servers_from_classification() -> tuple[list[dict], list[dict]]:
     """Compute HOT_SERVERS + WARM_SERVERS from ROLE_LAUNCH_META + NUMA_CONFIG.
 
@@ -2355,6 +2392,28 @@ def cmd_start(args: argparse.Namespace) -> int:
                         print(f"  Including WARM server: port {warm_server['port']} ({role})")
                         break
 
+    # Apply --numa-mode filter (default 'both' for back-compat — pre-2026-05-08 default).
+    # Picks full XOR quarters for any role with full_instance_idx + multiple instances
+    # (currently frontdoor + coder_escalation + worker_general); single-instance roles
+    # pass through. See launcher-numa-mode-gating handoff.
+    numa_mode = getattr(args, "numa_mode", "both")
+    if numa_mode == "both":
+        # Light advisory only — 'both' has been working for frontdoor/coder_escalation since
+        # 2026-03 (Qwen3.6-35B Q8 quarters tuned to coexist with the full instance). The
+        # gemma4-MTP exception is the one that needs --numa-mode full per role. We don't
+        # spam at every start since most roles are fine.
+        if any("worker_general" in s.get("roles", []) for s in servers_to_start):
+            print(f"  [advisory] worker_general (gemma4-MTP) runs at -t 96; if its full + 4 quarters "
+                  f"are all kept (default 'both'), expect 1.5× CPU oversubscription. "
+                  f"Use '--numa-mode full' (single instance) or '--numa-mode quarter' (4 concurrent) "
+                  f"for that role specifically. See launcher-numa-mode-gating.md.")
+    pre_filter_count = len(servers_to_start)
+    servers_to_start = _filter_by_numa_mode(servers_to_start, numa_mode)
+    if numa_mode != "both" and len(servers_to_start) != pre_filter_count:
+        dropped = pre_filter_count - len(servers_to_start)
+        print(f"  [--numa-mode={numa_mode}] dropped {dropped} overlapping instance(s); "
+              f"{len(servers_to_start)} server(s) to start")
+
     print()
 
     # Check target ports — skip healthy, clean up unhealthy
@@ -3117,6 +3176,24 @@ def main() -> int:
                               help="Start ONLY these roles (skip everything else). "
                                    "Searches both HOT and WARM server lists.")
     start_parser.add_argument("--dev", action="store_true", help="Dev mode (single 0.5B model)")
+    start_parser.add_argument(
+        "--numa-mode",
+        choices=["full", "quarter", "both"],
+        default="both",
+        help=(
+            "For roles with both a full-NUMA-node instance and quarter-instance siblings "
+            "(currently frontdoor + coder_escalation + worker_general — see "
+            "NUMA_CONFIG[role]['full_instance_idx']), pick one mode. "
+            "'full' = single full instance (max single-stream tps; recommended for single-user "
+            "workloads). 'quarter' = 4 concurrent quarters (max aggregate under multi-request "
+            "load). 'both' = default, preserves pre-2026-05-08 behavior with all 5 — viable "
+            "when the role's -t is small enough to avoid CPU oversubscription (Qwen3-Coder -t 24 "
+            "and Qwen3.6-35B Q8 quarter-tuned were OK; gemma4-MTP -t 96 will hit load 420 → "
+            "9 t/s with 'both', so use --numa-mode full for that role specifically). "
+            "Single-instance roles (architect_general, ingest_long_context, embedders) are "
+            "unaffected by this flag."
+        ),
+    )
     start_parser.add_argument(
         "--skip-host-prereqs",
         action="store_true",
