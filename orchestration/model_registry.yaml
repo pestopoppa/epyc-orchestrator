@@ -389,21 +389,30 @@ server_mode:
     slots: 1
     model_role: worker_general
     shared_with: [worker_math, toolrunner]
-    description: Try-cheap-first worker — Qwen3-Coder-30B-A3B MoE (freed from frontdoor 2026-03-19)
-    model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
-    draft_model: Qwen3-Coder-Instruct-DRAFT-0.75B-32k-Q4_0.gguf
+    description: Try-cheap-first worker — gemma4-26B-A4B Q4_K_M MTP (swapped 2026-05-08 from Qwen3-Coder-30B-A3B; tool_compliance 96% vs 78%, full suite 90% vs 84%)
+    model: gemma-4-26B-A4B-it-Q4_K_M.gguf
+    draft_model: gemma-4-26B-A4B-it-assistant-Q8_0.gguf  # in-house MTP drafter (4 layers); via ik_llama.cpp PR #1744
     memory_gb: 16
     tier: hot
-    previous_model: Qwen2.5-7B-Instruct-f16.gguf  # swapped 2026-03-21 (30B-A3B 2x faster, better quality)
+    previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf  # swapped 2026-05-08 (tool_compliance 96% vs 78%, +18pp). Pre-2026-03-21: Qwen2.5-7B-Instruct-f16.gguf.
     acceleration:
       type: speculative_decoding
-      draft_max: 8    # sweep-verified 2026-03-21 (dm nearly irrelevant: 38-39 t/s across all values)
-      p_split: 0      # linear only, tree is net-negative at 48t (sweep-verified)
-      lookup: true
+      spec_type: mtp        # ik_llama.cpp gemma-mtp branch (PR #1744)
+      draft_max: 2          # 58% acceptance on tier-3 prompts; matches 31B sibling tuning
+      draft_p_min: 0.0      # greedy: accept top-1 drafts, verifier rejects mismatches
+      threads_draft: 16     # dedicated drafter cores; ubatch 512 (MTP recipe)
+      ubatch: 512
+      lookup: false         # forbidden — MTP and ngram-simple lookup conflict on spec-decode slot
       corpus_retrieval: false
-    numa_instances: 4  # 4×48t NUMA quarters (2026-03-29). Same arch as old frontdoor — proven scaling.
+    runtime_requirements:
+      binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin    # PR #1744 patched build, NOT production llama.cpp
+      ld_library_path:                                     # gemma-mtp branch needs its own libllama / libggml
+      - /mnt/raid0/llm/ik_llama.cpp/build/src
+      - /mnt/raid0/llm/ik_llama.cpp/build/ggml/src
+      - /mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd
+    numa_instances: 4  # 4×48t NUMA quarters (2026-03-29 design retained; same RAM footprint).
     numa_ports: [8082, 8182, 8282, 8382]
-    throughput: 39.1   # t/s per instance at 48t (sweep 2026-03-21). 4×48t agg: ~156 t/s.
+    throughput: 60.7   # t/s per instance MTP-on (May-8 tool_compliance median); was 39.1 with Qwen3-Coder.
 
   # REAP-25B: Permanently pruned Qwen3-Coder-30B-A3B (25% experts removed by Cerebras REAP)
   # Pure MoE — speculative decoding IS viable (unlike Qwen3.5 hybrids)
@@ -2088,29 +2097,35 @@ roles:
       temperature: 0.3
   worker_general:
     tier: C
-    description: General worker — Qwen3-Coder-30B-A3B Q4 MoE (consolidated with coder_escalation + toolrunner)
+    description: General worker — gemma4-26B-A4B Q4_K_M (MTP) — swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4. +6pp on master suite (90% vs 84%), +18pp on tool_compliance (96% vs 78%), +36% tps on tool_compliance (60.7 vs 44.7), 3× more concise output. Draft via in-house assistant Q8.
     model:
-      name: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M
-      huggingface_id: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF
-      path: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
+      name: gemma-4-26B-A4B-it-Q4_K_M
+      path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf
       quant: Q4_K_M
       size_gb: 16
-      architecture: moe
-      previous_model: Meta-Llama-3-8B-Instruct-Q4_K_M (swapped 2026-03-19 in production; doc updated 2026-05-04 to match deployed state)
+      architecture: gemma4
+      previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf  # swapped 2026-05-08 (tool_compliance 96% vs 78%; full suite 90% vs 84%)
     candidate_roles:
     - worker
     - general
     - coder
     acceleration:
       type: speculative_decoding
-      draft_role: draft_qwen3_coder_0_75b
-      k: 8
-      p_split: 0
-      lookup: true
+      spec_type: mtp                                 # ik_llama.cpp PR #1744; MTP, not ngram lookup
+      draft_role: draft_gemma4_26b_a4b_assistant_q8  # in-house gemma4 assistant Q8 (4-layer drafter)
+      draft_max: 2                                   # matches research-registry tuning; 58% acceptance on tier-3 prompts
+      draft_p_min: 0.0                               # accept top-1 drafts greedily (verifier rejects mismatches)
+      threads_draft: 16                              # dedicated drafter cores; target keeps remaining 96
+      ubatch: 512                                    # MTP recipe override (canonical 8192 interacts poorly with batched-verify)
+    constraints:
+      forbid:
+      - prompt_lookup       # MTP-only model; --spec-type ngram-simple conflicts with -md MTP draft
+      reason: MTP and ngram-simple lookup both consume the spec-decode slot; ik_llama.cpp cannot hold both.
     performance:
-      baseline_tps: 43.4  # shares worker server (port 8082); May-4 canonical
-      optimized_tps: 43.4
-      quality_pct: 84  # 153/183 May-2 Claude-as-Judge
+      baseline_tps: 44.7    # measured 2026-05-08 tool_compliance baseline (was 41.49 dense, 44.12 with MTP draft per research registry)
+      optimized_tps: 60.7   # measured 2026-05-08 tool_compliance MTP (median of 9 questions)
+      quality_pct: 90       # 165/183 May-8 rigorous Claude-as-Judge (full suite, was 96% extrapolated)
+      tool_compliance_pct: 96   # 26/27 May-8 (after t3_q2 max_tokens 512→2048 fix)
     memory:
       residency: hot
       pinned: true
