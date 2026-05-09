@@ -500,18 +500,17 @@ async def _handle_chat(
                 "<|im_start|>user\n" + request.prompt
                 + "<|im_end|>\n<|im_start|>assistant\n"
             )
-            _dr = await asyncio.to_thread(
-                _execute_direct,
-                request,
-                routing,
-                primitives,
-                state,
-                start_time,
-                initial_role,
+            return _finalize(
+                await asyncio.to_thread(
+                    _execute_direct,
+                    request,
+                    routing,
+                    primitives,
+                    state,
+                    start_time,
+                    initial_role,
+                )
             )
-            if _dr.answer and "<answer>" in _dr.answer and "</answer>" not in _dr.answer:
-                _dr.answer += "</answer>"
-            return _finalize(_dr)
 
         # 8d: REPL orchestration mode (default fallback)
         return _finalize(
