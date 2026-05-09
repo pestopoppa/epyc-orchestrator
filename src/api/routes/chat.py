@@ -394,8 +394,6 @@ async def _handle_chat(
             return resp
 
         def _finalize(resp: ChatResponse) -> ChatResponse:
-            if resp.answer and "<answer>" in resp.answer and "</answer>" not in resp.answer:
-                resp.answer += "</answer>"
             return _annotate_error(
                 _attach_routing_telemetry(_attach_budget_diagnostics(resp, primitives))
             )
