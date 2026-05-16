@@ -225,12 +225,52 @@ class SafetyGate:
 
         # 5. Throughput floor
         if result.speed < self.baseline.frontdoor_speed * 0.8:
-            violations.append(
+            # 2026-05-09: before attributing a throughput regression to the
+            # config-under-test, check whether the host is itself throttled
+            # (CPU freq dip / page-cache fragmentation per
+            # feedback_host_throttle_check.md). If yes, run drop_caches and
+            # tag the verdict for autopilot to retry the trial. This avoids
+            # contaminating the Pareto archive with false-negative entries
+            # caused by sustained mlocked load (the 2026-05-09 incident:
+            # frontdoor measured 7.48 t/s = 1/3 of expected after 9 hours).
+            host_throttled = False
+            host_remediated = False
+            host_triggers: list[str] = []
+            try:
+                from scripts.autopilot.host_health import (
+                    HostHealthState,
+                    remediate as _hh_remediate,
+                )
+                _hh_state = HostHealthState.snapshot()
+                host_throttled, host_triggers = _hh_state.is_throttled()
+                if host_throttled:
+                    host_remediated = _hh_remediate()
+            except Exception:  # noqa: BLE001 — never let host check crash gate
+                pass
+
+            base_msg = (
                 f"Throughput floor: {result.speed:.1f} t/s < "
                 f"{self.baseline.frontdoor_speed * 0.8:.1f} t/s "
                 f"(80% of baseline {self.baseline.frontdoor_speed:.1f})"
             )
-            categories.append("throughput")
+            if host_throttled and host_remediated:
+                # Soft-fail: throttle was the likely cause; retry next tick.
+                warnings.append(
+                    f"{base_msg}. Host throttle detected ({'; '.join(host_triggers)}); "
+                    f"drop_caches issued — RECOMMEND retry."
+                )
+                categories.append("throughput_host_throttle_retry")
+            elif host_throttled:
+                # Throttled but couldn't remediate — still flag for retry, log the gap.
+                warnings.append(
+                    f"{base_msg}. Host throttle detected but remediation unavailable "
+                    f"({'; '.join(host_triggers)}); install per "
+                    f"scripts/autopilot/host_health_install.md."
+                )
+                categories.append("throughput_host_throttle_no_remediate")
+            else:
+                violations.append(base_msg)
+                categories.append("throughput")
         elif result.speed < self.baseline.frontdoor_speed * 0.9:
             warnings.append(
                 f"Speed marginal: {result.speed:.1f} t/s "
