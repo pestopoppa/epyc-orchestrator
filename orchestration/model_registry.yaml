@@ -339,9 +339,16 @@ server_mode:
 
   # HOT tier - always resident (~40GB total)
   frontdoor:
-    url: http://localhost:8080
-    port: 8080
-    slots: 1  # NUMA 4-way: 4×48t instances, 1 slot each (round-robin routing)
+    # Port: 8070 is the full-mode 1×96t instance (default per orchestrator_stack.py:114
+    # PORT_MAP, used by `start --numa-mode full`). Quarter-mode 4×48t lives on
+    # numa_ports below. Reconciled 2026-05-09 — was 8080, but no full-mode role
+    # ever runs there; consumers (autopilot seeder, status checks) now find the
+    # right port whether the stack is launched in full or quarter mode.
+    url: http://localhost:8070
+    port: 8070
+    slots: 2  # -np 2 at launch (launcher: SERIAL_ROLES gate; frontdoor not serial). The "round-robin"
+              # comment formerly here referred to NUMA quarter-mode routing on 8080/8180/8280/8380; that
+              # is still valid when --numa-mode quarter is used.
     model_role: qwen36_q8_0
     shared_with: []
     description: Root LM — Qwen3.6-35B-A3B Q8 (quality 93%, May-4 Claude-as-Judge 170/183)
@@ -363,8 +370,12 @@ server_mode:
     benchmark_date: 2026-05-04
 
   coder_escalation:
-    url: http://localhost:8081
-    port: 8081
+    # Port: 8070 — CONSOLIDATED 2026-05-09 onto frontdoor's server (same Qwen3.6-35B-A3B Q8
+    # GGUF since the 2026-05-06 swap). Roles differ only by prompt modifier; serving
+    # infrastructure is identical. Eliminates 36 GB duplicate mlock + a competing 96-thread
+    # OMP team. The dedicated 8071 server is no longer launched.
+    url: http://localhost:8070
+    port: 8070
     slots: 1
     model_role: qwen36_q8_0
     description: Coding escalation — Qwen3.6-35B-A3B Q8 (May-6 swap; shares GGUF with frontdoor; 97% coder vs 77% on Qwen3-Coder-30B-A3B; REAP-246B 70% architect_coding eliminated)
@@ -384,8 +395,9 @@ server_mode:
     benchmark_date: 2026-05-04
 
   worker:
-    url: http://localhost:8082
-    port: 8082
+    # Port: 8072 full-mode (PORT_MAP). Reconciled 2026-05-09 — was 8082.
+    url: http://localhost:8072
+    port: 8072
     slots: 1
     model_role: worker_general
     shared_with: [worker_math, toolrunner]
@@ -443,7 +455,11 @@ server_mode:
   architect_general:
     url: http://localhost:8083
     port: 8083
-    slots: 1  # Serial — admission=1, no wasted KV
+    slots: 2  # 2026-05-09: bumped from 1 to 2 to dodge llama.cpp speculative-tree-decode
+              # GGML_ASSERT (`init: invalid seq_id[1][0] = 1 >= 1`) when n_seq_max=1 + draft_max>1.
+              # Admission semantics still serial via router; -np 2 only affects KV slot count.
+              # Cost: +~1 GB KV at 16K ctx. Throughput per request unchanged.
+              # Driven by SERIAL_ROLES set in scripts/server/orchestrator_stack.py:318.
     model_role: qwen35_122b_q4km
     description: System architecture — Qwen3.5-122B-A10B MoE (quality 2.57/3, -64GB vs 235B)
     # Phase 3 compliance gate (2026-05-07): aggressive passes — 117% baseline compliance,
@@ -454,14 +470,9 @@ server_mode:
     draft_model: Qwen3.5-0.8B-Q8_0.gguf  # 0.8B Qwen3.5 draft (moe8+spec_q8_k8+lu = 12.6 t/s)
     memory_gb: 69
     tier: hot  # promoted from warm — half the RAM, fits NUMA node0
-    acceleration:
-      type: moe_expert_reduction
-      experts: 8  # full experts for quality (moe8+spec+lu, benchmark 2026-03-09)
-      override_key: qwen35moe.expert_used_count
-      draft_role: draft_qwen35_0_8b_q8_0
-      draft_max: 24   # sweep-verified 2026-03-21 (was 8; dm flat 8-48, 24 marginally best)
-      p_split: 0      # linear only — tree devastating on hybrid (-25% to -40%), sweep-verified
-      lookup: false  # DISABLED: --lookup segfaults on Qwen3.5 hybrids after 1-3 prompts (2026-03-24). Was +25% (9.2→11.5) but crashes.
+    # acceleration block REMOVED 2026-05-09 — moved to roles.architect_general.acceleration
+    # (single source of truth). Previously this section disagreed with that one and
+    # silently no-op'd because RegistryLoader reads from roles.X.acceleration.
     numa_instances: 1  # 1×96t canonical full-machine + c2 env (Probe B 2026-05-04)
     numa_ports: [8083]
     throughput: 12.19  # t/s single-instance canonical: numactl --interleave=all + taskset -c 0-95
@@ -1029,14 +1040,27 @@ roles:
     candidate_roles:
     - architect
     - general
+    # 2026-05-09 reconciled: this block is now the single source of truth.
+    # Previously `roles.X.acceleration` (type=speculative_decoding) and
+    # `server_mode.X.acceleration` (type=moe_expert_reduction, experts=8)
+    # disagreed; RegistryLoader reads from here, so MoE-expert-reduction
+    # never actually fired. The combined intent (moe8 + spec) lives here now.
+    # Spec decode is currently DISABLED at launch via _NO_SPEC_DECODE in
+    # orchestrator_stack.py (M-RoPE rollback bug in production llama.cpp);
+    # MoE reduction (experts=8) IS applied. Re-enable spec_decode by
+    # removing architect_general from _NO_SPEC_DECODE once M-RoPE patched.
     acceleration:
-      type: speculative_decoding
+      type: moe_expert_reduction
+      experts: 8                                  # full experts for quality
+      override_key: qwen35moe.expert_used_count
       draft_role: draft_qwen35_0_8b_q8_0
-      k: 24
-      p_split: 0  # linear only — tree devastating on hybrid (-25% to -40%)
-      lookup: false  # DISABLED: segfaults on Qwen3.5 hybrids (2026-03-24)
+      draft_max: 24                               # sweep-verified 2026-03-21
+      k: 24                                       # alias for draft_max (RegistryLoader)
+      p_split: 0                                  # linear only — tree harmful on hybrid
+      lookup: false                               # DISABLED: segfaults on Qwen3.5 hybrids (2026-03-24)
       notes: >
-        0.8B Qwen3.5 Q8_0 draft. moe8+spec_q8_k8+lu = 12.6 t/s.
+        moe8+spec_q8_k8+lu historically = 12.6 t/s. Spec decode currently
+        gated off (M-RoPE rollback bug). MoE-expert-reduction fires alone.
         Swapped from 235B (133GB) to 122B (69GB) — saves 128GB across 2 instances.
       benchmarked: 2026-02-13
     performance:
@@ -1318,7 +1342,9 @@ roles:
   # =============================================================================
   # Qwen3.5 Dense Models (2B, 4B, 9B, 27B)
   # =============================================================================
-  qwen35_2b_q4km:
+  # 2026-05-09: renamed from qwen35_2b_q4km (was a copy-paste-error key collision with the
+  # actual Qwen3.5-2B entry below; PyYAML silently kept the LAST value, hiding this entry).
+  minimax_m27_q8_0:
     tier: A
     description: MiniMax-M2.7 Q8_0 — architect replacement candidate, MoE 230B-A10B
     model:

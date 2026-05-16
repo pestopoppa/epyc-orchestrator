@@ -194,20 +194,12 @@ NUMA_CONFIG: dict[str, dict] = {
         "full_instance_idx": 0,  # index of 1×96t instance in list above
         "mlock": True,   # 19 GB per instance — latency-critical (S2: 30x improvement)
     },
-    # Qwen2.5-Coder-32B Q4KM (18.5 GB) — pre-warm: 1×96t + 4×48t
-    # Sweep-verified 2026-03-21: dm=32, ps=0.05, 10.8 t/s/inst at 48t
-    "coder_escalation": {
-        "instances": [
-            (NUMA_NODE0[0], 8071, NUMA_NODE0[1]),  # full: 1×96t
-            (NUMA_Q0A[0], 8081, NUMA_Q0A[1]),      # quarter 0
-            (NUMA_Q0B[0], 8181, NUMA_Q0B[1]),      # quarter 1
-            (NUMA_Q1A[0], 8281, NUMA_Q1A[1]),      # quarter 2
-            (NUMA_Q1B[0], 8381, NUMA_Q1B[1]),      # quarter 3
-        ],
-        "full_instance_idx": 0,
-        "mlock": True,
-        "spec_overrides": {"draft_max": 32, "p_split": 0.05},  # sweep-verified
-    },
+    # coder_escalation NUMA_CONFIG entry REMOVED 2026-05-09 — consolidated onto
+    # frontdoor's server (same Qwen3.6-35B-A3B Q8 GGUF since 2026-05-06 swap).
+    # Historical: ports 8071 (full) + 8081/8181/8281/8381 (quarters), spec_overrides
+    # {dm=32, ps=0.05} were Qwen2.5-Coder-32B-era params and didn't apply post-swap.
+    # If a separate coder server is ever rostered again on a different model,
+    # restore here with that model's tuned spec params.
     # Qwen3.5-122B-A10B Q4_K_M (69 GB) — 1×96t canonical (Probe B 2026-05-04)
     # Switched 2026-05-04 from 2× cross-NUMA (4.3 t/s/instance, 8.6 t/s agg) to
     # 1× full-machine canonical with numactl --interleave=all + GGML_NUMA_REPACK_INTERLEAVE=0
@@ -318,7 +310,21 @@ def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
 SERIAL_ROLES = {
     "coder_escalation",
     "worker_summarize",
-    "architect_general",
+    # 2026-05-11: frontdoor added to test -np 1 vs -np 2 single-instance throughput.
+    # -np 2 was inherited from quarter-mode (4×48t) where two slots gave round-robin
+    # admission. In full-mode 1×96t single-user serving, slot 2 is just preallocated
+    # KV that we never use — wastes L3. If -np 1 measurably improves throughput,
+    # keep frontdoor in SERIAL_ROLES; otherwise revert.
+    "frontdoor",
+    # architect_general REMOVED 2026-05-09: -np 1 + speculative tree decode
+    # (draft_max=24, p_split=0) trips a llama.cpp assertion in
+    # common_speculative_state_tree::draft — `init: invalid seq_id[1][0] = 1 >= 1`
+    # → `llama_decode: failed to decode, ret = -1` → `GGML_ASSERT(logits != nullptr)`
+    # at common/sampling.cpp:152. The spec-tree code expects n_seq_max >= 2
+    # even when admission is logically serial. Bumping to -np 2 dodges the
+    # assertion at the cost of one extra KV slot (~1 GB at 16K ctx for 122B
+    # Q4_K_M); throughput per request is unchanged. Single-request semantics
+    # preserved by upstream router admission, not by -np here.
     "ingest_long_context",
     "vision_escalation",
     "formalizer",
@@ -362,9 +368,18 @@ SERIAL_ROLES = {
 # server entries — used for --only filtering and routing fallthrough.
 ROLE_LAUNCH_META: dict[str, dict] = {
     # ---- HOT tier (always started) ----
-    "frontdoor":            {"tier": "hot",  "mode": "default"},
-    "coder_escalation":     {"tier": "hot",  "mode": "default",
-                             "shared_with_first_n": ["worker_summarize"]},  # worker_summarize co-hosts only on the full-speed instance (port 8071)
+    # 2026-05-09: coder_escalation + worker_summarize CONSOLIDATED onto frontdoor's
+    # llama-server. All three share the same Qwen3.6-35B-A3B Q8 GGUF since the
+    # 2026-05-06 model swap; running them as separate processes wasted 36 GB of
+    # mlocked RAM and ran two competing 96-thread OMP teams (-40% to -69%
+    # throughput on the cohabiting roles per 2026-05-09 measurements). The
+    # orchestrator API routes by role name → registry's url field (all three
+    # roles point at port 8070 in the registry).
+    "frontdoor":            {"tier": "hot",  "mode": "default",
+                             "shared_with_first_n": ["coder_escalation", "worker_summarize"]},
+    # coder_escalation entry REMOVED 2026-05-09 — consolidated into frontdoor above.
+    # NUMA_CONFIG['coder_escalation'] left in place as dead key for git-history
+    # blame purposes; not referenced by build_servers_from_classification anymore.
     "worker_general":       {"tier": "hot",  "mode": "worker_pool",
                              "worker_type": "explore",
                              # Aliases that share the worker_general process: worker_explore is the
@@ -806,9 +821,22 @@ def load_state() -> dict[str, ProcessInfo]:
     try:
         with open(STATE_FILE) as f:
             data = json.load(f)
-        return {k: ProcessInfo(**v) for k, v in data.items()}
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError:
         return {}
+    out: dict[str, ProcessInfo] = {}
+    for k, v in data.items():
+        if not isinstance(v, dict):
+            continue
+        try:
+            out[k] = ProcessInfo(**v)
+        except TypeError as exc:
+            # 2026-05-09: was preserving stubs as raw dicts here, which crashed
+            # cmd_status (line ~2980) and cmd_stop (line ~2787) on `info.pid`.
+            # Stubs cannot be acted on by either command (no pid to kill, no
+            # role to query). Drop with a single-line warning so the operator
+            # knows their state file had a non-actionable entry.
+            print(f"[load_state] dropping non-ProcessInfo entry {k!r}: {exc}")
+    return out
 
 
 def save_state(state: dict[str, ProcessInfo]) -> None:
@@ -908,8 +936,13 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
         "GGML_CCD_WORK_DIST": "1",
         "GGML_BARRIER_LOCAL_BETWEEN_OPS": "1",
     },
-    # MoE Q8 BW-bound frontdoor — EP stack (+17% honest baseline g.1 = drone+shard, N=2).
-    "frontdoor": {
+    # MoE Q8 BW-bound frontdoor — EP stack was historically +17% per the original
+    # validation (drone+shard, N=2), but verified WRONG by direct A/B 2026-05-11:
+    # the GGML_EP_* stack was sitting at 12.6 t/s under sustained single-instance
+    # full-NUMA load. Hypothesis: the EP stack assumed the older binary / different
+    # NUMA wiring. Re-verify before re-enabling.
+    "frontdoor": {},
+    "frontdoor_ep_stack_disabled_2026_05_11": {
         "GGML_EP_N_INSTANCES": "2",
         "GGML_EP_NUMA_PIN": "1",
         "GGML_EP_MASTER_ALL_NODES": "1",
@@ -1229,6 +1262,41 @@ def _collect_descendants(root_pid: int) -> list[int]:
             descendants.append(child)
             queue.append(child)
     return descendants
+
+
+def _renice_all_threads(pid: int, nice: int) -> None:
+    """Renice every thread of `pid` to `nice`.
+
+    `renice -p PID` from CLI only renices the lead thread; OMP team threads
+    spawned during model load keep their original priority. This iterates
+    /proc/<pid>/task/<tid> and sets each one explicitly. Idempotent.
+
+    Used to deprioritize binary_override (gemma4 MTP via ik_llama.cpp PR
+    #1744) which busy-spins 96 cores idle and contaminates other-role
+    measurements unless reniced. Verified 2026-05-09: post-renice, frontdoor
+    4.55 → 7.11 t/s, coder 4.02 → 12.34, ingest 10.46 → 28.99.
+
+    Going from nice=0 to nice=19 (lower priority) is allowed for the owner
+    without sudo.
+    """
+    import os as _os
+    task_dir = Path(f"/proc/{pid}/task")
+    if not task_dir.exists():
+        return
+    ok = 0
+    fail = 0
+    for tid_dir in task_dir.iterdir():
+        try:
+            tid = int(tid_dir.name)
+        except ValueError:
+            continue
+        try:
+            _os.setpriority(_os.PRIO_PROCESS, tid, nice)
+            ok += 1
+        except (PermissionError, ProcessLookupError, OSError):
+            fail += 1
+    print(f"    [renice] {ok} thread(s) → nice={nice}"
+          + (f" ({fail} failed)" if fail else ""))
 
 
 def kill_process(pid: int, timeout: int = 5) -> bool:
@@ -1560,6 +1628,14 @@ def build_server_command(
 
     # Use v2 binary for roles with v3 spec decode bug (Qwen2.5 architecture)
     _binary = LLAMA_SERVER_V2 if role_config.name in _V2_ROLES and LLAMA_SERVER_V2.exists() else LLAMA_SERVER
+    # 2026-05-11: -ub 8192 added to match the canonical-bench single-instance
+    # recipe (scripts/benchmark/run_qwen36_retest.py uses `-ub 8192` + `-c 8192`
+    # + `--parallel 1`). Without this, frontdoor's decode throughput was
+    # measured at 12.66 t/s vs 25-27 t/s in the bench CSV. Per memory
+    # feedback_psplit_default: "single-model bench uses ub8192".
+    # NUMA quarter-mode roles override to -ub 512 via spec_overrides (handled
+    # below) when they need the smaller batch.
+    _ubatch_default = "8192"
     cmd = [
         str(_binary),
         "-m", model_path,
@@ -1568,6 +1644,7 @@ def build_server_command(
         "-np", parallel_slots,  # Parallel slots (1 for large roles, 2 otherwise)
         "-c", context_size,     # Role-aware context size
         "-t", thread_count,     # NUMA-aware thread count (48 for quarter, 96 for node)
+        "-ub", _ubatch_default, # Microbatch — match canonical bench (was default 512)
         "--flash-attn", "on",   # Flash attention
     ]
 
@@ -1610,13 +1687,25 @@ def build_server_command(
     if role_config.name in MLOCK_ROLES:
         cmd.append("--mlock")
 
+    # 2026-05-09: SKIP architect_general — Qwen3.5-122B M-RoPE refuses position
+    # rollback when speculative draft tokens are rejected, triggering
+    #   `init: ... starting position of Y < cache position X` →
+    #   `decode: failed to initialize batch` →
+    #   `init: invalid seq_id[1][0] = 1 >= 1` →
+    #   `GGML_ASSERT(logits != nullptr)` in common_speculative_state_tree::draft.
+    # Build b8957-2ffbdbbba (production llama.cpp). Re-enable when upstream patches
+    # M-RoPE rollback or we move to a binary that supports it. Throughput cost: spec
+    # decode previously +25% (4.3→12.6 t/s with moe8+spec_q8); MoE-expert-reduction
+    # path stays active so we keep the moe-budget gain (12.19 t/s probe-B canonical).
+    _NO_SPEC_DECODE = {"architect_general"}
+
     # Add acceleration based on type
     if accel.type == "moe_expert_reduction" and accel.experts:
         cmd.extend([
             "--override-kv",
             f"{accel.override_key}=int:{accel.experts}",
         ])
-    elif accel.type == "speculative_decoding" and accel.draft_role:
+    elif accel.type == "speculative_decoding" and accel.draft_role and role_config.name not in _NO_SPEC_DECODE:
         # Get draft model path from registry
         registry = RegistryLoader()
         draft_config = registry.get_role(accel.draft_role)
@@ -1627,8 +1716,9 @@ def build_server_command(
             ])
 
     # MoE + spec decode combo (e.g., 480B with jukofyork draft + expert reduction)
-    # draft_role is populated from speculative_decoding sub-config in registry
-    if accel.type == "moe_expert_reduction" and accel.draft_role:
+    # draft_role is populated from speculative_decoding sub-config in registry.
+    # _NO_SPEC_DECODE gate also applies here (defined above).
+    if accel.type == "moe_expert_reduction" and accel.draft_role and role_config.name not in _NO_SPEC_DECODE:
         registry = RegistryLoader()
         draft_config = registry.get_role(accel.draft_role)
         if draft_config:
@@ -1860,17 +1950,31 @@ def start_server(
                     del env[k]
                 if stripped:
                     print(f"    [binary_override] stripped GGML_* env: {stripped}")
-                # Force OMP_WAIT_POLICY=passive for binary_override (gemma4 MTP via
-                # ik_llama.cpp PR #1744). The default canonical 'active' busy-waits
-                # the entire 96-thread OMP team during idle slots — measured 95
-                # cores spinning indefinitely with zero in-flight inference
-                # (2026-05-08 evening). Production llama.cpp's OMP integration
-                # releases idle threads correctly with 'active'; ik_llama.cpp
-                # PR #1744's fork point apparently regresses this. Latency cost
-                # of 'passive' is a few µs first-token wakeup per request —
-                # negligible vs continuous 96-core idle waste.
-                env["OMP_WAIT_POLICY"] = "passive"
-                print(f"    [binary_override] OMP_WAIT_POLICY=passive (gemma4 MTP idle-spin fix)")
+                # 2026-05-09: KMP_BLOCKTIME=10 ms — fixes the libomp idle busy-spin.
+                #
+                # Background: PR #1744 uses bare `#pragma omp parallel` per
+                # ggml_graph_compute() call (ggml/src/ggml.c:26739), no persistent
+                # threadpool. Between dispatches, AOCC libomp's worker team stays
+                # alive in a busy-wait state under OMP_WAIT_POLICY=active (95+ cores
+                # spinning idle, polluting L3 / DRAM bandwidth shared with the other
+                # roles — measured -40 to -69% throughput hit on frontdoor / coder /
+                # ingest while gemma4 was idle).
+                #
+                # Tried in source: omp_pause_resource(soft) + omp_pause_resource_all(hard)
+                # — verified BOTH ignored by AOCC 5.0.0 libomp (threads stayed in R
+                # state, wchan=0). The OMP runtime's idle behavior isn't controllable
+                # via the standard pause API on this libomp build.
+                #
+                # KMP_BLOCKTIME is the LLVM libomp tunable (AOCC's libomp is LLVM-
+                # based). Workers busy-wait this many ms before transitioning to a
+                # futex sleep. 10 ms = fast enough that MTP request dispatch finds
+                # workers warm (no perceptible first-token-latency regression), short
+                # enough that the multi-second gaps between requests don't waste
+                # cycles. OMP_WAIT_POLICY=active stays — it controls the steady-state
+                # behavior; KMP_BLOCKTIME tunes the idle transition. Full passive
+                # (= KMP_BLOCKTIME=0) breaks MTP wakeup; active alone busy-spins
+                # forever; active + KMP_BLOCKTIME=10 is the sweet spot.
+                env["KMP_BLOCKTIME"] = "10"
             # Prepend role-specific LD_LIBRARY_PATH entries (Phase 2): ik_llama.cpp
             # PR #1744 build needs its own libllama.so / libggml.so on the resolver
             # path. Prepend so the override beats system libs without touching the
@@ -1895,6 +1999,17 @@ def start_server(
         timeout = int(_registry_timeout("health", "quick_check", 10)) * 6 if worker_type == "fast" else _HEALTH_WORKER_SERVER
         if wait_for_health(port, timeout=timeout):
             print(f"    [OK] Worker {worker_type} ready")
+            # 2026-05-09: per-thread renice to nice=19 for binary_override roles
+            # (ik_llama.cpp PR #1744 / gemma4 MTP). Reason: PR #1744's OMP_WAIT_POLICY=active
+            # busy-loops 96 cores when idle, contaminating other-role measurements by
+            # 30-69% throughput. CLI `renice -p PID` only affects the lead thread, so we
+            # iterate /proc/<pid>/task/<tid> after model load completes (all OMP team
+            # threads are spawned by health-check time).
+            # Verified 2026-05-09: post-renice, frontdoor 4.55→7.11 t/s (+56%),
+            # coder 4.02→12.34 (+207%), ingest 10.46→28.99 (+177%).
+            # No sudo needed — increasing nice (lower priority) is permitted for owner.
+            if binary_override:
+                _renice_all_threads(proc.pid, 19)
             return ProcessInfo(
                 role=f"worker_{worker_type}",
                 pid=proc.pid,
@@ -2251,6 +2366,61 @@ def start_whisper() -> ProcessInfo | None:
 
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the orchestrator stack."""
+    _registry_yaml = Path(__file__).parent.parent.parent / "orchestration" / "model_registry.yaml"
+    _master_registry = Path(
+        "/mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml"
+    )
+    _cache_key_path = _registry_yaml.parent / ".lean_cache_key"
+
+    # 2026-05-09: lean-registry compile (opt-in via --compile-registry).
+    # When enabled, regenerates orchestration/model_registry.yaml from
+    # the master at epyc-inference-research/orchestration/model_registry.yaml,
+    # filtered to active roles per ROLE_LAUNCH_META + their transitive
+    # draft/alias deps. Cache-keyed by SHA-256 of (master content + active
+    # role names) — re-runs without changes are no-ops.
+    #
+    # Default OFF until the master + orchestrator are reconciled (today the
+    # master itself has an internal acceleration disagreement on
+    # architect_general — `roles.X.acceleration.type=speculative_decoding`
+    # vs `server_mode.X.acceleration.type=moe_expert_reduction`). Fix the
+    # master first, then enable this flag in the start command.
+    #
+    # Escape hatch (when ON): set ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to bypass.
+    if getattr(args, "compile_registry", False):
+        try:
+            from src.registry.registry_compiler import load_or_compile
+            active_roles = set(ROLE_LAUNCH_META.keys())
+            print(f"[registry-compile] master={_master_registry}")
+            print(f"[registry-compile] active_roles={sorted(active_roles)}")
+            load_or_compile(
+                master_path=_master_registry,
+                active_roles=active_roles,
+                output_path=_registry_yaml,
+                cache_key_path=_cache_key_path,
+            )
+            print(f"[registry-compile] OK — wrote {_registry_yaml}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[registry-compile] FATAL: {exc}")
+            return 2
+
+    # 2026-05-09: registry consistency gate — runs first, fails fast on cross-section
+    # acceleration disagreements, GGUF/port inconsistencies, or duplicate YAML keys.
+    # Catches the failure modes that wasted ~2 hours debugging architect_general on
+    # 2026-05-09 (server_mode.X.acceleration silently overridden by roles.X.acceleration).
+    try:
+        from src.registry.registry_validator import validate_or_raise, RegistryValidationError
+        try:
+            validate_or_raise(_registry_yaml)
+        except RegistryValidationError as exc:
+            print(f"[registry-validator] FATAL — refusing to start a stack on a broken registry:")
+            print(f"  {exc}")
+            print(f"  Fix the registry, then re-run.")
+            return 2
+    except ImportError:
+        # Validator module not present (older deployment) — proceed without gate.
+        # Once landed everywhere, drop this fallback.
+        pass
+
     # DS-7 / NIB2-19: --migrate-to handler (runs before any start path)
     migrate_to = getattr(args, "migrate_to", None)
     if migrate_to:
@@ -3236,6 +3406,16 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="With --migrate-to, plan the migration without stopping any servers.",
+    )
+    start_parser.add_argument(
+        "--compile-registry",
+        action="store_true",
+        help="Recompile orchestration/model_registry.yaml from the master "
+             "registry at epyc-inference-research before starting. Cache-aware "
+             "(no-op if neither master nor active role set has changed). "
+             "See src/registry/registry_compiler.py for details. Set "
+             "ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to disable when this flag "
+             "is on.",
     )
 
     # Stop command
