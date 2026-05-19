@@ -140,6 +140,8 @@ class AutoPilotTUI:
         self._current_trial: int = 0
         self._current_species: str = ""
         self._start_time: float = time.monotonic()
+        self._trial_start_time: float = self._start_time
+        self._status: str = ""
         self._live: Live | None = None
 
     # -- public API (called from autopilot loop or externally) --
@@ -157,6 +159,17 @@ class AutoPilotTUI:
         with self._lock:
             self._current_trial = trial_id
             self._current_species = species
+            # New trial starts: reset elapsed and clear any inter-trial status.
+            self._trial_start_time = time.monotonic()
+            self._status = ""
+
+    def set_status(self, status: str) -> None:
+        """Transient status shown in the header (e.g. "selecting next trial").
+
+        Cleared automatically by the next set_trial() call. Pass "" to clear.
+        """
+        with self._lock:
+            self._status = status
 
     # -- context manager --
 
@@ -206,15 +219,26 @@ class AutoPilotTUI:
         )
 
         # Header
-        elapsed = time.monotonic() - self._start_time
-        mins, secs = divmod(int(elapsed), 60)
-        hours, mins = divmod(mins, 60)
         with self._lock:
             trial = self._current_trial
             species = self._current_species
+            status_hint = self._status
+            trial_start = self._trial_start_time
+        elapsed = time.monotonic() - trial_start
+        mins, secs = divmod(int(elapsed), 60)
+        hours, mins = divmod(mins, 60)
 
         role_chain = self._inference_tailer.get_role_chain()
-        roles_str = " → ".join(role_chain) if role_chain else "idle"
+        if status_hint:
+            roles_str = status_hint
+        elif role_chain:
+            roles_str = " → ".join(role_chain)
+        elif species:
+            # Trial is active but no role inference is currently being tapped
+            # (e.g. seed_batch hits llama-server endpoints directly, no ROLE= markers).
+            roles_str = "(running)"
+        else:
+            roles_str = "idle"
 
         header_parts = [
             f" AutoPilot",
