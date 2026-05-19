@@ -37,6 +37,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # Model configs
+# NOTE 2026-05-19: these ports/models reflect the pre-2026-05-16 stack and are NOT
+# currently deployed. Script needs a model+port refresh before it can run against
+# the current consolidated layout (frontdoor on 8070, worker_general on 8072,
+# architect_coding removed).
 MODELS = {
     "7b": {"port": 8082, "name": "Qwen2.5-7B", "role": "worker"},
     "30b": {"port": 8080, "name": "Qwen3-Coder-30B-A3B", "role": "hot_orchestrator"},
