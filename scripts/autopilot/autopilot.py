@@ -1103,6 +1103,8 @@ def _run_loop_inner(
         hv_slope = archive.hypervolume_slope(50)
 
         # ── 2. Reason ────────────────────────────────────────────
+        if tui is not None:
+            tui.set_status("selecting next trial (controller)…")
         if use_controller:
             # Load program.md (human-editable strategy file)
             try:
