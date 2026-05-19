@@ -75,6 +75,12 @@ class MemoryEntry:
     # NULL on legacy rows; readers should pass through normalise_role() to coerce
     # to a valid {"thinker","worker","verifier"} string when consumed.
     assigned_role: Optional[str] = None
+    # Orchestration sub-decision axis (intake-548 5-class taxonomy; see
+    # src/classifiers/subdecision_taxonomy.py). One of
+    # {"spawn","delegate","communicate","aggregate","stop"} or NULL. NULL means
+    # "this event is not a sub-decision" — the polarity is opposite to
+    # `assigned_role` (where NULL is treated as the default WORKER role).
+    sub_decision: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize for storage (embedding stored separately)."""
@@ -90,6 +96,7 @@ class MemoryEntry:
             "update_count": self.update_count,
             "model_id": self.model_id,
             "assigned_role": self.assigned_role,
+            "sub_decision": self.sub_decision,
         }
 
     @classmethod
@@ -108,6 +115,7 @@ class MemoryEntry:
             update_count=data.get("update_count", 0),
             model_id=data.get("model_id"),
             assigned_role=data.get("assigned_role"),
+            sub_decision=data.get("sub_decision"),
         )
 
 
@@ -222,6 +230,20 @@ class EpisodicStore:
                 )
             except sqlite3.OperationalError:
                 pass
+            # sub_decision column for orchestration-trace 5-sub-decision axis
+            # (intake-548; see src/classifiers/subdecision_taxonomy.py). One of
+            # {"spawn","delegate","communicate","aggregate","stop"} or NULL.
+            # NULL means "not a sub-decision" — not a default value, just absent.
+            try:
+                conn.execute("ALTER TABLE memories ADD COLUMN sub_decision TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            try:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_sub_decision ON memories(sub_decision)"
+                )
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     def _init_embedding_store(self) -> None:
@@ -262,6 +284,7 @@ class EpisodicStore:
         initial_q: float = 0.5,
         model_id: Optional[str] = None,
         assigned_role: Optional[str] = None,
+        sub_decision: Optional[str] = None,
     ) -> str:
         """
         Store a new memory entry.
@@ -278,6 +301,11 @@ class EpisodicStore:
                 Default None preserves legacy semantics (NULL → reader treats as
                 "worker"). Pass via normalise_role() at call sites where the
                 source string may be untrusted.
+            sub_decision: Optional orchestration sub-decision label, one of
+                {"spawn","delegate","communicate","aggregate","stop"}. Default
+                None means "this event is not a sub-decision" — opposite
+                polarity to assigned_role. Pass via normalise_subdecision() at
+                call sites where the source string may be untrusted.
 
         Returns:
             Memory ID
@@ -293,8 +321,8 @@ class EpisodicStore:
             conn.execute(
                 """
                 INSERT INTO memories
-                (id, embedding_idx, action, action_type, context, outcome, q_value, created_at, updated_at, model_id, assigned_role)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, embedding_idx, action, action_type, context, outcome, q_value, created_at, updated_at, model_id, assigned_role, sub_decision)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     memory_id,
@@ -308,6 +336,7 @@ class EpisodicStore:
                     now,
                     model_id,
                     assigned_role,
+                    sub_decision,
                 ),
             )
             conn.commit()
@@ -328,6 +357,7 @@ class EpisodicStore:
         initial_q: float = 0.5,
         model_id: Optional[str] = None,
         assigned_role: Optional[str] = None,
+        sub_decision: Optional[str] = None,
     ) -> str:
         """
         Store a new memory with immediate FAISS persistence (ACID-critical).
@@ -344,6 +374,7 @@ class EpisodicStore:
             initial_q: Initial Q-value
             model_id: Optional model identifier for warm-start tracking
             assigned_role: Optional Trinity tri-role; see store() for semantics.
+            sub_decision: Optional orchestration sub-decision; see store().
 
         Returns:
             Memory ID
@@ -357,6 +388,7 @@ class EpisodicStore:
             initial_q,
             model_id=model_id,
             assigned_role=assigned_role,
+            sub_decision=sub_decision,
         )
         self.flush()  # Synchronous flush
         return memory_id
@@ -435,7 +467,7 @@ class EpisodicStore:
         placeholders = ",".join("?" * len(memory_ids))
         query = f"""
             SELECT id, embedding_idx, action, action_type, context, outcome, q_value,
-                   created_at, updated_at, update_count, model_id, assigned_role
+                   created_at, updated_at, update_count, model_id, assigned_role, sub_decision
             FROM memories
             WHERE id IN ({placeholders})
         """
@@ -484,6 +516,7 @@ class EpisodicStore:
                 similarity_score=score_map.get(memory_id, 0.0),
                 model_id=row[10] if len(row) > 10 else None,
                 assigned_role=row[11] if len(row) > 11 else None,
+                sub_decision=row[12] if len(row) > 12 else None,
             )
             results.append(entry)
 
@@ -571,7 +604,7 @@ class EpisodicStore:
             row = conn.execute(
                 """
                 SELECT id, embedding_idx, action, action_type, context, outcome, q_value,
-                       created_at, updated_at, update_count, model_id, assigned_role
+                       created_at, updated_at, update_count, model_id, assigned_role, sub_decision
                 FROM memories
                 WHERE id = ?
             """,
@@ -600,6 +633,7 @@ class EpisodicStore:
             update_count=row[9],
             model_id=row[10] if len(row) > 10 else None,
             assigned_role=row[11] if len(row) > 11 else None,
+            sub_decision=row[12] if len(row) > 12 else None,
         )
 
     def get_all_memories(
@@ -625,7 +659,7 @@ class EpisodicStore:
         """
         query = """
             SELECT id, embedding_idx, action, action_type, context, outcome, q_value,
-                   created_at, updated_at, update_count, model_id, assigned_role
+                   created_at, updated_at, update_count, model_id, assigned_role, sub_decision
             FROM memories
         """
         params: list = []
@@ -667,6 +701,7 @@ class EpisodicStore:
                     update_count=row[9],
                     model_id=row[10] if len(row) > 10 else None,
                     assigned_role=row[11] if len(row) > 11 else None,
+                    sub_decision=row[12] if len(row) > 12 else None,
                 )
             )
 
@@ -758,7 +793,7 @@ class EpisodicStore:
             rows = conn.execute(
                 """
                 SELECT id, embedding_idx, action, action_type, context, outcome, q_value,
-                       created_at, updated_at, update_count, model_id, assigned_role
+                       created_at, updated_at, update_count, model_id, assigned_role, sub_decision
                 FROM memories
                 WHERE q_value < ? OR q_value > ?
                 ORDER BY
@@ -790,6 +825,7 @@ class EpisodicStore:
                     update_count=row[9],
                     model_id=row[10] if len(row) > 10 else None,
                     assigned_role=row[11] if len(row) > 11 else None,
+                    sub_decision=row[12] if len(row) > 12 else None,
                 )
             )
 
@@ -908,6 +944,7 @@ class GraphEnhancedStore:
         task_type: Optional[str] = None,
         model_id: Optional[str] = None,
         assigned_role: Optional[str] = None,
+        sub_decision: Optional[str] = None,
     ) -> str:
         """
         Store a memory and schedule async graph updates.
@@ -922,6 +959,7 @@ class GraphEnhancedStore:
             task_type: Task type for hypothesis tracking
             model_id: Optional model identifier (warm-start)
             assigned_role: Optional Trinity tri-role; see EpisodicStore.store
+            sub_decision: Optional orchestration sub-decision; see EpisodicStore.store
 
         Returns:
             Memory ID
@@ -936,6 +974,7 @@ class GraphEnhancedStore:
             initial_q=initial_q,
             model_id=model_id,
             assigned_role=assigned_role,
+            sub_decision=sub_decision,
         )
 
         # Schedule async graph updates
