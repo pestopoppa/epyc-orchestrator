@@ -51,13 +51,11 @@ def audit_model_servers() -> bool:
     all_ok = True
     ports = {
         8000: "API",
-        8070: "frontdoor",
-        8071: "coder_escalation",
-        8072: "worker_explore",
-        8080: "frontdoor_numa",
+        8070: "frontdoor",  # also hosts coder_escalation + worker_summarize (same GGUF)
+        8072: "worker_general",
         8083: "architect_general",
-        8084: "architect_coding",
-        8085: "ingest",
+        8085: "ingest_long_context",
+        8087: "vision_escalation",
     }
     for port, name in ports.items():
         try:

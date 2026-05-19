@@ -151,7 +151,7 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
 - Prune: {{"type": "structural_prune", "file": "frontdoor.md", "block": "## Section Name", "description": "..."}}
   (Delete an instruction block from a .md prompt file — accepted only if quality >= baseline AND instruction_token_ratio decreases)
-- Compact: {{"type": "slot_compact", "port": 8080, "slot_id": 0, "keep_ratio": 0.3, "beta": 0.5, "keep_first": 5, "keep_last": 10}}
+- Compact: {{"type": "slot_compact", "port": 8070, "slot_id": 0, "keep_ratio": 0.3, "beta": 0.5, "keep_first": 5, "keep_last": 10}}
   (AM KV compaction — compress KV cache on a server slot. Use after long-context queries to free memory. Evaluates quality post-compact.)
 - Train: {{"type": "train_routing_models", "min_memories": 500}}
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
@@ -291,10 +291,9 @@ def append_blacklist(action: dict[str, Any], trial_id: int, reason: str) -> None
 # Primary production ports by role — query these for slot memory stats.
 _SLOT_QUERY_PORTS: dict[str, list[int]] = {
     "frontdoor": [8070],
-    "coder": [8071],
+    "coder": [8070],  # shares server with frontdoor (same Qwen3.6-35B Q8 GGUF)
     "worker": [8072],
     "architect_general": [8083],
-    "architect_coding": [8084],
 }
 
 

@@ -364,10 +364,9 @@ def compress_slot_adaptive(
 # Production port assignments (from orchestrator_stack.py)
 PRODUCTION_PORTS = {
     "frontdoor": 8070,
-    "coder": 8071,
+    "coder": 8070,  # shares server with frontdoor (same Qwen3.6-35B Q8 GGUF)
     "worker": 8072,
     "architect_general": 8083,
-    "architect_coding": 8084,
 }
 
 
