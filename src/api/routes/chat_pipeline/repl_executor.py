@@ -485,6 +485,23 @@ async def _execute_repl(
     except Exception:
         pass  # Use defaults if config unavailable
 
+    # FINAL() schema validation (Fast-RLM pattern). Inject schema preamble into
+    # the initial REPL context when the feature is enabled AND caller provided
+    # an output_schema. Validation happens after run_task returns below.
+    from src.features import features as _get_features
+    from src.graph.helpers import (
+        _render_schema_preamble,
+        _validate_final_answer,
+        _format_validation_failure_message,
+    )
+    _schema = (
+        request.output_schema
+        if _get_features().final_schema_validation
+        else None
+    )
+    if _schema:
+        combined_context = f"{_render_schema_preamble(_schema)}\n\n{combined_context}"
+
     task_state = TaskState(
         task_id=task_id,
         prompt=request.prompt,
@@ -509,7 +526,26 @@ async def _execute_repl(
         session_store=state.session_store if hasattr(state, "session_store") else None,
     )
 
-    graph_result = await run_task(task_state, task_deps, start_role=initial_role)
+    # Up to 2 attempts: initial run + one retry-with-error if schema validation fails.
+    # Shared REPLEnvironment via task_deps preserves agent state across retries;
+    # repl_executions budget naturally bounds total work.
+    _max_validation_attempts = 2 if _schema else 1
+    graph_result = None
+    for _attempt in range(_max_validation_attempts):
+        graph_result = await run_task(task_state, task_deps, start_role=initial_role)
+        if not _schema or not graph_result.answer:
+            break
+        _ok, _err, _ = _validate_final_answer(graph_result.answer, _schema)
+        if _ok:
+            break
+        if _attempt + 1 < _max_validation_attempts:
+            _failure_msg = _format_validation_failure_message(
+                _schema, _err or "(unknown)", graph_result.answer
+            )
+            task_state.context = f"{combined_context}\n\n{_failure_msg}"
+            task_state.turns = 0
+            task_state.current_role = initial_role
+            task_state.role_history = [str(initial_role)]
 
     answer = graph_result.answer
     turns = graph_result.turns

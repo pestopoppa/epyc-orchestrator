@@ -130,6 +130,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # Budget controls
     FeatureSpec("worker_call_budget", False, True, "WORKER_CALL_BUDGET", "Cap total REPL executions per task"),
     FeatureSpec("task_token_budget", False, True, "TASK_TOKEN_BUDGET", "Cap cumulative tokens per task"),
+    FeatureSpec("final_schema_validation", False, False, "FINAL_SCHEMA_VALIDATION", "Validate FINAL() value against caller-supplied JSON Schema; retry-with-error on failure"),
     # Context-Folding
     FeatureSpec("two_level_condensation", False, False, "TWO_LEVEL_CONDENSATION", "CF Phase 1: granular + deep consolidation"),
     FeatureSpec("segment_cache_dedup", False, False, "SEGMENT_CACHE_DEDUP", "CF Phase 1+: hash-based dedup"),
@@ -349,6 +350,7 @@ class Features:
     # Budget controls (Fast-RLM)
     worker_call_budget: bool = False  # Cap total REPL executions per task
     task_token_budget: bool = False   # Cap cumulative tokens across all turns
+    final_schema_validation: bool = False  # Validate FINAL() value against caller JSON Schema
 
     # Pipeline monitoring: model-graded subjective evals
     model_grading: bool = False  # Post-hoc model-graded evals via worker_explore

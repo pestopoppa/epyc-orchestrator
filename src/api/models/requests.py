@@ -95,6 +95,13 @@ class ChatRequest(BaseModel):
         "Merged with any pipeline-default stop sequences (e.g. QWEN_STOP). "
         "Used by benchmark seeding to stop after answer tags.",
     )
+    output_schema: dict | None = Field(
+        default=None,
+        description="Optional JSON Schema for the agent's FINAL() value. "
+        "When set AND features().final_schema_validation is True, the agent receives "
+        "the schema in its initial prompt and must call FINAL(json.dumps(value)). "
+        "Validation failure injects a retry-with-error message into the next turn.",
+    )
 
 
 class RewardRequest(BaseModel):

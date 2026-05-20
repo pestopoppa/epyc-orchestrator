@@ -55,6 +55,42 @@ SURFACES: dict[str, list[ParamSpec]] = {
         ParamSpec("escalation.max_retries", 1, 5, "int"),
         ParamSpec("escalation.max_escalations", 1, 5, "int"),
     ],
+    "repl_executor": [
+        # Sweep the REPL per-turn token cap (Fast-RLM truncation eval, originally
+        # deferred in 01-fast-rlm-budget-controls.md §4). Range covers our default
+        # (768) and reaches up to 4096 to test whether more headroom helps complex
+        # REPL turns, and down to 256 to test the fast-rlm "aggressive truncation"
+        # hypothesis. Note: when difficulty_signal mode == "enforce" the band-
+        # adaptive budgets dominate; this knob sweeps the flat-cap path that runs
+        # outside enforce-mode.
+        ParamSpec("repl.turn_token_cap", 256, 4096, "int"),
+        # Sibling: frontdoor REPL turn cap when tool_required=False. Default 768
+        # (env: ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS). Same band-adaptive
+        # bypass caveat applies.
+        ParamSpec("repl.frontdoor_non_tool_token_cap", 256, 4096, "int"),
+    ],
+    "repl_budget": [
+        # Fast-RLM REPL execution count cap. Default 30. Feature-flag-gated by
+        # `worker_call_budget`; sweep is meaningful only when that flag is on.
+        ParamSpec("repl.worker_call_budget_cap", 5, 100, "int"),
+        # Fast-RLM aggregate completion-token cap per task. Default 200,000.
+        # Feature-flag-gated by `task_token_budget`. Range probes both
+        # aggressive (50K — forces tight reasoning) and conservative (500K).
+        ParamSpec("repl.task_token_budget_cap", 50000, 500000, "int"),
+    ],
+    "kv_compaction": [
+        # Expected-Attention KV cache compression knobs (autopilot program.md
+        # Tier 4.5). Applied via kv_compress.compress_slot() — NOT env-restart.
+        # keep_ratio: fraction of KV entries to KEEP per compaction. Safe range
+        # [0.50, 0.90]; below 0.25 format degrades. Lower bound capped at 0.25
+        # so autopilot does not sample the catastrophic cliff zone.
+        ParamSpec("kv.keep_ratio", 0.25, 0.90, "float"),
+        # Sink tokens never evicted. Default 4. Protects system prompt.
+        ParamSpec("kv.keep_first", 2, 16, "int"),
+        # Future positions for RoPE averaging in EA scoring. Default 128.
+        # Higher = more stable scores, slower.
+        ParamSpec("kv.n_future", 64, 1024, "int"),
+    ],
 }
 
 

@@ -45,6 +45,7 @@ from meta_optimizer import MetaOptimizer, SpeciesBudget
 from progress_plots import generate_all_plots
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
 from species.prompt_forge import CODE_MUTATION_ALLOWLIST
+from digest import generate_digest, should_generate_today
 from short_term_memory import ShortTermMemory, TrialOutcome
 from self_criticism import SelfCriticism, generate_self_criticism
 
@@ -1431,6 +1432,22 @@ def _run_loop_inner(
             archive.hypervolume(),
         )
 
+        # Daily digest: once per UTC day, append a markdown snapshot to
+        # progress/YYYY-MM/YYYY-MM-DD-autopilot.md. Append-only and never
+        # touches existing handoffs — review remains a manual step.
+        if should_generate_today(state):
+            try:
+                digest_path = generate_digest(
+                    swarm=swarm, lab=lab, archive=archive, state=state, journal=journal,
+                )
+                from datetime import datetime, timezone
+                state["last_digest_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                save_state(state)
+                log.info("Daily digest written: %s", digest_path)
+            except Exception as e:
+                # Digest failure must NEVER block the optimization loop.
+                log.warning("Daily digest generation failed: %s", e)
+
     # Shutdown: checkpoint + save
     log.info("AutoPilot shutting down (trial=%d)", trial_counter)
     archive.save(state)
@@ -1608,6 +1625,28 @@ def cmd_restore(args: argparse.Namespace) -> None:
     print(f"Restore result: {result}")
 
 
+def cmd_digest(args: argparse.Namespace) -> None:
+    """Generate an autopilot digest snapshot on demand.
+
+    Useful between automated daily generations, or to verify the digest
+    writer works without waiting for the next trial-loop iteration.
+    """
+    state = load_state()
+    archive = ParetoArchive()
+    archive.load(state)
+    swarm = NumericSwarm()
+    lab = StructuralLab()
+    journal = ExperimentJournal()
+    path = generate_digest(
+        swarm=swarm, lab=lab, archive=archive, state=state, journal=journal,
+    )
+    if not args.no_state_update:
+        from datetime import datetime, timezone
+        state["last_digest_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        save_state(state)
+    print(f"Digest written: {path}")
+
+
 # ── Entry Point ──────────────────────────────────────────────────
 
 
@@ -1682,6 +1721,18 @@ def main() -> None:
         help="Clear short-term memory (start fresh for next session)",
     )
     p_reset_mem.set_defaults(func=cmd_reset_memory)
+
+    # digest — generate an autopilot snapshot on demand
+    p_digest = subparsers.add_parser(
+        "digest",
+        help="Generate an autopilot digest snapshot (progress/YYYY-MM/YYYY-MM-DD-autopilot.md)",
+    )
+    p_digest.add_argument(
+        "--no-state-update",
+        action="store_true",
+        help="Do NOT update state['last_digest_date'] — useful for ad-hoc snapshots that should not delay the next automatic generation.",
+    )
+    p_digest.set_defaults(func=cmd_digest)
 
     args = parser.parse_args()
     args.func(args)

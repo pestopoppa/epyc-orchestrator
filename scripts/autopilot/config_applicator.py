@@ -29,6 +29,12 @@ HOT_SWAP_FEATURES = {
     "routing_classifier", "staged_rewards", "session_compaction",
     "try_cheap_first", "long_context", "web_search", "web_research",
     "cascading_tool_policy", "factual_risk",
+    # Tier 3 promotions 2026-05-20: opt-in via StructuralLab's flag-mutation
+    # pool. All three were previously default-off and required hand-rolled
+    # experiments per the rlm-orchestrator-roadmap.md R6 candidate matrix.
+    "structured_tool_output",  # Lobster ToolOutput envelope on tool invocations
+    "content_cache",            # SHA-256 keyed LLM-response cache
+    "model_fallback",           # Same-tier alternatives on circuit-open
 }
 
 # Parameters applied via env vars (require API restart)
@@ -59,17 +65,36 @@ ENV_PARAMS = {
         "max_retries": "ORCHESTRATOR_ESCALATION_MAX_RETRIES",
         "max_escalations": "ORCHESTRATOR_ESCALATION_MAX_ESCALATIONS",
     },
+    "repl": {
+        "turn_token_cap": "ORCHESTRATOR_REPL_TURN_N_TOKENS",
+        # Tier 1 wire-in 2026-05-20:
+        "frontdoor_non_tool_token_cap": "ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS",
+        "worker_call_budget_cap": "ORCHESTRATOR_WORKER_CALL_BUDGET_CAP",
+        "task_token_budget_cap": "ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP",
+    },
+}
+
+
+# Tier 2 (2026-05-20): KV compression knobs applied at runtime via
+# kv_compress.compress_slot() — NOT env-restart, NOT POST /config.
+# Keys here are the NumericSwarm param names (e.g. "kv.keep_ratio"); values
+# are the kwarg names compress_slot() expects.
+KV_COMPACT_PARAMS = {
+    "keep_ratio": "keep_ratio",
+    "keep_first": "keep_first",
+    "n_future": "n_future",
 }
 
 
 def classify_params(params: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Classify parameters by application method.
 
-    Returns {"hot_swap": {...}, "env_restart": {...}, "unknown": {...}}.
+    Returns {"hot_swap": {...}, "env_restart": {...}, "kv_compact": {...}, "unknown": {...}}.
     """
     result: dict[str, dict[str, Any]] = {
         "hot_swap": {},
         "env_restart": {},
+        "kv_compact": {},
         "unknown": {},
     }
 
@@ -78,7 +103,9 @@ def classify_params(params: dict[str, Any]) -> dict[str, dict[str, Any]]:
             result["hot_swap"][key] = value
         elif "." in key:
             section, param = key.split(".", 1)
-            if section in ENV_PARAMS and param in ENV_PARAMS[section]:
+            if section == "kv" and param in KV_COMPACT_PARAMS:
+                result["kv_compact"][key] = value
+            elif section in ENV_PARAMS and param in ENV_PARAMS[section]:
                 result["env_restart"][key] = value
             else:
                 result["unknown"][key] = value
@@ -235,10 +262,59 @@ def health_check(url: str = ORCHESTRATOR_URL, retries: int = 5) -> HealthCheckRe
     return HealthCheckResult(ok=False, failure_reason=last_reason, failure_detail=last_detail)
 
 
+def apply_kv_compact(
+    params: dict[str, Any],
+    roles: list[str] | None = None,
+) -> dict[str, Any]:
+    """Apply KV-compression trial params via kv_compress.compress_slot().
+
+    params: NumericSwarm trial values like {"kv.keep_ratio": 0.5, "kv.keep_first": 4, "kv.n_future": 128}.
+    roles: subset of roles to compact (default = all PRODUCTION_PORTS). Each role
+           is compacted in turn; only idle slots are touched (slot state checked
+           inside the underlying compress_slot endpoint via the server).
+    """
+    try:
+        from scripts.autopilot.kv_compress import (
+            PRODUCTION_PORTS, compress_slot,
+        )
+    except ImportError as e:
+        log.error("kv_compress module not available: %s", e)
+        return {"status": "error", "error": str(e)}
+
+    # Translate "kv.<param>" → keyword arg for compress_slot
+    kwargs: dict[str, Any] = {}
+    for key, value in params.items():
+        if not key.startswith("kv."):
+            continue
+        short = key.split(".", 1)[1]
+        if short in KV_COMPACT_PARAMS:
+            kwargs[KV_COMPACT_PARAMS[short]] = value
+
+    if not kwargs:
+        return {"status": "no_changes"}
+
+    target_roles = roles or list(PRODUCTION_PORTS.keys())
+    results: dict[str, Any] = {"per_role": {}}
+    for role in target_roles:
+        port = PRODUCTION_PORTS.get(role)
+        if port is None:
+            results["per_role"][role] = {"status": "skipped", "reason": "no port mapping"}
+            continue
+        res = compress_slot(port=port, slot_id=0, **kwargs)
+        results["per_role"][role] = {
+            "success": res.success,
+            "n_evicted": res.n_evicted,
+            "elapsed_ms": res.elapsed_ms,
+            "error": res.error,
+        }
+    return results
+
+
 def apply_params(
     params: dict[str, Any],
     url: str = ORCHESTRATOR_URL,
     dry_run: bool = False,
+    kv_roles: list[str] | None = None,
 ) -> dict[str, Any]:
     """Apply parameters using the appropriate method.
 
@@ -258,6 +334,12 @@ def apply_params(
     # Env params (may require restart)
     if classified["env_restart"]:
         results["env_result"] = apply_env_params(classified["env_restart"], url=url)
+
+    # KV compaction (runtime POST to llama-server /slots/{id}?action=compact)
+    if classified["kv_compact"]:
+        results["kv_compact_result"] = apply_kv_compact(
+            classified["kv_compact"], roles=kv_roles,
+        )
 
     if classified["unknown"]:
         log.warning("Unknown params (not applied): %s", list(classified["unknown"].keys()))

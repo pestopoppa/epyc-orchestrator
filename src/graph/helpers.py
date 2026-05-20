@@ -962,5 +962,61 @@ def _detect_role_cycle(role_history: list[str]) -> bool:
     return _detect_role_cycle_impl(role_history)
 
 
+# ── FINAL() schema validation (Fast-RLM pattern) ─────────────────────────
+
+
+def _render_schema_preamble(schema: dict) -> str:
+    """Initial-prompt preamble shown to the agent when output_schema is set."""
+    import json as _json
+    return (
+        "Your FINAL(...) call must pass a JSON-encoded string whose decoded value matches "
+        "this JSON Schema:\n```json\n"
+        + _json.dumps(schema, indent=2)
+        + "\n```\nExample: FINAL(json.dumps(result_dict))"
+    )
+
+
+def _validate_final_answer(answer: str, schema: dict) -> tuple[bool, str | None, Any]:
+    """Parse ``answer`` as JSON and validate against a JSON-Schema ``schema``.
+
+    Accepts any JSON-Schema dict, including the output of
+    ``pydantic.BaseModel.model_json_schema()`` and hand-written schemas.
+    Returns (ok, error_message_or_None, parsed_value).
+    """
+    import json as _json
+    try:
+        parsed = _json.loads(answer)
+    except (_json.JSONDecodeError, TypeError) as e:
+        return False, f"FINAL value is not valid JSON: {e}", None
+    try:
+        import jsonschema  # type: ignore[import-untyped]
+        jsonschema.validate(parsed, schema)
+    except Exception as e:
+        # jsonschema.ValidationError.message is the concise reason; .json_path
+        # locates the offending field. Fall back to str(e) for other errors.
+        path = getattr(e, "json_path", "") or ""
+        msg = getattr(e, "message", "") or str(e)
+        err = f"{msg} (at {path})" if path else msg
+        return False, err, parsed
+    return True, None, parsed
+
+
+def _format_validation_failure_message(
+    schema: dict, err: str, rejected: str, max_rejected_chars: int = 500
+) -> str:
+    """Retry-with-error message injected into the next-turn context."""
+    import json as _json
+    rejected_trunc = rejected[:max_rejected_chars]
+    if len(rejected) > max_rejected_chars:
+        rejected_trunc += f"...[truncated {len(rejected) - max_rejected_chars} chars]"
+    return (
+        "FINAL value failed schema validation.\n"
+        f"Required JSON Schema:\n```json\n{_json.dumps(schema, indent=2)}\n```\n"
+        f"Validation error: {err}\n"
+        f"Rejected value: {rejected_trunc}\n"
+        "Fix the value and call FINAL again. State is preserved."
+    )
+
+
 
 
