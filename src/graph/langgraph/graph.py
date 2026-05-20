@@ -45,7 +45,7 @@ def _route_next(state: dict[str, Any]) -> str:
 
     Node functions set ``next_node`` to one of:
       "frontdoor", "worker", "coder", "coder_escalation",
-      "ingest", "architect", "architect_coding", "__end__"
+      "ingest", "architect", "__end__"
     """
     return state.get("next_node", END)
 
@@ -75,7 +75,7 @@ def build_orchestration_graph() -> StateGraph:
     # All nodes use the same conditional edge router based on next_node
     all_nodes = [
         "frontdoor", "worker", "coder", "coder_escalation",
-        "ingest", "architect", "architect_coding",
+        "ingest", "architect",
     ]
     for node_name in all_nodes:
         graph.add_conditional_edges(node_name, _route_next)
@@ -208,7 +208,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "frontdoor": {"frontdoor", "coder_escalation", "worker", END},
     "worker": {"worker", "coder_escalation", END},
     "coder": {"coder", "architect", END},
-    "coder_escalation": {"coder_escalation", "architect_coding", END},
+    "coder_escalation": {"coder_escalation", END},
     "ingest": {"ingest", "architect", END},
     "architect": {"architect", END},
     "architect_coding": {"architect_coding", END},
@@ -216,11 +216,11 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 
 # Invalid transitions — explicitly cannot happen
 INVALID_TRANSITIONS: dict[str, set[str]] = {
-    "frontdoor": {"architect", "architect_coding", "coder", "ingest"},
-    "worker": {"frontdoor", "architect", "architect_coding", "coder", "ingest"},
-    "coder": {"frontdoor", "worker", "coder_escalation", "architect_coding", "ingest"},
+    "frontdoor": {"architect", "coder", "ingest"},
+    "worker": {"frontdoor", "architect", "coder", "ingest"},
+    "coder": {"frontdoor", "worker", "coder_escalation", "ingest"},
     "coder_escalation": {"frontdoor", "worker", "coder", "architect", "ingest"},
-    "ingest": {"frontdoor", "worker", "coder", "coder_escalation", "architect_coding"},
-    "architect": {"frontdoor", "worker", "coder", "coder_escalation", "architect_coding", "ingest"},
+    "ingest": {"frontdoor", "worker", "coder", "coder_escalation"},
+    "architect": {"frontdoor", "worker", "coder", "coder_escalation", "ingest"},
     "architect_coding": {"frontdoor", "worker", "coder", "coder_escalation", "architect", "ingest"},
 }

@@ -20,10 +20,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Architect server ports (from model routing strategy)
+# Architect server ports (from model routing strategy).
+# architect_coding REMOVED 2026-05-06 (REAP-246B eliminated, 139 GB freed).
 ARCHITECT_PORTS = {
     "architect_general": 8083,
-    "architect_coding": 8084,
 }
 
 # System prompt prefix used across architect roles (warm this into KV cache)

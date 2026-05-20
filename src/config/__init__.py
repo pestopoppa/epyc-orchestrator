@@ -143,7 +143,8 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         # Without prefix: RoundRobinBackend (multi-URL) or single backend
         frontdoor: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
         coder: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
-        coder_escalation: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+        # 2026-05-09: consolidated onto frontdoor's process (same Qwen3.6-35B-A3B Q8 GGUF)
+        coder_escalation: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
         worker: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
         worker_general: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
         worker_explore: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
@@ -152,7 +153,8 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         vision_escalation: str = "http://localhost:8087"
         worker_coder: str = "http://localhost:8102"
         worker_fast: str = "http://localhost:8102"
-        worker_summarize: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+        # 2026-05-09: consolidated onto frontdoor's process
+        worker_summarize: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
         architect_general: str = "http://localhost:8083,http://localhost:8183"
         architect_coding: str = "http://localhost:8084,http://localhost:8184"
         ingest_long_context: str = "http://localhost:8085"

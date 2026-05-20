@@ -115,7 +115,11 @@ async def _probe_backend(url: str, timeout: float = 2.0) -> dict[str, Any]:
 async def _probe_core_backends() -> dict[str, Any]:
     """Probe core backend roles for liveness."""
     server_urls = get_config().server_urls.as_dict()
-    core_roles = ["frontdoor", "coder_escalation", "architect_general", "architect_coding"]
+    # Post-2026-05-09 consolidation: coder_escalation + worker_summarize share
+    # frontdoor's llama-server (same GGUF, same process at :8070), so probing
+    # frontdoor covers them. architect_coding was eliminated 2026-05-06.
+    # See orchestrator_stack.py:378 (shared_with_first_n) and progress 2026-05-06.
+    core_roles = ["frontdoor", "architect_general"]
     probes: dict[str, Any] = {}
     tasks = []
     role_list = []

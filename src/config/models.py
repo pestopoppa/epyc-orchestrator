@@ -381,7 +381,10 @@ class ServerURLsConfig:
 
     # Tier B - Specialists (pre-warm: 1×96t + 4×48t)
     coder: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
-    coder_escalation: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+    # 2026-05-09: coder_escalation consolidated onto frontdoor's process (same
+    # Qwen3.6-35B-A3B Q8 GGUF). URL must mirror frontdoor's port set, not the
+    # old :8071 family (which was the pre-consolidation independent server).
+    coder_escalation: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
 
     # Tier C - Workers (pre-warm: 1×96t + 4×48t)
     worker: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
@@ -392,10 +395,18 @@ class ServerURLsConfig:
     vision_escalation: str = "http://localhost:8087"
     worker_coder: str = "http://localhost:8102"
     worker_fast: str = "http://localhost:8102"
-    worker_summarize: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
+    # 2026-05-09: worker_summarize consolidated onto frontdoor's process. Mirror
+    # frontdoor's port set; old :8071 family no longer has a server.
+    worker_summarize: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
 
     # Tier B - Architects (2×96t cross-NUMA, round-robin)
     architect_general: str = "http://localhost:8083,http://localhost:8183"
+    # 2026-05-06: architect_coding role REMOVED (REAP-246B eliminated, 139 GB
+    # freed). Field kept because ~25 modules still reference it (chat_routing,
+    # admission, openai_compat, role enum, parsing_config, langgraph nodes).
+    # URL preserved at the original dead ports so any stray call fails fast
+    # with connect_error rather than silently routing elsewhere. Full purge
+    # of architect_coding is tracked as a separate refactor.
     architect_coding: str = "http://localhost:8084,http://localhost:8184"
     ingest_long_context: str = "http://localhost:8085"
 
