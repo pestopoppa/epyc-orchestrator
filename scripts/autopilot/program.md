@@ -328,6 +328,39 @@ These have been empirically tested and found non-viable:
 
 ---
 
+## Out-of-Action-Space Research Items (Do NOT Propose)
+
+Some open research items in the repo handoffs are tracked but cannot be executed by the action types listed above. Do NOT emit actions for them — they are gated on hardware, external publication, or harnesses outside the eval tower. If you see them in `journal_summary` or `insights_text`, acknowledge in `reasoning` and pick a different action.
+
+| Handoff / item | Why out-of-scope for autopilot actions |
+|---|---|
+| `agent-world-env-synthesis.md` AW-7 (Endless Terminals released-artifact re-eval on TB-2.0) | TB-2.0 harness not part of eval tower; needs HF dataset + checkpoint pull (~tens of GB) plus a TB-2.0 runner — out-of-band human/external work. |
+| `agent-world-env-synthesis.md` AW-8 (env-generation mirror with gemma4-26B-A4B as filter, ~50-100 wall-hr decode-only) | Not a `seed_batch`/`numeric_trial`/`code_mutation` shape; requires a background env-synth job runner, gated on user approval per `feedback_no_concurrent_inference`. |
+| `agent-world-env-synthesis.md` AW-9 (PPO consumption of env corpus, ECHO training) | GPU-gated. DGX Spark not acquired (`project_dgx_spark_target`). |
+| `gpu-acceleration-path.md` §ECHO 3-gate trigger watch (intake-571) | Pure monitoring; advertised `microsoft/echo-rl` repo is currently 404. Reproduction requires 8×B200 even if repo lands. |
+| `internal-kb-rag.md` Mirage K-A/K-F/K-V patterns | Design references for K1–K7 work; lands when the relevant K-task is actively worked, not via autopilot mutation. |
+| `hermes-outer-shell.md` Mirage HOS-S/HOS-R patterns | Design references for adapter shim + session replay; out of autopilot's mutation scope. |
+
+---
+
+## PEAF — Prediction-Error-As-Feature (intake-571 spike, default ON)
+
+**ON by default.** Disable for the next session by exporting `EPYC_AUTOPILOT_PEAF=0` before `python autopilot.py start` if you want a clean baseline A/B period or if controller-behavior drift is suspected.
+
+**When enabled (default)**, the controller prompt is appended with a brief instruction asking you (the controller) to optionally emit a separate fenced block AFTER the `json:autopilot_actions` block:
+
+```json:peaf_prediction
+{"quality": 0.72, "speed": 48.0, "cost": 0.05, "reliability": 0.95}
+```
+
+This is an OPTIONAL forecast of the trial's four objectives in the same units the journal uses (`quality`/`reliability` in [0,1], `speed` in t/s, `cost` per question). Omit the block if you cannot honestly estimate — do not fill with placeholders. The forecast does NOT affect the action's evaluation or the Pareto archive scoring; it is logged as `predicted_objectives` and the L1 distance to actuals is logged as `surprise_score` for offline correlation analysis.
+
+**Cheap-kill criterion**: run `python autopilot.py peaf` periodically. If Pearson r² between surprise and (entry.quality − parent.quality) is < 0.10 over ≥200 predicted trials, the PEAF signal does not correlate with config-quality gradient and the spike is abandoned. If r² ≥ 0.10, surprise is a candidate to promote as a Pareto co-objective in a future PR (NOT autopilot's job — flag in `distill_knowledge` output).
+
+**Why this exists**: ECHO (intake-571, "Terminal Agents Learn World Models for Free") shows that auxiliary environment-prediction loss on GRPO rollouts ~2× baseline performance on Terminal-Bench-2.0. ECHO itself is GPU-gated and not in autopilot's action space; PEAF tests the underlying "prediction error = understanding signal" intuition on EPYC's CPU-only stack at logging-only cost.
+
+---
+
 ## Production Flow (optimize this end-to-end)
 
 The full production request path is:

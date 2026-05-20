@@ -82,6 +82,8 @@ class JournalEntry:
     self_criticism: str = ""  # AP-23: structured self-criticism from last trial
     keep_revert_decision: str = ""  # AP-24: "keep" | "revert" | ""
     optimization_directions: str = ""  # AP-24: forward-looking next-round guidance
+    predicted_objectives: dict[str, float] = field(default_factory=dict)  # PEAF: controller's pre-trial forecast (empty when disabled / unforecast)
+    surprise_score: float | None = None  # PEAF: L1 distance in normalised objective space; None when no forecast
 
 
 class ExperimentJournal:
@@ -147,6 +149,8 @@ class ExperimentJournal:
                         deficiency_category=data.get("deficiency_category", ""),
                         instruction_token_count=data.get("instruction_token_count", 0),
                         instruction_token_ratio=data.get("instruction_token_ratio", 0.0),
+                        predicted_objectives=data.get("predicted_objectives", {}),
+                        surprise_score=data.get("surprise_score", None),
                     )
                     self._entries.append(entry)
             batch += 1

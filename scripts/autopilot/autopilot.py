@@ -12,6 +12,15 @@ Usage:
     python autopilot.py plot
     python autopilot.py checkpoint [--production-best]
     python autopilot.py restore [--checkpoint PATH]
+    python autopilot.py digest [--no-state-update]
+    python autopilot.py peaf [--min-n N]   # PEAF cheap-kill report (intake-571 spike)
+
+Environment flags:
+    EPYC_AUTOPILOT_PEAF=0   Disable PEAF (Prediction-Error-As-Feature). Default ON: the
+                            controller is asked to forecast each trial's objectives and
+                            surprise is logged alongside actuals (logging-only, never
+                            feeds back into scoring). Disable for baseline A/B or if
+                            controller drift is suspected. See `python autopilot.py peaf`.
 """
 
 from __future__ import annotations
@@ -43,6 +52,7 @@ from eval_tower import EvalTower
 from config_applicator import apply_params, health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
 from progress_plots import generate_all_plots
+import peaf
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
 from species.prompt_forge import CODE_MUTATION_ALLOWLIST
 from digest import generate_digest, should_generate_today
@@ -1155,17 +1165,19 @@ def _run_loop_inner(
                 blacklist_text=blacklist_text,
                 code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
-            )
+            ) + peaf.peaf_prompt_addendum()
 
             response, session_id = invoke_controller(
                 prompt, state.get("session_id")
             )
             state["session_id"] = session_id
             action = extract_action(response)
+            predicted_objectives = peaf.extract_predicted_objectives(response)
         else:
             # Autonomous mode: species selection by budget
             species = meta.select_species()
             action = _auto_action(species, memory_count, converged, seeder)
+            predicted_objectives = {}  # PEAF: autonomous mode has no controller forecast
 
         if not action:
             log.warning("No action proposed, defaulting to seed_batch")
@@ -1369,6 +1381,10 @@ def _run_loop_inner(
                 self_criticism=criticism.as_text(),  # AP-23
                 keep_revert_decision=criticism.keep_or_revert,  # AP-24
                 optimization_directions=criticism.directions_text(),  # AP-24
+                predicted_objectives=predicted_objectives,  # PEAF (intake-571 spike)
+                surprise_score=peaf.compute_surprise(
+                    predicted_objectives, peaf.actual_objectives_from_eval(eval_result)
+                ),
             )
         )
 
@@ -1647,6 +1663,35 @@ def cmd_digest(args: argparse.Namespace) -> None:
     print(f"Digest written: {path}")
 
 
+def cmd_peaf(args: argparse.Namespace) -> None:
+    """Print PEAF correlation report (intake-571 spike cheap-kill check).
+
+    Walks the experiment journal for entries with non-None surprise_score
+    and a parent_trial, computes Pearson r² between surprise and the
+    (entry.quality - parent.quality) delta, and reports the cheap-kill
+    decision threshold (r² < 0.10 over min_n predicted trials → abandon).
+    """
+    journal = ExperimentJournal()
+    report = peaf.journal_peaf_correlation(journal.all_entries(), min_n=args.min_n)
+    enabled = "ON (default)" if peaf.is_peaf_enabled() else "OFF (EPYC_AUTOPILOT_PEAF explicitly disabled — set to 1 to re-enable)"
+    print(f"PEAF status: {enabled}")
+    print(f"Total journal entries: {journal.count()}")
+    print(f"Entries with PEAF prediction + parent: {report['n_predicted']}")
+    if report["mean_surprise"] is not None:
+        print(f"Mean surprise (L1, normalised): {report['mean_surprise']:.4f}")
+    if report["r_squared"] is None:
+        print(f"r²: n/a (need at least {args.min_n} predicted trials with a parent)")
+    else:
+        print(f"r² (surprise vs Δquality from parent): {report['r_squared']:.4f}")
+    print(f"Decision: {report['decision']}")
+    if report["decision"] == "abandon":
+        print("  → r² < 0.10 — PEAF signal does not correlate with config-quality gradient; consider abandoning.")
+    elif report["decision"] == "continue":
+        print("  → r² ≥ 0.10 — PEAF signal correlates; consider promoting surprise as Pareto co-objective.")
+    else:
+        print("  → keep collecting.")
+
+
 # ── Entry Point ──────────────────────────────────────────────────
 
 
@@ -1733,6 +1778,19 @@ def main() -> None:
         help="Do NOT update state['last_digest_date'] — useful for ad-hoc snapshots that should not delay the next automatic generation.",
     )
     p_digest.set_defaults(func=cmd_digest)
+
+    # peaf — Prediction-Error-As-Feature cheap-kill correlation report (intake-571 spike)
+    p_peaf = subparsers.add_parser(
+        "peaf",
+        help="PEAF cheap-kill report: Pearson r² between surprise_score and Δquality from parent trial. Abandon at r²<0.10 over min_n predicted trials.",
+    )
+    p_peaf.add_argument(
+        "--min-n",
+        type=int,
+        default=200,
+        help="Minimum predicted-trials sample size before computing r² (default: 200, per intake-571 cheap-kill criterion).",
+    )
+    p_peaf.set_defaults(func=cmd_peaf)
 
     args = parser.parse_args()
     args.func(args)
