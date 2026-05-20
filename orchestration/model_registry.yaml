@@ -349,6 +349,15 @@ server_mode:
     slots: 2  # -np 2 at launch (launcher: SERIAL_ROLES gate; frontdoor not serial). The "round-robin"
               # comment formerly here referred to NUMA quarter-mode routing on 8080/8180/8280/8380; that
               # is still valid when --numa-mode quarter is used.
+    # 2026-05-20: enable_thinking=false is load-bearing for this role.
+    # Empirical: raw chat-completions with default thinking-on caused frontdoor
+    # to score 7/15 (47%) on a mixed-domain cheap-kill (knowledge/reasoning tasks
+    # got stuck in degenerate <think> loops, returning empty content). Adding
+    # enable_thinking=false lifted it to 12/15 (80%) — top accuracy in the
+    # stack. See handoffs/active/x-mas-text-routing.md § "Stack-simplification
+    # probe (2026-05-20)".
+    chat_template_kwargs:
+      enable_thinking: false
     model_role: qwen36_q8_0
     shared_with: []
     description: Root LM — Qwen3.6-35B-A3B Q8 (quality 93%, May-4 Claude-as-Judge 170/183)
@@ -377,6 +386,10 @@ server_mode:
     url: http://localhost:8070
     port: 8070
     slots: 1
+    # Same chat_template_kwargs as frontdoor — shares the same GGUF (Qwen3.6-35B Q8)
+    # and the same degenerate-thinking failure mode at chat-completions defaults.
+    chat_template_kwargs:
+      enable_thinking: false
     model_role: qwen36_q8_0
     description: Coding escalation — Qwen3.6-35B-A3B Q8 (May-6 swap; shares GGUF with frontdoor; 97% coder vs 77% on Qwen3-Coder-30B-A3B; REAP-246B 70% architect_coding eliminated)
     model: Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
@@ -460,6 +473,15 @@ server_mode:
               # Admission semantics still serial via router; -np 2 only affects KV slot count.
               # Cost: +~1 GB KV at 16K ctx. Throughput per request unchanged.
               # Driven by SERIAL_ROLES set in scripts/server/orchestrator_stack.py:318.
+    # 2026-05-20: enable_thinking=false. Qwen3.5-122B-A10B's <think> loops are
+    # particularly degenerate at chat-completions defaults — on simpleqa knowledge
+    # questions it fills 4096 tokens with "Wait, I found a reference: ..." cycles
+    # and emits zero content tokens (finish_reason=length, content="").
+    # Without nothink: 6/15 (40%) cheap-kill accuracy. With nothink: 9/15 (60%).
+    # Architect still trails frontdoor + gemma4 + ingest even with this fix —
+    # candidate for wider 50-100-task deprecation gate.
+    chat_template_kwargs:
+      enable_thinking: false
     model_role: qwen35_122b_q4km
     description: System architecture — Qwen3.5-122B-A10B MoE (quality 2.57/3, -64GB vs 235B)
     # Phase 3 compliance gate (2026-05-07): aggressive passes — 117% baseline compliance,
@@ -501,6 +523,13 @@ server_mode:
     port: 8085
     slots: 1  # Serial — admission=1, no wasted KV
     model_role: ingest_long_context
+    # 2026-05-20: deliberately leave thinking ON for this role. Empirical:
+    # disabling thinking dropped Qwen3-Next-80B from 13/15 (87%) to 11/15 (73%)
+    # on the cheap-kill task set. The thinking-mode budget is load-bearing for
+    # this model's quality. Trade-off: per-task wall time stays high (~50-150s
+    # vs ~5s without thinking) — only route accuracy-critical work here.
+    # See handoffs/active/x-mas-text-routing.md § "Stack-simplification probe".
+    # No chat_template_kwargs override → llama-server uses the model's default.
     description: Long document ingestion + Stage 1 of three_stage_summarization - SSM+MoE hybrid linear attention (NO speculation!)
     # Phase 3 compliance gate (2026-05-07): medium passes; aggressive fails procedure (89% baseline).
     # Compliance pinned at 0.933 across all 4 levels, recall 0.93-1.00. Source:

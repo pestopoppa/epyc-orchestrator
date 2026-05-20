@@ -264,6 +264,15 @@ class OpenAIBackend:
         if stream:
             payload["stream"] = True
 
+        # Per-role chat template kwargs (e.g. enable_thinking=False for Qwen3.6/3.5
+        # routes where degenerate <think> loops contaminate output). llama-server
+        # forwards these to the Jinja chat template; models whose templates don't
+        # use the kwarg silently ignore it. See handoffs/active/x-mas-text-routing.md
+        # § "Stack-simplification probe (2026-05-20)" for the empirical fix
+        # (frontdoor 47% → 80% acc on cheap-kill task set; architect 40% → 60%).
+        if request.extra.get("chat_template_kwargs"):
+            payload["chat_template_kwargs"] = request.extra["chat_template_kwargs"]
+
         return payload
 
     def _make_request(self, request: InferenceRequest) -> dict[str, Any]:
