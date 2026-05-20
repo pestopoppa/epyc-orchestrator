@@ -215,6 +215,36 @@ class TestOpenAIBackendPayload:
 
             assert payload["messages"] == messages
 
+    def test_build_payload_forwards_chat_template_kwargs(
+        self, mock_config: ExternalAPIConfig
+    ) -> None:
+        """Passing chat_template_kwargs via extra forwards to the payload.
+
+        Used by routes to thread per-role overrides (e.g.
+        enable_thinking=False for Qwen3.6/3.5) into the llama-server Jinja
+        chat template. Models whose templates don't reference the kwarg
+        ignore it silently.
+        """
+        with patch("httpx.Client"):
+            backend = OpenAIBackend(mock_config)
+            request = InferenceRequest(
+                prompt="test",
+                max_tokens=100,
+                extra={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            payload = backend._build_payload(request)
+            assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+    def test_build_payload_omits_chat_template_kwargs_when_absent(
+        self, mock_config: ExternalAPIConfig
+    ) -> None:
+        """Absence of chat_template_kwargs leaves the key out of payload."""
+        with patch("httpx.Client"):
+            backend = OpenAIBackend(mock_config)
+            request = InferenceRequest(prompt="test", max_tokens=100)
+            payload = backend._build_payload(request)
+            assert "chat_template_kwargs" not in payload
+
 
 class TestOpenAIBackendHealthCheck:
     """Tests for health check."""
