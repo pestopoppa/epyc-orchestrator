@@ -15,6 +15,7 @@ from src.api.routes.sessions import router as sessions_router
 from src.api.routes.documents import router as documents_router
 from src.api.routes.config import router as config_router
 from src.api.routes.delegate import router as delegate_router
+from src.api.routes.dashboard import router as dashboard_router
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ def create_api_router() -> APIRouter:
     router.include_router(documents_router, prefix="/v1", tags=["documents"])
     router.include_router(config_router, tags=["config"])
     router.include_router(delegate_router, tags=["delegate"])
+    router.include_router(dashboard_router, tags=["dashboard"])
 
     return router
 

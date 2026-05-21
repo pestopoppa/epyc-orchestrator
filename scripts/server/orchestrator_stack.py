@@ -1215,10 +1215,18 @@ def is_port_in_use(port: int) -> bool:
 
 
 def _pids_on_port(port: int) -> list[int]:
-    """Best-effort discovery of LISTEN pids on a TCP port."""
+    """Best-effort discovery of LISTEN pids on a TCP port.
+
+    NB: WITHOUT the `-sTCP:LISTEN` filter, `lsof -i :PORT` also returns the
+    PIDs of any client process with an ESTABLISHED connection to that port —
+    e.g. a Firefox tab open to localhost:8000/dashboard, or autopilot mid-
+    HTTP request. Killing those clients was the destructive bug observed
+    2026-05-21 where `reload orchestrator` would kill Firefox + autopilot.
+    The filter ensures we only target actual listeners.
+    """
     try:
         result = subprocess.run(
-            ["lsof", "-t", f"-i:{port}"],
+            ["lsof", "-t", "-sTCP:LISTEN", f"-i:{port}"],
             capture_output=True,
             text=True,
             timeout=3,
@@ -2883,10 +2891,16 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 
 def _find_pids_on_port(port: int) -> list[int]:
-    """Find PIDs listening on a port via lsof (fallback for stale state)."""
+    """Find PIDs listening on a port via lsof (fallback for stale state).
+
+    Uses `-sTCP:LISTEN` to filter out connected clients (Firefox tabs,
+    autopilot HTTP requests, etc.) that would otherwise be flagged as
+    "on the port" and killed by callers. See `_pids_on_port` for full
+    context on the 2026-05-21 destructive-reload bug this prevents.
+    """
     try:
         result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
+            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
