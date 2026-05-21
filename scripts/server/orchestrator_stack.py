@@ -915,6 +915,22 @@ _CANONICAL_OMP_ENV = {
     # asserts on "tensor buffer not set" because draft thread-team init races with
     # buffer allocation. (2026-05-08 Phase 3.)
     "OMP_DYNAMIC": "false",
+    # KMP_BLOCKTIME=10 ms: tunes the idle transition under OMP_WAIT_POLICY=active.
+    # Without this, AOCC libomp's worker team stays alive in busy-wait between OMP
+    # regions — when a server is idle (no request), its 96 OMP threads spin and burn
+    # ~half the chip in cumulative %Cpu(s) us. Originally added on the worker_pool
+    # branch (2026-05-09) for ik_llama.cpp PR #1744 (gemma4 MTP) because PR #1744
+    # uses bare `#pragma omp parallel` per ggml_graph_compute() with no persistent
+    # threadpool — that path's idle spin was the loudest. But the same idle-spin
+    # affects every llama-server launch under OMP_WAIT_POLICY=active on this libomp,
+    # not just MTP. Globalising here (2026-05-21) fixes the 4 frontdoor quarters +
+    # full + architect_general + ingest + visions + embedders all spinning idle
+    # between requests, which had been showing up as ~50% baseline %Cpu(s) us and
+    # multi-second delegation latency (other servers couldn't claim CPU against the
+    # spinning idle teams). 10 ms is the sweet spot: long enough to keep workers
+    # warm for back-to-back ops (no perceptible first-token regression), short
+    # enough that multi-second request gaps release the cores.
+    "KMP_BLOCKTIME": "10",
 }
 
 # clang-20's libomp directory — prepended to LD_LIBRARY_PATH for any role that
