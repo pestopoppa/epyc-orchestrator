@@ -281,6 +281,66 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     })
 
 
+@router.get("/dashboard/events/raw_tap")
+async def raw_tap_stream(request: Request, tail_bytes: int = 8192) -> StreamingResponse:
+    """True byte-level streaming SSE — mirrors what autopilot's TUI does.
+
+    Tails inference_tap.log at 10Hz, pushing any new bytes since the last
+    read directly to the client. The tap writer in eval_tower flushes
+    per-token during generation, so this is genuine real-time streaming
+    (same source the TUI uses).
+
+    Anti-buffering headers ensure intermediate proxies and uvicorn itself
+    don't batch small chunks — required for per-token feel in the browser.
+    """
+
+    async def event_gen():
+        try:
+            fh = open(_INFERENCE_TAP_PATH, "rb")
+            fh.seek(0, 2)
+            size = fh.tell()
+            start = max(0, size - tail_bytes)
+            fh.seek(start)
+            initial = fh.read().decode("utf-8", errors="replace")
+            yield "data: " + json.dumps({"chunk": initial, "initial": True}) + "\n\n"
+            heartbeat_counter = 0
+            while True:
+                if await request.is_disconnected():
+                    fh.close()
+                    return
+                pos = fh.tell()
+                fh.seek(pos)
+                raw = fh.read(8192)
+                if raw:
+                    chunk = raw.decode("utf-8", errors="replace")
+                    yield "data: " + json.dumps({"chunk": chunk, "initial": False}) + "\n\n"
+                    heartbeat_counter = 0
+                else:
+                    heartbeat_counter += 1
+                    # Send an SSE comment every ~3s to keep the connection
+                    # warm + flush any TCP buffer (Nagle / browser-side).
+                    if heartbeat_counter >= 30:
+                        yield ": heartbeat\n\n"
+                        heartbeat_counter = 0
+                    await asyncio.sleep(0.1)
+        except Exception as exc:
+            yield "data: " + json.dumps({"error": str(exc)}) + "\n\n"
+            try:
+                fh.close()  # type: ignore[has-type]
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",  # disable nginx / reverse-proxy buffering
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.get("/dashboard/events/inference_tap")
 async def inference_tap_stream(request: Request) -> StreamingResponse:
     """SSE stream — emit a new payload whenever any tap file mtime advances.
@@ -995,18 +1055,42 @@ async def _find_slot_by_objective(
     return None, None
 
 
+def _find_section_by_objective(objective: str) -> dict | None:
+    """Search the inference_tap.log for a completed section whose prompt
+    contains the task's objective text. Returns the most recent match or None.
+    Used as a fallback when the task's llama-server slot is no longer alive.
+    """
+    if not objective or len(objective) < 8:
+        return None
+    needle = objective[:120].strip()
+    tail_text = _read_tail(_INFERENCE_TAP_PATH, max_bytes=1024 * 1024)
+    sections = _parse_inference_sections(tail_text, max_sections=80)
+    for s in sections:  # already newest-first
+        if needle and needle in (s.get("prompt") or ""):
+            return s
+    return None
+
+
 @router.get("/dashboard/api/task/{task_id}")
 async def task_detail(task_id: str) -> JSONResponse:
-    """Return all events for a task_id + try to identify its current slot.
+    """Return all events for a task_id + active slot + tap fallback.
 
     Matches active slots by prompt content (orchestrator chat-XXX ids do not
-    correspond to llama-server's internal numeric id_task).
+    correspond to llama-server's internal numeric id_task). For completed
+    tasks where the slot is gone, falls back to searching the inference_tap.log
+    for a section whose prompt matches — letting the UI show the historical
+    response text instead of "(empty)".
     """
     log_path = _todays_progress_log()
     events = _task_events(task_id, log_path)
     objective = _objective_for_task(events)
     slots_by_port = await _poll_all_slots()
     slot_port, active_slot = await _find_slot_by_objective(objective, slots_by_port)
+
+    # Fallback: if no live slot but the task completed, mine inference_tap.log
+    tap_section = None
+    if active_slot is None:
+        tap_section = _find_section_by_objective(objective)
 
     return JSONResponse({
         "task_id": task_id,
@@ -1015,6 +1099,7 @@ async def task_detail(task_id: str) -> JSONResponse:
         "active_slot_port": slot_port,
         "active_slot_id": active_slot.get("id") if active_slot else None,
         "slot": active_slot,
+        "tap_section": tap_section,
     })
 
 
@@ -1685,9 +1770,86 @@ function updateTasks(snap) {
         : '<div style="color:var(--muted);font-size:11px">no completed tasks in last 10 min</div>';
 }
 
-// ---- Inference tap panel (live prompt + response from /mnt/raid0/llm/tmp/) ----
+// ---- Inference tap panel — uses RAW byte-streaming SSE (mirrors TUI behavior) ----
 let _tapStream = null;
-let _expandedSectionIdx = 0; // 0 = most recent
+let _rawTapStream = null;
+let _rawTapBuffer = "";
+const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
+
+// "tail -f" scroll model: pinned by default; user can override by scrolling
+// up; if they scroll back to bottom we auto-pin again.
+let _rawTapPinned = true;
+function attachScrollTracker(el) {
+    if (el.dataset.trackerAttached) return;
+    el.dataset.trackerAttached = "1";
+    el.addEventListener("scroll", () => {
+        // Threshold: within 24px of the bottom counts as "at bottom"
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        _rawTapPinned = atBottom;
+        const pinIndicator = document.getElementById('raw-tap-pin-status');
+        if (pinIndicator) {
+            pinIndicator.textContent = _rawTapPinned ? '🔒 following' : '⏸ scroll up — paused';
+            pinIndicator.style.color = _rawTapPinned ? 'var(--good)' : 'var(--warn)';
+        }
+    });
+}
+function autoscrollRawPanel(el) {
+    attachScrollTracker(el);
+    if (_rawTapPinned) {
+        el.scrollTop = el.scrollHeight;
+    }
+}
+
+function styleRawTap(text) {
+    // Lightweight inline highlighting: color ROLE= headers + PROMPT/RESPONSE markers
+    return escapeHTML(text)
+        .replace(/(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ROLE=\S+)/g,
+            '<span style="color:#34d399;font-weight:600">$1</span>')
+        .replace(/^(={20,})$/gm, '<span style="color:#475569">$1</span>')
+        .replace(/^(-{20,})$/gm, '<span style="color:#334155">$1</span>')
+        .replace(/^(PROMPT:)/gm, '<span style="color:#fcd34d;font-weight:600">$1</span>')
+        .replace(/^(RESPONSE:)/gm, '<span style="color:#3b82f6;font-weight:600">$1</span>')
+        .replace(/^(TIMINGS:.*$)/gm, '<span style="color:#94a3b8">$1</span>');
+}
+
+function startRawTapStream() {
+    if (_rawTapStream) _rawTapStream.close();
+    _rawTapBuffer = "";
+    _rawTapStream = new EventSource('/dashboard/events/raw_tap');
+    const container = document.getElementById('inference-tap');
+    _rawTapStream.onmessage = (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.error) return;
+            if (data.initial) {
+                _rawTapBuffer = data.chunk || "";
+            } else {
+                _rawTapBuffer += (data.chunk || "");
+                if (_rawTapBuffer.length > _RAW_TAP_MAX_CHARS) {
+                    _rawTapBuffer = _rawTapBuffer.slice(-_RAW_TAP_MAX_CHARS);
+                }
+            }
+            // Render: pre-formatted block so newlines + spacing preserved.
+            // Preserve the existing <pre> if it's there so the user's scroll
+            // position survives — re-creating the DOM element resets scroll.
+            let pre = document.getElementById('raw-tap-pre');
+            const statusBar = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span style="color:var(--muted);font-size:10px">live tap (per-token from /mnt/raid0/llm/tmp/inference_tap.log)</span>
+                <span id="raw-tap-pin-status" style="font-size:10px;color:var(--good)">🔒 following</span>
+            </div>`;
+            if (!pre) {
+                container.innerHTML = statusBar +
+                    `<pre id="raw-tap-pre" style="background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;max-height:480px;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;font-size:11px;line-height:1.4;font-family:ui-monospace,monospace;margin:0"></pre>`;
+                pre = document.getElementById('raw-tap-pre');
+            }
+            pre.innerHTML = styleRawTap(_rawTapBuffer);
+            autoscrollRawPanel(pre);
+        } catch {}
+    };
+    _rawTapStream.onerror = () => {
+        setTimeout(startRawTapStream, 2000);
+    };
+}
 
 function renderInferenceTap(data) {
     const status = document.getElementById('tap-status');
@@ -1741,22 +1903,10 @@ function renderInferenceTap(data) {
 }
 
 function startTapStream() {
-    if (_tapStream) _tapStream.close();
-    _tapStream = new EventSource('/dashboard/events/inference_tap');
-    _tapStream.onmessage = (e) => {
-        try {
-            const data = JSON.parse(e.data);
-            data.now = Date.now() / 1000;
-            renderInferenceTap(data);
-        } catch {}
-    };
-    _tapStream.onerror = () => {
-        setTimeout(startTapStream, 2000);
-    };
-    // Initial fetch for immediate content
-    fetch('/dashboard/api/inference_tap').then(r => r.json()).then(data => {
-        renderInferenceTap(data);
-    }).catch(() => {});
+    // Replaced the parsed-sections stream with the raw byte-level stream
+    // (mirrors how autopilot's TUI displays inference — incremental tokens
+    // as they're written, not waiting for section close).
+    startRawTapStream();
 }
 
 function updateDecisions(snap) {
@@ -1955,14 +2105,22 @@ async function openDetail(taskId, port, slotId) {
         const d = await r.json();
         let promptText = '';
         let initialContent = '';
+        let dataSource = '';
         if (d.slot) {
             promptText = (d.slot.prompt || '').toString();
             initialContent = (d.slot.content || '').toString();
+            dataSource = `live slot @ port ${d.active_slot_port}`;
+        } else if (d.tap_section) {
+            // Fall back to inference_tap.log section (completed task)
+            promptText = (d.tap_section.prompt || '').toString();
+            initialContent = (d.tap_section.response || '').toString();
+            dataSource = `inference_tap.log section @ ${d.tap_section.timestamp} (role=${d.tap_section.role})`;
         } else {
             const startedEv = d.events.find(e => e.event_type === 'task_started');
             if (startedEv) {
                 promptText = startedEv.data.objective || '';
             }
+            dataSource = 'task_started.objective (no slot or tap match)';
         }
         _currentTaskRawText = {
             taskId,
@@ -1977,10 +2135,11 @@ async function openDetail(taskId, port, slotId) {
                 <button class="secondary" onclick="window.open('/dashboard/api/task/${encodeURIComponent(taskId)}.txt','_blank')">↗ open as text</button>
                 <span id="copy-feedback" class="copy-feedback"></span>
             </div>
+            <div style="color:var(--muted);font-size:10px;margin-bottom:6px">source: ${escapeHTML(dataSource)}</div>
             <h3>prompt</h3>
             <div class="prompt-text" id="prompt-text"></div>
-            <h3>live inference</h3>
-            <div class="stream-text live" id="stream-text"></div>
+            <h3>${d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference')}</h3>
+            <div class="stream-text ${d.slot ? 'live' : ''}" id="stream-text"></div>
             <h3>task events (${d.events.length}) <span style="font-weight:normal;color:var(--muted);font-size:10px">orchestrator-side; not REPL turns</span></h3>
             <div id="repl-history"></div>
         `;
