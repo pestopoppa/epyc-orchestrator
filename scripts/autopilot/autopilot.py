@@ -1456,7 +1456,6 @@ def _run_loop_inner(
                 digest_path = generate_digest(
                     swarm=swarm, lab=lab, archive=archive, state=state, journal=journal,
                 )
-                from datetime import datetime, timezone
                 state["last_digest_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 save_state(state)
                 log.info("Daily digest written: %s", digest_path)
@@ -1657,7 +1656,6 @@ def cmd_digest(args: argparse.Namespace) -> None:
         swarm=swarm, lab=lab, archive=archive, state=state, journal=journal,
     )
     if not args.no_state_update:
-        from datetime import datetime, timezone
         state["last_digest_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         save_state(state)
     print(f"Digest written: {path}")
