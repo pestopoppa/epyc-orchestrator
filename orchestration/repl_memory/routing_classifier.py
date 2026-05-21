@@ -160,6 +160,42 @@ class RoutingClassifier:
 
         return best_action, best_prob
 
+    def mc_predict(
+        self,
+        X: np.ndarray,
+        p_drop: float = 0.1,
+        n_samples: int = 10,
+        seed: int = 0,
+    ) -> np.ndarray:
+        """MC-dropout-style forward pass with hidden-activation dropout.
+
+        Returns per-sample probability tensors so callers can compute mean /
+        variance / entropy as uncertainty signals. Classifier was NOT trained
+        with dropout, so this is test-time activation-noise sensitivity, not
+        canonical Bayesian MC-dropout — interpret variance as prediction
+        stability, not posterior credible interval.
+
+        Returns:
+            probs: (n_samples, N, n_actions) probability tensor.
+        """
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+        rng = np.random.default_rng(seed)
+        keep = 1.0 - p_drop
+        out = []
+        for _ in range(n_samples):
+            z1 = X @ self._weights["W1"] + self._weights["b1"]
+            a1 = _relu(z1)
+            m1 = (rng.random(a1.shape) > p_drop).astype(np.float32) / keep
+            a1 = a1 * m1
+            z2 = a1 @ self._weights["W2"] + self._weights["b2"]
+            a2 = _relu(z2)
+            m2 = (rng.random(a2.shape) > p_drop).astype(np.float32) / keep
+            a2 = a2 * m2
+            z3 = a2 @ self._weights["W3"] + self._weights["b3"]
+            out.append(_softmax(z3))
+        return np.stack(out)
+
     def calibrate_thresholds(
         self,
         X_val: np.ndarray,

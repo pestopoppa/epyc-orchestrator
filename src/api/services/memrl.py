@@ -468,10 +468,84 @@ def ensure_memrl_initialized(state: "AppState") -> bool:
                 logger.warning("GraphRouter init failed: %s", e)
                 graph_router_predictor = None
 
+        # P1.5 — load the MLP routing classifier and pass it to HybridRouter.
+        # This was previously orphan: the flag existed, HybridRouter accepted the
+        # arg, but no production-path code called RoutingClassifier.load() and
+        # threaded it through. Without this block, the 92%-val-acc MLP fast-path
+        # is dead code and every request takes the 10–50ms KNN path. Wired
+        # 2026-05-21 (see handoffs/active/learned-routing-controller.md Phase 6).
+        routing_classifier = None
+        if getattr(feature_flags, "routing_classifier", False):
+            try:
+                from pathlib import Path as _Path
+                from orchestration.repl_memory.routing_classifier import (
+                    RoutingClassifier,
+                    DEFAULT_WEIGHTS_PATH as _RC_DEFAULT_WEIGHTS,
+                )
+                _weights_path = _Path(
+                    os.environ.get("ROUTING_CLASSIFIER_WEIGHTS", str(_RC_DEFAULT_WEIGHTS))
+                )
+                if _weights_path.exists():
+                    routing_classifier = RoutingClassifier.load(_weights_path)
+                    if routing_classifier is not None:
+                        logger.info(
+                            "Routing classifier loaded: %d params, %d actions, weights=%s",
+                            routing_classifier.param_count,
+                            routing_classifier.n_actions,
+                            _weights_path,
+                        )
+                    else:
+                        logger.warning(
+                            "RoutingClassifier.load returned None for %s — fast-path disabled",
+                            _weights_path,
+                        )
+                else:
+                    logger.warning(
+                        "routing_classifier flag is ON but weights not found at %s — fast-path disabled",
+                        _weights_path,
+                    )
+            except Exception as e:
+                logger.warning("Routing classifier init failed: %s", e, exc_info=True)
+                routing_classifier = None
+
+        # P6.2-A2 — load the frontdoor-specialist verifier head behind a
+        # separate, default-OFF flag. The verifier only fires when (a) it's
+        # loaded AND (b) the classifier above predicts top-class=frontdoor with
+        # high confidence. See handoffs/active/learned-routing-controller.md
+        # Phase 6 A2 section for training, gates, and caveats.
+        frontdoor_verifier = None
+        if os.environ.get("ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE", "0") == "1":
+            try:
+                from pathlib import Path as _Path
+                from orchestration.repl_memory.verifier_head import (
+                    VerifierHead,
+                    DEFAULT_WEIGHTS_PATH as _VH_DEFAULT_WEIGHTS,
+                )
+                _v_weights = _Path(
+                    os.environ.get("FRONTDOOR_VERIFIER_WEIGHTS", str(_VH_DEFAULT_WEIGHTS))
+                )
+                if _v_weights.exists():
+                    frontdoor_verifier = VerifierHead.load(_v_weights)
+                    if frontdoor_verifier is not None:
+                        logger.info(
+                            "Frontdoor verifier loaded: %d params, weights=%s",
+                            frontdoor_verifier.param_count, _v_weights,
+                        )
+                else:
+                    logger.warning(
+                        "ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE=1 but verifier weights not found at %s",
+                        _v_weights,
+                    )
+            except Exception as e:
+                logger.warning("Frontdoor verifier init failed: %s", e, exc_info=True)
+                frontdoor_verifier = None
+
         hybrid_router = HybridRouter(
             retriever=retriever,
             rule_based_router=rule_router,
             graph_router=graph_router_predictor,
+            routing_classifier=routing_classifier,
+            frontdoor_verifier=frontdoor_verifier,
         )
 
         # SkillBank: wrap HybridRouter with skill retrieval if enabled

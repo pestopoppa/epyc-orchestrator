@@ -562,6 +562,8 @@ class HybridRouter:
         routing_classifier: Optional["RoutingClassifier"] = None,
         classifier_confidence_threshold: float = 0.8,
         exploration_epsilon: float = 0.0,
+        frontdoor_verifier: Optional[Any] = None,
+        frontdoor_verifier_threshold: float = 0.5,
     ):
         self.retriever = retriever
         self.rule_based = rule_based_router
@@ -569,6 +571,21 @@ class HybridRouter:
         self.graph_router_weight = graph_router_weight
         self.routing_classifier = routing_classifier
         self.classifier_confidence_threshold = classifier_confidence_threshold
+        # P6.2-A2 — frontdoor-specialist verifier (Hypothesis C from
+        # research/deep-dives/2026-05-21-recursive-reasoning-routing.md).
+        # When set, fires after the classifier picks top-class=frontdoor with
+        # confidence above its per-class threshold. If verifier P(success) drops
+        # below frontdoor_verifier_threshold, the fast-path is BYPASSED and the
+        # request falls through to the full KNN pipeline. Default-OFF in
+        # production: memrl.py only constructs a verifier when
+        # ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE=1.
+        self.frontdoor_verifier = frontdoor_verifier
+        self.frontdoor_verifier_threshold = float(
+            os.environ.get("FRONTDOOR_VERIFIER_THRESHOLD", str(frontdoor_verifier_threshold))
+        )
+        self.frontdoor_verifier_shadow = (
+            os.environ.get("FRONTDOOR_VERIFIER_SHADOW", "0") == "1"
+        )
         # DAR-3: Epsilon-greedy exploration for counterfactual data collection.
         # When > 0, with probability epsilon, pick a random alternative from
         # retrieval results instead of the best. Set via SPO_PLUS_EPSILON env var.
@@ -804,14 +821,83 @@ class HybridRouter:
                 if action is not None and confidence >= self.classifier_confidence_threshold:
                     routing = self._parse_routing_action(action)
                     if routing:
-                        self.retriever.update_last_role(routing[0])
-                        self.last_decision_meta = {
-                            "decision_source": "classifier",
-                            "chosen_action": action,
-                            "classifier_confidence": round(confidence, 4),
-                            "classifier_threshold": self.classifier_confidence_threshold,
-                        }
-                        return (routing, "classifier")
+                        # P6.2-A2 — frontdoor-specialist verifier gate. Fires
+                        # only when the classifier's chosen action is frontdoor.
+                        # In shadow mode, log the verifier's verdict but don't
+                        # gate. In enforcing mode, if P(success) < threshold,
+                        # do NOT return via fast-path — fall through to KNN.
+                        verifier_p = None
+                        verifier_verdict = None
+                        if (
+                            self.frontdoor_verifier is not None
+                            and routing[0] == "frontdoor"
+                        ):
+                            try:
+                                verifier_p = float(self.frontdoor_verifier.predict(
+                                    features, action_idx=0,
+                                ))
+                            except Exception as exc:
+                                logger.warning(
+                                    "frontdoor verifier predict failed: %s", exc,
+                                )
+                                verifier_p = None
+                            if verifier_p is not None:
+                                verifier_verdict = (
+                                    "accept" if verifier_p >= self.frontdoor_verifier_threshold
+                                    else "reject"
+                                )
+                                if (
+                                    verifier_verdict == "reject"
+                                    and not self.frontdoor_verifier_shadow
+                                ):
+                                    # Enforcing mode + reject: skip fast-path,
+                                    # let the normal KNN path take over below.
+                                    self.last_decision_meta = {
+                                        "decision_source": "classifier_verifier_reject",
+                                        "chosen_action": action,
+                                        "classifier_confidence": round(confidence, 4),
+                                        "classifier_threshold": self.classifier_confidence_threshold,
+                                        "verifier_p_success": round(verifier_p, 4),
+                                        "verifier_threshold": self.frontdoor_verifier_threshold,
+                                        "verifier_verdict": "reject",
+                                    }
+                                    # Intentionally do NOT return here — fall
+                                    # through to KNN below.
+                                    pass
+                                else:
+                                    self.retriever.update_last_role(routing[0])
+                                    self.last_decision_meta = {
+                                        "decision_source": "classifier",
+                                        "chosen_action": action,
+                                        "classifier_confidence": round(confidence, 4),
+                                        "classifier_threshold": self.classifier_confidence_threshold,
+                                        "verifier_p_success": round(verifier_p, 4),
+                                        "verifier_threshold": self.frontdoor_verifier_threshold,
+                                        "verifier_verdict": verifier_verdict,
+                                        "verifier_shadow": self.frontdoor_verifier_shadow,
+                                    }
+                                    return (routing, "classifier")
+                            else:
+                                # Verifier error — fall back to classifier alone
+                                self.retriever.update_last_role(routing[0])
+                                self.last_decision_meta = {
+                                    "decision_source": "classifier",
+                                    "chosen_action": action,
+                                    "classifier_confidence": round(confidence, 4),
+                                    "classifier_threshold": self.classifier_confidence_threshold,
+                                    "verifier_error": True,
+                                }
+                                return (routing, "classifier")
+                        else:
+                            # No verifier configured OR non-frontdoor route
+                            self.retriever.update_last_role(routing[0])
+                            self.last_decision_meta = {
+                                "decision_source": "classifier",
+                                "chosen_action": action,
+                                "classifier_confidence": round(confidence, 4),
+                                "classifier_threshold": self.classifier_confidence_threshold,
+                            }
+                            return (routing, "classifier")
 
         # DAR-4: Bilinear scorer provides a prior from model features.
         # Log scores for telemetry; blending into retrieval is future work.

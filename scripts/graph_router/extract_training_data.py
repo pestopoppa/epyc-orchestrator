@@ -62,6 +62,18 @@ ACTION_NORMALIZATION: dict[str, str] = {
     "frontdoor": "frontdoor",
     "architect_general": "architect_general",
     "architect_coding": "architect_coding",
+    # Identity maps for canonical actions present in live db as raw labels.
+    # Added 2026-05-21 — without these, ~23% of live-db routing memories were
+    # silently dropped during reembed/extract (coder_escalation: 3K rows,
+    # ingest_long_context: 5.6K rows). See learned-routing-controller.md Phase 6.
+    "coder_escalation": "coder_escalation",
+    "ingest_long_context": "ingest_long_context",
+    "worker_explore": "worker_explore",
+    "worker_math": "worker_math",
+    "worker_vision": "worker_vision",
+    # Renamed roles (post-2026-05-09 stack consolidation).
+    "worker_general": "worker_explore",
+    "coder": "architect_coding",
     # Escalation → destination
     "escalate:frontdoor->coder_escalation": "coder_escalation",
     "escalate:coder_escalation->architect_coding": "architect_coding",

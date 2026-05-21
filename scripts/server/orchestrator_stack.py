@@ -840,18 +840,26 @@ def load_state() -> dict[str, ProcessInfo]:
 
 
 def save_state(state: dict[str, ProcessInfo]) -> None:
-    """Save state to file."""
+    """Save state to file.
+
+    Only ProcessInfo records are persisted. In-memory dict stubs (used for
+    "preserved" / "already healthy" port bookkeeping during startup) are
+    NOT persisted — load_state drops them on the next restart anyway, and
+    keeping them in the file produced noisy `[load_state] dropping non-
+    ProcessInfo entry 'X': ProcessInfo.__init__() got an unexpected keyword
+    argument 'roles'` warnings every startup. The dict bookkeeping is still
+    available in-memory for the current startup's logic; it just doesn't
+    round-trip to disk. Changed 2026-05-21.
+    """
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     serializable: dict[str, dict[str, Any]] = {}
     for key, value in state.items():
         if isinstance(value, ProcessInfo):
             serializable[key] = asdict(value)
             continue
-        # Backward-compatible fallback: preserve minimally-typed dict records.
-        if isinstance(value, dict):
-            serializable[key] = dict(value)
-            continue
-        # Unknown record type; skip instead of crashing startup.
+        # Dict stubs ("preserved" port records, etc.) are transient bookkeeping
+        # — used only within the current startup's flow. Don't persist them.
+        # Unknown record types likewise skipped instead of crashing startup.
         continue
     with open(STATE_FILE, "w") as f:
         json.dump(serializable, f, indent=2)
@@ -2129,6 +2137,16 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     # Feature flags: enable production capabilities
     env["ORCHESTRATOR_MEMRL"] = "1"
     env["ORCHESTRATOR_ROUTING_CLASSIFIER"] = "1"
+    # P6.2-A2 (2026-05-21): frontdoor-specialist verifier loaded by the API
+    # service when the gate flag is on. Defaults below put it in SHADOW MODE —
+    # the verifier runs and logs P(success) to last_decision_meta but never
+    # blocks a fast-path route. To enforce: launch with
+    #   FRONTDOOR_VERIFIER_SHADOW=0 ./scripts/server/orchestrator_stack.py start
+    # Both can be disabled by setting ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE=0.
+    # See handoffs/active/learned-routing-controller.md Phase 6 rollout.
+    env.setdefault("ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE", "1")
+    env.setdefault("FRONTDOOR_VERIFIER_SHADOW", "1")
+    env.setdefault("FRONTDOOR_VERIFIER_THRESHOLD", "0.5")
     env["ORCHESTRATOR_TOOLS"] = "1"
     env["ORCHESTRATOR_SCRIPTS"] = "1"
     # NOTE: Do NOT set ORCHESTRATOR_REPL here — it collides with
@@ -2160,9 +2178,14 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env["ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"] = "1"
     _apply_orchestrator_profile(env, profile)
     # Bound inference-lock waits by default to avoid multi-minute silent stalls
-    # during iterative debugging / seeding runs.
-    env.setdefault("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_EXCLUSIVE_S", "45")
-    env.setdefault("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_SHARED_S", "45")
+    # during iterative debugging / seeding runs. Bumped from 45s → 180s 2026-05-21
+    # because GEPA-driven autopilot workloads were aborting worker_explore /
+    # ingest requests after 45s while frontdoor held the exclusive lock for
+    # 60-105s during reasoning-heavy spec-decode bursts. 180s rides out typical
+    # spec-decode + multi-token-generation while still surfacing true deadlocks
+    # within ~3 min. Tune via env override if your workload changes.
+    env.setdefault("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_EXCLUSIVE_S", "180")
+    env.setdefault("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_SHARED_S", "180")
 
     with open(log_file, "w") as log:
         workers = int(env.get("ORCHESTRATOR_UVICORN_WORKERS", "6"))
@@ -2556,6 +2579,60 @@ def cmd_start(args: argparse.Namespace) -> int:
             print("[0] Registry classification warnings:")
             for w in registry_warnings:
                 print(f"  ⚠ {w}")
+            print()
+
+    # [0.7] Episodic embedding health check (A3, 2026-05-21).
+    # Detects the orphan-FAISS condition where the live episodic.db has many more
+    # routing memories than FAISS vectors — e.g. after a FAISS reset or a BGE
+    # outage during write. KNN fallback (DAR-2 contrastive sharpening, low-confidence
+    # routing fallback) silently degrades in that state.
+    #
+    # Read-only by default — does not block startup. To repair, run:
+    #   python3 scripts/maintenance/repair_episodic_embeddings.py --repair
+    # Or pass --repair-embeddings to this command for auto-repair before launch.
+    if not args.dev:
+        try:
+            from scripts.maintenance.repair_episodic_embeddings import (
+                diagnose as _diagnose_embeddings,
+                print_report as _print_embedding_report,
+                run_repair as _run_embedding_repair,
+                DEFAULT_DB_PATH, DEFAULT_FAISS_PATH, DEFAULT_ID_MAP_PATH,
+                DEFAULT_REEMBEDDED_PATH,
+            )
+            print("[0.7] Episodic embedding health check...")
+            _report = _diagnose_embeddings(
+                DEFAULT_DB_PATH, DEFAULT_FAISS_PATH, DEFAULT_REEMBEDDED_PATH,
+            )
+            _print_embedding_report(_report)
+            if not _report.healthy:
+                if getattr(args, "repair_embeddings", False):
+                    print("\n[0.7] --repair-embeddings: starting bulk re-embed + FAISS rebuild...")
+                    print("      (launches 8 BGE servers; expected 5-15 min)")
+                    _run_embedding_repair(
+                        db_path=DEFAULT_DB_PATH,
+                        faiss_path=DEFAULT_FAISS_PATH,
+                        id_map_path=DEFAULT_ID_MAP_PATH,
+                        reembedded_path=DEFAULT_REEMBEDDED_PATH,
+                    )
+                    print("[0.7] Re-running diagnostic post-repair:")
+                    _report2 = _diagnose_embeddings(
+                        DEFAULT_DB_PATH, DEFAULT_FAISS_PATH, DEFAULT_REEMBEDDED_PATH,
+                    )
+                    _print_embedding_report(_report2)
+                    if not _report2.healthy:
+                        print("[!] WARNING: repair did not restore health — proceeding anyway.")
+                else:
+                    print("[!] Episodic store is ORPHANED. KNN fallback path will silently degrade.")
+                    print("    Repair: python3 scripts/maintenance/repair_episodic_embeddings.py --repair")
+                    print("    Or re-run with --repair-embeddings to auto-repair.")
+            print()
+        except ImportError as exc:
+            # Maintenance script not present (older deployment) — proceed without check.
+            print(f"[0.7] Skipping embedding health check (maintenance module unavailable: {exc})")
+            print()
+        except Exception as exc:
+            # Read-only diagnostic should never raise. If it does, log and continue.
+            print(f"[0.7] Embedding health check failed: {exc} (proceeding anyway)")
             print()
 
     # Determine which servers to start
@@ -3395,6 +3472,14 @@ def main() -> int:
         "--skip-host-prereqs",
         action="store_true",
         help="Skip host_prereq audit/apply (numa_balancing, THP, governor). NOT recommended for benchmarks.",
+    )
+    start_parser.add_argument(
+        "--repair-embeddings",
+        action="store_true",
+        help="If [0.7] embedding health check finds orphans, run repair before launch "
+             "(re-embeds via 8 parallel BGE servers, rebuilds FAISS index, ~5-15 min). "
+             "Default behavior is read-only — just print warning and continue. "
+             "See scripts/maintenance/repair_episodic_embeddings.py for the manual workflow.",
     )
     start_parser.add_argument(
         "--profile",
