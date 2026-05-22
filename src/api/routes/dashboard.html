@@ -461,7 +461,15 @@ const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
 // (b) Markdown-render mode for the raw tap. When _rawTapRenderMode === 'rendered',
 // a debounced timer kicks in after ~600ms of idle and re-renders the buffer
 // through marked + KaTeX. New chunks reset the debounce. Toggle in UI.
-let _rawTapRenderMode = (localStorage.getItem('rawTapRenderMode') || 'rendered');  // 'raw' | 'rendered'
+//
+// Default is 'raw' because the live tap content is multi-section structured
+// text (timestamp + ROLE= + PROMPT/RESPONSE markers + ====== separators),
+// and marked collapses single newlines, destroying that structure. The
+// 'rendered' option is best when watching a SINGLE coherent response —
+// for general structure-preserving rendering of the parsed sections, see
+// the per-section render path in renderInferenceTap() which is the right
+// place for markdown + LaTeX in the parsed-sections view.
+let _rawTapRenderMode = (localStorage.getItem('rawTapRenderMode') || 'raw');  // 'raw' | 'rendered'
 let _rawTapRenderTimer = null;
 const _RAW_TAP_RENDER_IDLE_MS = 600;
 
@@ -507,13 +515,26 @@ function toggleRawTapRenderMode() {
     paintRawTap();  // immediate redraw with the new mode
 }
 
+// One-time migration: clear the stale 'rendered' default set by the prior
+// commit's bug (multi-section content + flat markdown render = broken).
+// Run once per session — once cleared, the toggle still works for users
+// who explicitly want rendered mode.
+(function _migrateStaleRenderModeOnce() {
+    if (sessionStorage.getItem('rawTapRenderMode.migrated_v2')) return;
+    sessionStorage.setItem('rawTapRenderMode.migrated_v2', '1');
+    if (localStorage.getItem('rawTapRenderMode') === 'rendered') {
+        localStorage.removeItem('rawTapRenderMode');
+        _rawTapRenderMode = 'raw';
+    }
+})();
+
 function buildRawTapStatusBar() {
     // Sticky header above the live tap. Pin indicator + render-mode toggle.
     const isRendered = (_rawTapRenderMode === 'rendered');
     const toggleLabel = isRendered ? '📄 markdown' : '⌨️ raw';
     const toggleHint = isRendered
-        ? 'showing markdown + LaTeX (click for raw)'
-        : 'showing raw bytes (click for markdown)';
+        ? 'rendered markdown + LaTeX — collapses multi-section structure; best for a SINGLE coherent response. click for raw bytes.'
+        : 'raw structured bytes (section markers + PROMPT/RESPONSE preserved). click to try markdown rendering — note it works best on single-response captures, not the multi-section live stream.';
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
         <span style="color:var(--muted);font-size:10px">live tap (per-token from /mnt/raid0/llm/tmp/inference_tap.log)</span>
         <span style="display:flex;gap:8px;align-items:center">
