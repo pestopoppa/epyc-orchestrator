@@ -182,6 +182,11 @@ details.tap-section summary::-webkit-details-marker { color: var(--muted); }
 </div>
 
 <div class="panel" style="margin-top:12px">
+  <h2>autopilot activity <span style="color:var(--muted);font-weight:normal;font-size:11px">— real-time tail of autopilot.log (every phase: eval, seed_batch, meta-planning, rollback, safety violations)</span></h2>
+  <pre id="autopilot-log-pre" style="background:rgba(0,0,0,0.3);color:var(--fg);font-size:11px;line-height:1.35;padding:8px;border-radius:4px;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,monospace"></pre>
+</div>
+
+<div class="panel" style="margin-top:12px">
   <h2>gepa progress (autopilot.log tail)</h2>
   <div id="gepa-lines"></div>
 </div>
@@ -593,6 +598,78 @@ function scheduleRawTapRender() {
     }, _RAW_TAP_RENDER_IDLE_MS);
 }
 
+// ── autopilot.log live tail ───────────────────────────────────────────────
+let _autopilotLogStream = null;
+let _autopilotLogBuffer = "";
+const _AUTOPILOT_LOG_MAX_CHARS = 40000;
+let _autopilotLogPinned = true;
+
+function _styleAutopilotLine(line) {
+    // Color-code by log keyword. Cheap regex pass; preserves whitespace.
+    const escaped = line
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    if (/ERROR|FAIL|safety violation/i.test(line)) {
+        return '<span style="color:#f87171">' + escaped + '</span>';
+    }
+    if (/WARNING/i.test(line)) {
+        return '<span style="color:#fbbf24">' + escaped + '</span>';
+    }
+    if (/Trial \d+ complete|frontier|PASS\b/i.test(line)) {
+        return '<span style="color:#34d399">' + escaped + '</span>';
+    }
+    if (/Trial \d+:|Dispatching action|claude -p|seed_batch|gepa_optimize|structural_experiment/i.test(line)) {
+        return '<span style="color:#60a5fa">' + escaped + '</span>';
+    }
+    if (/METRIC /i.test(line)) {
+        return '<span style="color:#94a3b8">' + escaped + '</span>';
+    }
+    return escaped;
+}
+
+function _paintAutopilotLog() {
+    const pre = document.getElementById('autopilot-log-pre');
+    if (!pre) return;
+    const lines = _autopilotLogBuffer.split('\n');
+    pre.innerHTML = lines.map(_styleAutopilotLine).join('\n');
+    if (_autopilotLogPinned) {
+        pre.scrollTop = pre.scrollHeight;
+    }
+}
+
+function startAutopilotLogStream() {
+    if (_autopilotLogStream) _autopilotLogStream.close();
+    _autopilotLogBuffer = "";
+    _autopilotLogStream = new EventSource('/dashboard/events/autopilot_log');
+    _autopilotLogStream.onmessage = (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.error) return;
+            if (data.initial) {
+                _autopilotLogBuffer = data.chunk || "";
+            } else {
+                _autopilotLogBuffer += (data.chunk || "");
+                if (_autopilotLogBuffer.length > _AUTOPILOT_LOG_MAX_CHARS) {
+                    _autopilotLogBuffer = _autopilotLogBuffer.slice(-_AUTOPILOT_LOG_MAX_CHARS);
+                }
+            }
+            _paintAutopilotLog();
+        } catch {}
+    };
+    _autopilotLogStream.onerror = () => {
+        setTimeout(startAutopilotLogStream, 2000);
+    };
+    // Track user scroll for the same tail-f semantics as raw_tap
+    const pre = document.getElementById('autopilot-log-pre');
+    if (pre && !pre.dataset.scrollTracked) {
+        pre.dataset.scrollTracked = "1";
+        pre.addEventListener('scroll', () => {
+            _autopilotLogPinned = (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 24;
+        });
+    }
+}
+
 function startRawTapStream() {
     if (_rawTapStream) _rawTapStream.close();
     _rawTapBuffer = "";
@@ -691,6 +768,10 @@ function startTapStream() {
     // (mirrors how autopilot's TUI displays inference — incremental tokens
     // as they're written, not waiting for section close).
     startRawTapStream();
+    // Also start the autopilot.log stream so every phase autopilot is in
+    // (eval / seed_batch / claude -p meta-planning / rollback / safety
+    // violation) is visible in real time — not just /chat traffic.
+    startAutopilotLogStream();
 }
 
 function updateDecisions(snap) {

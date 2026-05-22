@@ -183,6 +183,70 @@ async def raw_tap_stream(request: Request, tail_bytes: int = 8192) -> StreamingR
     )
 
 
+@router.get("/dashboard/events/autopilot_log")
+async def autopilot_log_stream(request: Request, tail_bytes: int = 16384) -> StreamingResponse:
+    """Byte-level SSE tail of autopilot.log — surfaces every phase autopilot
+    is in (eval / seed_batch / meta-planning via `claude -p` / rollback /
+    safety violation / etc.).
+
+    The inference_tap.log only sees /chat traffic. seed_specialist_routing,
+    meta-planning, eval scoring, and rollback decisions all log to
+    autopilot.log without ever hitting /chat. This panel is the single
+    "what is autopilot doing right now" view.
+
+    Initial payload: last `tail_bytes` of the log. Subsequent: incremental
+    appends, pushed within ~100ms of being written.
+    """
+    log_path = AUTOPILOT_LOG
+
+    async def event_gen():
+        try:
+            if not log_path.exists():
+                yield "data: " + json.dumps({"error": f"{log_path} does not exist"}) + "\n\n"
+                return
+            fh = open(log_path, "rb")
+            fh.seek(0, 2)
+            size = fh.tell()
+            start = max(0, size - tail_bytes)
+            fh.seek(start)
+            initial = fh.read().decode("utf-8", errors="replace")
+            yield "data: " + json.dumps({"chunk": initial, "initial": True}) + "\n\n"
+            heartbeat_counter = 0
+            while True:
+                if await request.is_disconnected():
+                    fh.close()
+                    return
+                pos = fh.tell()
+                fh.seek(pos)
+                raw = fh.read(8192)
+                if raw:
+                    chunk = raw.decode("utf-8", errors="replace")
+                    yield "data: " + json.dumps({"chunk": chunk, "initial": False}) + "\n\n"
+                    heartbeat_counter = 0
+                else:
+                    heartbeat_counter += 1
+                    if heartbeat_counter >= 30:
+                        yield ": heartbeat\n\n"
+                        heartbeat_counter = 0
+                    await asyncio.sleep(0.1)
+        except Exception as exc:
+            yield "data: " + json.dumps({"error": str(exc)}) + "\n\n"
+            try:
+                fh.close()  # type: ignore[has-type]
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.get("/dashboard/events/inference_tap")
 async def inference_tap_stream(request: Request) -> StreamingResponse:
     """SSE stream — emit a new payload whenever any tap file mtime advances.
