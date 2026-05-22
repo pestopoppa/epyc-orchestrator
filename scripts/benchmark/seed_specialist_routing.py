@@ -201,73 +201,31 @@ signal.signal(signal.SIGTERM, _handle_sigterm)
 # ── Question sampling ─────────────────────────────────────────────────
 
 
+import seeding_sampling as _seeding_sampling
+
+
 def _load_from_dataset_adapter(
     suite_name: str, sample_count: int, seed: int,
 ) -> list[dict]:
-    """Sample questions from HF dataset adapters."""
-    try:
-        from dataset_adapters import get_adapter, ADAPTER_SUITES
-    except ImportError:
-        try:
-            sys.path.insert(0, str(Path(__file__).parent))
-            from dataset_adapters import get_adapter, ADAPTER_SUITES
-        except ImportError:
-            return []
-
-    if suite_name not in ADAPTER_SUITES:
-        return []
-
-    adapter = get_adapter(suite_name)
-    if adapter is None:
-        return []
-
-    prompts = adapter.sample(n=sample_count, seed=seed)
-    if prompts:
-        logger.info(f"  [{suite_name}] Sampled {len(prompts)} from "
-                     f"{adapter.total_available} HF dataset questions (seed={seed})")
-    return prompts
+    """Sample questions from HF dataset adapters (wrapper around seeding_sampling)."""
+    return _seeding_sampling.load_from_dataset_adapter(
+        suite_name, sample_count, seed, logger=logger,
+    )
 
 
 def _load_from_yaml(
     suite_name: str, sample_count: int, seed: int,
 ) -> list[dict]:
-    """Fall back to static YAML debug prompts."""
-    try:
-        import yaml
-    except ImportError:
-        return []
+    """Fall back to static YAML debug prompts (wrapper around seeding_sampling).
 
-    yaml_path = DEBUG_PROMPTS_DIR / f"{suite_name}.yaml"
-    if not yaml_path.exists():
-        return []
-
-    with open(yaml_path) as f:
-        data = yaml.safe_load(f)
-
-    questions = data.get("questions", [])
-    if not questions:
-        return []
-
-    rng = random.Random(seed)
-    n = min(sample_count, len(questions))
-    sampled = rng.sample(questions, n)
-    logger.info(f"  [{suite_name}] Sampled {n}/{len(questions)} from YAML (seed={seed})")
-
-    result = []
-    for q in sampled:
-        result.append({
-            "id": q["id"],
-            "suite": suite_name,
-            "prompt": q["prompt"].strip(),
-            "context": "",
-            "expected": q.get("expected", ""),
-            "image_path": q.get("image_path", ""),
-            "tier": q.get("tier", 1),
-            "scoring_method": q.get("scoring_method", "exact_match"),
-            "scoring_config": q.get("scoring_config", {}),
-            "dataset_source": "yaml",
-        })
-    return result
+    Reads `DEBUG_PROMPTS_DIR` from this module's globals each call so test
+    monkeypatches against `mod.DEBUG_PROMPTS_DIR` take effect.
+    """
+    return _seeding_sampling.load_from_yaml(
+        suite_name, sample_count, seed,
+        debug_prompts_dir=DEBUG_PROMPTS_DIR,
+        logger=logger,
+    )
 
 
 def sample_unseen_questions(
@@ -281,64 +239,20 @@ def sample_unseen_questions(
 ) -> list[dict]:
     """Sample questions not in the seen set, interleaved across suites.
 
-    If use_pool=True (default), tries the pre-extracted question pool first
-    (~100ms). Falls back to HF dataset adapters, then YAML.
-
-    If ``allow_reseen`` (debug mode), backfills with seen questions when a
-    suite is exhausted.  Normal mode skips exhausted suites.
-
-    Returns questions interleaved by suite (round-robin) so the orchestrator
-    sees diverse question types early rather than processing one suite at a time.
+    Wrapper around seeding_sampling.sample_unseen_questions. Injects the
+    module-level loader functions and default suites so tests that
+    monkeypatch `_load_from_dataset_adapter`, `_load_from_yaml`, or
+    `DEBUG_PROMPTS_DIR` continue to take effect (Python resolves names
+    from the module globals each call).
     """
-    suite_names = DEFAULT_SUITES if suites == ["all"] else suites
-
-    # Try the pre-extracted pool first
-    if use_pool:
-        try:
-            from question_pool import POOL_FILE, build_pool, load_pool, sample_from_pool
-
-            if not POOL_FILE.exists():
-                logger.info("Question pool not found — building automatically (one-time)...")
-                build_pool()
-
-            pool = load_pool()
-            if pool:
-                result = sample_from_pool(
-                    pool, suite_names, sample_per_suite, seed, seen,
-                    allow_reseen=allow_reseen,
-                )
-                if result:
-                    logger.info(f"Sampled {len(result)} questions from pool (fast path)")
-                    return result
-                logger.info("Pool returned no results — falling back to adapters")
-        except Exception as e:
-            logger.warning(f"Pool loading failed ({e}) — falling back to adapters")
-
-    per_suite: list[list[dict]] = []
-
-    for suite_name in suite_names:
-        oversample = sample_per_suite * 20
-
-        prompts = _load_from_dataset_adapter(suite_name, oversample, seed)
-        if not prompts:
-            prompts = _load_from_yaml(suite_name, oversample, seed)
-
-        fresh = [p for p in prompts if p["id"] not in seen]
-        if len(fresh) < len(prompts):
-            filtered = len(prompts) - len(fresh)
-            logger.info(f"  [{suite_name}] Filtered {filtered} previously seen questions")
-
-        per_suite.append(fresh[:sample_per_suite])
-
-    # Interleave: round-robin across suites
-    all_prompts: list[dict] = []
-    max_len = max((len(s) for s in per_suite), default=0)
-    for i in range(max_len):
-        for suite_questions in per_suite:
-            if i < len(suite_questions):
-                all_prompts.append(suite_questions[i])
-
-    return all_prompts
+    return _seeding_sampling.sample_unseen_questions(
+        suites, sample_per_suite, seen, seed,
+        use_pool=use_pool, allow_reseen=allow_reseen,
+        default_suites=DEFAULT_SUITES,
+        load_from_dataset_adapter=_load_from_dataset_adapter,
+        load_from_yaml=_load_from_yaml,
+        logger=logger,
+    )
 
 
 # ── 3-Way Batch Runner ───────────────────────────────────────────────
@@ -782,80 +696,22 @@ def print_3way_summary(results: list[ThreeWayResult]) -> None:
 # ── CLI ───────────────────────────────────────────────────────────────
 
 
+import seeding_cli_config as _seeding_cli_config
+
+# Re-export _PROFILE_PRESETS so tests / external code that read the name from
+# this module's namespace continue to work.
+_PROFILE_PRESETS = _seeding_cli_config._PROFILE_PRESETS
+
+
 def _build_retrieval_config_from_args(args) -> "RetrievalConfig":
-    """Build RetrievalConfig with optional CLI overrides for replay/debug tuning."""
-    from orchestration.repl_memory.retriever import RetrievalConfig
-
-    overrides: dict[str, Any] = {}
-    for key in (
-        "cost_lambda",
-        "confidence_threshold",
-        "confidence_estimator",
-        "confidence_trim_ratio",
-        "confidence_min_neighbors",
-        "warm_probability_hit",
-        "warm_probability_miss",
-        "warm_cost_fallback_s",
-        "cold_cost_fallback_s",
-        "calibrated_confidence_threshold",
-        "conformal_margin",
-        "risk_control_enabled",
-        "risk_budget_id",
-        "risk_gate_min_samples",
-        "risk_abstain_target_role",
-        "risk_gate_rollout_ratio",
-        "risk_gate_kill_switch",
-        "risk_budget_guardrail_min_events",
-        "risk_budget_guardrail_max_abstain_rate",
-        "prior_strength",
-    ):
-        val = getattr(args, key, None)
-        if val is not None:
-            overrides[key] = val
-    return RetrievalConfig(**overrides)
-
-
-_PROFILE_PRESETS: dict[str, dict[str, Any]] = {
-    "baseline": {
-        "cooldown": 0.0,
-        "timeout": None,
-        "env": {},
-    },
-    "infra-stable": {
-        "cooldown": 2.0,
-        "timeout": None,
-        "env": {
-            "ORCHESTRATOR_DEFERRED_TOOL_RESULTS": "1",
-            "ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_EXCLUSIVE_S": "45",
-            "ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_SHARED_S": "45",
-            "ORCHESTRATOR_UVICORN_WORKERS": "1",
-        },
-    },
-}
+    """Build RetrievalConfig with optional CLI overrides (wrapper)."""
+    return _seeding_cli_config.build_retrieval_config_from_args(args)
 
 
 def _apply_profile(args: argparse.Namespace) -> None:
-    profile = _PROFILE_PRESETS.get(args.profile, _PROFILE_PRESETS["baseline"])
-
-    for key, value in profile.get("env", {}).items():
-        os.environ.setdefault(key, str(value))
-
-    if args.cooldown is None:
-        args.cooldown = float(profile.get("cooldown", 0.0))
-    if args.timeout is None:
-        timeout_default = profile.get("timeout")
-        args.timeout = int(timeout_default) if timeout_default is not None else int(DEFAULT_TIMEOUT)
-
-    logger.info(
-        "Seeding profile=%s cooldown=%.1fs timeout=%ss deferred_tool_results=%s "
-        "lock_timeout_exclusive_s=%s lock_timeout_shared_s=%s uvicorn_workers=%s",
-        args.profile,
-        args.cooldown,
-        args.timeout,
-        os.environ.get("ORCHESTRATOR_DEFERRED_TOOL_RESULTS", "0"),
-        os.environ.get("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_EXCLUSIVE_S", ""),
-        os.environ.get("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_SHARED_S", ""),
-        os.environ.get("ORCHESTRATOR_UVICORN_WORKERS", ""),
+    """Apply profile env vars + cooldown/timeout (wrapper)."""
+    _seeding_cli_config.apply_profile(
+        args, default_timeout=DEFAULT_TIMEOUT, logger=logger,
     )
 
 
