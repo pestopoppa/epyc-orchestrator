@@ -851,13 +851,34 @@ async def gepa_status() -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# Single-page HTML (extracted to dashboard.html; loaded at module import).
+# Single-page HTML (extracted to dashboard.html; re-read on each request).
+#
+# The HTML is read fresh from disk on every /dashboard hit instead of cached
+# at module load, so edits to dashboard.html take effect after a browser
+# reload — no orchestrator API restart needed. Cost: one ~43 KB file read
+# per page hit (Linux page cache makes repeat reads essentially free).
+# Use this path for HTML/CSS/JS hotfixes; Python route handlers still
+# require `orchestrator_stack reload orchestrator`.
 # ---------------------------------------------------------------------------
 
-_DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text()
+_DASHBOARD_HTML_PATH = Path(__file__).parent / "dashboard.html"
+
+
+def _read_dashboard_html() -> str:
+    """Read the dashboard HTML file fresh from disk."""
+    return _DASHBOARD_HTML_PATH.read_text()
+
+
+# Backwards-compat: tests + external readers historically check
+# `_DASHBOARD_HTML` as a module attribute. Module-level __getattr__ resolves
+# it lazily on each access by re-reading the file.
+def __getattr__(name: str) -> str:
+    if name == "_DASHBOARD_HTML":
+        return _read_dashboard_html()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @router.get("/dashboard")
 async def dashboard_page() -> HTMLResponse:
-    """Serve the single-page dashboard."""
-    return HTMLResponse(_DASHBOARD_HTML)
+    """Serve the single-page dashboard (HTML re-read from disk per request)."""
+    return HTMLResponse(_read_dashboard_html())
