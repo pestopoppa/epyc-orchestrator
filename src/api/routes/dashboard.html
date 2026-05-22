@@ -613,38 +613,123 @@ async function loadTopology() {
 }
 
 function renderTopologyStrip() {
-    // Compact horizontal strip: one row per node showing label + port + slot-dot row.
-    // Slot dots: filled = active, empty = idle, red = down. Clicking opens node detail.
-    // Replaces the prior SVG canvas (500px tall, 58% of upper viewport) — strip is
-    // ~24px per row, fits ~12 nodes in ~300px without scrolling.
+    // Compact strip — one row per ROLE (not per process). Roles with quarter
+    // instances (frontdoor / worker_general / embedder etc., which run 4+
+    // llama-server processes for NUMA-quarter sharding) collapse into a single
+    // parent row with a "5 instances" badge + a per-row expand toggle revealing
+    // the per-quarter port + slot-dot detail.
+    //
+    // Without grouping, the live deployment renders 26 individual rows (frontdoor
+    // × 5 + worker_general × 5 + 6 embedders + 4 services + others), which
+    // pushes the right-column panels below the fold. Grouped, it's typically 7-9
+    // primary rows.
     const strip = document.getElementById('topology-strip');
     if (!strip || !topology) return;
     strip.innerHTML = '';
-    // Sort: orchestrator first, then llama-servers by label, then services
-    const sorted = [...topology.nodes].sort((a, b) => {
+
+    // Group nodes by base role. A label like "frontdoor.q2" → base="frontdoor",
+    // quarter="q2". A bare label like "architect_general" → base=same, no quarter.
+    // Orchestrator + services keep their own labels as the base (no grouping).
+    const groups = new Map();
+    for (const n of topology.nodes) {
+        let base = n.label || '';
+        let quarter = null;
+        if (n.kind === 'llama-server') {
+            const m = base.match(/^(.+?)\.(q\d+|[a-z]+_\d+)$/);
+            if (m) { base = m[1]; quarter = m[2]; }
+            else {
+                // Treat embedder_1..embedder_5 as instances of "embedder"
+                const m2 = base.match(/^([a-z_]+?)_(\d+)$/);
+                if (m2 && m2[1] === 'embedder') { base = m2[1]; quarter = `_${m2[2]}`; }
+            }
+        }
+        if (!groups.has(base)) groups.set(base, { base, kind: n.kind, color: n.color, instances: [] });
+        const g = groups.get(base);
+        g.instances.push({ ...n, quarter });
+        // Adopt the parent process (no quarter) as the canonical entry — use
+        // its port as the default in the collapsed view header.
+        if (!quarter && !g.parent) g.parent = n;
+    }
+
+    // Sort: orchestrator first, llama-servers (by base label), services last.
+    const groupList = [...groups.values()].sort((a, b) => {
         const ka = a.kind === 'orchestrator' ? 0 : (a.kind === 'llama-server' ? 1 : 2);
         const kb = b.kind === 'orchestrator' ? 0 : (b.kind === 'llama-server' ? 1 : 2);
         if (ka !== kb) return ka - kb;
-        return (a.label || '').localeCompare(b.label || '');
+        return (a.base || '').localeCompare(b.base || '');
     });
-    for (const n of sorted) {
+
+    for (const g of groupList) {
+        const parent = g.parent || g.instances[0];
+        const nInstances = g.instances.length;
+        const hasQuarters = nInstances > 1;
+
         const row = document.createElement('div');
         row.className = 'topology-row';
-        row.dataset.nodeId = n.id;
-        row.title = `${n.label} (port ${n.port}, ${n.kind}) — click for details`;
-        row.onclick = () => openNodeDetail(n.port, n.label);
+        row.dataset.nodeId = parent.id;
+        row.dataset.base = g.base;
+        row.title = hasQuarters
+            ? `${g.base} — ${nInstances} processes. Click row for detail; click ⊕ to expand quarters.`
+            : `${parent.label} (port ${parent.port}, ${parent.kind}) — click for details`;
+
         const label = document.createElement('div');
         label.className = 'role-name';
-        label.style.color = n.color || 'var(--text)';
-        label.textContent = n.label.length > 22 ? n.label.slice(0, 21) + '…' : n.label;
+        label.style.color = g.color || 'var(--text)';
+        label.innerHTML = hasQuarters
+            ? `${escapeHTML(g.base)} <span style="color:var(--dim);font-size:10px;margin-left:4px">×${nInstances}</span>`
+            : escapeHTML((parent.label || '').length > 22 ? parent.label.slice(0, 21) + '…' : (parent.label || ''));
+
         const port = document.createElement('div');
         port.className = 'port';
-        port.textContent = n.port || '—';
+        port.textContent = parent.port || '—';
+
         const dots = document.createElement('div');
         dots.className = 'slot-dots';
-        dots.id = `slotdots_${n.id}`;
+        dots.id = `slotdots_${parent.id}`;
+
         row.appendChild(label); row.appendChild(port); row.appendChild(dots);
-        strip.appendChild(row);
+
+        if (hasQuarters) {
+            // Expand toggle — clicking ⊕ reveals per-instance rows below.
+            row.style.position = 'relative';
+            const toggle = document.createElement('span');
+            toggle.textContent = '⊕';
+            toggle.style.cssText = 'position:absolute;left:-2px;top:50%;transform:translateY(-50%);color:var(--dim);font-size:9px;width:14px;text-align:center;cursor:pointer;user-select:none';
+            toggle.title = 'expand instances';
+            row.appendChild(toggle);
+            row.style.paddingLeft = '20px';
+            const childContainer = document.createElement('div');
+            childContainer.style.cssText = 'display:none;margin-left:20px;padding:4px 0 6px 0;border-left:1px solid var(--border);padding-left:10px';
+            for (const inst of g.instances) {
+                const r2 = document.createElement('div');
+                r2.className = 'topology-row';
+                r2.style.padding = '4px 8px';
+                r2.style.fontSize = '11px';
+                r2.title = `${inst.label} (port ${inst.port}) — click for details`;
+                r2.onclick = (ev) => { ev.stopPropagation(); openNodeDetail(inst.port, inst.label); };
+                const l2 = document.createElement('div'); l2.className = 'role-name';
+                l2.style.color = 'var(--muted)';
+                l2.textContent = inst.quarter ? `↳ ${inst.quarter}` : '↳ main';
+                const p2 = document.createElement('div'); p2.className = 'port';
+                p2.textContent = inst.port || '—';
+                const d2 = document.createElement('div'); d2.className = 'slot-dots';
+                d2.id = `slotdots_${inst.id}`;
+                r2.appendChild(l2); r2.appendChild(p2); r2.appendChild(d2);
+                childContainer.appendChild(r2);
+            }
+            row.onclick = () => openNodeDetail(parent.port, parent.label);
+            toggle.onclick = (ev) => {
+                ev.stopPropagation();
+                const open = childContainer.style.display === 'block';
+                childContainer.style.display = open ? 'none' : 'block';
+                toggle.textContent = open ? '⊕' : '⊖';
+            };
+            strip.appendChild(row);
+            strip.appendChild(childContainer);
+        } else {
+            row.onclick = () => openNodeDetail(parent.port, parent.label);
+            strip.appendChild(row);
+        }
     }
 }
 
@@ -723,23 +808,71 @@ async function openNodeDetail(port, label) {
 }
 
 function updateTopology(activity) {
-    // Update the slot-dot row for each topology row based on activity counters.
-    // n.n_total dots per row; first n.n_active are .active. If the role isn't
-    // in the activity map at all, all dots dim. If the backend reports a node
-    // as down (n_total=0 and activity reports it), tint the row red.
+    // Update slot-dot rows. Two passes:
+    //   1) Each individual node's dots (children + bare-role rows) come from its
+    //      own activity entry — same behavior as before grouping.
+    //   2) Parent rows for grouped roles (frontdoor, worker_general, embedder, …)
+    //      get aggregated dots = sum of all instances under that base label,
+    //      so the collapsed view reflects fleet-wide activity for that role.
     if (!topology) return;
+
+    // Per-instance pass.
     for (const n of topology.nodes) {
         const dotsEl = document.getElementById(`slotdots_${n.id}`);
         if (!dotsEl) continue;
         const a = activity[n.port] || {};
         const nActive = a.n_active || 0;
         const nTotal = a.n_total || 0;
-        const cap = nTotal > 0 ? nTotal : 4;  // default placeholder so rows aren't empty
+        const cap = nTotal > 0 ? nTotal : 4;
         dotsEl.innerHTML = '';
         for (let i = 0; i < cap; i++) {
             const dot = document.createElement('span');
             dot.className = 'slot-dot' + (i < nActive ? ' active' : '');
             dotsEl.appendChild(dot);
+        }
+    }
+
+    // Aggregate pass: re-group as renderTopologyStrip did, sum per group.
+    const groups = new Map();
+    for (const n of topology.nodes) {
+        if (n.kind !== 'llama-server') continue;
+        let base = n.label || '';
+        let isParent = true;
+        const m = base.match(/^(.+?)\.(q\d+|[a-z]+_\d+)$/);
+        if (m) { base = m[1]; isParent = false; }
+        else {
+            const m2 = base.match(/^([a-z_]+?)_(\d+)$/);
+            if (m2 && m2[1] === 'embedder') { base = m2[1]; isParent = false; }
+        }
+        if (!groups.has(base)) groups.set(base, { instances: [], parent: null });
+        const g = groups.get(base);
+        g.instances.push(n);
+        if (isParent) g.parent = n;
+    }
+    for (const [base, g] of groups.entries()) {
+        if (g.instances.length < 2 || !g.parent) continue;  // not a grouped row
+        let totalActive = 0, totalTotal = 0;
+        for (const inst of g.instances) {
+            const a = activity[inst.port] || {};
+            totalActive += a.n_active || 0;
+            totalTotal += a.n_total || 0;
+        }
+        const dotsEl = document.getElementById(`slotdots_${g.parent.id}`);
+        if (!dotsEl) continue;
+        const cap = totalTotal > 0 ? totalTotal : (g.instances.length * 4);
+        dotsEl.innerHTML = '';
+        // Cap visible dots at 12 to keep the row compact; trailing "+N" for spill.
+        const visible = Math.min(cap, 12);
+        for (let i = 0; i < visible; i++) {
+            const dot = document.createElement('span');
+            dot.className = 'slot-dot' + (i < totalActive ? ' active' : '');
+            dotsEl.appendChild(dot);
+        }
+        if (cap > 12) {
+            const overflow = document.createElement('span');
+            overflow.style.cssText = 'color:var(--dim);font-size:9px;margin-left:4px;font-family:var(--font-mono)';
+            overflow.textContent = `+${cap - 12}`;
+            dotsEl.appendChild(overflow);
         }
     }
 }
@@ -2011,6 +2144,19 @@ function startDashboard() {
                 grid.innerHTML = `<div style="grid-column:1/-1;color:var(--muted);font-size:11px">no lock files yet — fire an inference to populate</div>`;
             } else {
                 grid.innerHTML = rows.join('');
+                // Explainer footer: the per-region-lock infrastructure is opt-in
+                // per role. Only roles wired to src/runtime/cpu_region_lock.py
+                // (currently frontdoor + worker_general) ever create
+                // /mnt/raid0/llm/tmp/cpu_region.<role>.<region>.lock files.
+                // Other roles (architect_general, ingest_long_context, worker_vision,
+                // vision_escalation, embedder) are intentionally absent — they
+                // either run as singletons (one process, no per-region sharding) or
+                // use a different concurrency primitive. This footer prevents the
+                // empty rows from reading as a bug.
+                const footer = document.createElement('div');
+                footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
+                footer.innerHTML = `Only roles wired to <code style="font-size:10px;color:var(--muted)">src/runtime/cpu_region_lock.py</code> appear here. Other roles (architect_general, ingest_long_context, worker_vision, vision_escalation, embedder) are singletons or use a different concurrency primitive — intentionally absent, not missing.`;
+                grid.appendChild(footer);
             }
         } catch {}
     }
