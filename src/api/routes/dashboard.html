@@ -3,12 +3,17 @@
 <meta charset="utf-8">
 <title>Orchestrator Dashboard</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked-highlight@2.1.1/lib/index.umd.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css">
+<!-- All four rendering libs use `defer` so they load in parallel and execute
+     in document-order AFTER the parser hits </body>. The inline init() IIFE
+     at the bottom of this file is gated on DOMContentLoaded so it runs only
+     after these libs are available — fixes the prior race where the first
+     tap-section paint missed LaTeX rendering (KaTeX loaded too late). -->
+<script defer onerror="window.__libLoadFail=(window.__libLoadFail||[]).concat(['marked'])" src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+<script defer onerror="window.__libLoadFail=(window.__libLoadFail||[]).concat(['highlight.js'])" src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
+<script defer onerror="window.__libLoadFail=(window.__libLoadFail||[]).concat(['marked-highlight'])" src="https://cdn.jsdelivr.net/npm/marked-highlight@2.1.1/lib/index.umd.js"></script>
+<script defer onerror="window.__libLoadFail=(window.__libLoadFail||[]).concat(['katex'])" src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer onerror="window.__libLoadFail=(window.__libLoadFail||[]).concat(['katex-auto-render'])" src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <style>
 :root {
     --bg:#0f172a; --panel:#1e293b; --text:#e2e8f0; --muted:#94a3b8;
@@ -453,6 +458,12 @@ let _tapStream = null;
 let _rawTapStream = null;
 let _rawTapBuffer = "";
 const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
+// (b) Markdown-render mode for the raw tap. When _rawTapRenderMode === 'rendered',
+// a debounced timer kicks in after ~600ms of idle and re-renders the buffer
+// through marked + KaTeX. New chunks reset the debounce. Toggle in UI.
+let _rawTapRenderMode = (localStorage.getItem('rawTapRenderMode') || 'rendered');  // 'raw' | 'rendered'
+let _rawTapRenderTimer = null;
+const _RAW_TAP_RENDER_IDLE_MS = 600;
 
 // "tail -f" scroll model: pinned by default; user can override by scrolling
 // up; if they scroll back to bottom we auto-pin again.
@@ -490,11 +501,81 @@ function styleRawTap(text) {
         .replace(/^(TIMINGS:.*$)/gm, '<span style="color:#94a3b8">$1</span>');
 }
 
+function toggleRawTapRenderMode() {
+    _rawTapRenderMode = (_rawTapRenderMode === 'rendered' ? 'raw' : 'rendered');
+    localStorage.setItem('rawTapRenderMode', _rawTapRenderMode);
+    paintRawTap();  // immediate redraw with the new mode
+}
+
+function buildRawTapStatusBar() {
+    // Sticky header above the live tap. Pin indicator + render-mode toggle.
+    const isRendered = (_rawTapRenderMode === 'rendered');
+    const toggleLabel = isRendered ? '📄 markdown' : '⌨️ raw';
+    const toggleHint = isRendered
+        ? 'showing markdown + LaTeX (click for raw)'
+        : 'showing raw bytes (click for markdown)';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
+        <span style="color:var(--muted);font-size:10px">live tap (per-token from /mnt/raid0/llm/tmp/inference_tap.log)</span>
+        <span style="display:flex;gap:8px;align-items:center">
+            <button onclick="toggleRawTapRenderMode()" style="background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit"
+                title="${toggleHint}">${toggleLabel}</button>
+            <span id="raw-tap-pin-status" style="font-size:10px;color:var(--good)">🔒 following</span>
+        </span>
+    </div>`;
+}
+
+function paintRawTap() {
+    // Render the rolling buffer into #inference-tap. Idempotent — safe to
+    // call repeatedly. Preserves scroll position by reusing the inner
+    // container when possible.
+    const container = document.getElementById('inference-tap');
+    if (!container) return;
+    const statusBar = buildRawTapStatusBar();
+    let inner = document.getElementById('raw-tap-pre');
+    const isRendered = (_rawTapRenderMode === 'rendered');
+    // If the inner element exists but its tag doesn't match the desired mode
+    // (rendered → <div>, raw → <pre>), recreate it. Otherwise just update content.
+    const expectedTag = isRendered ? 'DIV' : 'PRE';
+    if (!inner || inner.tagName !== expectedTag) {
+        const tag = expectedTag.toLowerCase();
+        const style = isRendered
+            ? 'background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;max-height:480px;overflow-y:auto;font-size:11px;line-height:1.45;margin:0'
+            : 'background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;max-height:480px;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;font-size:11px;line-height:1.4;font-family:ui-monospace,monospace;margin:0';
+        container.innerHTML = statusBar + `<${tag} id="raw-tap-pre" style="${style}"></${tag}>`;
+        inner = document.getElementById('raw-tap-pre');
+    } else {
+        // Update the status bar without nuking the inner pane (keeps scroll).
+        const existingBar = container.firstElementChild;
+        if (existingBar && existingBar !== inner) {
+            existingBar.outerHTML = statusBar;
+        }
+    }
+    if (isRendered) {
+        // Markdown + LaTeX render of the buffer. Partial fenced code blocks
+        // can swallow trailing content; mitigated by the debounce — we only
+        // render after ~600ms of stream idle, so blocks are usually complete.
+        renderMarkdownInto(inner, _rawTapBuffer);
+    } else {
+        inner.innerHTML = styleRawTap(_rawTapBuffer);
+    }
+    autoscrollRawPanel(inner);
+}
+
+function scheduleRawTapRender() {
+    // Debounced re-render for the "rendered" mode. Live styled-tap shows
+    // updates immediately (no debounce); the rendered view waits for
+    // ~600ms idle so partial fenced code blocks complete before parsing.
+    if (_rawTapRenderTimer) clearTimeout(_rawTapRenderTimer);
+    _rawTapRenderTimer = setTimeout(() => {
+        _rawTapRenderTimer = null;
+        if (_rawTapRenderMode === 'rendered') paintRawTap();
+    }, _RAW_TAP_RENDER_IDLE_MS);
+}
+
 function startRawTapStream() {
     if (_rawTapStream) _rawTapStream.close();
     _rawTapBuffer = "";
     _rawTapStream = new EventSource('/dashboard/events/raw_tap');
-    const container = document.getElementById('inference-tap');
     _rawTapStream.onmessage = (e) => {
         try {
             const data = JSON.parse(e.data);
@@ -507,21 +588,25 @@ function startRawTapStream() {
                     _rawTapBuffer = _rawTapBuffer.slice(-_RAW_TAP_MAX_CHARS);
                 }
             }
-            // Render: pre-formatted block so newlines + spacing preserved.
-            // Preserve the existing <pre> if it's there so the user's scroll
-            // position survives — re-creating the DOM element resets scroll.
-            let pre = document.getElementById('raw-tap-pre');
-            const statusBar = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-                <span style="color:var(--muted);font-size:10px">live tap (per-token from /mnt/raid0/llm/tmp/inference_tap.log)</span>
-                <span id="raw-tap-pin-status" style="font-size:10px;color:var(--good)">🔒 following</span>
-            </div>`;
-            if (!pre) {
-                container.innerHTML = statusBar +
-                    `<pre id="raw-tap-pre" style="background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;max-height:480px;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;font-size:11px;line-height:1.4;font-family:ui-monospace,monospace;margin:0"></pre>`;
-                pre = document.getElementById('raw-tap-pre');
+            if (_rawTapRenderMode === 'raw') {
+                // Raw mode: paint immediately on each chunk (cheap, no parsing).
+                paintRawTap();
+            } else {
+                // Rendered mode: keep stream visible via a transient styled
+                // paint, then schedule the markdown + KaTeX pass for after
+                // the stream idles. The transient paint avoids a long blank
+                // window during continuous streaming.
+                const inner = document.getElementById('raw-tap-pre');
+                if (!inner) {
+                    paintRawTap();
+                } else {
+                    // Show plain styled text immediately for liveness; the
+                    // debounced timer below will swap in the rendered view.
+                    inner.innerHTML = styleRawTap(_rawTapBuffer);
+                    autoscrollRawPanel(inner);
+                }
+                scheduleRawTapRender();
             }
-            pre.innerHTML = styleRawTap(_rawTapBuffer);
-            autoscrollRawPanel(pre);
         } catch {}
     };
     _rawTapStream.onerror = () => {
@@ -904,15 +989,52 @@ async function updateProcessStatus() {
     } catch (e) {}
 }
 
-(async function init() {
-    await loadTopology();
-    startStream();
-    startTapStream();
-    updateGepa();
-    updateProcessStatus();
-    setInterval(updateGepa, 5000);
-    setInterval(updateProcessStatus, 3000);
-})();
+function checkRenderLibs() {
+    // After defers run, surface a visible warning if any lib failed to load.
+    // Without this, CDN/network failures cause silent degradation (no LaTeX,
+    // no syntax highlighting, no markdown) with no signal to the operator.
+    const status = {
+        marked: !!window.marked,
+        hljs: !!window.hljs,
+        markedHighlight: !!window.markedHighlight,
+        katex: !!window.katex,
+        renderMathInElement: !!window.renderMathInElement,
+    };
+    const missing = Object.entries(status).filter(([_, ok]) => !ok).map(([k]) => k);
+    if (missing.length === 0) return;
+    // Stash for inspection + render a small banner
+    window.__renderLibsStatus = status;
+    const banner = document.createElement('div');
+    banner.id = 'render-libs-banner';
+    banner.style.cssText = 'background:rgba(245,158,11,0.15);border:1px solid var(--warn);' +
+        'color:var(--warn);padding:6px 10px;border-radius:4px;margin-bottom:8px;font-size:11px';
+    const failed = (window.__libLoadFail || []).join(', ');
+    banner.innerHTML = `⚠ render libs missing: <code>${missing.join(', ')}</code>` +
+        (failed ? ` (CDN failures: <code>${failed}</code>)` : '') +
+        ' — markdown/LaTeX/syntax-highlighting may be degraded';
+    document.body.insertBefore(banner, document.body.firstChild);
+}
+
+function startDashboard() {
+    checkRenderLibs();
+    (async function () {
+        await loadTopology();
+        startStream();
+        startTapStream();
+        updateGepa();
+        updateProcessStatus();
+        setInterval(updateGepa, 5000);
+        setInterval(updateProcessStatus, 3000);
+    })();
+}
+
+// Gate init on DOMContentLoaded so deferred render libs (marked, hljs,
+// katex, etc.) have finished executing before the first render call.
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startDashboard);
+} else {
+    startDashboard();
+}
 </script>
 </body></html>
 
