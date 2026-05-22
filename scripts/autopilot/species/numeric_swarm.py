@@ -183,6 +183,23 @@ class NumericSwarm:
             trial_number, surface, objectives,
         )
 
+    def mark_failed(self, surface: str, trial_number: int, reason: str = "") -> None:
+        """Mark an Optuna trial failed when params could not be applied."""
+        from optuna.trial import TrialState
+
+        study = self._get_study(surface)
+        try:
+            study.tell(trial_number, state=TrialState.FAIL)
+            log.warning(
+                "Marked trial %d on '%s' failed: %s",
+                trial_number, surface, reason,
+            )
+        except ValueError as e:
+            log.warning(
+                "Could not mark trial %d on '%s' failed: %s",
+                trial_number, surface, e,
+            )
+
     def best_params(self, surface: str, method: str = "cluster") -> dict[str, Any]:
         """Get best parameters using cluster-based robust selection.
 

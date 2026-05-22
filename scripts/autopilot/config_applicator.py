@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +88,152 @@ KV_COMPACT_PARAMS = {
 }
 
 
+@dataclass
+class ApplyResult:
+    """Typed result for one parameter-application surface."""
+
+    status: str = "ok"
+    payload: dict[str, Any] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def failed(self) -> bool:
+        return self.status == "error" or bool(self.errors)
+
+    def to_dict(self) -> dict[str, Any]:
+        result = dict(self.payload)
+        result["status"] = "error" if self.failed else self.status
+        if self.errors:
+            result["errors"] = list(self.errors)
+        return result
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "ApplyResult":
+        status = str(payload.get("status", "ok"))
+        errors = [str(error) for error in payload.get("errors", [])]
+        if status == "error" and payload.get("error"):
+            errors.append(str(payload["error"]))
+        elif status == "error" and not errors:
+            errors.append(str(payload.get("error") or "unknown error"))
+        for role, role_result in payload.get("per_role", {}).items():
+            if isinstance(role_result, dict) and (
+                role_result.get("error") or role_result.get("success") is False
+            ):
+                errors.append(f"{role}: {role_result.get('error') or 'not applied'}")
+        return cls(status=status, payload=payload, errors=errors)
+
+
+class HotSwapApplicator:
+    """Apply feature-flag changes through the live config endpoint."""
+
+    def __init__(self, url: str = ORCHESTRATOR_URL) -> None:
+        self.url = url
+
+    def apply(self, params: dict[str, Any]) -> ApplyResult:
+        try:
+            resp = httpx.post(
+                f"{self.url}/config",
+                json=params,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            log.info("Hot-swap applied: %s → %s", params, payload.get("status"))
+            return ApplyResult.from_payload(payload)
+        except Exception as exc:
+            log.error("Hot-swap failed: %s", exc)
+            return ApplyResult(
+                status="error",
+                payload={"status": "error", "error": str(exc)},
+                errors=[str(exc)],
+            )
+
+
+class EnvRestartApplicator:
+    """Apply env-backed params by staging env vars and optionally reloading API."""
+
+    def __init__(self, url: str = ORCHESTRATOR_URL, restart: bool = True) -> None:
+        self.url = url
+        self.restart = restart
+
+    def env_changes_for(self, params: dict[str, Any]) -> dict[str, str]:
+        env_changes: dict[str, str] = {}
+        for key, value in params.items():
+            section, param = key.split(".", 1)
+            if section in ENV_PARAMS and param in ENV_PARAMS[section]:
+                env_var = ENV_PARAMS[section][param]
+                env_changes[env_var] = str(value)
+        return env_changes
+
+    def apply(self, params: dict[str, Any]) -> ApplyResult:
+        env_changes = self.env_changes_for(params)
+
+        if not env_changes:
+            return ApplyResult(status="no_changes", payload={"status": "no_changes"})
+
+        log.info("Env params to apply: %s", env_changes)
+
+        if self.restart:
+            return ApplyResult.from_payload(
+                restart_api(env_overrides=env_changes, url=self.url)
+            )
+        return ApplyResult(
+            status="staged",
+            payload={"status": "staged", "env_changes": env_changes},
+        )
+
+
+class KvCompactionApplicator:
+    """Apply KV-compaction params to llama-server slots."""
+
+    def __init__(self, roles: list[str] | None = None) -> None:
+        self.roles = roles
+
+    def apply(self, params: dict[str, Any]) -> ApplyResult:
+        try:
+            from scripts.autopilot.kv_compress import (
+                PRODUCTION_PORTS, compress_slot,
+            )
+        except ImportError as exc:
+            log.error("kv_compress module not available: %s", exc)
+            return ApplyResult(
+                status="error",
+                payload={"status": "error", "error": str(exc)},
+                errors=[str(exc)],
+            )
+
+        kwargs: dict[str, Any] = {}
+        for key, value in params.items():
+            if not key.startswith("kv."):
+                continue
+            short = key.split(".", 1)[1]
+            if short in KV_COMPACT_PARAMS:
+                kwargs[KV_COMPACT_PARAMS[short]] = value
+
+        if not kwargs:
+            return ApplyResult(status="no_changes", payload={"status": "no_changes"})
+
+        target_roles = self.roles or list(PRODUCTION_PORTS.keys())
+        payload: dict[str, Any] = {"per_role": {}}
+        errors: list[str] = []
+        for role in target_roles:
+            port = PRODUCTION_PORTS.get(role)
+            if port is None:
+                payload["per_role"][role] = {"status": "skipped", "reason": "no port mapping"}
+                continue
+            res = compress_slot(port=port, slot_id=0, **kwargs)
+            role_result = {
+                "success": res.success,
+                "n_evicted": res.n_evicted,
+                "elapsed_ms": res.elapsed_ms,
+                "error": res.error,
+            }
+            payload["per_role"][role] = role_result
+            if role_result.get("error") or role_result.get("success") is False:
+                errors.append(f"{role}: {role_result.get('error') or 'not applied'}")
+        return ApplyResult(status="error" if errors else "ok", payload=payload, errors=errors)
+
+
 def classify_params(params: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Classify parameters by application method.
 
@@ -119,19 +267,7 @@ def apply_hot_swap(
     params: dict[str, Any], url: str = ORCHESTRATOR_URL
 ) -> dict[str, Any]:
     """Apply feature flag changes via POST /config."""
-    try:
-        resp = httpx.post(
-            f"{url}/config",
-            json=params,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        log.info("Hot-swap applied: %s → %s", params, result.get("status"))
-        return result
-    except Exception as e:
-        log.error("Hot-swap failed: %s", e)
-        return {"status": "error", "error": str(e)}
+    return HotSwapApplicator(url=url).apply(params).to_dict()
 
 
 def apply_env_params(
@@ -143,21 +279,7 @@ def apply_env_params(
 
     params: dict like {"memrl_retrieval.q_weight": 0.75}
     """
-    env_changes = {}
-    for key, value in params.items():
-        section, param = key.split(".", 1)
-        if section in ENV_PARAMS and param in ENV_PARAMS[section]:
-            env_var = ENV_PARAMS[section][param]
-            env_changes[env_var] = str(value)
-
-    if not env_changes:
-        return {"status": "no_changes"}
-
-    log.info("Env params to apply: %s", env_changes)
-
-    if restart:
-        return restart_api(env_overrides=env_changes, url=url)
-    return {"status": "staged", "env_changes": env_changes}
+    return EnvRestartApplicator(url=url, restart=restart).apply(params).to_dict()
 
 
 def restart_api(
@@ -166,18 +288,17 @@ def restart_api(
 ) -> dict[str, Any]:
     """Restart the API server (uvicorn reload).
 
-    Uses the orchestrator_stack.py --restart-api flag if available,
-    otherwise sends SIGHUP to the uvicorn process.
+    Env-backed tuning must relaunch the API from a process that already has
+    the new environment. A SIGHUP cannot mutate another process environment,
+    so env overrides always go through orchestrator_stack.py reload.
     """
     import os
     import signal
 
     log.info("Restarting API server...")
 
-    # Apply env vars to current process (they'll be inherited)
     if env_overrides:
-        for k, v in env_overrides.items():
-            os.environ[k] = v
+        return _reload_api_via_stack(env_overrides=env_overrides, url=url)
 
     # Try to find and signal the uvicorn process
     try:
@@ -196,22 +317,50 @@ def restart_api(
     except Exception as e:
         log.warning("SIGHUP restart failed: %s", e)
 
-    # Fallback: use orchestrator_stack.py
-    stack_script = ORCH_ROOT / "scripts" / "server" / "orchestrator_stack.py"
-    if stack_script.exists():
-        try:
-            subprocess.run(
-                ["python", str(stack_script), "--restart-api"],
-                timeout=30,
-                check=True,
-            )
-            time.sleep(3)
-            if health_check(url):
-                return {"status": "ok", "method": "stack_restart"}
-        except Exception as e:
-            log.error("Stack restart failed: %s", e)
+    return _reload_api_via_stack(env_overrides=None, url=url)
 
-    return {"status": "error", "error": "Could not restart API"}
+
+def _reload_api_via_stack(
+    env_overrides: dict[str, str] | None,
+    url: str,
+) -> dict[str, Any]:
+    """Reload the orchestrator through the stack manager."""
+    import os
+
+    stack_script = ORCH_ROOT / "scripts" / "server" / "orchestrator_stack.py"
+    if not stack_script.exists():
+        return {"status": "error", "error": f"Stack script not found: {stack_script}"}
+
+    env = os.environ.copy()
+    if env_overrides:
+        env.update(env_overrides)
+
+    try:
+        subprocess.run(
+            [sys.executable, str(stack_script), "reload", "orchestrator"],
+            cwd=str(ORCH_ROOT),
+            env=env,
+            timeout=90,
+            check=True,
+        )
+        time.sleep(3)
+        health = health_check(url)
+        if health:
+            return {
+                "status": "ok",
+                "method": "stack_reload",
+                "env_keys": sorted((env_overrides or {}).keys()),
+            }
+        return {
+            "status": "error",
+            "method": "stack_reload",
+            "error": health.failure_reason,
+            "detail": health.failure_detail,
+            "env_keys": sorted((env_overrides or {}).keys()),
+        }
+    except Exception as e:
+        log.error("Stack reload failed: %s", e)
+        return {"status": "error", "error": str(e), "method": "stack_reload"}
 
 
 class HealthCheckResult:
@@ -273,41 +422,7 @@ def apply_kv_compact(
            is compacted in turn; only idle slots are touched (slot state checked
            inside the underlying compress_slot endpoint via the server).
     """
-    try:
-        from scripts.autopilot.kv_compress import (
-            PRODUCTION_PORTS, compress_slot,
-        )
-    except ImportError as e:
-        log.error("kv_compress module not available: %s", e)
-        return {"status": "error", "error": str(e)}
-
-    # Translate "kv.<param>" → keyword arg for compress_slot
-    kwargs: dict[str, Any] = {}
-    for key, value in params.items():
-        if not key.startswith("kv."):
-            continue
-        short = key.split(".", 1)[1]
-        if short in KV_COMPACT_PARAMS:
-            kwargs[KV_COMPACT_PARAMS[short]] = value
-
-    if not kwargs:
-        return {"status": "no_changes"}
-
-    target_roles = roles or list(PRODUCTION_PORTS.keys())
-    results: dict[str, Any] = {"per_role": {}}
-    for role in target_roles:
-        port = PRODUCTION_PORTS.get(role)
-        if port is None:
-            results["per_role"][role] = {"status": "skipped", "reason": "no port mapping"}
-            continue
-        res = compress_slot(port=port, slot_id=0, **kwargs)
-        results["per_role"][role] = {
-            "success": res.success,
-            "n_evicted": res.n_evicted,
-            "elapsed_ms": res.elapsed_ms,
-            "error": res.error,
-        }
-    return results
+    return KvCompactionApplicator(roles=roles).apply(params).to_dict()
 
 
 def apply_params(
@@ -321,7 +436,8 @@ def apply_params(
     Returns summary of what was applied.
     """
     classified = classify_params(params)
-    results: dict[str, Any] = {"classified": classified}
+    results: dict[str, Any] = {"classified": classified, "status": "ok"}
+    errors: list[str] = []
 
     if dry_run:
         results["dry_run"] = True
@@ -329,20 +445,35 @@ def apply_params(
 
     # Hot-swap first (instant)
     if classified["hot_swap"]:
-        results["hot_swap_result"] = apply_hot_swap(classified["hot_swap"], url)
+        hot_swap_result = ApplyResult.from_payload(
+            apply_hot_swap(classified["hot_swap"], url=url)
+        )
+        results["hot_swap_result"] = hot_swap_result.to_dict()
+        errors.extend(f"hot_swap: {error}" for error in hot_swap_result.errors)
 
     # Env params (may require restart)
     if classified["env_restart"]:
-        results["env_result"] = apply_env_params(classified["env_restart"], url=url)
+        env_result = ApplyResult.from_payload(
+            apply_env_params(classified["env_restart"], url=url)
+        )
+        results["env_result"] = env_result.to_dict()
+        errors.extend(f"env_restart: {error}" for error in env_result.errors)
 
     # KV compaction (runtime POST to llama-server /slots/{id}?action=compact)
     if classified["kv_compact"]:
-        results["kv_compact_result"] = apply_kv_compact(
-            classified["kv_compact"], roles=kv_roles,
+        kv_result = ApplyResult.from_payload(
+            apply_kv_compact(classified["kv_compact"], roles=kv_roles)
         )
+        results["kv_compact_result"] = kv_result.to_dict()
+        errors.extend(f"kv_compact:{error}" for error in kv_result.errors)
 
     if classified["unknown"]:
         log.warning("Unknown params (not applied): %s", list(classified["unknown"].keys()))
         results["unknown_params"] = list(classified["unknown"].keys())
+        errors.append(f"unknown_params: {', '.join(results['unknown_params'])}")
+
+    if errors:
+        results["status"] = "error"
+        results["errors"] = errors
 
     return results

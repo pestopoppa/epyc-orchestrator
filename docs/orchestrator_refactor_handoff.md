@@ -14,8 +14,11 @@ Relevant refactor changes already in flight:
 - `src/api/routes/dashboard.py`
 - `src/api/routes/dashboard_*.py`
 - `src/api/routes/dashboard.html`
+- `src/api/routes/chat_pipeline/routing.py`
+- `src/api/routes/chat_pipeline/routing_decision.py`
 - `src/api/services/memrl.py`
 - `src/api/services/routing_models.py`
+- `scripts/autopilot/config_applicator.py`
 - `tests/unit/test_stack_*.py`
 - `tests/unit/test_dashboard_helpers.py`
 - `tests/unit/test_routing_models.py`
@@ -58,6 +61,17 @@ Do not revert those files unless the user explicitly asks.
    frontdoor-verifier loading. `ensure_memrl_initialized()` now delegates
    optional routing-model startup to that bundle and remains the compatibility
    facade.
+8. Chat routing cleanup introduced
+   `src/api/routes/chat_pipeline/routing_decision.py` for initial routing
+   selection, factual-risk/difficulty scoring, failure-graph veto, routing
+   telemetry metadata, timeout resolution, skill ID extraction, task-type
+   derivation, and Trinity shadow classification. `_route_request()` remains the
+   public chat-pipeline orchestration function and preserves the legacy
+   `routing._classify_and_route` patch point used by tests.
+9. Autopilot config application now has a typed `ApplyResult` plus explicit
+   `HotSwapApplicator`, `EnvRestartApplicator`, and `KvCompactionApplicator`
+   classes. Existing public functions still return dictionaries for
+   compatibility with `autopilot.py` and tests.
 
 The live orchestrator API was healthy when last checked. Autopilot was
 intentionally killed per user instruction and should remain off unless the user
@@ -104,24 +118,92 @@ Completed:
 Partially completed.
 
 GitNexus marked both `ensure_memrl_initialized()` and `_route_request` as HIGH
-risk. The safe portion is now done:
+risk. The safe portions are now done:
 
 - `RoutingModelBundle` added
 - graph-router/classifier/verifier loading isolated in `routing_models.py`
 - keep `ensure_memrl_initialized()` as a compatibility facade
-- `_route_request` left untouched
+- `_route_request` reduced to orchestration while decision helpers live in
+  `routing_decision.py`
 
-Do not refactor `_route_request` further without a dedicated routing-design pass.
+Do not make behavioral changes to `_route_request` without a dedicated
+routing-design pass.
 
-## Exact Next Edit
+## Remaining Refactor Candidates
 
-No mandatory refactor edit remains in the current plan.
+No mandatory refactor edit remains before review/commit. The next work should be
+treated as separate tranches, not bundled into the current stack/dashboard/routing
+cleanup.
 
 Recommended next step is review/commit hygiene:
 
 - separate runtime artifacts from source changes
 - decide whether to include the earlier autopilot changes in the same commit
 - run the focused test suite again before committing
+
+Further refactoring candidates, in priority order:
+
+1. `scripts/autopilot/autopilot.py`
+
+   Current shape: still about 1,800 lines, with `dispatch_action()` carrying many
+   unrelated action branches.
+
+   Suggested next split:
+
+   - `autopilot/actions.py`: `dispatch_action()` facade plus action handlers
+   - `autopilot/controller_io.py`: controller invoke/extract/validation helpers
+   - `autopilot/state_store.py`: state/blacklist/model-signature persistence
+   - keep CLI commands in `autopilot.py` until action dispatch is stable
+
+   Safety: GitNexus previously showed `dispatch_action` as LOW risk by direct
+   callers, but behavior risk is high because it drives live experiments. Keep
+   `dispatch_action()` as the public facade and add focused tests for each action
+   family before moving branches.
+
+2. `orchestration/repl_memory/retriever.py`
+
+   Current shape: about 1,650 lines. `HybridRouter` is a large shared class with
+   classifier fast path, graph blending, risk gates, verifier logic, and rule
+   fallback behavior in one file.
+
+   Suggested next split:
+
+   - `retrieval_config.py`: `RetrievalConfig`, `RetrievalResult`, score structs
+   - `hybrid_router.py`: `HybridRouter` facade
+   - `routing_risk.py`: risk gate/budget stats helpers
+   - `routing_fast_path.py`: classifier/verifier decision helpers
+   - keep import re-exports in `retriever.py` during transition
+
+   Safety: run GitNexus impact on `HybridRouter`, `route`, and `route_with_mode`
+   before editing. This code has many direct unit and integration tests; preserve
+   constructor and method signatures until callers move.
+
+3. `scripts/server/orchestrator_stack.py`
+
+   Current shape: reduced but still about 2,700 lines. Most mechanical helpers
+   are extracted, but manifest/config constants and CLI command orchestration are
+   still colocated.
+
+   Suggested next split:
+
+   - `stack_manifest.py`: ports, role aliases, model paths, role classifications
+   - `stack_commands.py`: `cmd_start`, `cmd_stop`, `cmd_reload`, `cmd_status`
+   - keep `orchestrator_stack.py` as the executable CLI shim
+
+   Safety: preserve the top-level import path used by registry compiler fallback
+   imports. Move constants only after adding tests that import both
+   `scripts.server.orchestrator_stack` and top-level `orchestrator_stack`.
+
+4. Dashboard polish, not structural
+
+   Current shape: dashboard internals are split and route signatures are
+   preserved. More refactor is optional.
+
+   Suggested next work:
+
+   - replace `datetime.utcnow()` in `dashboard_tasks.py` with timezone-aware UTC
+   - add one route-level test for the extracted `dashboard.html` response
+   - avoid coupling dashboard route handlers back to stack launcher internals
 
 ## Safety Constraints
 

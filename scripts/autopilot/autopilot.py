@@ -513,11 +513,25 @@ def dispatch_action(
 
         if explicit_params:
             # Apply explicit params
-            apply_params(explicit_params)
+            apply_result = apply_params(explicit_params)
+            if apply_result.get("status") == "error":
+                log.warning(
+                    "Skipping numeric trial eval; explicit params were not applied: %s",
+                    apply_result.get("errors") or apply_result,
+                )
+                return None, "numeric_swarm"
         else:
             # Let Optuna suggest
             trial = swarm.suggest_trial(surface)
-            apply_params(trial["params"])
+            apply_result = apply_params(trial["params"])
+            if apply_result.get("status") == "error":
+                reason = "; ".join(apply_result.get("errors", [])) or str(apply_result)
+                swarm.mark_failed(surface, trial["trial_number"], reason)
+                log.warning(
+                    "Skipping numeric trial eval; suggested params were not applied: %s",
+                    reason,
+                )
+                return None, "numeric_swarm"
             state["_current_optuna_trial"] = {
                 "surface": surface,
                 "trial_number": trial["trial_number"],

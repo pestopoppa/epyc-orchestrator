@@ -102,6 +102,8 @@ class StubHybridRouter:
     retriever: Any = None
     rule_based_router: Any = None
     graph_router: Any = None
+    routing_classifier: Any = None
+    frontdoor_verifier: Any = None
 
 
 @dataclass
