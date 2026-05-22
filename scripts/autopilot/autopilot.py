@@ -59,6 +59,24 @@ from digest import generate_digest, should_generate_today
 from short_term_memory import ShortTermMemory, TrialOutcome
 from self_criticism import SelfCriticism, generate_self_criticism
 
+# 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
+from controller_io import (
+    extract_action,
+    invoke_controller as _invoke_controller_impl,
+    validate_single_variable as _validate_single_variable,
+    _unwrap_action,
+)
+from state_store import (
+    append_blacklist as _append_blacklist_impl,
+    check_blacklist,
+    format_model_signatures,
+    load_blacklist as _load_blacklist_impl,
+    load_model_signatures as _load_model_signatures_impl,
+    load_state as _load_state_impl,
+    save_state as _save_state_impl,
+)
+from actions import dispatch_action
+
 # Preflight diagnostics from seeding infra
 sys.path.insert(0, str(SCRIPT_DIR.parent / "benchmark"))
 try:
@@ -179,9 +197,14 @@ Include brief reasoning before the action block.
 # ── State Management ─────────────────────────────────────────────
 
 
-def load_state() -> dict[str, Any]:
-    if STATE_PATH.exists():
-        return json.loads(STATE_PATH.read_text())
+# State / blacklist / signatures helpers moved to state_store.py (2026-05-22 refactor).
+# Wrappers below preserve the original autopilot.py API by supplying STATE_PATH,
+# BLACKLIST_PATH, and the model-quality-signatures path.
+
+_MODEL_SIGNATURES_PATH = ORCH_ROOT / "orchestration" / "model_quality_signatures.yaml"
+
+
+def _default_state() -> dict[str, Any]:
     return {
         "trial_counter": 0,
         "session_id": None,
@@ -191,109 +214,27 @@ def load_state() -> dict[str, Any]:
     }
 
 
+def load_state() -> dict[str, Any]:
+    return _load_state_impl(STATE_PATH, _default_state)
+
+
 def save_state(state: dict[str, Any]) -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, indent=2, default=str))
-
-
-# ── Failure Blacklist (B2) ───────────────────────────────────
+    _save_state_impl(STATE_PATH, state)
 
 
 def load_blacklist() -> list[dict[str, Any]]:
     """Load failure blacklist from YAML."""
-    if not BLACKLIST_PATH.exists():
-        return []
-    try:
-        data = yaml.safe_load(BLACKLIST_PATH.read_text()) or {}
-        return data.get("blacklist", [])
-    except (yaml.YAMLError, OSError) as e:
-        log.warning("Could not load blacklist: %s", e)
-        return []
+    return _load_blacklist_impl(BLACKLIST_PATH)
 
 
 def load_model_signatures() -> dict[str, Any]:
     """Load model quality signatures from YAML."""
-    signatures_path = ORCH_ROOT / "orchestration" / "model_quality_signatures.yaml"
-    if not signatures_path.exists():
-        return {}
-    try:
-        data = yaml.safe_load(signatures_path.read_text()) or {}
-        return data.get("models", {})
-    except (yaml.YAMLError, OSError) as e:
-        log.warning("Could not load model signatures: %s", e)
-        return {}
-
-
-def format_model_signatures(signatures: dict[str, Any]) -> str:
-    """Format model signatures for controller prompt."""
-    if not signatures:
-        return "  (no model signatures available)"
-
-    lines = ["| Model | Role | Speed (t/s) | Strengths | Weaknesses |"]
-    lines.append("|-------|------|------------|-----------|------------|")
-
-    for model_name, sig in sorted(signatures.items()):
-        role = sig.get("role", "unknown")
-        speed = sig.get("max_throughput_tps", 0)
-        per_suite = sig.get("per_suite", {})
-
-        # Find top 2 suites (highest scores)
-        sorted_suites = sorted(per_suite.items(), key=lambda x: int(x[1].rstrip("%")), reverse=True)
-        strengths = ", ".join(f"{s[0]} ({s[1]})" for s in sorted_suites[:2])
-
-        # Find bottom 2 suites (lowest scores)
-        weaknesses = ", ".join(f"{s[0]} ({s[1]})" for s in sorted_suites[-2:])
-
-        short_name = model_name.split("-")[0:3]  # First 3 parts for brevity
-        short_name = "-".join(short_name)
-
-        lines.append(f"| {short_name} | {role} | {speed:.1f} | {strengths} | {weaknesses} |")
-
-    return "\n".join(lines)
-
-
-def check_blacklist(action: dict[str, Any], blacklist: list[dict[str, Any]]) -> str | None:
-    """Check if action matches any blacklist pattern.
-
-    Returns the reason string if blocked, None if allowed.
-    """
-    if not isinstance(action, dict):
-        return None
-    for entry in blacklist:
-        pattern = entry.get("pattern", {})
-        if not isinstance(pattern, dict):
-            continue
-        if pattern and all(action.get(k) == v for k, v in pattern.items()):
-            return entry.get("reason", "blacklisted")
-    return None
+    return _load_model_signatures_impl(_MODEL_SIGNATURES_PATH)
 
 
 def append_blacklist(action: dict[str, Any], trial_id: int, reason: str) -> None:
     """Auto-append a blacklist entry after rollback trigger."""
-    # Build a pattern from the action's key fields
-    pattern = {}
-    for key in ("type", "surface", "file", "mutation", "flags"):
-        if key in action:
-            pattern[key] = action[key]
-    if not pattern:
-        return
-
-    entry = {
-        "pattern": pattern,
-        "reason": reason,
-        "added": datetime.now(timezone.utc).isoformat(),
-        "source_trial": trial_id,
-    }
-
-    data = {"blacklist": []}
-    if BLACKLIST_PATH.exists():
-        try:
-            data = yaml.safe_load(BLACKLIST_PATH.read_text()) or {"blacklist": []}
-        except Exception:
-            log.debug("Blacklist write failed", exc_info=True)
-    data.setdefault("blacklist", []).append(entry)
-    BLACKLIST_PATH.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
-    log.info("Blacklisted pattern: %s (reason: %s)", pattern, reason)
+    _append_blacklist_impl(action, trial_id, reason, BLACKLIST_PATH)
 
 
 # ── Slot Memory Visibility (AM KV Compaction) ──────────────────
@@ -345,6 +286,10 @@ def _query_slot_memory() -> str:
 
 
 # ── Claude CLI Controller ────────────────────────────────────────
+# Controller invocation, action extraction, and AP-9 single-variable
+# validation moved to controller_io.py (2026-05-22 refactor). Wrapper below
+# preserves the original cwd=ORCH_ROOT semantics; extract_action +
+# _validate_single_variable + _unwrap_action are re-imported up top.
 
 
 def invoke_controller(
@@ -352,640 +297,14 @@ def invoke_controller(
     session_id: str | None = None,
     timeout: int = 300,
 ) -> tuple[str, str | None]:
-    """Invoke Claude CLI for meta-reasoning.
+    """Invoke Claude CLI for meta-reasoning."""
+    return _invoke_controller_impl(prompt, session_id=session_id, timeout=timeout, cwd=ORCH_ROOT)
 
-    Returns (response_text, session_id).
-    """
-    cmd = [
-        "claude", "-p", prompt,
-        "--output-format", "json",
-        "--allowedTools", "Read,Grep,Glob",
-    ]
-    if session_id:
-        cmd.extend(["--resume", session_id])
 
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=str(ORCH_ROOT),
-        )
-        stdout, stderr = proc.communicate(timeout=timeout)
+# ── Action Dispatch (moved to actions.py, 2026-05-22 refactor) ──
+# dispatch_action() is re-imported from actions.py at the module top so the
+# public name + signature are preserved for callers (run_loop, tests).
 
-        if proc.returncode != 0:
-            log.error("Controller failed (rc=%d): %s", proc.returncode, stderr[:500])
-            return "", session_id
-
-        try:
-            response = json.loads(stdout)
-            new_session = response.get("session_id", session_id)
-            return response.get("result", stdout), new_session
-        except json.JSONDecodeError:
-            return stdout, session_id
-
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        log.error("Controller timed out after %ds", timeout)
-        return "", session_id
-    except FileNotFoundError:
-        log.error("Claude CLI not found")
-        return "", session_id
-
-
-def _unwrap_action(data: Any) -> dict[str, Any] | None:
-    """Unwrap action from list or validate dict."""
-    if isinstance(data, list) and len(data) > 0:
-        data = data[0]
-    if isinstance(data, dict) and "type" in data:
-        return data
-    return None
-
-
-def extract_action(text: str) -> dict[str, Any] | None:
-    """Extract structured action from controller response."""
-    marker = "```json:autopilot_actions"
-    if marker in text:
-        start = text.index(marker) + len(marker)
-        end = text.index("```", start)
-        try:
-            data = json.loads(text[start:end].strip())
-            return _unwrap_action(data)
-        except json.JSONDecodeError as e:
-            log.error("Failed to parse action JSON: %s", e)
-            return None
-
-    # Fallback: look for any JSON block
-    if "```json" in text:
-        start = text.index("```json") + len("```json")
-        end = text.index("```", start)
-        try:
-            data = json.loads(text[start:end].strip())
-            if isinstance(data, dict) and "type" in data:
-                return data
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    return None
-
-
-# ── Action Dispatch ──────────────────────────────────────────────
-
-
-def _validate_single_variable(action: dict[str, Any]) -> str | None:
-    """AP-9: Validate that an action proposes a single-variable change.
-
-    Returns an error message if the action violates the single-variable
-    constraint, or None if it passes.
-    """
-    action_type = action.get("type", "")
-
-    if action_type in ("prompt_mutation", "gepa_optimize"):
-        # Must target exactly one file
-        target = action.get("file", "")
-        if not target:
-            return f"{action_type} must specify a single target file"
-        if "," in target or ";" in target:
-            return f"{action_type} targets multiple files: {target}"
-
-    elif action_type == "code_mutation":
-        target = action.get("file", "")
-        if not target:
-            return "code_mutation must specify a single target file"
-
-    elif action_type == "structural_experiment":
-        flags = action.get("flags", {})
-        if len(flags) > 1:
-            return (
-                f"structural_experiment changes {len(flags)} flags at once "
-                f"({list(flags.keys())}); limit to 1 for clean attribution"
-            )
-
-    elif action_type == "numeric_trial":
-        params = action.get("params", {})
-        # Optuna-suggested params are fine (controlled search), but explicit
-        # multi-param overrides violate single-variable principle
-        if len(params) > 1:
-            return (
-                f"numeric_trial sets {len(params)} params explicitly; "
-                "limit to 1 for clean attribution (Optuna suggestions exempt)"
-            )
-
-    return None
-
-
-def dispatch_action(
-    action: dict[str, Any],
-    seeder: Seeder,
-    swarm: NumericSwarm,
-    forge: PromptForge,
-    lab: StructuralLab,
-    tower: EvalTower,
-    gate: SafetyGate,
-    archive: ParetoArchive,
-    journal: ExperimentJournal,
-    state: dict[str, Any],
-    strategy_store: StrategyStore | None = None,
-    evo: EvolutionManager | None = None,
-) -> tuple[EvalResult | None, str]:
-    """Execute an action and return (eval_result, species_name)."""
-    action_type = action.get("type", "")
-
-    # AP-9: Single-variable scope enforcement
-    scope_err = _validate_single_variable(action)
-    if scope_err:
-        log.warning("AP-9 scope violation: %s — skipping trial", scope_err)
-        return None, action_type
-    log.info("Dispatching action: %s", action_type)
-
-    if action_type == "seed_batch":
-        n = action.get("n_questions", 10)
-        suites = action.get("suites")
-        result = seeder.run_batch(n_questions=n, suites=suites)
-        # After seeding, run T0 eval
-        eval_result = tower.hybrid_eval()
-        return eval_result, "seeder"
-
-    elif action_type == "numeric_trial":
-        surface = action.get("surface", "memrl_retrieval")
-        explicit_params = action.get("params", {})
-
-        if explicit_params:
-            # Apply explicit params
-            apply_result = apply_params(explicit_params)
-            if apply_result.get("status") == "error":
-                log.warning(
-                    "Skipping numeric trial eval; explicit params were not applied: %s",
-                    apply_result.get("errors") or apply_result,
-                )
-                return None, "numeric_swarm"
-        else:
-            # Let Optuna suggest
-            trial = swarm.suggest_trial(surface)
-            apply_result = apply_params(trial["params"])
-            if apply_result.get("status") == "error":
-                reason = "; ".join(apply_result.get("errors", [])) or str(apply_result)
-                swarm.mark_failed(surface, trial["trial_number"], reason)
-                log.warning(
-                    "Skipping numeric trial eval; suggested params were not applied: %s",
-                    reason,
-                )
-                return None, "numeric_swarm"
-            state["_current_optuna_trial"] = {
-                "surface": surface,
-                "trial_number": trial["trial_number"],
-            }
-
-        eval_result = tower.hybrid_eval()
-        # Report to Optuna if we have a trial
-        if "_current_optuna_trial" in state and eval_result:
-            t = state.pop("_current_optuna_trial")
-            swarm.report_result(
-                t["surface"], t["trial_number"], eval_result.objectives
-            )
-        return eval_result, "numeric_swarm"
-
-    elif action_type == "prompt_mutation":
-        target = action.get("file", "frontdoor.md")
-        mutation_type = action.get("mutation", "targeted_fix")
-        description = action.get("description", "")
-
-        # Gather failure context from recent journal entries (AP-1)
-        recent_failures = journal.recent_failures(species="prompt_forge", n=5)
-        failure_context = "\n\n".join(
-            f"Trial #{f.trial_id} ({f.action_type}):\n{f.failure_analysis}"
-            for f in recent_failures
-        )
-
-        # B5: Cross-species fertilization — prepend insights from all species
-        cross_insights = journal.insights_text(n=5)
-        if cross_insights and cross_insights != "(no insights yet)":
-            failure_context = (
-                f"## Cross-Species Insights\n{cross_insights}\n\n"
-                + failure_context
-            )
-
-        # B1: Strategy store retrieval — add past strategy insights
-        if strategy_store is not None:
-            query = f"{target} {mutation_type} {description}"
-            strategies = strategy_store.retrieve(query, k=3)
-            if strategies:
-                strategy_lines = "\n".join(
-                    f"- Trial #{s.source_trial_id} ({s.species}): {s.description} → {s.insight}"
-                    for s in strategies
-                )
-                failure_context = (
-                    f"## Past Strategy Insights\n{strategy_lines}\n\n"
-                    + failure_context
-                )
-
-        # B3: Execution trace feedback — add recent inference traces
-        last_traces = state.get("last_traces", "")
-        if last_traces:
-            failure_context = (
-                f"## Recent Execution Traces\n{last_traces}\n\n"
-                + failure_context
-            )
-
-        # Get per-suite quality from most recent eval
-        last_entries = journal.recent(1)
-        last_per_suite = (
-            last_entries[-1].eval_details.get("per_suite_quality")
-            if last_entries else None
-        )
-
-        try:
-            mutation = forge.propose_mutation(
-                target_file=target,
-                mutation_type=mutation_type,
-                failure_context=failure_context,
-                per_suite_quality=last_per_suite,
-                description=description,
-            )
-        except FileNotFoundError:
-            log.warning("Prompt file not found: %s (may have been removed in refactoring)", target)
-            return None, "prompt_forge"
-        forge.apply_mutation(mutation)
-        eval_result = tower.hybrid_eval()
-
-        # Revert if quality drops
-        verdict = gate.check(eval_result)
-        if not verdict:
-            log.warning("Prompt mutation failed safety gate, reverting")
-            forge.revert_mutation(mutation)
-            return eval_result, "prompt_forge"
-
-        # AP-10: Simplicity criterion — reject mutations that add
-        # disproportionate complexity for marginal quality gain.
-        orig_len = len(mutation.original_content)
-        new_len = len(mutation.mutated_content)
-        if orig_len > 0:
-            size_increase = (new_len - orig_len) / orig_len
-            # Compare quality against last known quality from journal
-            last_quality = 0.0
-            recent = journal.recent(1)
-            if recent:
-                last_quality = recent[-1].quality
-            quality_delta = eval_result.quality - last_quality
-            if size_increase > 0.20 and quality_delta < 0.02:
-                log.warning(
-                    "Simplicity criterion: prompt grew %.0f%% for %.3f quality gain, reverting",
-                    size_increase * 100,
-                    quality_delta,
-                )
-                forge.revert_mutation(mutation)
-                return eval_result, "prompt_forge"
-            # Block catastrophic shrinkage (>50% reduction) — likely destructive
-            if size_increase < -0.50:
-                log.warning(
-                    "Simplicity criterion: prompt shrank %.0f%% — likely destructive, reverting",
-                    abs(size_increase) * 100,
-                )
-                forge.revert_mutation(mutation)
-                state["_dispatch_deficiency"] = "shrinkage"  # AP-14
-                return eval_result, "prompt_forge"
-
-        # AP-7: Prompt change accepted — invalidate stale Optuna trials
-        swarm.mark_epoch(f"prompt_mutation:{target}/{mutation_type}")
-        return eval_result, "prompt_forge"
-
-    elif action_type == "gepa_optimize":
-        # AP-19: GEPA evolutionary prompt optimization
-        target = action.get("file", "frontdoor.md")
-        max_evals = action.get("max_evals", 50)
-        description = action.get("description", f"GEPA optimize {target}")
-
-        log.info("GEPA optimize: %s (max_evals=%d)", target, max_evals)
-
-        try:
-            mutation = forge.propose_mutation(
-                target_file=target,
-                mutation_type="gepa",
-                description=description,
-                eval_tower=tower,
-                gepa_max_evals=max_evals,
-            )
-        except FileNotFoundError:
-            log.warning("Prompt file not found: %s", target)
-            return None, "prompt_forge"
-
-        # No-op mutation means GEPA failed
-        if mutation.original_content == mutation.mutated_content:
-            log.warning("GEPA produced no mutation for %s", target)
-            eval_result = tower.hybrid_eval()
-            return eval_result, "prompt_forge"
-
-        forge.apply_mutation(mutation)
-        eval_result = tower.hybrid_eval()
-
-        # Safety gate check (same as prompt_mutation)
-        verdict = gate.check(eval_result)
-        if not verdict:
-            log.warning("GEPA mutation failed safety gate, reverting")
-            forge.revert_mutation(mutation)
-            return eval_result, "prompt_forge"
-
-        # Simplicity criterion (AP-10)
-        orig_len = len(mutation.original_content)
-        new_len = len(mutation.mutated_content)
-        if orig_len > 0:
-            size_increase = (new_len - orig_len) / orig_len
-            last_quality = 0.0
-            recent = journal.recent(1)
-            if recent:
-                last_quality = recent[-1].quality
-            quality_delta = eval_result.quality - last_quality
-            if size_increase > 0.20 and quality_delta < 0.02:
-                log.warning(
-                    "GEPA simplicity criterion: prompt grew %.0f%% for %.3f gain, reverting",
-                    size_increase * 100, quality_delta,
-                )
-                forge.revert_mutation(mutation)
-                return eval_result, "prompt_forge"
-            if size_increase < -0.50:
-                log.warning(
-                    "GEPA simplicity criterion: prompt shrank %.0f%%, reverting",
-                    abs(size_increase) * 100,
-                )
-                forge.revert_mutation(mutation)
-                state["_dispatch_deficiency"] = "shrinkage"
-                return eval_result, "prompt_forge"
-
-        swarm.mark_epoch(f"gepa_optimize:{target}")
-        return eval_result, "prompt_forge"
-
-    elif action_type == "code_mutation":
-        # Meta-Harness Tier 2: Python code mutation
-        target = action.get("file", "")
-        mutation_type = action.get("mutation", "targeted_fix")
-        description = action.get("description", "")
-
-        # Gather context (same as prompt_mutation)
-        recent_failures = journal.recent_failures(species="prompt_forge", n=5)
-        failure_context = "\n\n".join(
-            f"Trial #{f.trial_id} ({f.action_type}):\n{f.failure_analysis}"
-            for f in recent_failures
-        )
-        cross_insights = journal.insights_text(n=5)
-        if cross_insights and cross_insights != "(no insights yet)":
-            failure_context = f"## Cross-Species Insights\n{cross_insights}\n\n" + failure_context
-        last_traces = state.get("last_traces", "")
-        if last_traces:
-            failure_context = f"## Recent Execution Traces\n{last_traces}\n\n" + failure_context
-
-        last_entries = journal.recent(1)
-        last_per_suite = (
-            last_entries[-1].eval_details.get("per_suite_quality")
-            if last_entries else None
-        )
-
-        try:
-            mutation = forge.propose_code_mutation(
-                target_file=target,
-                mutation_type=mutation_type,
-                failure_context=failure_context,
-                per_suite_quality=last_per_suite,
-                description=description,
-            )
-        except (ValueError, FileNotFoundError) as e:
-            log.error("Code mutation blocked: %s", e)
-            return None, "prompt_forge"
-
-        if not mutation.syntax_valid:
-            log.warning("Code mutation failed syntax validation, skipping")
-            return None, "prompt_forge"
-
-        forge.apply_code_mutation(mutation)
-        eval_result = tower.hybrid_eval()
-
-        verdict = gate.check(eval_result)
-        if not verdict:
-            log.warning("Code mutation failed safety gate, reverting")
-            forge.revert_code_mutation(mutation)
-            return eval_result, "prompt_forge"
-
-        # Simplicity criterion for code — block both excessive growth AND catastrophic shrinkage
-        orig_len = len(mutation.original_content)
-        new_len = len(mutation.mutated_content)
-        if orig_len > 0:
-            size_change = (new_len - orig_len) / orig_len
-            last_quality = 0.0
-            recent = journal.recent(1)
-            if recent:
-                last_quality = recent[-1].quality
-            quality_delta = eval_result.quality - last_quality
-            # Block excessive growth with insufficient quality gain
-            if size_change > 0.20 and quality_delta < 0.02:
-                log.warning(
-                    "Simplicity criterion: code grew %.0f%% for %.3f quality gain, reverting",
-                    size_change * 100, quality_delta,
-                )
-                forge.revert_code_mutation(mutation)
-                return eval_result, "prompt_forge"
-            # Block catastrophic shrinkage (>50% reduction) — likely destructive
-            if size_change < -0.50:
-                log.warning(
-                    "Simplicity criterion: code shrank %.0f%% — likely destructive, reverting",
-                    abs(size_change) * 100,
-                )
-                forge.revert_code_mutation(mutation)
-                state["_dispatch_deficiency"] = "shrinkage"  # AP-14
-                return eval_result, "prompt_forge"
-
-        swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")
-        return eval_result, "prompt_forge"
-
-    elif action_type == "structural_experiment":
-        flags = action.get("flags", {})
-        validation = lab.propose_flag_experiment(flags)
-        if validation.get("status") != "valid":
-            log.warning("Invalid flag experiment: %s", validation)
-            return None, "structural_lab"
-
-        lab.apply_flag_experiment(flags)
-        eval_result = tower.hybrid_eval()
-
-        # Revert if quality drops
-        verdict = gate.check(eval_result)
-        if not verdict:
-            log.warning("Structural experiment failed safety gate, reverting")
-            # Revert flags
-            reverted = {k: not v for k, v in flags.items()}
-            lab.apply_flag_experiment(reverted)
-        else:
-            # AP-7: Structural change accepted — invalidate stale Optuna trials
-            swarm.mark_epoch(f"structural_experiment:{flags}")
-
-        return eval_result, "structural_lab"
-
-    elif action_type == "structural_prune":
-        # AP-17: Block-level deletion from .md prompt files
-        target = action.get("file", "")
-        block_id = action.get("block", "")
-
-        if not target or not block_id:
-            log.warning("structural_prune requires 'file' and 'block'")
-            return None, "structural_lab"
-
-        # Only allow pruning .md files in prompts directory
-        prompts_dir = Path(__file__).resolve().parents[2] / "orchestration" / "prompts"
-        target_path = prompts_dir / target
-        if not target_path.exists() or not target.endswith(".md"):
-            log.warning("Prune target not found or not .md: %s", target_path)
-            return None, "structural_lab"
-
-        original_content = target_path.read_text()
-        pruned_content = lab.prune_block(original_content, block_id)
-        if pruned_content is None or pruned_content == original_content:
-            log.warning("Block '%s' not found in %s", block_id, target)
-            return None, "structural_lab"
-
-        # Save deleted block in action for journal rollback
-        deleted_lines = original_content.split("\n")
-        pruned_lines = pruned_content.split("\n")
-        action["_deleted_block"] = "\n".join(
-            line for line in deleted_lines if line not in pruned_lines
-        )
-
-        # Apply pruning
-        target_path.write_text(pruned_content)
-        pre_ratio = state.get("_last_instruction_ratio", 0.0)
-
-        eval_result = tower.hybrid_eval()
-
-        # Acceptance: safety gate passes AND instruction_token_ratio decreased
-        verdict_result = gate.check(eval_result)
-        ratio_decreased = eval_result.instruction_token_ratio < pre_ratio
-
-        if not verdict_result or not ratio_decreased:
-            reasons = []
-            if not verdict_result:
-                reasons.append(f"safety gate: {verdict_result.violations}")
-            if not ratio_decreased:
-                reasons.append(
-                    f"ratio not decreased: {eval_result.instruction_token_ratio:.4f} "
-                    f">= {pre_ratio:.4f}"
-                )
-            log.warning("Structural prune rejected: %s", "; ".join(reasons))
-            target_path.write_text(original_content)
-            return eval_result, "structural_lab"
-
-        # Accepted — invalidate stale Optuna trials
-        swarm.mark_epoch(f"structural_prune:{target}/{block_id}")
-        return eval_result, "structural_lab"
-
-    elif action_type == "train_routing_models":
-        min_mem = action.get("min_memories", 500)
-        lab.checkpoint_state(
-            trial_id=state.get("trial_counter", 0),
-            notes="Pre-training checkpoint",
-        )
-        result = lab.train_routing_models(min_memories=min_mem)
-        log.info("Training result: %s", result)
-        eval_result = tower.hybrid_eval()
-        return eval_result, "structural_lab"
-
-    elif action_type == "distill_skillbank":
-        teacher = action.get("teacher", "claude")
-        categories = action.get("categories", ["routing"])
-        lab.checkpoint_state(
-            trial_id=state.get("trial_counter", 0),
-            notes="Pre-distillation checkpoint",
-        )
-        result = lab.distill_skillbank(teacher=teacher, categories=categories)
-        log.info("Distillation result: %s", result)
-        eval_result = tower.hybrid_eval()
-        return eval_result, "structural_lab"
-
-    elif action_type == "reset_memories":
-        keep_seen = action.get("keep_seen", True)
-        keep_skills = action.get("keep_skills", True)
-        result = lab.reset_and_reseed(
-            keep_seen=keep_seen,
-            keep_skills=keep_skills,
-            trial_id=state.get("trial_counter", 0),
-        )
-        log.info("Reset result: %s", result)
-        return None, "structural_lab"
-
-    elif action_type == "deep_eval":
-        tier = action.get("tier", 2)
-        eval_result = tower.evaluate(tier=tier)
-        return eval_result, "seeder"
-
-    elif action_type == "rollback":
-        to_cp = action.get("to_checkpoint", "production_best")
-        if to_cp == "production_best":
-            lab.restore_checkpoint()
-        else:
-            lab.restore_checkpoint(Path(to_cp))
-        gate.reset_failures()
-        eval_result = tower.hybrid_eval()
-        return eval_result, "structural_lab"
-
-    elif action_type == "distill_knowledge":
-        # Evolution Manager: knowledge distillation (no eval, no system change)
-        last_n = action.get("last_n", 10)
-        if evo is not None and strategy_store is not None:
-            result = evo.distill(
-                journal_entries=journal.all_entries(),
-                strategy_store=strategy_store,
-                last_n=last_n,
-                trial_id=state.get("trial_counter", 0),
-            )
-            log.info("Knowledge distillation: %s", result)
-        else:
-            log.warning("distill_knowledge requires evo + strategy_store")
-        return None, "evolution_manager"
-
-    elif action_type == "slot_compact":
-        # Expected Attention KV Compression: score and evict KV cache entries
-        # Uses the kv_compress module for telemetry, gap guardrails, and structured results.
-        from kv_compress import compress_slot, auto_compress_all
-
-        port = action.get("port")
-        slot_id = action.get("slot_id", 0)
-        keep_ratio = action.get("keep_ratio", 0.5)
-        keep_first = action.get("keep_first", 4)
-        scorer = action.get("scorer", "expected_attention")
-        layer_weights = action.get("layer_weights")
-        n_future = action.get("n_future", 128)
-        use_covariance = action.get("use_covariance", True)
-
-        if port:
-            # Single-port compression
-            result = compress_slot(
-                port=port, slot_id=slot_id, keep_ratio=keep_ratio,
-                scorer=scorer, keep_first=keep_first, n_future=n_future,
-                use_covariance=use_covariance, layer_weights=layer_weights,
-            )
-            if result.success:
-                log.info(
-                    "KV compact port=%d slot=%d: evicted=%d keep=%.0f%% scorer=%s time=%.1fms",
-                    port, slot_id, result.n_evicted, keep_ratio * 100, scorer, result.elapsed_ms,
-                )
-            else:
-                log.warning("KV compact failed on port %d: %s", port, result.error)
-        else:
-            # Compress all production slots
-            results = auto_compress_all(
-                threshold=action.get("threshold", 0.80),
-                keep_ratio=keep_ratio, scorer=scorer, keep_first=keep_first,
-                n_future=n_future, use_covariance=use_covariance,
-                layer_weights=layer_weights,
-            )
-            for role, r in results.items():
-                if r and r.success:
-                    log.info("KV compact %s: evicted=%d", role, r.n_evicted)
-
-        # Evaluate quality after compaction to measure impact
-        eval_result = tower.hybrid_eval()
-        return eval_result, "slot_management"
-
-    else:
-        log.warning("Unknown action type: %s", action_type)
-        return None, "unknown"
 
 
 # ── Main Loop ────────────────────────────────────────────────────

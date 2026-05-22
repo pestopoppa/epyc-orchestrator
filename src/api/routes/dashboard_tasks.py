@@ -10,7 +10,7 @@ historical inference_tap.log when a task's slot is no longer alive.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +62,11 @@ def _task_text_snapshot(
 ) -> str:
     """Render a plain-text snapshot of a task suitable for pasting into chat."""
     lines: list[str] = []
-    lines.append(f"=== Task {task_id} @ {datetime.utcnow().isoformat()}Z ===")
+    # Use timezone-aware UTC instead of the deprecated datetime.utcnow().
+    # isoformat() on a tz-aware datetime ends with "+00:00"; the dashboard
+    # snapshot format expects a trailing "Z" so we strip the offset.
+    now_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "")
+    lines.append(f"=== Task {task_id} @ {now_utc}Z ===")
     lines.append("")
     prompt_text = ""
     stream_text = ""

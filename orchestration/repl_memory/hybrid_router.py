@@ -1,0 +1,713 @@
+"""HybridRouter — learned + rule-based fusion for orchestrator routing.
+
+Extracted from retriever.py during the 2026-05-22 Tranche-6 refactor. The
+class combines a TwoPhaseRetriever's KNN/Q-value scores with a RuleBasedRouter
+fallback, optional GraphRouterPredictor blending, classifier fast-path,
+frontdoor-specialist verifier (P6.2-A2), and DAR-3 epsilon-greedy exploration.
+
+retriever.py re-imports HybridRouter so existing `from
+orchestration.repl_memory.retriever import HybridRouter` calls keep working.
+
+GitNexus impact analysis (pre-refactor): MEDIUM risk, 14 direct callers, 44
+impacted symbols. Constructor + method signatures are preserved verbatim — no
+behavioral changes — to minimize regression risk in the routing path.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import random
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+import numpy as np
+
+from .retrieval_config import RetrievalResult, _retr_cfg
+
+if TYPE_CHECKING:
+    from .failure_graph import FailureGraph
+    from .graph_router_predictor import GraphRouterPredictor
+    from .hypothesis_graph import HypothesisGraph
+    from .routing_classifier import RoutingClassifier
+    # Forward-only — these classes still live in retriever.py
+    from .retriever import RuleBasedRouter, TwoPhaseRetriever
+
+logger = logging.getLogger(__name__)
+
+
+class HybridRouter:
+    """
+    Hybrid routing that combines learned and rule-based approaches.
+
+    Uses learned routing when confident, falls back to rules otherwise.
+    This implements the cold start strategy from the plan.
+    """
+
+    def __init__(
+        self,
+        retriever: TwoPhaseRetriever,
+        rule_based_router: "RuleBasedRouter",  # Forward reference
+        graph_router: Optional["GraphRouterPredictor"] = None,
+        graph_router_weight: float = 0.3,
+        routing_classifier: Optional["RoutingClassifier"] = None,
+        classifier_confidence_threshold: float = 0.8,
+        exploration_epsilon: float = 0.0,
+        frontdoor_verifier: Optional[Any] = None,
+        frontdoor_verifier_threshold: float = 0.5,
+    ):
+        self.retriever = retriever
+        self.rule_based = rule_based_router
+        self.graph_router = graph_router
+        self.graph_router_weight = graph_router_weight
+        self.routing_classifier = routing_classifier
+        self.classifier_confidence_threshold = classifier_confidence_threshold
+        # P6.2-A2 — frontdoor-specialist verifier (Hypothesis C from
+        # research/deep-dives/2026-05-21-recursive-reasoning-routing.md).
+        # When set, fires after the classifier picks top-class=frontdoor with
+        # confidence above its per-class threshold. If verifier P(success) drops
+        # below frontdoor_verifier_threshold, the fast-path is BYPASSED and the
+        # request falls through to the full KNN pipeline. Default-OFF in
+        # production: memrl.py only constructs a verifier when
+        # ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE=1.
+        self.frontdoor_verifier = frontdoor_verifier
+        self.frontdoor_verifier_threshold = float(
+            os.environ.get("FRONTDOOR_VERIFIER_THRESHOLD", str(frontdoor_verifier_threshold))
+        )
+        self.frontdoor_verifier_shadow = (
+            os.environ.get("FRONTDOOR_VERIFIER_SHADOW", "0") == "1"
+        )
+        # DAR-3: Epsilon-greedy exploration for counterfactual data collection.
+        # When > 0, with probability epsilon, pick a random alternative from
+        # retrieval results instead of the best. Set via SPO_PLUS_EPSILON env var.
+        self.exploration_epsilon = float(
+            os.environ.get("SPO_PLUS_EPSILON", str(exploration_epsilon))
+        )
+        self.last_decision_meta: Dict[str, Any] = {}
+
+        # DAR-4: Bilinear scorer for zero cold-start model routing.
+        # Initialized lazily on first use when BILINEAR_SCORER_ENABLED=1.
+        self._bilinear_scorer = None
+        if os.environ.get("BILINEAR_SCORER_ENABLED", "0") == "1":
+            try:
+                from orchestration.repl_memory.bilinear_scorer import (
+                    BilinearScorer,
+                    extract_model_features,
+                    extract_prompt_features,
+                )
+                from orchestration.repl_memory.q_scorer import ScoringConfig
+                features = extract_model_features(ScoringConfig())
+                self._bilinear_scorer = BilinearScorer(features)
+                # Try loading saved weights
+                import pathlib
+                weights_path = str(pathlib.Path(__file__).parent / "bilinear_scorer_weights.npz")
+                self._bilinear_scorer.load(weights_path)
+                logger.info("DAR-4 bilinear scorer initialized (%d models)", len(features))
+            except Exception as e:
+                logger.warning("DAR-4 bilinear scorer init failed: %s", e)
+                self._bilinear_scorer = None
+
+    def _record_decision_meta(
+        self,
+        *,
+        strategy: str,
+        chosen_action: Optional[str],
+        results: List[RetrievalResult],
+        risk_gate: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Store metadata for telemetry logging."""
+        top = results[:5]
+        self.last_decision_meta = {
+            "decision_source": strategy,
+            "chosen_action": chosen_action or "",
+            "similarity_topk": [round(r.similarity, 4) for r in top],
+            "q_topk": [round(r.q_value, 4) for r in top],
+            "q_robust_confidence": round(top[0].q_confidence, 4) if top else 0.0,
+            "selection_score_topk": [round(r.selection_score, 4) for r in top],
+            "prior_term_topk": [round(r.prior_term, 4) for r in top],
+            "posterior_score_topk": [round(r.posterior_score, 4) for r in top],
+            "learned_evidence_topk": [round(r.q_value, 4) for r in top],
+            "cost_term_topk": [
+                round(
+                    self.retriever.config.cost_lambda
+                    * (r.expected_cost_s / max(r.cold_cost_s, 1e-6)),
+                    4,
+                )
+                for r in top
+            ],
+            "cache_state": (
+                "warm"
+                if top and top[0].p_warm >= 0.7
+                else "cold"
+                if top and top[0].p_warm <= 0.3
+                else "mixed"
+            ),
+            "expected_cost_s": round(top[0].expected_cost_s, 4) if top else 0.0,
+            "p_warm": round(top[0].p_warm, 4) if top else 0.0,
+            "warm_cost_s": round(top[0].warm_cost_s, 4) if top else 0.0,
+            "cold_cost_s": round(top[0].cold_cost_s, 4) if top else 0.0,
+            "effective_confidence_threshold": round(
+                self.retriever.get_effective_confidence_threshold(), 4
+            ),
+            "risk_gate_action": (
+                str((risk_gate or {}).get("action"))
+                if risk_gate
+                else ("not_enforced" if not self.retriever.config.risk_control_enabled else "")
+            ),
+            "risk_gate_reason": str((risk_gate or {}).get("reason", "")),
+            "risk_budget_id": str(
+                (risk_gate or {}).get("budget_id", self.retriever.config.risk_budget_id)
+            ),
+            "graph_router_ready": bool(
+                self.graph_router and self.graph_router.is_ready
+            ) if self.graph_router else False,
+            "graph_router_weight": round(
+                self._get_adaptive_graph_weight(), 4
+            ) if self.graph_router else 0.0,
+        }
+
+    def _get_adaptive_graph_weight(self) -> float:
+        """Compute adaptive blend weight based on episodic store size.
+
+        Annealing schedule:
+        - Below 500 memories: w=0.1 (minimal GNN trust, cold-start)
+        - 500-2000 memories: linear ramp 0.1->0.3
+        - Above 2000: w=0.3 (max GNN influence)
+
+        Returns:
+            Blend weight in [0.1, graph_router_weight]
+        """
+        try:
+            store_size = self.retriever.store.count()
+        except Exception:
+            return 0.1
+
+        min_w = 0.1
+        max_w = self.graph_router_weight
+        if store_size < 500:
+            return min_w
+        if store_size >= 2000:
+            return max_w
+        # Linear interpolation
+        t = (store_size - 500) / 1500.0
+        return min_w + t * (max_w - min_w)
+
+    def _blend_graph_router_scores(
+        self,
+        results: List[RetrievalResult],
+        task_ir: Dict[str, Any],
+    ) -> None:
+        """Blend GraphRouter signal into posterior scores.
+
+        Formula: posterior = (1-w) * retriever_score + w * graph_score
+        """
+        if not results:
+            return
+
+        # Get query embedding (reuse from retriever)
+        try:
+            embedding = self.retriever.embedder.embed_task_ir(task_ir)
+        except Exception:
+            return
+
+        task_type = task_ir.get("task_type", "general")
+        gr_scores = self.graph_router.predict(embedding, task_type)
+
+        if not gr_scores:
+            return
+
+        w = self._get_adaptive_graph_weight()
+
+        for r in results:
+            role = self.retriever._extract_role_from_memory(r.memory)
+            if role in gr_scores:
+                r.posterior_score = (1 - w) * r.posterior_score + w * gr_scores[role]
+
+        results.sort(key=lambda r: r.posterior_score, reverse=True)
+
+    def _action_prior_prob(self, action: str, priors: Dict[str, float]) -> float:
+        """Map action string to prior probability mass."""
+        first = action.split(",")[0].strip()
+        if ":" in first:
+            first = first.split(":", 1)[0]
+        return float(priors.get(first, priors.get(action, 0.0)))
+
+    def _apply_priors(
+        self,
+        results: List[RetrievalResult],
+        priors: Optional[Dict[str, float]],
+    ) -> List[RetrievalResult]:
+        """Combine heuristic priors with learned evidence into posterior score."""
+        if not results:
+            return results
+        if not priors:
+            for r in results:
+                r.prior_term = 0.0
+                r.posterior_score = r.selection_score
+            return sorted(results, key=lambda x: x.posterior_score, reverse=True)
+
+        strength = float(self.retriever.config.prior_strength)
+        for r in results:
+            prior_prob = self._action_prior_prob(r.memory.action, priors)
+            r.prior_term = strength * prior_prob
+            r.posterior_score = r.selection_score + r.prior_term
+        return sorted(results, key=lambda x: x.posterior_score, reverse=True)
+
+    # Task types matching extract_training_data.py (order must be stable)
+    _CLASSIFIER_TASK_TYPES = ["code", "chat", "architecture", "ingest", "general"]
+
+    def _build_classifier_features(self, task_ir: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Build 1031-dim feature vector for classifier from task_ir.
+
+        Returns None if embedding fails.
+        """
+        try:
+            embedding = self.retriever.embedder.embed_task_ir(task_ir)
+        except Exception:
+            return None
+
+        emb = np.asarray(embedding, dtype=np.float32)
+
+        # Task type one-hot
+        tt_vec = np.zeros(len(self._CLASSIFIER_TASK_TYPES), dtype=np.float32)
+        task_type = (task_ir.get("task_type", "general") or "general").lower()
+        matched = False
+        for i, tt in enumerate(self._CLASSIFIER_TASK_TYPES):
+            if tt in task_type:
+                tt_vec[i] = 1.0
+                matched = True
+                break
+        if not matched:
+            tt_vec[self._CLASSIFIER_TASK_TYPES.index("general")] = 1.0
+
+        # Context features
+        ctx_len = task_ir.get("context_length", 0)
+        norm_ctx_len = np.float32(np.log1p(ctx_len) / 12.0)
+        has_images = np.float32(1.0 if task_ir.get("has_images", False) else 0.0)
+
+        return np.concatenate([emb, tt_vec, [norm_ctx_len], [has_images]])
+
+    def route(
+        self,
+        task_ir: Dict[str, Any],
+        priors: Optional[Dict[str, float]] = None,
+    ) -> Tuple[List[str], str]:
+        """
+        Route a task using hybrid strategy.
+
+        Args:
+            task_ir: TaskIR dictionary
+
+        Returns:
+            (routing_decision, strategy_used) tuple
+            strategy_used is "learned" or "rules"
+        """
+        # Classifier fast-path: skip full retrieval if confident
+        if self.routing_classifier is not None:
+            features = self._build_classifier_features(task_ir)
+            if features is not None:
+                action, confidence = self.routing_classifier.predict_action(features)
+                # Per-class thresholds: action is None when below threshold
+                # Global threshold: fallback for classifiers without per-class calibration
+                if action is not None and confidence >= self.classifier_confidence_threshold:
+                    routing = self._parse_routing_action(action)
+                    if routing:
+                        # P6.2-A2 — frontdoor-specialist verifier gate. Fires
+                        # only when the classifier's chosen action is frontdoor.
+                        # In shadow mode, log the verifier's verdict but don't
+                        # gate. In enforcing mode, if P(success) < threshold,
+                        # do NOT return via fast-path — fall through to KNN.
+                        verifier_p = None
+                        verifier_verdict = None
+                        if (
+                            self.frontdoor_verifier is not None
+                            and routing[0] == "frontdoor"
+                        ):
+                            try:
+                                verifier_p = float(self.frontdoor_verifier.predict(
+                                    features, action_idx=0,
+                                ))
+                            except Exception as exc:
+                                logger.warning(
+                                    "frontdoor verifier predict failed: %s", exc,
+                                )
+                                verifier_p = None
+                            if verifier_p is not None:
+                                verifier_verdict = (
+                                    "accept" if verifier_p >= self.frontdoor_verifier_threshold
+                                    else "reject"
+                                )
+                                if (
+                                    verifier_verdict == "reject"
+                                    and not self.frontdoor_verifier_shadow
+                                ):
+                                    # Enforcing mode + reject: skip fast-path,
+                                    # let the normal KNN path take over below.
+                                    self.last_decision_meta = {
+                                        "decision_source": "classifier_verifier_reject",
+                                        "chosen_action": action,
+                                        "classifier_confidence": round(confidence, 4),
+                                        "classifier_threshold": self.classifier_confidence_threshold,
+                                        "verifier_p_success": round(verifier_p, 4),
+                                        "verifier_threshold": self.frontdoor_verifier_threshold,
+                                        "verifier_verdict": "reject",
+                                    }
+                                    # Intentionally do NOT return here — fall
+                                    # through to KNN below.
+                                    pass
+                                else:
+                                    self.retriever.update_last_role(routing[0])
+                                    self.last_decision_meta = {
+                                        "decision_source": "classifier",
+                                        "chosen_action": action,
+                                        "classifier_confidence": round(confidence, 4),
+                                        "classifier_threshold": self.classifier_confidence_threshold,
+                                        "verifier_p_success": round(verifier_p, 4),
+                                        "verifier_threshold": self.frontdoor_verifier_threshold,
+                                        "verifier_verdict": verifier_verdict,
+                                        "verifier_shadow": self.frontdoor_verifier_shadow,
+                                    }
+                                    return (routing, "classifier")
+                            else:
+                                # Verifier error — fall back to classifier alone
+                                self.retriever.update_last_role(routing[0])
+                                self.last_decision_meta = {
+                                    "decision_source": "classifier",
+                                    "chosen_action": action,
+                                    "classifier_confidence": round(confidence, 4),
+                                    "classifier_threshold": self.classifier_confidence_threshold,
+                                    "verifier_error": True,
+                                }
+                                return (routing, "classifier")
+                        else:
+                            # No verifier configured OR non-frontdoor route
+                            self.retriever.update_last_role(routing[0])
+                            self.last_decision_meta = {
+                                "decision_source": "classifier",
+                                "chosen_action": action,
+                                "classifier_confidence": round(confidence, 4),
+                                "classifier_threshold": self.classifier_confidence_threshold,
+                            }
+                            return (routing, "classifier")
+
+        # DAR-4: Bilinear scorer provides a prior from model features.
+        # Log scores for telemetry; blending into retrieval is future work.
+        if self._bilinear_scorer is not None:
+            try:
+                from orchestration.repl_memory.bilinear_scorer import extract_prompt_features
+                prompt_features = extract_prompt_features(task_ir)
+                bilinear_scores = self._bilinear_scorer.predict_all(prompt_features)
+                self.last_decision_meta["bilinear_scores"] = {
+                    k: round(v, 4) for k, v in list(bilinear_scores.items())[:5]
+                }
+            except Exception:
+                pass
+
+        # Try learned routing first
+        results = self.retriever.retrieve_for_routing(task_ir)
+        results = self._apply_priors(results, priors)
+
+        # Blend GraphRouter signal if available
+        if self.graph_router and self.graph_router.is_ready:
+            self._blend_graph_router_scores(results, task_ir)
+
+        route_key = str(task_ir.get("task_id", task_ir.get("objective", "")))
+        risk_gate = self.retriever.evaluate_risk_gate(results, route_key=route_key)
+
+        if risk_gate.get("enforced") and not risk_gate.get("passed"):
+            routing = [self.retriever.config.risk_abstain_target_role]
+            self.retriever.update_last_role(routing[0])
+            self._record_decision_meta(
+                strategy="risk_abstain_escalate",
+                chosen_action=",".join(routing),
+                results=results,
+                risk_gate=risk_gate,
+            )
+            return (routing, "risk_abstain_escalate")
+
+        if self.retriever.should_use_learned(results):
+            best_action = self.retriever.get_best_action(results)
+            if best_action:
+                action = best_action[0]
+                confidence = best_action[1]
+                strategy = "learned"
+
+                # DAR-3: Epsilon-greedy exploration for counterfactual data.
+                # With probability epsilon, pick a random alternative action.
+                if (
+                    self.exploration_epsilon > 0
+                    and random.random() < self.exploration_epsilon
+                    and len(results) > 1
+                ):
+                    # Collect unique alternative actions
+                    alt_actions = [
+                        r.memory.action for r in results[1:]
+                        if r.memory.action != action
+                    ]
+                    if alt_actions:
+                        action = random.choice(alt_actions)
+                        strategy = "learned_explore"
+                        logger.info(
+                            "DAR-3 epsilon-greedy: exploring %s instead of best %s",
+                            action, best_action[0],
+                        )
+
+                # Parse action as routing decision
+                routing = self._parse_routing_action(action)
+                # Track last role for cache affinity (Phase 2.5)
+                if routing:
+                    self.retriever.update_last_role(routing[0])
+                self._record_decision_meta(
+                    strategy=strategy,
+                    chosen_action=action,
+                    results=results,
+                    risk_gate=risk_gate,
+                )
+                return (routing, strategy)
+
+        # Fall back to rule-based routing
+        routing = self.rule_based.route(task_ir)
+        # Track last role for cache affinity (Phase 2.5)
+        if routing:
+            self.retriever.update_last_role(routing[0])
+        self._record_decision_meta(
+            strategy="rules",
+            chosen_action=",".join(routing),
+            results=results,
+            risk_gate=risk_gate,
+        )
+        return (routing, "rules")
+
+    def route_with_mode(
+        self,
+        task_ir: Dict[str, Any],
+        priors: Optional[Dict[str, float]] = None,
+    ) -> Tuple[List[str], str, str]:
+        """Route a task with mode selection (direct/react/repl).
+
+        Extends route() to also return the recommended execution mode.
+        Mode is parsed from action strings in format "role:mode" (colon-separated).
+        Falls back to rule-based mode selection if no mode annotation found.
+
+        Args:
+            task_ir: TaskIR dictionary
+
+        Returns:
+            (routing_decision, strategy_used, mode) tuple
+            mode is "direct", "react", or "repl"
+        """
+        # Classifier fast-path
+        if self.routing_classifier is not None:
+            features = self._build_classifier_features(task_ir)
+            if features is not None:
+                action, confidence = self.routing_classifier.predict_action(features)
+                if action is not None and confidence >= self.classifier_confidence_threshold:
+                    routing, mode = self._parse_routing_action_with_mode(action)
+                    if routing:
+                        self.retriever.update_last_role(routing[0])
+                        self.last_decision_meta = {
+                            "decision_source": "classifier",
+                            "chosen_action": action,
+                            "classifier_confidence": round(confidence, 4),
+                            "classifier_threshold": self.classifier_confidence_threshold,
+                        }
+                        return (routing, "classifier", mode)
+
+        # Try learned routing first
+        results = self.retriever.retrieve_for_routing(task_ir)
+        results = self._apply_priors(results, priors)
+
+        # Blend GraphRouter signal if available
+        if self.graph_router and self.graph_router.is_ready:
+            self._blend_graph_router_scores(results, task_ir)
+
+        route_key = str(task_ir.get("task_id", task_ir.get("objective", "")))
+        risk_gate = self.retriever.evaluate_risk_gate(results, route_key=route_key)
+
+        if risk_gate.get("enforced") and not risk_gate.get("passed"):
+            routing = [self.retriever.config.risk_abstain_target_role]
+            self._record_decision_meta(
+                strategy="risk_abstain_escalate",
+                chosen_action=",".join(routing),
+                results=results,
+                risk_gate=risk_gate,
+            )
+            return (routing, "risk_abstain_escalate", "direct")
+
+        if self.retriever.should_use_learned(results):
+            best_action = self.retriever.get_best_action(results)
+            if best_action:
+                action = best_action[0]
+                confidence = best_action[1]
+                routing, mode = self._parse_routing_action_with_mode(action)
+                self._record_decision_meta(
+                    strategy="learned",
+                    chosen_action=action,
+                    results=results,
+                    risk_gate=risk_gate,
+                )
+                return (routing, "learned", mode)
+
+        # Fall back to rule-based routing (with mode)
+        routing, mode = self.rule_based.route_with_mode(task_ir)
+        self._record_decision_meta(
+            strategy="rules",
+            chosen_action=",".join(routing),
+            results=results,
+            risk_gate=risk_gate,
+        )
+        return (routing, "rules", mode)
+
+    def route_3way(
+        self, task_ir: Dict[str, Any], cost_tiers: Optional[Dict[str, int]] = None
+    ) -> Tuple[str, str, float]:
+        """Route using 3-way action vocabulary with cost-adjusted decision.
+
+        3-way actions:
+        - SELF:direct - Frontdoor without tools
+        - SELF:repl - Frontdoor with tools, no delegation
+        - ARCHITECT - Architect with full delegation freedom
+        - WORKER - (Not directly routed to, used via delegation)
+
+        The Q-values represent P(success|action). Cost is applied at decision time:
+            score = Q(action) / cost_tier
+
+        Args:
+            task_ir: TaskIR dictionary.
+            cost_tiers: Optional cost tiers per action. Defaults to standard tiers.
+
+        Returns:
+            (action, strategy, confidence) tuple.
+            action is one of: "SELF:direct", "SELF:repl", "ARCHITECT"
+            strategy is "learned" or "rules"
+        """
+        # Default cost tiers (same as seeding_types.THREE_WAY_COST_TIER)
+        if cost_tiers is None:
+            cost_tiers = {
+                "SELF:direct": 2,
+                "SELF:repl": 2,
+                "ARCHITECT": 4,
+                "WORKER": 1,
+            }
+
+        # Retrieve learned Q-values
+        results = self.retriever.retrieve_for_routing(task_ir)
+
+        if self.retriever.should_use_learned(results):
+            # Aggregate Q-values and elapsed times by 3-way category
+            q_values: Dict[str, List[float]] = {
+                "SELF:direct": [],
+                "SELF:repl": [],
+                "ARCHITECT": [],
+            }
+            elapsed_times: Dict[str, List[float]] = {
+                "SELF:direct": [],
+                "SELF:repl": [],
+                "ARCHITECT": [],
+            }
+
+            for r in results:
+                action = r.memory.action
+                # Map old action format to 3-way categories
+                category = None
+                if action in q_values:
+                    category = action
+                elif action.startswith("frontdoor:direct"):
+                    category = "SELF:direct"
+                elif action.startswith("frontdoor:repl"):
+                    category = "SELF:repl"
+                elif action.startswith(("architect_", "ARCHITECT")):
+                    category = "ARCHITECT"
+
+                if category:
+                    q_values[category].append(r.q_value)
+                    # Extract actual compute cost from stored metadata
+                    ctx = r.memory.context or {}
+                    elapsed = ctx.get("elapsed_seconds", 0.0)
+                    if elapsed > 0:
+                        elapsed_times[category].append(elapsed)
+
+            # Average Q-values per category
+            avg_q = {}
+            for action, values in q_values.items():
+                if values:
+                    avg_q[action] = sum(values) / len(values)
+                else:
+                    avg_q[action] = 0.5  # Default neutral
+
+            # Compute cost: use actual avg elapsed seconds from similar tasks,
+            # fall back to static cost tiers if no elapsed data stored yet
+            avg_cost = {}
+            for action in avg_q:
+                times = elapsed_times.get(action, [])
+                if times:
+                    avg_cost[action] = sum(times) / len(times)
+                else:
+                    avg_cost[action] = float(cost_tiers.get(action, 2))
+
+            # Apply cost-adjusted scoring: Q(action) / avg_elapsed_seconds
+            scores = {}
+            for action, q in avg_q.items():
+                scores[action] = q / avg_cost[action]
+
+            # Select best action
+            best_action = max(scores, key=scores.get)
+            confidence = avg_q[best_action]
+
+            return (best_action, "learned", confidence)
+
+        # Fall back to rule-based routing
+        # Determine 3-way action from task characteristics
+        task_type = task_ir.get("task_type", "chat")
+        objective = task_ir.get("objective", "").lower()
+        context_length = task_ir.get("context_length", 0)
+
+        # Heuristics for 3-way routing
+        if task_type in ("architecture", "design", "complex"):
+            return ("ARCHITECT", "rules", 0.5)
+        elif context_length > 20000:
+            return ("SELF:repl", "rules", 0.5)  # Large context needs tools
+        elif any(kw in objective for kw in ["search", "file", "explore", "read"]):
+            return ("SELF:repl", "rules", 0.5)
+        else:
+            return ("SELF:direct", "rules", 0.5)
+
+    def _parse_routing_action(self, action: str) -> List[str]:
+        """Parse stored action string to routing list."""
+        # Actions are stored as comma-separated role names
+        # Also handle "role:mode" format by stripping mode suffix
+        roles = []
+        for r in action.split(","):
+            r = r.strip()
+            if ":" in r:
+                r = r.split(":")[0]  # Strip mode suffix
+            roles.append(r)
+        return roles
+
+    def _parse_routing_action_with_mode(
+        self, action: str
+    ) -> Tuple[List[str], str]:
+        """Parse stored action string to routing list and mode.
+
+        Action format: "role1:mode,role2" — colon separates role from mode.
+        Only the first role's mode is used. If no mode annotation, defaults
+        to "direct".
+
+        Args:
+            action: Action string from episodic memory.
+
+        Returns:
+            (routing_list, mode) tuple.
+        """
+        roles = []
+        mode = "direct"  # Default mode
+        for i, r in enumerate(action.split(",")):
+            r = r.strip()
+            if ":" in r:
+                role_part, mode_part = r.split(":", 1)
+                roles.append(role_part)
+                if i == 0:  # Mode from first role
+                    mode = mode_part if mode_part in ("direct", "react", "repl") else "direct"
+            else:
+                roles.append(r)
+        return roles, mode
+
