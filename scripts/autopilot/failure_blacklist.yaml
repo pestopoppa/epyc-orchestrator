@@ -4,38 +4,22 @@ blacklist:
     flags:
       lookup_cache: true
   reason: "Lookup table segfaults on Qwen3.5 hybrids after 1-3 prompts (2026-03-19).\
-    \ Hardware-level architectural incompatibility \u2014 only works on dense models."
+    \ Hardware-level architectural incompatibility — only works on dense models."
   added: '2026-04-01T00:00:00Z'
   severity: crash
-  notes: "Server launch flag \u2014 not runtime-tunable. Prevents restart-based experiments."
-- pattern:
-    type: seed_batch
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 318'
-  added: '2026-05-09T05:19:31.760824+00:00'
-  source_trial: 318
-- pattern:
-    type: prompt_mutation
-    file: frontdoor.md
-    mutation: targeted_fix
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 320'
-  added: '2026-05-09T06:39:54.403893+00:00'
-  source_trial: 320
-- pattern:
-    type: seed_batch
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 322'
-  added: '2026-05-09T08:23:53.887647+00:00'
-  source_trial: 322
-- pattern:
-    type: structural_experiment
-    flags:
-      output_formalizer: true
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 399'
-  added: '2026-05-21T19:43:10.260374+00:00'
-  source_trial: 399
-- pattern:
-    type: prompt_mutation
-    file: frontdoor.md
-    mutation: compress
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 409'
-  added: '2026-05-21T20:05:14.396969+00:00'
-  source_trial: 409
+  source_trial: -1
+  notes: "Server launch flag — not runtime-tunable. Prevents restart-based experiments."
+
+# 2026-05-22: cleared 6 auto-blacklisted entries that predated today's fixes:
+#   - seed_batch (trials 318, 322, both 2026-05-09) — failures caused by pre-2026-05-08
+#     worker_general gemma4 swap chat-template bug + lock contention; root causes
+#     addressed in commits 206701f, cc40679, 6b5ac4c (per-region locks).
+#   - prompt_mutation frontdoor.md targeted_fix (trial 320, 2026-05-09)
+#   - prompt_mutation frontdoor.md compress (trial 409, 2026-05-21)
+#   - structural_experiment output_formalizer:true (trial 399, 2026-05-21)
+#   - structural_experiment session_log:false (trial 411, 2026-05-22 — this trial
+#     failed *during* the orchestrator reload window, never actually got a clean run)
+# Old YAML preserved at failure_blacklist.yaml.bak-2026-05-22 for reference.
+# Marked the lookup_cache entry with source_trial: -1 so preflight_audit recognizes
+# it as the single permanent / manual entry (the audit expects zero auto entries
+# on session start).

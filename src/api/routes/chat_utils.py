@@ -143,9 +143,27 @@ def _estimate_tokens(text: str) -> int:
 _TEMPLATE_QWEN_CHATML = (
     "<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n"
 )
-_TEMPLATE_GEMMA = (
+# Gemma 2 / Gemma 3 use the classic `<start_of_turn>` / `<end_of_turn>`
+# turn markers.
+_TEMPLATE_GEMMA3 = (
     "<start_of_turn>user\n{user}<end_of_turn>\n<start_of_turn>model\n"
 )
+# Gemma 4 (e.g. gemma-4-26B-A4B-it) actually ships a NEW multi-channel
+# template with `<|turn>` / `<turn|>` markers + a `<|channel>thought`
+# reasoning channel. Verified 2026-05-22 by reading the GGUF's embedded
+# chat_template + calling the live server's /apply-template endpoint.
+# HOWEVER: empirically (2026-05-22), feeding the proper gemma-4 template
+# to ik_llama.cpp's /completion endpoint TIMES OUT with 0 tokens (tested
+# with and without the channel prefix). The /v1/chat/completions
+# endpoint with --jinja works fine (returns answers in 0.07s).
+#
+# Until worker_general's backend is switched to /chat/completions, fall
+# back to the gemma-3 template — it produces output with some
+# `<|channel>` artifacts in the response (visible bytes that need
+# stripping downstream) but at least the request completes. The
+# completion-quality issue is documented as a follow-up; see deferred
+# section in the 2026-05-22 progress entry.
+_TEMPLATE_GEMMA4 = _TEMPLATE_GEMMA3
 _TEMPLATE_LLAMA3 = (
     "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"
     "{user}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
@@ -155,16 +173,20 @@ _TEMPLATE_LLAMA3 = (
 def _detect_template_family(model_name: str) -> str:
     """Return a family identifier for `model_name`, or 'unknown'.
 
-    Match order matters: longest-prefix family first so a name containing
-    both 'Llama' and 'Qwen' (e.g. distillations) lands on the more specific
-    parent. Today's registry has no such overlap but the order is defensive.
+    Match order matters: more-specific variants first (e.g. gemma-4
+    before gemma).
     """
     if not model_name:
         return "unknown"
     n = model_name.lower()
-    # Gemma family (gemma-3, gemma-4, gemma2, etc.)
+    # Gemma 4 — uses the new <|turn>/<channel|> template, different from
+    # gemma 2/3. Match BEFORE generic "gemma" so we route to the right
+    # family.
+    if "gemma-4" in n or "gemma4" in n:
+        return "gemma4"
+    # Gemma 2/3 — classic start_of_turn/end_of_turn template.
     if "gemma" in n:
-        return "gemma"
+        return "gemma3"
     # MiniMax-M2: uses ChatML-ish but with different markers; pass-through for now
     if "minimax" in n:
         return "minimax"
@@ -183,8 +205,10 @@ def _detect_template_family(model_name: str) -> str:
 
 def _wrap_for_family(user_prompt: str, family: str) -> str:
     """Apply turn-marker wrap for a known family; pass-through otherwise."""
-    if family == "gemma":
-        return _TEMPLATE_GEMMA.format(user=user_prompt)
+    if family == "gemma4":
+        return _TEMPLATE_GEMMA4.format(user=user_prompt)
+    if family == "gemma3" or family == "gemma":  # alias kept for back-compat
+        return _TEMPLATE_GEMMA3.format(user=user_prompt)
     if family == "llama3":
         return _TEMPLATE_LLAMA3.format(user=user_prompt)
     if family in ("qwen", "minimax", "phi"):
@@ -198,7 +222,8 @@ def _is_already_templated(user_prompt: str) -> bool:
     """True if `user_prompt` already contains any known turn markers."""
     return (
         "<|im_start|>" in user_prompt
-        or "<start_of_turn>" in user_prompt
+        or "<start_of_turn>" in user_prompt  # gemma 2/3
+        or "<|turn>" in user_prompt  # gemma 4
         or "<|begin_of_text|>" in user_prompt
     )
 
@@ -280,6 +305,43 @@ def _strip_tool_outputs(text: str, tool_outputs: list[str]) -> str:
     from src.classifiers import strip_tool_outputs
 
     return strip_tool_outputs(text, tool_outputs)
+
+
+# Gemma-4's chat template uses a multi-channel output format. When the
+# orchestrator sends pre-templated prompts via /completion (which doesn't
+# apply the GGUF's jinja template), the model emits its own channel
+# markers as raw output bytes. /v1/chat/completions with --jinja strips
+# these automatically; we replicate that here for the /completion path.
+#
+# Patterns observed in worker_general (gemma-4-26B-A4B-it) responses:
+#   <|channel>thought\n<channel|>actual_answer
+#   <thought\n<channel|>actual_answer
+#   <|channel>final\n<channel|>actual_answer
+#
+# We strip the channel prefix structures, keeping the actual answer that
+# follows the last <channel|>. Conservative: if no marker found, return
+# the input unchanged.
+_GEMMA4_CHANNEL_RE = re.compile(
+    r"^(?:<\|?(?:channel|thought|final|turn)\|?>?[^<]*)+",
+    re.DOTALL,
+)
+
+
+def strip_gemma4_channel_markers(text: str) -> str:
+    """Remove gemma-4 channel-prefix artifacts from raw /completion output.
+
+    Idempotent — re-running on already-clean text returns it unchanged.
+    Safe to call on any model's output (the patterns are gemma-specific
+    and won't match Qwen ChatML or other formats).
+    """
+    if not text or "<|channel" not in text and "<channel|" not in text and "<|turn" not in text:
+        return text
+    # Find the last `<channel|>` — content after it is the real answer.
+    last_close = text.rfind("<channel|>")
+    if last_close >= 0:
+        return text[last_close + len("<channel|>"):].lstrip("\n").lstrip()
+    # Fall back: regex-strip a leading prefix of channel markers.
+    return _GEMMA4_CHANNEL_RE.sub("", text).lstrip()
 
 
 _FUNCTION_REPR_RE = re.compile(r"<(?:function|class|module) \w+ at 0x[0-9a-fA-F]+>")
