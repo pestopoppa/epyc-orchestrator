@@ -397,6 +397,16 @@ class InferenceMixin:
             from src.inference_lock import inference_lock
             can_stream = False
             _cb_port = _extract_port(backend_url)
+            # Phase 3 of per-region-lock migration (2026-05-22): when the
+            # ORCHESTRATOR_PER_REGION_LOCKS feature flag is on, skip the
+            # legacy global heavy_model.lock here — ConcurrencyAwareBackend's
+            # `_dispatch` will take the precise per-CPU-region locks needed
+            # for the chosen instance. Holding both would deadlock or
+            # double-serialize. When the flag is off, retain legacy behavior.
+            import os as _os
+            _per_region_on = _os.environ.get(
+                "ORCHESTRATOR_PER_REGION_LOCKS", "0"
+            ).strip() in {"1", "true", "yes", "on"}
             lock_ctx = (
                 inference_lock(
                     role,
@@ -405,7 +415,7 @@ class InferenceMixin:
                     request_tag=self.get_request_task_id(),
                     port=_cb_port,
                 )
-                if backend_url
+                if (backend_url and not _per_region_on)
                 else contextlib.nullcontext()
             )
 

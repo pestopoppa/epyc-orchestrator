@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any
 
 try:
@@ -422,29 +423,155 @@ class ConcurrencyAwareBackend:
             return str(request.task_id or "")
         return ""
 
+    # === Cross-process dispatch (Phase 2 of per-region locks) ===
+    #
+    # When ORCHESTRATOR_PER_REGION_LOCKS=1, the dispatch path uses
+    # `cpu_region_lock_for_instance` non-blocking try-acquire to pick an
+    # instance that's actually free across uvicorn worker processes. The
+    # legacy in-process `_full_active` / `_quarter_active` flags are still
+    # maintained for telemetry but are no longer the authoritative
+    # cross-process source of truth. When the flag is off, legacy
+    # `_select` is used unchanged.
+
+    @staticmethod
+    def _per_region_locks_enabled() -> bool:
+        import os as _os
+        return _os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip() in {
+            "1", "true", "yes", "on",
+        }
+
+    @contextmanager
+    def _dispatch(self, session_id: str = ""):
+        """Yield (backend, idx, is_full) with the right lock held.
+
+        Two paths:
+        - Legacy (default): pre-existing in-process selection via _select.
+        - Per-region (flag on): cross-process region locks coordinate
+          which instance handles the request.
+
+        On context exit, releases both in-process state and any region
+        locks. Caller calls backend.infer/infer_stream_text inside the
+        with-block; nothing else.
+        """
+        if not self._per_region_locks_enabled():
+            backend, idx, is_full = self._select(session_id=session_id)
+            try:
+                yield (backend, idx, is_full)
+            finally:
+                self._release(idx, is_full)
+            return
+
+        # Per-region cross-process path. Try instances in priority order:
+        #  1. full (best per-request latency, warm KV)
+        #  2. each quarter, in numerical order
+        # First non-blocking acquire that succeeds wins. If all fail,
+        # fall through to blocking acquire on full (mirrors the legacy
+        # "all-busy → overflow to full" behavior, but waits properly).
+        from src.runtime.cpu_region_lock import (
+            cpu_region_lock_for_instance,
+            CpuRegionLockTimeout,
+        )
+
+        deadline_s = None  # caller's deadline carried in via request.timeout
+
+        def _try_instance(role: str, instance_idx: int):
+            """Try non-blocking acquire of the region locks for one
+            instance. Returns an entered context-manager handle on
+            success, or None if the lock is held elsewhere."""
+            ctx = cpu_region_lock_for_instance(
+                role, instance_idx,
+                timeout_s=0.05,  # effectively non-blocking
+                deadline_s=None,
+            )
+            try:
+                paths = ctx.__enter__()
+            except CpuRegionLockTimeout:
+                return None
+            return ctx, paths
+
+        # Priority list of (idx_in_concurrency_aware, instance_idx_in_topology)
+        # In NUMA_CONFIG: idx 0 is full, idx 1..N are quarters → matches
+        # our internal indexing (-1 for full, 0..N-1 for quarters).
+        candidates: list[tuple[int, int]] = [(-1, 0)]  # full first
+        for q_idx in range(len(self._quarters)):
+            candidates.append((q_idx, q_idx + 1))  # quarter q_idx → topology idx q_idx+1
+
+        chosen_ctx = None
+        chosen_idx = -2
+        for ca_idx, topo_idx in candidates:
+            attempt = _try_instance(self._role, topo_idx)
+            if attempt is not None:
+                chosen_ctx, _paths = attempt
+                chosen_idx = ca_idx
+                break
+
+        if chosen_ctx is None:
+            # All non-blocking attempts failed → block on full's region locks.
+            # Use a generous timeout (60s) — caller's own deadline still
+            # propagates via deadline_s if set.
+            blocking_ctx = cpu_region_lock_for_instance(
+                self._role, 0,
+                timeout_s=60.0, deadline_s=deadline_s,
+            )
+            chosen_ctx = blocking_ctx
+            blocking_ctx.__enter__()
+            chosen_idx = -1
+
+        # Update in-process telemetry (best-effort; not authoritative).
+        with self._lock:
+            self._total_requests += 1
+            if chosen_idx == -1:
+                self._full_active = True
+                self._full_requests += 1
+                if session_id:
+                    self._full_last_session = session_id
+                    self._set_session_state(
+                        session_id,
+                        state=_STATE_ASSIGNED_FULL,
+                        quarter=None,
+                    )
+            else:
+                self._quarter_active[chosen_idx] = True
+                self._quarter_requests += 1
+                if session_id:
+                    self._session_quarter[session_id] = chosen_idx
+                    self._set_session_state(
+                        session_id,
+                        state=_STATE_ASSIGNED_QUARTER,
+                        quarter=chosen_idx,
+                    )
+
+        backend = self._full if chosen_idx == -1 else self._quarters[chosen_idx]
+        is_full = (chosen_idx == -1)
+
+        try:
+            yield (backend, chosen_idx, is_full)
+        finally:
+            # In-process release
+            self._release(chosen_idx, is_full)
+            # Region-lock release
+            try:
+                chosen_ctx.__exit__(None, None, None)
+            except Exception as exc:
+                logger.warning(
+                    "region-lock release failed (role=%s idx=%d): %s",
+                    self._role, chosen_idx, exc,
+                )
+
     def infer(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
-        backend, idx, is_full = self._select(session_id=sid)
-        try:
+        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
             return backend.infer(role_config, request)
-        finally:
-            self._release(idx, is_full)
 
     def infer_streaming(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
-        backend, idx, is_full = self._select(session_id=sid)
-        try:
+        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
             return backend.infer_streaming(role_config, request)
-        finally:
-            self._release(idx, is_full)
 
     def infer_stream_text(self, role_config: Any, request: Any, on_chunk: Any = None) -> Any:
         sid = self._extract_session_id(request)
-        backend, idx, is_full = self._select(session_id=sid)
-        try:
+        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
             return backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
-        finally:
-            self._release(idx, is_full)
 
     def health_check(self, pid: int = 0) -> bool:
         """Check health of full instance + all quarters."""
