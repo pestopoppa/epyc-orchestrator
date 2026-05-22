@@ -131,79 +131,103 @@ routing-design pass.
 
 ## Remaining Refactor Candidates
 
-No mandatory refactor edit remains before review/commit. The next work should be
-treated as separate tranches, not bundled into the current stack/dashboard/routing
-cleanup.
+**ALL FOUR FURTHER TRANCHES COMPLETE as of 2026-05-22 session 2.** No
+mandatory refactor edit remains. The refactor is at a natural stopping point
+across stack, autopilot, retriever, and dashboard.
 
-Recommended next step is review/commit hygiene:
+### Tranche 5 — autopilot.py split ✅ DONE 2026-05-22
 
-- separate runtime artifacts from source changes
-- decide whether to include the earlier autopilot changes in the same commit
-- run the focused test suite again before committing
+`autopilot.py`: 1832 → 1151 lines (−37%). Extracted:
+- `scripts/autopilot/actions.py` (608): all 14 action handlers as
+  `_action_<type>` functions + `dispatch_action()` facade with AP-9 scope
+  validation. Each handler takes an `_ActionContext` bundle.
+- `scripts/autopilot/controller_io.py` (150): `invoke_controller`,
+  `extract_action`, `_unwrap_action`, `validate_single_variable`.
+- `scripts/autopilot/state_store.py` (135): `load_state`, `save_state`,
+  `load_blacklist`, `check_blacklist`, `append_blacklist`,
+  `load_model_signatures`, `format_model_signatures` — all parameterized
+  on Path objects.
+- `autopilot.py` keeps thin wrappers supplying STATE_PATH/BLACKLIST_PATH
+  and the Claude-CLI cwd, plus `_apply_params` lazy lookup so existing
+  monkeypatch-based tests keep working.
 
-Further refactoring candidates, in priority order:
+### Tranche 7 — orchestrator_stack.py split ✅ DONE 2026-05-22
 
-1. `scripts/autopilot/autopilot.py`
+`orchestrator_stack.py`: 2772 → 1325 lines (−52% additional). Extracted:
+- `scripts/server/stack_paths.py` (67): `_PATHS`, `_get_paths`,
+  `STATE_FILE`, `LLAMA_SERVER`, `_V2_ROLES`, `SLOT_SAVE_DIR`, `_HEALTH_*`
+  timeouts. Lives below stack_manifest + stack_commands in the dep graph
+  to avoid a cycle.
+- `scripts/server/stack_manifest.py` (566): `PORT_MAP`, `ROLE_LAUNCH_META`,
+  `HOT_ROLES`, `SERIAL_ROLES`, `NUMA_REPLICA_PORTS`, model paths,
+  `ORCHESTRATOR_PROFILES`, `DOCKER_SERVICES`, classification helpers
+  (`_filter_by_numa_mode`, `_build_servers_from_classification`),
+  `validate_against_registry`, `validate_model_paths`, computed
+  `HOT_SERVERS`/`WARM_SERVERS`.
+- `scripts/server/stack_commands.py` (998): `cmd_start`, `cmd_stop`,
+  `cmd_reload`, `cmd_status` + `_find_pids_on_port` + `_scan_known_ports`.
+  Uses lazy proxy functions for symbols still in orchestrator_stack
+  (start_server, init_memrl_and_tools, thin wrappers).
+- `orchestrator_stack.py`: re-imports all extracted names so
+  `from orchestrator_stack import ROLE_LAUNCH_META` (registry_compiler
+  fallback per `src/registry/registry_compiler.py:266`) keeps working.
+  `main()` imports stack_commands lazily inside the function body to
+  avoid the module-load circular import. Module-level `__getattr__`
+  exposes `cmd_*` for tests that do
+  `from scripts.server import orchestrator_stack as stack; stack.cmd_reload(...)`.
 
-   Current shape: still about 1,800 lines, with `dispatch_action()` carrying many
-   unrelated action branches.
+### Tranche 6 — retriever.py split ✅ DONE 2026-05-22
 
-   Suggested next split:
+`retriever.py`: 1657 → 881 lines (−47%). Extracted:
+- `orchestration/repl_memory/retrieval_config.py` (106): `RetrievalConfig`,
+  `RetrievalResult`, `ScoreComponents` dataclasses + `_retr_cfg` helper.
+- `orchestration/repl_memory/hybrid_router.py` (713): `HybridRouter` class
+  verbatim. `TYPE_CHECKING`-only imports for `TwoPhaseRetriever` /
+  `RuleBasedRouter`; no behavioral changes.
+- `orchestration/repl_memory/routing_risk.py` (103):
+  `is_risk_gate_enforced_for_route`, `guardrail_blocks_gate`,
+  `build_{not_enforced,abstain,accept}_response` — pure functions taking
+  `config` + `risk_budget_stats` as parameters.
+- `orchestration/repl_memory/routing_fast_path.py` (94):
+  `compute_robust_confidence`, `apply_confidence_to_results`,
+  `effective_confidence_threshold`, `action_prior_prob` — pure functions
+  extracted from TwoPhaseRetriever methods.
+- `retriever.py`: `_compute_robust_confidence`, `_apply_confidence`,
+  `get_effective_confidence_threshold`, `_is_risk_gate_enforced_for_route`,
+  `_guardrail_blocks_gate` delegate to the new modules. Re-exports
+  `HybridRouter`, `RetrievalConfig`, `RetrievalResult`, `ScoreComponents`
+  so existing imports keep working unchanged.
 
-   - `autopilot/actions.py`: `dispatch_action()` facade plus action handlers
-   - `autopilot/controller_io.py`: controller invoke/extract/validation helpers
-   - `autopilot/state_store.py`: state/blacklist/model-signature persistence
-   - keep CLI commands in `autopilot.py` until action dispatch is stable
+### Tranche 8 — dashboard polish ✅ DONE 2026-05-22
 
-   Safety: GitNexus previously showed `dispatch_action` as LOW risk by direct
-   callers, but behavior risk is high because it drives live experiments. Keep
-   `dispatch_action()` as the public facade and add focused tests for each action
-   family before moving branches.
+- `src/api/routes/dashboard_tasks.py`: replaced deprecated
+  `datetime.utcnow()` with timezone-aware `datetime.now(timezone.utc)`
+  (preserves the "Z" suffix in the snapshot header by stripping the tz
+  offset).
+- `tests/unit/test_dashboard_route_html.py`: route-level coverage — the
+  `/dashboard` endpoint returns the extracted `dashboard.html` body
+  byte-for-byte.
+- Dashboard route handlers do not import any stack launcher internals
+  (verified by inspection — only stack-agnostic helper modules are
+  imported from `dashboard.py`).
 
-2. `orchestration/repl_memory/retriever.py`
+### Cumulative state across Tranches 1-8
 
-   Current shape: about 1,650 lines. `HybridRouter` is a large shared class with
-   classifier fast path, graph blending, risk gates, verifier logic, and rule
-   fallback behavior in one file.
+| File | Pre-refactor | Post-refactor | Δ |
+|---|---|---|---|
+| `scripts/server/orchestrator_stack.py` | 3433 | 1325 | −61% |
+| `scripts/autopilot/autopilot.py` | 1832 | 1151 | −37% |
+| `orchestration/repl_memory/retriever.py` | 1657 | 881 | −47% |
+| `src/api/routes/dashboard.py` | 2246 | 863 | −62% |
+| **Total reduction in the four targeted files** | **9168** | **4220** | **−54%** |
 
-   Suggested next split:
+New sibling modules: 17 (10 stack: paths/manifest/commands/processes/state/env/host/health/docker/numa/checkpoint/runtime, 3 autopilot: actions/controller_io/state_store, 4 retriever: retrieval_config/hybrid_router/routing_risk/routing_fast_path, 5 dashboard: topology/tap/tasks/snapshot/html).
 
-   - `retrieval_config.py`: `RetrievalConfig`, `RetrievalResult`, score structs
-   - `hybrid_router.py`: `HybridRouter` facade
-   - `routing_risk.py`: risk gate/budget stats helpers
-   - `routing_fast_path.py`: classifier/verifier decision helpers
-   - keep import re-exports in `retriever.py` during transition
-
-   Safety: run GitNexus impact on `HybridRouter`, `route`, and `route_with_mode`
-   before editing. This code has many direct unit and integration tests; preserve
-   constructor and method signatures until callers move.
-
-3. `scripts/server/orchestrator_stack.py`
-
-   Current shape: reduced but still about 2,700 lines. Most mechanical helpers
-   are extracted, but manifest/config constants and CLI command orchestration are
-   still colocated.
-
-   Suggested next split:
-
-   - `stack_manifest.py`: ports, role aliases, model paths, role classifications
-   - `stack_commands.py`: `cmd_start`, `cmd_stop`, `cmd_reload`, `cmd_status`
-   - keep `orchestrator_stack.py` as the executable CLI shim
-
-   Safety: preserve the top-level import path used by registry compiler fallback
-   imports. Move constants only after adding tests that import both
-   `scripts.server.orchestrator_stack` and top-level `orchestrator_stack`.
-
-4. Dashboard polish, not structural
-
-   Current shape: dashboard internals are split and route signatures are
-   preserved. More refactor is optional.
-
-   Suggested next work:
-
-   - replace `datetime.utcnow()` in `dashboard_tasks.py` with timezone-aware UTC
-   - add one route-level test for the extracted `dashboard.html` response
-   - avoid coupling dashboard route handlers back to stack launcher internals
+Test coverage: 305 focused tests across all refactor-touched modules
+(was 7 at the start of Tranche 1). Full unit suite: 5829 passed, 33
+failed (identical baseline failures pre-refactor; +121 new passing tests
+vs baseline). `gitnexus detect-changes --scope all` after final re-index:
+"No changes detected" — graph is clean.
 
 ## Safety Constraints
 
