@@ -1,28 +1,7 @@
 # AutoPilot Short-Term Memory
-<!-- Auto-generated. Last updated: 2026-04-17T00:53:12+00:00 -->
+<!-- Auto-generated. Last updated: 2026-05-21T20:05:14+00:00 -->
 
 ## Running Hypotheses
-- [t232] Seed 10 questions across all -- confirmed (q=1.14)
-- [t233] Seed 10 questions across all -- confirmed (q=1.14)
-- [t234] Seed 10 questions across all -- confirmed (q=1.14)
-- [t235] Seed 10 questions across all -- confirmed (q=1.14)
-- [t236] Seed 10 questions across all -- confirmed (q=1.14)
-- [t237] Seed 10 questions across all -- confirmed (q=1.14)
-- [t238] Seed 10 questions across all -- confirmed (q=1.14)
-- [t239] Seed 10 questions across all -- confirmed (q=1.14)
-- [t240] Toggle flags: {'react_mode': True} -- confirmed (q=1.14)
-- [t241] Minimal compression of frontdoor.md to test if prompt_forge species triggers T0 eval instead of T1. If T0 fires, this provides the first real measurement since t204. -- confirmed (q=1.14)
-- [t244] Optimize escalation surface -- confirmed (q=1.14)
-- [t245] Add explicit instruction for worker_general to handle hotpotqa-style multi-hop reasoning by breaking questions into sub-questions. hotpotqa=0.00 on all evals — worker needs multi-hop reasoning guidance. -- confirmed (q=1.14)
-- [t249] Rollback -- confirmed (q=1.14)
-- [t250] Toggle flags: {'model_fallback': True} -- confirmed (q=1.14)
-- [t252] Remove 'coder' from NO_WEB_TASK_TYPES to allow web search for coding questions. Program explicitly marks this as EXPLORE — WS-3 deny was belt-and-suspenders alongside old search-first prompt that has been fixed to compute-first. Hypothesis: web search helps coder suite for API/library reference questions. -- confirmed (q=1.14)
-- [t253] Evolutionary prompt optimization on worker_math.md targeting zero-scoring math-adjacent suites (physics=0, physreason=0, olympiadbench=0). GEPA runs its own internal eval loop — if those internal evals use T0 tier, this bypasses the T1 blockade. Even if T1 persists, GEPA's internal selection may find a variant that scores above 1.160 on T1. -- confirmed (q=1.14)
-- [t254] Seed 10 questions across all -- confirmed (q=1.14)
-- [t262] Add explicit instruction for code output prediction tasks (cruxeval pattern): when asked 'what is the output of this code?', trace execution step-by-step and return ONLY the final output value with no explanation. cruxeval=0.00 across all evals despite coder models scoring 70-84% — likely an output format mismatch where verbose explanations fail exact-match scoring. -- confirmed (q=1.14)
-- [t263] Optimize think_harder surface -- confirmed (q=1.14)
-- [t264] Optimize monitor surface -- confirmed (q=1.14)
-- [t268] Seed 10 questions across all -- confirmed (q=1.14)
 - [t269] Seed 10 questions across all -- confirmed (q=1.14)
 - [t271] Fix routing deadlock: when HybridRouter falls back to rule-based routing (strategy='rules') and returns frontdoor, run the keyword classifier as a second opinion. If the classifier identifies a specialist role with confidence >= 0.6, override the frontdoor default. This breaks the 100%-frontdoor bottleneck that causes 18/29 suites to score 0.00. The keyword classifier in src/classifiers/keyword_matcher.py already has specialist routing logic but is gated behind the specialist_routing feature flag AND only reachable when hybrid_router is None. Since hybrid_router exists (just empty with 0 memories), the classifier is never consulted. Fix: after _route_request returns, if routing_strategy is 'rules' and role is frontdoor, call _classify_and_route as override check. -- confirmed (q=1.14)
 - [t274] Seed 10 questions across all -- confirmed (q=1.14)
@@ -32,72 +11,99 @@
 - [t290] Seed 10 questions across all -- confirmed (q=1.14)
 - [t291] Force architect_general for direct-mode requests when routing falls back to rules-based frontdoor. Line 406 area: after initial_role is set from routing_decision, add override: if execution_mode=='direct' and request.real_mode and routing.routing_strategy=='rules' and str(initial_role)=='frontdoor', set initial_role='architect_general'. This routes eval questions to 122B-A10B (82% math, 81% thinking) instead of 35B-A3B (68% math, 48% thinking). Unconditional for rules-fallback — no keyword matching (t287's keywords were too narrow). Only triggers on rules-strategy fallback, preserving explicit/forced/learned routing paths. -- confirmed (q=1.14)
 - [t313] Seed 10 questions across all -- confirmed (q=1.14)
+- [t314] Fix stop-sequence tag truncation corrupting answer extraction for 18/29 eval suites. Root cause: direct_stage.py:102 sets stop_seqs=[...,'</answer>']. llama.cpp excludes the stop token from returned content, so model output '<answer>Paris</answer>' arrives as '<answer>Paris'. The scorer regex <answer>(.*?)</answer> fails, falls back to last-line which contains the raw '<answer>Paris' prefix, and after _normalize_text strips <> punctuation produces 'answerparis' with zero F1 overlap against expected 'paris'. Fix: at chat.py lines 488-498, replace the single-expression 'return _finalize(await asyncio.to_thread(_execute_direct, request, routing, primitives, state, start_time, initial_role,))' with four lines: '_direct_result = await asyncio.to_thread(_execute_direct, request, routing, primitives, state, start_time, initial_role,)' then 'if _direct_result.answer and "<answer>" in _direct_result.answer and "</answer>" not in _direct_result.answer: _direct_result.answer += "</answer>"' then 'return _finalize(_direct_result)'. ChatResponse.answer is a plain str attribute (direct_stage.py:232). This is a no-op when </answer> is already present or absent. -- confirmed (q=2.40)
+- [t315] Seed 30 questions across ['hotpotqa', 'simpleqa', 'instruction_precision', 'mode_advantage_hard', 'cruxeval', 'gpqa', 'coder', 'thinking', 'physics', 'olympiadbench', 'usaco'] -- rejected (q=0.72)
+- [t316] Rollback -- confirmed (q=2.40)
+- [t317] SURGICAL FIX ONLY. Replace exactly these 11 lines starting at line 503, and nothing else in the file.
+- [t318] Seed 10 questions across all -- rejected (q=0.62)
+- [t319] In the '#8c: Direct LLM call mode' block (around line 503), the final return statement currently reads: `return _finalize(await asyncio.to_thread(_execute_direct, request, routing, primitives, state, start_time, initial_role,))`. Replace only this return statement with three lines: `_dr = await asyncio.to_thread(_execute_direct, request, routing, primitives, state, start_time, initial_role,)` then `if _dr.answer and '<answer>' in _dr.answer and '</answer>' not in _dr.answer: _dr.answer += '</answer>'` then `return _finalize(_dr)`. The llama.cpp backend strips the stop token from returned content, so a model response of '<answer>Paris</answer>' arrives as '<answer>Paris'; this re-appends the closing tag. Preserve every other line in the file byte-for-byte. The lines immediately above (ChatML wrapping, execution_mode check) and below (8d REPL fallback) are untouched. -- rejected (q=0.93)
+- [t320] Add answer-tag newline formatting instruction to fix stop-sequence stripping. The llama.cpp backend strips the </answer> stop token from returned content, so '<answer>Paris</answer>' arrives as '<answer>Paris'. The scorer regex fails, falls back to last-line, which normalizes '<answer>Paris' to 'answerparis' (zero F1 overlap against 'paris'). Fix: instruct the model to place the answer value on its own line. In the response format section add: 'When placing your answer inside <answer></answer> tags, put the answer on its own line — write the opening tag, then a newline, then the answer, then a newline, then the closing tag. For example: <answer>\nParis\n</answer> — NOT <answer>Paris</answer> on a single line.' With this format, the stripped output is '<answer>\nParis\n', and the last non-empty line is 'Paris', which the scorer correctly extracts. -- rejected (q=0.72)
+- [t321] In the `_finalize` closure (defined around line 396 inside the `chat` async handler), insert a tag-completion check as its first statement, before the `return`: `if resp.answer and '<answer>' in resp.answer and '</answer>' not in resp.answer: resp.answer += '</answer>'`. The closure currently reads: `def _finalize(resp: ChatResponse) -> ChatResponse: return _annotate_error(_attach_routing_telemetry(_attach_budget_diagnostics(resp, primitives)))`. After the change it becomes: `def _finalize(resp: ChatResponse) -> ChatResponse:` then `    if resp.answer and '<answer>' in resp.answer and '</answer>' not in resp.answer: resp.answer += '</answer>'` then `    return _annotate_error(_attach_routing_telemetry(_attach_budget_diagnostics(resp, primitives)))`. This is the only change to the file. -- rejected (q=0.72)
+- [t322] Seed 10 questions across all -- rejected (q=0.72)
+- [t325] Seed 10 questions across all -- confirmed (q=2.10)
+- [t327] Optimize think_harder surface -- rejected (q=0.83)
+- [t333] Evolve worker_general.md to fix cruxeval (code output prediction) and hotpotqa (multi-hop QA) which remain at 0.00 despite targeted_fix instructions at t262 and t245. Existing instructions exist but are not working — cruxeval likely still produces verbose explanations, hotpotqa likely fails to extract the final answer from multi-step reasoning. GEPA should evolve variants that: (1) more strictly constrain cruxeval to return ONLY the final output value with zero explanation text before the answer tag; (2) enforce explicit sub-question decomposition for hotpotqa then emit only the terminal answer; (3) ensure instruction_precision treats each constraint as a hard rule. These are format-compliance failures, not capability limits. -- rejected (q=0.00)
+- [t347] Seed 10 questions across all -- confirmed (q=2.40)
+- [t361] Seed 10 questions across all -- confirmed (q=2.10)
+- [t375] Seed 10 questions across all -- confirmed (q=2.40)
+- [t395] Toggle memrl OFF as diagnostic probe. memrl was enabled at t288 (q=1.138 T1). All T0 quality measurements since t314 (q=2.10-2.40) have been with memrl=True, but memory_count=0 means the retrieval system has nothing to retrieve — memrl=True is a no-op with empty memory. Hypothesis: disabling memrl has zero quality impact (neutral). Diagnostic purpose: if this creates a journal entry, structural_experiment CAN execute with known flags, and the prior freeze was caused by structural_experiment crashing pre-journal when given an undefined flag (specialist_routing). Next action after this: code_mutation src/features.py to define specialist_routing=False, then structural_experiment specialist_routing: true. -- confirmed (q=2.40)
+- [t396] Seed 10 questions across all -- rejected (q=0.00)
+- [t397] Seed 10 questions across all -- rejected (q=0.00)
+- [t399] Toggle flags: {'output_formalizer': True} -- rejected (q=1.20)
+- [t405] Toggle flags: {'skillbank': False} -- rejected (q=0.60)
+- [t409] Compress frontdoor prompt to reduce per-request token overhead without changing routing or answer behavior. Target: remove redundant phrasing, collapse repetitive instruction blocks, tighten examples. Hypothesis: a leaner frontdoor prompt reduces decode latency per request, lifting throughput above 12.7 t/s baseline while quality holds at 2.40. Hot-swap, no restart. Revert immediately if quality dips below 2.40. -- rejected (q=0.60)
 
 ## Optimization Directions
-- [t244] Numeric optimization working — continue exploring this surface
-- [t244] Speed is good but quality is low — invest in quality improvements
-- [t245] Speed is good but quality is low — invest in quality improvements
-- [t249] Speed is good but quality is low — invest in quality improvements
-- [t250] Speed is good but quality is low — invest in quality improvements
-- [t252] Speed is good but quality is low — invest in quality improvements
-- [t253] Speed is good but quality is low — invest in quality improvements
-- [t254] Seeding complete — evaluate if routing data is sufficient for training
-- [t254] Speed is good but quality is low — invest in quality improvements
-- [t262] Speed is good but quality is low — invest in quality improvements
-- [t263] Numeric optimization working — continue exploring this surface
-- [t263] Speed is good but quality is low — invest in quality improvements
-- [t264] Numeric optimization working — continue exploring this surface
-- [t264] Speed is good but quality is low — invest in quality improvements
-- [t268] Seeding complete — evaluate if routing data is sufficient for training
-- [t268] Speed is good but quality is low — invest in quality improvements
-- [t269] Seeding complete — evaluate if routing data is sufficient for training
-- [t269] Speed is good but quality is low — invest in quality improvements
-- [t271] Speed is good but quality is low — invest in quality improvements
-- [t274] Seeding complete — evaluate if routing data is sufficient for training
-- [t274] Speed is good but quality is low — invest in quality improvements
-- [t282] Seeding complete — evaluate if routing data is sufficient for training
-- [t282] Speed is good but quality is low — invest in quality improvements
-- [t287] Speed is good but quality is low — invest in quality improvements
-- [t288] Speed is good but quality is low — invest in quality improvements
-- [t290] Seeding complete — evaluate if routing data is sufficient for training
-- [t290] Speed is good but quality is low — invest in quality improvements
-- [t291] Speed is good but quality is low — invest in quality improvements
-- [t313] Seeding complete — evaluate if routing data is sufficient for training
-- [t313] Speed is good but quality is low — invest in quality improvements
+- [t317] Code mutation failed — try prompt_mutation or structural_experiment
+- [t318] Investigate declining suites: skill_transfer (0.00 < 3.00), debugbench (0.00 < 3.00)
+- [t318] Seeding complete — evaluate if routing data is sufficient for training
+- [t318] Speed is good but quality is low — invest in quality improvements
+- [t319] Code mutation failed — try prompt_mutation or structural_experiment
+- [t319] Speed is good but quality is low — invest in quality improvements
+- [t320] Investigate declining suites: bigcodebench (0.00 < 3.00), skill_transfer (0.00 < 3.00)
+- [t320] Try code_mutation or numeric_trial instead of prompt changes
+- [t321] Investigate declining suites: coder (0.00 < 3.00)
+- [t321] Code mutation failed — try prompt_mutation or structural_experiment
+- [t321] Speed is good but quality is low — invest in quality improvements
+- [t322] Seeding complete — evaluate if routing data is sufficient for training
+- [t322] Speed is good but quality is low — invest in quality improvements
+- [t325] Investigate declining suites: agentic (0.00 < 3.00)
+- [t325] Seeding complete — evaluate if routing data is sufficient for training
+- [t327] Investigate declining suites: agentic (0.00 < 3.00), skill_transfer (0.00 < 3.00), math (0.00 < 3.00), debugbench (0.00 < 3.00)
+- [t327] Speed is good but quality is low — invest in quality improvements
+- [t333] Investigate declining suites: general (0.00 < 3.00), math (0.00 < 3.00), coder (0.00 < 3.00), thinking (0.00 < 3.00), long_context (0.00 < 3.00), agentic (0.00 < 3.00)
+- [t347] Investigate declining suites: coder (0.00 < 3.00)
+- [t347] Seeding complete — evaluate if routing data is sufficient for training
+- [t361] Investigate declining suites: thinking (0.00 < 3.00)
+- [t361] Seeding complete — evaluate if routing data is sufficient for training
+- [t375] Seeding complete — evaluate if routing data is sufficient for training
+- [t395] Investigate declining suites: coder (0.00 < 3.00), agentic (0.00 < 3.00)
+- [t396] Investigate declining suites: general (0.00 < 3.00), math (0.00 < 3.00), thinking (0.00 < 3.00), instruction_precision (0.00 < 3.00), long_context (0.00 < 3.00), hotpotqa (0.00 < 3.00), simpleqa (0.00 < 3.00), mode_advantage_hard (0.00 < 3.00)
+- [t396] Seeding complete — evaluate if routing data is sufficient for training
+- [t397] Seeding complete — evaluate if routing data is sufficient for training
+- [t399] Investigate declining suites: thinking (0.00 < 3.00), hotpotqa (0.00 < 3.00), simpleqa (0.00 < 3.00), mode_advantage_hard (0.00 < 3.00)
+- [t405] Investigate declining suites: instruction_precision (0.00 < 3.00), long_context (0.00 < 3.00)
+- [t409] Try code_mutation or numeric_trial instead of prompt changes
 
 ## Failure Patterns
-- [t19] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t20] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t21] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t22] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t23] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t24] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t25] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t26] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t27] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- instruction_precision:
-- [t28] seeder/seed_batch: VIOLATIONS:
-- Throughput floor: 0.0 t/s < 10.2 t/s (80% of baseline 12.7)
-- physreason: 0.000 (flo
+- [t318] seeder/seed_batch: VIOLATIONS:
+- Quality floor violation: 0.621 < 1.0 (tier 1)
+- Quality regression: 0.621 vs baseline 1.160 (-46.5%, t
+- [t319] prompt_forge/code_mutation: VIOLATIONS:
+- Quality floor violation: 0.931 < 1.0 (tier 1)
+- Quality regression: 0.931 vs baseline 1.160 (-19.7%, t
+- [t320] prompt_forge/prompt_mutation: VIOLATIONS:
+- Quality floor violation: 0.724 < 1.0 (tier 1)
+- Quality regression: 0.724 vs baseline 1.160 (-37.6%, t
+- [t321] prompt_forge/code_mutation: VIOLATIONS:
+- Quality floor violation: 0.724 < 1.0 (tier 1)
+- Quality regression: 0.724 vs baseline 1.160 (-37.6%, t
+- [t322] seeder/seed_batch: VIOLATIONS:
+- Quality floor violation: 0.724 < 1.0 (tier 1)
+- Quality regression: 0.724 vs baseline 1.160 (-37.6%, t
+- [t327] numeric_swarm/numeric_trial: VIOLATIONS:
+- Quality floor violation: 0.828 < 1.0 (tier 1)
+- Quality regression: 0.828 vs baseline 1.160 (-28.7%, t
+- [t333] prompt_forge/gepa_optimize: VIOLATIONS:
+- Quality floor violation: 0.000 < 2.0 (tier 0)
+- Quality regression: 0.000 vs baseline 1.160 (-100.0%,
+- [t396] seeder/seed_batch: VIOLATIONS:
+- Quality floor violation: 0.000 < 2.0 (tier 0)
+- Quality regression: 0.000 vs baseline 1.160 (-100.0%,
+- [t397] seeder/seed_batch: VIOLATIONS:
+- Quality floor violation: 0.000 < 2.0 (tier 0)
+- Quality regression: 0.000 vs baseline 1.160 (-100.0%,
+- [t399] structural_lab/structural_experiment: VIOLATIONS:
+  - Quality floor violation: 1.200 < 2.0 (tier 0)
+  - Throughput floor: 2.3 t/s < 10.2 t/s (80% of baseline
+- [t405] structural_lab/structural_experiment: VIOLATIONS:
+  - Quality floor violation: 0.600 < 2.0 (tier 0)
+  - Quality regression: 0.600 vs baseline 1.160 (-48.3%, t
+- [t409] prompt_forge/prompt_mutation: VIOLATIONS:
+  - Quality floor violation: 0.600 < 2.0 (tier 0)
+  - Quality regression: 0.600 vs baseline 1.160 (-48.3%, t
 
 ## Working Context
-- Last trial: 313 (seeder/seed_batch, q=1.14, revert)
-- Best quality: 2.10
-- Weak suites: olympiadbench=0.00, ruler=0.00, vl=0.00, simpleqa=0.00, physics=0.00, usaco=0.00, physreason=0.00, hotpotqa=0.00, aime=0.00, mode_advantage_hard=0.00, leval=0.00, web_research=0.00, longbench=0.00, cruxeval=0.00, gpqa=0.00, instruction_precision=0.00, zeroscrolls=0.00, mode_advantage=0.00
+- Last trial: 409 (prompt_forge/prompt_mutation, q=0.60, revert)
+- Best quality: 2.40
+- Weak suites: coder=0.00, thinking=0.00, instruction_precision=0.00, long_context=0.00, agentic=0.00, hotpotqa=0.00, simpleqa=0.00, mode_advantage_hard=0.00
