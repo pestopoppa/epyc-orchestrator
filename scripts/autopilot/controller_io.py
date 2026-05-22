@@ -5,6 +5,15 @@ controller is the Claude CLI subprocess that proposes the next action;
 this module handles invocation, JSON action extraction, and AP-9
 single-variable scope validation.
 
+2026-05-22 streaming overhaul:
+- Switched `--output-format json` (single final JSON, fully buffered) to
+  `stream-json` (line-delimited events emitted live). Caller can now tail
+  the planner output as it streams instead of waiting up to 300s.
+- Each line is teed to a per-call planner tap file at
+  PLANNER_TAP_PATH so the dashboard can SSE-stream it. The tap file is
+  appended across calls (with section separators) so the recent planning
+  history survives across trials.
+
 `autopilot.py` keeps the public function names as thin re-imports.
 """
 
@@ -13,10 +22,88 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("autopilot")
+
+# Tap file the planner subprocess streams into. Dashboard tails this via
+# /dashboard/events/planner_tap. The path is fixed (not per-invocation) so
+# a single SSE consumer can watch every planner session.
+PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
+
+
+def _open_planner_tap() -> Any:
+    """Return an append-mode handle on the planner tap, creating dirs if needed."""
+    try:
+        PLANNER_TAP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        return open(PLANNER_TAP_PATH, "a", buffering=1)  # line-buffered
+    except Exception as exc:
+        log.warning("Could not open planner tap %s: %s", PLANNER_TAP_PATH, exc)
+        return None
+
+
+def _summarize_event(line: str) -> str:
+    """Produce a human-readable one-line summary of a stream-json event.
+
+    Stream-json events look like:
+        {"type":"system","subtype":"init", ...}
+        {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
+        {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read",...}]}}
+        {"type":"user","message":{"content":[{"type":"tool_result","content":"..."}]}}
+        {"type":"result","subtype":"success","total_cost_usd":...,"result":"..."}
+
+    We summarize so the tap file is readable even at a glance.
+    """
+    try:
+        evt = json.loads(line)
+    except json.JSONDecodeError:
+        return line.rstrip()
+
+    t = evt.get("type", "?")
+    if t == "system":
+        sub = evt.get("subtype", "")
+        return f"[system:{sub}] session={evt.get('session_id','')[:8]}…"
+    if t == "assistant":
+        msg = evt.get("message", {})
+        parts = []
+        for c in msg.get("content", []):
+            ctype = c.get("type")
+            if ctype == "text":
+                txt = c.get("text", "").strip()
+                if txt:
+                    parts.append(txt[:300])
+            elif ctype == "tool_use":
+                name = c.get("name", "?")
+                inp = c.get("input", {})
+                arg_preview = json.dumps(inp)[:160]
+                parts.append(f"TOOL_USE {name}({arg_preview})")
+        return "[assistant] " + " | ".join(parts) if parts else "[assistant] (empty)"
+    if t == "user":
+        msg = evt.get("message", {})
+        for c in msg.get("content", []):
+            if c.get("type") == "tool_result":
+                content = c.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        (b.get("text", "") if isinstance(b, dict) else str(b))
+                        for b in content
+                    )
+                preview = str(content)[:240].replace("\n", " / ")
+                return f"[tool_result] {preview}"
+        return "[user] (no tool_result)"
+    if t == "result":
+        sub = evt.get("subtype", "")
+        cost = evt.get("total_cost_usd")
+        dur = evt.get("duration_ms")
+        return (
+            f"[result:{sub}] cost=${cost:.4f} duration={dur}ms"
+            if isinstance(cost, (int, float))
+            else f"[result:{sub}]"
+        )
+    return f"[{t}] {line.rstrip()[:200]}"
 
 
 def invoke_controller(
@@ -26,18 +113,68 @@ def invoke_controller(
     *,
     cwd: Path | str | None = None,
 ) -> tuple[str, str | None]:
-    """Invoke Claude CLI for meta-reasoning.
+    """Invoke Claude CLI for meta-reasoning with live streaming to planner tap.
 
     Returns (response_text, session_id). `cwd` is the working directory
     Claude runs in; defaults to current process cwd if not provided.
+
+    Streams each event to PLANNER_TAP_PATH as it's emitted so the dashboard
+    can watch the planner reason in real time.
     """
     cmd = [
         "claude", "-p", prompt,
-        "--output-format", "json",
+        "--output-format", "stream-json",
+        "--verbose",  # required by claude CLI for stream-json output
         "--allowedTools", "Read,Grep,Glob",
     ]
     if session_id:
         cmd.extend(["--resume", session_id])
+
+    tap = _open_planner_tap()
+    if tap is not None:
+        try:
+            tap.write(f"\n{'=' * 72}\n[{datetime.now().isoformat(timespec='seconds')}] PLANNER session start\n")
+            if session_id:
+                tap.write(f"resume_session: {session_id}\n")
+            tap.write(f"prompt_chars: {len(prompt)}\n")
+            tap.write(f"{'-' * 72}\n")
+            tap.flush()
+        except Exception:
+            pass
+
+    result_text = ""
+    final_session_id = session_id
+    proc: subprocess.Popen | None = None
+    reader_thread: threading.Thread | None = None
+
+    def _drain_stdout(p: subprocess.Popen):
+        """Read p.stdout line-by-line; tee each line to tap; capture result."""
+        nonlocal result_text, final_session_id
+        assert p.stdout is not None
+        try:
+            for raw_line in p.stdout:
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                # Tee summarized + raw to tap
+                if tap is not None:
+                    try:
+                        tap.write(_summarize_event(line) + "\n")
+                        tap.flush()
+                    except Exception:
+                        pass
+                # Capture the final result + session_id from the result event
+                try:
+                    evt = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if evt.get("type") == "result":
+                    result_text = evt.get("result", "") or result_text
+                    final_session_id = evt.get("session_id", final_session_id)
+                elif evt.get("type") == "system" and evt.get("subtype") == "init":
+                    final_session_id = evt.get("session_id", final_session_id)
+        except Exception as exc:
+            log.warning("Planner stdout drain failed: %s", exc)
 
     try:
         proc = subprocess.Popen(
@@ -45,28 +182,57 @@ def invoke_controller(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            bufsize=1,  # line-buffered
             cwd=str(cwd) if cwd else None,
         )
-        stdout, stderr = proc.communicate(timeout=timeout)
 
-        if proc.returncode != 0:
-            log.error("Controller failed (rc=%d): %s", proc.returncode, stderr[:500])
-            return "", session_id
+        reader_thread = threading.Thread(target=_drain_stdout, args=(proc,), daemon=True)
+        reader_thread.start()
 
         try:
-            response = json.loads(stdout)
-            new_session = response.get("session_id", session_id)
-            return response.get("result", stdout), new_session
-        except json.JSONDecodeError:
-            return stdout, session_id
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            log.error("Controller timed out after %ds", timeout)
+            if tap is not None:
+                try:
+                    tap.write(f"[TIMEOUT after {timeout}s]\n{'=' * 72}\n")
+                    tap.flush()
+                except Exception:
+                    pass
+            return "", session_id
 
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        log.error("Controller timed out after %ds", timeout)
-        return "", session_id
+        reader_thread.join(timeout=5)
+
+        if proc.returncode != 0:
+            stderr = proc.stderr.read() if proc.stderr else ""
+            log.error("Controller failed (rc=%d): %s", proc.returncode, stderr[:500])
+            if tap is not None:
+                try:
+                    tap.write(f"[FAIL rc={proc.returncode}] {stderr[:400]}\n{'=' * 72}\n")
+                    tap.flush()
+                except Exception:
+                    pass
+            return "", session_id
+
+        if tap is not None:
+            try:
+                tap.write(f"[END] result_chars={len(result_text)} session={(final_session_id or '')[:8]}…\n{'=' * 72}\n")
+                tap.flush()
+            except Exception:
+                pass
+
+        return result_text, final_session_id
+
     except FileNotFoundError:
         log.error("Claude CLI not found")
         return "", session_id
+    finally:
+        if tap is not None:
+            try:
+                tap.close()
+            except Exception:
+                pass
 
 
 def _unwrap_action(data: Any) -> dict[str, Any] | None:

@@ -188,6 +188,11 @@ details.tap-section summary::-webkit-details-marker { color: var(--muted); }
 </div>
 
 <div class="panel" style="margin-top:12px">
+  <h2>planner (claude -p) — live <span style="color:var(--muted);font-weight:normal;font-size:11px">— each tool_use, assistant thought, and result event as it streams from meta-planning</span></h2>
+  <pre id="planner-tap-pre" style="background:rgba(0,0,0,0.3);color:var(--fg);font-size:11px;line-height:1.35;padding:8px;border-radius:4px;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,monospace"></pre>
+</div>
+
+<div class="panel" style="margin-top:12px">
   <h2>gepa progress (autopilot.log tail)</h2>
   <div id="gepa-lines"></div>
 </div>
@@ -868,6 +873,74 @@ function renderInferenceTap(data) {
     });
 }
 
+// ── planner_tap (claude -p meta-planner) live stream ──────────────────────
+let _plannerTapStream = null;
+let _plannerTapBuffer = "";
+const _PLANNER_TAP_MAX_CHARS = 40000;
+let _plannerTapPinned = true;
+
+function _stylePlannerLine(line) {
+    const escaped = line
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    if (/^\[result/i.test(line)) {
+        return '<span style="color:#34d399;font-weight:600">' + escaped + '</span>';
+    }
+    if (/^\[TIMEOUT|^\[FAIL/i.test(line)) {
+        return '<span style="color:#f87171">' + escaped + '</span>';
+    }
+    if (/^\[system/i.test(line)) {
+        return '<span style="color:#a78bfa">' + escaped + '</span>';
+    }
+    if (/^\[assistant\].*TOOL_USE/i.test(line)) {
+        return '<span style="color:#60a5fa">' + escaped + '</span>';
+    }
+    if (/^\[tool_result\]/i.test(line)) {
+        return '<span style="color:#94a3b8">' + escaped + '</span>';
+    }
+    if (/^\[assistant\]/i.test(line)) {
+        return '<span style="color:#fbbf24">' + escaped + '</span>';
+    }
+    if (/^=+$|^-+$|PLANNER session/i.test(line)) {
+        return '<span style="color:#475569">' + escaped + '</span>';
+    }
+    return escaped;
+}
+
+function _paintPlannerTap() {
+    const pre = document.getElementById('planner-tap-pre');
+    if (!pre) return;
+    pre.innerHTML = _plannerTapBuffer.split('\n').map(_stylePlannerLine).join('\n');
+    if (_plannerTapPinned) pre.scrollTop = pre.scrollHeight;
+}
+
+function startPlannerTapStream() {
+    if (_plannerTapStream) _plannerTapStream.close();
+    _plannerTapBuffer = "";
+    _plannerTapStream = new EventSource('/dashboard/events/planner_tap');
+    _plannerTapStream.onmessage = (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.error) return;
+            if (data.initial) _plannerTapBuffer = data.chunk || "";
+            else {
+                _plannerTapBuffer += (data.chunk || "");
+                if (_plannerTapBuffer.length > _PLANNER_TAP_MAX_CHARS) {
+                    _plannerTapBuffer = _plannerTapBuffer.slice(-_PLANNER_TAP_MAX_CHARS);
+                }
+            }
+            _paintPlannerTap();
+        } catch {}
+    };
+    _plannerTapStream.onerror = () => setTimeout(startPlannerTapStream, 2000);
+    const pre = document.getElementById('planner-tap-pre');
+    if (pre && !pre.dataset.scrollTracked) {
+        pre.dataset.scrollTracked = "1";
+        pre.addEventListener('scroll', () => {
+            _plannerTapPinned = (pre.scrollHeight - pre.scrollTop - pre.clientHeight) < 24;
+        });
+    }
+}
+
 function startTapStream() {
     // Replaced the parsed-sections stream with the raw byte-level stream
     // (mirrors how autopilot's TUI displays inference — incremental tokens
@@ -877,6 +950,9 @@ function startTapStream() {
     // (eval / seed_batch / claude -p meta-planning / rollback / safety
     // violation) is visible in real time — not just /chat traffic.
     startAutopilotLogStream();
+    // And the planner tap so claude -p meta-planning streams its
+    // tool_use / assistant thoughts / result events in real time.
+    startPlannerTapStream();
 }
 
 function updateDecisions(snap) {

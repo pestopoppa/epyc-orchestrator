@@ -247,6 +247,69 @@ async def autopilot_log_stream(request: Request, tail_bytes: int = 16384) -> Str
     )
 
 
+@router.get("/dashboard/events/planner_tap")
+async def planner_tap_stream(request: Request, tail_bytes: int = 16384) -> StreamingResponse:
+    """Byte-level SSE tail of the planner tap file written by
+    controller_io.invoke_controller. Streams each `claude -p` event
+    (system init / assistant thinking / tool_use / tool_result / result)
+    summarized as it's emitted — no more 60-120s black-box waits during
+    meta-planning.
+
+    The tap is APPENDED across planner sessions with section separators,
+    so the panel shows recent planner history at a glance.
+    """
+    planner_tap_path = Path("/mnt/raid0/llm/tmp/planner_tap.log")
+
+    async def event_gen():
+        try:
+            if not planner_tap_path.exists():
+                # Create empty file so the SSE doesn't error before the
+                # first planner session writes anything.
+                planner_tap_path.parent.mkdir(parents=True, exist_ok=True)
+                planner_tap_path.touch()
+            fh = open(planner_tap_path, "rb")
+            fh.seek(0, 2)
+            size = fh.tell()
+            start = max(0, size - tail_bytes)
+            fh.seek(start)
+            initial = fh.read().decode("utf-8", errors="replace")
+            yield "data: " + json.dumps({"chunk": initial, "initial": True}) + "\n\n"
+            heartbeat_counter = 0
+            while True:
+                if await request.is_disconnected():
+                    fh.close()
+                    return
+                pos = fh.tell()
+                fh.seek(pos)
+                raw = fh.read(8192)
+                if raw:
+                    chunk = raw.decode("utf-8", errors="replace")
+                    yield "data: " + json.dumps({"chunk": chunk, "initial": False}) + "\n\n"
+                    heartbeat_counter = 0
+                else:
+                    heartbeat_counter += 1
+                    if heartbeat_counter >= 30:
+                        yield ": heartbeat\n\n"
+                        heartbeat_counter = 0
+                    await asyncio.sleep(0.1)
+        except Exception as exc:
+            yield "data: " + json.dumps({"error": str(exc)}) + "\n\n"
+            try:
+                fh.close()  # type: ignore[has-type]
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.get("/dashboard/events/inference_tap")
 async def inference_tap_stream(request: Request) -> StreamingResponse:
     """SSE stream — emit a new payload whenever any tap file mtime advances.
