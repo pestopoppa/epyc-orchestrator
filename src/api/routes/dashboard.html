@@ -456,6 +456,15 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
     <div class="panel">
       <h2>
         <span class="live-dot"></span>
+        cpu region locks
+        <span class="count-suffix" id="region-locks-status">— per-region cross-process lock state (Phase 5 / 2026-05-22)</span>
+      </h2>
+      <div id="region-locks-grid" style="display:grid;grid-template-columns:160px repeat(4,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center"></div>
+    </div>
+
+    <div class="panel">
+      <h2>
+        <span class="live-dot"></span>
         autopilot activity
         <span class="count-suffix">— real-time tail (eval / seed_batch / meta-planning / rollback / safety)</span>
       </h2>
@@ -1858,6 +1867,50 @@ function checkRenderLibs() {
 
 function startDashboard() {
     checkRenderLibs();
+    async function updateRegionLocks() {
+        try {
+            const r = await fetch('/dashboard/api/region_locks');
+            const d = await r.json();
+            const status = document.getElementById('region-locks-status');
+            const grid = document.getElementById('region-locks-grid');
+            if (!grid) return;
+            const enabled = d.per_region_locks_enabled;
+            if (status) {
+                status.textContent = enabled
+                    ? '— per-region cross-process locks ACTIVE'
+                    : '— DISABLED (legacy global lock; set ORCHESTRATOR_PER_REGION_LOCKS=1)';
+                status.style.color = enabled ? 'var(--good, #34d399)' : 'var(--warn, #fbbf24)';
+            }
+            const REGIONS = ['q0', 'q1', 'q2', 'q3'];
+            const rows = [];
+            // Header row
+            rows.push(`<div style="color:var(--muted);font-size:10px">role / region</div>`);
+            for (const r of REGIONS) rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center">${r}</div>`);
+            const roles = Object.keys(d.by_role || {}).sort();
+            for (const role of roles) {
+                rows.push(`<div style="color:var(--fg);overflow:hidden;text-overflow:ellipsis">${role}</div>`);
+                const region_map = {};
+                for (const e of d.by_role[role]) region_map[e.region] = e;
+                for (const r of REGIONS) {
+                    const entry = region_map[r];
+                    if (!entry) {
+                        rows.push(`<div style="background:rgba(100,100,100,0.1);border-radius:3px;padding:3px;text-align:center;color:var(--muted)">—</div>`);
+                    } else if (entry.held) {
+                        const pids = (entry.holder_pids || []).join(',');
+                        rows.push(`<div style="background:rgba(248,113,113,0.4);border-radius:3px;padding:3px;text-align:center;color:#fff" title="pids: ${pids}">🔒 ${pids.slice(0,30)}</div>`);
+                    } else {
+                        rows.push(`<div style="background:rgba(52,211,153,0.18);border-radius:3px;padding:3px;text-align:center;color:var(--good,#34d399)">idle</div>`);
+                    }
+                }
+            }
+            if (!roles.length) {
+                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--muted);font-size:11px">no lock files yet — fire an inference to populate</div>`;
+            } else {
+                grid.innerHTML = rows.join('');
+            }
+        } catch {}
+    }
+
     (async function () {
         await loadTopology();
         startStream();
@@ -1865,10 +1918,12 @@ function startDashboard() {
         updateGepa();
         updateProcessStatus();
         updateBuildRev();
+        updateRegionLocks();
         updatePareto();  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
+        setInterval(updateRegionLocks, 1500);  // 1.5s poll — fast enough to catch transient locks during inference
         // Pareto poll: only fetch when the GEPA accordion is open. Cheap when
         // closed (no fetch, just summary text from the last successful call).
         setInterval(() => {

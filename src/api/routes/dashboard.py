@@ -123,6 +123,70 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     })
 
 
+@router.get("/dashboard/api/region_locks")
+async def region_locks_snapshot() -> JSONResponse:
+    """Per-CPU-region lock state — which (role, region) lock files are
+    currently held, and by which PIDs.
+
+    Built from /proc/locks scan of the orchestrator's lock files. Used
+    by the dashboard to surface real-time concurrent dispatch — a glance
+    at this endpoint shows whether the cross-process per-region lock
+    layer (Phase 5 of 2026-05-22) is actually achieving multi-instance
+    concurrency.
+
+    Returns a list of {role, region, lock_path, holder_pids[]} entries
+    for every region lock file that exists. Empty list when no lock
+    files have been created yet (orchestrator was just started, no
+    inference has flown through region-lock-aware path).
+    """
+    import os
+    from pathlib import Path
+
+    try:
+        from src.runtime.cpu_region_lock import _tmp_dir, _current_lock_owner_pids
+        tmp_dir = _tmp_dir()
+    except Exception:
+        tmp_dir = Path("/mnt/raid0/llm/tmp")
+        from src.runtime.cpu_region_lock import _current_lock_owner_pids
+
+    out: list[dict[str, Any]] = []
+    try:
+        for p in sorted(tmp_dir.glob("cpu_region.*.lock")):
+            stem = p.stem  # "cpu_region.<role>.<region>"
+            parts = stem.split(".", 2)
+            if len(parts) < 3:
+                continue
+            _prefix, role, region = parts[0], parts[1], parts[2]
+            holders = _current_lock_owner_pids(p)
+            out.append({
+                "role": role,
+                "region": region,
+                "lock_path": str(p),
+                "holder_pids": holders,
+                "held": bool(holders),
+            })
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "entries": []}, status_code=200)
+
+    # Group by role for easier dashboard rendering
+    by_role: dict[str, list[dict[str, Any]]] = {}
+    for entry in out:
+        by_role.setdefault(entry["role"], []).append({
+            "region": entry["region"],
+            "held": entry["held"],
+            "holder_pids": entry["holder_pids"],
+        })
+
+    feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
+    return JSONResponse({
+        "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
+        "tmp_dir": str(tmp_dir),
+        "entries": out,
+        "by_role": by_role,
+        "now": time.time(),
+    })
+
+
 @router.get("/dashboard/events/raw_tap")
 async def raw_tap_stream(request: Request, tail_bytes: int = 8192) -> StreamingResponse:
     """True byte-level streaming SSE — mirrors what autopilot's TUI does.
