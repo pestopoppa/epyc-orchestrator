@@ -178,6 +178,7 @@ def get_stats(role: str | None = None, mode: str | None = None) -> dict:
 def reset() -> None:
     """Clear all stats. Useful in tests; not used in production."""
     _stats.clear()
+    _recent_batches.clear()
 
 
 # ── Lock-pressure heuristic ─────────────────────────────────────────────
@@ -188,6 +189,96 @@ def reset() -> None:
 # module exposes — cheap, accurate, no extra syscall path.
 
 _HEAVY_LOCK_PATH = "/mnt/raid0/llm/tmp/heavy_model.lock"
+
+
+# ── Batch-level telemetry ───────────────────────────────────────────────
+#
+# Tracks recent seed_batch wall-clock durations + their question counts so
+# the autopilot can adapt n_questions for future batches. A batch that
+# burns 2400s for 10 questions = 240s/question. Under a 900s budget, the
+# right next batch is 3-4 questions, not 10. Without this, the autopilot
+# keeps requesting 10-question batches and the seeder keeps grinding for
+# 40 minutes per trial.
+
+_recent_batches: deque = deque(maxlen=20)  # [(n_questions, duration_s, ts), ...]
+
+
+def record_batch_duration(n_questions: int, duration_s: float) -> None:
+    """Record a completed seed_batch's question count + wall-clock duration."""
+    if n_questions <= 0 or duration_s <= 0:
+        return
+    _recent_batches.append((int(n_questions), float(duration_s), time.time()))
+
+
+def median_seconds_per_question() -> Optional[float]:
+    """Median (duration_s / n_questions) across recent batches, or None
+    if no batches recorded yet."""
+    if not _recent_batches:
+        return None
+    rates = [d / n for n, d, _ in _recent_batches if n > 0]
+    if not rates:
+        return None
+    return statistics.median(rates)
+
+
+def adaptive_batch_size(
+    requested_n: int,
+    budget_s: Optional[float] = None,
+    min_n: int = 2,
+) -> tuple[int, str]:
+    """Recommend an n_questions value that should fit within `budget_s`
+    based on recent observed seconds-per-question.
+
+    Args:
+        requested_n: The autopilot's requested batch size.
+        budget_s: Wall-clock budget in seconds. None = read env var.
+        min_n: Floor on recommended n (keep at least this many for signal).
+
+    Returns:
+        (recommended_n, reason) — recommended_n <= requested_n; reason is
+        a one-line human explanation. If telemetry is empty or signal
+        favors the request, recommended_n == requested_n.
+    """
+    if budget_s is None:
+        budget_s = float(
+            os.environ.get("SEEDING_BATCH_BUDGET_S", "900")
+        )
+    if requested_n <= min_n or budget_s <= 0:
+        return requested_n, "below floor or no budget — using requested"
+
+    rate = median_seconds_per_question()
+    if rate is None:
+        return requested_n, "no batch history yet — using requested"
+
+    # Per-batch fixed overhead (T0 eval after batch, _wait_for_heavy_models
+    # at start, etc.) — empirically 30-60s. Reserve 60s of the budget for
+    # this so the per-question math stays honest.
+    OVERHEAD_S = 60.0
+    workable_budget = max(budget_s - OVERHEAD_S, 60.0)
+    fits = int(workable_budget / rate)
+    if fits >= requested_n:
+        return requested_n, (
+            f"recent rate {rate:.0f}s/q × {requested_n}q = "
+            f"{rate * requested_n:.0f}s ≤ budget {budget_s:.0f}s"
+        )
+    recommended = max(min_n, fits)
+    return recommended, (
+        f"recent rate {rate:.0f}s/q × {requested_n}q = "
+        f"{rate * requested_n:.0f}s > budget {budget_s:.0f}s — "
+        f"scaled to {recommended}q ({rate * recommended:.0f}s)"
+    )
+
+
+def batch_summary() -> dict:
+    """Snapshot of recent batches for diagnostics."""
+    return {
+        "n_recent": len(_recent_batches),
+        "median_s_per_q": median_seconds_per_question(),
+        "recent": [
+            {"n_questions": n, "duration_s": d, "rate_s_per_q": d / max(n, 1)}
+            for n, d, _ in list(_recent_batches)[-5:]
+        ],
+    }
 
 
 def lock_pressure_too_high(min_holder_age_s: float = 60.0) -> tuple[bool, str]:

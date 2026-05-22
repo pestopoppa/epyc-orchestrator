@@ -79,9 +79,51 @@ class _ActionContext:
 
 
 def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
-    n = action.get("n_questions", 10)
+    requested_n = int(action.get("n_questions", 10))
     suites = action.get("suites")
+
+    # 2026-05-22: adaptive batch size — scale requested_n down to what
+    # recent batch wall-clock suggests will fit within
+    # SEEDING_BATCH_BUDGET_S (default 900s). Without this, the autopilot
+    # asks for 10 questions every time and a 240s/question rate gives
+    # ~40-min batches that crowd out other trials.
+    try:
+        import sys
+        sys.path.insert(0, "/mnt/raid0/llm/epyc-orchestrator/scripts/benchmark")
+        from seeding_telemetry import (
+            adaptive_batch_size as _adaptive_n,
+            record_batch_duration as _record_batch,
+        )
+        adapted_n, reason = _adaptive_n(requested_n)
+        if adapted_n != requested_n:
+            log.warning(
+                "[adaptive-batch] scaling seed_batch from %d → %d (%s)",
+                requested_n, adapted_n, reason,
+            )
+        else:
+            log.info("[adaptive-batch] keeping seed_batch n=%d (%s)", requested_n, reason)
+        n = adapted_n
+    except Exception as exc:
+        log.warning("[adaptive-batch] telemetry import failed (%s) — using requested n=%d", exc, requested_n)
+        n = requested_n
+        _record_batch = None  # type: ignore[assignment]
+
+    import time as _time
+    _batch_start = _time.perf_counter()
     ctx.seeder.run_batch(n_questions=n, suites=suites)
+    _batch_elapsed = _time.perf_counter() - _batch_start
+
+    # Record duration so the next batch can adapt
+    if _record_batch is not None:
+        try:
+            _record_batch(n, _batch_elapsed)
+            log.info(
+                "[adaptive-batch] recorded duration: %dq in %.0fs (%.0fs/q)",
+                n, _batch_elapsed, _batch_elapsed / max(n, 1),
+            )
+        except Exception:
+            pass
+
     # After seeding, run T0 eval
     eval_result = ctx.tower.hybrid_eval()
     return eval_result, "seeder"
