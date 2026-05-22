@@ -455,6 +455,76 @@ async def node_detail(port: int) -> JSONResponse:
 # Topology endpoint
 # ---------------------------------------------------------------------------
 
+
+# Dashboard source paths used by the /version endpoint below to surface
+# build state to the browser, so users can tell when a hard-reload is needed.
+_DASHBOARD_HTML_FOR_VERSION = Path(__file__).parent / "dashboard.html"
+_DASHBOARD_PY_FOR_VERSION = Path(__file__)
+_REPO_ROOT_FOR_VERSION = Path(__file__).resolve().parents[3]
+_SERVER_STARTED_AT = time.time()
+
+
+def _read_git_short_sha() -> str | None:
+    """Read current HEAD short SHA from .git/ — no subprocess.
+
+    Handles both branch checkouts (.git/HEAD = "ref: refs/heads/main\n") and
+    detached HEAD (.git/HEAD = "<sha>\n"). Returns None on any error.
+    """
+    try:
+        head_file = _REPO_ROOT_FOR_VERSION / ".git" / "HEAD"
+        head = head_file.read_text().strip()
+        if head.startswith("ref: "):
+            ref_path = _REPO_ROOT_FOR_VERSION / ".git" / head.split(" ", 1)[1].strip()
+            if ref_path.exists():
+                return ref_path.read_text().strip()[:7]
+            # Fall back to packed-refs
+            packed = _REPO_ROOT_FOR_VERSION / ".git" / "packed-refs"
+            if packed.exists():
+                target_ref = head.split(" ", 1)[1].strip()
+                for line in packed.read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or line.startswith("^"):
+                        continue
+                    parts = line.split(" ", 1)
+                    if len(parts) == 2 and parts[1] == target_ref:
+                        return parts[0][:7]
+            return None
+        # Detached HEAD: file directly contains the SHA
+        return head[:7] if len(head) >= 7 else None
+    except Exception:
+        return None
+
+
+@router.get("/dashboard/api/version")
+async def version() -> JSONResponse:
+    """Return current build state for the hard-reload-needed indicator.
+
+    The browser polls this every ~30s. If the returned `dashboard_html_mtime`
+    or `git_sha` differs from what was captured at page load, the dashboard
+    shows a "new build — hard-reload" badge.
+
+    Returns:
+        git_sha: short SHA of the orchestrator repo HEAD (or None if read fails)
+        dashboard_html_mtime: float epoch seconds; bumps on every save
+        dashboard_py_mtime: float epoch seconds; bumps when route handlers
+            change (would require an orchestrator API reload to take effect,
+            but useful to surface in case the file changed without restart)
+        server_started_at: float epoch seconds; bumps on orchestrator restart
+    """
+    def mtime(p: Path) -> float | None:
+        try:
+            return p.stat().st_mtime
+        except Exception:
+            return None
+
+    return JSONResponse({
+        "git_sha": _read_git_short_sha(),
+        "dashboard_html_mtime": mtime(_DASHBOARD_HTML_FOR_VERSION),
+        "dashboard_py_mtime": mtime(_DASHBOARD_PY_FOR_VERSION),
+        "server_started_at": _SERVER_STARTED_AT,
+    })
+
+
 @router.get("/dashboard/api/topology")
 async def topology() -> JSONResponse:
     """Return the static topology: nodes with role + display color + port."""

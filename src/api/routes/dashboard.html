@@ -155,6 +155,7 @@ details.tap-section summary::-webkit-details-marker { color: var(--muted); }
 <h1>orchestrator dashboard
     <span style="font-weight:normal;color:var(--muted)" id="status">connecting…</span>
     <span style="font-weight:normal;color:var(--muted);margin-left:12px;font-size:11px" id="process-status"></span>
+    <span style="font-weight:normal;font-size:10px;margin-left:12px" id="build-rev" title="git SHA + dashboard.html mtime; turns yellow when a hard-reload would pick up newer content"></span>
 </h1>
 
 <div class="counters" id="counters"></div>
@@ -463,18 +464,19 @@ let _tapStream = null;
 let _rawTapStream = null;
 let _rawTapBuffer = "";
 const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
-// (b) Markdown-render mode for the raw tap. When _rawTapRenderMode === 'rendered',
-// a debounced timer kicks in after ~600ms of idle and re-renders the buffer
-// through marked + KaTeX. New chunks reset the debounce. Toggle in UI.
+// (b) Render mode for the live raw tap.
+//   'raw'      : legacy styled <pre> via styleRawTap() — header coloring only,
+//                literal bytes preserved (per-token live updates).
+//   'rendered' : structured per-section render via parseRawTapSections() +
+//                renderMarkdownInto() — section metadata as styled header,
+//                PROMPT/RESPONSE bodies through marked + KaTeX. Preserves
+//                section structure (fixes the prior flat-buffer regression).
 //
-// Default is 'raw' because the live tap content is multi-section structured
-// text (timestamp + ROLE= + PROMPT/RESPONSE markers + ====== separators),
-// and marked collapses single newlines, destroying that structure. The
-// 'rendered' option is best when watching a SINGLE coherent response —
-// for general structure-preserving rendering of the parsed sections, see
-// the per-section render path in renderInferenceTap() which is the right
-// place for markdown + LaTeX in the parsed-sections view.
-let _rawTapRenderMode = (localStorage.getItem('rawTapRenderMode') || 'raw');  // 'raw' | 'rendered'
+// Default is 'rendered' because that delivers the original intent
+// (LaTeX + syntax-highlighted code in the live tap). A debounced timer
+// (~600ms of stream idle) defers the rendered redraw so partial fenced
+// code blocks complete before the per-section parse runs.
+let _rawTapRenderMode = (localStorage.getItem('rawTapRenderMode') || 'rendered');  // 'raw' | 'rendered'
 let _rawTapRenderTimer = null;
 const _RAW_TAP_RENDER_IDLE_MS = 600;
 
@@ -520,16 +522,25 @@ function toggleRawTapRenderMode() {
     paintRawTap();  // immediate redraw with the new mode
 }
 
-// One-time migration: clear the stale 'rendered' default set by the prior
-// commit's bug (multi-section content + flat markdown render = broken).
-// Run once per session — once cleared, the toggle still works for users
-// who explicitly want rendered mode.
-(function _migrateStaleRenderModeOnce() {
-    if (sessionStorage.getItem('rawTapRenderMode.migrated_v2')) return;
-    sessionStorage.setItem('rawTapRenderMode.migrated_v2', '1');
-    if (localStorage.getItem('rawTapRenderMode') === 'rendered') {
+// One-time migration history:
+//   v2 (commit c87e1d0): clear stale 'rendered' values left by an earlier
+//     commit where 'rendered' applied flat marked.parse() to multi-section
+//     content (destroyed section structure).
+//   v3 (this commit): the rendered mode is now a structured per-section
+//     parser + per-body marked/KaTeX render, which is the original
+//     LaTeX-in-live-tap intent. Clear any stale 'raw' preference left by
+//     users who turned the broken mode off during v2 — they'd benefit
+//     from re-enabling now.
+(function _migrateRenderModeOnce() {
+    if (sessionStorage.getItem('rawTapRenderMode.migrated_v3')) return;
+    sessionStorage.setItem('rawTapRenderMode.migrated_v3', '1');
+    // Drop the v2 lockout marker since we're past that bug now.
+    sessionStorage.removeItem('rawTapRenderMode.migrated_v2');
+    // Clear the explicit-'raw' opt-out so v3 default 'rendered' takes effect.
+    // Users who deliberately want raw can toggle after seeing the new behavior.
+    if (localStorage.getItem('rawTapRenderMode') === 'raw') {
         localStorage.removeItem('rawTapRenderMode');
-        _rawTapRenderMode = 'raw';
+        _rawTapRenderMode = 'rendered';
     }
 })();
 
@@ -538,8 +549,8 @@ function buildRawTapStatusBar() {
     const isRendered = (_rawTapRenderMode === 'rendered');
     const toggleLabel = isRendered ? '📄 markdown' : '⌨️ raw';
     const toggleHint = isRendered
-        ? 'rendered markdown + LaTeX — collapses multi-section structure; best for a SINGLE coherent response. click for raw bytes.'
-        : 'raw structured bytes (section markers + PROMPT/RESPONSE preserved). click to try markdown rendering — note it works best on single-response captures, not the multi-section live stream.';
+        ? 'structured render: each section parsed + body run through marked + KaTeX. click for raw bytes.'
+        : 'raw structured bytes (section markers + PROMPT/RESPONSE preserved). click to render markdown + LaTeX per section.';
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
         <span style="color:var(--muted);font-size:10px">live tap (per-token from /mnt/raid0/llm/tmp/inference_tap.log)</span>
         <span style="display:flex;gap:8px;align-items:center">
@@ -577,14 +588,108 @@ function paintRawTap() {
         }
     }
     if (isRendered) {
-        // Markdown + LaTeX render of the buffer. Partial fenced code blocks
-        // can swallow trailing content; mitigated by the debounce — we only
-        // render after ~600ms of stream idle, so blocks are usually complete.
-        renderMarkdownInto(inner, _rawTapBuffer);
+        // Structured per-section render: parse the buffer into the same
+        // (timestamp, role, prompt, response) records the server's parsed
+        // sections view uses, then render metadata as styled headers and
+        // bodies through marked + KaTeX. Preserves the section structure
+        // that flat-buffer markdown rendering destroys.
+        paintRawTapRendered(inner);
     } else {
         inner.innerHTML = styleRawTap(_rawTapBuffer);
     }
     autoscrollRawPanel(inner);
+}
+
+// Section separator that the autopilot/seeding harness writes between
+// tap records. Mirrors server-side _SECTION_SEP in dashboard_tap.py.
+const _RAW_TAP_SECTION_SEP = "=".repeat(72);
+
+function parseRawTapSections(buf) {
+    // Client-side mirror of dashboard_tap._parse_inference_sections. Splits
+    // on _SECTION_SEP and pulls (timestamp, role, prompt, response) out of
+    // each chunk. Returns sections in chronological (oldest → newest) order.
+    if (!buf) return [];
+    const out = [];
+    const chunks = buf.split(_RAW_TAP_SECTION_SEP);
+    for (const raw of chunks) {
+        const chunk = raw.trim();
+        if (!chunk) continue;
+        const roleMatch = chunk.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*ROLE=(\S+)/);
+        const promptIdx = chunk.indexOf("PROMPT:");
+        const responseIdx = chunk.indexOf("RESPONSE:");
+        if (promptIdx < 0 || responseIdx < 0 || responseIdx < promptIdx) continue;
+        let promptText = chunk.substring(promptIdx + "PROMPT:".length, responseIdx).trim();
+        // Strip trailing subsection separator before RESPONSE
+        promptText = promptText.replace(/-{20,}\s*$/, "").trim();
+        let responseText = chunk.substring(responseIdx + "RESPONSE:".length).trim();
+        // Skip the TIMINGS-only probes the parsed-sections endpoint filters server-side
+        const respStripped = responseText.replace(/^-+/, "").trim();
+        if (respStripped.startsWith("TIMINGS:") && responseText.length < 400) continue;
+        // Trim a trailing TIMINGS: line out of the response body — keep it for the metadata footer
+        let timings = null;
+        const timingsMatch = responseText.match(/^-{20,}\s*\nTIMINGS:\s*(.+?)$/m);
+        if (timingsMatch) {
+            timings = timingsMatch[1].trim();
+            responseText = responseText.substring(0, timingsMatch.index).trim();
+            responseText = responseText.replace(/-{20,}\s*$/, "").trim();
+        }
+        out.push({
+            timestamp: roleMatch ? roleMatch[1] : null,
+            role: roleMatch ? roleMatch[2] : null,
+            prompt: promptText,
+            response: responseText,
+            timings: timings,
+            prompt_len: promptText.length,
+            response_len: responseText.length,
+        });
+    }
+    return out;
+}
+
+function paintRawTapRendered(container) {
+    // Replace container content with one styled block per section. Newest
+    // section shown first + auto-expanded; older sections collapsed
+    // <details>. Each section's PROMPT/RESPONSE body runs through
+    // renderMarkdownInto so marked + KaTeX apply.
+    const sections = parseRawTapSections(_rawTapBuffer);
+    if (!sections.length) {
+        container.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:6px">no parseable sections in buffer yet — tap may be warming up</div>';
+        return;
+    }
+    // Newest first for visual scanning
+    sections.reverse();
+    const html = sections.map((s, i) => {
+        const ts = s.timestamp || '';
+        const role = s.role || '?';
+        const color = (typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--muted)';
+        const escapedRole = escapeHTML(role);
+        const escapedTs = escapeHTML(ts);
+        const timingsLine = s.timings
+            ? `<div style="color:var(--muted);font-size:10px;margin-top:6px;font-family:ui-monospace,monospace">${escapeHTML(s.timings)}</div>`
+            : '';
+        return `<details class="tap-section" ${i === 0 ? 'open' : ''} data-section-idx="${i}">
+            <summary style="cursor:pointer;padding:4px 0;color:${color}">
+                <span style="font-weight:600">${escapedRole}</span>
+                <span style="color:var(--muted);font-size:10px;margin-left:6px">${escapedTs} · ${s.prompt_len}c prompt · ${s.response_len}c resp</span>
+            </summary>
+            <div style="margin:4px 0">
+                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">prompt</div>
+                <div class="tap-content prompt-text" data-raw-tap-prompt="${i}"></div>
+                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-top:6px">response</div>
+                <div class="tap-content stream-text" data-raw-tap-response="${i}"></div>
+                ${timingsLine}
+            </div>
+        </details>`;
+    }).join('');
+    container.innerHTML = html;
+    // Now render the bodies through marked + KaTeX. Done after innerHTML so
+    // the elements exist; renderMarkdownInto mutates each in place.
+    sections.forEach((s, i) => {
+        const pEl = container.querySelector(`[data-raw-tap-prompt="${i}"]`);
+        const rEl = container.querySelector(`[data-raw-tap-response="${i}"]`);
+        if (pEl) renderMarkdownInto(pEl, s.prompt);
+        if (rEl) renderMarkdownInto(rEl, s.response);
+    });
 }
 
 function scheduleRawTapRender() {
@@ -1091,6 +1196,48 @@ async function updateProcessStatus() {
     } catch (e) {}
 }
 
+// Build-rev indicator: shows the git SHA + dashboard.html mtime captured at
+// page load. Polls /dashboard/api/version every 30s; if either changes,
+// the badge goes yellow + the tooltip explains a hard-reload would pick up
+// the newer build. Independent from the /process_status polling because
+// (a) /version is cheap (file mtime + .git/HEAD read), and (b) cadence is
+// different — we don't need second-by-second granularity for build drift.
+let _buildRevLoaded = null;  // {git_sha, dashboard_html_mtime, dashboard_py_mtime, server_started_at}
+
+async function updateBuildRev() {
+    try {
+        const r = await fetch('/dashboard/api/version');
+        const v = await r.json();
+        if (_buildRevLoaded === null) {
+            _buildRevLoaded = v;
+        }
+        const el = document.getElementById('build-rev');
+        if (!el) return;
+        const htmlChanged = v.dashboard_html_mtime !== _buildRevLoaded.dashboard_html_mtime;
+        const pyChanged = v.dashboard_py_mtime !== _buildRevLoaded.dashboard_py_mtime;
+        const restarted = v.server_started_at !== _buildRevLoaded.server_started_at;
+        const shaChanged = v.git_sha !== _buildRevLoaded.git_sha;
+        const sha = v.git_sha || '?';
+        const isStale = htmlChanged || shaChanged || restarted;
+        if (isStale) {
+            const why = [];
+            if (htmlChanged) why.push('dashboard.html newer on server');
+            if (shaChanged) why.push(`git HEAD bumped → ${sha}`);
+            if (restarted) why.push('API restarted');
+            if (pyChanged) why.push('dashboard.py newer (restart required)');
+            el.innerHTML = `<span style="color:var(--warn);cursor:pointer" ` +
+                `onclick="location.reload(true)" ` +
+                `title="hard-reload to pick up: ${why.join('; ')}">⟳ build ${sha} (stale)</span>`;
+        } else {
+            const pyStaleNote = pyChanged
+                ? ' <span style="color:var(--warn)" title="dashboard.py changed on disk but the running process is still using the old code — orchestrator_stack reload orchestrator to apply">·py</span>'
+                : '';
+            el.innerHTML = `<span style="color:var(--muted)" ` +
+                `title="loaded build (matches server)">build ${sha}</span>${pyStaleNote}`;
+        }
+    } catch (e) {}
+}
+
 function checkRenderLibs() {
     // After defers run, surface a visible warning if any lib failed to load.
     // Without this, CDN/network failures cause silent degradation (no LaTeX,
@@ -1125,8 +1272,10 @@ function startDashboard() {
         startTapStream();
         updateGepa();
         updateProcessStatus();
+        updateBuildRev();
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
+        setInterval(updateBuildRev, 30000);  // build-drift poll
     })();
 }
 
