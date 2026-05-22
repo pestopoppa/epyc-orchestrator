@@ -200,19 +200,41 @@ h2 .live-dot.idle { background: var(--dim); box-shadow: none; animation: none; }
 .tag.reject { background: rgba(239,68,68,0.12); color: var(--bad); border-color: rgba(239,68,68,0.3); }
 .tag.shadow { background: rgba(245,158,11,0.10); color: var(--warn); border-color: rgba(245,158,11,0.3); }
 
-/* Decision rows */
+/* Decision rows — compact 2-line card per decision, fits in narrow column.
+   Header line: action (colored) · age + tags
+   Footer line: task_id (mono, truncated) · src · conf · verifier */
 .decision-row {
-    padding: 7px 0;
-    border-bottom: 1px solid var(--border);
-    display: grid;
-    grid-template-columns: 50px 90px 90px 56px 50px 60px;
-    gap: 6px;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.015);
+    border: 1px solid var(--border);
     font-size: 11px;
-    font-family: var(--font-mono);
-    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    transition: background .15s, border-color .15s;
 }
+.decision-row:hover { background: rgba(255,255,255,0.05); border-color: var(--border-strong); }
+.decision-row .dec-line-1 {
+    display: flex; align-items: center; gap: 6px;
+    flex-wrap: wrap;
+}
+.decision-row .dec-line-2 {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    color: var(--dim); font-size: 10px; font-family: var(--font-mono);
+}
+.decision-row .dec-action { font-weight: 600; font-size: 12px; }
+.decision-row .dec-age { color: var(--dim); font-size: 10px; font-family: var(--font-mono); margin-left: auto; }
+.decision-row .dec-taskid {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
+}
+.decision-row .src { font-weight: 500; }
 .decision-row .src.classifier { color: var(--good); }
 .decision-row .src.rules { color: var(--warn); }
+.decision-row .src.fallback { color: var(--dim); }
+.decision-row .dec-conf { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* Stream surfaces (autopilot log, planner tap) */
 .stream-pre {
@@ -554,6 +576,12 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
     <div class="panel">
       <h2>in-flight <span class="count-suffix" id="inflight-count"></span></h2>
       <div id="inflight-tasks"></div>
+      <div id="inflight-explainer" style="color:var(--dim);font-size:10px;margin-top:6px;line-height:1.5;display:none">
+        in-flight = chat-XXX tasks logged to progress JSONL.
+        the live tap also shows seeding / eval / internal probes that don't
+        emit task_started events — those have no task_id so they can't be
+        clicked here. for those, click the tap section above (↗ detail) instead.
+      </div>
     </div>
 
     <div class="panel">
@@ -562,10 +590,7 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
     </div>
 
     <div class="panel">
-      <h2>routing decisions <span class="count-suffix">last 50</span></h2>
-      <div class="decision-row" style="font-weight:600;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.06em">
-        <div>age</div><div>task</div><div>action</div><div>src</div><div>conf</div><div>v.</div>
-      </div>
+      <h2>routing decisions <span class="count-suffix">last 20</span></h2>
       <div id="decision-feed"></div>
     </div>
   </div>
@@ -983,8 +1008,16 @@ function updateTasks(snap) {
         slotsTotal += a.n_total || 0;
     });
     document.getElementById('inflight-count').textContent =
-        `(${inflight.length} chat · ${slotsActive}/${slotsTotal} slots active)`;
-    document.getElementById('completed-count').textContent = `(${completed.length} in last 10m)`;
+        `${inflight.length} chat · ${slotsActive}/${slotsTotal} slots active`;
+    // Surface the gap: more slots active than tracked chat tasks means some
+    // inferences are seeding/eval/internal probes without a task_id. Show
+    // an explainer when that's the case so the operator understands why
+    // the tap shows more activity than is clickable here.
+    const explainer = document.getElementById('inflight-explainer');
+    if (explainer) {
+        explainer.style.display = (slotsActive > inflight.length) ? 'block' : 'none';
+    }
+    document.getElementById('completed-count').textContent = `${completed.length} in last 10m`;
     const ifEl = document.getElementById('inflight-tasks');
     const cpEl = document.getElementById('completed-tasks');
     if (inflight.length) {
@@ -1550,19 +1583,27 @@ function updateDecisions(snap) {
     const feed = document.getElementById('decision-feed');
     const rows = (snap.recent_decisions || []).slice(-20).reverse();
     feed.innerHTML = rows.map(d => {
-        const conf = d.classifier_confidence != null ? d.classifier_confidence.toFixed(2) : '—';
+        const action = d.chosen_action || '—';
+        const actionColor = (typeof roleColor === 'function' ? roleColor(action) : null) || 'var(--text)';
+        const conf = d.classifier_confidence != null
+            ? `<span class="dec-conf">conf ${d.classifier_confidence.toFixed(2)}</span>` : '';
         const verifier = d.verifier_p_success != null
             ? `<span class="tag ${d.verifier_verdict||''}">${d.verifier_verdict||'?'} ${d.verifier_p_success.toFixed(2)}${d.verifier_shadow?' s':''}</span>`
-            : '—';
-        return `<div class="decision-row">
-            <div>${d.age_s}s</div>
-            <div title="${d.task_id||''}">${(d.task_id||'').slice(-12)}</div>
-            <div>${d.chosen_action||'—'}</div>
-            <div class="src ${d.source}">${d.source}</div>
-            <div>${conf}</div>
-            <div>${verifier}</div>
+            : '';
+        const taskId = d.task_id || '';
+        return `<div class="decision-row" title="${escapeHTML(taskId)}">
+            <div class="dec-line-1">
+                <span class="dec-action" style="color:${actionColor}">${escapeHTML(action)}</span>
+                ${verifier}
+                <span class="dec-age">${d.age_s}s</span>
+            </div>
+            <div class="dec-line-2">
+                <span class="dec-taskid">${escapeHTML(taskId.slice(-16) || '—')}</span>
+                <span class="src ${escapeHTML(d.source||'')}">${escapeHTML(d.source||'?')}</span>
+                ${conf}
+            </div>
         </div>`;
-    }).join('') || '<div style="color:var(--muted);padding:6px 0">no decisions yet</div>';
+    }).join('') || '<div style="color:var(--muted);padding:6px 0;font-size:11px">no decisions yet</div>';
 }
 
 async function updateGepa() {
@@ -1976,9 +2017,23 @@ async function openDetail(taskId, port, slotId) {
             }
             if (u.delta) {
                 _currentTaskRawText.stream += u.delta;
-                // Re-render after every batch — cheap for short streams
+                // Scroll preservation: full-buffer re-render through marked +
+                // KaTeX rebuilds innerHTML, which resets scrollTop to 0. If the
+                // user was reading mid-stream (scrolled up), the auto-reset
+                // makes the panel feel "unscrollable" — every chunk yanks
+                // them back to the top.
+                // Strategy: capture at-bottom state BEFORE re-render. After
+                // re-render, restore scrollTop (or snap to bottom if user was
+                // following). Same pattern as the raw-tap autoscroll tracker.
+                const atBottom = (sel.scrollHeight - sel.scrollTop - sel.clientHeight) < 24;
+                const savedTop = sel.scrollTop;
                 renderMarkdownInto(sel, _currentTaskRawText.stream);
                 sel.classList.add('live');
+                if (atBottom) {
+                    sel.scrollTop = sel.scrollHeight;
+                } else {
+                    sel.scrollTop = savedTop;  // user is reading mid-stream — don't yank
+                }
             }
         };
     } catch (e) {

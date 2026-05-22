@@ -90,7 +90,19 @@ def _summarize_event(line: str) -> str:
     t = evt.get("type", "?")
     if t == "system":
         sub = evt.get("subtype", "")
-        return f"[system:{sub}] session={evt.get('session_id','')[:8]}…"
+        # For the init event surface model + tools + cwd so the operator
+        # sees the planner's environment at a glance.
+        sid = evt.get("session_id", "")[:8]
+        extras = []
+        if evt.get("model"):
+            extras.append(f"model={evt['model']}")
+        tools = evt.get("tools") or []
+        if tools:
+            extras.append(f"tools={','.join(tools[:8])}{'…' if len(tools) > 8 else ''}")
+        if evt.get("cwd"):
+            extras.append(f"cwd={evt['cwd']}")
+        suffix = (" " + " ".join(extras)) if extras else ""
+        return f"[system:{sub}] session={sid}…{suffix}"
     if t == "assistant":
         msg = evt.get("message", {})
         parts = []
@@ -99,12 +111,21 @@ def _summarize_event(line: str) -> str:
             if ctype == "text":
                 txt = c.get("text", "").strip()
                 if txt:
-                    parts.append(txt[:300])
+                    # 1200c (was 300c) — assistant text is the planner's
+                    # reasoning the operator wants to read mid-stream.
+                    parts.append(txt[:1200])
             elif ctype == "tool_use":
                 name = c.get("name", "?")
                 inp = c.get("input", {})
-                arg_preview = json.dumps(inp)[:160]
+                # 800c (was 160c) — args include file paths / search patterns
+                # / shell commands that show WHAT the planner is doing.
+                arg_preview = json.dumps(inp)[:800]
                 parts.append(f"TOOL_USE {name}({arg_preview})")
+            elif ctype == "thinking":
+                # Extended-thinking content (when the planner model emits it)
+                think = c.get("thinking", "").strip()
+                if think:
+                    parts.append(f"THINKING: {think[:800]}")
         return "[assistant] " + " | ".join(parts) if parts else "[assistant] (empty)"
     if t == "user":
         msg = evt.get("message", {})
@@ -116,18 +137,32 @@ def _summarize_event(line: str) -> str:
                         (b.get("text", "") if isinstance(b, dict) else str(b))
                         for b in content
                     )
-                preview = str(content)[:240].replace("\n", " / ")
-                return f"[tool_result] {preview}"
+                is_error = c.get("is_error", False)
+                # 1500c (was 240c) — tool results are the planner's evidence;
+                # truncating them hides the inputs to its next decision.
+                # Newlines preserved — the tap renderer wraps the content.
+                preview = str(content)[:1500]
+                tag = "[tool_error] " if is_error else "[tool_result] "
+                return tag + preview
         return "[user] (no tool_result)"
     if t == "result":
         sub = evt.get("subtype", "")
         cost = evt.get("total_cost_usd")
         dur = evt.get("duration_ms")
-        return (
-            f"[result:{sub}] cost=${cost:.4f} duration={dur}ms"
-            if isinstance(cost, (int, float))
-            else f"[result:{sub}]"
-        )
+        turns = evt.get("num_turns")
+        usage = evt.get("usage") or {}
+        in_tok = usage.get("input_tokens")
+        out_tok = usage.get("output_tokens")
+        parts = [f"[result:{sub}]"]
+        if isinstance(cost, (int, float)):
+            parts.append(f"cost=${cost:.4f}")
+        if isinstance(dur, (int, float)):
+            parts.append(f"duration={dur}ms")
+        if isinstance(turns, (int, float)):
+            parts.append(f"turns={turns}")
+        if isinstance(in_tok, (int, float)) and isinstance(out_tok, (int, float)):
+            parts.append(f"tokens={in_tok}in/{out_tok}out")
+        return " ".join(parts)
     return f"[{t}] {line.rstrip()[:200]}"
 
 

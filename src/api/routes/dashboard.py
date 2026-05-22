@@ -943,7 +943,11 @@ async def stream(request: Request) -> StreamingResponse:
             except Exception as exc:
                 payload = json.dumps({"error": str(exc)})
             yield f"data: {payload}\n\n"
-            await asyncio.sleep(1.0)
+            # 2 Hz instead of 1 Hz: more responsive in-flight panel updates
+            # so short-lived tasks (sub-second) are more likely to be caught.
+            # Snapshot is cheap (file mtime + JSONL tail + /slots fan-out is
+            # parallel + bounded), so doubling the rate is a small cost.
+            await asyncio.sleep(0.5)
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
