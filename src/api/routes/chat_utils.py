@@ -181,6 +181,50 @@ def _detect_template_family(model_name: str) -> str:
     return "unknown"
 
 
+def _wrap_for_family(user_prompt: str, family: str) -> str:
+    """Apply turn-marker wrap for a known family; pass-through otherwise."""
+    if family == "gemma":
+        return _TEMPLATE_GEMMA.format(user=user_prompt)
+    if family == "llama3":
+        return _TEMPLATE_LLAMA3.format(user=user_prompt)
+    if family in ("qwen", "minimax", "phi"):
+        # MiniMax + Phi-4 both accept Qwen-style ChatML markers per empirical
+        # check. If a future model breaks, add a dedicated entry above.
+        return _TEMPLATE_QWEN_CHATML.format(user=user_prompt)
+    return user_prompt
+
+
+def _is_already_templated(user_prompt: str) -> bool:
+    """True if `user_prompt` already contains any known turn markers."""
+    return (
+        "<|im_start|>" in user_prompt
+        or "<start_of_turn>" in user_prompt
+        or "<|begin_of_text|>" in user_prompt
+    )
+
+
+def apply_chat_template_for_model(model_name: str, user_prompt: str) -> str:
+    """Wrap `user_prompt` with markers appropriate for `model_name`.
+
+    Use this when the caller already knows the model name (e.g. worker_pool
+    has it via `WorkerConfig.model_path`'s basename). For callers that only
+    know the role, use `apply_chat_template_for_role` instead.
+
+    Returns the prompt unchanged if it's already templated or if the family
+    is unknown. Never raises.
+    """
+    if not user_prompt or _is_already_templated(user_prompt):
+        return user_prompt
+    family = _detect_template_family(model_name)
+    out = _wrap_for_family(user_prompt, family)
+    if out is user_prompt and family == "unknown":
+        log.debug(
+            "apply_chat_template_for_model: no template for model=%s; passing through",
+            model_name,
+        )
+    return out
+
+
 def apply_chat_template_for_role(
     role_name: str,
     user_prompt: str,
@@ -188,23 +232,20 @@ def apply_chat_template_for_role(
 ) -> str:
     """Wrap `user_prompt` with the role's chat-template turn markers.
 
-    Returns the original prompt unchanged if:
-        - registry is None or role not found
-        - model family can't be identified
-        - prompt already contains turn markers (don't double-wrap)
+    Looks up the role's model name from the registry and dispatches to
+    `apply_chat_template_for_model`. Returns the original prompt unchanged
+    if it's already templated, or wrapped with the Qwen ChatML fallback if
+    registry/role lookup fails (preserves the legacy behavior used by the
+    dominant Qwen-stack callers).
 
     Safe to call from chat.py and worker_pool; never raises.
     """
-    if not user_prompt:
-        return user_prompt
-    # Avoid double-wrapping if caller has already templated.
-    if "<|im_start|>" in user_prompt or "<start_of_turn>" in user_prompt:
-        return user_prompt
-    if "<|begin_of_text|>" in user_prompt:
+    if not user_prompt or _is_already_templated(user_prompt):
         return user_prompt
     if registry is None:
-        # Default fallback: Qwen ChatML (preserves prior behavior for callers
-        # who can't see the registry — same as before this helper landed).
+        # Legacy fallback: Qwen ChatML — matches pre-fix behavior for callers
+        # that can't see the registry. The dominant stack is Qwen, so the
+        # fallback is "right by default" for unknown-registry callers.
         return _TEMPLATE_QWEN_CHATML.format(user=user_prompt)
     try:
         role = registry.get_role(role_name)  # type: ignore[attr-defined]
@@ -216,24 +257,7 @@ def apply_chat_template_for_role(
             role_name, exc,
         )
         return _TEMPLATE_QWEN_CHATML.format(user=user_prompt)
-
-    family = _detect_template_family(model_name)
-    if family == "gemma":
-        return _TEMPLATE_GEMMA.format(user=user_prompt)
-    if family == "llama3":
-        return _TEMPLATE_LLAMA3.format(user=user_prompt)
-    if family in ("qwen", "minimax", "phi"):
-        # MiniMax + Phi-4 both accept Qwen-style ChatML markers per empirical
-        # check (their templates use compatible <|im_start|> tokens). If a
-        # future model in those families breaks, add a dedicated entry above.
-        return _TEMPLATE_QWEN_CHATML.format(user=user_prompt)
-    # Unknown family: pass through. Safer than guessing wrong.
-    log.debug(
-        "apply_chat_template_for_role: no template for role=%s model=%s (family=%s); "
-        "passing through",
-        role_name, model_name, family,
-    )
-    return user_prompt
+    return apply_chat_template_for_model(model_name, user_prompt)
 
 
 def _is_stub_final(text: str) -> bool:

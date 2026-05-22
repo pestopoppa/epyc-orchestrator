@@ -676,8 +676,19 @@ class WorkerPoolManager:
         """
         url = f"{worker.url}/completion"
 
+        # Per-model chat template (mirrors the chat.py:498 fix). /completion
+        # does not apply the GGUF's Jinja template server-side, so the caller
+        # must template the prompt. Without this, gemma-family workers see
+        # raw user text (or Qwen-style markers from a prior caller) as random
+        # tokens and return 0 tokens. Stem of model_path is the same kind of
+        # name the helper's family detector expects (e.g.
+        # `gemma-4-26B-A4B-it-Q4_K_M` from a Q4_K_M.gguf).
+        from src.api.routes.chat_utils import apply_chat_template_for_model
+        model_stem = Path(worker.config.model_path).stem
+        templated_prompt = apply_chat_template_for_model(model_stem, prompt)
+
         payload = {
-            "prompt": prompt,
+            "prompt": templated_prompt,
             "temperature": temperature,
             "n_predict": max_tokens,
             "stream": False,
