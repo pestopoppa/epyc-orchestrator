@@ -915,6 +915,15 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     # Feature flags: enable production capabilities
     env["ORCHESTRATOR_MEMRL"] = "1"
     env["ORCHESTRATOR_ROUTING_CLASSIFIER"] = "1"
+    # 2026-05-22 Phase 5: per-CPU-region cross-process locks enabled by
+    # default. Replaces the single global heavy_model.lock with
+    # per-(role, atomic-region) fcntl locks so frontdoor full (0-47)
+    # can run concurrently with frontdoor.q2 / q3 (48-71 / 72-95) on
+    # disjoint cores. ConcurrencyAwareBackend's dispatch path uses these
+    # for cross-process safe instance selection. Override with
+    # ORCHESTRATOR_PER_REGION_LOCKS=0 to fall back to the legacy global
+    # heavy lock if a regression surfaces.
+    env.setdefault("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     # P6.2-A2 (2026-05-21): frontdoor-specialist verifier loaded by the API
     # service when the gate flag is on. Defaults below put it in SHADOW MODE —
     # the verifier runs and logs P(success) to last_decision_meta but never
