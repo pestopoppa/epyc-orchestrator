@@ -4,6 +4,9 @@
 <title>Orchestrator Dashboard</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/atom-one-dark.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <!-- All four rendering libs use `defer` so they load in parallel and execute
      in document-order AFTER the parser hits </body>. The inline init() IIFE
      at the bottom of this file is gated on DOMContentLoaded so it runs only
@@ -16,140 +19,417 @@
 <script defer onerror="window.__libLoadFail=(window.__libLoadFail||[]).concat(['katex-auto-render'])" src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <style>
 :root {
-    --bg:#0f172a; --panel:#1e293b; --text:#e2e8f0; --muted:#94a3b8;
-    --border:#334155; --accent:#3b82f6;
-    --good:#10b981; --warn:#f59e0b; --bad:#ef4444;
+    --bg-1: #0a0f1c;
+    --bg-2: #111827;
+    --panel: rgba(30, 41, 59, 0.55);
+    --panel-elevated: rgba(30, 41, 59, 0.85);
+    --text: #e2e8f0;
+    --text-strong: #f1f5f9;
+    --muted: #94a3b8;
+    --dim: #64748b;
+    --border: rgba(148, 163, 184, 0.15);
+    --border-strong: rgba(148, 163, 184, 0.3);
+    --accent: #38bdf8;
+    --accent-soft: rgba(56, 189, 248, 0.12);
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --font-ui: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, monospace;
+    --radius: 10px;
+    --radius-sm: 6px;
 }
 * { box-sizing: border-box; }
 body {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    background: var(--bg); color: var(--text); margin:0; padding:12px;
-    font-size: 12px; line-height: 1.4;
+    font-family: var(--font-ui);
+    background: radial-gradient(ellipse at top, var(--bg-2), var(--bg-1));
+    background-attachment: fixed;
+    color: var(--text);
+    margin: 0;
+    padding: 18px 22px 28px 22px;
+    font-size: 13px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
-h1 { font-size: 16px; margin: 0 0 12px 0; color: var(--text); }
-h2 { font-size: 13px; margin: 0 0 8px 0; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
-.grid {
+h1 {
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 18px 0;
+    color: var(--text-strong);
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+h2 {
+    font-size: 11px;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+h2 .count-suffix { color: var(--dim); font-weight: 500; letter-spacing: 0; text-transform: none; }
+h2 .live-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--good);
+    box-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
+    animation: live-pulse 1.6s ease-in-out infinite;
+    flex-shrink: 0;
+}
+h2 .live-dot.idle { background: var(--dim); box-shadow: none; animation: none; }
+@keyframes live-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+.layout {
     display: grid;
-    grid-template-columns: 1.4fr 1fr;
-    grid-template-rows: auto auto;
-    gap: 12px;
+    grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr);
+    gap: 18px;
 }
+.col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+
 .panel {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 10px 12px;
-    overflow: auto;
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15), 0 4px 12px rgba(0,0,0,0.08);
+    backdrop-filter: blur(8px);
 }
-.panel.topology { grid-row: 1 / span 2; }
+
+/* Counters */
 .counters {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-    margin-bottom: 12px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
 }
 .counter {
-    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
-    padding: 6px 10px;
-}
-.counter .label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
-.counter .value { font-size: 18px; font-weight: 600; color: var(--text); margin-top: 2px; }
-.counter .sub { color: var(--muted); font-size: 10px; }
-.task-card {
-    background: rgba(255,255,255,0.03);
+    background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 8px;
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    transition: border-color .15s, transform .15s;
+}
+.counter:hover { border-color: var(--border-strong); }
+.counter .label {
+    color: var(--muted); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.08em; font-weight: 600;
+}
+.counter .value {
+    font-size: 24px; font-weight: 700; color: var(--text-strong);
+    margin-top: 4px; font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+}
+.counter .sub { color: var(--dim); font-size: 11px; margin-top: 2px; }
+
+/* Compact topology strip — each role on its own row with slot dots */
+.topology-strip { display: flex; flex-direction: column; gap: 4px; }
+.topology-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 120px;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background .15s;
+}
+.topology-row:hover { background: rgba(255,255,255,0.04); }
+.topology-row .role-name {
+    font-size: 12px; font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topology-row .port {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--dim); padding-right: 4px;
+}
+.topology-row .slot-dots {
+    display: flex; gap: 3px; justify-content: flex-end; align-items: center;
+    flex-wrap: wrap;
+}
+.slot-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: rgba(148,163,184,0.25);
+    transition: background .15s, box-shadow .15s;
+}
+.slot-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 6px rgba(56,189,248,0.55);
+}
+.slot-dot.down { background: var(--bad); }
+
+/* Task cards */
+.task-card {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
     margin-bottom: 6px;
     cursor: pointer;
-    transition: background .1s;
+    transition: background .15s, border-color .15s;
 }
-.task-card:hover { background: rgba(255,255,255,0.08); }
-.task-card .role { font-weight: 600; }
-.task-card .meta { color: var(--muted); font-size: 10px; margin-top: 2px; }
-.task-card .prompt { color: var(--text); font-size: 11px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.task-card:hover {
+    background: rgba(255,255,255,0.05);
+    border-color: var(--border-strong);
+}
+.task-card .role { font-weight: 600; font-size: 12px; }
+.task-card .meta { color: var(--muted); font-size: 10px; margin-top: 4px; font-family: var(--font-mono); }
+.task-card .prompt {
+    color: var(--text); font-size: 11px; margin-top: 6px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Tags */
+.tag {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+}
+.tag.accept { background: rgba(16,185,129,0.12); color: var(--good); border-color: rgba(16,185,129,0.3); }
+.tag.reject { background: rgba(239,68,68,0.12); color: var(--bad); border-color: rgba(239,68,68,0.3); }
+.tag.shadow { background: rgba(245,158,11,0.10); color: var(--warn); border-color: rgba(245,158,11,0.3); }
+
+/* Decision rows */
 .decision-row {
-    padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
-    display: grid; grid-template-columns: 70px 100px 100px 60px 60px 60px;
-    gap: 6px; font-size: 11px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 50px 90px 90px 56px 50px 60px;
+    gap: 6px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    align-items: center;
 }
-.decision-row .src { color: var(--accent); }
 .decision-row .src.classifier { color: var(--good); }
 .decision-row .src.rules { color: var(--warn); }
-.tag {
-    display: inline-block; padding: 1px 6px; border-radius: 2px;
-    font-size: 10px; background: rgba(255,255,255,0.1);
+
+/* Stream surfaces (autopilot log, planner tap) */
+.stream-pre {
+    background: rgba(0,0,0,0.32);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.5;
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    max-height: 320px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
 }
-.tag.accept { background: rgba(16,185,129,0.2); color: #34d399; }
-.tag.reject { background: rgba(239,68,68,0.2); color: #f87171; }
-.tag.shadow { background: rgba(245,158,11,0.15); color: #fcd34d; }
-svg.topology { width: 100%; height: 500px; background: rgba(0,0,0,0.2); border-radius: 6px; }
-svg .node-circle { transition: r .2s; cursor: pointer; }
-svg .node-label { fill: var(--text); font-family: ui-monospace, monospace; font-size: 10px; pointer-events: none; }
-svg .edge { stroke: var(--border); stroke-width: 1; fill: none; }
-svg .edge.active { stroke: var(--accent); stroke-width: 2; }
-svg .pulse {
-    fill: var(--accent);
-    animation: pulse 1.2s linear infinite;
+.stream-tall { max-height: 480px; }
+.stream-medium { max-height: 300px; }
+.stream-short { max-height: 220px; }
+
+/* Tap-section cards (rendered inference tap) */
+details.tap-section {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    background: rgba(255,255,255,0.015);
+    transition: border-color .15s, background .15s;
+    overflow: hidden;
 }
-@keyframes pulse { from { offset-distance: 0%; opacity: 1; } to { offset-distance: 100%; opacity: 0; } }
-#detail-panel {
-    position: fixed; top: 0; right: -640px; width: 620px; height: 100vh;
-    background: var(--panel); border-left: 1px solid var(--border);
-    transition: right .25s ease; overflow-y: auto;
-    z-index: 100; padding: 14px;
+details.tap-section:hover { border-color: var(--border-strong); }
+details.tap-section[open] { background: rgba(255,255,255,0.025); }
+details.tap-section summary {
+    cursor: pointer; padding: 10px 14px; outline: none;
+    list-style: none;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px;
 }
-#detail-panel.open { right: 0; }
-#detail-close { float: right; cursor: pointer; color: var(--muted); font-size: 16px; padding: 0 6px; }
-#detail-close:hover { color: var(--text); }
-#detail-content h3 { margin: 6px 0 4px 0; color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+details.tap-section summary::-webkit-details-marker { display: none; }
+details.tap-section summary::before {
+    content: '▸'; color: var(--muted); font-size: 10px;
+    transition: transform .2s;
+    display: inline-block;
+    flex-shrink: 0;
+}
+details.tap-section[open] summary::before { transform: rotate(90deg); }
+details.tap-section .tap-detail-link {
+    margin-left: auto; color: var(--accent); font-size: 10px;
+    text-decoration: none; padding: 3px 9px; border-radius: 4px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(56,189,248,0.25);
+    opacity: 0; transition: opacity .15s;
+    cursor: pointer;
+}
+details.tap-section:hover .tap-detail-link { opacity: 1; }
+details.tap-section .section-body { padding: 0 14px 12px 14px; }
+
+/* Content blocks */
 .prompt-text, .stream-text, .tap-content {
-    background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px;
-    max-height: 320px; overflow-y: auto; overflow-x: auto;
-    font-size: 12px; line-height: 1.5;
-    font-family: ui-sans-serif, system-ui, sans-serif;
-    word-wrap: break-word; overflow-wrap: break-word;
+    background: rgba(0,0,0,0.22);
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    max-height: 360px;
+    overflow-y: auto;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+    font-family: var(--font-ui);
+    word-wrap: break-word;
 }
 .prompt-text pre, .stream-text pre, .tap-content pre {
-    background: #0b1220; padding: 8px; border-radius: 3px;
-    overflow-x: auto; font-family: ui-monospace, monospace; font-size: 11px;
-    white-space: pre; word-wrap: normal;
+    background: #050911;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    white-space: pre;
+    word-wrap: normal;
+    margin: 8px 0;
 }
 .prompt-text code, .stream-text code, .tap-content code {
-    background: rgba(255,255,255,0.07); padding: 1px 4px; border-radius: 2px;
-    font-family: ui-monospace, monospace; font-size: 11px;
+    background: rgba(255,255,255,0.07);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 12px;
 }
-.prompt-text p, .stream-text p, .tap-content p { margin: 4px 0; }
-details.tap-section { border-bottom: 1px solid var(--border); padding: 4px 0; }
-details.tap-section summary { font-size: 11px; outline: none; }
-details.tap-section summary::-webkit-details-marker { color: var(--muted); }
-#detail-content .stream-text.live::after {
-    content: "▌"; animation: blink 1s infinite;
+.prompt-text p, .stream-text p, .tap-content p { margin: 6px 0; }
+
+/* Detail panel */
+#detail-panel {
+    position: fixed;
+    top: 0; right: -720px;
+    width: 700px; max-width: 92vw;
+    height: 100vh;
+    background: var(--bg-2);
+    border-left: 1px solid var(--border);
+    transition: right .28s cubic-bezier(.16, 1, .3, 1);
+    overflow-y: auto;
+    z-index: 100;
+    padding: 20px 22px;
+    box-shadow: -12px 0 36px rgba(0,0,0,0.5);
+}
+#detail-panel.open { right: 0; }
+#detail-close {
+    position: absolute; top: 14px; right: 16px;
+    cursor: pointer; color: var(--muted); font-size: 20px;
+    line-height: 1;
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    transition: background .15s, color .15s;
+}
+#detail-close:hover { color: var(--text-strong); background: rgba(255,255,255,0.08); }
+#detail-content h3 {
+    margin: 16px 0 8px 0;
     color: var(--accent);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
 }
+#detail-content .stream-text.live::after {
+    content: "▌"; animation: blink 1s infinite; color: var(--accent);
+}
+
+/* Detail actions */
 .detail-actions {
-    display: flex; gap: 6px; margin: 8px 0;
+    display: flex; gap: 8px; margin: 10px 0;
+    flex-wrap: wrap;
 }
 .detail-actions button {
-    background: var(--accent); color: white; border: none; padding: 4px 10px;
-    border-radius: 3px; cursor: pointer; font-size: 11px;
+    background: var(--accent); color: white; border: none;
+    padding: 6px 14px; border-radius: var(--radius-sm); cursor: pointer;
+    font-size: 11px; font-weight: 500; font-family: var(--font-ui);
+    transition: opacity .15s, transform .1s;
 }
+.detail-actions button:active { transform: translateY(1px); }
 .detail-actions button.secondary {
-    background: var(--border); color: var(--text);
+    background: rgba(255,255,255,0.08); color: var(--text);
+    border: 1px solid var(--border);
 }
 .detail-actions button:hover { opacity: 0.85; }
-.copy-feedback {
-    color: var(--good); font-size: 11px; padding: 4px 8px;
-    opacity: 0; transition: opacity .2s;
-}
+.copy-feedback { color: var(--good); font-size: 11px; padding: 4px 8px; opacity: 0; transition: opacity .2s; }
 .copy-feedback.shown { opacity: 1; }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* REPL events */
 .repl-event {
-    padding: 3px 6px; border-left: 2px solid var(--border);
-    margin: 3px 0; font-size: 11px;
+    padding: 6px 10px;
+    border-left: 2px solid var(--border);
+    margin: 4px 0;
+    font-size: 11px;
+    border-radius: 0 4px 4px 0;
+    transition: background .15s;
 }
-.repl-event .ts { color: var(--muted); font-size: 10px; }
+.repl-event:hover { background: rgba(255,255,255,0.03); }
+.repl-event .ts { color: var(--dim); font-size: 10px; font-family: var(--font-mono); }
 .repl-event .ev { color: var(--accent); font-weight: 600; }
-.gepa-line { font-size: 10px; color: var(--muted); padding: 1px 0; }
+
+/* GEPA progress (within accordion) */
+.gepa-line { font-size: 11px; color: var(--muted); padding: 2px 0; font-family: var(--font-mono); }
 .gepa-line.bold { color: var(--text); font-weight: 600; }
+
+/* Collapsible accordion (GEPA, etc.) */
+details.section-accordion {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+    padding: 14px 18px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+}
+details.section-accordion > summary {
+    cursor: pointer; outline: none; list-style: none;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    letter-spacing: 0.08em; text-transform: uppercase;
+}
+details.section-accordion > summary::-webkit-details-marker { display: none; }
+details.section-accordion > summary::before {
+    content: '▸'; font-size: 10px; transition: transform .2s; display: inline-block;
+}
+details.section-accordion[open] > summary::before { transform: rotate(90deg); }
+details.section-accordion > *:not(summary) { margin-top: 14px; }
+
+/* Scrollbars */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+    background: rgba(148,163,184,0.2);
+    border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.4); }
+
+/* Pareto plot */
+.pareto-plot {
+    width: 100%; height: 280px;
+    background: rgba(0,0,0,0.25);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+.pareto-plot .axis-line { stroke: var(--border); stroke-width: 1; }
+.pareto-plot .axis-label { fill: var(--dim); font-size: 10px; font-family: var(--font-mono); }
+.pareto-plot .grid-line { stroke: var(--border); stroke-width: 0.5; stroke-dasharray: 2,2; opacity: 0.5; }
+.pareto-plot .point-dominated { fill: var(--dim); opacity: 0.4; }
+.pareto-plot .point-frontier { fill: var(--accent); }
+.pareto-plot .point-production { fill: var(--good); stroke: var(--text-strong); stroke-width: 1.5; }
+.pareto-plot .frontier-line { stroke: var(--accent); stroke-width: 1.5; fill: none; opacity: 0.5; stroke-dasharray: 3,3; }
+
+/* Responsive */
+@media (max-width: 1100px) {
+    .layout { grid-template-columns: 1fr; }
+    .counters { grid-template-columns: repeat(2, 1fr); }
+}
 </style>
 </head><body>
 <h1>orchestrator dashboard
@@ -160,42 +440,88 @@ details.tap-section summary::-webkit-details-marker { color: var(--muted); }
 
 <div class="counters" id="counters"></div>
 
-<div class="grid">
-  <div class="panel topology">
-    <h2>topology — click a node for details, edges glow when active</h2>
-    <svg class="topology" id="topology-svg" viewBox="0 0 700 500"></svg>
-  </div>
-  <div class="panel">
-    <h2>in-flight tasks <span style="color:var(--muted);font-weight:normal" id="inflight-count"></span></h2>
-    <div id="inflight-tasks"></div>
-    <h2 style="margin-top:14px">recently completed <span style="color:var(--muted);font-weight:normal" id="completed-count"></span></h2>
-    <div id="completed-tasks"></div>
-    <h2 style="margin-top:14px">live inference <span style="color:var(--muted);font-weight:normal" id="tap-status"></span></h2>
-    <div id="inference-tap"></div>
-  </div>
-  <div class="panel">
-    <h2>recent routing decisions (last 50)</h2>
-    <div class="decision-row" style="font-weight:600;border-bottom:1px solid var(--border);color:var(--muted)">
-      <div>age</div><div>task_id</div><div>action</div><div>src</div><div>conf</div><div>verifier</div>
+<div class="layout">
+  <!-- LEFT column: live streams (the things you actually watch) -->
+  <div class="col">
+
+    <div class="panel">
+      <h2>
+        <span class="live-dot" id="tap-live-dot"></span>
+        live inference
+        <span class="count-suffix" id="tap-status"></span>
+      </h2>
+      <div id="inference-tap"></div>
     </div>
-    <div id="decision-feed"></div>
+
+    <div class="panel">
+      <h2>
+        <span class="live-dot"></span>
+        autopilot activity
+        <span class="count-suffix">— real-time tail (eval / seed_batch / meta-planning / rollback / safety)</span>
+      </h2>
+      <pre id="autopilot-log-pre" class="stream-pre stream-medium"></pre>
+    </div>
+
+    <div class="panel">
+      <h2>
+        <span class="live-dot"></span>
+        planner <span style="color:var(--dim);font-family:var(--font-mono);font-weight:400">(claude -p)</span>
+        <span class="count-suffix">— streamed tool_use / assistant / result events</span>
+      </h2>
+      <pre id="planner-tap-pre" class="stream-pre stream-medium"></pre>
+    </div>
+  </div>
+
+  <!-- RIGHT column: state cards (compact, lots of them) -->
+  <div class="col">
+
+    <div class="panel">
+      <h2>topology</h2>
+      <div class="topology-strip" id="topology-strip"></div>
+    </div>
+
+    <div class="panel">
+      <h2>in-flight <span class="count-suffix" id="inflight-count"></span></h2>
+      <div id="inflight-tasks"></div>
+    </div>
+
+    <div class="panel">
+      <h2>completed <span class="count-suffix" id="completed-count"></span></h2>
+      <div id="completed-tasks"></div>
+    </div>
+
+    <div class="panel">
+      <h2>routing decisions <span class="count-suffix">last 50</span></h2>
+      <div class="decision-row" style="font-weight:600;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.06em">
+        <div>age</div><div>task</div><div>action</div><div>src</div><div>conf</div><div>v.</div>
+      </div>
+      <div id="decision-feed"></div>
+    </div>
   </div>
 </div>
 
-<div class="panel" style="margin-top:12px">
-  <h2>autopilot activity <span style="color:var(--muted);font-weight:normal;font-size:11px">— real-time tail of autopilot.log (every phase: eval, seed_batch, meta-planning, rollback, safety violations)</span></h2>
-  <pre id="autopilot-log-pre" style="background:rgba(0,0,0,0.3);color:var(--fg);font-size:11px;line-height:1.35;padding:8px;border-radius:4px;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,monospace"></pre>
-</div>
+<details class="section-accordion" style="margin-top:18px">
+  <summary>GEPA + Pareto frontier <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px;font-size:10px" id="pareto-summary"></span></summary>
+  <div id="pareto-container">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div>
+        <h2 style="margin-bottom:8px">Pareto frontier — quality × speed</h2>
+        <svg id="pareto-plot-qs" class="pareto-plot" viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <div>
+        <h2 style="margin-bottom:8px">hypervolume timeline</h2>
+        <svg id="pareto-plot-hv" class="pareto-plot" viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+    </div>
+    <h2 style="margin-bottom:8px">GEPA progress <span class="count-suffix">(autopilot.log tail)</span></h2>
+    <div id="gepa-lines"></div>
+  </div>
+</details>
 
-<div class="panel" style="margin-top:12px">
-  <h2>planner (claude -p) — live <span style="color:var(--muted);font-weight:normal;font-size:11px">— each tool_use, assistant thought, and result event as it streams from meta-planning</span></h2>
-  <pre id="planner-tap-pre" style="background:rgba(0,0,0,0.3);color:var(--fg);font-size:11px;line-height:1.35;padding:8px;border-radius:4px;max-height:340px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;margin:0;font-family:ui-monospace,monospace"></pre>
-</div>
-
-<div class="panel" style="margin-top:12px">
-  <h2>gepa progress (autopilot.log tail)</h2>
-  <div id="gepa-lines"></div>
-</div>
+<!-- Legacy id placeholder so the old SVG-aware JS code paths that may still
+     reference #topology-svg degrade silently. The new render path uses
+     #topology-strip exclusively. Hidden so it never paints. -->
+<svg id="topology-svg" style="display:none"></svg>
 
 <div id="detail-panel">
   <span id="detail-close" onclick="closeDetail()">×</span>
@@ -212,73 +538,43 @@ let detailStream = null;
 async function loadTopology() {
     const r = await fetch('/dashboard/api/topology');
     topology = await r.json();
-    layoutTopology();
+    renderTopologyStrip();
 }
 
-function layoutTopology() {
-    const svg = document.getElementById('topology-svg');
-    svg.innerHTML = '';
-    const w = 700, h = 500;
-    const cx = w / 2, cy = h / 2;
-    const orchestrator = topology.nodes.find(n => n.kind === 'orchestrator');
-    const others = topology.nodes.filter(n => n.kind !== 'orchestrator');
-    const services = others.filter(n => n.kind === 'service');
-    const llamas = others.filter(n => n.kind === 'llama-server');
-    // Inner ring: llama-servers
-    const radiusInner = 150;
-    llamas.forEach((n, i) => {
-        const a = (i / llamas.length) * 2 * Math.PI - Math.PI / 2;
-        n._x = cx + radiusInner * Math.cos(a);
-        n._y = cy + radiusInner * Math.sin(a);
+function renderTopologyStrip() {
+    // Compact horizontal strip: one row per node showing label + port + slot-dot row.
+    // Slot dots: filled = active, empty = idle, red = down. Clicking opens node detail.
+    // Replaces the prior SVG canvas (500px tall, 58% of upper viewport) — strip is
+    // ~24px per row, fits ~12 nodes in ~300px without scrolling.
+    const strip = document.getElementById('topology-strip');
+    if (!strip || !topology) return;
+    strip.innerHTML = '';
+    // Sort: orchestrator first, then llama-servers by label, then services
+    const sorted = [...topology.nodes].sort((a, b) => {
+        const ka = a.kind === 'orchestrator' ? 0 : (a.kind === 'llama-server' ? 1 : 2);
+        const kb = b.kind === 'orchestrator' ? 0 : (b.kind === 'llama-server' ? 1 : 2);
+        if (ka !== kb) return ka - kb;
+        return (a.label || '').localeCompare(b.label || '');
     });
-    // Outer ring: services
-    const radiusOuter = 220;
-    services.forEach((n, i) => {
-        const a = (i / services.length) * 2 * Math.PI - Math.PI / 2 + 0.1;
-        n._x = cx + radiusOuter * Math.cos(a);
-        n._y = cy + radiusOuter * Math.sin(a);
-    });
-    if (orchestrator) { orchestrator._x = cx; orchestrator._y = cy; }
-
-    // Draw edges from orchestrator to every other node (initially inactive)
-    others.forEach(n => {
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        path.setAttribute('id', `edge_${n.id}`);
-        path.setAttribute('class', 'edge');
-        path.setAttribute('x1', cx); path.setAttribute('y1', cy);
-        path.setAttribute('x2', n._x); path.setAttribute('y2', n._y);
-        svg.appendChild(path);
-    });
-
-    // Draw nodes
-    topology.nodes.forEach(n => {
-        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        g.setAttribute('transform', `translate(${n._x},${n._y})`);
-        g.setAttribute('style', 'cursor:pointer');
-        g.addEventListener('click', () => openNodeDetail(n.port, n.label));
-        g.addEventListener('mouseenter', (ev) => showNodeTooltip(ev, n));
-        g.addEventListener('mouseleave', hideNodeTooltip);
-        const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        c.setAttribute('class', 'node-circle');
-        c.setAttribute('id', `node_${n.id}`);
-        c.setAttribute('r', NODE_RADIUS);
-        c.setAttribute('fill', '#475569');
-        c.setAttribute('stroke', n.color);
-        c.setAttribute('stroke-width', 2);
-        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        t.setAttribute('class', 'node-label');
-        t.setAttribute('text-anchor', 'middle');
-        t.setAttribute('y', NODE_RADIUS + 12);
-        t.textContent = n.label.length > 18 ? n.label.slice(0, 17) + '…' : n.label;
-        const tp = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        tp.setAttribute('class', 'node-label');
-        tp.setAttribute('text-anchor', 'middle');
-        tp.setAttribute('y', 4);
-        tp.setAttribute('id', `nodecount_${n.id}`);
-        tp.textContent = '';
-        g.appendChild(c); g.appendChild(t); g.appendChild(tp);
-        svg.appendChild(g);
-    });
+    for (const n of sorted) {
+        const row = document.createElement('div');
+        row.className = 'topology-row';
+        row.dataset.nodeId = n.id;
+        row.title = `${n.label} (port ${n.port}, ${n.kind}) — click for details`;
+        row.onclick = () => openNodeDetail(n.port, n.label);
+        const label = document.createElement('div');
+        label.className = 'role-name';
+        label.style.color = n.color || 'var(--text)';
+        label.textContent = n.label.length > 22 ? n.label.slice(0, 21) + '…' : n.label;
+        const port = document.createElement('div');
+        port.className = 'port';
+        port.textContent = n.port || '—';
+        const dots = document.createElement('div');
+        dots.className = 'slot-dots';
+        dots.id = `slotdots_${n.id}`;
+        row.appendChild(label); row.appendChild(port); row.appendChild(dots);
+        strip.appendChild(row);
+    }
 }
 
 let _tooltipEl = null;
@@ -356,29 +652,25 @@ async function openNodeDetail(port, label) {
 }
 
 function updateTopology(activity) {
+    // Update the slot-dot row for each topology row based on activity counters.
+    // n.n_total dots per row; first n.n_active are .active. If the role isn't
+    // in the activity map at all, all dots dim. If the backend reports a node
+    // as down (n_total=0 and activity reports it), tint the row red.
     if (!topology) return;
-    topology.nodes.forEach(n => {
-        const port = n.port;
-        const a = activity[port];
-        const circle = document.getElementById(`node_${n.id}`);
-        const countText = document.getElementById(`nodecount_${n.id}`);
-        const edge = document.getElementById(`edge_${n.id}`);
-        if (a && a.n_active > 0) {
-            if (circle) {
-                circle.setAttribute('fill', n.color);
-                circle.setAttribute('r', NODE_RADIUS + Math.min(a.n_active * 2, 8));
-            }
-            if (countText) countText.textContent = `${a.n_active}/${a.n_total}`;
-            if (edge) edge.setAttribute('class', 'edge active');
-        } else {
-            if (circle) {
-                circle.setAttribute('fill', '#334155');
-                circle.setAttribute('r', NODE_RADIUS);
-            }
-            if (countText) countText.textContent = '';
-            if (edge) edge.setAttribute('class', 'edge');
+    for (const n of topology.nodes) {
+        const dotsEl = document.getElementById(`slotdots_${n.id}`);
+        if (!dotsEl) continue;
+        const a = activity[n.port] || {};
+        const nActive = a.n_active || 0;
+        const nTotal = a.n_total || 0;
+        const cap = nTotal > 0 ? nTotal : 4;  // default placeholder so rows aren't empty
+        dotsEl.innerHTML = '';
+        for (let i = 0; i < cap; i++) {
+            const dot = document.createElement('span');
+            dot.className = 'slot-dot' + (i < nActive ? ' active' : '');
+            dotsEl.appendChild(dot);
         }
-    });
+    }
 }
 
 function updateCounters(snap) {
@@ -651,6 +943,10 @@ function parseRawTapSections(buf) {
     return out;
 }
 
+// Stash parsed sections so the "open detail" link can hand the
+// pre-rendered content to the detail panel without re-parsing.
+let _lastRawTapSections = [];
+
 function paintRawTapRendered(container) {
     // Replace container content with one styled block per section. Newest
     // section shown first + auto-expanded; older sections collapsed
@@ -663,6 +959,7 @@ function paintRawTapRendered(container) {
     }
     // Newest first for visual scanning
     sections.reverse();
+    _lastRawTapSections = sections;
     const html = sections.map((s, i) => {
         const ts = s.timestamp || '';
         const role = s.role || '?';
@@ -670,17 +967,19 @@ function paintRawTapRendered(container) {
         const escapedRole = escapeHTML(role);
         const escapedTs = escapeHTML(ts);
         const timingsLine = s.timings
-            ? `<div style="color:var(--muted);font-size:10px;margin-top:6px;font-family:ui-monospace,monospace">${escapeHTML(s.timings)}</div>`
+            ? `<div style="color:var(--muted);font-size:10px;margin-top:6px;font-family:var(--font-mono)">${escapeHTML(s.timings)}</div>`
             : '';
         return `<details class="tap-section" ${i === 0 ? 'open' : ''} data-section-idx="${i}">
-            <summary style="cursor:pointer;padding:4px 0;color:${color}">
-                <span style="font-weight:600">${escapedRole}</span>
-                <span style="color:var(--muted);font-size:10px;margin-left:6px">${escapedTs} · ${s.prompt_len}c prompt · ${s.response_len}c resp</span>
+            <summary>
+                <span style="font-weight:600;color:${color}">${escapedRole}</span>
+                <span style="color:var(--muted);font-size:10px;font-family:var(--font-mono)">${escapedTs}</span>
+                <span style="color:var(--dim);font-size:10px">· ${s.prompt_len}c prompt · ${s.response_len}c resp</span>
+                <span class="tap-detail-link" onclick="event.preventDefault();event.stopPropagation();openTapSectionDetail(${i})" title="Open in detail panel (more space, copy/download buttons)">↗ detail</span>
             </summary>
-            <div style="margin:4px 0">
-                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">prompt</div>
+            <div class="section-body">
+                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">prompt</div>
                 <div class="tap-content prompt-text" data-raw-tap-prompt="${i}"></div>
-                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-top:6px">response</div>
+                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:8px 0 4px 0">response</div>
                 <div class="tap-content stream-text" data-raw-tap-response="${i}"></div>
                 ${timingsLine}
             </div>
@@ -695,6 +994,45 @@ function paintRawTapRendered(container) {
         if (pEl) renderMarkdownInto(pEl, s.prompt);
         if (rEl) renderMarkdownInto(rEl, s.response);
     });
+}
+
+function openTapSectionDetail(sectionIdx) {
+    // Open the detail panel pre-populated from a parsed tap section, without
+    // requiring a server round-trip. Useful for completed tap entries that
+    // have no live task_id (the dashboard only tracks chat-XXX task ids;
+    // pure tap entries from seeding etc. have no orchestrator-side task id).
+    // For tap sections that DO correspond to a known completed task, the
+    // operator can still click that task card in the right-column list to
+    // get the full task_events history.
+    const s = _lastRawTapSections[sectionIdx];
+    if (!s) return;
+    const panel = document.getElementById('detail-panel');
+    const content = document.getElementById('detail-content');
+    document.getElementById('detail-title').textContent =
+        `tap section · ${s.role || '?'} · ${s.timestamp || ''}`;
+    _currentTaskRawText = {
+        taskId: `tap_${(s.timestamp || '').replace(/[^0-9]/g, '')}_${s.role || ''}`,
+        prompt: s.prompt || '',
+        stream: s.response || '',
+        repl: [],
+    };
+    content.innerHTML = `
+        <div class="detail-actions">
+            <button onclick="copySnapshotToClipboard()">📋 copy snapshot</button>
+            <button class="secondary" onclick="downloadSnapshot()">⬇ download .txt</button>
+            <span id="copy-feedback" class="copy-feedback"></span>
+        </div>
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px">
+            source: inference_tap.log section · role=${escapeHTML(s.role || '?')} · ${escapeHTML(s.timestamp || '')}
+            ${s.timings ? ' · ' + escapeHTML(s.timings) : ''}
+        </div>
+        <h3>prompt</h3>
+        <div class="prompt-text" id="prompt-text"></div>
+        <h3>response</h3>
+        <div class="stream-text" id="stream-text"></div>`;
+    renderMarkdownInto(document.getElementById('prompt-text'), s.prompt || '*(no prompt captured)*');
+    renderMarkdownInto(document.getElementById('stream-text'), s.response || '*(no response captured)*');
+    panel.classList.add('open');
 }
 
 function scheduleRawTapRender() {
@@ -824,13 +1162,20 @@ function startRawTapStream() {
 
 function renderInferenceTap(data) {
     const status = document.getElementById('tap-status');
+    const liveDot = document.getElementById('tap-live-dot');
     const container = document.getElementById('inference-tap');
     const active = data.tap_active;
     const mtime = data.inference_tap_mtime;
     const ageS = mtime ? Math.max(0, Math.round(data.now ? (data.now - mtime) : (Date.now()/1000 - mtime))) : null;
-    status.innerHTML = active
-        ? `<span style="color:var(--good)">● tap active</span> · ${ageS!=null?ageS+'s since last write':''}`
-        : '<span style="color:var(--bad)">● tap inactive</span>';
+    if (liveDot) {
+        liveDot.classList.toggle('idle', !active);
+        liveDot.title = active
+            ? (ageS != null ? `tap active — ${ageS}s since last write` : 'tap active')
+            : 'tap inactive — no recent writes';
+    }
+    status.textContent = active
+        ? (ageS != null ? `— ${ageS}s since last write` : '')
+        : '— inactive';
     const sections = data.inference_sections || [];
     if (!sections.length && !(data.current_prompt && data.current_prompt.trim())) {
         container.innerHTML = '<div style="color:var(--muted);font-size:11px">no inference activity in the tap file yet</div>';
