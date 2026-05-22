@@ -31,8 +31,13 @@ from src.tools.web.search import web_search
 
 logger = logging.getLogger(__name__)
 
-# Worker endpoint for synthesis (explore model — Qwen2.5-7B)
+# Worker endpoint for synthesis. Port 8082 in the current stack is
+# worker_general (gemma-4-26B-A4B-it Q4_K_M MTP via ik_llama.cpp PR #1744),
+# swapped from Qwen2.5-7B on 2026-05-08. Keep this model hint in sync with
+# the active stack — the chat template depends on it. Without the gemma
+# template, every synthesis call here silently returned 0 tokens.
 _WORKER_URL = "http://localhost:8082/completion"
+_WORKER_MODEL_HINT = "gemma-4-26B-A4B-it-Q4_K_M"
 _WORKER_TIMEOUT = 45  # seconds per synthesis call
 _FETCH_TIMEOUT = 15   # seconds per URL fetch
 _MAX_FETCH_WORKERS = 5
@@ -215,30 +220,37 @@ def _synthesize_page(
             "error": "Empty content",
         }
 
-    prompt = (
-        f"<|im_start|>system\n"
+    # Concatenate system + user content into a single user-side block,
+    # then apply per-model turn markers via the helper. Previously this
+    # was hardcoded to Qwen ChatML (<|im_start|>...<|im_end|>), which
+    # silently broke after port 8082 was swapped from Qwen2.5-7B to
+    # gemma-4-26B-A4B-it (gemma uses <start_of_turn>...<end_of_turn>) —
+    # every synthesis call returned 0 tokens because gemma didn't
+    # recognize the Qwen markers.
+    from src.api.routes.chat_utils import apply_chat_template_for_model
+    body = (
         f"You are a research assistant. Extract and synthesize the most relevant "
         f"information from the following web page content that answers or relates "
         f"to the query. Be concise but thorough — include specific facts, numbers, "
-        f"names, and technical details. If the page is not relevant, say so briefly.\n"
-        f"IMPORTANT: Only use information from the retrieved content below. "
-        f"Do not add facts from your training data.\n"
-        f"<|im_end|>\n"
-        f"<|im_start|>user\n"
+        f"names, and technical details. If the page is not relevant, say so briefly. "
+        f"Only use information from the retrieved content below. "
+        f"Do not add facts from your training data.\n\n"
         f"Query: {query}\n\n"
         f"Page: {title} ({url})\n\n"
         f"Content:\n{content}\n\n"
-        f"Synthesize the relevant information from this page. Cite the source URL when stating specific facts.\n"
-        f"<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+        f"Synthesize the relevant information from this page. "
+        f"Cite the source URL when stating specific facts.\n"
     )
+    prompt = apply_chat_template_for_model(_WORKER_MODEL_HINT, body)
 
     payload = json.dumps({
         "prompt": prompt,
         "temperature": 0.1,
         "n_predict": _SYNTH_MAX_TOKENS,
         "stream": False,
-        "stop": ["<|im_end|>"],
+        # No family-specific stop tokens — let the model use its natural
+        # EOT. The n_predict cap bounds the output length. (Previously
+        # hardcoded ["<|im_end|>"] which only worked for Qwen.)
     }).encode("utf-8")
 
     headers = {

@@ -26,6 +26,13 @@ ARCHITECT_PORTS = {
     "architect_general": 8083,
 }
 
+# Per-port model hints — used to pick the correct chat template when
+# pre-warming. Update this whenever an architect port is repointed to a
+# different model family. Keep in sync with the active stack's registry.
+ARCHITECT_PORT_MODEL_HINT = {
+    8083: "Qwen3.5-122B-A10B",  # architect_general
+}
+
 # System prompt prefix used across architect roles (warm this into KV cache)
 ARCHITECT_SYSTEM_PREFIX = (
     "You are a senior software architect. Analyze the task, identify components, "
@@ -108,8 +115,14 @@ class EscalationPrewarmer:
 
     async def _send_prewarm(self, port: int, objective: str) -> bool:
         """Send a n_predict=0, cache_prompt=true request to warm KV cache."""
-        # Build the prefix that will be shared with the actual escalation
-        prewarm_prompt = ARCHITECT_SYSTEM_PREFIX + objective[:2000]
+        # Build the prefix that will be shared with the actual escalation.
+        # Apply the same chat template the real escalation will use so the
+        # KV cache prefix matches end-to-end. Falls back to raw text on
+        # unknown ports (defensive — same shape as the prior behavior).
+        from src.api.routes.chat_utils import apply_chat_template_for_model
+        body = ARCHITECT_SYSTEM_PREFIX + objective[:2000]
+        model_hint = ARCHITECT_PORT_MODEL_HINT.get(port, "")
+        prewarm_prompt = apply_chat_template_for_model(model_hint, body) if model_hint else body
 
         payload = {
             "prompt": prewarm_prompt,
