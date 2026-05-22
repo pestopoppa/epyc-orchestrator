@@ -493,12 +493,20 @@ async def _handle_chat(
 
         # 8c: Direct LLM call mode
         if execution_mode == "direct" and request.real_mode:
-            # Wrap prompt in Qwen3 ChatML turn markers for /completion endpoint.
-            # Without this, bare text is treated as continuation, not user query —
-            # causing rambling self-correction instead of clean assistant response.
-            request.prompt = (
-                "<|im_start|>user\n" + request.prompt
-                + "<|im_end|>\n<|im_start|>assistant\n"
+            # Per-role chat-template application (replaces the prior hardcoded
+            # Qwen3 ChatML wrap that broke silently after 2026-05-08's
+            # worker_general swap to gemma-4-26B-A4B-it). The helper looks up
+            # the role's model name from the registry and picks the right
+            # turn markers — Qwen for Qwen-family, Gemma for Gemma, Llama3
+            # headers for Llama3, pass-through for unknowns. Without this,
+            # bare text is treated as continuation, not user query — causing
+            # rambling self-correction on Qwen models OR zero-token output on
+            # Gemma when the wrong markers are sent.
+            from src.api.routes.chat_utils import apply_chat_template_for_role
+            request.prompt = apply_chat_template_for_role(
+                str(initial_role),
+                request.prompt,
+                registry=getattr(state, "registry", None),
             )
             return _finalize(
                 await asyncio.to_thread(

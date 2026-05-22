@@ -967,6 +967,16 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
 
     with open(log_file, "w") as log:
         workers = int(env.get("ORCHESTRATOR_UVICORN_WORKERS", "6"))
+        # 2026-05-22: bumped from 4 → 16 (env-overridable). The original 4
+        # was set when /chat requests dominated traffic. Long-lived SSE
+        # streams (dashboard raw_tap + snapshot feeds, eval-server pushes)
+        # each occupy a worker slot for their lifetime — a single dashboard
+        # tab can hold 2-3 slots. Combined with autopilot's 6 GEPA workers
+        # all pushing /chat in parallel, the prior cap saturated and
+        # returned HTTP 503 on health checks. 16 keeps the inference-lock-
+        # based throttling intact (real serialization is upstream) while
+        # giving the SSE streams headroom.
+        concurrency = int(env.get("ORCHESTRATOR_UVICORN_LIMIT_CONCURRENCY", "16"))
         proc = subprocess.Popen(
             [
                 sys.executable, "-m", "uvicorn",
@@ -974,7 +984,7 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
                 "--host", "127.0.0.1",
                 "--port", "8000",
                 "--workers", str(workers),
-                "--limit-concurrency", "4",  # Prevent request pile-up per worker
+                "--limit-concurrency", str(concurrency),
             ],
             cwd=str(_PATHS["project_root"]),
             stdout=log,

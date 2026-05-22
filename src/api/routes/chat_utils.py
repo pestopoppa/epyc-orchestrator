@@ -117,6 +117,125 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+# ── Chat template application (per-role) ───────────────────────────────
+#
+# chat.py's direct-mode path used to hardcode the Qwen3 ChatML template
+# unconditionally before sending to /completion. That broke silently after
+# the 2026-05-08 worker_general swap to gemma-4-26B-A4B-it (gemma uses
+# <start_of_turn>...<end_of_turn>, not <|im_start|>...<|im_end|>). Routes
+# to worker_explore/worker_general/worker_summarize started producing
+# 0 tokens — gemma4 saw the Qwen markers as random tokens and refused to
+# generate, after which the orchestrator escalated to frontdoor (real cost:
+# ~60s of dead-loop time per request).
+#
+# This helper inspects the chosen role's model name (from the live registry)
+# and emits the correct turn-marker wrapper. Unknown model families return
+# the prompt unchanged (defensive: never make things worse than the
+# pass-through baseline).
+#
+# Family detection is case-insensitive substring match on `model.name`.
+# Note: llama-server's /chat/completions endpoint applies the Jinja template
+# server-side from the GGUF metadata — that's the more principled path. We
+# keep this orchestrator-side wrapper because the direct path goes through
+# /completion (which does not), and rewriting that backend is a larger
+# refactor.
+
+_TEMPLATE_QWEN_CHATML = (
+    "<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n"
+)
+_TEMPLATE_GEMMA = (
+    "<start_of_turn>user\n{user}<end_of_turn>\n<start_of_turn>model\n"
+)
+_TEMPLATE_LLAMA3 = (
+    "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"
+    "{user}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+)
+
+
+def _detect_template_family(model_name: str) -> str:
+    """Return a family identifier for `model_name`, or 'unknown'.
+
+    Match order matters: longest-prefix family first so a name containing
+    both 'Llama' and 'Qwen' (e.g. distillations) lands on the more specific
+    parent. Today's registry has no such overlap but the order is defensive.
+    """
+    if not model_name:
+        return "unknown"
+    n = model_name.lower()
+    # Gemma family (gemma-3, gemma-4, gemma2, etc.)
+    if "gemma" in n:
+        return "gemma"
+    # MiniMax-M2: uses ChatML-ish but with different markers; pass-through for now
+    if "minimax" in n:
+        return "minimax"
+    # Llama 3.x — needs the header-id template
+    if "llama-3" in n or "llama3" in n or "meta-llama-3" in n:
+        return "llama3"
+    # Qwen family (Qwen2.5, Qwen3, Qwen3.5, Qwen3.6, Qwen3-Next, Qwen-VL, etc.)
+    # This is the broadest match — keep it last so more specific families win.
+    if "qwen" in n or "deepseek-r1-distill-qwen" in n:
+        return "qwen"
+    # Phi-4 uses Phi-4 chat template (close to ChatML); pass-through default
+    if "phi-4" in n or "phi4" in n:
+        return "phi"
+    return "unknown"
+
+
+def apply_chat_template_for_role(
+    role_name: str,
+    user_prompt: str,
+    registry: "object | None" = None,
+) -> str:
+    """Wrap `user_prompt` with the role's chat-template turn markers.
+
+    Returns the original prompt unchanged if:
+        - registry is None or role not found
+        - model family can't be identified
+        - prompt already contains turn markers (don't double-wrap)
+
+    Safe to call from chat.py and worker_pool; never raises.
+    """
+    if not user_prompt:
+        return user_prompt
+    # Avoid double-wrapping if caller has already templated.
+    if "<|im_start|>" in user_prompt or "<start_of_turn>" in user_prompt:
+        return user_prompt
+    if "<|begin_of_text|>" in user_prompt:
+        return user_prompt
+    if registry is None:
+        # Default fallback: Qwen ChatML (preserves prior behavior for callers
+        # who can't see the registry — same as before this helper landed).
+        return _TEMPLATE_QWEN_CHATML.format(user=user_prompt)
+    try:
+        role = registry.get_role(role_name)  # type: ignore[attr-defined]
+        model_name = getattr(role.model, "name", "") or ""
+    except Exception as exc:
+        log.warning(
+            "apply_chat_template_for_role: registry lookup failed for role=%s: %s — "
+            "using Qwen ChatML fallback",
+            role_name, exc,
+        )
+        return _TEMPLATE_QWEN_CHATML.format(user=user_prompt)
+
+    family = _detect_template_family(model_name)
+    if family == "gemma":
+        return _TEMPLATE_GEMMA.format(user=user_prompt)
+    if family == "llama3":
+        return _TEMPLATE_LLAMA3.format(user=user_prompt)
+    if family in ("qwen", "minimax", "phi"):
+        # MiniMax + Phi-4 both accept Qwen-style ChatML markers per empirical
+        # check (their templates use compatible <|im_start|> tokens). If a
+        # future model in those families breaks, add a dedicated entry above.
+        return _TEMPLATE_QWEN_CHATML.format(user=user_prompt)
+    # Unknown family: pass through. Safer than guessing wrong.
+    log.debug(
+        "apply_chat_template_for_role: no template for role=%s model=%s (family=%s); "
+        "passing through",
+        role_name, model_name, family,
+    )
+    return user_prompt
+
+
 def _is_stub_final(text: str) -> bool:
     """Detect when FINAL() arg is a stub pointing to printed output.
 
