@@ -35,11 +35,10 @@ import argparse
 import json
 import os
 import shutil
-import signal
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -47,6 +46,50 @@ from typing import Any
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from scripts.server import stack_checkpoint as _stack_checkpoint
+from scripts.server import stack_processes as _stack_processes
+from scripts.server.stack_env import (
+    _CANONICAL_OMP_ENV,
+    _LLVM20_LIBDIR,
+    _ROLE_ENV_BLOCKS,
+    _role_env_overrides,
+    build_launch_env,
+)
+from scripts.server.stack_host import (
+    _HOST_PREREQ_GOVERNOR,
+    _HOST_PREREQ_SYSCTLS,
+    _HOST_PREREQ_THP,
+    _read_governor,
+    _read_sysctl,
+    _read_thp_active,
+    apply_host_prerequisites,
+    check_host_prerequisites,
+)
+from scripts.server.stack_docker import (
+    _docker_available,
+    docker_container_running,
+    start_docker_container,
+    stop_docker_container,
+)
+from scripts.server.stack_health import wait_for_health as _wait_for_health
+from scripts.server.stack_runtime import runtime_requirements_for_role as _runtime_requirements_for_role_impl
+from scripts.server.stack_numa import (
+    MLOCK_ROLES,
+    NUMA_CONFIG,
+    NUMA_FULL,
+    NUMA_NODE0,
+    NUMA_NODE1,
+    NUMA_Q0A,
+    NUMA_Q0B,
+    NUMA_Q1A,
+    NUMA_Q1B,
+    _numa_prefix,
+)
+from scripts.server.stack_state import (
+    ProcessInfo,
+    load_state_file as _load_state_file,
+    save_state_file as _save_state_file,
+)
 from src.config import _registry_timeout
 from src.registry_loader import RegistryLoader
 
@@ -148,126 +191,11 @@ HOT_ROLES = {
 }
 
 # =============================================================================
-# NUMA CPU Pinning — validated via benchmarks (2026-03-18)
+# NUMA topology + per-role wiring moved to scripts/server/stack_numa.py
+# (2026-05-21 refactor). Constants + _numa_prefix re-exported via the
+# module-level import above. NUMA_REPLICA_PORTS stays here because it
+# requires PORT_MAP, which is admission/routing state (not NUMA topology).
 # =============================================================================
-# EPYC 9655: 192 cores, 2 NUMA nodes (~566 GB each).
-# Node 0: cores 0-47, HT 96-143
-# Node 1: cores 48-95, HT 144-191
-#
-# Key findings:
-# - Models ≤65GB: 4×48t NUMA-quarter instances give 6-7x aggregate throughput
-# - Models 130-250GB: 1×96t NUMA-node pinning gives 1.2-1.5x
-# - Using all 192t is ANTI-OPTIMAL (46-60% cross-NUMA penalty)
-# - taskset alone is sufficient — numactl --membind adds no benefit (S4 result)
-# - mlock gives 30x latency improvement under memory pressure (S2) — enabled for ALL HOT tier
-# - Total mlock budget: ~701 GB of 1.13 TB (62%), leaving ~429 GB for KV caches + OS
-
-# NUMA quarter definitions: (cpu_list, thread_count)
-NUMA_Q0A = ("0-23,96-119", 48)
-NUMA_Q0B = ("24-47,120-143", 48)
-NUMA_Q1A = ("48-71,144-167", 48)
-NUMA_Q1B = ("72-95,168-191", 48)
-NUMA_NODE0 = ("0-47,96-143", 96)
-NUMA_NODE1 = ("48-95,144-191", 96)
-# Full-machine physical-cores-only (no SMT) — for canonical-recipe wiring
-# (single-instance latency-optimal). 96 physical cores spanning all 4 NPS4 nodes.
-# Pair with numactl_policy="interleave=all" so memory distributes across all 4 nodes
-# (matches the canonical bench recipe used by Probe B 2026-05-04).
-NUMA_FULL = ("0-95", 96)
-
-# Per-role NUMA configurations.
-# "instances" is a list of (cpu_list, port, threads) tuples.
-# Roles with multiple instances get round-robin routing (requires orchestrator support).
-NUMA_CONFIG: dict[str, dict] = {
-    # Qwen3.5-35B-A3B Q4_K_M (19 GB) — pre-warm: 1×96t full-speed + 4×48t concurrent
-    # Benchmark (2026-03-24): moe6 = 12.7 t/s at 48t. 96t TBD (expect higher per-request).
-    # Pre-warm strategy (2026-03-29): 5 instances total, +19 GB (95 GB total for frontdoor).
-    # Concurrency router: single session → full (96t), concurrent → quarter (48t) instances.
-    "frontdoor": {
-        "instances": [
-            (NUMA_NODE0[0], 8070, NUMA_NODE0[1]),  # full: 1×96t (max single-session speed)
-            (NUMA_Q0A[0], 8080, NUMA_Q0A[1]),      # quarter 0
-            (NUMA_Q0B[0], 8180, NUMA_Q0B[1]),      # quarter 1
-            (NUMA_Q1A[0], 8280, NUMA_Q1A[1]),      # quarter 2
-            (NUMA_Q1B[0], 8380, NUMA_Q1B[1]),      # quarter 3
-        ],
-        "full_instance_idx": 0,  # index of 1×96t instance in list above
-        "mlock": True,   # 19 GB per instance — latency-critical (S2: 30x improvement)
-    },
-    # coder_escalation NUMA_CONFIG entry REMOVED 2026-05-09 — consolidated onto
-    # frontdoor's server (same Qwen3.6-35B-A3B Q8 GGUF since 2026-05-06 swap).
-    # Historical: ports 8071 (full) + 8081/8181/8281/8381 (quarters), spec_overrides
-    # {dm=32, ps=0.05} were Qwen2.5-Coder-32B-era params and didn't apply post-swap.
-    # If a separate coder server is ever rostered again on a different model,
-    # restore here with that model's tuned spec params.
-    # Qwen3.5-122B-A10B Q4_K_M (69 GB) — 1×96t canonical (Probe B 2026-05-04)
-    # Switched 2026-05-04 from 2× cross-NUMA (4.3 t/s/instance, 8.6 t/s agg) to
-    # 1× full-machine canonical with numactl --interleave=all + GGML_NUMA_REPACK_INTERLEAVE=0
-    # (c2 env block, see _ROLE_ENV_BLOCKS). Measured 12.19 t/s single-instance = +184%
-    # per-request latency vs prior 2× wiring. Bundle:
-    # epyc-inference-research/data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/
-    # Reopen 4× per-NUMA-node wiring (16.86 t/s aggregate) ONLY if architect_general workload
-    # shifts to 4+ concurrent batch eval — see findings_phase2.md.
-    "architect_general": {
-        "instances": [
-            (NUMA_FULL[0], 8083, NUMA_FULL[1]),  # 1×96t physical cores, all 4 NUMA nodes
-        ],
-        "mlock": True,
-        "numactl_policy": "interleave=all",  # wraps launch with `numactl --interleave=all --`
-        "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified
-    },
-    # architect_coding REMOVED 2026-05-06 — REAP-246B Q4KM scored 7/10 (70%) on coder
-    # under canonical recipe, WORSE than worker_general (gemma4-26B-A4B Q4_K_M MTP at 96%)
-    # AND far worse than frontdoor (Qwen3.6-35B-A3B Q8 at 97%). 139 GB warm freed.
-    # Hard coding escalations now route to coder_escalation, which uses the same
-    # Qwen3.6-35B-A3B Q8 model as frontdoor (shared GGUF mmap).
-    "ingest_long_context": {
-        "instances": [
-            (NUMA_NODE0[0], 8085, NUMA_NODE0[1]),
-        ],
-        "mlock": True,    # ~46 GB — latency-critical for ingest pipeline (Stage 1 of three_stage_summarization since 2026-05-06)
-    },
-    # Worker: gemma4-26B-A4B Q4_K_M MTP (16 GB) — pre-warm: 1×96t + 4×48t.
-    # Swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M (was 39 t/s at 48t).
-    # gemma4-26B-A4B + ik_llama.cpp PR #1744 MTP: 76.5 t/s at 96t (full canonical), 95.2% draft acceptance.
-    # +18pp on tool_compliance (96% vs 78%), +6pp on full suite (90% vs 84%).
-    # Pre-2026-05-08: 7B f16 (until 2026-03-21), then Qwen3-Coder-30B-A3B Q4_K_M.
-    # NB: full + 4 quarters share overlapping CPU sets — pick one mode at start time
-    # (full instance uses 0-95; 4 quarters together also cover 0-95). See task #57.
-    "worker_general": {
-        "instances": [
-            # 2026-05-08 swap to gemma4-26B-A4B MTP via ik_llama.cpp PR #1744:
-            # full instance MUST use "0-95" (both NUMA nodes' physical cores) +
-            # numactl --interleave=all to satisfy MTP's tensor-buffer NUMA expectation.
-            # NUMA_NODE0's "0-47,96-143" (one-socket-with-SMT) crashed the MTP draft
-            # path with "tensor buffer not set" assertion. Quarter instances retain
-            # their per-quarter pinning since the full canonical recipe is incompatible
-            # with the 4×concurrent design — they may need separate debugging.
-            ("0-95", 8072, 96),                    # full canonical (replaces NUMA_NODE0)
-            (NUMA_Q0A[0], 8082, NUMA_Q0A[1]),      # quarter 0
-            (NUMA_Q0B[0], 8182, NUMA_Q0B[1]),      # quarter 1
-            (NUMA_Q1A[0], 8282, NUMA_Q1A[1]),      # quarter 2
-            (NUMA_Q1B[0], 8382, NUMA_Q1B[1]),      # quarter 3
-        ],
-        "full_instance_idx": 0,
-        "mlock": True,
-        "spec_overrides": {"draft_max": 2, "p_split": 0},  # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
-        "numactl_policy": "interleave=all",  # 2026-05-08: required for gemma4 MTP buffer allocation
-    },
-    # Qwen2.5-VL-7B Q4_K_M (~4 GB) — 24 threads
-    "worker_vision": {
-        "instances": [(NUMA_Q0B[0], 8086, 24)],
-        "mlock": True,    # ~4 GB — minimal footprint
-    },
-    # Qwen3-VL-30B-A3B MoE (~17 GB) — 96 threads, pin to node1
-    "vision_escalation": {
-        "instances": [(NUMA_NODE1[0], 8087, 96)],
-        "mlock": True,    # ~17 GB — fits in 1.13 TB budget
-    },
-}
-
-# Roles that should use --mlock (requires ulimit -l unlimited in launch env)
-MLOCK_ROLES = {role for role, cfg in NUMA_CONFIG.items() if cfg.get("mlock")}
 
 # All NUMA replica ports (for port scanning and cleanup)
 NUMA_REPLICA_PORTS = {
@@ -276,31 +204,6 @@ NUMA_REPLICA_PORTS = {
     for _, port, _ in cfg["instances"]
     if port not in PORT_MAP.values()
 }
-
-
-def _numa_prefix(role: str, instance_idx: int = 0) -> list[str]:
-    """Return CPU-pinning + memory-policy prefix for a role instance.
-
-    Default: taskset -c <cpu_list> (S4 benchmark: numactl --membind adds no benefit
-    over taskset + first-touch memory policy for per-NUMA-node-bound roles).
-
-    If the role's NUMA_CONFIG entry has a "numactl_policy" key (e.g. "interleave=all"),
-    wraps the launch with `numactl --<policy> --` ahead of taskset. Used for
-    canonical-recipe roles like architect_general (Probe B 2026-05-04: numactl
-    --interleave=all + taskset -c 0-95 = 12.19 t/s single-instance vs 4.3 t/s under
-    legacy 2× cross-NUMA + first-touch).
-    """
-    cfg = NUMA_CONFIG.get(role)
-    if cfg and instance_idx < len(cfg["instances"]):
-        cpu_list = cfg["instances"][instance_idx][0]
-        prefix: list[str] = []
-        policy = cfg.get("numactl_policy")
-        if policy:
-            prefix.extend(["numactl", f"--{policy}", "--"])
-        prefix.extend(["taskset", "-c", cpu_list])
-        return prefix
-    # Fallback: no pinning (embedders, fast workers, dev mode)
-    return []
 
 
 # Roles that must never run concurrently (large/latency-sensitive paths).
@@ -803,66 +706,14 @@ def validate_model_paths() -> list[str]:
 # =============================================================================
 
 
-@dataclass
-class ProcessInfo:
-    """Information about a running process."""
-    role: str
-    pid: int
-    port: int
-    started_at: str
-    model_path: str
-    log_file: str
-
-
 def load_state() -> dict[str, ProcessInfo]:
     """Load state from file."""
-    if not STATE_FILE.exists():
-        return {}
-    try:
-        with open(STATE_FILE) as f:
-            data = json.load(f)
-    except json.JSONDecodeError:
-        return {}
-    out: dict[str, ProcessInfo] = {}
-    for k, v in data.items():
-        if not isinstance(v, dict):
-            continue
-        try:
-            out[k] = ProcessInfo(**v)
-        except TypeError as exc:
-            # 2026-05-09: was preserving stubs as raw dicts here, which crashed
-            # cmd_status (line ~2980) and cmd_stop (line ~2787) on `info.pid`.
-            # Stubs cannot be acted on by either command (no pid to kill, no
-            # role to query). Drop with a single-line warning so the operator
-            # knows their state file had a non-actionable entry.
-            print(f"[load_state] dropping non-ProcessInfo entry {k!r}: {exc}")
-    return out
+    return _load_state_file(STATE_FILE)
 
 
 def save_state(state: dict[str, ProcessInfo]) -> None:
-    """Save state to file.
-
-    Only ProcessInfo records are persisted. In-memory dict stubs (used for
-    "preserved" / "already healthy" port bookkeeping during startup) are
-    NOT persisted — load_state drops them on the next restart anyway, and
-    keeping them in the file produced noisy `[load_state] dropping non-
-    ProcessInfo entry 'X': ProcessInfo.__init__() got an unexpected keyword
-    argument 'roles'` warnings every startup. The dict bookkeeping is still
-    available in-memory for the current startup's logic; it just doesn't
-    round-trip to disk. Changed 2026-05-21.
-    """
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    serializable: dict[str, dict[str, Any]] = {}
-    for key, value in state.items():
-        if isinstance(value, ProcessInfo):
-            serializable[key] = asdict(value)
-            continue
-        # Dict stubs ("preserved" port records, etc.) are transient bookkeeping
-        # — used only within the current startup's flow. Don't persist them.
-        # Unknown record types likewise skipped instead of crashing startup.
-        continue
-    with open(STATE_FILE, "w") as f:
-        json.dump(serializable, f, indent=2)
+    """Save state to file."""
+    _save_state_file(STATE_FILE, state)
 
 
 # =============================================================================
@@ -871,347 +722,28 @@ def save_state(state: dict[str, ProcessInfo]) -> None:
 
 
 def check_free_memory() -> int:
-    """Return free memory in GB."""
-    with open("/proc/meminfo") as f:
-        for line in f:
-            if line.startswith("MemAvailable:"):
-                kb = int(line.split()[1])
-                return kb // (1024 * 1024)
-    return 0
+    """Return free memory in GB (delegates to stack_processes.free_memory_gb)."""
+    return _stack_processes.free_memory_gb()
 
 
 # =============================================================================
-# Host prerequisites — applied at session start before any llama-server launch.
-# Source: handoffs/active/cpu-kernel-env-flags-inventory.md §211 +
-#         handoffs/active/model-registry-v5-deployment-draft.yaml host_prerequisites.
-# Single source of truth for canonical inference host state.
+# Host prerequisites moved to scripts/server/stack_host.py (2026-05-21 refactor).
+# Per-role env blocks moved to scripts/server/stack_env.py (same session).
+# Re-exported above via the module-level imports so existing call sites
+# (start_server, cmd_start etc.) keep resolving these unqualified names.
 # =============================================================================
-
-# Required sysctl values. /etc/sysctl.d/99-epyc-inference.conf gives the boot-time
-# default; these are re-verified per session per feedback_numa_balancing_self_reset.
-_HOST_PREREQ_SYSCTLS = {
-    "kernel.numa_balancing": "0",
-    "kernel.perf_event_paranoid": "1",
-}
-
-# Required THP state — both enabled and defrag must read "always".
-_HOST_PREREQ_THP = {
-    "/sys/kernel/mm/transparent_hugepage/enabled": "always",
-    "/sys/kernel/mm/transparent_hugepage/defrag": "always",
-}
-
-# Required CPU governor.
-_HOST_PREREQ_GOVERNOR = "performance"
-
-
-# =============================================================================
-# Per-role env blocks — applied to every llama-server launch.
-# Source: handoffs/active/model-registry-v5-deployment-draft.yaml roles section.
-# Universally-applied OMP env stack + per-arch-class GGML_* opt-ins.
-# =============================================================================
-
-# Always applied to every llama-server launch (the canonical OMP recipe).
-# Source: cpu-kernel-env-flags-inventory.md §28-30. Without these, post-reboot
-# Coder-30B drops 17 → 48.8 t/s (3-4× degraded, per feedback_omp_env_stack_required).
-_CANONICAL_OMP_ENV = {
-    "OMP_PROC_BIND": "spread",
-    "OMP_PLACES": "cores",
-    "OMP_WAIT_POLICY": "active",
-    # OMP_DYNAMIC=false: prevents the runtime from quietly trimming the team
-    # below OMP_NUM_THREADS. Required by canonical recipe (canonical_recipe.py:43-48
-    # in epyc-inference-research). Without this, ik_llama.cpp's MTP draft path
-    # asserts on "tensor buffer not set" because draft thread-team init races with
-    # buffer allocation. (2026-05-08 Phase 3.)
-    "OMP_DYNAMIC": "false",
-    # KMP_BLOCKTIME=10 ms: tunes the idle transition under OMP_WAIT_POLICY=active.
-    # Without this, AOCC libomp's worker team stays alive in busy-wait between OMP
-    # regions — when a server is idle (no request), its 96 OMP threads spin and burn
-    # ~half the chip in cumulative %Cpu(s) us. Originally added on the worker_pool
-    # branch (2026-05-09) for ik_llama.cpp PR #1744 (gemma4 MTP) because PR #1744
-    # uses bare `#pragma omp parallel` per ggml_graph_compute() with no persistent
-    # threadpool — that path's idle spin was the loudest. But the same idle-spin
-    # affects every llama-server launch under OMP_WAIT_POLICY=active on this libomp,
-    # not just MTP. Globalising here (2026-05-21) fixes the 4 frontdoor quarters +
-    # full + architect_general + ingest + visions + embedders all spinning idle
-    # between requests, which had been showing up as ~50% baseline %Cpu(s) us and
-    # multi-second delegation latency (other servers couldn't claim CPU against the
-    # spinning idle teams). 10 ms is the sweet spot: long enough to keep workers
-    # warm for back-to-back ops (no perceptible first-token regression), short
-    # enough that multi-second request gaps release the cores.
-    "KMP_BLOCKTIME": "10",
-}
-
-# clang-20's libomp directory — prepended to LD_LIBRARY_PATH for any role that
-# resolves OpenMP at runtime. The orchestrator's binaries (and the per-role
-# ik_llama.cpp PR #1744 build for worker_general) would otherwise fall through
-# to AOCC's libomp.so on disk; AOCC has different thread-pinning behavior that
-# triggers the MTP buffer assertion. Mirrors canonical_recipe.LLVM20_LIBDIR.
-_LLVM20_LIBDIR = "/usr/lib/llvm-20/lib"
-
-# Per-role env blocks. Keyed by role name (matches NUMA_CONFIG keys + registry roles).
-# Roles not listed inherit only the canonical OMP env.
-# Source: model-registry-v5-deployment-draft.yaml §roles, validated under v5 audit.
-_ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
-    # MoE Q4 sync-bound (CPU1 stack +1.8% on Coder-30B Q4_K_M tg32, stable).
-    # NB: GGML_NUMA_WEIGHTS deliberately excluded — DEPRECATED per CPU21 P3 isolation
-    # (unstable, 19-22σ at warmed state). Uses 3-flag stable stack.
-    "worker": {
-        "GGML_CCD_POOLS": "1",
-        "GGML_CCD_WORK_DIST": "1",
-        "GGML_BARRIER_LOCAL_BETWEEN_OPS": "1",
-    },
-    # MoE Q8 BW-bound frontdoor — EP stack was historically +17% per the original
-    # validation (drone+shard, N=2), but verified WRONG by direct A/B 2026-05-11:
-    # the GGML_EP_* stack was sitting at 12.6 t/s under sustained single-instance
-    # full-NUMA load. Hypothesis: the EP stack assumed the older binary / different
-    # NUMA wiring. Re-verify before re-enabling.
-    "frontdoor": {},
-    "frontdoor_ep_stack_disabled_2026_05_11": {
-        "GGML_EP_N_INSTANCES": "2",
-        "GGML_EP_NUMA_PIN": "1",
-        "GGML_EP_MASTER_ALL_NODES": "1",
-        "GGML_EP_WORKER_DRONE": "1",
-        "GGML_EP_SHARD": "1",
-    },
-    # architect_coding env block REMOVED 2026-05-06 — REAP-246B role eliminated.
-    # MoE-Spec budget=40 plumbing (LLAMA_ARG_MOE_SPEC_BUDGET) was REAP-246B-specific
-    # (validated +13-16% pp32 / +3% e2e on that model only). If a future role rosters
-    # a comparable MoE-Q4 DRAM-bound model, re-add the env block AT THAT TIME using
-    # benchmark data on the new model — do NOT blanket-apply the budget=40 setting.
-    # architect_general (Qwen3.5-122B-A10B Q4_K_M) — Probe B closed 2026-05-04.
-    # Arch class: moe_q4_bw_bound_mbind_sensitive. c2 wins at +1.28% (σ ~0.4%, z ~3)
-    # vs default v5 at 96t canonical. CPU1 stack net-neutral, c3 (combined) regresses to
-    # noise. Source bundle: data/cpu_optimization/2026-05-04-qwen35-122b-arch-probe/
-    "architect_general": {
-        "GGML_NUMA_REPACK_INTERLEAVE": "0",
-    },
-    # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
-    # Activate when a hybrid_ssm_dense model is rostered.
-    "hybrid_ssm_dense": {
-        "GGML_CCD_POOLS": "1",
-        "GGML_CCD_WORK_DIST": "1",
-        "GGML_BARRIER_LOCAL_BETWEEN_OPS": "1",
-        "GGML_NUMA_REPACK_INTERLEAVE": "0",
-    },
-    # Hybrid SSM MoE (Qwen3-Next-80B-A3B-class) — default v5 (c3 +1.7% noise floor).
-    "hybrid_ssm_moe": {},
-    # Dense Q8 (Qwen3.6-27B Q8) — DEFAULT v5; CPU1 stack actively HURTS.
-    # All probed CPU1/mbind-off configs negative (c1=-4.7%, c2=-3.3%, c3=-1.6%).
-    "dense_q8": {},
-    # Dense Q4 (gemma-4-31B / SuperGemma4-31B class) — default v5 within ±2% noise.
-    "dense_q4": {},
-}
-
-
-def _role_env_overrides(role: str) -> dict[str, str]:
-    """Return per-role env block for a given role. Empty dict if role not registered.
-    Falls back through arch-class aliases (e.g. coder_escalation → worker)."""
-    if role in _ROLE_ENV_BLOCKS:
-        return dict(_ROLE_ENV_BLOCKS[role])
-    # Aliases — production roles that map to v5 arch_class names.
-    # 2026-05-06: coder_escalation + worker_summarize now use the SAME GGUF as frontdoor
-    # (Qwen3.6-35B-A3B Q8) and should inherit frontdoor's EP-stack env block.
-    # 2026-05-06: thinking_reasoning alias REMOVED (role eliminated).
-    # NB: ingest_long_context (Qwen3-Next-80B-A3B hybrid SSM MoE) routes to hybrid_ssm_moe
-    # (default v5 — MoE-Spec budget=40 was REAP-246B-specific, NOT validated on hybrid SSM).
-    # formalizer (MathSmith-Qwen3-8B Q8 dense) routes to dense_q8 — it's not MoE at all.
-    arch_aliases = {
-        "coder_escalation": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
-        "worker_summarize": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
-        "worker_general": "worker",         # gemma4-26B-A4B Q4_K_M MTP — GGML_* env stripped at launch when binary_override is in effect (ik_llama.cpp PR #1744 forked at different ggml commit)
-        "worker_explore": "worker",         # Legacy alias for worker_general
-        "general_gemma_3_27b_it_qat": "dense_q4",
-        "ingest_long_context": "hybrid_ssm_moe",  # Qwen3-Next-80B-A3B
-        "formalizer": "dense_q8",                 # MathSmith-Qwen3-8B Q8 dense; NOT MoE at all
-        "toolrunner": "worker",                   # gemma4-26B-A4B Q4_K_M MTP (shares with worker_general)
-    }
-    aliased = arch_aliases.get(role)
-    if aliased and aliased in _ROLE_ENV_BLOCKS:
-        return dict(_ROLE_ENV_BLOCKS[aliased])
-    return {}
-
-
-def build_launch_env(role: str, base_env: dict[str, str] | None = None) -> dict[str, str]:
-    """Compose the full env dict for a llama-server launch.
-
-    Order (later overrides earlier):
-        1. base_env (parent process env, typically os.environ.copy())
-        2. LLVM-20 libomp prepended to LD_LIBRARY_PATH (canonical recipe)
-        3. canonical OMP env stack (always applied)
-        4. per-role GGML_* env block (from v5 deployment draft)
-
-    The per-role block is allowed to override OMP if it must, though no current
-    role does so.
-    """
-    env: dict[str, str] = dict(base_env) if base_env else {}
-    # LLVM-20 libomp must win over AOCC libomp at runtime. Prepend to LD_LIBRARY_PATH
-    # so the dynamic loader resolves libomp.so to clang-20's. AOCC libomp has different
-    # thread-pinning + dynamic-team behavior that breaks ik_llama.cpp PR #1744's MTP
-    # path (2026-05-08 Phase 3).
-    existing_ld = env.get("LD_LIBRARY_PATH", "")
-    if _LLVM20_LIBDIR not in existing_ld.split(":"):
-        env["LD_LIBRARY_PATH"] = (
-            f"{_LLVM20_LIBDIR}:{existing_ld}" if existing_ld else _LLVM20_LIBDIR
-        )
-    env.update(_CANONICAL_OMP_ENV)
-    env.update(_role_env_overrides(role))
-    return env
 
 
 def _runtime_requirements_for_role(
     registry: "RegistryLoader", role_name: str
 ) -> tuple[str | None, list[str] | None]:
-    """Return (binary_dir, ld_library_paths) for a role from server_mode.<x>.runtime_requirements.
-
-    Walks `registry._raw["server_mode"]` looking for the entry whose `model_role`
-    matches `role_name`. Returns (None, None) when no entry has runtime_requirements
-    or when the role isn't found — caller falls back to default LLAMA_SERVER + the
-    canonical env without LD_LIBRARY_PATH overrides.
-
-    Used by the worker_pool launch branch (currently only worker_general / gemma4
-    MTP via ik_llama.cpp PR #1744). Other workers stay on the default binary.
-    """
-    if not registry or not hasattr(registry, "_raw"):
-        return None, None
-    sm = registry._raw.get("server_mode", {}) or {}
-    for entry in sm.values():
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("model_role") != role_name:
-            continue
-        rt = entry.get("runtime_requirements") or {}
-        return rt.get("binary_dir"), rt.get("ld_library_path")
-    return None, None
-
-
-def _read_sysctl(key: str) -> str | None:
-    path = "/proc/sys/" + key.replace(".", "/")
-    try:
-        with open(path) as f:
-            return f.read().strip()
-    except OSError:
-        return None
-
-
-def _read_thp_active(path: str) -> str | None:
-    # /sys/kernel/mm/transparent_hugepage/enabled has format e.g. "always [madvise] never"
-    # The bracketed token is the active value.
-    try:
-        with open(path) as f:
-            content = f.read().strip()
-    except OSError:
-        return None
-    for token in content.split():
-        if token.startswith("[") and token.endswith("]"):
-            return token[1:-1]
-    return content
-
-
-def _read_governor() -> str | None:
-    try:
-        with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor") as f:
-            return f.read().strip()
-    except OSError:
-        return None
-
-
-def check_host_prerequisites() -> tuple[bool, list[str]]:
-    """Audit canonical host state. Returns (all_pass, list_of_drift_messages)."""
-    drift: list[str] = []
-
-    for key, want in _HOST_PREREQ_SYSCTLS.items():
-        got = _read_sysctl(key)
-        if got != want:
-            drift.append(f"sysctl {key}={got} (want {want})")
-
-    for path, want in _HOST_PREREQ_THP.items():
-        got = _read_thp_active(path)
-        if got != want:
-            drift.append(f"{path} active={got} (want {want})")
-
-    gov = _read_governor()
-    if gov != _HOST_PREREQ_GOVERNOR:
-        drift.append(f"cpu0 scaling_governor={gov} (want {_HOST_PREREQ_GOVERNOR})")
-
-    return (len(drift) == 0, drift)
-
-
-def apply_host_prerequisites(auto_fix: bool = True) -> bool:
-    """Verify and (optionally) apply canonical host settings.
-
-    Returns True if host is canonical (or was successfully fixed). Returns False
-    if any prereq could not be applied — caller should refuse to launch.
-    """
-    print("[host_prereq] Auditing canonical host state...")
-    ok, drift = check_host_prerequisites()
-    if ok:
-        print("  [OK] All host prerequisites satisfied "
-              "(numa_balancing=0, THP=always, governor=performance, perf_paranoid=1)")
-        return True
-
-    print(f"  [DRIFT] {len(drift)} setting(s) need correction:")
-    for msg in drift:
-        print(f"    - {msg}")
-
-    if not auto_fix:
-        print("  [SKIP] auto_fix disabled. Pass --apply-host-prereqs or fix manually.")
-        return False
-
-    print("  [FIX] Applying canonical settings (sudo -n)...")
-    ok_fix = True
-    for key, val in _HOST_PREREQ_SYSCTLS.items():
-        if _read_sysctl(key) == val:
-            continue
-        try:
-            subprocess.run(["sudo", "-n", "sysctl", "-w", f"{key}={val}"],
-                           check=True, capture_output=True, text=True, timeout=5)
-            print(f"    ✓ sysctl {key}={val}")
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            print(f"    ✗ FAILED to set sysctl {key}: {exc}")
-            ok_fix = False
-
-    for path, val in _HOST_PREREQ_THP.items():
-        if _read_thp_active(path) == val:
-            continue
-        try:
-            # tee with sudo: echo "always" | sudo tee /sys/kernel/...
-            proc = subprocess.run(
-                ["sudo", "-n", "tee", path],
-                input=val + "\n", check=True, capture_output=True, text=True, timeout=5,
-            )
-            print(f"    ✓ {path} = {val}")
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            print(f"    ✗ FAILED to set {path}: {exc}")
-            ok_fix = False
-
-    if _read_governor() != _HOST_PREREQ_GOVERNOR:
-        try:
-            subprocess.run(
-                ["sudo", "-n", "cpupower", "frequency-set", "-g", _HOST_PREREQ_GOVERNOR],
-                check=True, capture_output=True, text=True, timeout=10,
-            )
-            print(f"    ✓ cpu governor = {_HOST_PREREQ_GOVERNOR}")
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            print(f"    ✗ FAILED to set governor: {exc}")
-            ok_fix = False
-
-    # Re-audit
-    ok, drift_after = check_host_prerequisites()
-    if ok:
-        print("  [OK] All host prerequisites now satisfied after fix")
-        return True
-
-    print(f"  [FAIL] {len(drift_after)} setting(s) STILL drifted after fix attempt:")
-    for msg in drift_after:
-        print(f"    - {msg}")
-    return False
+    """Return (binary_dir, ld_library_paths) for a role (delegates to stack_runtime)."""
+    return _runtime_requirements_for_role_impl(registry, role_name)
 
 
 def is_port_in_use(port: int) -> bool:
     """Check if a port is in use."""
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("localhost", port)) == 0
+    return _stack_processes.is_port_in_use(port)
 
 
 def _pids_on_port(port: int) -> list[int]:
@@ -1224,261 +756,51 @@ def _pids_on_port(port: int) -> list[int]:
     2026-05-21 where `reload orchestrator` would kill Firefox + autopilot.
     The filter ensures we only target actual listeners.
     """
-    try:
-        result = subprocess.run(
-            ["lsof", "-t", "-sTCP:LISTEN", f"-i:{port}"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        pids: list[int] = []
-        for line in result.stdout.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                pids.append(int(line))
-            except ValueError:
-                continue
-        return pids
-    except Exception:
-        return []
+    return _stack_processes.pids_on_port(port)
 
 
 def _pid_alive(pid: int) -> bool:
     """Return True when a pid currently exists."""
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+    return _stack_processes.pid_alive(pid)
 
 
 def _child_pids(pid: int) -> list[int]:
     """Return direct child pids for a process."""
-    try:
-        result = subprocess.run(
-            ["ps", "-o", "pid=", "--ppid", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-    except Exception:
-        return []
-
-    children: list[int] = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            children.append(int(line))
-        except ValueError:
-            continue
-    return children
+    return _stack_processes.child_pids(pid)
 
 
 def _collect_descendants(root_pid: int) -> list[int]:
     """Collect all descendants of root_pid (breadth-first)."""
-    descendants: list[int] = []
-    queue = [root_pid]
-    seen = {root_pid}
-    while queue:
-        parent = queue.pop(0)
-        for child in _child_pids(parent):
-            if child in seen:
-                continue
-            seen.add(child)
-            descendants.append(child)
-            queue.append(child)
-    return descendants
+    return _stack_processes.collect_descendants(root_pid)
 
 
 def _renice_all_threads(pid: int, nice: int) -> None:
-    """Renice every thread of `pid` to `nice`.
-
-    `renice -p PID` from CLI only renices the lead thread; OMP team threads
-    spawned during model load keep their original priority. This iterates
-    /proc/<pid>/task/<tid> and sets each one explicitly. Idempotent.
-
-    Used to deprioritize binary_override (gemma4 MTP via ik_llama.cpp PR
-    #1744) which busy-spins 96 cores idle and contaminates other-role
-    measurements unless reniced. Verified 2026-05-09: post-renice, frontdoor
-    4.55 → 7.11 t/s, coder 4.02 → 12.34, ingest 10.46 → 28.99.
-
-    Going from nice=0 to nice=19 (lower priority) is allowed for the owner
-    without sudo.
-    """
-    import os as _os
-    task_dir = Path(f"/proc/{pid}/task")
-    if not task_dir.exists():
-        return
-    ok = 0
-    fail = 0
-    for tid_dir in task_dir.iterdir():
-        try:
-            tid = int(tid_dir.name)
-        except ValueError:
-            continue
-        try:
-            _os.setpriority(_os.PRIO_PROCESS, tid, nice)
-            ok += 1
-        except (PermissionError, ProcessLookupError, OSError):
-            fail += 1
-    print(f"    [renice] {ok} thread(s) → nice={nice}"
-          + (f" ({fail} failed)" if fail else ""))
+    """Renice every thread of `pid` to `nice`."""
+    _stack_processes.renice_all_threads(pid, nice)
 
 
 def kill_process(pid: int, timeout: int = 5) -> bool:
     """Kill a process tree gracefully, then forcefully."""
-    if pid <= 0:
-        return True
-
-    this_pid = os.getpid()
-    targets = [p for p in (_collect_descendants(pid) + [pid]) if p > 0 and p != this_pid]
-    if not targets:
-        return True
-
-    try:
-        # Terminate children first, then parent.
-        for target in reversed(targets):
-            try:
-                os.kill(target, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                print(f"  [!] Permission denied killing PID {target}")
-        for _ in range(timeout):
-            time.sleep(1)
-            if not any(_pid_alive(target) for target in targets):
-                return True
-        # Force kill survivors.
-        for target in reversed(targets):
-            if not _pid_alive(target):
-                continue
-            try:
-                os.kill(target, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                print(f"  [!] Permission denied force-killing PID {target}")
-        time.sleep(1)
-        return not any(_pid_alive(target) for target in targets)
-    except Exception as exc:
-        print(f"  [!] Failed to kill PID {pid}: {exc}")
-        return False
+    return _stack_processes.kill_process_tree(pid, timeout=timeout)
 
 
 # =============================================================================
-# Docker Container Management (NextPLAID services)
+# Docker container management moved to scripts/server/stack_docker.py
+# (2026-05-21 refactor). Re-exported via the module-level import above so
+# existing call sites (cmd_start, cmd_stop, cmd_reload, cmd_status) keep
+# resolving these names unqualified.
 # =============================================================================
-
-
-def _docker_available() -> bool:
-    """Check if docker CLI is available."""
-    try:
-        result = subprocess.run(
-            ["docker", "version", "--format", "{{.Server.Version}}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
-def docker_container_running(name: str) -> bool:
-    """Check if a named Docker container is running."""
-    try:
-        result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", name],
-            capture_output=True, text=True, timeout=5,
-        )
-        return result.stdout.strip() == "true"
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-
-
-def start_docker_container(service: dict) -> ProcessInfo | None:
-    """Start a Docker service. Removes any existing container with the same name first."""
-    name = service["name"]
-    port = service["port"]
-
-    # Remove existing container (stopped or running) with same name
-    subprocess.run(
-        ["docker", "rm", "-f", name],
-        capture_output=True, timeout=10,
-    )
-
-    cmd = ["docker", "run", "-d", "--name", name, "-p", f"{port}:8080"]
-    for vol in service.get("volumes", []):
-        cmd.extend(["-v", vol])
-    cmd.append(service["image"])
-    cmd.extend(service.get("args", []))
-
-    print(f"  Starting {name} on port {port}...")
-
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode != 0:
-        print(f"    [FAIL] docker run failed: {result.stderr.strip()[:200]}")
-        return None
-
-    container_id = result.stdout.strip()[:12]
-    print(f"    Container: {container_id}")
-
-    # Wait for health
-    health_path = service.get("health_path", "/health")
-    print(f"    Waiting for health...")
-    if wait_for_health(port, timeout=60, path=health_path):
-        print(f"    [OK] {name} ready ({service['description']})")
-        # Use container_id as PID placeholder (Docker manages the actual process)
-        return ProcessInfo(
-            role=name,
-            pid=-1,  # Docker-managed, not a host PID
-            port=port,
-            started_at=datetime.now().isoformat(),
-            model_path=service.get("model", service["image"]),
-            log_file=f"docker logs {name}",
-        )
-    else:
-        print(f"    [FAIL] {name} health check timed out")
-        # Show last few log lines for debugging
-        logs = subprocess.run(
-            ["docker", "logs", "--tail", "10", name],
-            capture_output=True, text=True, timeout=5,
-        )
-        if logs.stdout:
-            print(f"    Last logs: {logs.stdout.strip()[:300]}")
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=5)
-        return None
-
-
-def stop_docker_container(name: str) -> bool:
-    """Stop and remove a named Docker container."""
-    result = subprocess.run(
-        ["docker", "rm", "-f", name],
-        capture_output=True, text=True, timeout=15,
-    )
-    return result.returncode == 0
 
 
 def wait_for_health(port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str = "/health") -> bool:
-    """Wait for server health endpoint."""
-    import urllib.request
-    import urllib.error
+    """Wait for server health endpoint (delegates to stack_health.wait_for_health).
 
-    url = f"http://localhost:{port}{path}"
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                if resp.status == 200:
-                    return True
-        except (urllib.error.URLError, TimeoutError, ConnectionResetError, OSError):
-            pass
-        time.sleep(2)
-    return False
+    Wrapper preserves the registry-driven _HEALTH_SERVER_STARTUP default for
+    callers that don't pass timeout explicitly. (Currently every production
+    caller does pass one — see the 14 call sites in this file — but the
+    default is part of the public API.)
+    """
+    return _wait_for_health(port, timeout, path)
 
 
 # =============================================================================
@@ -1486,259 +808,215 @@ def wait_for_health(port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str 
 # =============================================================================
 
 
-def build_server_command(
-    role_config: Any,
-    port: int,
-    dev_mode: bool = False,
-    embedding_mode: bool = False,
-    worker_pool_mode: bool = False,
-    worker_type: str = None,
-    vision_mode: bool = False,
-    vision_type: str = None,
-    binary_override: str | None = None,
-) -> list[str]:
-    """Build llama-server command from role config.
+# -----------------------------------------------------------------------------
+# Mode-specific command builders (called by build_server_command dispatcher).
+# Each returns a fully formed llama-server argv list for one launch shape.
+# Kept private (_build_*) because the public API is build_server_command.
+# -----------------------------------------------------------------------------
 
-    `binary_override` (Phase 2): when set, replaces `LLAMA_SERVER` for the worker_pool
-    explore branch. Used by worker_general (gemma4 MTP) to launch ik_llama.cpp PR #1744
-    instead of the production llama.cpp build. Other branches ignore this argument
-    today — extend as needed.
-    """
-    # Vision server mode - VL models with multimodal projector
-    if vision_mode:
-        if vision_type == "escalation":
-            # Qwen3-VL-30B MoE - larger model, expert reduction
-            return [
-                str(LLAMA_SERVER),
-                "-m", VISION_ESCALATION_MODEL,
-                "--mmproj", VISION_ESCALATION_MMPROJ,
-                "--override-kv", "qwen3vlmoe.expert_used_count=int:4",
-                "--host", "127.0.0.1",
-                "--port", str(port),
-                "-np", "1",
-                "-c", "16384",
-                "-t", "96",
-                "--flash-attn", "on",
-            ]
-        else:
-            # Qwen2.5-VL-7B - smaller worker model
-            return [
-                str(LLAMA_SERVER),
-                "-m", VISION_WORKER_MODEL,
-                "--mmproj", VISION_WORKER_MMPROJ,
-                "--host", "127.0.0.1",
-                "--port", str(port),
-                "-np", "2",
-                "-c", "8192",
-                "-t", "24",
-                "--flash-attn", "on",
-            ]
 
-    # Embedding server mode - BGE-large with CLS pooling
-    if embedding_mode:
+def _build_vision_command(port: int, vision_type: str | None) -> list[str]:
+    """VL launch: Qwen3-VL-30B MoE (escalation) or Qwen2.5-VL-7B (worker)."""
+    if vision_type == "escalation":
+        # Qwen3-VL-30B MoE - larger model, expert reduction
         return [
             str(LLAMA_SERVER),
-            "-m", EMBEDDING_MODEL_PATH,
+            "-m", VISION_ESCALATION_MODEL,
+            "--mmproj", VISION_ESCALATION_MMPROJ,
+            "--override-kv", "qwen3vlmoe.expert_used_count=int:4",
             "--host", "127.0.0.1",
             "--port", str(port),
-            "-np", "4",  # 4 parallel slots for embedding requests
-            "-c", "512",  # BGE works with short contexts
-            "-t", "4",  # 4 threads per instance (6 instances = 24 threads total)
-            "--embeddings",  # Enable embedding endpoint
-            "--pooling", "cls",  # BGE uses CLS token pooling (standard BERT)
+            "-np", "1",
+            "-c", "16384",
+            "-t", "96",
             "--flash-attn", "on",
         ]
+    # Qwen2.5-VL-7B - smaller worker model
+    return [
+        str(LLAMA_SERVER),
+        "-m", VISION_WORKER_MODEL,
+        "--mmproj", VISION_WORKER_MMPROJ,
+        "--host", "127.0.0.1",
+        "--port", str(port),
+        "-np", "2",
+        "-c", "8192",
+        "-t", "24",
+        "--flash-attn", "on",
+    ]
 
-    # Worker pool mode - heterogeneous workers with specific configs
-    if worker_pool_mode and worker_type:
-        model_path = WORKER_POOL_MODELS.get(worker_type)
-        if not model_path:
-            raise ValueError(f"Unknown worker type: {worker_type}")
 
-        # Worker-type specific configuration
-        if worker_type == "fast":
-            # Fast worker: 1.5B model, 4 slots for parallel burst capacity
-            return [
-                str(LLAMA_SERVER),
-                "-m", model_path,
-                "--host", "127.0.0.1",
-                "--port", str(port),
-                "-np", "4",  # 4 parallel slots (consolidated from 2×2)
-                "-c", "16384",  # 4K per slot
-                "-t", "16",  # 16 threads for small model
-                "--flash-attn", "on",
-            ]
-        else:
-            # explore worker: gemma4-26B-A4B Q4_K_M MTP (swapped 2026-05-08 from
-            # Qwen3-Coder-30B-A3B Q4_K_M). Tool_compliance 96% vs 78% prior, +36% tps.
-            # Binary defaults to str(LLAMA_SERVER); start_server overrides via
-            # binary_override (from server_mode.worker.runtime_requirements.binary_dir)
-            # for gemma4 MTP because it needs ik_llama.cpp PR #1744 build, not the
-            # production llama.cpp build.
-            binary = binary_override if binary_override else str(LLAMA_SERVER)
-            # Derive thread count from NUMA_CONFIG by matching this instance's port.
-            # Pre-2026-05-08 was hardcoded -t 24 (1.5B-era leftover), then briefly -t 96
-            # which over-subscribed the 4 quarter instances (24 cores each) and crashed
-            # the load average to 420. Per-instance lookup gets full=96 + quarters=48.
-            _numa_thread_count = 96  # default fallback (full canonical instance)
-            for cpu_list, inst_port, threads in NUMA_CONFIG.get("worker_general", {}).get("instances", []):
-                if inst_port == port:
-                    _numa_thread_count = threads
-                    break
-            return [
-                binary,
-                "-m", model_path,
-                "-md", EXPLORE_DRAFT_MODEL,  # MTP draft (gemma4 assistant Q8)
-                "--spec-type", "mtp",        # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
-                                             # Without this, -md is treated as standard spec decode and
-                                             # MTP-arch draft tensors are loaded but never assigned to a
-                                             # backend buffer → "tensor buffer not set" assertion.
-                "--draft-max", "2",          # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
-                "--draft-p-min", "0.0",      # greedy: accept top-1 drafts, verifier rejects mismatches
-                "--threads-draft", "16",     # dedicate 16 threads to small 4-layer drafter
-                "-ub", "512",                # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
-                "--no-mmap",                 # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
-                "--reasoning", "off",        # disable gemma4 thinking-channel (output otherwise lands in
-                                             # reasoning_content not content; registry: gemma4_26b reasoning=off)
-                "--jinja",                   # gemma4 ships a custom chat template embedded in the gguf;
-                                             # without --jinja, llama.cpp rejects /v1/chat/completions
-                                             # with "this custom template is not supported"
-                "--host", "127.0.0.1",
-                "--port", str(port),
-                # -np 1 (single slot): MTP shares state with the target across slots in a
-                # way that the ik_llama.cpp PR #1744 build asserts on with -np 2 ("tensor
-                # buffer not set" at ggml-backend.cpp:236 during inference). Single slot
-                # matches the working benchmark recipe. Pre-gemma4 worker_general used
-                # -np 2 because external-draft spec decode (Qwen3-Coder + 0.75B draft)
-                # had per-slot draft state; MTP fuses draft + target, hence -np 1.
-                "-np", "1",
-                "-c", "16384",  # match research-registry max_context; 8192 causes MTP buffer mismatches
-                # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
-                # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
-                # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
-                # "tensor buffer not set" MTP assertion.
-                "-t", str(_numa_thread_count),
-                # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
-                # allocation. f16 default left some MTP tensor buffers uninitialized.
-                "-ctk", "q8_0",
-                "-ctv", "q8_0",
-                "--flash-attn", "on",
-            ]
+def _build_embedding_command(port: int) -> list[str]:
+    """BGE-large embedding server with CLS pooling (6 parallel instances in prod)."""
+    return [
+        str(LLAMA_SERVER),
+        "-m", EMBEDDING_MODEL_PATH,
+        "--host", "127.0.0.1",
+        "--port", str(port),
+        "-np", "4",  # 4 parallel slots for embedding requests
+        "-c", "512",  # BGE works with short contexts
+        "-t", "4",  # 4 threads per instance (6 instances = 24 threads total)
+        "--embeddings",  # Enable embedding endpoint
+        "--pooling", "cls",  # BGE uses CLS token pooling (standard BERT)
+        "--flash-attn", "on",
+    ]
 
-    if dev_mode:
-        return [
-            str(LLAMA_SERVER),
-            "-m", DEV_MODEL_PATH,
-            "--host", "127.0.0.1",
-            "--port", str(port),
-            "-np", "4",
-            "-c", "4096",
-            "-t", "16",
-            "--flash-attn", "on",  # Flash attention
-        ]
 
-    model_path = role_config.model.full_path
-    accel = role_config.acceleration
-    parallel_slots = "1" if role_config.name in SERIAL_ROLES else "2"
-
-    # NUMA-aware thread count: use the configured thread count for the
-    # specific instance, falling back to 96 (single NUMA node).
-    numa_cfg = NUMA_CONFIG.get(role_config.name)
-    if numa_cfg and numa_cfg["instances"]:
-        # Default to first instance thread count (all instances same for a role)
-        thread_count = str(numa_cfg["instances"][0][2])
-    else:
-        thread_count = "96"
-
-    # KV cache budgets: role-aware context sizes to prevent memory pressure.
-    # 2026-05-06: architect_coding REMOVED (role eliminated; entry stripped).
-    _KV_CONTEXT_SIZES = {
-        "architect_general": "16384",   # 122B MoE hybrid → ~16GB KV
-        "ingest_long_context": "32768", # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
-    }
-    context_size = _KV_CONTEXT_SIZES.get(role_config.name, "32768")
-
-    # Use v2 binary for roles with v3 spec decode bug (Qwen2.5 architecture)
-    _binary = LLAMA_SERVER_V2 if role_config.name in _V2_ROLES and LLAMA_SERVER_V2.exists() else LLAMA_SERVER
-    # 2026-05-11: -ub 8192 added to match the canonical-bench single-instance
-    # recipe (scripts/benchmark/run_qwen36_retest.py uses `-ub 8192` + `-c 8192`
-    # + `--parallel 1`). Without this, frontdoor's decode throughput was
-    # measured at 12.66 t/s vs 25-27 t/s in the bench CSV. Per memory
-    # feedback_psplit_default: "single-model bench uses ub8192".
-    # NUMA quarter-mode roles override to -ub 512 via spec_overrides (handled
-    # below) when they need the smaller batch.
-    _ubatch_default = "8192"
-    cmd = [
-        str(_binary),
+def _build_worker_fast_command(port: int, model_path: str) -> list[str]:
+    """Fast worker: 1.5B model, 4 slots for parallel burst capacity."""
+    return [
+        str(LLAMA_SERVER),
         "-m", model_path,
         "--host", "127.0.0.1",
         "--port", str(port),
-        "-np", parallel_slots,  # Parallel slots (1 for large roles, 2 otherwise)
-        "-c", context_size,     # Role-aware context size
-        "-t", thread_count,     # NUMA-aware thread count (48 for quarter, 96 for node)
-        "-ub", _ubatch_default, # Microbatch — match canonical bench (was default 512)
-        "--flash-attn", "on",   # Flash attention
+        "-np", "4",  # 4 parallel slots (consolidated from 2×2)
+        "-c", "16384",  # 4K per slot
+        "-t", "16",  # 16 threads for small model
+        "--flash-attn", "on",
     ]
 
-    # --jinja: Use model's native chat template (enables thinking on Qwen3/3.5).
-    # SKIP for architect_general — Qwen3.5 hybrids enter infinite <think> loops.
-    # --reasoning off was insufficient: the jinja template itself primes the model
-    # into think mode. Without --jinja, llama-server falls back to generic ChatML
-    # which has no thinking scaffolding. architect_coding (REAP-246B, pure MoE)
-    # keeps --jinja + default reasoning (no loop issue on non-hybrid architectures).
-    if role_config.name != "architect_general":
-        cmd.append("--jinja")
 
-    # KV cache quantization: reduces KV memory with negligible quality impact.
-    # Phase 0 benchmarks (2026-03-25): generation speed neutral, memory savings significant at 65K+.
-    # CRITICAL (2026-03-28): V=q4_0 causes 71% prefill regression on pure-attention models.
-    # V=f16 has ZERO prefill regression (actually 1% faster due to K bandwidth savings).
-    # q4_0 K / f16 V = quality-neutral (PPL +0.017 with Hadamard), 37% KV savings, zero speed cost.
-    # q4_0 / q4_0 = 71% KV savings but 71% prefill regression on pure-attn. OK for hybrid (SSM amortizes).
-    # --kv-hadamard: production binary rebuilt with Hadamard support (commit b51c905ec, 2026-03-28).
-    # Closes q4_0 K PPL gap from +0.055 to +0.017 vs f16. Zero throughput overhead.
-    _KV_QUANT_CONFIGS = {
-        # 2026-05-06: frontdoor + coder_escalation now share Qwen3.6-35B-A3B Q8 GGUF
-        # (qwen35moe MoE-attention, NOT SSM hybrid). Per registry kv_quant {q8_0/q8_0}.
-        "frontdoor":            ("q8_0", "q8_0"),   # Qwen3.6-35B-A3B Q8: q8_0 K/V (Qwen trained bf16)
-        "coder_escalation":     ("q8_0", "q8_0"),   # same model as frontdoor
-        "architect_general":    ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
-        # architect_coding REMOVED 2026-05-06 (REAP-246B role eliminated)
-        "ingest_long_context":  ("q4_0", "q4_0"),   # SSM-hybrid, long context, max compression
-    }
-    kv_quant = _KV_QUANT_CONFIGS.get(role_config.name)
-    if kv_quant:
-        cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1]])
-        # --kv-hadamard: v3 auto-enables (upstream #21038), v2 needs explicit flag
-        if role_config.name in _V2_ROLES and LLAMA_SERVER_V2.exists():
-            cmd.append("--kv-hadamard")
+def _build_worker_explore_command(
+    port: int, model_path: str, binary_override: str | None
+) -> list[str]:
+    """Explore worker: gemma4-26B-A4B Q4_K_M MTP via ik_llama.cpp PR #1744.
 
-    # mlock: lock model weights in RAM to prevent page cache eviction.
-    # Validated in S2: 30x latency improvement under memory pressure.
-    # Requires ulimit -l unlimited in launch environment.
-    if role_config.name in MLOCK_ROLES:
-        cmd.append("--mlock")
+    Swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M. Tool_compliance 96% vs 78%
+    prior, +36% tps. `binary_override` comes from `server_mode.worker.runtime_requirements.binary_dir`
+    in the registry — required because gemma4 MTP needs ik_llama.cpp PR #1744 build,
+    not the production llama.cpp build.
+    """
+    binary = binary_override if binary_override else str(LLAMA_SERVER)
+    # Derive thread count from NUMA_CONFIG by matching this instance's port.
+    # Pre-2026-05-08 was hardcoded -t 24 (1.5B-era leftover), then briefly -t 96
+    # which over-subscribed the 4 quarter instances (24 cores each) and crashed
+    # the load average to 420. Per-instance lookup gets full=96 + quarters=48.
+    numa_thread_count = 96  # default fallback (full canonical instance)
+    for _cpu_list, inst_port, threads in NUMA_CONFIG.get("worker_general", {}).get("instances", []):
+        if inst_port == port:
+            numa_thread_count = threads
+            break
+    return [
+        binary,
+        "-m", model_path,
+        "-md", EXPLORE_DRAFT_MODEL,  # MTP draft (gemma4 assistant Q8)
+        "--spec-type", "mtp",        # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
+                                     # Without this, -md is treated as standard spec decode and
+                                     # MTP-arch draft tensors are loaded but never assigned to a
+                                     # backend buffer → "tensor buffer not set" assertion.
+        "--draft-max", "2",          # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
+        "--draft-p-min", "0.0",      # greedy: accept top-1 drafts, verifier rejects mismatches
+        "--threads-draft", "16",     # dedicate 16 threads to small 4-layer drafter
+        "-ub", "512",                # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
+        "--no-mmap",                 # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
+        "--reasoning", "off",        # disable gemma4 thinking-channel (output otherwise lands in
+                                     # reasoning_content not content; registry: gemma4_26b reasoning=off)
+        "--jinja",                   # gemma4 ships a custom chat template embedded in the gguf;
+                                     # without --jinja, llama.cpp rejects /v1/chat/completions
+                                     # with "this custom template is not supported"
+        "--host", "127.0.0.1",
+        "--port", str(port),
+        # -np 1 (single slot): MTP shares state with the target across slots in a
+        # way that the ik_llama.cpp PR #1744 build asserts on with -np 2 ("tensor
+        # buffer not set" at ggml-backend.cpp:236 during inference). Single slot
+        # matches the working benchmark recipe. Pre-gemma4 worker_general used
+        # -np 2 because external-draft spec decode (Qwen3-Coder + 0.75B draft)
+        # had per-slot draft state; MTP fuses draft + target, hence -np 1.
+        "-np", "1",
+        "-c", "16384",  # match research-registry max_context; 8192 causes MTP buffer mismatches
+        # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
+        # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
+        # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
+        # "tensor buffer not set" MTP assertion.
+        "-t", str(numa_thread_count),
+        # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
+        # allocation. f16 default left some MTP tensor buffers uninitialized.
+        "-ctk", "q8_0",
+        "-ctv", "q8_0",
+        "--flash-attn", "on",
+    ]
 
-    # 2026-05-09: SKIP architect_general — Qwen3.5-122B M-RoPE refuses position
-    # rollback when speculative draft tokens are rejected, triggering
-    #   `init: ... starting position of Y < cache position X` →
-    #   `decode: failed to initialize batch` →
-    #   `init: invalid seq_id[1][0] = 1 >= 1` →
-    #   `GGML_ASSERT(logits != nullptr)` in common_speculative_state_tree::draft.
-    # Build b8957-2ffbdbbba (production llama.cpp). Re-enable when upstream patches
-    # M-RoPE rollback or we move to a binary that supports it. Throughput cost: spec
-    # decode previously +25% (4.3→12.6 t/s with moe8+spec_q8); MoE-expert-reduction
-    # path stays active so we keep the moe-budget gain (12.19 t/s probe-B canonical).
-    _NO_SPEC_DECODE = {"architect_general"}
 
-    # Add acceleration based on type
+def _build_dev_command(port: int) -> list[str]:
+    """Dev mode: single 0.5B Qwen2.5-Coder model for fast iteration."""
+    return [
+        str(LLAMA_SERVER),
+        "-m", DEV_MODEL_PATH,
+        "--host", "127.0.0.1",
+        "--port", str(port),
+        "-np", "4",
+        "-c", "4096",
+        "-t", "16",
+        "--flash-attn", "on",
+    ]
+
+
+# -----------------------------------------------------------------------------
+# Default-role builder sub-helpers (called by _build_role_command).
+# -----------------------------------------------------------------------------
+
+# Use v2 binary for roles with v3 spec decode bug (Qwen2.5 architecture).
+# Currently empty (was {"coder_escalation"}); kept here for clarity of intent.
+_NO_SPEC_DECODE = {"architect_general"}
+
+# Role-specific KV cache budgets and quantization.
+# Phase 0 benchmarks (2026-03-25): generation speed neutral, memory savings significant at 65K+.
+# CRITICAL (2026-03-28): V=q4_0 causes 71% prefill regression on pure-attention models.
+# V=f16 has ZERO prefill regression (actually 1% faster due to K bandwidth savings).
+# q4_0 K / f16 V = quality-neutral (PPL +0.017 with Hadamard), 37% KV savings, zero speed cost.
+# q4_0 / q4_0 = 71% KV savings but 71% prefill regression on pure-attn. OK for hybrid (SSM amortizes).
+# --kv-hadamard: production binary rebuilt with Hadamard support (commit b51c905ec, 2026-03-28).
+_KV_CONTEXT_SIZES = {
+    "architect_general": "16384",   # 122B MoE hybrid → ~16GB KV
+    "ingest_long_context": "32768", # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
+}
+_KV_QUANT_CONFIGS = {
+    # 2026-05-06: frontdoor + coder_escalation now share Qwen3.6-35B-A3B Q8 GGUF
+    # (qwen35moe MoE-attention, NOT SSM hybrid). Per registry kv_quant {q8_0/q8_0}.
+    "frontdoor":            ("q8_0", "q8_0"),   # Qwen3.6-35B-A3B Q8: q8_0 K/V (Qwen trained bf16)
+    "coder_escalation":     ("q8_0", "q8_0"),   # same model as frontdoor
+    "architect_general":    ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
+    "ingest_long_context":  ("q4_0", "q4_0"),   # SSM-hybrid, long context, max compression
+}
+
+
+def _resolve_thread_count(role_name: str) -> str:
+    """NUMA-aware thread count for a role's primary instance (fallback: 96)."""
+    numa_cfg = NUMA_CONFIG.get(role_name)
+    if numa_cfg and numa_cfg["instances"]:
+        return str(numa_cfg["instances"][0][2])
+    return "96"
+
+
+def _resolve_binary_for_role(role_name: str) -> Path:
+    """Pick LLAMA_SERVER_V2 if the role is on the v2 binary allow-list and the binary exists."""
+    if role_name in _V2_ROLES and LLAMA_SERVER_V2.exists():
+        return LLAMA_SERVER_V2
+    return LLAMA_SERVER
+
+
+def _append_kv_quant_args(cmd: list[str], role_name: str) -> None:
+    """Emit -ctk/-ctv (and --kv-hadamard for v2 binary) for roles with a KV quant config."""
+    kv_quant = _KV_QUANT_CONFIGS.get(role_name)
+    if not kv_quant:
+        return
+    cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1]])
+    # --kv-hadamard: v3 auto-enables (upstream #21038), v2 needs explicit flag
+    if role_name in _V2_ROLES and LLAMA_SERVER_V2.exists():
+        cmd.append("--kv-hadamard")
+
+
+def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_path: str) -> None:
+    """Emit acceleration-mode-specific args (MoE expert reduction / spec decode / self-spec).
+
+    2026-05-09: architect_general is gated out of speculative_decoding because
+    Qwen3.5-122B M-RoPE refuses position rollback when speculative draft tokens
+    are rejected — see `_NO_SPEC_DECODE` and the comment block above its
+    definition for the full incident trace.
+    """
     if accel.type == "moe_expert_reduction" and accel.experts:
-        cmd.extend([
-            "--override-kv",
-            f"{accel.override_key}=int:{accel.experts}",
-        ])
-    elif accel.type == "speculative_decoding" and accel.draft_role and role_config.name not in _NO_SPEC_DECODE:
-        # Get draft model path from registry
+        cmd.extend(["--override-kv", f"{accel.override_key}=int:{accel.experts}"])
+    elif (accel.type == "speculative_decoding" and accel.draft_role
+          and role_name not in _NO_SPEC_DECODE):
         registry = RegistryLoader()
         draft_config = registry.get_role(accel.draft_role)
         if draft_config:
@@ -1748,9 +1026,8 @@ def build_server_command(
             ])
 
     # MoE + spec decode combo (e.g., 480B with jukofyork draft + expert reduction)
-    # draft_role is populated from speculative_decoding sub-config in registry.
-    # _NO_SPEC_DECODE gate also applies here (defined above).
-    if accel.type == "moe_expert_reduction" and accel.draft_role and role_config.name not in _NO_SPEC_DECODE:
+    if (accel.type == "moe_expert_reduction" and accel.draft_role
+            and role_name not in _NO_SPEC_DECODE):
         registry = RegistryLoader()
         draft_config = registry.get_role(accel.draft_role)
         if draft_config:
@@ -1778,56 +1055,107 @@ def build_server_command(
         if accel.n_layer_exit_intermediate:
             cmd.extend(["--n-layer-exit-intermediate", str(accel.n_layer_exit_intermediate)])
 
-    # Tree speculation: --draft-p-split was the DySpec branching probability flag.
-    # REMOVED 2026-05-04: production-consolidated-v5 kernel push stripped tree-speculation
-    # support; the binary no longer accepts --draft-p-split. Spec-decode is now linear-only,
-    # which matches the registry config (all 4 spec-decode roles use p_split=0 = linear).
-    # Re-introduce only if a future binary restores tree speculation.
-    # Historical: Coder Q4KM tree was +2.7% at 48t; hybrids tree HARMFUL (-25% to -40%).
-    if False and accel.p_split is not None:  # disabled — flag stripped in v5
-        cmd.extend(["--draft-p-split", str(accel.p_split)])
 
-    # NUMA-specific spec param overrides: when NUMA thread count differs from 192t,
-    # the optimal draft_max/p_split may differ. Override the registry defaults with
-    # NUMA-optimal values from bench_sweep_spec_params.sh results.
-    if numa_cfg and "spec_overrides" in numa_cfg:
-        overrides = numa_cfg["spec_overrides"]
-        if "draft_max" in overrides:
-            # Replace --draft-max value in existing cmd
-            for i, arg in enumerate(cmd):
-                if arg == "--draft-max" and i + 1 < len(cmd):
-                    cmd[i + 1] = str(overrides["draft_max"])
-                    break
-        if False and "p_split" in overrides:  # disabled — --draft-p-split stripped in v5 binary
-            # Replace or add --draft-p-split
-            replaced = False
-            for i, arg in enumerate(cmd):
-                if arg == "--draft-p-split" and i + 1 < len(cmd):
-                    cmd[i + 1] = str(overrides["p_split"])
-                    replaced = True
-                    break
-            if not replaced and overrides["p_split"] > 0:
-                cmd.extend(["--draft-p-split", str(overrides["p_split"])])
+def _apply_numa_spec_overrides(cmd: list[str], numa_cfg: dict | None) -> None:
+    """In-place rewrite of --draft-max based on NUMA spec_overrides.
 
-    # Prompt n-gram lookup decode — disabled 2026-05-04: production-consolidated-v5 binary
-    # stripped the bare `--lookup` boolean flag. Replaced by `--lookup-cache-static FNAME` /
-    # `--lookup-cache-dynamic FNAME` (file-based) and `--spec-ngram-size-n/m N` parameters
-    # for ngram-simple/ngram-map speculative-decoding modes. Per-role registry `lookup: true`
-    # is now informational; emission would crash the server with `error: invalid argument: --lookup`.
-    # Historical: dense/small-MoE +27% (30B), net-negative on large MoE (480B); combined with
-    # spec-decode 5.4x vs 5.2x spec-only (production-consolidated commit 8e35dbc01).
-    # Re-enable by writing a static cache file and emitting --lookup-cache-static if the
-    # quality/speed lever is wanted back.
-    if False and accel.lookup:  # disabled — bare --lookup stripped in v5 binary
-        cmd.append("--lookup")
+    When NUMA thread count differs from 192t, the optimal draft_max may differ.
+    Overrides come from bench_sweep_spec_params.sh results stored in NUMA_CONFIG.
+    """
+    if not numa_cfg or "spec_overrides" not in numa_cfg:
+        return
+    overrides = numa_cfg["spec_overrides"]
+    if "draft_max" in overrides:
+        for i, arg in enumerate(cmd):
+            if arg == "--draft-max" and i + 1 < len(cmd):
+                cmd[i + 1] = str(overrides["draft_max"])
+                break
+    # Tree-spec (--draft-p-split) and bare --lookup flag both stripped in v5 binary;
+    # see git history for re-enable conditions if/when a future binary restores them.
 
-    # DS-3: KV state save/restore — enables dynamic stack slot persistence.
-    # Each role gets its own subdirectory to avoid slot ID collisions.
-    slot_dir = SLOT_SAVE_DIR / role_config.name
+
+def _build_role_command(role_config: Any, port: int) -> list[str]:
+    """Build llama-server command for a registry-backed role (default path)."""
+    model_path = role_config.model.full_path
+    accel = role_config.acceleration
+    role_name = role_config.name
+    parallel_slots = "1" if role_name in SERIAL_ROLES else "2"
+    thread_count = _resolve_thread_count(role_name)
+    context_size = _KV_CONTEXT_SIZES.get(role_name, "32768")
+    binary = _resolve_binary_for_role(role_name)
+
+    # -ub 8192: matches the canonical-bench single-instance recipe
+    # (scripts/benchmark/run_qwen36_retest.py uses `-ub 8192` + `-c 8192` + `--parallel 1`).
+    # Without this, frontdoor's decode throughput was 12.66 t/s vs 25-27 t/s in the bench CSV.
+    cmd = [
+        str(binary),
+        "-m", model_path,
+        "--host", "127.0.0.1",
+        "--port", str(port),
+        "-np", parallel_slots,
+        "-c", context_size,
+        "-t", thread_count,
+        "-ub", "8192",
+        "--flash-attn", "on",
+    ]
+
+    # --jinja: model's native chat template (enables thinking on Qwen3/3.5).
+    # SKIP for architect_general — Qwen3.5 hybrids enter infinite <think> loops.
+    # --reasoning off is insufficient: the jinja template itself primes the model
+    # into think mode. Without --jinja, llama-server falls back to generic ChatML
+    # which has no thinking scaffolding.
+    if role_name != "architect_general":
+        cmd.append("--jinja")
+
+    _append_kv_quant_args(cmd, role_name)
+
+    # mlock: lock model weights in RAM to prevent page cache eviction.
+    # Validated in S2: 30x latency improvement under memory pressure.
+    if role_name in MLOCK_ROLES:
+        cmd.append("--mlock")
+
+    _append_acceleration_args(cmd, role_name, accel, model_path)
+    _apply_numa_spec_overrides(cmd, NUMA_CONFIG.get(role_name))
+
+    # DS-3: KV state save/restore — per-role subdir to avoid slot ID collisions.
+    slot_dir = SLOT_SAVE_DIR / role_name
     slot_dir.mkdir(parents=True, exist_ok=True)
     cmd.extend(["--slot-save-path", str(slot_dir)])
 
     return cmd
+
+
+def build_server_command(
+    role_config: Any,
+    port: int,
+    dev_mode: bool = False,
+    embedding_mode: bool = False,
+    worker_pool_mode: bool = False,
+    worker_type: str = None,
+    vision_mode: bool = False,
+    vision_type: str = None,
+    binary_override: str | None = None,
+) -> list[str]:
+    """Dispatch to the per-mode command builder.
+
+    `binary_override`: when set, replaces `LLAMA_SERVER` for the worker_pool explore
+    branch (used by worker_general / gemma4 MTP to launch ik_llama.cpp PR #1744).
+    Other branches ignore this argument today.
+    """
+    if vision_mode:
+        return _build_vision_command(port, vision_type)
+    if embedding_mode:
+        return _build_embedding_command(port)
+    if worker_pool_mode and worker_type:
+        model_path = WORKER_POOL_MODELS.get(worker_type)
+        if not model_path:
+            raise ValueError(f"Unknown worker type: {worker_type}")
+        if worker_type == "fast":
+            return _build_worker_fast_command(port, model_path)
+        return _build_worker_explore_command(port, model_path, binary_override)
+    if dev_mode:
+        return _build_dev_command(port)
+    return _build_role_command(role_config, port)
 
 
 def start_server(
@@ -2898,16 +2226,7 @@ def _find_pids_on_port(port: int) -> list[int]:
     "on the port" and killed by callers. See `_pids_on_port` for full
     context on the 2026-05-21 destructive-reload bug this prevents.
     """
-    try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
-    except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
-        pass
-    return []
+    return _stack_processes.pids_on_port(port, timeout=5)
 
 
 def _scan_known_ports() -> dict[int, list[int]]:
@@ -2917,12 +2236,7 @@ def _scan_known_ports() -> dict[int, list[int]]:
         {port: [pid, ...]} for ports that have listeners.
     """
     known_ports = sorted({s["port"] for s in HOT_SERVERS} | NUMA_REPLICA_PORTS | {8000})
-    found: dict[int, list[int]] = {}
-    for port in known_ports:
-        pids = _find_pids_on_port(port)
-        if pids:
-            found[port] = pids
-    return found
+    return _stack_processes.scan_known_ports(known_ports)
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -3028,14 +2342,9 @@ def cmd_reload(args: argparse.Namespace) -> int:
             for port in EMBEDDER_PORTS:
                 if is_port_in_use(port):
                     try:
-                        result = subprocess.run(
-                            ["lsof", "-t", f"-i:{port}"],
-                            capture_output=True, text=True,
-                        )
-                        if result.stdout.strip():
-                            for pid_str in result.stdout.strip().split("\n"):
-                                kill_process(int(pid_str))
-                                print(f"    Killed stale process on port {port}")
+                        for pid in _pids_on_port(port):
+                            kill_process(pid)
+                            print(f"    Killed stale process on port {port}")
                     except (subprocess.TimeoutExpired, OSError, ValueError):
                         pass  # Best-effort stale process cleanup
 
@@ -3304,138 +2613,33 @@ def init_memrl_and_tools() -> bool:
 # =============================================================================
 
 CHECKPOINT_DIR = _PATHS["project_root"] / "orchestration/checkpoints"
+_REGISTRY_PATH_FOR_CHECKPOINT = _PATHS["project_root"] / "orchestration/model_registry.yaml"
 
 
 def checkpoint_create(name: str, include_state: bool = True) -> dict[str, Any]:
-    """Create a checkpoint of the orchestrator stack state.
-
-    Called by self-management procedures before making changes.
-
-    Args:
-        name: Descriptive checkpoint name.
-        include_state: Whether to include server state.
-
-    Returns:
-        Dict with checkpoint_id and path.
-    """
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    checkpoint_id = f"{name}_{timestamp}"
-    checkpoint_path = CHECKPOINT_DIR / f"{checkpoint_id}.json"
-
-    checkpoint_data = {
-        "id": checkpoint_id,
-        "name": name,
-        "created_at": datetime.now().isoformat(),
-        "state": {},
-        "registry_snapshot": None,
-    }
-
-    # Capture current state
-    if include_state:
-        state = load_state()
-        checkpoint_data["state"] = {k: asdict(v) for k, v in state.items()}
-
-    # Snapshot of registry (just metadata, not full file)
-    registry_path = _PATHS["project_root"] / "orchestration/model_registry.yaml"
-    if registry_path.exists():
-        checkpoint_data["registry_snapshot"] = {
-            "path": str(registry_path),
-            "mtime": registry_path.stat().st_mtime,
-            "size": registry_path.stat().st_size,
-        }
-
-    with open(checkpoint_path, "w") as f:
-        json.dump(checkpoint_data, f, indent=2)
-
-    return {
-        "checkpoint_id": checkpoint_id,
-        "path": str(checkpoint_path),
-        "created_at": checkpoint_data["created_at"],
-    }
+    """Create a checkpoint (wrapper supplying CHECKPOINT_DIR + STATE_FILE)."""
+    return _stack_checkpoint.checkpoint_create(
+        name,
+        CHECKPOINT_DIR,
+        STATE_FILE,
+        include_state=include_state,
+        registry_path=_REGISTRY_PATH_FOR_CHECKPOINT,
+    )
 
 
 def checkpoint_restore(checkpoint_id: str) -> dict[str, Any]:
-    """Restore orchestrator stack from a checkpoint.
-
-    Args:
-        checkpoint_id: ID from checkpoint_create.
-
-    Returns:
-        Dict with restoration status.
-    """
-    checkpoint_path = CHECKPOINT_DIR / f"{checkpoint_id}.json"
-
-    if not checkpoint_path.exists():
-        return {"success": False, "error": f"Checkpoint not found: {checkpoint_id}"}
-
-    try:
-        with open(checkpoint_path) as f:
-            checkpoint_data = json.load(f)
-
-        # Restore state (process info)
-        if checkpoint_data.get("state"):
-            saved_state = {
-                k: ProcessInfo(**v)
-                for k, v in checkpoint_data["state"].items()
-            }
-            save_state(saved_state)
-
-        return {
-            "success": True,
-            "checkpoint_id": checkpoint_id,
-            "restored_at": datetime.now().isoformat(),
-            "original_created_at": checkpoint_data.get("created_at"),
-        }
-
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    """Restore from a checkpoint (wrapper supplying CHECKPOINT_DIR + STATE_FILE)."""
+    return _stack_checkpoint.checkpoint_restore(checkpoint_id, CHECKPOINT_DIR, STATE_FILE)
 
 
 def checkpoint_list(limit: int = 10) -> list[dict[str, Any]]:
-    """List available checkpoints.
-
-    Args:
-        limit: Maximum number to return (newest first).
-
-    Returns:
-        List of checkpoint summaries.
-    """
-    if not CHECKPOINT_DIR.exists():
-        return []
-
-    checkpoints = []
-    for cp_path in sorted(CHECKPOINT_DIR.glob("*.json"), reverse=True)[:limit]:
-        try:
-            with open(cp_path) as f:
-                data = json.load(f)
-            checkpoints.append({
-                "id": data.get("id", cp_path.stem),
-                "name": data.get("name"),
-                "created_at": data.get("created_at"),
-                "path": str(cp_path),
-            })
-        except (json.JSONDecodeError, OSError, KeyError):
-            pass  # Skip malformed or unreadable checkpoint files
-
-    return checkpoints
+    """List available checkpoints (wrapper supplying CHECKPOINT_DIR)."""
+    return _stack_checkpoint.checkpoint_list(CHECKPOINT_DIR, limit=limit)
 
 
 def checkpoint_delete(checkpoint_id: str) -> bool:
-    """Delete a checkpoint.
-
-    Args:
-        checkpoint_id: Checkpoint to delete.
-
-    Returns:
-        True if deleted, False if not found.
-    """
-    checkpoint_path = CHECKPOINT_DIR / f"{checkpoint_id}.json"
-    if checkpoint_path.exists():
-        checkpoint_path.unlink()
-        return True
-    return False
+    """Delete a checkpoint (wrapper supplying CHECKPOINT_DIR)."""
+    return _stack_checkpoint.checkpoint_delete(checkpoint_id, CHECKPOINT_DIR)
 
 
 # Export hooks for use by procedure_registry

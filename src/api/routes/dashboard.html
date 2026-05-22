@@ -1,0 +1,918 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Orchestrator Dashboard</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked-highlight@2.1.1/lib/index.umd.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css">
+<style>
+:root {
+    --bg:#0f172a; --panel:#1e293b; --text:#e2e8f0; --muted:#94a3b8;
+    --border:#334155; --accent:#3b82f6;
+    --good:#10b981; --warn:#f59e0b; --bad:#ef4444;
+}
+* { box-sizing: border-box; }
+body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); color: var(--text); margin:0; padding:12px;
+    font-size: 12px; line-height: 1.4;
+}
+h1 { font-size: 16px; margin: 0 0 12px 0; color: var(--text); }
+h2 { font-size: 13px; margin: 0 0 8px 0; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
+.grid {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    grid-template-rows: auto auto;
+    gap: 12px;
+}
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    overflow: auto;
+}
+.panel.topology { grid-row: 1 / span 2; }
+.counters {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+    margin-bottom: 12px;
+}
+.counter {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px;
+}
+.counter .label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.counter .value { font-size: 18px; font-weight: 600; color: var(--text); margin-top: 2px; }
+.counter .sub { color: var(--muted); font-size: 10px; }
+.task-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: background .1s;
+}
+.task-card:hover { background: rgba(255,255,255,0.08); }
+.task-card .role { font-weight: 600; }
+.task-card .meta { color: var(--muted); font-size: 10px; margin-top: 2px; }
+.task-card .prompt { color: var(--text); font-size: 11px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.decision-row {
+    padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: grid; grid-template-columns: 70px 100px 100px 60px 60px 60px;
+    gap: 6px; font-size: 11px;
+}
+.decision-row .src { color: var(--accent); }
+.decision-row .src.classifier { color: var(--good); }
+.decision-row .src.rules { color: var(--warn); }
+.tag {
+    display: inline-block; padding: 1px 6px; border-radius: 2px;
+    font-size: 10px; background: rgba(255,255,255,0.1);
+}
+.tag.accept { background: rgba(16,185,129,0.2); color: #34d399; }
+.tag.reject { background: rgba(239,68,68,0.2); color: #f87171; }
+.tag.shadow { background: rgba(245,158,11,0.15); color: #fcd34d; }
+svg.topology { width: 100%; height: 500px; background: rgba(0,0,0,0.2); border-radius: 6px; }
+svg .node-circle { transition: r .2s; cursor: pointer; }
+svg .node-label { fill: var(--text); font-family: ui-monospace, monospace; font-size: 10px; pointer-events: none; }
+svg .edge { stroke: var(--border); stroke-width: 1; fill: none; }
+svg .edge.active { stroke: var(--accent); stroke-width: 2; }
+svg .pulse {
+    fill: var(--accent);
+    animation: pulse 1.2s linear infinite;
+}
+@keyframes pulse { from { offset-distance: 0%; opacity: 1; } to { offset-distance: 100%; opacity: 0; } }
+#detail-panel {
+    position: fixed; top: 0; right: -640px; width: 620px; height: 100vh;
+    background: var(--panel); border-left: 1px solid var(--border);
+    transition: right .25s ease; overflow-y: auto;
+    z-index: 100; padding: 14px;
+}
+#detail-panel.open { right: 0; }
+#detail-close { float: right; cursor: pointer; color: var(--muted); font-size: 16px; padding: 0 6px; }
+#detail-close:hover { color: var(--text); }
+#detail-content h3 { margin: 6px 0 4px 0; color: var(--accent); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+.prompt-text, .stream-text, .tap-content {
+    background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px;
+    max-height: 320px; overflow-y: auto; overflow-x: auto;
+    font-size: 12px; line-height: 1.5;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    word-wrap: break-word; overflow-wrap: break-word;
+}
+.prompt-text pre, .stream-text pre, .tap-content pre {
+    background: #0b1220; padding: 8px; border-radius: 3px;
+    overflow-x: auto; font-family: ui-monospace, monospace; font-size: 11px;
+    white-space: pre; word-wrap: normal;
+}
+.prompt-text code, .stream-text code, .tap-content code {
+    background: rgba(255,255,255,0.07); padding: 1px 4px; border-radius: 2px;
+    font-family: ui-monospace, monospace; font-size: 11px;
+}
+.prompt-text p, .stream-text p, .tap-content p { margin: 4px 0; }
+details.tap-section { border-bottom: 1px solid var(--border); padding: 4px 0; }
+details.tap-section summary { font-size: 11px; outline: none; }
+details.tap-section summary::-webkit-details-marker { color: var(--muted); }
+#detail-content .stream-text.live::after {
+    content: "▌"; animation: blink 1s infinite;
+    color: var(--accent);
+}
+.detail-actions {
+    display: flex; gap: 6px; margin: 8px 0;
+}
+.detail-actions button {
+    background: var(--accent); color: white; border: none; padding: 4px 10px;
+    border-radius: 3px; cursor: pointer; font-size: 11px;
+}
+.detail-actions button.secondary {
+    background: var(--border); color: var(--text);
+}
+.detail-actions button:hover { opacity: 0.85; }
+.copy-feedback {
+    color: var(--good); font-size: 11px; padding: 4px 8px;
+    opacity: 0; transition: opacity .2s;
+}
+.copy-feedback.shown { opacity: 1; }
+@keyframes blink { 50% { opacity: 0; } }
+.repl-event {
+    padding: 3px 6px; border-left: 2px solid var(--border);
+    margin: 3px 0; font-size: 11px;
+}
+.repl-event .ts { color: var(--muted); font-size: 10px; }
+.repl-event .ev { color: var(--accent); font-weight: 600; }
+.gepa-line { font-size: 10px; color: var(--muted); padding: 1px 0; }
+.gepa-line.bold { color: var(--text); font-weight: 600; }
+</style>
+</head><body>
+<h1>orchestrator dashboard
+    <span style="font-weight:normal;color:var(--muted)" id="status">connecting…</span>
+    <span style="font-weight:normal;color:var(--muted);margin-left:12px;font-size:11px" id="process-status"></span>
+</h1>
+
+<div class="counters" id="counters"></div>
+
+<div class="grid">
+  <div class="panel topology">
+    <h2>topology — click a node for details, edges glow when active</h2>
+    <svg class="topology" id="topology-svg" viewBox="0 0 700 500"></svg>
+  </div>
+  <div class="panel">
+    <h2>in-flight tasks <span style="color:var(--muted);font-weight:normal" id="inflight-count"></span></h2>
+    <div id="inflight-tasks"></div>
+    <h2 style="margin-top:14px">recently completed <span style="color:var(--muted);font-weight:normal" id="completed-count"></span></h2>
+    <div id="completed-tasks"></div>
+    <h2 style="margin-top:14px">live inference <span style="color:var(--muted);font-weight:normal" id="tap-status"></span></h2>
+    <div id="inference-tap"></div>
+  </div>
+  <div class="panel">
+    <h2>recent routing decisions (last 50)</h2>
+    <div class="decision-row" style="font-weight:600;border-bottom:1px solid var(--border);color:var(--muted)">
+      <div>age</div><div>task_id</div><div>action</div><div>src</div><div>conf</div><div>verifier</div>
+    </div>
+    <div id="decision-feed"></div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:12px">
+  <h2>gepa progress (autopilot.log tail)</h2>
+  <div id="gepa-lines"></div>
+</div>
+
+<div id="detail-panel">
+  <span id="detail-close" onclick="closeDetail()">×</span>
+  <h2 id="detail-title">task detail</h2>
+  <div id="detail-content"></div>
+</div>
+
+<script>
+const NODE_RADIUS = 18;
+let topology = null;
+let activeStream = null;
+let detailStream = null;
+
+async function loadTopology() {
+    const r = await fetch('/dashboard/api/topology');
+    topology = await r.json();
+    layoutTopology();
+}
+
+function layoutTopology() {
+    const svg = document.getElementById('topology-svg');
+    svg.innerHTML = '';
+    const w = 700, h = 500;
+    const cx = w / 2, cy = h / 2;
+    const orchestrator = topology.nodes.find(n => n.kind === 'orchestrator');
+    const others = topology.nodes.filter(n => n.kind !== 'orchestrator');
+    const services = others.filter(n => n.kind === 'service');
+    const llamas = others.filter(n => n.kind === 'llama-server');
+    // Inner ring: llama-servers
+    const radiusInner = 150;
+    llamas.forEach((n, i) => {
+        const a = (i / llamas.length) * 2 * Math.PI - Math.PI / 2;
+        n._x = cx + radiusInner * Math.cos(a);
+        n._y = cy + radiusInner * Math.sin(a);
+    });
+    // Outer ring: services
+    const radiusOuter = 220;
+    services.forEach((n, i) => {
+        const a = (i / services.length) * 2 * Math.PI - Math.PI / 2 + 0.1;
+        n._x = cx + radiusOuter * Math.cos(a);
+        n._y = cy + radiusOuter * Math.sin(a);
+    });
+    if (orchestrator) { orchestrator._x = cx; orchestrator._y = cy; }
+
+    // Draw edges from orchestrator to every other node (initially inactive)
+    others.forEach(n => {
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        path.setAttribute('id', `edge_${n.id}`);
+        path.setAttribute('class', 'edge');
+        path.setAttribute('x1', cx); path.setAttribute('y1', cy);
+        path.setAttribute('x2', n._x); path.setAttribute('y2', n._y);
+        svg.appendChild(path);
+    });
+
+    // Draw nodes
+    topology.nodes.forEach(n => {
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('transform', `translate(${n._x},${n._y})`);
+        g.setAttribute('style', 'cursor:pointer');
+        g.addEventListener('click', () => openNodeDetail(n.port, n.label));
+        g.addEventListener('mouseenter', (ev) => showNodeTooltip(ev, n));
+        g.addEventListener('mouseleave', hideNodeTooltip);
+        const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        c.setAttribute('class', 'node-circle');
+        c.setAttribute('id', `node_${n.id}`);
+        c.setAttribute('r', NODE_RADIUS);
+        c.setAttribute('fill', '#475569');
+        c.setAttribute('stroke', n.color);
+        c.setAttribute('stroke-width', 2);
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('class', 'node-label');
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('y', NODE_RADIUS + 12);
+        t.textContent = n.label.length > 18 ? n.label.slice(0, 17) + '…' : n.label;
+        const tp = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        tp.setAttribute('class', 'node-label');
+        tp.setAttribute('text-anchor', 'middle');
+        tp.setAttribute('y', 4);
+        tp.setAttribute('id', `nodecount_${n.id}`);
+        tp.textContent = '';
+        g.appendChild(c); g.appendChild(t); g.appendChild(tp);
+        svg.appendChild(g);
+    });
+}
+
+let _tooltipEl = null;
+function showNodeTooltip(ev, n) {
+    if (!_tooltipEl) {
+        _tooltipEl = document.createElement('div');
+        _tooltipEl.id = 'node-tooltip';
+        _tooltipEl.style.cssText = 'position:fixed; background:#1e293b; border:1px solid #334155; border-radius:4px; padding:6px 10px; font-size:11px; color:#e2e8f0; pointer-events:none; z-index:200; max-width:300px';
+        document.body.appendChild(_tooltipEl);
+    }
+    _tooltipEl.innerHTML = `
+        <div style="color:${n.color};font-weight:600">${escapeHTML(n.label)}</div>
+        <div style="color:#94a3b8;font-size:10px;margin-top:2px">port ${n.port} · ${n.kind}</div>
+        <div style="color:#94a3b8;font-size:10px;margin-top:2px">click for details</div>`;
+    _tooltipEl.style.left = (ev.clientX + 12) + 'px';
+    _tooltipEl.style.top = (ev.clientY + 12) + 'px';
+    _tooltipEl.style.display = 'block';
+}
+function hideNodeTooltip() {
+    if (_tooltipEl) _tooltipEl.style.display = 'none';
+}
+
+async function openNodeDetail(port, label) {
+    const panel = document.getElementById('detail-panel');
+    const content = document.getElementById('detail-content');
+    document.getElementById('detail-title').textContent = `node ${label} (port ${port})`;
+    content.innerHTML = '<div style="color:var(--muted)">loading…</div>';
+    panel.classList.add('open');
+    if (detailStream) { detailStream.close(); detailStream = null; }
+    try {
+        const r = await fetch(`/dashboard/api/node/${port}`);
+        const d = await r.json();
+        const proc = d.process || {};
+        const slotRows = (d.slots || []).map(s => `
+            <div class="repl-event">
+                <span class="ev">slot ${s.id}</span>
+                ${s.is_processing ? '<span class="tag accept" style="margin-left:6px">processing</span>' : '<span class="tag" style="margin-left:6px">idle</span>'}
+                <div style="font-size:10px;color:var(--muted);margin-top:2px">
+                    n_decoded=${s.n_decoded ?? '-'} · prompt_tokens=${s.n_prompt_tokens ?? '-'} · content=${s.content_len}c
+                </div>
+                ${s.prompt_preview ? `<div style="font-size:11px;margin-top:2px">prompt: ${escapeHTML(s.prompt_preview)}</div>` : ''}
+            </div>
+        `).join('') || '<div style="color:var(--muted)">no slot data</div>';
+        const routedRows = (d.recent_routed || []).slice().reverse().map(r => `
+            <div class="repl-event">
+                <span class="ts">${(r.timestamp||'').replace('T',' ').slice(11,19)}</span>
+                <span class="ev">${(r.task_id||'').slice(-12)}</span>
+                <span style="font-size:10px;color:var(--muted)">src=${r.decision_source} · conf=${r.classifier_confidence!=null?r.classifier_confidence.toFixed(2):'-'}</span>
+            </div>
+        `).join('') || '<div style="color:var(--muted)">no recent decisions routed here</div>';
+        const healthColor = d.health_status === 'ok' ? 'var(--good)' :
+                            d.health_status === 'connection_refused' ? 'var(--bad)' :
+                            'var(--warn)';
+        content.innerHTML = `
+            <h3>process</h3>
+            <div style="font-size:11px;line-height:1.7">
+                <div>pid: <code>${proc.pid||'—'}</code></div>
+                <div>uptime: ${proc.etime||'—'}</div>
+                <div>cum %CPU: ${proc.pcpu_cumulative!=null?proc.pcpu_cumulative.toFixed(1)+'%':'—'}</div>
+                <div>RSS: ${proc.rss_kb!=null?(proc.rss_kb/1024/1024).toFixed(1)+' GB':'—'}</div>
+                <div>health: <span style="color:${healthColor}">${d.health_status || '—'}</span></div>
+                <div>slots: ${d.n_processing}/${d.n_slots} processing</div>
+            </div>
+            <h3>slots (${d.n_slots})</h3>
+            <div>${slotRows}</div>
+            <h3>recent decisions routed here (${d.recent_routed_count})</h3>
+            <div>${routedRows}</div>
+            <details style="margin-top:8px"><summary style="cursor:pointer;color:var(--muted);font-size:11px">cmd</summary>
+                <div style="background:rgba(0,0,0,0.3);padding:6px;border-radius:3px;font-size:10px;word-break:break-all;margin-top:4px">${escapeHTML(proc.cmd||'')}</div>
+            </details>
+        `;
+    } catch (e) {
+        content.innerHTML = `<div style="color:var(--bad)">error: ${e.message}</div>`;
+    }
+}
+
+function updateTopology(activity) {
+    if (!topology) return;
+    topology.nodes.forEach(n => {
+        const port = n.port;
+        const a = activity[port];
+        const circle = document.getElementById(`node_${n.id}`);
+        const countText = document.getElementById(`nodecount_${n.id}`);
+        const edge = document.getElementById(`edge_${n.id}`);
+        if (a && a.n_active > 0) {
+            if (circle) {
+                circle.setAttribute('fill', n.color);
+                circle.setAttribute('r', NODE_RADIUS + Math.min(a.n_active * 2, 8));
+            }
+            if (countText) countText.textContent = `${a.n_active}/${a.n_total}`;
+            if (edge) edge.setAttribute('class', 'edge active');
+        } else {
+            if (circle) {
+                circle.setAttribute('fill', '#334155');
+                circle.setAttribute('r', NODE_RADIUS);
+            }
+            if (countText) countText.textContent = '';
+            if (edge) edge.setAttribute('class', 'edge');
+        }
+    });
+}
+
+function updateCounters(snap) {
+    const c = document.getElementById('counters');
+    const rolling = snap.source_counts_rolling || {};
+    const cumulative = snap.source_counts_cumulative || {};
+    const logCounts = snap.log_counts || {};
+    const verdicts = rolling._verifier_verdicts || {};
+    const rollingTotal = Object.entries(rolling).filter(([k]) => !k.startsWith('_')).reduce((s, [_, v]) => s + (typeof v === 'number' ? v : 0), 0);
+    const cumTotal = Object.values(cumulative).reduce((a, b) => a + b, 0);
+    const classifierShare = rolling.classifier || 0;
+    c.innerHTML = `
+        <div class="counter"><div class="label">decisions (10m / today)</div>
+            <div class="value">${rollingTotal} <span class="sub">/ ${cumTotal}</span></div>
+            <div class="sub">cls:${rolling.classifier||0} learn:${rolling.learned||0} rules:${rolling.rules||0}</div></div>
+        <div class="counter"><div class="label">classifier share (rolling)</div>
+            <div class="value">${rollingTotal>0 ? Math.round(100*classifierShare/rollingTotal) : 0}%</div>
+            <div class="sub">${classifierShare} of ${rollingTotal}</div></div>
+        <div class="counter"><div class="label">verifier verdicts (rolling)</div>
+            <div class="value">${(verdicts.accept||0)}/${(verdicts.reject||0)}</div>
+            <div class="sub">accept / reject</div></div>
+        <div class="counter"><div class="label">lock events (today)</div>
+            <div class="value">${logCounts.inference_aborted||0}</div>
+            <div class="sub">aborts · ${logCounts.slot_erase||0} slot-erases</div></div>
+    `;
+}
+
+function roleColor(role) {
+    if (!topology) return '#64748b';
+    const n = topology.nodes.find(n => n.role === role || n.label === role);
+    return n ? n.color : '#64748b';
+}
+
+function renderTaskCard(t, kind) {
+    // kind: 'in_flight' or 'completed'
+    const role = t.chosen_action || t.final_role || '?';
+    const color = roleColor(role);
+    const conf = t.classifier_confidence != null ? ` · conf ${t.classifier_confidence.toFixed(2)}` : '';
+    const src = t.decision_source ? ` · <span class="tag" style="background:rgba(255,255,255,0.08)">${t.decision_source}</span>` : '';
+    let verifier = '';
+    if (t.verifier_p_success != null) {
+        verifier = ` · <span class="tag ${t.verifier_verdict||''}">v=${t.verifier_p_success.toFixed(2)} ${t.verifier_verdict||''}</span>`;
+    }
+    let outcome = '';
+    if (kind === 'completed') {
+        const okIcon = t.outcome === 'task_completed' ? '✅' : t.outcome === 'task_failed' ? '❌' : '↗';
+        outcome = `<span style="float:right;color:var(--muted);font-size:10px">${okIcon} ${t.duration_s}s</span>`;
+    } else {
+        outcome = `<span style="float:right;color:var(--good);font-size:10px">running ${t.age_s.toFixed(0)}s</span>`;
+    }
+    return `
+        <div class="task-card" onclick="openDetail('${t.task_id}', null, null)">
+            <div class="role" style="color:${color}">${role}${outcome}</div>
+            <div class="meta">${t.task_id}${conf}${src}${verifier}</div>
+            <div class="prompt">${escapeHTML(t.objective || '')}</div>
+        </div>
+    `;
+}
+
+function updateTasks(snap) {
+    const inflight = snap.in_flight_tasks || [];
+    const completed = snap.recent_completed_tasks || [];
+    // Compute slot summary from activity to show alongside chat-task count
+    let slotsActive = 0, slotsTotal = 0;
+    Object.values(snap.activity || {}).forEach(a => {
+        slotsActive += a.n_active || 0;
+        slotsTotal += a.n_total || 0;
+    });
+    document.getElementById('inflight-count').textContent =
+        `(${inflight.length} chat · ${slotsActive}/${slotsTotal} slots active)`;
+    document.getElementById('completed-count').textContent = `(${completed.length} in last 10m)`;
+    const ifEl = document.getElementById('inflight-tasks');
+    const cpEl = document.getElementById('completed-tasks');
+    if (inflight.length) {
+        ifEl.innerHTML = inflight.map(t => renderTaskCard(t, 'in_flight')).join('');
+    } else if (slotsActive > 0) {
+        ifEl.innerHTML = `<div style="color:var(--warn);font-size:11px">${slotsActive} slot(s) processing on llama-server but no chat-XXX task yet logged to the progress JSONL — this is the ~1-2s flush lag between request arrival and event log.</div>`;
+    } else {
+        ifEl.innerHTML = '<div style="color:var(--muted);font-size:11px">no tasks in flight — autopilot may be in a between-batch GEPA local-compute phase</div>';
+    }
+    cpEl.innerHTML = completed.length
+        ? completed.slice(0, 12).map(t => renderTaskCard(t, 'completed')).join('')
+        : '<div style="color:var(--muted);font-size:11px">no completed tasks in last 10 min</div>';
+}
+
+// ---- Inference tap panel — uses RAW byte-streaming SSE (mirrors TUI behavior) ----
+let _tapStream = null;
+let _rawTapStream = null;
+let _rawTapBuffer = "";
+const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
+
+// "tail -f" scroll model: pinned by default; user can override by scrolling
+// up; if they scroll back to bottom we auto-pin again.
+let _rawTapPinned = true;
+function attachScrollTracker(el) {
+    if (el.dataset.trackerAttached) return;
+    el.dataset.trackerAttached = "1";
+    el.addEventListener("scroll", () => {
+        // Threshold: within 24px of the bottom counts as "at bottom"
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        _rawTapPinned = atBottom;
+        const pinIndicator = document.getElementById('raw-tap-pin-status');
+        if (pinIndicator) {
+            pinIndicator.textContent = _rawTapPinned ? '🔒 following' : '⏸ scroll up — paused';
+            pinIndicator.style.color = _rawTapPinned ? 'var(--good)' : 'var(--warn)';
+        }
+    });
+}
+function autoscrollRawPanel(el) {
+    attachScrollTracker(el);
+    if (_rawTapPinned) {
+        el.scrollTop = el.scrollHeight;
+    }
+}
+
+function styleRawTap(text) {
+    // Lightweight inline highlighting: color ROLE= headers + PROMPT/RESPONSE markers
+    return escapeHTML(text)
+        .replace(/(\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ROLE=\S+)/g,
+            '<span style="color:#34d399;font-weight:600">$1</span>')
+        .replace(/^(={20,})$/gm, '<span style="color:#475569">$1</span>')
+        .replace(/^(-{20,})$/gm, '<span style="color:#334155">$1</span>')
+        .replace(/^(PROMPT:)/gm, '<span style="color:#fcd34d;font-weight:600">$1</span>')
+        .replace(/^(RESPONSE:)/gm, '<span style="color:#3b82f6;font-weight:600">$1</span>')
+        .replace(/^(TIMINGS:.*$)/gm, '<span style="color:#94a3b8">$1</span>');
+}
+
+function startRawTapStream() {
+    if (_rawTapStream) _rawTapStream.close();
+    _rawTapBuffer = "";
+    _rawTapStream = new EventSource('/dashboard/events/raw_tap');
+    const container = document.getElementById('inference-tap');
+    _rawTapStream.onmessage = (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.error) return;
+            if (data.initial) {
+                _rawTapBuffer = data.chunk || "";
+            } else {
+                _rawTapBuffer += (data.chunk || "");
+                if (_rawTapBuffer.length > _RAW_TAP_MAX_CHARS) {
+                    _rawTapBuffer = _rawTapBuffer.slice(-_RAW_TAP_MAX_CHARS);
+                }
+            }
+            // Render: pre-formatted block so newlines + spacing preserved.
+            // Preserve the existing <pre> if it's there so the user's scroll
+            // position survives — re-creating the DOM element resets scroll.
+            let pre = document.getElementById('raw-tap-pre');
+            const statusBar = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <span style="color:var(--muted);font-size:10px">live tap (per-token from /mnt/raid0/llm/tmp/inference_tap.log)</span>
+                <span id="raw-tap-pin-status" style="font-size:10px;color:var(--good)">🔒 following</span>
+            </div>`;
+            if (!pre) {
+                container.innerHTML = statusBar +
+                    `<pre id="raw-tap-pre" style="background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;max-height:480px;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;font-size:11px;line-height:1.4;font-family:ui-monospace,monospace;margin:0"></pre>`;
+                pre = document.getElementById('raw-tap-pre');
+            }
+            pre.innerHTML = styleRawTap(_rawTapBuffer);
+            autoscrollRawPanel(pre);
+        } catch {}
+    };
+    _rawTapStream.onerror = () => {
+        setTimeout(startRawTapStream, 2000);
+    };
+}
+
+function renderInferenceTap(data) {
+    const status = document.getElementById('tap-status');
+    const container = document.getElementById('inference-tap');
+    const active = data.tap_active;
+    const mtime = data.inference_tap_mtime;
+    const ageS = mtime ? Math.max(0, Math.round(data.now ? (data.now - mtime) : (Date.now()/1000 - mtime))) : null;
+    status.innerHTML = active
+        ? `<span style="color:var(--good)">● tap active</span> · ${ageS!=null?ageS+'s since last write':''}`
+        : '<span style="color:var(--bad)">● tap inactive</span>';
+    const sections = data.inference_sections || [];
+    if (!sections.length && !(data.current_prompt && data.current_prompt.trim())) {
+        container.innerHTML = '<div style="color:var(--muted);font-size:11px">no inference activity in the tap file yet</div>';
+        return;
+    }
+    const cur = data.current_prompt || '';
+    const liveBlock = cur.trim() ? `
+        <div style="margin-bottom:8px">
+            <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">current prompt</div>
+            <div class="tap-content prompt-text" id="tap-current-prompt"></div>
+        </div>` : '';
+    const sectionsHtml = sections.map((s, i) => {
+        const ts = s.timestamp || '';
+        const role = s.role || '?';
+        const color = roleColor(role) || 'var(--muted)';
+        return `
+            <details class="tap-section" ${i === 0 ? 'open' : ''}>
+                <summary style="cursor:pointer;padding:4px 0;color:${color}">
+                    <span style="font-weight:600">${escapeHTML(role)}</span>
+                    <span style="color:var(--muted);font-size:10px;margin-left:6px">${escapeHTML(ts)} · ${s.prompt_len}c prompt · ${s.response_len}c resp</span>
+                </summary>
+                <div style="margin:4px 0">
+                    <div style="color:var(--muted);font-size:10px">prompt</div>
+                    <div class="tap-content prompt-text" data-md="prompt-${i}"></div>
+                    <div style="color:var(--muted);font-size:10px;margin-top:4px">response</div>
+                    <div class="tap-content stream-text" data-md="response-${i}"></div>
+                </div>
+            </details>`;
+    }).join('');
+    container.innerHTML = liveBlock + sectionsHtml;
+    // Render markdown into each block
+    if (cur.trim()) {
+        renderMarkdownInto(document.getElementById('tap-current-prompt'), cur);
+    }
+    sections.forEach((s, i) => {
+        const pEl = container.querySelector(`[data-md="prompt-${i}"]`);
+        const rEl = container.querySelector(`[data-md="response-${i}"]`);
+        if (pEl) renderMarkdownInto(pEl, s.prompt);
+        if (rEl) renderMarkdownInto(rEl, s.response);
+    });
+}
+
+function startTapStream() {
+    // Replaced the parsed-sections stream with the raw byte-level stream
+    // (mirrors how autopilot's TUI displays inference — incremental tokens
+    // as they're written, not waiting for section close).
+    startRawTapStream();
+}
+
+function updateDecisions(snap) {
+    const feed = document.getElementById('decision-feed');
+    const rows = (snap.recent_decisions || []).slice(-20).reverse();
+    feed.innerHTML = rows.map(d => {
+        const conf = d.classifier_confidence != null ? d.classifier_confidence.toFixed(2) : '—';
+        const verifier = d.verifier_p_success != null
+            ? `<span class="tag ${d.verifier_verdict||''}">${d.verifier_verdict||'?'} ${d.verifier_p_success.toFixed(2)}${d.verifier_shadow?' s':''}</span>`
+            : '—';
+        return `<div class="decision-row">
+            <div>${d.age_s}s</div>
+            <div title="${d.task_id||''}">${(d.task_id||'').slice(-12)}</div>
+            <div>${d.chosen_action||'—'}</div>
+            <div class="src ${d.source}">${d.source}</div>
+            <div>${conf}</div>
+            <div>${verifier}</div>
+        </div>`;
+    }).join('') || '<div style="color:var(--muted);padding:6px 0">no decisions yet</div>';
+}
+
+async function updateGepa() {
+    try {
+        const r = await fetch('/dashboard/api/gepa');
+        const d = await r.json();
+        const el = document.getElementById('gepa-lines');
+        const st = d.state || {};
+        let header = '';
+        if (st.current_trial) {
+            const prog = st.baseline_sentinels_total
+                ? `<span style="color:var(--accent)">${st.sentinels_completed||0}/${st.baseline_sentinels_total}</span>`
+                : '';
+            const score = st.baseline_score != null
+                ? ` · baseline=<span style="color:var(--good)">${st.baseline_score.toFixed(3)}</span>`
+                : ' · evaluating…';
+            header = `
+                <div style="background:rgba(59,130,246,0.08); padding:6px 10px; border-radius:4px; margin-bottom:8px; border-left:3px solid var(--accent)">
+                    <div style="font-weight:600">Trial ${st.current_trial} · ${st.current_action || '?'} · ${st.current_file || '?'}</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:2px">sentinels ${prog}${score} · last: ${st.last_event || 'n/a'}</div>
+                </div>`;
+        }
+        let trialsTable = '';
+        if (d.recent_trials && d.recent_trials.length) {
+            trialsTable = '<div style="margin:8px 0 4px 0;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">last 10 trials (pareto trajectory)</div>';
+            trialsTable += '<div style="font-size:10px">';
+            trialsTable += '<div style="display:grid;grid-template-columns:48px 80px 60px 70px 60px 60px 1fr;gap:6px;color:var(--muted);padding:2px 0;border-bottom:1px solid var(--border)">' +
+                '<div>trial</div><div>species</div><div>quality</div><div>speed</div><div>cost</div><div>pareto</div><div>desc</div></div>';
+            d.recent_trials.slice(-10).reverse().forEach(t => {
+                const paretoColor = t.pareto_status === 'pareto_frontier' ? '#34d399' :
+                                     t.pareto_status === 'dominated' ? '#94a3b8' : '#fcd34d';
+                trialsTable += `<div style="display:grid;grid-template-columns:48px 80px 60px 70px 60px 60px 1fr;gap:6px;padding:1px 0">
+                    <div>${t.trial_id||'-'}</div>
+                    <div>${(t.species||'').slice(0,12)}</div>
+                    <div>${t.quality!=null?t.quality.toFixed(2):'-'}</div>
+                    <div>${t.speed!=null?t.speed.toFixed(1):'-'}</div>
+                    <div>${t.cost!=null?t.cost.toFixed(2):'-'}</div>
+                    <div style="color:${paretoColor}">${(t.pareto_status||'').replace('pareto_','')}</div>
+                    <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHTML(t.description||'')}">${escapeHTML((t.description||'').slice(0,80))}</div>
+                </div>`;
+            });
+            trialsTable += '</div>';
+        }
+        let recentLines = '';
+        if (d.lines && d.lines.length) {
+            recentLines = '<div style="margin-top:8px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">log tail</div>';
+            recentLines += d.lines.slice(-8).map(l => {
+                const bold = /Trial \d+|baseline|sentinel/.test(l) ? 'bold' : '';
+                return `<div class="gepa-line ${bold}">${escapeHTML(l.slice(-180))}</div>`;
+            }).join('');
+        }
+        const all = header + trialsTable + recentLines;
+        el.innerHTML = all || '<div style="color:var(--muted)">no recent GEPA activity</div>';
+    } catch (e) {}
+}
+
+function escapeHTML(s) {
+    return (s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+// Configure marked to use highlight.js for code blocks (once on first call).
+let _markedConfigured = false;
+function configureMarked() {
+    if (_markedConfigured || !window.marked) return;
+    try {
+        if (window.markedHighlight && window.hljs) {
+            marked.use(markedHighlight.markedHighlight({
+                langPrefix: 'hljs language-',
+                highlight(code, lang) {
+                    const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                    return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+                },
+            }));
+        }
+        marked.use({ breaks: true, gfm: true });
+        _markedConfigured = true;
+    } catch (e) {}
+}
+
+function renderMarkdownInto(el, rawText) {
+    configureMarked();
+    if (window.marked) {
+        try {
+            el.innerHTML = marked.parse(rawText || '');
+        } catch {
+            el.textContent = rawText || '';
+        }
+    } else {
+        el.textContent = rawText || '';
+    }
+    if (window.renderMathInElement) {
+        try {
+            renderMathInElement(el, {
+                delimiters: [
+                    {left: "$$", right: "$$", display: true},
+                    {left: "\\[", right: "\\]", display: true},
+                    {left: "\\(", right: "\\)", display: false},
+                    {left: "$", right: "$", display: false},
+                ],
+                throwOnError: false,
+            });
+        } catch (e) {}
+    }
+}
+
+let _currentTaskRawText = { taskId: null, prompt: '', stream: '', repl: [] };
+
+function buildTextSnapshot() {
+    const c = _currentTaskRawText;
+    const lines = [];
+    lines.push(`=== Task ${c.taskId} @ ${new Date().toISOString()} ===`);
+    lines.push('');
+    lines.push('PROMPT:');
+    lines.push('-------');
+    lines.push(c.prompt || '(not available)');
+    lines.push('');
+    lines.push('INFERENCE STREAM:');
+    lines.push('-----------------');
+    lines.push(c.stream || '(empty)');
+    lines.push('');
+    lines.push(`REPL HISTORY (${c.repl.length} events):`);
+    lines.push('-----------------');
+    c.repl.forEach(ev => {
+        const ts = (ev.timestamp || '').replace('T', ' ').slice(11, 19);
+        lines.push(`[${ts}] ${ev.event_type}: ${JSON.stringify(ev.data)}`);
+    });
+    return lines.join('\n');
+}
+
+async function copySnapshotToClipboard() {
+    // Prefer the server-side filtered .txt endpoint (it strips stack_state
+    // and other noisy keys). Fall back to the local builder if the fetch fails.
+    let text;
+    try {
+        const r = await fetch(`/dashboard/api/task/${encodeURIComponent(_currentTaskRawText.taskId)}.txt`);
+        if (r.ok) {
+            text = await r.text();
+        } else {
+            text = buildTextSnapshot();
+        }
+    } catch {
+        text = buildTextSnapshot();
+    }
+    try {
+        await navigator.clipboard.writeText(text);
+        const fb = document.getElementById('copy-feedback');
+        fb.textContent = `copied ${text.length}c`;
+        fb.classList.add('shown');
+        setTimeout(() => fb.classList.remove('shown'), 1500);
+    } catch (e) {
+        alert('clipboard write failed: ' + e.message);
+    }
+}
+
+function downloadSnapshot() {
+    const text = buildTextSnapshot();
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `task_${_currentTaskRawText.taskId}_${Date.now()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+async function openDetail(taskId, port, slotId) {
+    if (taskId === null || taskId === 'null' || taskId === undefined) {
+        return;
+    }
+    const panel = document.getElementById('detail-panel');
+    const content = document.getElementById('detail-content');
+    document.getElementById('detail-title').textContent = `task ${taskId}`;
+    content.innerHTML = '<div style="color:var(--muted)">loading…</div>';
+    panel.classList.add('open');
+    try {
+        const r = await fetch(`/dashboard/api/task/${encodeURIComponent(taskId)}`);
+        const d = await r.json();
+        let promptText = '';
+        let initialContent = '';
+        let dataSource = '';
+        if (d.slot) {
+            promptText = (d.slot.prompt || '').toString();
+            initialContent = (d.slot.content || '').toString();
+            dataSource = `live slot @ port ${d.active_slot_port}`;
+        } else if (d.tap_section) {
+            // Fall back to inference_tap.log section (completed task)
+            promptText = (d.tap_section.prompt || '').toString();
+            initialContent = (d.tap_section.response || '').toString();
+            dataSource = `inference_tap.log section @ ${d.tap_section.timestamp} (role=${d.tap_section.role})`;
+        } else {
+            const startedEv = d.events.find(e => e.event_type === 'task_started');
+            if (startedEv) {
+                promptText = startedEv.data.objective || '';
+            }
+            dataSource = 'task_started.objective (no slot or tap match)';
+        }
+        _currentTaskRawText = {
+            taskId,
+            prompt: promptText,
+            stream: initialContent,
+            repl: d.events,
+        };
+        content.innerHTML = `
+            <div class="detail-actions">
+                <button onclick="copySnapshotToClipboard()">📋 copy snapshot</button>
+                <button class="secondary" onclick="downloadSnapshot()">⬇ download .txt</button>
+                <button class="secondary" onclick="window.open('/dashboard/api/task/${encodeURIComponent(taskId)}.txt','_blank')">↗ open as text</button>
+                <span id="copy-feedback" class="copy-feedback"></span>
+            </div>
+            <div style="color:var(--muted);font-size:10px;margin-bottom:6px">source: ${escapeHTML(dataSource)}</div>
+            <h3>prompt</h3>
+            <div class="prompt-text" id="prompt-text"></div>
+            <h3>${d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference')}</h3>
+            <div class="stream-text ${d.slot ? 'live' : ''}" id="stream-text"></div>
+            <h3>task events (${d.events.length}) <span style="font-weight:normal;color:var(--muted);font-size:10px">orchestrator-side; not REPL turns</span></h3>
+            <div id="repl-history"></div>
+        `;
+        renderMarkdownInto(document.getElementById('prompt-text'), promptText || '*(prompt not available)*');
+        renderMarkdownInto(document.getElementById('stream-text'), initialContent);
+        const replEl = document.getElementById('repl-history');
+        replEl.innerHTML = d.events.map(ev => `
+            <div class="repl-event">
+                <span class="ts">${(ev.timestamp || '').replace('T', ' ').slice(11, 19)}</span>
+                <span class="ev">${ev.event_type}</span>
+                <span>${escapeHTML(JSON.stringify(ev.data).slice(0, 180))}</span>
+            </div>
+        `).join('');
+        // Start live stream
+        if (detailStream) { detailStream.close(); detailStream = null; }
+        detailStream = new EventSource(`/dashboard/events/task/${encodeURIComponent(taskId)}`);
+        detailStream.onmessage = (e) => {
+            const u = JSON.parse(e.data);
+            const sel = document.getElementById('stream-text');
+            if (!sel) return;
+            if (u.done) {
+                sel.classList.remove('live');
+                detailStream.close();
+                detailStream = null;
+                return;
+            }
+            if (u.delta) {
+                _currentTaskRawText.stream += u.delta;
+                // Re-render after every batch — cheap for short streams
+                renderMarkdownInto(sel, _currentTaskRawText.stream);
+                sel.classList.add('live');
+            }
+        };
+    } catch (e) {
+        content.innerHTML = `<div style="color:var(--bad)">error: ${e.message}</div>`;
+    }
+}
+
+function closeDetail() {
+    document.getElementById('detail-panel').classList.remove('open');
+    if (detailStream) { detailStream.close(); detailStream = null; }
+}
+
+function startStream() {
+    if (activeStream) activeStream.close();
+    activeStream = new EventSource('/dashboard/events/stream');
+    document.getElementById('status').textContent = 'connecting…';
+    activeStream.onopen = () => { document.getElementById('status').textContent = 'live'; };
+    activeStream.onmessage = (e) => {
+        try {
+            const snap = JSON.parse(e.data);
+            if (snap.error) { document.getElementById('status').textContent = `error: ${snap.error}`; return; }
+            updateTopology(snap.activity || {});
+            updateCounters(snap);
+            updateTasks(snap);
+            updateDecisions(snap);
+        } catch (err) {
+            console.error(err);
+        }
+    };
+    activeStream.onerror = () => {
+        document.getElementById('status').textContent = 'reconnecting…';
+        setTimeout(() => startStream(), 2000);
+    };
+}
+
+async function updateProcessStatus() {
+    try {
+        const r = await fetch('/dashboard/api/process_status');
+        const d = await r.json();
+        const ap = d.autopilot || {};
+        const el = document.getElementById('process-status');
+        if (ap.running) {
+            const workers = d.gepa_worker_count ? ` · ${d.gepa_worker_count} gepa workers` : '';
+            const ageLabel = d.last_autopilot_log_age_s != null
+                ? ` · last log ${Math.round(d.last_autopilot_log_age_s)}s ago`
+                : '';
+            el.innerHTML = `<span style="color:var(--good)">● autopilot up</span>
+                <span style="color:var(--muted)">pid ${ap.pid} · ${ap.etime}${workers}${ageLabel}</span>`;
+        } else {
+            el.innerHTML = `<span style="color:var(--bad)">● autopilot DOWN</span>
+                <span style="color:var(--muted)">no process matching "autopilot.py start"</span>`;
+        }
+    } catch (e) {}
+}
+
+(async function init() {
+    await loadTopology();
+    startStream();
+    startTapStream();
+    updateGepa();
+    updateProcessStatus();
+    setInterval(updateGepa, 5000);
+    setInterval(updateProcessStatus, 3000);
+})();
+</script>
+</body></html>
+
