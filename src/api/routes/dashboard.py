@@ -558,6 +558,98 @@ def _read_git_short_sha() -> str | None:
         return None
 
 
+_AUTOPILOT_STATE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
+
+
+@router.get("/dashboard/api/pareto")
+async def pareto(max_dominated: int = 600) -> JSONResponse:
+    """Return the autopilot's Pareto archive for visualization.
+
+    Reads orchestration/autopilot_state.json on each call (file is small,
+    a few hundred KB; mtime-based caching unnecessary at this scale).
+    Returns enough data to draw a scatter of (quality, speed) with the
+    frontier highlighted + the hypervolume timeline.
+
+    Objectives in the archive are (quality, speed, -cost, reliability).
+    The dashboard plots the first two by default since they're the most
+    operationally meaningful; -cost and reliability ride along as
+    per-point fields the client can surface in tooltips.
+    """
+    if not _AUTOPILOT_STATE_PATH.exists():
+        return JSONResponse({
+            "available": False,
+            "reason": "autopilot_state.json not found",
+            "frontier": [],
+            "dominated": [],
+            "hypervolume_history": [],
+        })
+    try:
+        data = json.loads(_AUTOPILOT_STATE_PATH.read_text())
+    except Exception as exc:
+        return JSONResponse({
+            "available": False,
+            "reason": f"failed to parse autopilot_state.json: {exc}",
+            "frontier": [],
+            "dominated": [],
+            "hypervolume_history": [],
+        })
+
+    archive = data.get("pareto_archive", {}) or {}
+    frontier_raw = archive.get("frontier", []) or []
+    all_raw = archive.get("all_entries", []) or []
+    hv_history = archive.get("hypervolume_history", []) or []
+
+    def _shape(entry: dict) -> dict:
+        # Strip heavy config_snapshot for transport — plotted points only need
+        # objectives + identity metadata. Caller can drill via trial_id if needed.
+        obj = entry.get("objectives") or [0.0, 0.0, 0.0, 0.0]
+        if len(obj) < 4:
+            obj = list(obj) + [0.0] * (4 - len(obj))
+        return {
+            "trial_id": entry.get("trial_id"),
+            "objectives": list(obj[:4]),
+            "git_tag": entry.get("git_tag", ""),
+            "species": entry.get("species", ""),
+            "is_production_best": bool(entry.get("is_production_best", False)),
+            "timestamp": entry.get("timestamp", ""),
+            "reasoning": (entry.get("reasoning") or "")[:200],
+        }
+
+    frontier = [_shape(e) for e in frontier_raw]
+    frontier_ids = {f["trial_id"] for f in frontier if f["trial_id"] is not None}
+
+    # Dominated entries: newest first, trimmed to max_dominated to bound payload.
+    dominated_only = [e for e in all_raw if e.get("trial_id") not in frontier_ids]
+    dominated_only.sort(key=lambda e: (e.get("trial_id") or 0), reverse=True)
+    dominated_shaped = [_shape(e) for e in dominated_only[:max_dominated]]
+
+    hv_shaped: list[list[float]] = []
+    for h in hv_history:
+        if isinstance(h, (list, tuple)) and len(h) >= 2:
+            try:
+                hv_shaped.append([int(h[0]), float(h[1])])
+            except (TypeError, ValueError):
+                continue
+
+    return JSONResponse({
+        "available": True,
+        "frontier": frontier,
+        "dominated": dominated_shaped,
+        "hypervolume_history": hv_shaped,
+        "totals": {
+            "frontier_size": len(frontier),
+            "all_entries": len(all_raw),
+            "hv_points": len(hv_shaped),
+        },
+        "objective_axes": [
+            {"key": "quality", "index": 0, "direction": "max", "label": "quality"},
+            {"key": "speed", "index": 1, "direction": "max", "label": "speed (t/s)"},
+            {"key": "neg_cost", "index": 2, "direction": "max", "label": "-cost"},
+            {"key": "reliability", "index": 3, "direction": "max", "label": "reliability"},
+        ],
+    })
+
+
 @router.get("/dashboard/api/version")
 async def version() -> JSONResponse:
     """Return current build state for the hard-reload-needed indicator.

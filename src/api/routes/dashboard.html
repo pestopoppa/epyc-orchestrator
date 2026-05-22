@@ -1373,6 +1373,177 @@ async function updateGepa() {
     } catch (e) {}
 }
 
+// ── Pareto frontier visualization ────────────────────────────────────
+// Two plots inside the GEPA accordion:
+//   1) Quality × Speed scatter with frontier highlighted
+//   2) Hypervolume timeline (single line plot, x=trial_id, y=hv)
+// Polls /dashboard/api/pareto every ~10s. Idempotent — full SVG repaint
+// each tick (cheap; the dataset is bounded to ~600 points).
+
+async function updatePareto() {
+    try {
+        const r = await fetch('/dashboard/api/pareto');
+        const d = await r.json();
+        const sumEl = document.getElementById('pareto-summary');
+        if (sumEl) {
+            if (d.available) {
+                sumEl.textContent =
+                    `${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials`;
+            } else {
+                sumEl.textContent = '(no autopilot_state.json yet)';
+            }
+        }
+        if (!d.available) {
+            const qs = document.getElementById('pareto-plot-qs');
+            const hv = document.getElementById('pareto-plot-hv');
+            if (qs) qs.innerHTML = '<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">Pareto archive empty</text>';
+            if (hv) hv.innerHTML = '';
+            return;
+        }
+        renderParetoScatter(d);
+        renderHypervolumeTimeline(d);
+    } catch (e) {}
+}
+
+function renderParetoScatter(d) {
+    // Quality (x) × Speed (y) scatter. Dominated points dim, frontier accent,
+    // production-best ringed green. Axis labels + tick gridlines.
+    const svg = document.getElementById('pareto-plot-qs');
+    if (!svg) return;
+    const VB = { w: 400, h: 280 };
+    const PAD = { l: 40, r: 14, t: 14, b: 32 };
+    const plotW = VB.w - PAD.l - PAD.r;
+    const plotH = VB.h - PAD.t - PAD.b;
+
+    const allPts = (d.frontier || []).concat(d.dominated || []);
+    if (!allPts.length) {
+        svg.innerHTML = '<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">no trial data yet</text>';
+        return;
+    }
+    // Find data ranges with a small margin.
+    const xs = allPts.map(p => p.objectives[0]);
+    const ys = allPts.map(p => p.objectives[1]);
+    const xMin = Math.min(...xs), xMax = Math.max(...xs);
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const xRange = (xMax - xMin) || 1;
+    const yRange = (yMax - yMin) || 1;
+    const xPad = xRange * 0.08;
+    const yPad = yRange * 0.08;
+    const xLo = xMin - xPad, xHi = xMax + xPad;
+    const yLo = yMin - yPad, yHi = yMax + yPad;
+
+    const sx = v => PAD.l + ((v - xLo) / (xHi - xLo)) * plotW;
+    const sy = v => PAD.t + plotH - ((v - yLo) / (yHi - yLo)) * plotH;
+
+    const parts = [];
+    // Gridlines (4 vertical + 4 horizontal)
+    for (let i = 1; i < 5; i++) {
+        const gx = PAD.l + (i / 5) * plotW;
+        parts.push(`<line class="grid-line" x1="${gx}" y1="${PAD.t}" x2="${gx}" y2="${PAD.t + plotH}"/>`);
+        const gy = PAD.t + (i / 5) * plotH;
+        parts.push(`<line class="grid-line" x1="${PAD.l}" y1="${gy}" x2="${PAD.l + plotW}" y2="${gy}"/>`);
+    }
+    // Axes
+    parts.push(`<line class="axis-line" x1="${PAD.l}" y1="${PAD.t + plotH}" x2="${PAD.l + plotW}" y2="${PAD.t + plotH}"/>`);
+    parts.push(`<line class="axis-line" x1="${PAD.l}" y1="${PAD.t}" x2="${PAD.l}" y2="${PAD.t + plotH}"/>`);
+    // Axis tick labels (5 ticks each)
+    for (let i = 0; i <= 4; i++) {
+        const xVal = xLo + (i / 4) * (xHi - xLo);
+        const xPx = PAD.l + (i / 4) * plotW;
+        parts.push(`<text class="axis-label" x="${xPx}" y="${VB.h - 12}" text-anchor="middle">${xVal.toFixed(2)}</text>`);
+        const yVal = yLo + (i / 4) * (yHi - yLo);
+        const yPx = PAD.t + plotH - (i / 4) * plotH;
+        parts.push(`<text class="axis-label" x="${PAD.l - 6}" y="${yPx + 3}" text-anchor="end">${yVal.toFixed(1)}</text>`);
+    }
+    // Axis titles
+    parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 2}" text-anchor="middle" font-size="10" fill="#94a3b8">quality →</text>`);
+    parts.push(`<text class="axis-label" x="10" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 10 ${PAD.t + plotH / 2})">speed (t/s) →</text>`);
+
+    // Dominated points first (so frontier paints on top)
+    (d.dominated || []).forEach(p => {
+        const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
+        const tip = `trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
+        parts.push(`<circle class="point-dominated" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5"><title>${tip}</title></circle>`);
+    });
+    // Frontier line: sort by x ascending, draw polyline through points
+    const frontier = (d.frontier || []).slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
+    if (frontier.length > 1) {
+        const path = frontier.map((p, i) =>
+            `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
+        ).join(' ');
+        parts.push(`<path class="frontier-line" d="${path}"/>`);
+    }
+    // Frontier points
+    frontier.forEach(p => {
+        const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
+        const cls = p.is_production_best ? 'point-production' : 'point-frontier';
+        const tip = `trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${p.is_production_best ? ' · PRODUCTION' : ''}`;
+        parts.push(`<circle class="${cls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"><title>${tip}</title></circle>`);
+    });
+
+    svg.innerHTML = parts.join('');
+}
+
+function renderHypervolumeTimeline(d) {
+    // Hypervolume timeline: x=trial_id, y=hv. Single accent-colored line +
+    // gridlines + axis labels. Shows the optimization-progress trajectory.
+    const svg = document.getElementById('pareto-plot-hv');
+    if (!svg) return;
+    const VB = { w: 400, h: 280 };
+    const PAD = { l: 48, r: 14, t: 14, b: 32 };
+    const plotW = VB.w - PAD.l - PAD.r;
+    const plotH = VB.h - PAD.t - PAD.b;
+
+    const hv = d.hypervolume_history || [];
+    if (!hv.length) {
+        svg.innerHTML = '<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">no hypervolume history</text>';
+        return;
+    }
+    const xs = hv.map(p => p[0]);
+    const ys = hv.map(p => p[1]);
+    const xMin = Math.min(...xs), xMax = Math.max(...xs);
+    const yMin = 0, yMax = Math.max(...ys, 1e-6);  // floor at 0
+    const xRange = (xMax - xMin) || 1;
+    const yRange = (yMax - yMin) || 1;
+    const sx = v => PAD.l + ((v - xMin) / xRange) * plotW;
+    const sy = v => PAD.t + plotH - ((v - yMin) / yRange) * plotH;
+
+    const parts = [];
+    // Gridlines
+    for (let i = 1; i < 5; i++) {
+        const gx = PAD.l + (i / 5) * plotW;
+        parts.push(`<line class="grid-line" x1="${gx}" y1="${PAD.t}" x2="${gx}" y2="${PAD.t + plotH}"/>`);
+        const gy = PAD.t + (i / 5) * plotH;
+        parts.push(`<line class="grid-line" x1="${PAD.l}" y1="${gy}" x2="${PAD.l + plotW}" y2="${gy}"/>`);
+    }
+    // Axes
+    parts.push(`<line class="axis-line" x1="${PAD.l}" y1="${PAD.t + plotH}" x2="${PAD.l + plotW}" y2="${PAD.t + plotH}"/>`);
+    parts.push(`<line class="axis-line" x1="${PAD.l}" y1="${PAD.t}" x2="${PAD.l}" y2="${PAD.t + plotH}"/>`);
+    // Tick labels
+    for (let i = 0; i <= 4; i++) {
+        const xVal = xMin + (i / 4) * xRange;
+        const xPx = PAD.l + (i / 4) * plotW;
+        parts.push(`<text class="axis-label" x="${xPx}" y="${VB.h - 12}" text-anchor="middle">${Math.round(xVal)}</text>`);
+        const yVal = yMin + (i / 4) * yRange;
+        const yPx = PAD.t + plotH - (i / 4) * plotH;
+        parts.push(`<text class="axis-label" x="${PAD.l - 6}" y="${yPx + 3}" text-anchor="end">${yVal.toFixed(2)}</text>`);
+    }
+    // Axis titles
+    parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 2}" text-anchor="middle" font-size="10" fill="#94a3b8">trial →</text>`);
+    parts.push(`<text class="axis-label" x="14" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 14 ${PAD.t + plotH / 2})">hypervolume →</text>`);
+
+    // Line path
+    const path = hv.map((p, i) =>
+        `${i === 0 ? 'M' : 'L'} ${sx(p[0]).toFixed(1)} ${sy(p[1]).toFixed(1)}`
+    ).join(' ');
+    parts.push(`<path class="frontier-line" style="stroke-dasharray:none;opacity:0.9" d="${path}"/>`);
+    // Endpoint dot
+    const last = hv[hv.length - 1];
+    parts.push(`<circle class="point-frontier" cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="4"><title>trial ${last[0]} · hv=${last[1].toFixed(3)}</title></circle>`);
+
+    svg.innerHTML = parts.join('');
+}
+
 function escapeHTML(s) {
     return (s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
@@ -1694,9 +1865,28 @@ function startDashboard() {
         updateGepa();
         updateProcessStatus();
         updateBuildRev();
+        updatePareto();  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
+        // Pareto poll: only fetch when the GEPA accordion is open. Cheap when
+        // closed (no fetch, just summary text from the last successful call).
+        setInterval(() => {
+            const acc = document.querySelector('details.section-accordion');
+            if (acc && acc.open) updatePareto();
+            else {
+                // Still refresh the summary text occasionally even when closed.
+                if (Math.random() < 0.2) updatePareto();
+            }
+        }, 10000);
+        // Repaint plots when the user opens the accordion (so they see fresh
+        // data immediately instead of waiting for the next interval tick).
+        const acc = document.querySelector('details.section-accordion');
+        if (acc) {
+            acc.addEventListener('toggle', () => {
+                if (acc.open) updatePareto();
+            });
+        }
     })();
 }
 
