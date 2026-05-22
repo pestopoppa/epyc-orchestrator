@@ -119,6 +119,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Seeder Status
 {seeder_status}
 
+### Recent Batch Telemetry (autopilot adapts n_questions to fit budget)
+{batch_telemetry}
+
 ### Species Effectiveness
 {species_effectiveness}
 
@@ -477,11 +480,55 @@ def _run_loop_inner(
             model_sigs = load_model_signatures()
             model_signatures_text = format_model_signatures(model_sigs)
 
+            # Adaptive-batch telemetry hint for the controller. Surfaces
+            # recent seconds-per-question + recommended n_questions so the
+            # planner can request batches that will actually fit the budget,
+            # rather than asking for 10 every time and getting silently
+            # scaled to 3 by _action_seed_batch's adaptive_batch_size().
+            try:
+                import sys as _sys
+                _sys.path.insert(
+                    0,
+                    "/mnt/raid0/llm/epyc-orchestrator/scripts/benchmark",
+                )
+                from seeding_telemetry import (
+                    batch_summary as _batch_summary,
+                    adaptive_batch_size as _adaptive_n,
+                )
+                _bs = _batch_summary()
+                _rate = _bs.get("median_s_per_q")
+                if _rate is None:
+                    batch_telemetry_text = (
+                        "(no batch history yet — first seed_batch will use "
+                        "the requested n; subsequent batches will auto-adapt)"
+                    )
+                else:
+                    _budget_s = float(os.environ.get("SEEDING_BATCH_BUDGET_S", "900"))
+                    _max_n_now, _max_reason = _adaptive_n(100)
+                    batch_telemetry_text = (
+                        f"recent median: {_rate:.0f}s/question over "
+                        f"{_bs['n_recent']} batches\n"
+                        f"current budget: {_budget_s:.0f}s "
+                        f"(SEEDING_BATCH_BUDGET_S)\n"
+                        f"realistic max n_questions right now: ~{_max_n_now} "
+                        f"(scaler reason: {_max_reason})\n"
+                        f"recent batches: "
+                        + json.dumps(_bs.get("recent", []), separators=(",", ":"))
+                        + "\n"
+                        + "IMPORTANT: request seed_batch sizes that fit the "
+                        "budget. Asking for 10 questions when the realistic "
+                        "max is 3 just gets silently scaled down — better to "
+                        "ask for 3 directly so you keep clean attribution."
+                    )
+            except Exception as _exc:
+                batch_telemetry_text = f"(telemetry unavailable: {_exc})"
+
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 program=program_text,
                 pareto_summary=archive.summary_text(),
                 journal_summary=journal.summary_text(20),
                 seeder_status=json.dumps(seeder.convergence_status(), indent=2),
+                batch_telemetry=batch_telemetry_text,
                 species_effectiveness=json.dumps(
                     journal.species_effectiveness(), indent=2
                 ),

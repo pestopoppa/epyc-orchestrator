@@ -34,6 +34,14 @@ log = logging.getLogger("autopilot")
 # a single SSE consumer can watch every planner session.
 PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
 
+# Persistent JSONL archive of planner sessions — survives /tmp wipes and
+# is queryable for reasoning-trace research. One line per session with
+# the full event list. Lives alongside other autopilot logs so it's
+# included in the same backup/retention scheme.
+PLANNER_ARCHIVE_PATH = Path(
+    "/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl"
+)
+
 
 def _open_planner_tap() -> Any:
     """Return an append-mode handle on the planner tap, creating dirs if needed."""
@@ -43,6 +51,22 @@ def _open_planner_tap() -> Any:
     except Exception as exc:
         log.warning("Could not open planner tap %s: %s", PLANNER_TAP_PATH, exc)
         return None
+
+
+def _append_planner_archive(record: dict) -> None:
+    """Append one planner-session record to the persistent JSONL archive.
+
+    Best-effort: silent on failure (the tap file is the live source of
+    truth; archive is for after-the-fact analysis). One JSONL line per
+    session with timestamp, duration, session_id, prompt hash + length,
+    captured events, and final result.
+    """
+    try:
+        PLANNER_ARCHIVE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(PLANNER_ARCHIVE_PATH, "a") as fh:
+            fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        log.debug("planner archive append failed: %s", exc)
 
 
 def _summarize_event(line: str) -> str:
@@ -146,6 +170,12 @@ def invoke_controller(
     final_session_id = session_id
     proc: subprocess.Popen | None = None
     reader_thread: threading.Thread | None = None
+    # Captured events for the archive write at end. Each entry is the
+    # one-line summary; full raw JSON would bloat the JSONL too much for
+    # routine grep, and the user can always reconstruct via the live tap.
+    archive_events: list[str] = []
+    archive_meta: dict[str, Any] = {}
+    session_start_ts = time.time()
 
     def _drain_stdout(p: subprocess.Popen):
         """Read p.stdout line-by-line; tee each line to tap; capture result."""
@@ -156,10 +186,13 @@ def invoke_controller(
                 line = raw_line.rstrip("\n")
                 if not line:
                     continue
-                # Tee summarized + raw to tap
+                # Tee summarized + raw to tap, and also remember the
+                # summary for the archive write.
+                summary = _summarize_event(line)
+                archive_events.append(summary)
                 if tap is not None:
                     try:
-                        tap.write(_summarize_event(line) + "\n")
+                        tap.write(summary + "\n")
                         tap.flush()
                     except Exception:
                         pass
@@ -171,6 +204,9 @@ def invoke_controller(
                 if evt.get("type") == "result":
                     result_text = evt.get("result", "") or result_text
                     final_session_id = evt.get("session_id", final_session_id)
+                    archive_meta["total_cost_usd"] = evt.get("total_cost_usd")
+                    archive_meta["duration_ms"] = evt.get("duration_ms")
+                    archive_meta["subtype"] = evt.get("subtype")
                 elif evt.get("type") == "system" and evt.get("subtype") == "init":
                     final_session_id = evt.get("session_id", final_session_id)
         except Exception as exc:
@@ -221,6 +257,23 @@ def invoke_controller(
                 tap.flush()
             except Exception:
                 pass
+
+        # Archive write (persistent JSONL, survives /tmp wipe)
+        import hashlib
+        _append_planner_archive({
+            "ts": session_start_ts,
+            "ts_iso": datetime.fromtimestamp(session_start_ts).isoformat(timespec="seconds"),
+            "duration_s": time.time() - session_start_ts,
+            "session_id": final_session_id,
+            "resume_session_id": session_id,
+            "prompt_chars": len(prompt),
+            "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "result_chars": len(result_text),
+            "result_preview": (result_text or "")[:500],
+            "n_events": len(archive_events),
+            "events": archive_events[-200:],  # last 200 events, prevents megabyte lines
+            **archive_meta,
+        })
 
         return result_text, final_session_id
 
