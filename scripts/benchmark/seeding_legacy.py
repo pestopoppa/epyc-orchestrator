@@ -207,18 +207,73 @@ def evaluate_question(
     SLOW_ROLES = {"architect_general", "architect_coding"}
     SLOW_ROLE_TIMEOUT = max(timeout, 300)
 
+    # 2026-05-22: adaptive dispatch — per-(role,mode) latency tracking +
+    # timeout-rate skip + per-question wall-clock budget. Cuts wasted time
+    # on combos that have been failing recently and avoids pre-empting
+    # combos that consistently run just over the default timeout.
+    from seeding_telemetry import (
+        record_outcome as _telemetry_record,
+        recommended_timeout as _telemetry_timeout,
+        should_skip as _telemetry_should_skip,
+        lock_pressure_too_high as _telemetry_lock_pressure,
+    )
+    import os as _os
+    # Per-question wall-clock budget. Set to 0 to disable. Default = 5x
+    # the per-call timeout. When exceeded, we bail out of remaining combos
+    # for this question rather than wasting another 105s discovering they
+    # also time out under current pressure.
+    _PER_QUESTION_BUDGET_S = float(
+        _os.environ.get("SEEDING_PER_QUESTION_BUDGET_S", str(max(timeout * 5, 300)))
+    )
+    _question_start = time.perf_counter()
+
     for combo_idx, (role, mode) in enumerate(active_combos):
         if state.shutdown:
             return None
 
         target_port = ROLE_PORT.get(role, 0)
+        key = f"{role}:{mode}"
+
+        # Per-question budget — bail out of remaining combos if we're
+        # already over budget. The first combo always runs (combo_idx==0)
+        # so we always have a baseline result for the question.
+        if combo_idx > 0 and _PER_QUESTION_BUDGET_S > 0:
+            qspent = time.perf_counter() - _question_start
+            if qspent >= _PER_QUESTION_BUDGET_S:
+                logger.info(
+                    f"  → {key} SKIPPED — question budget exhausted "
+                    f"({qspent:.0f}s ≥ {_PER_QUESTION_BUDGET_S:.0f}s)"
+                )
+                continue
+
+        # Telemetry-driven skip — recent timeout rate too high for this combo.
+        skip, reason = _telemetry_should_skip(role, mode)
+        if skip:
+            logger.info(f"  → {key} SKIPPED — {reason}")
+            continue
+
         if target_port in HEAVY_PORTS:
+            # Lock-pressure shortcut: if a heavy holder has been running
+            # for >60s, skip non-essential combos rather than queue another
+            # heavy request that's likely to time out.
+            pressure, why = _telemetry_lock_pressure(min_holder_age_s=60.0)
+            if pressure and combo_idx > 0:
+                logger.info(
+                    f"  → {key} SKIPPED — heavy lock under pressure ({why})"
+                )
+                continue
             _wait_for_heavy_models_idle()
 
-        key = f"{role}:{mode}"
+        # Adaptive timeout based on observed P95. For most combos with
+        # fresh telemetry this leaves base unchanged; for combos that
+        # consistently run 105-115s (e.g. frontdoor on reasoning prompts)
+        # this stretches the budget to ~150s and avoids pre-empt cancels.
+        base_timeout = SLOW_ROLE_TIMEOUT if role in SLOW_ROLES else timeout
+        role_timeout = _telemetry_timeout(role, mode, base_timeout)
         if target_port in HEAVY_PORTS:
-            logger.info(f"  → {key} (heavy model, expect 30-120s)...")
-        role_timeout = SLOW_ROLE_TIMEOUT if role in SLOW_ROLES else timeout
+            logger.info(
+                f"  → {key} (heavy model, expect 30-120s, timeout={role_timeout}s)..."
+            )
         q_start = time.perf_counter()
         response = call_orchestrator_forced(
             prompt, role, mode, url, role_timeout,
@@ -226,6 +281,14 @@ def evaluate_question(
             client=client,
         )
         q_elapsed = time.perf_counter() - q_start
+
+        # Record outcome for future adaptive decisions. A response is a
+        # "timeout" if it errored AND elapsed is at/near our timeout window
+        # (within 5s — accounts for the seeder's pre-empt-erase logic at
+        # 105s/120s).
+        _resp_err = response.get("error") if isinstance(response, dict) else None
+        _was_timeout = bool(_resp_err) and q_elapsed >= max(role_timeout - 10, 5)
+        _telemetry_record(role, mode, q_elapsed, _was_timeout)
 
         if cooldown > 0 and combo_idx < len(active_combos) - 1:
             time.sleep(cooldown)
