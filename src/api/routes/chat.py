@@ -271,10 +271,25 @@ async def _try_cheap_first(
         prompt = f"{request.context}\n\n{request.prompt}"
 
     try:
-        from src.api.routes.chat_utils import QWEN_STOP
+        from src.api.routes.chat_utils import QWEN_STOP, apply_chat_template_for_role
 
-        answer = primitives.llm_call(
+        # Apply per-role chat template — without this, gemma-family cheap
+        # roles (worker_general post 2026-05-08 swap) see raw text instead
+        # of the expected <start_of_turn>...<end_of_turn> markers and return
+        # 0 tokens. This is the SECOND /completion path (the first is the
+        # direct-mode path at chat.py:498). Discovered after the 2026-05-22
+        # reload still showed worker_explore producing 0-token responses
+        # despite the chat.py:498 fix being live for frontdoor.
+        templated_prompt = apply_chat_template_for_role(
+            cheap_role,
             prompt,
+            registry=getattr(state, "registry", None),
+        )
+        # QWEN_STOP only applies if the templated prompt is actually Qwen-
+        # marked. For non-Qwen families, the marker won't appear in output;
+        # for Qwen, leaving it in is safe.
+        answer = primitives.llm_call(
+            templated_prompt,
             role=cheap_role,
             n_tokens=cfg.try_cheap_first_max_tokens,
             skip_suffix=True,
