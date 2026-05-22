@@ -614,6 +614,23 @@ class LlamaServerBackend(ModelBackend):
             generation_ms = timings.get("predicted_ms", 0.0)
             predicted_per_second = timings.get("predicted_per_second", 0.0)
 
+            # TIMINGS-zero fallback: llama-server occasionally emits a stop
+            # event with `tokens_predicted=0` and an empty `timings` dict —
+            # most commonly for thinking-mode responses that exhaust their
+            # budget inside a `<think>` block, slot-kill / OOM aborts, and
+            # certain spec-decode edge cases. The tap's per-chunk writer has
+            # already streamed real content to disk by then, so reporting
+            # "TIMINGS: 0 tokens in 0.00s" is misleading. Fall back to chunk
+            # count + http elapsed when content exists but the server's
+            # numbers are zero — preserves operator signal in the tap.
+            if stream_chunks > 0:
+                if tokens_generated == 0:
+                    tokens_generated = stream_chunks
+                if generation_ms == 0.0:
+                    generation_ms = http_elapsed_ms
+                if predicted_per_second == 0.0 and generation_ms > 0.0:
+                    predicted_per_second = tokens_generated / (generation_ms / 1000.0)
+
             inference_ms = prompt_eval_ms + generation_ms
             http_overhead_ms = max(0.0, http_elapsed_ms - inference_ms)
 
@@ -674,11 +691,15 @@ class LlamaServerBackend(ModelBackend):
                     "returning partial content",
                     _elapsed, len(chunks), role_config.name,
                 )
+                # Populate the timing fields the tap writer reads so the
+                # TIMINGS line reflects what actually happened during the
+                # partial stream instead of falling back to dataclass zeros.
+                _partial_tps = (len(chunks) / _elapsed) if _elapsed > 0 else 0.0
                 return InferenceResult(
                     role=role_config.name,
                     output=_partial,
                     tokens_generated=len(chunks),
-                    generation_speed=len(chunks) / _elapsed if _elapsed > 0 else 0.0,
+                    generation_speed=_partial_tps,
                     elapsed_time=_elapsed,
                     success=False,
                     partial=True,
@@ -686,6 +707,8 @@ class LlamaServerBackend(ModelBackend):
                     failure_stage="stream_read",
                     failure_reason="read_timeout",
                     completion_reason="read_timeout_partial",
+                    generation_ms=_elapsed * 1000.0,
+                    predicted_per_second=_partial_tps,
                 )
             return InferenceResult(
                 role=role_config.name,
