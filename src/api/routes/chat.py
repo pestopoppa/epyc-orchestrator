@@ -495,6 +495,12 @@ async def _handle_chat(
         if cheap_result is not None:
             if cheap_result.answer and "<answer>" in cheap_result.answer and "</answer>" not in cheap_result.answer:
                 cheap_result.answer += "</answer>"
+            # Raw code answers (no <answer> tag) fall through to REPL — the cheap
+            # model returned a function body without formatting (e.g. HumanEval/MBPP
+            # intercepted before task_type bypass fires). REPL handles these correctly.
+            if cheap_result.answer and "<answer>" not in cheap_result.answer:
+                cheap_result = None
+        if cheap_result is not None:
             return _finalize(cheap_result)
 
         # Stage 8: Execute selected mode (with fallthrough on failure)
