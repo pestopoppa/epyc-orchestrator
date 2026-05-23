@@ -1850,8 +1850,22 @@ async function copySnapshotToClipboard() {
     }
 }
 
-function downloadSnapshot() {
-    const text = buildTextSnapshot();
+async function downloadSnapshot() {
+    // Prefer the server-side .txt endpoint so this button matches what
+    // 'copy snapshot' sends to the clipboard (single source of truth for
+    // the task snapshot). Falls back to local buildTextSnapshot only
+    // when the server fetch fails (e.g. orchestrator API restart mid-click).
+    let text;
+    try {
+        const r = await fetch(`/dashboard/api/task/${encodeURIComponent(_currentTaskRawText.taskId)}.txt`);
+        if (r.ok) {
+            text = await r.text();
+        } else {
+            text = buildTextSnapshot();
+        }
+    } catch {
+        text = buildTextSnapshot();
+    }
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

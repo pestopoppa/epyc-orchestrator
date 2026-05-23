@@ -1069,7 +1069,12 @@ async def stream(request: Request) -> StreamingResponse:
 
 @router.get("/dashboard/api/task/{task_id}.txt")
 async def task_text(task_id: str) -> Any:
-    """Return a plain-text snapshot of a task — for clipboard, curl, downstream LLMs."""
+    """Return a plain-text snapshot of a task — for clipboard, curl, downstream LLMs.
+
+    Mirrors the source-priority logic of /dashboard/api/task/{task_id}
+    (live slot → tap_section → empty) so the .txt output stays
+    consistent with what the dashboard panel displays.
+    """
     log_path = _todays_progress_log()
     events = _task_events(task_id, log_path)
     slots_by_port = await _poll_all_slots()
@@ -1081,7 +1086,25 @@ async def task_text(task_id: str) -> Any:
                 break
         if found_slot:
             break
-    text = _task_text_snapshot(task_id, events, found_slot)
+
+    # Tap-section fallback when no live slot — same matcher the JSON
+    # endpoint uses, including the role-filtered pass for higher precision.
+    tap_section = None
+    if found_slot is None:
+        objective = _objective_for_task(events)
+        producer_role = None
+        for ev in reversed(events):
+            if ev.get("event_type") == "task_completed":
+                producer_role = (ev.get("data") or {}).get("producer_role")
+                break
+        if not producer_role:
+            for ev in events:
+                if ev.get("event_type") == "routing_decision":
+                    producer_role = (ev.get("data") or {}).get("chosen_action")
+                    break
+        tap_section = _find_section_by_objective(objective, expected_role=producer_role)
+
+    text = _task_text_snapshot(task_id, events, found_slot, tap_section=tap_section)
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse(text)
 

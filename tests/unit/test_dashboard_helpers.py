@@ -205,7 +205,11 @@ def test_task_text_snapshot_falls_back_to_objective_when_no_slot() -> None:
     events = [{"event_type": "task_started", "timestamp": "t", "data": {"objective": "fallback objective"}}]
     out = dashboard_tasks._task_text_snapshot("chat-2", events, None)
     assert "fallback objective" in out
-    assert "(empty)" in out  # no inference stream
+    # The empty-placeholder text was made more descriptive (2026-05-23):
+    # "(empty)" → "(empty — no live slot and no matching tap section)".
+    # Match the prefix so the test stays robust to minor copy tweaks.
+    assert "(empty" in out  # no inference stream
+    assert "INFERENCE STREAM:" in out
 
 
 def test_task_text_snapshot_elides_noisy_keys() -> None:

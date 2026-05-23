@@ -58,9 +58,22 @@ def _task_events(task_id: str, path: Path, max_events: int = 200) -> list[dict[s
 
 
 def _task_text_snapshot(
-    task_id: str, events: list[dict[str, Any]], slot: dict | None,
+    task_id: str,
+    events: list[dict[str, Any]],
+    slot: dict | None,
+    tap_section: dict | None = None,
 ) -> str:
-    """Render a plain-text snapshot of a task suitable for pasting into chat."""
+    """Render a plain-text snapshot of a task suitable for pasting into chat.
+
+    Inference-stream source priority:
+        1. Live llama-server slot (highest fidelity — current cache state)
+        2. inference_tap.log section matching the task's objective
+           (covers completed tasks whose slot is gone — the JSON endpoint
+           has always used this fallback; this function was missing it,
+           producing "(empty)" INFERENCE STREAM for finished tasks even
+           when the dashboard panel showed the tap content.)
+        3. Empty placeholder
+    """
     lines: list[str] = []
     # Use timezone-aware UTC instead of the deprecated datetime.utcnow().
     # isoformat() on a tz-aware datetime ends with "+00:00"; the dashboard
@@ -70,9 +83,17 @@ def _task_text_snapshot(
     lines.append("")
     prompt_text = ""
     stream_text = ""
+    source_note = ""
     if slot:
         prompt_text = str(slot.get("prompt") or "")
         stream_text = str(slot.get("content") or "")
+        source_note = "(source: live llama-server slot)"
+    elif tap_section:
+        prompt_text = str(tap_section.get("prompt") or "")
+        stream_text = str(tap_section.get("response") or "")
+        ts = tap_section.get("timestamp") or "?"
+        role = tap_section.get("role") or "?"
+        source_note = f"(source: inference_tap.log section @ {ts} · role={role})"
     if not prompt_text:
         for ev in events:
             if ev.get("event_type") == "task_started":
@@ -82,9 +103,9 @@ def _task_text_snapshot(
     lines.append("-------")
     lines.append(prompt_text or "(not available)")
     lines.append("")
-    lines.append("INFERENCE STREAM:")
+    lines.append("INFERENCE STREAM:" + (f"  {source_note}" if source_note else ""))
     lines.append("-----------------")
-    lines.append(stream_text or "(empty)")
+    lines.append(stream_text or "(empty — no live slot and no matching tap section)")
     lines.append("")
     lines.append(f"REPL HISTORY ({len(events)} events):")
     lines.append("-----------------")
