@@ -124,7 +124,13 @@ class TapWriter:
             f"PROMPT:\n"
         )
 
-    def write_prompt(self, prompt: str, max_chars: int = 2000) -> None:
+    def write_prompt(self, prompt: str, max_chars: int = 8000) -> None:
+        # 8000c cap (was 2000c). The dashboard's task-detail tap-section
+        # matcher does substring search on the user objective inside this
+        # field; long system prompts + chat templates would push the user
+        # portion past 2000c, breaking the match and producing "(empty)"
+        # INFERENCE STREAM views for completed tasks. 8000c covers all
+        # observed system+template+user combinations in the production stack.
         if len(prompt) > max_chars:
             text = prompt[:max_chars] + f"\n... [{len(prompt) - max_chars} chars truncated]"
         else:

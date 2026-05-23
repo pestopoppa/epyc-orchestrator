@@ -115,19 +115,80 @@ def _objective_for_task(events: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _find_section_by_objective(objective: str) -> dict | None:
-    """Search inference_tap.log for a completed section whose prompt contains `objective`.
+def _find_section_by_objective(
+    objective: str,
+    expected_role: str | None = None,
+) -> dict | None:
+    """Search inference_tap.log for a completed section that matches the
+    task's objective.
 
-    Returns the most recent match or None. Used as a fallback when the task's
-    llama-server slot is no longer alive (orchestrator chat-XXX ids don't
-    map to llama-server's internal numeric id_task).
+    Tries multiple strategies in order (most-specific first) — the single
+    120-char substring search was too brittle for long prompts where the
+    system-prompt + chat-template overhead pushed the user portion past
+    the tap writer's truncation cap, breaking literal substring match.
+
+    Match strategies:
+        1. First 120c of objective in section prompt
+        2. First 60c of objective in section prompt
+        3. Middle 60c (objective[60:120]) — useful when chat template prefix
+           varies but the middle of the user content is preserved
+        4. Last 60c of objective in section prompt
+        5. Role-filtered: same strategies (1)-(4) but limited to sections
+           whose role matches `expected_role` (if provided) — improves
+           precision when multiple roles processed the same user content
+
+    Returns the most recent (newest-first) section that matches under the
+    earliest-succeeding strategy, or None if every strategy fails.
+
+    Used as a fallback when the task's llama-server slot is no longer
+    alive (orchestrator chat-XXX ids don't map to llama-server's internal
+    numeric id_task).
     """
     if not objective or len(objective) < 8:
         return None
-    needle = objective[:120].strip()
     tail_text = _read_tail(_INFERENCE_TAP_PATH, max_bytes=1024 * 1024)
     sections = _parse_inference_sections(tail_text, max_sections=80)
-    for s in sections:  # already newest-first
-        if needle and needle in (s.get("prompt") or ""):
-            return s
+    if not sections:
+        return None
+
+    # Strategy candidates, broadest match first within each pass.
+    # For short objectives (< 60c) just use the whole thing; for longer ones
+    # try a few overlapping windows so a single broken substring doesn't
+    # disqualify the section.
+    needles: list[str] = []
+    obj = objective.strip()
+    if len(obj) <= 120:
+        needles.append(obj)
+    else:
+        needles.append(obj[:120].strip())
+        needles.append(obj[:60].strip())
+        if len(obj) >= 180:
+            needles.append(obj[60:120].strip())
+        needles.append(obj[-60:].strip())
+    # De-dup while preserving order
+    seen: set[str] = set()
+    needles = [n for n in needles if n and not (n in seen or seen.add(n))]
+    if not needles:
+        return None
+
+    def _match(sections_iter, needle: str) -> dict | None:
+        for s in sections_iter:
+            if needle in (s.get("prompt") or ""):
+                return s
+        return None
+
+    # Pass 1 — role-filtered (if known). Higher precision; prefer over global.
+    if expected_role:
+        role_sections = [s for s in sections if (s.get("role") or "") == expected_role]
+        for n in needles:
+            hit = _match(role_sections, n)
+            if hit is not None:
+                return hit
+
+    # Pass 2 — global. Each needle in turn.
+    for n in needles:
+        hit = _match(sections, n)
+        if hit is not None:
+            return hit
+
     return None
