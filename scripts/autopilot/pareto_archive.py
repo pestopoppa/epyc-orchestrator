@@ -257,6 +257,194 @@ class ParetoArchive:
                 )
         return "\n".join(lines)
 
+    # ── frontier geometry (2026-05-23) ────────────────────────────────
+    # Goes beyond summary_text() by surfacing structural info that helps the
+    # planner choose WHICH axis to attack rather than just emitting blind
+    # action proposals. Three pieces:
+    #
+    #   shape          — categorical: "empty" / "single" / "linear" /
+    #                    "L_quality" / "L_speed" / "scattered". Tells the
+    #                    planner whether the frontier is a smooth trade-off
+    #                    curve or has obvious gaps.
+    #   blocking       — per-axis: which frontier point dominates that axis
+    #                    AND what it gives up on the other axes to do so.
+    #                    Tells the planner where the current Pareto front is
+    #                    capped + the cost of pushing further.
+    #   gaps           — list of (q_range, s_range) regions in the
+    #                    quality×speed projection where no frontier point
+    #                    lives — concrete coordinates for "adjacent
+    #                    possible" exploration.
+    #
+    # Output is a structured dict (for programmatic use) + a text rendering
+    # helper for the controller prompt.
+
+    def geometry(self) -> dict[str, Any]:
+        """Compute structural info about the current frontier.
+
+        Returns dict with keys: shape, blocking_quality, blocking_speed,
+        gaps, hv_slope_10, suggested_attack.
+        """
+        out: dict[str, Any] = {
+            "shape": "empty",
+            "blocking_quality": None,
+            "blocking_speed": None,
+            "gaps": [],
+            "hv_slope_10": self.hypervolume_slope(10),
+            "suggested_attack": "no data — seed more trials first",
+            "frontier_count": len(self._frontier),
+        }
+        if not self._frontier:
+            return out
+        if len(self._frontier) == 1:
+            out["shape"] = "single"
+            e = self._frontier[0]
+            out["suggested_attack"] = (
+                f"single frontier point trial #{e.trial_id} q={e.objectives[0]:.2f} "
+                f"sp={e.objectives[1]:.1f} — propose explore actions to add "
+                "diversity"
+            )
+            return out
+
+        # Project to (quality, speed). Sort by quality ascending.
+        pts = sorted(
+            self._frontier, key=lambda x: (x.objectives[0], -x.objectives[1])
+        )
+        q_vals = [e.objectives[0] for e in pts]
+        s_vals = [e.objectives[1] for e in pts]
+        q_min, q_max = min(q_vals), max(q_vals)
+        s_min, s_max = min(s_vals), max(s_vals)
+        q_range = q_max - q_min
+        s_range = s_max - s_min
+
+        # Shape heuristics:
+        #   linear      — points spread evenly along both axes
+        #   L_quality   — bulk of points cluster at high quality (one outlier at high speed)
+        #   L_speed     — bulk cluster at high speed (one outlier at high quality)
+        #   scattered   — no clear pattern
+        n = len(pts)
+        if q_range < 1e-6 or s_range < 1e-6:
+            out["shape"] = "linear"  # degenerate but useful: variation on one axis only
+        else:
+            # Coefficient of variation per axis as a roughness proxy.
+            mean_q = sum(q_vals) / n
+            mean_s = sum(s_vals) / n
+            spread_q = (max(abs(v - mean_q) for v in q_vals)) / max(abs(mean_q), 1e-9)
+            spread_s = (max(abs(v - mean_s) for v in s_vals)) / max(abs(mean_s), 1e-9)
+            if spread_q > 2 * spread_s and n >= 3:
+                out["shape"] = "L_speed"
+            elif spread_s > 2 * spread_q and n >= 3:
+                out["shape"] = "L_quality"
+            else:
+                out["shape"] = "linear" if n >= 3 else "scattered"
+
+        # Blocking points per axis.
+        blocking_q = max(self._frontier, key=lambda e: e.objectives[0])
+        blocking_s = max(self._frontier, key=lambda e: e.objectives[1])
+        out["blocking_quality"] = {
+            "trial_id": blocking_q.trial_id,
+            "objectives": list(blocking_q.objectives),
+            "species": blocking_q.species,
+            "gives_up_speed": s_max - blocking_q.objectives[1] if s_max > 0 else 0.0,
+        }
+        out["blocking_speed"] = {
+            "trial_id": blocking_s.trial_id,
+            "objectives": list(blocking_s.objectives),
+            "species": blocking_s.species,
+            "gives_up_quality": q_max - blocking_s.objectives[0] if q_max > 0 else 0.0,
+        }
+
+        # Gap detection: walk q-sorted points, look for consecutive pairs
+        # where the (q, s) jump is large relative to per-axis range.
+        gaps: list[dict[str, Any]] = []
+        for i in range(1, len(pts)):
+            a, b = pts[i - 1], pts[i]
+            dq = b.objectives[0] - a.objectives[0]
+            ds = a.objectives[1] - b.objectives[1]  # frontier expected: speed drops as quality rises
+            if dq > 0.15 * q_range or ds > 0.25 * s_range:
+                gaps.append({
+                    "between_trials": [a.trial_id, b.trial_id],
+                    "q_window": [a.objectives[0], b.objectives[0]],
+                    "s_window": [b.objectives[1], a.objectives[1]],
+                    "size_q_frac": dq / q_range if q_range else 0.0,
+                    "size_s_frac": ds / s_range if s_range else 0.0,
+                })
+        out["gaps"] = gaps[:5]  # cap at 5 most significant
+
+        # Suggested attack.
+        slope = out["hv_slope_10"]
+        if abs(slope) < 1e-5 and len(pts) < 5:
+            out["suggested_attack"] = (
+                "frontier is sparse and hv-stagnant — try species rotation "
+                "or seed_batch to break out of local minimum"
+            )
+        elif gaps:
+            g = gaps[0]
+            out["suggested_attack"] = (
+                f"largest gap is between trials {g['between_trials'][0]} and "
+                f"{g['between_trials'][1]} (q∈[{g['q_window'][0]:.2f},"
+                f"{g['q_window'][1]:.2f}], sp∈[{g['s_window'][0]:.1f},"
+                f"{g['s_window'][1]:.1f}]) — actions targeting this midpoint "
+                "would expand the frontier most"
+            )
+        elif out["shape"] == "L_quality":
+            out["suggested_attack"] = (
+                "frontier is L-shaped along quality — speed is undersampled; "
+                "propose numeric/structural actions tuned for throughput"
+            )
+        elif out["shape"] == "L_speed":
+            out["suggested_attack"] = (
+                "frontier is L-shaped along speed — quality is undersampled; "
+                "propose prompt_mutation / gepa_optimize for accuracy gains"
+            )
+        elif slope > 1e-3:
+            out["suggested_attack"] = (
+                f"frontier is growing (hv_slope_10={slope:.4f}) — continue the "
+                "current species mix"
+            )
+        else:
+            out["suggested_attack"] = (
+                "frontier mature with no obvious gaps — switch to exploit "
+                "(rollback to best + small numeric perturbations) or invoke "
+                "distill_knowledge to consolidate"
+            )
+        return out
+
+    def geometry_text(self) -> str:
+        """Render geometry() for inclusion in the controller prompt."""
+        g = self.geometry()
+        if g["frontier_count"] == 0:
+            return "(frontier empty — no geometry to analyse)"
+        lines = [
+            f"Shape:   {g['shape']}  ({g['frontier_count']} frontier points)",
+            f"HV slope last-10:  {g['hv_slope_10']:+.5f}",
+        ]
+        if g["blocking_quality"]:
+            bq = g["blocking_quality"]
+            lines.append(
+                f"Blocking quality: trial #{bq['trial_id']} ({bq['species']}) "
+                f"q={bq['objectives'][0]:.3f} sp={bq['objectives'][1]:.1f} — "
+                f"to advance q here, would give up {bq['gives_up_speed']:.1f} t/s"
+            )
+        if g["blocking_speed"]:
+            bs = g["blocking_speed"]
+            lines.append(
+                f"Blocking speed:   trial #{bs['trial_id']} ({bs['species']}) "
+                f"q={bs['objectives'][0]:.3f} sp={bs['objectives'][1]:.1f} — "
+                f"to advance sp here, would give up {bs['gives_up_quality']:.3f} q"
+            )
+        if g["gaps"]:
+            lines.append("Gaps in frontier (q-sorted, largest first):")
+            for gap in g["gaps"]:
+                lines.append(
+                    f"  - between #{gap['between_trials'][0]} and "
+                    f"#{gap['between_trials'][1]}: "
+                    f"q∈[{gap['q_window'][0]:.3f}, {gap['q_window'][1]:.3f}] "
+                    f"sp∈[{gap['s_window'][0]:.1f}, {gap['s_window'][1]:.1f}] "
+                    f"(size: {max(gap['size_q_frac'], gap['size_s_frac']):.0%} of axis range)"
+                )
+        lines.append(f"\nSuggested attack: {g['suggested_attack']}")
+        return "\n".join(lines)
+
 
 # ── hypervolume computation ──────────────────────────────────────
 

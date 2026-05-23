@@ -84,6 +84,14 @@ class JournalEntry:
     optimization_directions: str = ""  # AP-24: forward-looking next-round guidance
     predicted_objectives: dict[str, float] = field(default_factory=dict)  # PEAF: controller's pre-trial forecast (empty when disabled / unforecast)
     surprise_score: float | None = None  # PEAF: L1 distance in normalised objective space; None when no forecast
+    # 2026-05-23: journal-pollution tracking. When a trial's outcome was
+    # caused by an orchestrator bug that has since been fixed, the operator
+    # runs scripts/autopilot/scrub_journal.py to set this to the short SHA of
+    # the bug-fix commit. The planner's hypothesis-chain reasoning filters
+    # bug_corrupted entries out of "trustworthy" trial counts so it doesn't
+    # learn wrong lessons from buggy outcomes. Empty string == trustworthy.
+    bug_corrupted_by: str = ""
+    bug_corrupted_reason: str = ""  # free-text operator note (~80c) for context
 
 
 class ExperimentJournal:
@@ -149,8 +157,13 @@ class ExperimentJournal:
                         deficiency_category=data.get("deficiency_category", ""),
                         instruction_token_count=data.get("instruction_token_count", 0),
                         instruction_token_ratio=data.get("instruction_token_ratio", 0.0),
+                        self_criticism=data.get("self_criticism", ""),
+                        keep_revert_decision=data.get("keep_revert_decision", ""),
+                        optimization_directions=data.get("optimization_directions", ""),
                         predicted_objectives=data.get("predicted_objectives", {}),
                         surprise_score=data.get("surprise_score", None),
+                        bug_corrupted_by=data.get("bug_corrupted_by", ""),
+                        bug_corrupted_reason=data.get("bug_corrupted_reason", ""),
                     )
                     self._entries.append(entry)
             batch += 1
@@ -248,6 +261,95 @@ class ExperimentJournal:
                 lines.append(line)
         return "\n".join(lines)
 
+    # ── bug-corruption tracking (2026-05-23) ─────────────────────
+
+    def trustworthy_entries(self) -> list[JournalEntry]:
+        """All entries whose outcome is NOT marked bug_corrupted_by."""
+        return [e for e in self._entries if not e.bug_corrupted_by]
+
+    def trustworthiness_score(self) -> dict[str, Any]:
+        """Counts of trustworthy vs bug-corrupted entries.
+
+        Returned shape:
+            {
+                "total": N,
+                "trustworthy": M,
+                "corrupted": N - M,
+                "ratio": M / N (or 1.0 when N == 0),
+                "corrupted_by": {"de34dd4": K1, "b3895aa": K2, ...},
+                "low_signal": bool,  # True when trustworthy < 5
+            }
+        """
+        total = len(self._entries)
+        if total == 0:
+            return {
+                "total": 0, "trustworthy": 0, "corrupted": 0,
+                "ratio": 1.0, "corrupted_by": {}, "low_signal": True,
+            }
+        corrupted_by: dict[str, int] = {}
+        trustworthy = 0
+        for e in self._entries:
+            sha = e.bug_corrupted_by or ""
+            if sha:
+                corrupted_by[sha] = corrupted_by.get(sha, 0) + 1
+            else:
+                trustworthy += 1
+        return {
+            "total": total,
+            "trustworthy": trustworthy,
+            "corrupted": total - trustworthy,
+            "ratio": trustworthy / total,
+            "corrupted_by": corrupted_by,
+            "low_signal": trustworthy < 5,
+        }
+
+    def recent_hypotheses(self, n: int = 3, exclude_bug_corrupted: bool = True) -> list[JournalEntry]:
+        """Return the last n entries with a non-empty hypothesis field.
+
+        When `exclude_bug_corrupted` is True, skip entries marked by
+        scrub_journal so the planner's hypothesis-chain reasoning learns
+        from real signal only.
+        """
+        pool = (
+            self.trustworthy_entries() if exclude_bug_corrupted else self._entries
+        )
+        with_hyp = [e for e in pool if e.hypothesis]
+        return with_hyp[-n:]
+
+    def apply_scrub(
+        self,
+        commit_sha: str,
+        reason: str,
+        trial_id_min: int | None = None,
+        trial_id_max: int | None = None,
+        timestamp_min: str | None = None,
+        timestamp_max: str | None = None,
+    ) -> tuple[int, list[int]]:
+        """Tag in-window entries as bug_corrupted_by=<commit_sha>.
+
+        Filter semantics: an entry is tagged when it falls inside EVERY
+        bound provided (AND, not OR). Bounds that are None match everything.
+
+        Returns (n_tagged, [trial_ids_tagged]). Mutates self._entries in
+        memory. The caller is responsible for re-persisting the JSONL +
+        TSV via the scrub CLI (this method intentionally does not write to
+        disk so the operator can preview the change first).
+        """
+        tagged: list[int] = []
+        for e in self._entries:
+            if trial_id_min is not None and e.trial_id < trial_id_min:
+                continue
+            if trial_id_max is not None and e.trial_id > trial_id_max:
+                continue
+            if timestamp_min is not None and (e.timestamp or "") < timestamp_min:
+                continue
+            if timestamp_max is not None and (e.timestamp or "") > timestamp_max:
+                continue
+            e.bug_corrupted_by = commit_sha
+            e.bug_corrupted_reason = (reason or "")[:200]
+            tagged.append(e.trial_id)
+        return len(tagged), tagged
+
     def recent_failures(
         self, species: str | None = None, n: int = 10
     ) -> list[JournalEntry]:
@@ -313,6 +415,131 @@ class ExperimentJournal:
                 f"  [{tag}] #{e.trial_id} ({species_label}/{hyp})"
                 + (f" [{mechanism}]" if mechanism else "")
                 + f": {detail}"
+            )
+        return "\n".join(lines)
+
+    def insights_structured(
+        self,
+        n: int = 30,
+        exclude_bug_corrupted: bool = True,
+    ) -> dict[str, dict[str, Any]]:
+        """Group recent insightful trials by action_type to expose pattern + confidence.
+
+        Each action_type bucket carries:
+          - observation: one-line synthesis from the most-recent trial in
+            that bucket (operator can scan; planner cites trial IDs as
+            evidence).
+          - trials_supporting: list[trial_id] in chronological order.
+          - successes / failures: counts within the bucket.
+          - confidence: 'high' (≥3 supporting, success_rate ≥ 0.66),
+            'medium' (≥2 supporting), or 'low' (else).
+          - latest_q / latest_s: quality + speed of the most-recent trial,
+            for at-a-glance trend visibility.
+
+        Bug-corrupted entries are excluded by default so the planner doesn't
+        learn from poisoned signal.
+        """
+        pool = (
+            self.trustworthy_entries() if exclude_bug_corrupted else self._entries
+        )
+        recent = pool[-n:]
+        if not recent:
+            return {}
+
+        buckets: dict[str, list[JournalEntry]] = {}
+        for e in recent:
+            if not (e.pareto_status == "frontier" or e.failure_analysis):
+                continue
+            buckets.setdefault(e.action_type or "unknown", []).append(e)
+
+        out: dict[str, dict[str, Any]] = {}
+        for action_type, entries in buckets.items():
+            entries.sort(key=lambda x: x.trial_id)
+            successes = sum(1 for e in entries if e.pareto_status == "frontier")
+            failures = sum(1 for e in entries if e.failure_analysis)
+            n_sup = len(entries)
+            success_rate = successes / n_sup if n_sup else 0.0
+            if n_sup >= 3 and success_rate >= 0.66:
+                confidence = "high"
+            elif n_sup >= 2:
+                confidence = "medium"
+            else:
+                confidence = "low"
+            latest = entries[-1]
+            observation = latest.hypothesis or latest.expected_mechanism or (
+                latest.failure_analysis.replace("\n", " | ")[:160]
+            ) or "(no description)"
+            out[action_type] = {
+                "observation": observation[:240],
+                "trials_supporting": [e.trial_id for e in entries],
+                "successes": successes,
+                "failures": failures,
+                "confidence": confidence,
+                "latest_trial_id": latest.trial_id,
+                "latest_q": latest.quality,
+                "latest_s": latest.speed,
+                "latest_outcome": (
+                    "frontier" if latest.pareto_status == "frontier" else "failed"
+                ),
+            }
+        return out
+
+    def action_distribution(self, last_n: int = 30) -> dict[str, int]:
+        """Count of each action_type seen in the last n entries (newest-first window).
+
+        Used by the Adjacent-Possible / tail-sampling section to identify
+        action types that are over- vs under-represented in recent history.
+        """
+        counts: dict[str, int] = {}
+        for e in self._entries[-last_n:]:
+            t = e.action_type or "unknown"
+            counts[t] = counts.get(t, 0) + 1
+        return counts
+
+    def tail_action_candidates(
+        self,
+        known_action_types: list[str],
+        last_n: int = 30,
+        n_sample: int = 3,
+    ) -> list[str]:
+        """Sample n_sample action types that are under-represented in recent history.
+
+        "Tail" means actions that show up 0–1 times in the last `last_n`
+        trials. Used to push the planner toward considering creative
+        alternatives outside its recent comfort zone (breaks local-optimum
+        traps).
+        """
+        import random
+        dist = self.action_distribution(last_n=last_n)
+        tail = [t for t in known_action_types if dist.get(t, 0) <= 1]
+        random.shuffle(tail)
+        return tail[:n_sample]
+
+    def insights_structured_text(
+        self, n: int = 30, exclude_bug_corrupted: bool = True
+    ) -> str:
+        """Render insights_structured() for inclusion in the controller prompt."""
+        d = self.insights_structured(n=n, exclude_bug_corrupted=exclude_bug_corrupted)
+        if not d:
+            return "(no insights yet — seed more trials to build evidence)"
+        # Sort by confidence desc, then n supporting desc
+        rank = {"high": 0, "medium": 1, "low": 2}
+        items = sorted(
+            d.items(),
+            key=lambda kv: (rank[kv[1]["confidence"]], -len(kv[1]["trials_supporting"])),
+        )
+        lines: list[str] = []
+        for action_type, info in items:
+            lines.append(
+                f"{action_type} ({info['confidence']} confidence, "
+                f"{info['successes']}+/{info['failures']}- across "
+                f"trials {info['trials_supporting']}):"
+            )
+            lines.append(f"  Observation: {info['observation']}")
+            lines.append(
+                f"  Latest trial #{info['latest_trial_id']} → "
+                f"{info['latest_outcome']} (q={info['latest_q']:.3f} "
+                f"sp={info['latest_s']:.1f})"
             )
         return "\n".join(lines)
 

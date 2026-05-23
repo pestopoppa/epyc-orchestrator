@@ -113,6 +113,15 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Pareto Archive
 {pareto_summary}
 
+### Pareto Frontier Geometry
+{pareto_geometry}
+
+### Journal Trustworthiness (bug_corrupted filtering)
+{journal_trustworthiness}
+
+### Hypotheses Under Test (last 3 trustworthy trials)
+{hypotheses_under_test}
+
 ### Experiment Journal (last 20 entries)
 {journal_summary}
 
@@ -139,8 +148,23 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Suite Quality Trends (last 10 evals)
 {suite_quality_trends}
 
-### Recent Insights (cross-species)
+### Recent Insights (cross-species, structured per action_type, bug-corrupted excluded)
+{insights_structured}
+
+### Recent Insights (legacy flat — for backward compatibility)
 {insights}
+
+### Adjacent Possible — alternatives to consider BEFORE committing
+Before emitting your single action, briefly enumerate 3–5 alternatives you
+considered. For each, give a one-line reason for rejection OR pick it as
+your action.
+
+Additionally, ALSO consider these CREATIVE TAIL candidates sampled from the
+under-used action types (≤1 occurrence in the last 30 trials) — explicitly
+include at least one in your enumeration even if you reject it, so we
+break local-optimum traps:
+
+{creative_tail_candidates}
 
 ### Short-Term Memory (accumulated learnings this session)
 {short_term_memory}
@@ -523,9 +547,93 @@ def _run_loop_inner(
             except Exception as _exc:
                 batch_telemetry_text = f"(telemetry unavailable: {_exc})"
 
+            # 2026-05-23 planner enrichment — four new sections injected
+            # into the prompt:
+            #   1. pareto_geometry — frontier shape + blocking points + gaps
+            #   2. journal_trustworthiness — bug-corrupted ratio + low-signal flag
+            #   3. hypotheses_under_test — last 3 trustworthy trials' hypotheses
+            #   4. insights_structured — per-action-type observations + confidence
+            #   5. creative_tail_candidates — under-used action types to consider
+            try:
+                trust = journal.trustworthiness_score()
+                trust_lines = [
+                    f"total trials: {trust['total']}",
+                    f"trustworthy:  {trust['trustworthy']}",
+                    f"corrupted:    {trust['corrupted']}",
+                    f"ratio:        {trust['ratio']:.1%}",
+                ]
+                if trust["corrupted_by"]:
+                    trust_lines.append(
+                        "corrupted-by breakdown: "
+                        + ", ".join(f"{sha}:{n}" for sha, n in trust["corrupted_by"].items())
+                    )
+                if trust["low_signal"]:
+                    trust_lines.append(
+                        "WARNING: trustworthy < 5 — hypothesis-chain reasoning has low "
+                        "signal. Prefer EXPLORE actions (seed_batch, structural_experiment, "
+                        "tail-sampled creative actions) over EXPLOIT (rollback, "
+                        "small numeric perturbations) until trustworthiness exceeds 5."
+                    )
+                journal_trustworthiness_text = "\n".join(trust_lines)
+            except Exception as _exc:
+                journal_trustworthiness_text = f"(trustworthiness unavailable: {_exc})"
+
+            try:
+                hyps = journal.recent_hypotheses(n=3, exclude_bug_corrupted=True)
+                if not hyps:
+                    hypotheses_text = "(no recent trustworthy hypotheses)"
+                else:
+                    hyp_lines: list[str] = []
+                    for e in hyps:
+                        outcome = (
+                            f"q={e.quality:.3f} sp={e.speed:.1f} → {e.pareto_status}"
+                        )
+                        hyp_lines.append(
+                            f"#{e.trial_id} ({e.species}/{e.action_type}):\n"
+                            f"  Hypothesis: {(e.hypothesis or '(none)')[:240]}\n"
+                            f"  Outcome:    {outcome}"
+                            + (f"\n  Self-criticism: {e.self_criticism[:200]}" if e.self_criticism else "")
+                        )
+                    hypotheses_text = "\n\n".join(hyp_lines)
+            except Exception as _exc:
+                hypotheses_text = f"(hypothesis chain unavailable: {_exc})"
+
+            try:
+                insights_structured_text = journal.insights_structured_text(
+                    n=30, exclude_bug_corrupted=True
+                )
+            except Exception as _exc:
+                insights_structured_text = f"(structured insights unavailable: {_exc})"
+
+            try:
+                pareto_geometry_text = archive.geometry_text()
+            except Exception as _exc:
+                pareto_geometry_text = f"(geometry unavailable: {_exc})"
+
+            try:
+                _known_actions = [
+                    "seed_batch", "numeric_trial", "prompt_mutation",
+                    "gepa_optimize", "code_mutation", "structural_experiment",
+                    "structural_prune", "slot_compact", "train_routing_models",
+                    "distill_skillbank", "reset_memories", "deep_eval",
+                    "rollback", "distill_knowledge",
+                ]
+                _tail = journal.tail_action_candidates(
+                    known_action_types=_known_actions, last_n=30, n_sample=3
+                )
+                if _tail:
+                    creative_tail_text = "\n".join(f"  - {t}" for t in _tail)
+                else:
+                    creative_tail_text = "  (no under-used action types — all action_types seen recently)"
+            except Exception as _exc:
+                creative_tail_text = f"(tail sampling unavailable: {_exc})"
+
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 program=program_text,
                 pareto_summary=archive.summary_text(),
+                pareto_geometry=pareto_geometry_text,
+                journal_trustworthiness=journal_trustworthiness_text,
+                hypotheses_under_test=hypotheses_text,
                 journal_summary=journal.summary_text(20),
                 seeder_status=json.dumps(seeder.convergence_status(), indent=2),
                 batch_telemetry=batch_telemetry_text,
@@ -539,6 +647,8 @@ def _run_loop_inner(
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
                 insights=insights_text,
+                insights_structured=insights_structured_text,
+                creative_tail_candidates=creative_tail_text,
                 short_term_memory=memory.to_text(),  # AP-22
                 last_criticism=last_criticism_text,  # AP-23
                 model_signatures=model_signatures_text,
