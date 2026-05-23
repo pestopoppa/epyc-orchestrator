@@ -307,41 +307,17 @@ def _strip_tool_outputs(text: str, tool_outputs: list[str]) -> str:
     return strip_tool_outputs(text, tool_outputs)
 
 
-# Gemma-4's chat template uses a multi-channel output format. When the
-# orchestrator sends pre-templated prompts via /completion (which doesn't
-# apply the GGUF's jinja template), the model emits its own channel
-# markers as raw output bytes. /v1/chat/completions with --jinja strips
-# these automatically; we replicate that here for the /completion path.
-#
-# Patterns observed in worker_general (gemma-4-26B-A4B-it) responses:
-#   <|channel>thought\n<channel|>actual_answer
-#   <thought\n<channel|>actual_answer
-#   <|channel>final\n<channel|>actual_answer
-#
-# We strip the channel prefix structures, keeping the actual answer that
-# follows the last <channel|>. Conservative: if no marker found, return
-# the input unchanged.
-_GEMMA4_CHANNEL_RE = re.compile(
-    r"^(?:<\|?(?:channel|thought|final|turn)\|?>?[^<]*)+",
-    re.DOTALL,
-)
-
-
-def strip_gemma4_channel_markers(text: str) -> str:
-    """Remove gemma-4 channel-prefix artifacts from raw /completion output.
-
-    Idempotent — re-running on already-clean text returns it unchanged.
-    Safe to call on any model's output (the patterns are gemma-specific
-    and won't match Qwen ChatML or other formats).
-    """
-    if not text or "<|channel" not in text and "<channel|" not in text and "<|turn" not in text:
-        return text
-    # Find the last `<channel|>` — content after it is the real answer.
-    last_close = text.rfind("<channel|>")
-    if last_close >= 0:
-        return text[last_close + len("<channel|>"):].lstrip("\n").lstrip()
-    # Fall back: regex-strip a leading prefix of channel markers.
-    return _GEMMA4_CHANNEL_RE.sub("", text).lstrip()
+# 2026-05-23: `strip_gemma4_channel_markers()` retired entirely.
+# It was added 2026-05-22 (commit 3d69e97) as a stop-gap to clean
+# `<|channel>thought\n<channel|>` artifacts that gemma-4-26B-A4B-it
+# emitted into /completion responses. The /v1/chat/completions
+# migration (commit 2c1711a, 2026-05-23) made the helper unreachable —
+# all gemma-family worker roles now route via /v1/chat/completions
+# which applies --jinja server-side and parses the multi-channel
+# format cleanly. The wire-up in direct_stage.py was removed in
+# ab889b1; this turn fully retires the helper to avoid carrying dead
+# code. If a future gemma-family role ever lands on /completion, see
+# wiki/chat-templates.md for the proper handling.
 
 
 _FUNCTION_REPR_RE = re.compile(r"<(?:function|class|module) \w+ at 0x[0-9a-fA-F]+>")

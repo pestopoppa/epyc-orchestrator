@@ -286,20 +286,35 @@ def invoke_controller(
                 except Exception:
                     pass
             # 2026-05-23: detect stale --resume target. claude CLI emits
-            # "No conversation found with session ID: X" on stderr when
-            # the resumed session has been pruned / wasn't persisted.
-            # Returning the same stale session_id causes the caller to
-            # save it back into autopilot state, repeating the failure
-            # every trial. Clear it so the next call starts fresh.
-            if (
-                stderr and (
-                    "no conversation found" in stderr.lower()
-                    or "session id" in stderr.lower() and "not found" in stderr.lower()
+            # various stderr patterns when the resumed session has been
+            # pruned / wasn't persisted; returning the same stale
+            # session_id back to the caller causes it to save it again
+            # into autopilot state, repeating the failure every trial.
+            # Clear it so the next call starts fresh. Broadened pattern
+            # set to catch CLI wording drift across versions.
+            _stderr_low = (stderr or "").lower()
+            _stale_session_phrases = (
+                "no conversation found",
+                "session expired",
+                "session not found",
+                "conversation not found",
+                "unknown session",
+                "invalid session",
+                "could not resume",
+                "session has been deleted",
+            )
+            _stale_id_combo = (
+                "session id" in _stderr_low and (
+                    "not found" in _stderr_low
+                    or "expired" in _stderr_low
+                    or "invalid" in _stderr_low
+                    or "no such" in _stderr_low
                 )
-            ):
+            )
+            if _stale_id_combo or any(p in _stderr_low for p in _stale_session_phrases):
                 log.warning(
-                    "Clearing stale planner session_id=%s (CLI reports it no longer exists); "
-                    "next trial will start a fresh conversation",
+                    "Clearing stale planner session_id=%s (CLI reports it no longer "
+                    "exists / expired); next trial will start a fresh conversation",
                     (session_id or "")[:12],
                 )
                 return "", None
