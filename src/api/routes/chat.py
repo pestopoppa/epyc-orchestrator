@@ -273,18 +273,26 @@ async def _try_cheap_first(
     try:
         from src.api.routes.chat_utils import QWEN_STOP, apply_chat_template_for_role
 
-        # Apply per-role chat template — without this, gemma-family cheap
-        # roles (worker_general post 2026-05-08 swap) see raw text instead
-        # of the expected <start_of_turn>...<end_of_turn> markers and return
-        # 0 tokens. This is the SECOND /completion path (the first is the
-        # direct-mode path at chat.py:498). Discovered after the 2026-05-22
-        # reload still showed worker_explore producing 0-token responses
-        # despite the chat.py:498 fix being live for frontdoor.
-        templated_prompt = apply_chat_template_for_role(
-            cheap_role,
-            prompt,
-            registry=getattr(state, "registry", None),
-        )
+        # 2026-05-23: skip template wrap when cheap_role routes through
+        # /v1/chat/completions (server-side jinja handles templating).
+        import os as _os_cc
+        _cc_roles = {
+            r.strip() for r in _os_cc.environ.get(
+                "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES",
+                "worker_general,worker_explore,worker_math,worker_summarize,worker_coder",
+            ).split(",") if r.strip()
+        }
+        if cheap_role in _cc_roles:
+            templated_prompt = prompt
+        else:
+            # Apply per-role chat template — without this, gemma-family cheap
+            # roles (worker_general post 2026-05-08 swap) see raw text instead
+            # of the expected turn markers and return 0 tokens.
+            templated_prompt = apply_chat_template_for_role(
+                cheap_role,
+                prompt,
+                registry=getattr(state, "registry", None),
+            )
         # QWEN_STOP only applies if the templated prompt is actually Qwen-
         # marked. For non-Qwen families, the marker won't appear in output;
         # for Qwen, leaving it in is safe.
@@ -517,12 +525,26 @@ async def _handle_chat(
             # bare text is treated as continuation, not user query — causing
             # rambling self-correction on Qwen models OR zero-token output on
             # Gemma when the wrong markers are sent.
-            from src.api.routes.chat_utils import apply_chat_template_for_role
-            request.prompt = apply_chat_template_for_role(
-                str(initial_role),
-                request.prompt,
-                registry=getattr(state, "registry", None),
-            )
+            # 2026-05-23: when this role routes through /v1/chat/completions
+            # (env: ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES), skip the
+            # orchestrator-side template wrap entirely — llama-server's
+            # --jinja flag will apply the GGUF's chat template server-side.
+            # Pre-templating would inject our template markers as literal
+            # user content, confusing the model.
+            import os as _os_cc
+            _cc_roles = {
+                r.strip() for r in _os_cc.environ.get(
+                    "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES",
+                    "worker_general,worker_explore,worker_math,worker_summarize,worker_coder",
+                ).split(",") if r.strip()
+            }
+            if str(initial_role) not in _cc_roles:
+                from src.api.routes.chat_utils import apply_chat_template_for_role
+                request.prompt = apply_chat_template_for_role(
+                    str(initial_role),
+                    request.prompt,
+                    registry=getattr(state, "registry", None),
+                )
             return _finalize(
                 await asyncio.to_thread(
                     _execute_direct,

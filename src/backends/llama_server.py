@@ -86,6 +86,13 @@ class ServerConfig:
     connect_timeout: int = field(default_factory=lambda: _server_cfg().connect_timeout)
     retry_count: int = field(default_factory=lambda: _server_cfg().retry_count)
     retry_backoff: float = field(default_factory=lambda: _server_cfg().retry_backoff)
+    # 2026-05-23: when True, this backend routes through /v1/chat/completions
+    # instead of /completion. Used for models whose GGUF chat_template emits
+    # multi-channel output (e.g. gemma-4-26B-A4B-it's <|channel>thought
+    # markers) that /completion can't apply server-side. The OpenAI-style
+    # endpoint with --jinja handles templating + response parsing properly.
+    # See backend.py:_init_caching_backends for env-driven role selection.
+    use_chat_completions: bool = False
 
 
 @dataclass
@@ -270,6 +277,13 @@ class LlamaServerBackend(ModelBackend):
         start_time = time.time()
         self.cache_stats.total_requests += 1
 
+        # 2026-05-23: when use_chat_completions is set on this backend's
+        # ServerConfig, route through /v1/chat/completions (server-side
+        # jinja template applied by --jinja flag). Otherwise legacy
+        # /completion path.
+        if self.config.use_chat_completions:
+            return self._infer_chat_completions(role_config, request, start_time)
+
         # Build request payload
         payload = self._build_payload(role_config, request)
 
@@ -421,6 +435,149 @@ class LlamaServerBackend(ModelBackend):
                 completion_reason="request_error",
             )
 
+    def _infer_chat_completions(
+        self,
+        role_config: RoleConfig,
+        request: InferenceRequest,
+        start_time: float,
+    ) -> InferenceResult:
+        """Run inference via the OpenAI-compatible /v1/chat/completions endpoint.
+
+        Used for models whose chat template needs server-side jinja
+        application (gemma-4-26B-A4B-it's multi-channel format, etc.).
+        Builds a single-user-turn messages list from request.prompt and
+        lets llama-server's --jinja flag handle templating + response
+        parsing.
+
+        Caller's prompt is treated as PLAIN user content — if the caller
+        pre-templated, the inner-template markers will appear as literal
+        user content and likely confuse the model. The chat.py path
+        knows to skip pre-templating when this backend mode is in use
+        (see _per_region_locks_enabled + chat_completion_roles env).
+        """
+        # Strip any prior chat-template wrapping the orchestrator might
+        # have applied — we want the model to see only the user's actual
+        # question. This is defensive; chat.py should already be passing
+        # raw prompts for chat_completion roles.
+        user_content = request.prompt or ""
+        for marker in ("<|im_start|>user\n", "<|im_start|>user "):
+            if user_content.startswith(marker):
+                user_content = user_content[len(marker):]
+                # also strip the closing markers
+                for closer in ("<|im_end|>\n<|im_start|>assistant\n", "<|im_end|>"):
+                    idx = user_content.rfind(closer)
+                    if idx > 0:
+                        user_content = user_content[:idx]
+                break
+        if user_content.startswith("<start_of_turn>user\n"):
+            user_content = user_content[len("<start_of_turn>user\n"):]
+            for closer in ("<end_of_turn>\n<start_of_turn>model\n", "<end_of_turn>"):
+                idx = user_content.rfind(closer)
+                if idx > 0:
+                    user_content = user_content[:idx]
+        user_content = user_content.strip()
+
+        payload: dict[str, Any] = {
+            "messages": [{"role": "user", "content": user_content}],
+            "max_tokens": request.n_tokens if request.n_tokens > 0 else 4096,
+            "stream": False,
+        }
+        temp = role_config.acceleration.temperature
+        if temp is None:
+            temp = request.temperature
+        if temp is not None and temp >= 0:
+            payload["temperature"] = temp
+        if request.stop_sequences:
+            payload["stop"] = request.stop_sequences
+
+        try:
+            http_start = time.perf_counter()
+            _overall = request.timeout or self.config.timeout
+            _batch_timeout = httpx.Timeout(
+                connect=self.config.connect_timeout,
+                read=min(_overall, 120),
+                write=_overall,
+                pool=30,
+            )
+            logger.warning(
+                "llama POST /v1/chat/completions start role=%s prompt_chars=%d max_tokens=%d timeout=%.0f",
+                role_config.name, len(user_content), payload["max_tokens"], _overall,
+            )
+            response = self.client.post(
+                "/v1/chat/completions",
+                json=payload,
+                timeout=_batch_timeout,
+            )
+            http_elapsed_ms = (time.perf_counter() - http_start) * 1000
+            logger.warning(
+                "llama POST /v1/chat/completions done role=%s elapsed_ms=%.0f status=%d",
+                role_config.name, http_elapsed_ms, response.status_code,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            elapsed = time.time() - start_time
+
+            choices = data.get("choices", [])
+            output = ""
+            completion_reason = "stop"
+            if choices:
+                msg = choices[0].get("message", {})
+                output = msg.get("content", "") or ""
+                completion_reason = str(choices[0].get("finish_reason") or "stop")
+
+            usage = data.get("usage", {}) or {}
+            prompt_tokens = int(usage.get("prompt_tokens", 0))
+            tokens_generated = int(usage.get("completion_tokens", 0))
+
+            # llama-server's OpenAI shim doesn't always emit timings; estimate
+            timings = data.get("timings", {}) or {}
+            prompt_eval_ms = float(timings.get("prompt_ms", 0.0))
+            generation_ms = float(timings.get("predicted_ms", 0.0))
+            predicted_per_second = float(timings.get("predicted_per_second", 0.0))
+            inference_ms = prompt_eval_ms + generation_ms
+            http_overhead_ms = max(0.0, http_elapsed_ms - inference_ms)
+
+            self.cache_stats.total_prompt_tokens += prompt_tokens
+            speed = (
+                predicted_per_second if predicted_per_second > 0
+                else (tokens_generated / elapsed if elapsed > 0 else 0.0)
+            )
+
+            return InferenceResult(
+                role=role_config.name,
+                output=output,
+                tokens_generated=tokens_generated,
+                generation_speed=speed,
+                elapsed_time=elapsed,
+                success=True,
+                partial=False,
+                degraded=False,
+                prompt_eval_ms=prompt_eval_ms,
+                generation_ms=generation_ms,
+                predicted_per_second=predicted_per_second,
+                http_overhead_ms=http_overhead_ms,
+                completion_reason=completion_reason,
+            )
+        except httpx.HTTPStatusError as e:
+            elapsed = time.time() - start_time
+            return InferenceResult(
+                role=role_config.name, output="", tokens_generated=0,
+                generation_speed=0.0, elapsed_time=elapsed, success=False,
+                error_message=f"chat_completions HTTP {e.response.status_code}",
+                failure_stage="transport", failure_reason="http_status",
+                completion_reason="http_error",
+            )
+        except Exception as e:
+            elapsed = time.time() - start_time
+            return InferenceResult(
+                role=role_config.name, output="", tokens_generated=0,
+                generation_speed=0.0, elapsed_time=elapsed, success=False,
+                error_message=f"chat_completions failed: {e}",
+                failure_stage="transport", failure_reason="request_error",
+                completion_reason="request_error",
+            )
+
     def infer_stream(
         self,
         role_config: RoleConfig,
@@ -516,6 +673,16 @@ class LlamaServerBackend(ModelBackend):
 
         start_time = time.time()
         self.cache_stats.total_requests += 1
+
+        # 2026-05-23: chat-completions streaming path. The orchestrator's
+        # inference tap consumes per-token text chunks via on_chunk; the
+        # OpenAI streaming format emits the same kind of incremental
+        # content deltas, so we can route through /v1/chat/completions
+        # without changing the on_chunk contract.
+        if self.config.use_chat_completions:
+            return self._infer_stream_text_chat_completions(
+                role_config, request, on_chunk, start_time,
+            )
 
         payload = self._build_payload(role_config, request)
         payload["stream"] = True
@@ -896,6 +1063,142 @@ class LlamaServerBackend(ModelBackend):
         except httpx.RequestError as e:
             logger.error(f"Failed to restore slot {slot_id}: {e}")
             return False
+
+    def _infer_stream_text_chat_completions(
+        self,
+        role_config: RoleConfig,
+        request: InferenceRequest,
+        on_chunk,
+        start_time: float,
+    ) -> InferenceResult:
+        """Streaming variant of /v1/chat/completions for use with the inference tap.
+
+        Parses OpenAI-style SSE chunks (`data: {"choices":[{"delta":{"content":"..."}}]}`)
+        and forwards each delta to on_chunk before assembling the final
+        InferenceResult. Treats the request.prompt as PLAIN user content
+        (same un-templating as _infer_chat_completions).
+        """
+        import json as _json
+
+        user_content = request.prompt or ""
+        # Same un-template logic as the non-streaming variant
+        for marker in ("<|im_start|>user\n", "<|im_start|>user "):
+            if user_content.startswith(marker):
+                user_content = user_content[len(marker):]
+                for closer in ("<|im_end|>\n<|im_start|>assistant\n", "<|im_end|>"):
+                    idx = user_content.rfind(closer)
+                    if idx > 0:
+                        user_content = user_content[:idx]
+                break
+        if user_content.startswith("<start_of_turn>user\n"):
+            user_content = user_content[len("<start_of_turn>user\n"):]
+            for closer in ("<end_of_turn>\n<start_of_turn>model\n", "<end_of_turn>"):
+                idx = user_content.rfind(closer)
+                if idx > 0:
+                    user_content = user_content[:idx]
+        user_content = user_content.strip()
+
+        payload: dict[str, Any] = {
+            "messages": [{"role": "user", "content": user_content}],
+            "max_tokens": request.n_tokens if request.n_tokens > 0 else 4096,
+            "stream": True,
+        }
+        temp = role_config.acceleration.temperature
+        if temp is None:
+            temp = request.temperature
+        if temp is not None and temp >= 0:
+            payload["temperature"] = temp
+        if request.stop_sequences:
+            payload["stop"] = request.stop_sequences
+
+        chunks: list[str] = []
+        completion_reason = "stop"
+
+        try:
+            _overall = request.timeout or self.config.timeout
+            _read_timeout = min(_overall, 120)
+            _stream_timeout = httpx.Timeout(
+                connect=self.config.connect_timeout,
+                read=_read_timeout, write=_overall, pool=_overall,
+            )
+            http_start = time.perf_counter()
+            logger.info(
+                "llama STREAM /v1/chat/completions start role=%s prompt_chars=%d max_tokens=%d",
+                role_config.name, len(user_content), payload["max_tokens"],
+            )
+            with self.client.stream(
+                "POST", "/v1/chat/completions",
+                json=payload, timeout=_stream_timeout,
+            ) as response:
+                response.raise_for_status()
+                try:
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                evt = _json.loads(data)
+                                choices = evt.get("choices") or []
+                                if choices:
+                                    delta = choices[0].get("delta") or {}
+                                    content = delta.get("content")
+                                    if content:
+                                        chunks.append(content)
+                                        if on_chunk is not None:
+                                            try:
+                                                on_chunk(content)
+                                            except StopIteration:
+                                                # Caller-controlled early stop
+                                                logger.debug(
+                                                    "chat_completions stream aborted by on_chunk"
+                                                )
+                                                break
+                                    fr = choices[0].get("finish_reason")
+                                    if fr:
+                                        completion_reason = str(fr)
+                            except _json.JSONDecodeError:
+                                continue
+                except httpx.ReadTimeout:
+                    logger.warning(
+                        "chat_completions stream read timeout (role=%s, accumulated %d chunks)",
+                        role_config.name, len(chunks),
+                    )
+                    completion_reason = "read_timeout"
+            http_elapsed_ms = (time.perf_counter() - http_start) * 1000
+
+            output = "".join(chunks)
+            elapsed = time.time() - start_time
+            tokens_generated = len(output) // 4 + len(chunks)  # rough estimate from chunks
+            speed = tokens_generated / elapsed if elapsed > 0 else 0.0
+            return InferenceResult(
+                role=role_config.name,
+                output=output,
+                tokens_generated=tokens_generated,
+                generation_speed=speed,
+                elapsed_time=elapsed,
+                success=bool(output) or completion_reason != "read_timeout",
+                partial=False,
+                degraded=False,
+                prompt_eval_ms=0.0,
+                generation_ms=elapsed * 1000,
+                predicted_per_second=speed,
+                http_overhead_ms=0.0,
+                completion_reason=completion_reason,
+            )
+        except Exception as e:
+            elapsed = time.time() - start_time
+            return InferenceResult(
+                role=role_config.name,
+                output="".join(chunks),
+                tokens_generated=len(chunks),
+                generation_speed=0.0, elapsed_time=elapsed, success=False,
+                error_message=f"chat_completions stream failed: {e}",
+                failure_stage="transport", failure_reason="request_error",
+                completion_reason="request_error",
+            )
 
     def close(self) -> None:
         """Close the HTTP client and release connections.

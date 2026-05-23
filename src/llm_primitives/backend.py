@@ -24,6 +24,25 @@ class BackendMixin:
             from src.backends.concurrency_aware import ConcurrencyAwareBackend
             from src.prefix_cache import CachingBackend, PrefixRouter
 
+            # 2026-05-23: roles in this env var route through
+            # /v1/chat/completions instead of /completion. Used for models
+            # whose chat template needs server-side jinja application
+            # (gemma-4 multi-channel format, etc.). Comma-separated names.
+            # Default: worker_general (gemma-4-26B-A4B-it).
+            import os as _os
+            _ccl_raw = _os.environ.get(
+                "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES",
+                "worker_general,worker_explore,worker_math,worker_summarize,worker_coder",
+            )
+            _chat_completion_roles = {
+                r.strip() for r in _ccl_raw.split(",") if r.strip()
+            }
+            if _chat_completion_roles:
+                _log.info(
+                    "Roles using /v1/chat/completions backend: %s",
+                    sorted(_chat_completion_roles),
+                )
+
             for role, url_str in server_urls.items():
                 urls = [u.strip() for u in url_str.split(",") if u.strip()]
 
@@ -38,9 +57,16 @@ class BackendMixin:
                     full_url = None
                     quarter_urls = urls
 
+                _use_cc = role in _chat_completion_roles
+                if _use_cc:
+                    _log.info("role %s → /v1/chat/completions backend (server-side jinja)", role)
+
                 if has_full and quarter_urls:
                     # Pre-warm role: full-speed + quarter instances
-                    full_config = ServerConfig(base_url=full_url, num_slots=num_slots)
+                    full_config = ServerConfig(
+                        base_url=full_url, num_slots=num_slots,
+                        use_chat_completions=_use_cc,
+                    )
                     full_backend = CachingBackend(
                         LlamaServerBackend(full_config),
                         PrefixRouter(num_slots=num_slots),
@@ -49,7 +75,10 @@ class BackendMixin:
 
                     quarter_backends = []
                     for url in quarter_urls:
-                        qcfg = ServerConfig(base_url=url, num_slots=num_slots)
+                        qcfg = ServerConfig(
+                            base_url=url, num_slots=num_slots,
+                            use_chat_completions=_use_cc,
+                        )
                         quarter_backends.append(CachingBackend(
                             LlamaServerBackend(qcfg),
                             PrefixRouter(num_slots=num_slots),
@@ -67,7 +96,10 @@ class BackendMixin:
                     # Multi-instance role without full: round-robin
                     backends = []
                     for url in quarter_urls:
-                        config = ServerConfig(base_url=url, num_slots=num_slots)
+                        config = ServerConfig(
+                            base_url=url, num_slots=num_slots,
+                            use_chat_completions=_use_cc,
+                        )
                         backend = LlamaServerBackend(config)
                         router = PrefixRouter(num_slots=num_slots)
                         backends.append(CachingBackend(backend, router))
@@ -76,7 +108,10 @@ class BackendMixin:
                 else:
                     # Single-instance role
                     url = quarter_urls[0] if quarter_urls else url_str
-                    config = ServerConfig(base_url=url, num_slots=num_slots)
+                    config = ServerConfig(
+                        base_url=url, num_slots=num_slots,
+                        use_chat_completions=_use_cc,
+                    )
                     backend = LlamaServerBackend(config)
                     router = PrefixRouter(num_slots=num_slots)
                     self._backends[role] = CachingBackend(backend, router)
