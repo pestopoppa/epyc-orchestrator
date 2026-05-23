@@ -522,6 +522,24 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         <span class="count-suffix" id="autopilot-status">— real-time tail (eval / seed_batch / meta-planning / rollback / safety)</span>
       </h2>
       <pre id="autopilot-log-pre" class="stream-pre stream-medium"></pre>
+
+      <details class="section-accordion" style="margin-top:14px" open>
+        <summary>GEPA + Pareto frontier <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px;font-size:10px" id="pareto-summary"></span></summary>
+        <div id="pareto-container">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+            <div>
+              <h2 style="margin-bottom:8px">Pareto frontier — quality × speed</h2>
+              <svg id="pareto-plot-qs" class="pareto-plot" viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet"></svg>
+            </div>
+            <div>
+              <h2 style="margin-bottom:8px">hypervolume timeline</h2>
+              <svg id="pareto-plot-hv" class="pareto-plot" viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet"></svg>
+            </div>
+          </div>
+          <h2 style="margin-bottom:8px">GEPA progress <span class="count-suffix">(autopilot.log tail)</span></h2>
+          <div id="gepa-lines"></div>
+        </div>
+      </details>
     </div>
   </div>
 
@@ -555,24 +573,6 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
     </div>
   </div>
 </div>
-
-<details class="section-accordion" style="margin-top:18px">
-  <summary>GEPA + Pareto frontier <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px;font-size:10px" id="pareto-summary"></span></summary>
-  <div id="pareto-container">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-      <div>
-        <h2 style="margin-bottom:8px">Pareto frontier — quality × speed</h2>
-        <svg id="pareto-plot-qs" class="pareto-plot" viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet"></svg>
-      </div>
-      <div>
-        <h2 style="margin-bottom:8px">hypervolume timeline</h2>
-        <svg id="pareto-plot-hv" class="pareto-plot" viewBox="0 0 400 280" preserveAspectRatio="xMidYMid meet"></svg>
-      </div>
-    </div>
-    <h2 style="margin-bottom:8px">GEPA progress <span class="count-suffix">(autopilot.log tail)</span></h2>
-    <div id="gepa-lines"></div>
-  </div>
-</details>
 
 <!-- Legacy id placeholder so the old SVG-aware JS code paths that may still
      reference #topology-svg degrade silently. The new render path uses
