@@ -480,6 +480,8 @@ async def _handle_chat(
             request, routing, primitives, state, start_time, initial_role, execution_mode,
         )
         if cheap_result is not None:
+            if cheap_result.answer and "<answer>" in cheap_result.answer and "</answer>" not in cheap_result.answer:
+                cheap_result.answer += "</answer>"
             return _finalize(cheap_result)
 
         # Stage 8: Execute selected mode (with fallthrough on failure)
