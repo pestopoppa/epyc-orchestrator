@@ -139,13 +139,16 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
 }
 .counter .sub { color: var(--dim); font-size: 11px; margin-top: 2px; }
 
-/* Compact topology strip — each role on its own row with slot dots */
+/* Compact topology strip — each role on its own row.
+   Grid: role-name | port | activity-stats | slot-dots
+   Activity-stats column shows recent req count + t/s + last-active age
+   pulled from /dashboard/api/topology_activity (5s poll). */
 .topology-strip { display: flex; flex-direction: column; gap: 4px; }
 .topology-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto 120px;
+    grid-template-columns: minmax(0, 1fr) auto minmax(110px, auto) 120px;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     padding: 7px 10px;
     border-radius: var(--radius-sm);
     cursor: pointer;
@@ -160,6 +163,15 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     font-family: var(--font-mono); font-size: 11px;
     color: var(--dim); padding-right: 4px;
 }
+.topology-row .activity-stats {
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--dim);
+    text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topology-row .activity-stats .stat-fresh { color: var(--good); }
+.topology-row .activity-stats .stat-stale { color: var(--dim); }
+.topology-row .activity-stats .stat-sep { color: var(--border-strong); padding: 0 2px; }
 .topology-row .slot-dots {
     display: flex; gap: 3px; justify-content: flex-end; align-items: center;
     flex-wrap: wrap;
@@ -656,11 +668,16 @@ function renderTopologyStrip() {
         port.className = 'port';
         port.textContent = parent.port || '—';
 
+        const stats = document.createElement('div');
+        stats.className = 'activity-stats';
+        stats.id = `activity_${g.base}`;
+        stats.textContent = '—';  // populated by updateTopologyActivity
+
         const dots = document.createElement('div');
         dots.className = 'slot-dots';
         dots.id = `slotdots_${parent.id}`;
 
-        row.appendChild(label); row.appendChild(port); row.appendChild(dots);
+        row.appendChild(label); row.appendChild(port); row.appendChild(stats); row.appendChild(dots);
 
         if (hasQuarters) {
             // Expand toggle — clicking ⊕ reveals per-instance rows below.
@@ -685,9 +702,11 @@ function renderTopologyStrip() {
                 l2.textContent = inst.quarter ? `↳ ${inst.quarter}` : '↳ main';
                 const p2 = document.createElement('div'); p2.className = 'port';
                 p2.textContent = inst.port || '—';
+                const s2 = document.createElement('div'); s2.className = 'activity-stats';
+                s2.textContent = '';  // per-quarter aggregation not yet implemented; parent row shows fleet-wide
                 const d2 = document.createElement('div'); d2.className = 'slot-dots';
                 d2.id = `slotdots_${inst.id}`;
-                r2.appendChild(l2); r2.appendChild(p2); r2.appendChild(d2);
+                r2.appendChild(l2); r2.appendChild(p2); r2.appendChild(s2); r2.appendChild(d2);
                 childContainer.appendChild(r2);
             }
             row.onclick = () => openNodeDetail(parent.port, parent.label);
@@ -2074,6 +2093,54 @@ async function updateProcessStatus() {
 // different — we don't need second-by-second granularity for build drift.
 let _buildRevLoaded = null;  // {git_sha, dashboard_html_mtime, dashboard_py_mtime, server_started_at}
 
+async function updateTopologyActivity() {
+    // Per-role recent activity stats from /dashboard/api/topology_activity.
+    // Populates each topology row's .activity-stats element with:
+    //   "12 req · 31 t/s · 3s ago"
+    // Color cues: fresh (<60s ago) in green, stale (>=60s) in dim.
+    // Falls back to "—" when the role has no data in the window.
+    try {
+        const r = await fetch('/dashboard/api/topology_activity');
+        const d = await r.json();
+        const perRole = d.per_role || {};
+        // Iterate every .activity-stats element by id pattern. Each row was
+        // created with id="activity_<base>" by renderTopologyStrip.
+        document.querySelectorAll('[id^="activity_"]').forEach(el => {
+            const base = el.id.substring('activity_'.length);
+            const stats = perRole[base];
+            if (!stats || (!stats.n_recent && !stats.n_completed)) {
+                el.innerHTML = '<span class="stat-stale">—</span>';
+                el.title = `no recent activity for ${base} in last ${Math.round(d.window_s)}s`;
+                return;
+            }
+            const parts = [];
+            const nReq = stats.n_recent || stats.n_completed || 0;
+            if (nReq > 0) parts.push(`<span class="stat-fresh">${nReq}</span> req`);
+            if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+                parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+            } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
+                parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
+            }
+            const age = stats.last_activity_age_s;
+            if (age != null) {
+                const ageClass = age < 60 ? 'stat-fresh' : 'stat-stale';
+                const ageStr = age < 60
+                    ? `${Math.round(age)}s`
+                    : (age < 3600 ? `${Math.round(age/60)}m` : `${(age/3600).toFixed(1)}h`);
+                parts.push(`<span class="${ageClass}">${ageStr} ago</span>`);
+            }
+            el.innerHTML = parts.join('<span class="stat-sep">·</span>');
+            const tooltipBits = [
+                `${nReq} req in last ${Math.round(d.window_s)}s`,
+                stats.avg_tps_recent != null ? `avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
+                stats.avg_duration_s != null ? `avg ${stats.avg_duration_s.toFixed(2)}s/task` : null,
+                age != null ? `last activity ${age.toFixed(1)}s ago` : null,
+            ].filter(Boolean);
+            el.title = tooltipBits.join(' · ');
+        });
+    } catch (e) {}
+}
+
 async function updateBuildRev() {
     try {
         const r = await fetch('/dashboard/api/version');
@@ -2206,6 +2273,8 @@ function startDashboard() {
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
         setInterval(updateRegionLocks, 1500);  // 1.5s poll — fast enough to catch transient locks during inference
+        updateTopologyActivity();
+        setInterval(updateTopologyActivity, 5000);  // topology row activity stats
         // Pareto poll: only fetch when the GEPA accordion is open. Cheap when
         // closed (no fetch, just summary text from the last successful call).
         setInterval(() => {

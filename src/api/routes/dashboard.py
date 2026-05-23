@@ -755,6 +755,106 @@ async def version() -> JSONResponse:
     })
 
 
+@router.get("/dashboard/api/topology_activity")
+async def topology_activity(window_s: float = 600.0) -> JSONResponse:
+    """Per-role recent activity stats for the topology strip.
+
+    Aggregates from two cheap sources:
+      - inference_tap.log sections (last ~80) — provides per-role recent
+        request count, last activity timestamp, and TIMINGS (t/s).
+      - recent_completed_tasks (last 10 min, from progress JSONL) —
+        provides per-role per-task durations.
+
+    Returns:
+        {
+          "<role>": {
+            "n_recent": int,                  # tap sections matching role in window
+            "n_completed": int,               # JSONL chat tasks matching role in window
+            "last_activity_age_s": float,     # seconds since last tap section
+            "avg_tps_recent": float | None,   # mean of TIMINGS t/s across recent sections
+            "avg_duration_s": float | None,   # mean chat-task duration
+          },
+          ...
+        }
+
+    Cheap: tap parse is already what the live tap polling uses; we just
+    aggregate it here. Cached header advised but not required at current
+    request rates.
+    """
+    inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=512 * 1024)
+    sections = _parse_inference_sections(inference_tail, max_sections=80)
+    now = time.time()
+
+    # Per-role aggregation from tap sections. timestamp format is
+    # "YYYY-MM-DD HH:MM:SS" in local time (writer uses datetime.now()).
+    per_role: dict[str, dict[str, Any]] = {}
+    for s in sections:
+        role = s.get("role") or ""
+        if not role:
+            continue
+        bucket = per_role.setdefault(role, {
+            "n_recent": 0,
+            "n_completed": 0,
+            "last_activity_age_s": None,
+            "_tps_samples": [],
+            "_duration_samples": [],
+        })
+        ts = s.get("timestamp")
+        if ts:
+            try:
+                dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                age = max(0.0, now - dt.timestamp())
+            except Exception:
+                age = None
+            if age is not None and age <= window_s:
+                bucket["n_recent"] += 1
+                if bucket["last_activity_age_s"] is None or age < bucket["last_activity_age_s"]:
+                    bucket["last_activity_age_s"] = age
+        # Parse the TIMINGS line for t/s — format "N tokens in Xs (prompt=..., gen=..., Y.Y t/s)"
+        timings_str = (s.get("response") or "")
+        m = re.search(r"([\d.]+)\s*t/s", timings_str)
+        if m:
+            try:
+                bucket["_tps_samples"].append(float(m.group(1)))
+            except ValueError:
+                pass
+
+    # Augment from recent_completed_tasks (gives chat-XXX-tracked durations).
+    log_path = _todays_progress_log()
+    completed_pairs, _rolling, _cum = _scan_recent_decisions(log_path)
+    _, recent_completed = _scan_orchestrator_tasks(
+        log_path,
+        in_flight_max_age_s=90.0,
+        completed_window_s=window_s,
+        max_items=80,
+    )
+    for t in recent_completed:
+        role = t.get("final_role") or t.get("chosen_action") or ""
+        if not role:
+            continue
+        bucket = per_role.setdefault(role, {
+            "n_recent": 0,
+            "n_completed": 0,
+            "last_activity_age_s": None,
+            "_tps_samples": [],
+            "_duration_samples": [],
+        })
+        bucket["n_completed"] += 1
+        dur = t.get("duration_s")
+        if isinstance(dur, (int, float)) and dur > 0:
+            bucket["_duration_samples"].append(float(dur))
+
+    # Collapse internal sample lists to aggregates.
+    out: dict[str, dict[str, Any]] = {}
+    for role, b in per_role.items():
+        tps_samples = b.pop("_tps_samples")
+        dur_samples = b.pop("_duration_samples")
+        b["avg_tps_recent"] = (sum(tps_samples) / len(tps_samples)) if tps_samples else None
+        b["avg_duration_s"] = (sum(dur_samples) / len(dur_samples)) if dur_samples else None
+        out[role] = b
+    return JSONResponse({"per_role": out, "window_s": window_s, "now": now})
+
+
 @router.get("/dashboard/api/topology")
 async def topology() -> JSONResponse:
     """Return the static topology: nodes with role + display color + port."""
