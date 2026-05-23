@@ -221,41 +221,62 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
 .tag.reject { background: rgba(239,68,68,0.12); color: var(--bad); border-color: rgba(239,68,68,0.3); }
 .tag.shadow { background: rgba(245,158,11,0.10); color: var(--warn); border-color: rgba(245,158,11,0.3); }
 
-/* Decision rows — compact 2-line card per decision, fits in narrow column.
-   Header line: action (colored) · age + tags
-   Footer line: task_id (mono, truncated) · src · conf · verifier */
-.decision-row {
-    padding: 8px 10px;
-    margin-bottom: 4px;
-    border-radius: var(--radius-sm);
-    background: rgba(255,255,255,0.015);
-    border: 1px solid var(--border);
-    font-size: 11px;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    transition: background .15s, border-color .15s;
+/* Routing decisions — statistical distillation panel.
+   Sections: header summary, role distribution, source distribution,
+   confidence histogram, verifier verdict counts, last decision footer.
+   Replaces the per-decision card list, which was too noisy to scan
+   for trends in a narrow column. */
+.dec-stats { display: flex; flex-direction: column; gap: 14px; }
+.dec-stats-header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 11px; color: var(--muted);
+    padding-bottom: 6px; border-bottom: 1px solid var(--border);
 }
-.decision-row:hover { background: rgba(255,255,255,0.05); border-color: var(--border-strong); }
-.decision-row .dec-line-1 {
-    display: flex; align-items: center; gap: 6px;
-    flex-wrap: wrap;
+.dec-stats-header .total {
+    color: var(--text-strong); font-size: 16px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
 }
-.decision-row .dec-line-2 {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+.dec-stats-section .section-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); font-weight: 600; margin-bottom: 6px;
+}
+.dec-bar-row {
+    display: grid;
+    grid-template-columns: minmax(0, 100px) 1fr 56px;
+    gap: 8px; align-items: center;
+    font-size: 11px; padding: 2px 0;
+}
+.dec-bar-row .label {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text);
+}
+.dec-bar-row .bar-track {
+    height: 10px; background: rgba(255,255,255,0.05);
+    border-radius: 3px; overflow: hidden;
+}
+.dec-bar-row .bar-fill {
+    height: 100%; background: var(--accent);
+    transition: width .25s ease;
+    border-radius: 3px;
+}
+.dec-bar-row .bar-fill.fill-good { background: var(--good); }
+.dec-bar-row .bar-fill.fill-warn { background: var(--warn); }
+.dec-bar-row .bar-fill.fill-bad  { background: var(--bad); }
+.dec-bar-row .bar-fill.fill-dim  { background: var(--dim); }
+.dec-bar-row .pct {
+    color: var(--dim); font-size: 10px; text-align: right;
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+}
+.dec-bar-row .pct .n { color: var(--muted); }
+.dec-stats-footer {
+    border-top: 1px solid var(--border);
+    padding-top: 8px; font-size: 11px; color: var(--muted);
+    display: flex; flex-direction: column; gap: 3px;
+}
+.dec-stats-footer .last-action { color: var(--text); font-weight: 500; }
+.dec-stats-footer .last-meta {
     color: var(--dim); font-size: 10px; font-family: var(--font-mono);
 }
-.decision-row .dec-action { font-weight: 600; font-size: 12px; }
-.decision-row .dec-age { color: var(--dim); font-size: 10px; font-family: var(--font-mono); margin-left: auto; }
-.decision-row .dec-taskid {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    flex: 1; min-width: 0;
-}
-.decision-row .src { font-weight: 500; }
-.decision-row .src.classifier { color: var(--good); }
-.decision-row .src.rules { color: var(--warn); }
-.decision-row .src.fallback { color: var(--dim); }
-.decision-row .dec-conf { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* Stream surfaces (autopilot log, planner tap) */
 .stream-pre {
@@ -568,7 +589,7 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
     </div>
 
     <div class="panel">
-      <h2>routing decisions <span class="count-suffix">last 20</span></h2>
+      <h2>routing decisions <span class="count-suffix">distribution over last 50</span></h2>
       <div id="decision-feed"></div>
     </div>
   </div>
@@ -1500,31 +1521,120 @@ function startTapStream() {
     startPlannerTapStream();
 }
 
+function _barRow(label, count, total, color, labelStyle) {
+    // Compact bar-chart row used across the decision-stats panel.
+    const pct = total > 0 ? (count / total) * 100 : 0;
+    const fillClass = color ? `fill-${color}` : '';
+    return `<div class="dec-bar-row">
+        <span class="label" style="${labelStyle || ''}">${escapeHTML(label)}</span>
+        <span class="bar-track">
+            <span class="bar-fill ${fillClass}" style="width:${pct.toFixed(1)}%"></span>
+        </span>
+        <span class="pct">${pct.toFixed(0)}<span class="n">% · ${count}</span></span>
+    </div>`;
+}
+
 function updateDecisions(snap) {
+    // Statistical distillation rather than a per-decision card list.
+    // Aggregates the last 50 recent_decisions into:
+    //   - header total
+    //   - per-role bar chart (chosen_action distribution)
+    //   - per-source bar chart (classifier / learned / rules / forced)
+    //   - confidence histogram (high ≥0.8, medium [0.5, 0.8), low <0.5)
+    //   - verifier verdict counts (accept / reject / shadow / no-verdict)
+    //   - last decision footer (so the live signal is still visible)
     const feed = document.getElementById('decision-feed');
-    const rows = (snap.recent_decisions || []).slice(-20).reverse();
-    feed.innerHTML = rows.map(d => {
-        const action = d.chosen_action || '—';
-        const actionColor = (typeof roleColor === 'function' ? roleColor(action) : null) || 'var(--text)';
-        const conf = d.classifier_confidence != null
-            ? `<span class="dec-conf">conf ${d.classifier_confidence.toFixed(2)}</span>` : '';
-        const verifier = d.verifier_p_success != null
-            ? `<span class="tag ${d.verifier_verdict||''}">${d.verifier_verdict||'?'} ${d.verifier_p_success.toFixed(2)}${d.verifier_shadow?' s':''}</span>`
-            : '';
-        const taskId = d.task_id || '';
-        return `<div class="decision-row" title="${escapeHTML(taskId)}">
-            <div class="dec-line-1">
-                <span class="dec-action" style="color:${actionColor}">${escapeHTML(action)}</span>
-                ${verifier}
-                <span class="dec-age">${d.age_s}s</span>
-            </div>
-            <div class="dec-line-2">
-                <span class="dec-taskid">${escapeHTML(taskId.slice(-16) || '—')}</span>
-                <span class="src ${escapeHTML(d.source||'')}">${escapeHTML(d.source||'?')}</span>
-                ${conf}
-            </div>
-        </div>`;
-    }).join('') || '<div style="color:var(--muted);padding:6px 0;font-size:11px">no decisions yet</div>';
+    const decisions = snap.recent_decisions || [];
+    if (!decisions.length) {
+        feed.innerHTML = '<div style="color:var(--muted);padding:6px 0;font-size:11px">no decisions yet</div>';
+        return;
+    }
+
+    // Aggregates
+    const byRole = {};
+    const bySource = {};
+    const confBucket = { high: 0, medium: 0, low: 0, none: 0 };
+    const verifierBucket = { accept: 0, reject: 0, shadow: 0, none: 0 };
+    for (const d of decisions) {
+        const role = d.chosen_action || 'unknown';
+        byRole[role] = (byRole[role] || 0) + 1;
+        const src = d.source || 'unknown';
+        bySource[src] = (bySource[src] || 0) + 1;
+        const c = d.classifier_confidence;
+        if (c == null) confBucket.none++;
+        else if (c >= 0.8) confBucket.high++;
+        else if (c >= 0.5) confBucket.medium++;
+        else confBucket.low++;
+        const v = d.verifier_verdict;
+        if (v === 'accept') verifierBucket.accept++;
+        else if (v === 'reject') verifierBucket.reject++;
+        else if (d.verifier_shadow) verifierBucket.shadow++;
+        else verifierBucket.none++;
+    }
+    const total = decisions.length;
+
+    // Sort role + source buckets by count descending
+    const roleEntries = Object.entries(byRole).sort((a, b) => b[1] - a[1]);
+    const sourceEntries = Object.entries(bySource).sort((a, b) => b[1] - a[1]);
+
+    // Last decision (most recent: largest ts; data comes oldest-first from server)
+    const last = decisions[decisions.length - 1];
+    const lastAction = last.chosen_action || '?';
+    const lastColor = (typeof roleColor === 'function' ? roleColor(lastAction) : null) || 'var(--text)';
+    const lastConf = last.classifier_confidence != null
+        ? ` · conf ${last.classifier_confidence.toFixed(2)}` : '';
+    const lastVerifier = last.verifier_verdict != null
+        ? ` · ${last.verifier_verdict}${last.verifier_p_success != null ? ' ' + last.verifier_p_success.toFixed(2) : ''}` : '';
+    const lastAge = last.age_s != null
+        ? (last.age_s < 60 ? `${Math.round(last.age_s)}s` : `${(last.age_s/60).toFixed(1)}m`)
+        : '?';
+
+    const sourceColorFor = src => ({
+        classifier: 'good', learned: 'good', rules: 'warn', forced: 'bad', fallback: 'dim',
+    }[src] || '');
+
+    feed.innerHTML = `
+      <div class="dec-stats">
+        <div class="dec-stats-header">
+          <span><span class="total">${total}</span> decisions</span>
+          <span>window: last ${total}</span>
+        </div>
+
+        <div class="dec-stats-section">
+          <div class="section-label">role chosen</div>
+          ${roleEntries.map(([role, n]) => _barRow(
+              role, n, total, '',
+              `color:${(typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--text)'};font-weight:500`,
+          )).join('')}
+        </div>
+
+        <div class="dec-stats-section">
+          <div class="section-label">decision source</div>
+          ${sourceEntries.map(([src, n]) => _barRow(src, n, total, sourceColorFor(src))).join('')}
+        </div>
+
+        <div class="dec-stats-section">
+          <div class="section-label">classifier confidence</div>
+          ${_barRow('high (≥0.8)',      confBucket.high,   total, 'good')}
+          ${_barRow('medium (0.5-0.8)', confBucket.medium, total, 'warn')}
+          ${_barRow('low (<0.5)',       confBucket.low,    total, 'bad')}
+          ${confBucket.none > 0 ? _barRow('no-confidence',  confBucket.none, total, 'dim') : ''}
+        </div>
+
+        <div class="dec-stats-section">
+          <div class="section-label">verifier verdict</div>
+          ${_barRow('accept', verifierBucket.accept, total, 'good')}
+          ${_barRow('reject', verifierBucket.reject, total, 'bad')}
+          ${verifierBucket.shadow > 0 ? _barRow('shadow', verifierBucket.shadow, total, 'warn') : ''}
+          ${verifierBucket.none > 0 ? _barRow('no-verdict', verifierBucket.none, total, 'dim') : ''}
+        </div>
+
+        <div class="dec-stats-footer">
+          <div>last decision: <span class="last-action" style="color:${lastColor}">${escapeHTML(lastAction)}</span> · ${lastAge} ago${lastConf}${lastVerifier}</div>
+          <div class="last-meta">task ${escapeHTML((last.task_id || '').slice(-16))} · source: ${escapeHTML(last.source || '?')}</div>
+        </div>
+      </div>
+    `;
 }
 
 async function updateGepa() {
