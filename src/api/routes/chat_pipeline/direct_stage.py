@@ -167,22 +167,13 @@ def _execute_direct(
     if answer and not answer.startswith("[ERROR"):
         answer = _truncate_looped_answer(answer, direct_prompt)
 
-    # Gemma-4 multi-channel output cleanup. When routed via /completion
-    # (no server-side jinja), gemma-4-26B-A4B-it emits its own
-    # `<|channel>thought\n<channel|>actual_answer` markers as raw text.
-    # Strip them so downstream scorers see clean answers. No-op for
-    # non-gemma models. 2026-05-22.
-    if answer and not answer.startswith("[ERROR") and (
-        "<|channel" in answer or "<channel|" in answer
-    ):
-        from src.api.routes.chat_utils import strip_gemma4_channel_markers
-        cleaned = strip_gemma4_channel_markers(answer)
-        if cleaned and cleaned != answer:
-            log.debug(
-                "stripped gemma-4 channel markers from %s response (%d → %d chars)",
-                initial_role, len(answer), len(cleaned),
-            )
-            answer = cleaned
+    # 2026-05-23: previously stripped gemma-4 `<|channel>thought` markers
+    # here as a stop-gap for /completion-routed gemma-4 output. That fix
+    # was retired in commit 2c1711a once worker_general roles were
+    # switched to /v1/chat/completions (server-side jinja parses the
+    # multi-channel format cleanly). If a future gemma-family role
+    # leaks channel markers, restore the call to
+    # strip_gemma4_channel_markers() — the helper is still in chat_utils.
 
     # Output formalizer: enforce format constraints
     if answer and not answer.startswith("[ERROR"):

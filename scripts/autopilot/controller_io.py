@@ -285,6 +285,24 @@ def invoke_controller(
                     tap.flush()
                 except Exception:
                     pass
+            # 2026-05-23: detect stale --resume target. claude CLI emits
+            # "No conversation found with session ID: X" on stderr when
+            # the resumed session has been pruned / wasn't persisted.
+            # Returning the same stale session_id causes the caller to
+            # save it back into autopilot state, repeating the failure
+            # every trial. Clear it so the next call starts fresh.
+            if (
+                stderr and (
+                    "no conversation found" in stderr.lower()
+                    or "session id" in stderr.lower() and "not found" in stderr.lower()
+                )
+            ):
+                log.warning(
+                    "Clearing stale planner session_id=%s (CLI reports it no longer exists); "
+                    "next trial will start a fresh conversation",
+                    (session_id or "")[:12],
+                )
+                return "", None
             return "", session_id
 
         if tap is not None:
