@@ -558,9 +558,10 @@ async def _handle_chat(
             )
 
         # 8d: REPL orchestration mode (default fallback)
-        return _finalize(
-            await _execute_repl(request, routing, primitives, state, start_time, initial_role)
-        )
+        _repl_result = await _execute_repl(request, routing, primitives, state, start_time, initial_role)
+        if "<answer>" in _repl_result.answer and "</answer>" not in _repl_result.answer:
+            _repl_result.answer += "</answer>"
+        return _finalize(_repl_result)
 
 
 @router.post("/chat/stream")
