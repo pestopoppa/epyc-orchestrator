@@ -456,11 +456,22 @@ async def process_status() -> JSONResponse:
             recent_lines = [l for l in tail.splitlines() if l.strip()][-5:]
         except Exception:
             pass
+    # Stream-source mtimes — drive the live-dot activity-state badges in the
+    # left-column panels. The browser computes its own age from the timestamp
+    # plus a freshness threshold; we just report mtimes (None when missing).
+    def _age_s(p: Path) -> float | None:
+        try:
+            return time.time() - p.stat().st_mtime
+        except Exception:
+            return None
+
     return JSONResponse({
         "autopilot": autopilot,
         "gepa_worker_count": n_workers,
         "last_autopilot_log_age_s": last_log_age_s,
         "autopilot_recent_lines": recent_lines,
+        "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
+        "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
     })
 
 

@@ -82,7 +82,16 @@ h2 .live-dot {
     animation: live-pulse 1.6s ease-in-out infinite;
     flex-shrink: 0;
 }
-h2 .live-dot.idle { background: var(--dim); box-shadow: none; animation: none; }
+/* Activity states for stream-panel live-dots:
+   default = green pulse (actively writing/streaming)
+   .idle    = solid dim gray (process exists / source available but nothing happening)
+   .standby = solid warm amber (yielding to a mutually-exclusive sibling — e.g.
+              live tap shows standby while planner is active because the planner
+              run gates inference activity)
+   .down    = solid red (process not running / source unavailable) */
+h2 .live-dot.idle    { background: var(--dim);  box-shadow: none; animation: none; }
+h2 .live-dot.standby { background: var(--warn); box-shadow: 0 0 4px rgba(251, 191, 36, 0.35); animation: none; }
+h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 113, 113, 0.45); animation: none; }
 @keyframes live-pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.35; }
@@ -487,20 +496,20 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
 
     <div class="panel">
       <h2>
-        <span class="live-dot"></span>
-        autopilot activity
-        <span class="count-suffix">— real-time tail (eval / seed_batch / meta-planning / rollback / safety)</span>
+        <span class="live-dot" id="planner-live-dot" title="green pulse: planner emitting events; standby: idle while live tap is active; idle: nothing"></span>
+        planner <span style="color:var(--dim);font-family:var(--font-mono);font-weight:400">(claude -p)</span>
+        <span class="count-suffix" id="planner-status">— streamed tool_use / assistant / result events</span>
       </h2>
-      <pre id="autopilot-log-pre" class="stream-pre stream-medium"></pre>
+      <pre id="planner-tap-pre" class="stream-pre stream-medium"></pre>
     </div>
 
     <div class="panel">
       <h2>
-        <span class="live-dot"></span>
-        planner <span style="color:var(--dim);font-family:var(--font-mono);font-weight:400">(claude -p)</span>
-        <span class="count-suffix">— streamed tool_use / assistant / result events</span>
+        <span class="live-dot" id="autopilot-live-dot" title="green pulse: autopilot loop active; idle: process running but quiet; down: autopilot.py not running"></span>
+        autopilot activity
+        <span class="count-suffix" id="autopilot-status">— real-time tail (eval / seed_batch / meta-planning / rollback / safety)</span>
       </h2>
-      <pre id="planner-tap-pre" class="stream-pre stream-medium"></pre>
+      <pre id="autopilot-log-pre" class="stream-pre stream-medium"></pre>
     </div>
   </div>
 
@@ -1338,17 +1347,13 @@ function startRawTapStream() {
 
 function renderInferenceTap(data) {
     const status = document.getElementById('tap-status');
-    const liveDot = document.getElementById('tap-live-dot');
+    // tap-live-dot state is now driven by updateProcessStatus (single source
+    // of truth across all three left-column dots; handles the mutually-
+    // exclusive standby logic with the planner dot).
     const container = document.getElementById('inference-tap');
     const active = data.tap_active;
     const mtime = data.inference_tap_mtime;
     const ageS = mtime ? Math.max(0, Math.round(data.now ? (data.now - mtime) : (Date.now()/1000 - mtime))) : null;
-    if (liveDot) {
-        liveDot.classList.toggle('idle', !active);
-        liveDot.title = active
-            ? (ageS != null ? `tap active — ${ageS}s since last write` : 'tap active')
-            : 'tap inactive — no recent writes';
-    }
     status.textContent = active
         ? (ageS != null ? `— ${ageS}s since last write` : '')
         : '— inactive';
@@ -1966,6 +1971,26 @@ function startStream() {
     };
 }
 
+// Activity thresholds (seconds since last write to corresponding tap/log):
+//   ACTIVE_THRESHOLD — under this counts as "actively streaming" (green pulse)
+//   IDLE_THRESHOLD   — over this counts as "quiet" (idle dim)
+// Between the two = "recent" — still green-pulses to avoid flicker between
+// chunks. The planner is gated to a longer threshold because its events come
+// in bursts with ~1-3s natural gaps between tool_use / tool_result rounds.
+const _LIVE_TAP_ACTIVE_S = 5;
+const _LIVE_TAP_IDLE_S = 30;
+const _PLANNER_ACTIVE_S = 8;
+const _PLANNER_IDLE_S = 60;
+const _AUTOPILOT_ACTIVE_S = 30;
+const _AUTOPILOT_IDLE_S = 180;
+
+function _setDotState(el, state, tooltip) {
+    if (!el) return;
+    el.classList.remove('idle', 'standby', 'down');
+    if (state !== 'active') el.classList.add(state);
+    if (tooltip) el.title = tooltip;
+}
+
 async function updateProcessStatus() {
     try {
         const r = await fetch('/dashboard/api/process_status');
@@ -1982,6 +2007,61 @@ async function updateProcessStatus() {
         } else {
             el.innerHTML = `<span style="color:var(--bad)">● autopilot DOWN</span>
                 <span style="color:var(--muted)">no process matching "autopilot.py start"</span>`;
+        }
+
+        // Live-dot states. Mutually-exclusive logic between live-tap + planner:
+        // when one is actively streaming, the other gets a 'standby' badge
+        // (warm amber, no pulse) to signal "ready but gated by the other".
+        const tapAge = d.inference_tap_age_s;
+        const planAge = d.planner_tap_age_s;
+        const apAge = d.last_autopilot_log_age_s;
+        const tapActive  = tapAge  != null && tapAge  < _LIVE_TAP_ACTIVE_S;
+        const planActive = planAge != null && planAge < _PLANNER_ACTIVE_S;
+        const apActive   = apAge   != null && apAge   < _AUTOPILOT_ACTIVE_S;
+
+        const tapDot  = document.getElementById('tap-live-dot');
+        const planDot = document.getElementById('planner-live-dot');
+        const apDot   = document.getElementById('autopilot-live-dot');
+
+        // Live tap dot
+        if (tapAge == null) {
+            _setDotState(tapDot, 'down', 'inference_tap.log not found');
+        } else if (tapActive) {
+            _setDotState(tapDot, 'active', `inference tap streaming — ${tapAge.toFixed(1)}s since last write`);
+        } else if (planActive) {
+            _setDotState(tapDot, 'standby', `standby — planner is active (last tap write ${Math.round(tapAge)}s ago)`);
+        } else if (tapAge < _LIVE_TAP_IDLE_S) {
+            _setDotState(tapDot, 'active', `recent tap activity — ${tapAge.toFixed(1)}s ago`);
+        } else {
+            _setDotState(tapDot, 'idle', `idle — last tap write ${Math.round(tapAge)}s ago`);
+        }
+
+        // Planner dot
+        if (planAge == null) {
+            _setDotState(planDot, 'idle', 'no planner session yet this run');
+        } else if (planActive) {
+            _setDotState(planDot, 'active', `planner streaming — ${planAge.toFixed(1)}s since last event`);
+        } else if (tapActive) {
+            _setDotState(planDot, 'standby', `standby — live inference is active (last planner event ${Math.round(planAge)}s ago)`);
+        } else if (planAge < _PLANNER_IDLE_S) {
+            _setDotState(planDot, 'active', `recent planner activity — ${planAge.toFixed(1)}s ago`);
+        } else {
+            _setDotState(planDot, 'idle', `idle — last planner event ${Math.round(planAge)}s ago`);
+        }
+
+        // Autopilot log dot — independent of live-tap/planner exclusivity.
+        // Process-running gates everything: if the process is dead, dot is
+        // .down regardless of how recent the log was.
+        if (!ap.running) {
+            _setDotState(apDot, 'down', 'autopilot.py is not running');
+        } else if (apAge == null) {
+            _setDotState(apDot, 'idle', 'autopilot.log not found yet');
+        } else if (apActive) {
+            _setDotState(apDot, 'active', `autopilot looping — last log ${apAge.toFixed(1)}s ago`);
+        } else if (apAge < _AUTOPILOT_IDLE_S) {
+            _setDotState(apDot, 'active', `autopilot recent activity — ${Math.round(apAge)}s ago`);
+        } else {
+            _setDotState(apDot, 'idle', `autopilot quiet — last log ${Math.round(apAge)}s ago`);
         }
     } catch (e) {}
 }
