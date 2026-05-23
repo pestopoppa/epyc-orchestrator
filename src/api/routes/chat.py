@@ -114,6 +114,10 @@ _FACTUAL_QUESTION_PREFIXES = (
     "when did ", "when was ",
 )
 
+# Task types that require multi-step REPL execution and cannot be handled
+# by the cheap-first single-shot path.
+_REPL_ONLY_TASK_TYPES = frozenset({"coder", "agentic"})
+
 router = APIRouter()
 
 
@@ -484,9 +488,10 @@ async def _handle_chat(
         # Attempts the task with the cheapest HOT model (7B, 44 t/s) before
         # routing to expensive specialists. On quality gate pass, returns the
         # cheap answer (2-3x faster). On fail, falls through to normal pipeline.
-        # Bypass cheap-first for factual recall questions — the coding model
-        # returns plausible-sounding but wrong answers that pass the quality gate.
-        if request.prompt.lower().startswith(_FACTUAL_QUESTION_PREFIXES):
+        # Bypass cheap-first for: factual recall questions (coding model hallucinates),
+        # and task types that require multi-step REPL execution (coder, agentic).
+        _task_type = routing.task_ir.get("task_type")
+        if request.prompt.lower().startswith(_FACTUAL_QUESTION_PREFIXES) or _task_type in _REPL_ONLY_TASK_TYPES:
             cheap_result = None
         else:
             cheap_result = await _try_cheap_first(
