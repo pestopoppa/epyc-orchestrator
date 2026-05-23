@@ -105,6 +105,14 @@ from src.api.routes.chat_pipeline import (
     _attach_budget_diagnostics,
 )
 
+# Factual question prefixes that the coding cheap-first model handles poorly.
+# Prompts starting with these are routed past cheap-first to frontdoor/REPL
+# which have better general knowledge and web-search access.
+_FACTUAL_QUESTION_PREFIXES = (
+    "who ", "who was ", "what was ", "what year", "in what year",
+    "where was ", "in which ", "which country", "which city",
+    "when did ", "when was ",
+)
 
 router = APIRouter()
 
@@ -476,9 +484,14 @@ async def _handle_chat(
         # Attempts the task with the cheapest HOT model (7B, 44 t/s) before
         # routing to expensive specialists. On quality gate pass, returns the
         # cheap answer (2-3x faster). On fail, falls through to normal pipeline.
-        cheap_result = await _try_cheap_first(
-            request, routing, primitives, state, start_time, initial_role, execution_mode,
-        )
+        # Bypass cheap-first for factual recall questions — the coding model
+        # returns plausible-sounding but wrong answers that pass the quality gate.
+        if request.prompt.lower().startswith(_FACTUAL_QUESTION_PREFIXES):
+            cheap_result = None
+        else:
+            cheap_result = await _try_cheap_first(
+                request, routing, primitives, state, start_time, initial_role, execution_mode,
+            )
         if cheap_result is not None:
             if cheap_result.answer and "<answer>" in cheap_result.answer and "</answer>" not in cheap_result.answer:
                 cheap_result.answer += "</answer>"
