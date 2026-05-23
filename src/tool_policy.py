@@ -59,8 +59,9 @@ TOOL_GROUPS: dict[str, frozenset[str]] = {
 # Used to set no_web=True in tool context for these task types.
 # Explicitly excluded: long_context, agentic (permanently 0.00 — web search is EXPLORE).
 # coder removed: with compute-first prompt priority, web search helps for API/library refs.
+# instruction_precision removed: format/convention questions benefit from web lookup at T1 depth.
 NO_WEB_TASK_TYPES: frozenset[str] = frozenset({
-    "math", "thinking", "instruction_precision",
+    "math", "thinking",
 })
 
 
