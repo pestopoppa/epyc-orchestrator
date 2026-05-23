@@ -68,6 +68,66 @@ def test_extract_action_returns_none_on_invalid_json() -> None:
     assert controller_io.extract_action(text) is None
 
 
+# ----- extract_rationale -----
+
+
+def test_extract_rationale_well_formed() -> None:
+    text = """Action below.
+
+```json:autopilot_actions
+{"type": "seed_batch"}
+```
+
+```json:autopilot_rationale
+{"falsifier": "no quality gain after 20 seeded questions",
+ "rubric_scores": {"info_gain": 4, "coherence": 5, "usefulness": 3,
+  "synthesis_note": "fused with numeric_trial"}}
+```"""
+    out = controller_io.extract_rationale(text)
+    assert out["falsifier"] == "no quality gain after 20 seeded questions"
+    assert out["rubric_scores"]["info_gain"] == 4
+    assert out["rubric_scores"]["synthesis_note"] == "fused with numeric_trial"
+
+
+def test_extract_rationale_missing_block_returns_defaults() -> None:
+    out = controller_io.extract_rationale("no rationale here")
+    assert out == {"falsifier": "", "rubric_scores": {}}
+
+
+def test_extract_rationale_malformed_json_returns_defaults() -> None:
+    text = """```json:autopilot_rationale
+{not valid
+```"""
+    out = controller_io.extract_rationale(text)
+    assert out == {"falsifier": "", "rubric_scores": {}}
+
+
+def test_extract_rationale_unclosed_fence_returns_defaults() -> None:
+    text = """```json:autopilot_rationale
+{"falsifier": "x"}
+"""
+    out = controller_io.extract_rationale(text)
+    assert out == {"falsifier": "", "rubric_scores": {}}
+
+
+def test_extract_rationale_coerces_non_string_falsifier() -> None:
+    text = """```json:autopilot_rationale
+{"falsifier": 42, "rubric_scores": {"info_gain": 1}}
+```"""
+    out = controller_io.extract_rationale(text)
+    assert out["falsifier"] == "42"
+    assert out["rubric_scores"] == {"info_gain": 1}
+
+
+def test_extract_rationale_non_dict_rubric_falls_back_to_empty() -> None:
+    text = """```json:autopilot_rationale
+{"falsifier": "x", "rubric_scores": "not a dict"}
+```"""
+    out = controller_io.extract_rationale(text)
+    assert out["falsifier"] == "x"
+    assert out["rubric_scores"] == {}
+
+
 # ----- validate_single_variable (AP-9) -----
 
 

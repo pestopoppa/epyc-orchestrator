@@ -379,6 +379,43 @@ Key insight: **optimize the FULL flow, not individual components.**
 
 ---
 
+## Constrained-Creativity Exploration (2026-05-23)
+
+The controller prompt now switches between two exploration fragments based on a
+stagnation signal computed at assembly time. Default is the *lean* fragment:
+enumerate 3–5 alternatives with one-line reject/accept reasons. When any of
+these fire, the *rich* fragment activates:
+
+- `hv_slope_10 < 1e-3` (Pareto frontier not advancing)
+- trustworthy trial count `< 5` (low-signal regime)
+- last 3 trials share the same `action_type` (exploit lock-in)
+
+The rich fragment asks for N=5 candidates under truth-preserving constraints,
+scores each on a 3-axis rubric (info_gain / coherence / usefulness), prefers
+fusion of the top-2 when one action can encode the other, and requires the
+chosen action's scores to be quoted (not regenerated) from the candidate
+table. Tail-sampled under-used action types are passed as *inspiration*, not
+as candidates to defend.
+
+Every trial that runs through the controller emits a second fenced block:
+
+```
+```json:autopilot_rationale
+{"falsifier": "...", "rubric_scores": {"info_gain": 4, "coherence": 5,
+ "usefulness": 3, "synthesis_note": "..."}}
+```
+```
+
+Soft contract — a missing/malformed block logs a warning but does not abort.
+The `falsifier` and `rubric_scores` fields land on `JournalEntry`, and the
+next planner pass surfaces still-open hypotheses (those with an explicit
+falsifier that hasn't been resolved) in the rich-fragment context.
+
+Knobs live at the top of `autopilot.py`: `CREATIVITY_N`, `TAIL_WINDOW`,
+`TAIL_SEED_COUNT`, `STAGNATION_HV_EPS`, `STAGNATION_STREAK`.
+
+---
+
 ## Interaction with Autopilot Infrastructure
 
 This program.md guides autonomous Claude sessions. The existing autopilot infrastructure (`scripts/autopilot/`) provides:

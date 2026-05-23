@@ -62,6 +62,7 @@ from self_criticism import SelfCriticism, generate_self_criticism
 # 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
 from controller_io import (
     extract_action,
+    extract_rationale,
     invoke_controller as _invoke_controller_impl,
     validate_single_variable as _validate_single_variable,
     _unwrap_action,
@@ -94,6 +95,16 @@ STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 LOCK_PATH = ORCH_ROOT / "orchestration" / ".autopilot.lock"
 BLACKLIST_PATH = SCRIPT_DIR / "failure_blacklist.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
+
+# 2026-05-23 constrained-creativity planner knobs (gated on stagnation).
+# Lean prompt is the default; the rich rubric+synthesis fragment activates
+# only when one of the stagnation signals fires, to avoid spending prompt
+# budget when autopilot is mid-exploit on a working lead.
+CREATIVITY_N = 5            # candidates the rich prompt asks the controller to generate
+TAIL_WINDOW = 30            # lookback for action_distribution "under-used" classification
+TAIL_SEED_COUNT = 3         # seeds (not candidates) passed to LLM as inspiration
+STAGNATION_HV_EPS = 1e-3    # hv_slope_10 strictly below this triggers rich prompt
+STAGNATION_STREAK = 3       # N consecutive same-action_type trials triggers rich prompt
 PLOT_INTERVAL = 10  # Generate plots every N trials
 
 # ── Controller Prompt Template ───────────────────────────────────
@@ -154,17 +165,10 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Recent Insights (legacy flat — for backward compatibility)
 {insights}
 
-### Adjacent Possible — alternatives to consider BEFORE committing
-Before emitting your single action, briefly enumerate 3–5 alternatives you
-considered. For each, give a one-line reason for rejection OR pick it as
-your action.
+### Exploration mode
+Stagnation signal: {stagnation_signal}
 
-Additionally, ALSO consider these CREATIVE TAIL candidates sampled from the
-under-used action types (≤1 occurrence in the last 30 trials) — explicitly
-include at least one in your enumeration even if you reject it, so we
-break local-optimum traps:
-
-{creative_tail_candidates}
+{exploration_block}
 
 ### Short-Term Memory (accumulated learnings this session)
 {short_term_memory}
@@ -218,7 +222,150 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
   (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
 
 Include brief reasoning before the action block.
+
+After the action block, ALSO emit a second fenced block tagged
+`autopilot_rationale` carrying the chosen action's falsifier and its self-scored
+rubric. This sidecar is observability-only — a missing or malformed block will
+not abort the trial, but populating it lets future planner passes grade new
+candidates against still-open hypotheses:
+
+```json:autopilot_rationale
+{{"falsifier": "<one-line predicted outcome whose absence invalidates this hypothesis>",
+ "rubric_scores": {{"info_gain": <1-5>, "coherence": <1-5>, "usefulness": <1-5>,
+   "synthesis_note": "<optional one-line on fusion / cleaner model>"}}}}
+```
 """
+
+
+# ── Exploration block (stagnation-gated creative-prompt fragment) ─
+
+_EXPLORATION_LEAN = """\
+Before emitting your single action, briefly enumerate 3–5 alternatives you
+considered. For each, give a one-line reason for rejection OR pick it as
+your action.
+"""
+
+
+_EXPLORATION_RICH_TEMPLATE = """\
+The system is STAGNATING. Run the constrained-creativity protocol:
+
+1. **Generate {n} candidate actions.** Each must be:
+   - Non-obvious relative to the recent default (last 3 trials' action_types).
+   - Consistent with the Pareto geometry, blacklist, model signatures, and
+     the last 30 trials' evidence above — do NOT optimize for weirdness.
+   - Inspired (not constrained) by the under-used action types below — these
+     are directions explored ≤1 time in the last {window} trials:
+
+{tail_seeds}
+
+2. **For each candidate, write one line each:**
+   - why-low-typicality (what makes this non-default given current evidence)
+   - falsifier (the concrete observation that would invalidate it)
+
+3. **Score each candidate 1–5 on three axes:**
+   - **info_gain** — novelty + falsifiability + explanatory compression
+     (does resolving this trial reduce posterior uncertainty more than the
+     obvious next step?)
+   - **coherence** — consistency with facts, signatures, blacklist, the
+     last 30 trials, and the still-open hypotheses listed below
+   - **usefulness** — expected Pareto improvement per unit compute, minus
+     risk of being decorative nonsense
+
+4. **Synthesize.** If your top-2 candidates can be FUSED into one action
+   that dominates both (e.g. a numeric_trial whose params encode a
+   structural_experiment's hypothesis), prefer the fusion. The best
+   creative idea reduces uncertainty, not adds complexity.
+
+5. **Quote, don't regenerate.** The chosen action's rubric_scores in the
+   rationale sidecar must be copied verbatim from your candidate table —
+   no re-grading after the fact.
+
+### Still-open hypotheses (carry an explicit falsifier, not yet resolved)
+{unfalsified}
+"""
+
+
+def _build_exploration_block(
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+    known_actions: list[str],
+) -> tuple[str, str]:
+    """Return (exploration_block_text, stagnation_signal_text).
+
+    Selects between the lean fragment (default) and the rich constrained-
+    creativity fragment when at least one stagnation signal fires:
+      - hv_slope_10 strictly below STAGNATION_HV_EPS
+      - trustworthy trial count < 5 (low-signal regime)
+      - last STAGNATION_STREAK trials share an action_type
+    """
+    reasons: list[str] = []
+
+    # Pareto-hypervolume slope (already computed by archive.geometry()).
+    hv_slope_10 = None
+    try:
+        geom = archive.geometry()
+        hv_slope_10 = geom.get("hv_slope_10") if isinstance(geom, dict) else None
+    except Exception:
+        pass
+    if hv_slope_10 is not None and hv_slope_10 < STAGNATION_HV_EPS:
+        reasons.append(f"hv_slope_10={hv_slope_10:+.5f} < {STAGNATION_HV_EPS}")
+
+    # Trustworthiness low-signal flag.
+    try:
+        trust = journal.trustworthiness_score()
+        if trust.get("low_signal"):
+            reasons.append(f"trustworthy={trust.get('trustworthy', 0)} < 5")
+    except Exception:
+        pass
+
+    # Action-type streak over the last STAGNATION_STREAK trials.
+    try:
+        recent = journal.recent(STAGNATION_STREAK)
+        if len(recent) == STAGNATION_STREAK:
+            types = {e.action_type for e in recent}
+            if len(types) == 1:
+                reasons.append(
+                    f"last {STAGNATION_STREAK} trials all action_type={next(iter(types))}"
+                )
+    except Exception:
+        pass
+
+    if not reasons:
+        return _EXPLORATION_LEAN, "none (lean prompt)"
+
+    # Rich fragment: tail seeds + unfalsified hypotheses.
+    try:
+        tail = journal.tail_action_candidates(
+            known_action_types=known_actions,
+            last_n=TAIL_WINDOW,
+            n_sample=TAIL_SEED_COUNT,
+        )
+    except Exception:
+        tail = []
+    if tail:
+        tail_text = "\n".join(f"  - {t}" for t in tail)
+    else:
+        tail_text = "  (no under-used action types — every action_type seen recently)"
+
+    try:
+        unfalsified = journal.unfalsified_hypotheses(n=5)
+    except Exception:
+        unfalsified = []
+    if unfalsified:
+        unfalsified_text = "\n".join(
+            f"  #{tid}: {hyp[:160]}\n     falsifier: {fal[:160]}"
+            for tid, hyp, fal in unfalsified
+        )
+    else:
+        unfalsified_text = "  (no recent trials with explicit falsifiers yet)"
+
+    block = _EXPLORATION_RICH_TEMPLATE.format(
+        n=CREATIVITY_N,
+        window=TAIL_WINDOW,
+        tail_seeds=tail_text,
+        unfalsified=unfalsified_text,
+    )
+    return block, "; ".join(reasons)
 
 
 # ── State Management ─────────────────────────────────────────────
@@ -553,7 +700,8 @@ def _run_loop_inner(
             #   2. journal_trustworthiness — bug-corrupted ratio + low-signal flag
             #   3. hypotheses_under_test — last 3 trustworthy trials' hypotheses
             #   4. insights_structured — per-action-type observations + confidence
-            #   5. creative_tail_candidates — under-used action types to consider
+            #   5. stagnation_signal + exploration_block — stagnation-gated
+            #      lean/rich creative-exploration fragment (2026-05-23 upgrade)
             try:
                 trust = journal.trustworthiness_score()
                 trust_lines = [
@@ -618,15 +766,18 @@ def _run_loop_inner(
                     "distill_skillbank", "reset_memories", "deep_eval",
                     "rollback", "distill_knowledge",
                 ]
-                _tail = journal.tail_action_candidates(
-                    known_action_types=_known_actions, last_n=30, n_sample=3
+                exploration_block, stagnation_signal = _build_exploration_block(
+                    journal=journal,
+                    archive=archive,
+                    known_actions=_known_actions,
                 )
-                if _tail:
-                    creative_tail_text = "\n".join(f"  - {t}" for t in _tail)
-                else:
-                    creative_tail_text = "  (no under-used action types — all action_types seen recently)"
             except Exception as _exc:
-                creative_tail_text = f"(tail sampling unavailable: {_exc})"
+                exploration_block = (
+                    "Briefly enumerate 3–5 alternatives with one-line reject/accept "
+                    "reasons before committing to your single action.\n"
+                    f"(exploration-block assembly failed: {_exc})"
+                )
+                stagnation_signal = "unknown"
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 program=program_text,
@@ -648,7 +799,8 @@ def _run_loop_inner(
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
                 insights=insights_text,
                 insights_structured=insights_structured_text,
-                creative_tail_candidates=creative_tail_text,
+                stagnation_signal=stagnation_signal,
+                exploration_block=exploration_block,
                 short_term_memory=memory.to_text(),  # AP-22
                 last_criticism=last_criticism_text,  # AP-23
                 model_signatures=model_signatures_text,
@@ -663,11 +815,13 @@ def _run_loop_inner(
             state["session_id"] = session_id
             action = extract_action(response)
             predicted_objectives = peaf.extract_predicted_objectives(response)
+            rationale = extract_rationale(response)
         else:
             # Autonomous mode: species selection by budget
             species = meta.select_species()
             action = _auto_action(species, memory_count, converged, seeder)
             predicted_objectives = {}  # PEAF: autonomous mode has no controller forecast
+            rationale = {"falsifier": "", "rubric_scores": {}}  # no controller call
 
         if not action:
             log.warning("No action proposed, defaulting to seed_batch")
@@ -875,6 +1029,8 @@ def _run_loop_inner(
                 surprise_score=peaf.compute_surprise(
                     predicted_objectives, peaf.actual_objectives_from_eval(eval_result)
                 ),
+                falsifier=rationale.get("falsifier", ""),
+                rubric_scores=rationale.get("rubric_scores", {}),
             )
         )
 

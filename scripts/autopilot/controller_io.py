@@ -397,6 +397,48 @@ def extract_action(text: str) -> dict[str, Any] | None:
     return None
 
 
+def extract_rationale(text: str) -> dict[str, Any]:
+    """Extract the optional rationale sidecar from the controller response.
+
+    Looks for a ```json:autopilot_rationale``` fenced block. The block carries
+    the chosen action's falsifier + self-scored rubric, e.g.
+
+        ```json:autopilot_rationale
+        {"falsifier": "...", "rubric_scores": {"info_gain": 4,
+         "coherence": 5, "usefulness": 3, "synthesis_note": "..."}}
+        ```
+
+    Returns a dict with two keys — `falsifier` (str) and `rubric_scores` (dict)
+    — defaulting both to empty when the block is missing or malformed. The
+    contract is intentionally soft: rationale capture is observability, not a
+    gate, so a missing block must not abort the trial.
+    """
+    empty: dict[str, Any] = {"falsifier": "", "rubric_scores": {}}
+    marker = "```json:autopilot_rationale"
+    if marker not in text:
+        return empty
+    start = text.index(marker) + len(marker)
+    try:
+        end = text.index("```", start)
+    except ValueError:
+        log.warning("autopilot_rationale block has no closing fence")
+        return empty
+    try:
+        data = json.loads(text[start:end].strip())
+    except json.JSONDecodeError as e:
+        log.warning("Failed to parse autopilot_rationale JSON: %s", e)
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    falsifier = data.get("falsifier", "")
+    rubric = data.get("rubric_scores", {})
+    if not isinstance(falsifier, str):
+        falsifier = str(falsifier)
+    if not isinstance(rubric, dict):
+        rubric = {}
+    return {"falsifier": falsifier, "rubric_scores": rubric}
+
+
 def validate_single_variable(action: dict[str, Any]) -> str | None:
     """AP-9: Validate that an action proposes a single-variable change.
 

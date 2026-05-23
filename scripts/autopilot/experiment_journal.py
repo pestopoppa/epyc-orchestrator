@@ -92,6 +92,14 @@ class JournalEntry:
     # learn wrong lessons from buggy outcomes. Empty string == trustworthy.
     bug_corrupted_by: str = ""
     bug_corrupted_reason: str = ""  # free-text operator note (~80c) for context
+    # 2026-05-23: constrained-creativity planner upgrade. `falsifier` holds the
+    # one-line predicted outcome whose absence would invalidate the trial's
+    # hypothesis (emitted by the controller in the rationale block).
+    # `rubric_scores` holds the controller's self-scoring on info_gain /
+    # coherence / usefulness plus an optional synthesis note. Both default
+    # empty so legacy entries stay loadable.
+    falsifier: str = ""
+    rubric_scores: dict[str, Any] = field(default_factory=dict)
 
 
 class ExperimentJournal:
@@ -164,6 +172,8 @@ class ExperimentJournal:
                         surprise_score=data.get("surprise_score", None),
                         bug_corrupted_by=data.get("bug_corrupted_by", ""),
                         bug_corrupted_reason=data.get("bug_corrupted_reason", ""),
+                        falsifier=data.get("falsifier", ""),
+                        rubric_scores=data.get("rubric_scores", {}),
                     )
                     self._entries.append(entry)
             batch += 1
@@ -315,6 +325,28 @@ class ExperimentJournal:
         )
         with_hyp = [e for e in pool if e.hypothesis]
         return with_hyp[-n:]
+
+    def unfalsified_hypotheses(
+        self, n: int = 5, exclude_bug_corrupted: bool = True
+    ) -> list[tuple[int, str, str]]:
+        """Return [(trial_id, hypothesis, falsifier)] for the last `n` trustworthy
+        trials that carry both a hypothesis and an explicit falsifier.
+
+        The planner consumes this list to grade new candidates against still-open
+        claims — i.e. predictions that have not yet been resolved either way.
+        Resolution-checking is intentionally minimal here (presence of the
+        falsifier string only); semantic matching is deferred to the controller,
+        which sees the trial's actual outcome via the journal summary.
+        """
+        pool = (
+            self.trustworthy_entries() if exclude_bug_corrupted else self._entries
+        )
+        with_falsifier = [
+            (e.trial_id, e.hypothesis, e.falsifier)
+            for e in pool
+            if e.hypothesis and e.falsifier
+        ]
+        return with_falsifier[-n:]
 
     def apply_scrub(
         self,
