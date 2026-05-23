@@ -72,6 +72,11 @@ from scripts.server.stack_docker import (
     stop_docker_container,
 )
 from scripts.server.stack_health import wait_for_health as _wait_for_health
+from scripts.server.fleet_markers import (
+    LAUNCH_SOURCE_STACK_COMMANDS as _FLEET_SRC_STACK,
+    write_llama_marker as _write_llama_marker,
+    write_orchestrator_marker as _write_orchestrator_marker,
+)
 from scripts.server.stack_runtime import runtime_requirements_for_role as _runtime_requirements_for_role_impl
 from scripts.server.stack_manifest import (
     DEV_MODEL,
@@ -633,6 +638,13 @@ def start_server(
         print(f"    Roles: {', '.join(roles)}")
         print(f"    Command: {' '.join(cmd[:6])}...")
 
+        # Fleet marker: written BEFORE Popen so subsequent watcher polls
+        # see the new startup timestamp immediately + can resolve role→port.
+        try:
+            _write_llama_marker(port, roles, source=_FLEET_SRC_STACK, tmp_dir=_PATHS["tmp_dir"])
+        except Exception as exc:
+            print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
+
         with open(log_file, "w") as log:
             env = build_launch_env(roles[0], os.environ.copy())
             proc = subprocess.Popen(
@@ -675,6 +687,13 @@ def start_server(
         print(f"  Starting embedder #{instance_idx} on port {port}: {model_name}")
         print(f"    Roles: {', '.join(roles)}")
         print(f"    Command: {' '.join(cmd[:6])}...")
+
+        # Fleet marker: written BEFORE Popen so the watcher can resolve
+        # role→port and detect operator-initiated reloads.
+        try:
+            _write_llama_marker(port, roles, source=_FLEET_SRC_STACK, tmp_dir=_PATHS["tmp_dir"])
+        except Exception as exc:
+            print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
 
         with open(log_file, "w") as log:
             env = build_launch_env(roles[0], os.environ.copy())
@@ -787,6 +806,12 @@ def start_server(
                 env["LD_LIBRARY_PATH"] = merged
                 print(f"    LD_LIBRARY_PATH += {ld_paths}")
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
+            # Fleet marker: written BEFORE Popen so the watcher can resolve
+            # role→port and detect operator-initiated reloads.
+            try:
+                _write_llama_marker(port, roles, source=_FLEET_SRC_STACK, tmp_dir=_PATHS["tmp_dir"])
+            except Exception as exc:
+                print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
             proc = subprocess.Popen(
                 _numa_prefix(roles[0]) + cmd,
                 stdout=log,
@@ -855,6 +880,12 @@ def start_server(
     with open(log_file, "w") as log:
         env = build_launch_env(primary_role, os.environ.copy())
         # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
+        # Fleet marker: written BEFORE Popen so the watcher can resolve
+        # role→port and detect operator-initiated reloads.
+        try:
+            _write_llama_marker(port, roles, source=_FLEET_SRC_STACK, tmp_dir=_PATHS["tmp_dir"])
+        except Exception as exc:
+            print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
         proc = subprocess.Popen(
             _numa_prefix(primary_role, numa_instance) + cmd,
             stdout=log,
@@ -973,6 +1004,20 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     # within ~3 min. Tune via env override if your workload changes.
     env.setdefault("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_EXCLUSIVE_S", "180")
     env.setdefault("ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_SHARED_S", "180")
+
+    # Write the fleet-startup marker BEFORE Popen. uvicorn forks workers
+    # AFTER its own startup (each worker imports the app independently),
+    # and dashboard.py reads this marker at module-import time to serve
+    # the same `server_started_at` across all six workers via
+    # /dashboard/api/version. Without this marker, each worker would
+    # carry its own `time.time()` and consumers (OrchestratorWatcher)
+    # would see spurious restart signals depending on which worker the
+    # load balancer routed each request to.
+    try:
+        marker_path = _write_orchestrator_marker(tmp_dir=_PATHS["tmp_dir"])
+        print(f"    Fleet marker: {marker_path}")
+    except Exception as exc:
+        print(f"    [WARN] Failed to write orchestrator fleet marker: {exc}")
 
     with open(log_file, "w") as log:
         workers = int(env.get("ORCHESTRATOR_UVICORN_WORKERS", "6"))

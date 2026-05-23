@@ -599,7 +599,23 @@ async def node_detail(port: int) -> JSONResponse:
 _DASHBOARD_HTML_FOR_VERSION = Path(__file__).parent / "dashboard.html"
 _DASHBOARD_PY_FOR_VERSION = Path(__file__)
 _REPO_ROOT_FOR_VERSION = Path(__file__).resolve().parents[3]
-_SERVER_STARTED_AT = time.time()
+
+# Fleet startup timestamp — read from the marker file written by
+# scripts/server/orchestrator_stack.start_orchestrator() before uvicorn launches.
+# Live measurement (2026-05-23) confirmed uvicorn forks workers BEFORE importing
+# the app, so each worker imports dashboard.py independently. The per-worker
+# `time.time()` fallback would produce different timestamps across workers
+# (observed: ~15ms drift among the 6 workers), which would cause the autopilot
+# watcher to detect spurious restarts when consecutive requests hit different
+# workers. Reading the atomic-write marker file gives every worker the same
+# value as long as the marker exists before uvicorn's Popen — which the launch
+# script guarantees.
+try:
+    from scripts.server.fleet_markers import read_orchestrator_marker as _read_orch_marker
+    _marker_val = _read_orch_marker()
+    _SERVER_STARTED_AT = _marker_val if _marker_val is not None else time.time()
+except Exception:
+    _SERVER_STARTED_AT = time.time()
 
 
 def _read_git_short_sha() -> str | None:
@@ -752,6 +768,38 @@ async def version() -> JSONResponse:
         "dashboard_html_mtime": mtime(_DASHBOARD_HTML_FOR_VERSION),
         "dashboard_py_mtime": mtime(_DASHBOARD_PY_FOR_VERSION),
         "server_started_at": _SERVER_STARTED_AT,
+    })
+
+
+@router.get("/dashboard/api/llama_fleet_ids")
+async def llama_fleet_ids() -> JSONResponse:
+    """Aggregate per-port llama-server fleet-startup markers.
+
+    Used by the autopilot's OrchestratorWatcher to:
+      1. Resolve role→port lookups (each marker carries the canonical
+         role list served by that llama-server process).
+      2. Detect operator-initiated reloads (when a stored `started_at`
+         differs from a fresh poll, that port restarted).
+      3. Distinguish operator-initiated reloads (`source=stack_commands`)
+         from external restarts (any other source value).
+
+    See scripts/server/fleet_markers.py for the marker file format and
+    handoffs/active/autopilot-exogenous-restart-resilience.md sections
+    5.1 + 5.2 for the design.
+
+    Returns:
+        per_port: {port: {started_at: float, source: str, roles: list[str]}}
+        now: float epoch seconds (for the client's freshness math)
+    """
+    try:
+        from scripts.server.fleet_markers import discover_llama_markers
+        per_port = discover_llama_markers()
+    except Exception as exc:
+        return JSONResponse({"error": str(exc), "per_port": {}, "now": time.time()})
+    # JSON keys must be strings; convert int ports to strings for transport.
+    return JSONResponse({
+        "per_port": {str(p): m for p, m in per_port.items()},
+        "now": time.time(),
     })
 
 
