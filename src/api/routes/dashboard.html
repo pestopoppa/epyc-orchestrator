@@ -256,66 +256,6 @@ h2 .live-dot.idle { background: var(--dim); box-shadow: none; animation: none; }
 .stream-medium { max-height: 300px; }
 .stream-short { max-height: 220px; }
 
-/* Active tasks strip — the per-task list at the top of the inference panel.
-   Each row is a big clickable chip showing the task at-a-glance:
-   role pill (colored) · task_id · age · prompt preview · ↗ open. */
-.active-tasks-strip {
-    display: flex; flex-direction: column; gap: 6px;
-    margin-bottom: 14px;
-    padding-bottom: 14px;
-    border-bottom: 1px dashed var(--border);
-}
-.active-tasks-strip:empty { margin: 0; padding: 0; border-bottom: none; }
-.active-tasks-strip .strip-header {
-    font-size: 10px; font-weight: 600; color: var(--muted);
-    letter-spacing: 0.08em; text-transform: uppercase;
-    display: flex; align-items: center; gap: 8px;
-    margin-bottom: 4px;
-}
-.active-tasks-strip .strip-header .strip-hint {
-    font-weight: 400; letter-spacing: 0; text-transform: none;
-    color: var(--dim); font-size: 11px;
-}
-.active-task-row {
-    display: grid;
-    grid-template-columns: auto 110px 60px 1fr auto;
-    gap: 10px;
-    align-items: center;
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: rgba(56, 189, 248, 0.05);
-    border: 1px solid rgba(56, 189, 248, 0.15);
-    cursor: pointer;
-    transition: background .15s, border-color .15s, transform .1s;
-}
-.active-task-row:hover {
-    background: rgba(56, 189, 248, 0.1);
-    border-color: rgba(56, 189, 248, 0.4);
-}
-.active-task-row:active { transform: translateY(1px); }
-.active-task-row .role-pill {
-    padding: 2px 9px;
-    border-radius: 12px;
-    font-size: 10px; font-weight: 600;
-    background: rgba(255,255,255,0.08);
-}
-.active-task-row .task-id {
-    font-family: var(--font-mono); font-size: 11px; color: var(--muted);
-}
-.active-task-row .age {
-    font-family: var(--font-mono); font-size: 11px; color: var(--good);
-    font-variant-numeric: tabular-nums;
-}
-.active-task-row .prompt-preview {
-    color: var(--text); font-size: 12px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.active-task-row .open-icon {
-    color: var(--accent); font-size: 12px;
-    padding: 2px 8px; border-radius: 4px;
-    background: var(--accent-soft);
-    border: 1px solid rgba(56,189,248,0.25);
-}
 
 /* Tap-section cards (rendered inference tap) */
 details.tap-section {
@@ -533,7 +473,6 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         live inference
         <span class="count-suffix" id="tap-status"></span>
       </h2>
-      <div id="active-tasks-strip"></div>
       <div id="inference-tap"></div>
     </div>
 
@@ -959,45 +898,6 @@ function renderTaskCard(t, kind) {
     `;
 }
 
-function renderActiveTasksStrip(inflight) {
-    // Per-task list shown ABOVE the structured tap render in the live-inference
-    // panel. Each row is a fat clickable chip → opens the slide-out detail panel
-    // which then SSE-streams that ONE task's tokens at /dashboard/events/task/:id.
-    // Solves the "concurrent tasks make the interleaved tap unfollowable" problem
-    // by letting the operator pick a single task to focus on.
-    const stripEl = document.getElementById('active-tasks-strip');
-    if (!stripEl) return;
-    if (!inflight || !inflight.length) {
-        stripEl.className = '';
-        stripEl.innerHTML = '';  // collapses cleanly via the :empty selector
-        return;
-    }
-    stripEl.className = 'active-tasks-strip';
-    const header = `<div class="strip-header">
-        active now (${inflight.length})
-        <span class="strip-hint">click to follow one task — the interleaved live tap below shows every concurrent stream</span>
-    </div>`;
-    // Sort: newest first (smallest age_s)
-    const sorted = [...inflight].sort((a, b) => (a.age_s || 0) - (b.age_s || 0));
-    const rows = sorted.map(t => {
-        const role = t.chosen_action || t.final_role || '?';
-        const color = (typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--muted)';
-        const age = t.age_s != null ? `${t.age_s.toFixed(0)}s` : '—';
-        const objective = (t.objective || '').toString();
-        const preview = objective.length > 160 ? objective.slice(0, 159) + '…' : objective;
-        const taskId = escapeHTML(t.task_id || '');
-        return `<div class="active-task-row" onclick="openDetail('${taskId}', null, null)"
-                     title="${escapeHTML(objective)}">
-            <span class="role-pill" style="color:${color};border-left:3px solid ${color}">${escapeHTML(role)}</span>
-            <span class="task-id">${taskId}</span>
-            <span class="age">${age}</span>
-            <span class="prompt-preview">${escapeHTML(preview)}</span>
-            <span class="open-icon">↗ open</span>
-        </div>`;
-    }).join('');
-    stripEl.innerHTML = header + rows;
-}
-
 function updateTasks(snap) {
     const inflight = snap.in_flight_tasks || [];
     const completed = snap.recent_completed_tasks || [];
@@ -1030,9 +930,6 @@ function updateTasks(snap) {
     cpEl.innerHTML = completed.length
         ? completed.slice(0, 12).map(t => renderTaskCard(t, 'completed')).join('')
         : '<div style="color:var(--muted);font-size:11px">no completed tasks in last 10 min</div>';
-    // Mirror the in-flight list at the top of the live-inference panel so the
-    // operator can pick a task to focus on without scanning the right column.
-    renderActiveTasksStrip(inflight);
 }
 
 // ---- Inference tap panel — uses RAW byte-streaming SSE (mirrors TUI behavior) ----

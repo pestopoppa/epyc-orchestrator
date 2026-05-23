@@ -82,7 +82,7 @@ def scan_recent_decisions(
 
 def scan_orchestrator_tasks(
     path: Path,
-    in_flight_max_age_s: float = 300.0,
+    in_flight_max_age_s: float = 90.0,
     completed_window_s: float = 600.0,
     max_items: int = 40,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
