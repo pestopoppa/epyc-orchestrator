@@ -176,6 +176,40 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     display: flex; gap: 3px; justify-content: flex-end; align-items: center;
     flex-wrap: wrap;
 }
+/* In-flight task badge — nested under role rows (B: merge in-flight + topology) */
+.topology-row .active-badge {
+    display: inline-flex; align-items: center;
+    padding: 1px 6px; margin-left: 4px;
+    border-radius: 8px; font-size: 9px;
+    font-family: var(--font-mono); font-weight: 600;
+    background: rgba(56, 189, 248, 0.15);
+    color: var(--accent);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    vertical-align: middle;
+}
+.topology-row .active-badge.zero {
+    background: rgba(148,163,184,0.08); color: var(--dim);
+    border-color: var(--border);
+}
+.topology-row .role-expand-chev {
+    color: var(--dim); font-size: 9px;
+    display: inline-block; width: 12px; text-align: center;
+    transition: transform .15s;
+    margin-right: 2px;
+    user-select: none;
+}
+.topology-row.role-open .role-expand-chev { transform: rotate(90deg); }
+.role-active-tasks {
+    display: none;
+    margin: 4px 0 6px 24px;
+    padding: 4px 0 6px 10px;
+    border-left: 2px solid var(--accent-soft);
+    gap: 4px;
+}
+.topology-row.role-open + .role-active-tasks { display: flex; flex-direction: column; }
+.role-active-tasks .task-card {
+    margin-bottom: 0;
+}
 .slot-dot {
     width: 8px; height: 8px; border-radius: 50%;
     background: rgba(148,163,184,0.25);
@@ -568,18 +602,14 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
   <div class="col">
 
     <div class="panel">
-      <h2>topology</h2>
+      <h2>topology <span class="count-suffix" id="inflight-count"></span></h2>
       <div class="topology-strip" id="topology-strip"></div>
-    </div>
-
-    <div class="panel">
-      <h2>in-flight <span class="count-suffix" id="inflight-count"></span></h2>
-      <div id="inflight-tasks"></div>
-      <div id="inflight-explainer" style="color:var(--dim);font-size:10px;margin-top:6px;line-height:1.5;display:none">
-        in-flight = chat-XXX tasks logged to progress JSONL.
-        the live tap also shows seeding / eval / internal probes that don't
-        emit task_started events — those have no task_id so they can't be
-        clicked here. for those, click the tap section above (↗ detail) instead.
+      <div id="inflight-explainer" style="color:var(--dim);font-size:10px;margin-top:10px;line-height:1.5;display:none">
+        in-flight tasks (chat-XXX in progress JSONL) are nested under their
+        chosen role above. Click a role row's ▸ to expand and see its
+        active tasks; click a task to open the detail panel. Tap entries
+        without a chat-XXX id (seeding / eval / internal probes) appear in
+        the live tap only — click the tap section's ↗ detail link there.
       </div>
     </div>
 
@@ -681,12 +711,22 @@ function renderTopologyStrip() {
         const label = document.createElement('div');
         label.className = 'role-name';
         label.style.color = g.color || 'var(--text)';
-        label.innerHTML = hasQuarters
+        // Role label: chevron + name [×N quarters] + active badge (populated
+        // by updateTopologyInflight; default 0 / hidden).
+        const labelText = hasQuarters
             ? `${escapeHTML(g.base)} <span style="color:var(--dim);font-size:10px;margin-left:4px">×${nInstances}</span>`
             : escapeHTML((parent.label || '').length > 22 ? parent.label.slice(0, 21) + '…' : (parent.label || ''));
+        label.innerHTML = `<span class="role-expand-chev">▸</span>${labelText}` +
+            `<span class="active-badge zero" id="active_badge_${g.base}" title="active in-flight tasks for ${g.base}">0</span>`;
 
         const port = document.createElement('div');
         port.className = 'port';
+        port.style.cursor = 'pointer';
+        port.title = `port ${parent.port} · click for node detail`;
+        port.onclick = (ev) => {
+            ev.stopPropagation();
+            openNodeDetail(parent.port, parent.label);
+        };
         port.textContent = parent.port || '—';
 
         const stats = document.createElement('div');
@@ -700,16 +740,29 @@ function renderTopologyStrip() {
 
         row.appendChild(label); row.appendChild(port); row.appendChild(stats); row.appendChild(dots);
 
+        // Nested in-flight tasks container — sits after the row, expand/
+        // collapse driven by row.classList toggle 'role-open'. Populated by
+        // updateTopologyInflight on every snapshot. Always created so we can
+        // refresh it in place; visibility gated by the role-open class.
+        const activeContainer = document.createElement('div');
+        activeContainer.className = 'role-active-tasks';
+        activeContainer.id = `active_tasks_${g.base}`;
+        activeContainer.innerHTML = '';
+
+        // Quarter-expand toggle stays — clicking ⊕ reveals per-instance
+        // rows. Different concept from the role-active-tasks accordion:
+        // ⊕ is for "show me the individual llama-server processes", row
+        // click is for "show me the in-flight chat tasks routed here".
+        let childContainer = null;
+        let toggle = null;
         if (hasQuarters) {
-            // Expand toggle — clicking ⊕ reveals per-instance rows below.
             row.style.position = 'relative';
-            const toggle = document.createElement('span');
+            toggle = document.createElement('span');
             toggle.textContent = '⊕';
-            toggle.style.cssText = 'position:absolute;left:-2px;top:50%;transform:translateY(-50%);color:var(--dim);font-size:9px;width:14px;text-align:center;cursor:pointer;user-select:none';
-            toggle.title = 'expand instances';
+            toggle.style.cssText = 'position:absolute;right:-4px;top:50%;transform:translateY(-50%);color:var(--dim);font-size:9px;width:14px;text-align:center;cursor:pointer;user-select:none';
+            toggle.title = 'expand quarter instances';
             row.appendChild(toggle);
-            row.style.paddingLeft = '20px';
-            const childContainer = document.createElement('div');
+            childContainer = document.createElement('div');
             childContainer.style.cssText = 'display:none;margin-left:20px;padding:4px 0 6px 0;border-left:1px solid var(--border);padding-left:10px';
             for (const inst of g.instances) {
                 const r2 = document.createElement('div');
@@ -724,26 +777,72 @@ function renderTopologyStrip() {
                 const p2 = document.createElement('div'); p2.className = 'port';
                 p2.textContent = inst.port || '—';
                 const s2 = document.createElement('div'); s2.className = 'activity-stats';
-                s2.textContent = '';  // per-quarter aggregation not yet implemented; parent row shows fleet-wide
+                s2.textContent = '';
                 const d2 = document.createElement('div'); d2.className = 'slot-dots';
                 d2.id = `slotdots_${inst.id}`;
                 r2.appendChild(l2); r2.appendChild(p2); r2.appendChild(s2); r2.appendChild(d2);
                 childContainer.appendChild(r2);
             }
-            row.onclick = () => openNodeDetail(parent.port, parent.label);
             toggle.onclick = (ev) => {
                 ev.stopPropagation();
                 const open = childContainer.style.display === 'block';
                 childContainer.style.display = open ? 'none' : 'block';
                 toggle.textContent = open ? '⊕' : '⊖';
             };
-            strip.appendChild(row);
-            strip.appendChild(childContainer);
-        } else {
-            row.onclick = () => openNodeDetail(parent.port, parent.label);
-            strip.appendChild(row);
         }
+
+        // Row-click toggles the role-active-tasks accordion (the new
+        // merged in-flight view). Doesn't fire openNodeDetail anymore —
+        // port number is the click target for that. Click-anywhere-else-
+        // in-row toggles the accordion: less precise, more friendly.
+        row.onclick = (ev) => {
+            // Ignore clicks on the port column (its own handler) and the
+            // quarter toggle button.
+            if (ev.target === port || ev.target === toggle) return;
+            row.classList.toggle('role-open');
+            const chev = label.querySelector('.role-expand-chev');
+            if (chev) chev.style.transform = row.classList.contains('role-open') ? 'rotate(90deg)' : '';
+        };
+
+        strip.appendChild(row);
+        strip.appendChild(activeContainer);  // always present, .role-open on row reveals it
+        if (childContainer) strip.appendChild(childContainer);
     }
+}
+
+function updateTopologyInflight(inflight) {
+    // Populate each role row's active-badge + nested .role-active-tasks
+    // container from the snapshot's in_flight_tasks list. Called from
+    // updateTopology so it stays in lock-step with slot-dot updates.
+    if (!topology) return;
+    // Group inflight by chosen_action (the routed role).
+    const byRole = {};
+    for (const t of inflight || []) {
+        const role = t.chosen_action || t.final_role || 'unknown';
+        if (!byRole[role]) byRole[role] = [];
+        byRole[role].push(t);
+    }
+    // Iterate every active-badge — these were created with id="active_badge_<base>"
+    document.querySelectorAll('[id^="active_badge_"]').forEach(badge => {
+        const base = badge.id.substring('active_badge_'.length);
+        const tasks = byRole[base] || [];
+        if (tasks.length === 0) {
+            badge.textContent = '0';
+            badge.classList.add('zero');
+        } else {
+            badge.textContent = `${tasks.length} active`;
+            badge.classList.remove('zero');
+        }
+        const container = document.getElementById(`active_tasks_${base}`);
+        if (!container) return;
+        if (tasks.length === 0) {
+            container.innerHTML = '<div style="color:var(--dim);font-size:10px;padding:4px 6px">no in-flight tasks for this role</div>';
+        } else {
+            // Sort newest first
+            const sorted = [...tasks].sort((a, b) => (a.age_s || 0) - (b.age_s || 0));
+            container.innerHTML = sorted.map(t => renderTaskCard(t, 'in_flight')).join('');
+        }
+    });
 }
 
 let _tooltipEl = null;
@@ -820,7 +919,7 @@ async function openNodeDetail(port, label) {
     }
 }
 
-function updateTopology(activity) {
+function updateTopology(activity, inflight) {
     // Update slot-dot rows. Two passes:
     //   1) Each individual node's dots (children + bare-role rows) come from its
     //      own activity entry — same behavior as before grouping.
@@ -887,6 +986,12 @@ function updateTopology(activity) {
             overflow.textContent = `+${cap - 12}`;
             dotsEl.appendChild(overflow);
         }
+    }
+
+    // Third pass: per-role in-flight task badges + nested cards.
+    // (B: merged in-flight panel into topology.)
+    if (inflight !== undefined) {
+        updateTopologyInflight(inflight);
     }
 }
 
@@ -956,29 +1061,31 @@ function updateTasks(snap) {
         slotsActive += a.n_active || 0;
         slotsTotal += a.n_total || 0;
     });
-    document.getElementById('inflight-count').textContent =
-        `${inflight.length} chat · ${slotsActive}/${slotsTotal} slots active`;
-    // Surface the gap: more slots active than tracked chat tasks means some
-    // inferences are seeding/eval/internal probes without a task_id. Show
-    // an explainer when that's the case so the operator understands why
-    // the tap shows more activity than is clickable here.
+    // The in-flight panel was merged into topology (B); the count + explainer
+    // still live in the topology h2 header / footer hint so the operator can
+    // glance at "N chat · M/T slots" without expanding any role.
+    const cntEl = document.getElementById('inflight-count');
+    if (cntEl) {
+        cntEl.textContent = `${inflight.length} chat · ${slotsActive}/${slotsTotal} slots active`;
+    }
     const explainer = document.getElementById('inflight-explainer');
     if (explainer) {
-        explainer.style.display = (slotsActive > inflight.length) ? 'block' : 'none';
+        // Show the explainer when the gap is non-trivial (slots > chat or no
+        // chat tasks at all with slots busy).
+        explainer.style.display = (slotsActive > inflight.length || (slotsActive > 0 && inflight.length === 0))
+            ? 'block' : 'none';
     }
-    document.getElementById('completed-count').textContent = `${completed.length} in last 10m`;
-    const ifEl = document.getElementById('inflight-tasks');
     const cpEl = document.getElementById('completed-tasks');
-    if (inflight.length) {
-        ifEl.innerHTML = inflight.map(t => renderTaskCard(t, 'in_flight')).join('');
-    } else if (slotsActive > 0) {
-        ifEl.innerHTML = `<div style="color:var(--warn);font-size:11px">${slotsActive} slot(s) processing on llama-server but no chat-XXX task yet logged to the progress JSONL — this is the ~1-2s flush lag between request arrival and event log.</div>`;
-    } else {
-        ifEl.innerHTML = '<div style="color:var(--muted);font-size:11px">no tasks in flight — autopilot may be in a between-batch GEPA local-compute phase</div>';
+    const cpCount = document.getElementById('completed-count');
+    if (cpCount) cpCount.textContent = `${completed.length} in last 10m`;
+    if (cpEl) {
+        cpEl.innerHTML = completed.length
+            ? completed.slice(0, 12).map(t => renderTaskCard(t, 'completed')).join('')
+            : '<div style="color:var(--muted);font-size:11px">no completed tasks in last 10 min</div>';
     }
-    cpEl.innerHTML = completed.length
-        ? completed.slice(0, 12).map(t => renderTaskCard(t, 'completed')).join('')
-        : '<div style="color:var(--muted);font-size:11px">no completed tasks in last 10 min</div>';
+    // Feed in-flight tasks into the topology strip — each role row's
+    // active-badge + nested .role-active-tasks container is populated by
+    // updateTopologyInflight (called from updateTopology with snap context).
 }
 
 // ---- Inference tap panel — uses RAW byte-streaming SSE (mirrors TUI behavior) ----
@@ -2100,7 +2207,7 @@ function startStream() {
         try {
             const snap = JSON.parse(e.data);
             if (snap.error) { document.getElementById('status').textContent = `error: ${snap.error}`; return; }
-            updateTopology(snap.activity || {});
+            updateTopology(snap.activity || {}, snap.in_flight_tasks || []);
             updateCounters(snap);
             updateTasks(snap);
             updateDecisions(snap);
