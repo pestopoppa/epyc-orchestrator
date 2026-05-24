@@ -391,11 +391,11 @@ class ServerURLsConfig:
     worker_general: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
     worker_explore: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
     worker_math: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
-    # 2026-05-24: worker_vision + vision_escalation upgraded to full+4×quarters
-    # following Phase 0.5 quarter-fit benches (worker_vision 11.39 t/s @ 24t,
-    # vision_escalation 20.09 t/s @ 48t — best quarter-throughput of any role).
-    # "full:" prefix triggers ConcurrencyAwareBackend (solo→full, concurrent→quarters).
-    worker_vision: str = "full:http://localhost:8086,http://localhost:8186,http://localhost:8286,http://localhost:8386,http://localhost:8486"
+    # 2026-05-24: vision_escalation upgraded to full+4×quarters following
+    # Phase 0.5 quarter-fit bench (20.09 t/s @ 48t — best quarter-throughput
+    # of any role). worker_vision reverted to single-instance (too small to
+    # benefit from quartering — see stack_numa.py for the bench data).
+    worker_vision: str = "http://localhost:8086"
     vision_escalation: str = "full:http://localhost:8087,http://localhost:8187,http://localhost:8287,http://localhost:8387,http://localhost:8487"
     worker_coder: str = "http://localhost:8102"
     worker_fast: str = "http://localhost:8102"

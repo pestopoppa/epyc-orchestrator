@@ -64,10 +64,11 @@ def test_single_instance_roles_use_first_entry() -> None:
         assert int(orchestrator_stack._resolve_thread_count(role, 99)) == expected
 
 
-def test_quartered_vision_roles_per_instance_thread_count() -> None:
-    """Phase 1b: vision_escalation + worker_vision + ingest_long_context now
-    have full + 4 quarters. Per-instance thread count must resolve correctly."""
-    for role in ("vision_escalation", "worker_vision", "ingest_long_context"):
+def test_quartered_roles_per_instance_thread_count() -> None:
+    """Phase 1b: vision_escalation + ingest_long_context were upgraded to
+    full + 4 quarters (worker_vision reverted to single — too small). Per-
+    instance thread count must resolve correctly for the quartered roles."""
+    for role in ("vision_escalation", "ingest_long_context"):
         instances = _instances(role)
         assert len(instances) >= 2, (
             f"{role} should have full + at least 1 quarter post-Phase-1b "
@@ -78,6 +79,36 @@ def test_quartered_vision_roles_per_instance_thread_count() -> None:
             assert int(resolved) == expected_threads, (
                 f"{role} instance[{idx}] expected -t {expected_threads}, got {resolved}"
             )
+
+
+def test_worker_vision_stays_single_instance() -> None:
+    """Phase 0.5 bench showed Qwen2.5-VL-7B is flat between 24t/48t and not
+    worth quartering. Stays single instance on NUMA_Q0B."""
+    instances = _instances("worker_vision")
+    assert len(instances) == 1, "worker_vision should be single-instance (too small to quarter)"
+    cpus, port, threads = instances[0]
+    assert port == 8086
+    assert threads == 24
+    assert cpus == "24-47,120-143"  # NUMA_Q0B
+
+
+def test_frontdoor_full_uses_numa_node0_not_full() -> None:
+    """April 2026-04-17 head-to-head: NUMA_NODE0 beats NUMA_FULL+interleave=all
+    by 1.7% on Qwen3.6-35B-A3B Q8 (cache locality wins for A3B MoE).
+    Recorded in progress/2026-05/2026-05-20.md:671-680."""
+    instances = _instances("frontdoor")
+    full = instances[0]
+    assert full[0] == "0-47,96-143", (
+        f"frontdoor full should be NUMA_NODE0 (0-47,96-143), got {full[0]!r} — "
+        "if this is NUMA_FULL ('0-95'), it's the 2026-05-24 mistaken migration; "
+        "April head-to-head data says NUMA_NODE0 wins"
+    )
+    # And: no numactl_policy (config B in April test was plain taskset, no numactl)
+    import stack_numa
+    assert "numactl_policy" not in stack_numa.NUMA_CONFIG["frontdoor"], (
+        "frontdoor should NOT have numactl_policy set — April config B "
+        "(plain taskset, no numactl) beat config A (numactl interleave=all)"
+    )
 
 
 def test_unknown_role_falls_back_to_96() -> None:

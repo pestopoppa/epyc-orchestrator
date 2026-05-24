@@ -48,17 +48,19 @@ NUMA_CONFIG: dict[str, dict] = {
     # Concurrency router: single session → full (96t), concurrent → quarter (48t) instances.
     "frontdoor": {
         "instances": [
-            # 2026-05-24 migration: full instance now NUMA_FULL ("0-95") + numactl
-            # --interleave=all to match worker_general / architect_general
-            # canonical max-throughput recipe. Pre-fix this was NUMA_NODE0
-            # ("0-47,96-143") = half-socket, 96 threads — a leftover of the NPS2
-            # "Node 0" definition that became half-socket when we migrated to NPS4
-            # 2026-04-24. Phase 0 bench 2026-05-24: full-socket 96t = 10.31 t/s
-            # vs half-socket 96t = 10.18 t/s on Qwen3.6-35B Q8 (other servers
-            # alive contend for the "extra" channels so the win is small;
-            # consistency with the other full-instance roles is worth more
-            # than the +2% margin).
-            (NUMA_FULL[0], 8070, NUMA_FULL[1]),    # full: 1×96t (max single-session speed)
+            # 2026-05-24 REVERT: full instance returned to NUMA_NODE0 (cores
+            # 0-47, SMT siblings 96-143) WITHOUT numactl_policy. April 2026-04-17
+            # 3-rep head-to-head bench on Qwen3.6-35B-A3B Q8 (recorded in
+            # progress/2026-05/2026-05-20.md lines 671-680):
+            #   Config A: numactl --interleave=all + 96t  → 26.60 t/s
+            #   Config B: NUMA_NODE0 (taskset 0-47,96-143) + 96t  → 27.06 t/s
+            # B beats A by 1.7% — A3B MoE activates only ~3B/35B params per
+            # token, so memory traffic is low and cache locality dominates over
+            # channel parallelism. NUMA_NODE0 is correct.
+            # An earlier 2026-05-24 commit (6657bbd) migrated this to
+            # NUMA_FULL+interleave=all citing "consistency with worker_general /
+            # architect_general"; that ignored the April head-to-head. Reverted.
+            (NUMA_NODE0[0], 8070, NUMA_NODE0[1]),  # full: 1×96t on cores 0-47+SMT
             (NUMA_Q0A[0], 8080, NUMA_Q0A[1]),      # quarter 0
             (NUMA_Q0B[0], 8180, NUMA_Q0B[1]),      # quarter 1
             (NUMA_Q1A[0], 8280, NUMA_Q1A[1]),      # quarter 2
@@ -66,14 +68,11 @@ NUMA_CONFIG: dict[str, dict] = {
         ],
         "full_instance_idx": 0,  # index of 1×96t instance in list above
         "mlock": True,   # 19 GB per instance — latency-critical (S2: 30x improvement)
-        "numactl_policy": "interleave=all",  # 2026-05-24: matches the canonical recipe
-        # NOTE: per Phase 0 bench, NPS4 single-quarter at -t 48 gives 8.90 t/s
-        # vs full-socket 10.31 — so the 4 quarter instances above (-t 48 per the
-        # Phase 1a fix) will run WORSE per-instance than the full. Aggregate
-        # serving capacity is still 5× the full (~45 t/s aggregate vs 10 solo),
-        # but consider whether the quartering is the right shape for this Q8
-        # model long-term; for now keeping the 5-instance topology since the
-        # ConcurrencyAwareBackend depends on it.
+        # NOTE: NPS4 single-quarter at -t 48 gives ~8.90 t/s on this model per
+        # Phase 0.5 (Qwen3-Coder-30B Q4's 46.6 t/s NPS4 sweep does NOT transfer
+        # to 35B Q8 — Q8 needs more BW than one quarter provides). The 4
+        # quarter instances above will run noticeably slower than the full;
+        # ConcurrencyAwareBackend prefers the full for solo requests anyway.
     },
     # coder_escalation NUMA_CONFIG entry REMOVED 2026-05-09 — consolidated onto
     # frontdoor's server (same Qwen3.6-35B-A3B Q8 GGUF since 2026-05-06 swap).
@@ -106,11 +105,14 @@ NUMA_CONFIG: dict[str, dict] = {
     # 2026-05-24 Phase 0.5 bench: 48t single-quarter = 12.34 t/s, viable for
     # quartering despite the 45 GB GGUF being snug against per-quarter capacity.
     # Concurrency router routes solo → full (8085), concurrent → quarters
-    # (8185/8285/8385/8485). Full uses NUMA_FULL + interleave=all to match the
-    # canonical max-throughput recipe (was NUMA_NODE0 = half-socket pre-fix).
+    # (8185/8285/8385/8485). Full anchor reverted to NUMA_NODE0 (same NPS4
+    # half-socket pattern frontdoor uses, which the April 2026-04-17 data
+    # showed beats NUMA_FULL+interleave=all by 1.7% on Qwen3.6-Q8. No direct
+    # head-to-head data exists for Qwen3-Next-80B Q4, but it's an A3B MoE
+    # like Qwen3.6 so cache-locality argument applies — keep parity).
     "ingest_long_context": {
         "instances": [
-            (NUMA_FULL[0], 8085, NUMA_FULL[1]),      # full canonical (was NUMA_NODE0 pre-2026-05-24)
+            (NUMA_NODE0[0], 8085, NUMA_NODE0[1]),    # full: 1×96t on cores 0-47+SMT
             (NUMA_Q0A[0], 8185, NUMA_Q0A[1]),        # quarter 0
             (NUMA_Q0B[0], 8285, NUMA_Q0B[1]),        # quarter 1
             (NUMA_Q1A[0], 8385, NUMA_Q1A[1]),        # quarter 2
@@ -118,7 +120,6 @@ NUMA_CONFIG: dict[str, dict] = {
         ],
         "full_instance_idx": 0,
         "mlock": True,    # ~46 GB per instance — latency-critical for ingest pipeline (Stage 1 of three_stage_summarization since 2026-05-06)
-        "numactl_policy": "interleave=all",
     },
     # Worker: gemma4-26B-A4B Q4_K_M MTP (16 GB) — pre-warm: 1×96t + 4×48t.
     # Swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M (was 39 t/s at 48t).
@@ -147,29 +148,28 @@ NUMA_CONFIG: dict[str, dict] = {
         "spec_overrides": {"draft_max": 2, "p_split": 0},  # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
         "numactl_policy": "interleave=all",  # 2026-05-08: required for gemma4 MTP buffer allocation
     },
-    # Qwen2.5-VL-7B Q4_K_M (~4 GB) — pre-warm: 1×96t full + 4×24t quarters
-    # 2026-05-24 Phase 0.5 bench: 48t/quarter = 11.30 t/s, 24t/quarter = 11.39 t/s
-    # (flat — model too small to benefit from more threads). Quarter at 24t
-    # preserves headroom for the other quarter-resident workloads.
+    # Qwen2.5-VL-7B Q4_K_M (~4 GB) — single instance on Q0B at 24t.
+    # Phase 0.5 bench (2026-05-24) showed 24t = 11.39 t/s, 48t = 11.30 t/s
+    # (flat — model too small to benefit from more threads or quartering).
+    # An earlier 2026-05-24 commit (6657bbd) added a 96t full instance + 4
+    # quarters, all using 24t each = 16 GB unnecessary mlock budget. Reverted
+    # to the original single-quarter shape: this role just doesn't have
+    # enough request volume to justify concurrent-serving topology.
     "worker_vision": {
-        "instances": [
-            (NUMA_FULL[0], 8086, NUMA_FULL[1]),      # full (was NUMA_Q0B[0]=8086, 24t pre-fix)
-            (NUMA_Q0A[0], 8186, 24),                 # quarter 0 (24t — flat past that)
-            (NUMA_Q0B[0], 8286, 24),                 # quarter 1
-            (NUMA_Q1A[0], 8386, 24),                 # quarter 2
-            (NUMA_Q1B[0], 8486, 24),                 # quarter 3
-        ],
-        "full_instance_idx": 0,
-        "mlock": True,    # ~4 GB per instance — minimal footprint
-        "numactl_policy": "interleave=all",
+        "instances": [(NUMA_Q0B[0], 8086, 24)],
+        "mlock": True,    # ~4 GB — minimal footprint
     },
     # Qwen3-VL-30B-A3B MoE (~17 GB) — pre-warm: 1×96t full + 4×48t quarters
-    # 2026-05-24 Phase 0.5 bench: 48t/quarter = 20.09 t/s, best quarter throughput
-    # of any role (small Q4 active params + healthy BW). Quartering gives ~80 t/s
-    # aggregate for concurrent vision-escalation requests.
+    # Phase 0.5 bench (2026-05-24): 48t/quarter = 20.09 t/s — best quarter
+    # throughput of any role (small Q4 active params + healthy BW). Quartering
+    # gives ~80 t/s aggregate for concurrent vision-escalation requests.
+    # Full anchor: NUMA_NODE1 (the historical pre-2026-05-24 choice, on the
+    # node 1 half-socket — frees node 0 for frontdoor's heavier load). An
+    # earlier 2026-05-24 commit migrated this to NUMA_FULL+interleave=all
+    # without supporting head-to-head data — reverted.
     "vision_escalation": {
         "instances": [
-            (NUMA_FULL[0], 8087, NUMA_FULL[1]),      # full (was NUMA_NODE1 = half-socket pre-fix)
+            (NUMA_NODE1[0], 8087, NUMA_NODE1[1]),    # full: 1×96t on node 1 half-socket
             (NUMA_Q0A[0], 8187, NUMA_Q0A[1]),        # quarter 0
             (NUMA_Q0B[0], 8287, NUMA_Q0B[1]),        # quarter 1
             (NUMA_Q1A[0], 8387, NUMA_Q1A[1]),        # quarter 2
@@ -177,7 +177,6 @@ NUMA_CONFIG: dict[str, dict] = {
         ],
         "full_instance_idx": 0,
         "mlock": True,    # ~17 GB per instance — fits in 1.13 TB budget
-        "numactl_policy": "interleave=all",
     },
 }
 
