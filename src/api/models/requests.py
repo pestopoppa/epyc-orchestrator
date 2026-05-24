@@ -89,6 +89,24 @@ class ChatRequest(BaseModel):
         description="Admission priority: 'interactive' (default) or 'background'. "
         "Interactive requests are prioritized at backend admission gates.",
     )
+    max_queue_wait_ms: int | None = Field(
+        default=None,
+        description="Maximum time the cross-role contention gate may queue "
+        "this request before rejecting it (HTTP 503 + Retry-After). When unset, "
+        "the gate uses 5s for interactive and 90s for background. Foreground "
+        "callers with tight SLO budgets should set this explicitly.",
+    )
+    migration_budget_ms: int | None = Field(
+        default=None,
+        description="Phase E (cross-role-bw-aware-routing): maximum acceptable "
+        "KV-save+restore latency for migrating an existing session from full "
+        "to quarter on concurrent arrival. Short interactive turns should set "
+        "this low (e.g. 200) to skip migration and queue/cold-start instead. "
+        "Long conversations + background probes can amortize a longer budget. "
+        "Currently advisory only — migration is disabled under "
+        "ORCHESTRATOR_PER_REGION_LOCKS=1 (production default); see "
+        "ConcurrencyAwareBackend.kv_migration_status() for runtime state.",
+    )
     stop_sequences: list[str] | None = Field(
         default=None,
         description="Additional stop sequences to halt generation. "

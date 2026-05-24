@@ -565,6 +565,16 @@ def call_orchestrator_forced(
         "force_mode": force_mode,
         "timeout_s": timeout,
         "client_deadline_unix_s": time.time() + float(timeout),
+        # Phase C (cross-role-bw-aware-routing): seeder traffic is background.
+        # The orchestrator's contention gate queues these behind any active
+        # foreground decode on a known-bad/unknown pair (e.g. when frontdoor
+        # is decoding, an ingest probe is held until frontdoor releases).
+        # Without this stamp, autopilot probes contend with user chats and
+        # crater both sides per the 2026-05-24 contention matrix.
+        "request_priority": "background",
+        # Background autopilot can wait up to 90 s for the gate; foreground
+        # chats default to 5 s. Adjust if seed timeouts shorten in future.
+        "max_queue_wait_ms": min(int(timeout * 1000), 90_000),
     }
     if image_path:
         payload["image_path"] = image_path

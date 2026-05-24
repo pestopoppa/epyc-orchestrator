@@ -206,6 +206,66 @@ def _current_lock_owner_pids(lock_file: Path) -> list[str]:
     return sorted(owners)
 
 
+def active_region_holders(
+    instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
+) -> dict[str, list[int]]:
+    """Return {role: [instance_idx, ...]} for instances currently holding
+    any CPU region lock (i.e. actively dispatched under PER_REGION_LOCKS=1).
+
+    This is the canonical cross-process source of "which role is decoding"
+    used by the cross-role admission gate (Phase B of the cross-role-bw-aware
+    routing handoff). Returns empty dict if PER_REGION_LOCKS is disabled or
+    no instances are dispatching.
+
+    `instance_regions`: optional override (e.g. for tests). Defaults to the
+    live mapping from `src.runtime.instance_topology.get_instance_regions()`.
+
+    The mapping is cheap to call (one /proc/locks scan + per-region stat),
+    typically <2 ms even on a busy host. Safe to call from request-handling
+    threads.
+    """
+    if instance_regions is None:
+        try:
+            from src.runtime.instance_topology import get_instance_regions
+            instance_regions = get_instance_regions()
+        except Exception:
+            return {}
+
+    if not instance_regions:
+        return {}
+
+    # Cache lock-file holder lookup per region — many instances share regions.
+    region_held: dict[str, bool] = {}
+
+    def _region_has_holder(role: str, region: str) -> bool:
+        key = f"{role}.{region}"
+        if key in region_held:
+            return region_held[key]
+        lock_path = region_lock_path(role, region)
+        if not lock_path.exists():
+            region_held[key] = False
+            return False
+        held = bool(_current_lock_owner_pids(lock_path))
+        region_held[key] = held
+        return held
+
+    out: dict[str, list[int]] = {}
+    for (role, idx), regions in instance_regions.items():
+        if not regions:
+            continue
+        # Instance is "active" if ANY of its regions has a current holder.
+        # That matches how cpu_region_lock acquires the union of region locks
+        # for an instance — if even one is held, the instance is dispatched.
+        for region in regions:
+            if _region_has_holder(role, region):
+                out.setdefault(role, []).append(idx)
+                break
+    # Sort instance indices for deterministic output (helps tests + logs).
+    for role in out:
+        out[role] = sorted(out[role])
+    return out
+
+
 @contextmanager
 def cpu_region_lock(
     role: str,

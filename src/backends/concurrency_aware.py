@@ -170,13 +170,109 @@ class ConcurrencyAwareBackend:
         self._session_quarter: dict[str, int] = {}
         self._session_state: dict[str, dict[str, Any]] = {}
 
+        # Phase D (cross-role-bw-aware-routing): topology-aware quarter ordering.
+        # When the full instance is busy, try quarters in an order that prefers
+        # NUMA-disjoint placement first. For frontdoor with full on NUMA_NODE0
+        # (cores 0-47), the matrix shows q3 (Q1B 72-95) + q2 (Q1A 48-71)
+        # beat q1 (Q0B 24-47) + q0 (Q0A 0-23) by 1.5×-1.7× on the
+        # full+own-quarter test. See `_compute_quarter_preference()`.
+        self._quarter_preference_order: list[int] = self._compute_quarter_preference()
+
+        # Phase E (cross-role-bw-aware-routing): KV migration status.
+        # The legacy `_select` path migrates KV state from full → quarter via
+        # `/slots/{id}?action=save`+`?action=restore`. The newer per-region-locks
+        # `_dispatch` path does NOT use migration — it only picks the first
+        # free region-lock. Production runs with PER_REGION_LOCKS=1 by default,
+        # so today migration is effectively dormant. We expose this status
+        # explicitly so operators don't reason about KV-warm sessions that
+        # aren't actually being preserved. Phase E in the routing handoff
+        # accepts either porting migration into the per-region-locks path OR
+        # explicitly disabling+reporting; we take the second path here. The
+        # first is tracked as a follow-up (see open issues in the handoff).
+        self._kv_migration_enabled = (not self._per_region_locks_enabled()) and _HTTPX_AVAILABLE
+
         logger.info(
-            "ConcurrencyAwareBackend[%s]: 1 full (%s) + %d quarters, KV migration %s",
+            "ConcurrencyAwareBackend[%s]: 1 full (%s) + %d quarters, "
+            "quarter preference=%s, KV migration %s (per_region_locks=%s)",
             role or "unknown",
             self._full_url or "?",
             len(quarter_backends),
-            "enabled" if _HTTPX_AVAILABLE else "disabled (no httpx)",
+            self._quarter_preference_order,
+            "enabled" if self._kv_migration_enabled else "disabled",
+            self._per_region_locks_enabled(),
         )
+
+    def kv_migration_status(self) -> dict[str, Any]:
+        """Operator-visible status of the KV-migration subsystem.
+
+        Returns:
+            {
+              "enabled": bool,           # legacy migration path active?
+              "per_region_locks": bool,  # the newer dispatch is in effect
+              "reason": str,             # human description of why disabled
+              "follow_up": str,          # pointer to the design follow-up
+            }
+
+        Surfaced via /dashboard so a session like "frontdoor warm KV moved to
+        a quarter after a second request" isn't silently false. Today (with
+        per_region_locks=1 in production) migration is OFF — sessions that
+        hit the full instance are served on full or fall back to a cold-start
+        quarter; the warm KV is NOT preserved across the move.
+        """
+        return {
+            "enabled": self._kv_migration_enabled,
+            "per_region_locks": self._per_region_locks_enabled(),
+            "reason": (
+                "" if self._kv_migration_enabled
+                else "per-region-locks dispatch does not invoke save/restore; "
+                     "porting is a follow-up (handoff Phase E open issue)"
+            ),
+            "follow_up": "handoffs/active/cross-role-bw-aware-routing.md Phase E",
+        }
+
+    def _compute_quarter_preference(self) -> list[int]:
+        """Return quarter indices ordered by preference when full is busy.
+
+        Logic: quarters whose CPU cores are DISJOINT from the full instance's
+        cores come first (no cpu-set contention with the in-flight full
+        request), then quarters with partial overlap. Within each bucket,
+        original numerical order is preserved.
+
+        Falls back to `[0, 1, 2, ..., N-1]` if NUMA_CONFIG isn't importable
+        (e.g. dev/test contexts).
+        """
+        try:
+            from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+            from src.runtime.instance_topology import parse_cpu_list
+        except Exception:
+            return list(range(len(self._quarters)))
+
+        cfg = NUMA_CONFIG.get(self._role)
+        if not cfg or not cfg.get("instances"):
+            return list(range(len(self._quarters)))
+
+        instances = cfg["instances"]
+        # Instance 0 is full; quarters are 1..N
+        if len(instances) < 2:
+            return list(range(len(self._quarters)))
+
+        full_cores = parse_cpu_list(instances[0][0])
+
+        disjoint: list[int] = []
+        overlapping: list[int] = []
+        for q_idx in range(len(self._quarters)):
+            topo_idx = q_idx + 1  # quarter index in NUMA_CONFIG.instances
+            if topo_idx >= len(instances):
+                # More backends than topology entries — append at the end
+                overlapping.append(q_idx)
+                continue
+            q_cores = parse_cpu_list(instances[topo_idx][0])
+            if full_cores & q_cores:
+                overlapping.append(q_idx)
+            else:
+                disjoint.append(q_idx)
+
+        return disjoint + overlapping
 
     def _select(self, session_id: str = "") -> tuple[Any, int, bool]:
         """Select the best backend for the next request.
@@ -492,8 +588,12 @@ class ConcurrencyAwareBackend:
         # Priority list of (idx_in_concurrency_aware, instance_idx_in_topology)
         # In NUMA_CONFIG: idx 0 is full, idx 1..N are quarters → matches
         # our internal indexing (-1 for full, 0..N-1 for quarters).
+        # Phase D: quarters are visited in `_quarter_preference_order` so when
+        # the full lock is held, the next attempted quarter is one that's
+        # NUMA-disjoint from full (no cpu-set overlap). For frontdoor full on
+        # NUMA_NODE0 this picks q3/q2 before q1/q0.
         candidates: list[tuple[int, int]] = [(-1, 0)]  # full first
-        for q_idx in range(len(self._quarters)):
+        for q_idx in self._quarter_preference_order:
             candidates.append((q_idx, q_idx + 1))  # quarter q_idx → topology idx q_idx+1
 
         chosen_ctx = None

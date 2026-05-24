@@ -414,6 +414,7 @@ async def _handle_chat(
             if str(request.request_priority).strip().lower() == "background"
             else "interactive"
         ),
+        max_queue_wait_ms=request.max_queue_wait_ms,  # Phase B: cross-role gate budget
     ):
         def _attach_routing_telemetry(resp: ChatResponse) -> ChatResponse:
             """NIB2-35: stamp shadow routing signals onto the response so

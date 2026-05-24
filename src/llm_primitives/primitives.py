@@ -160,6 +160,10 @@ class LLMPrimitives(
             "llm_primitives_request_task_id",
             default=None,
         )
+        self._max_queue_wait_ms_ctx: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+            "llm_primitives_max_queue_wait_ms",
+            default=None,
+        )
         self._request_priority_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
             "llm_primitives_request_priority",
             default=None,
@@ -235,6 +239,17 @@ class LLMPrimitives(
             return str(value)
         return str(self._request_priority or "interactive")
 
+    def get_max_queue_wait_ms(self) -> int | None:
+        """Get request-local cross-role contention gate budget, if set.
+
+        Returns None when the request did not specify one — the gate will
+        then pick a class-appropriate default (5 s foreground / 90 s background).
+        """
+        value = self._max_queue_wait_ms_ctx.get()
+        if value is not None:
+            return int(value)
+        return None
+
     @contextlib.contextmanager
     def request_context(
         self,
@@ -243,8 +258,15 @@ class LLMPrimitives(
         deadline_s: float | None = None,
         task_id: str | None = None,
         priority: str = "interactive",
+        max_queue_wait_ms: int | None = None,
     ):
-        """Bind cancellation/deadline metadata to the current request context."""
+        """Bind cancellation/deadline metadata to the current request context.
+
+        `max_queue_wait_ms` is the cross-role contention gate budget — how
+        long the gate may queue a request before rejecting (per the
+        cross-role-bw-aware-routing handoff Phase B). None lets the gate
+        pick the class-appropriate default.
+        """
         normalized_priority = (
             "background"
             if str(priority or "interactive").strip().lower() == "background"
@@ -272,6 +294,7 @@ class LLMPrimitives(
         token_deadline = self._request_deadline_s_ctx.set(deadline_s)
         token_task = self._request_task_id_ctx.set(task_id)
         token_priority = self._request_priority_ctx.set(normalized_priority)
+        token_queue_wait = self._max_queue_wait_ms_ctx.set(max_queue_wait_ms)
         try:
             yield
         finally:
@@ -285,6 +308,7 @@ class LLMPrimitives(
             self._request_deadline_s_ctx.reset(token_deadline)
             self._request_task_id_ctx.reset(token_task)
             self._request_priority_ctx.reset(token_priority)
+            self._max_queue_wait_ms_ctx.reset(token_queue_wait)
 
     def _remaining_deadline_s(self) -> float | None:
         """Return remaining request deadline in seconds, if any."""

@@ -99,6 +99,29 @@ class InferenceMixin:
         Raises:
             RuntimeError: If no backend configured for this role.
         """
+        # Cross-role contention gate (Phase B of cross-role-bw-aware-routing).
+        # MUST run BEFORE _acquire_role — the per-role semaphore would hide
+        # an admitted request from the active-decode snapshot during its wait.
+        # ContentionDenied surfaces as 503 + Retry-After at the chat route.
+        from src.scheduling.contention_gate import get_gate, ContentionDenied
+        from src.scheduling.contention import TrafficClass
+
+        priority = self.get_request_priority() if hasattr(self, "get_request_priority") else "interactive"
+        traffic_class = (
+            TrafficClass.BACKGROUND if str(priority).lower() == "background"
+            else TrafficClass.FOREGROUND_INTERACTIVE
+        )
+        max_wait_ms = (
+            self.get_max_queue_wait_ms() if hasattr(self, "get_max_queue_wait_ms") else None
+        )
+
+        gate = get_gate()
+        decision = gate.admit(role, traffic_class, max_wait_ms)
+        if not decision.admitted:
+            raise ContentionDenied(
+                f"contention gate denied role={role} class={traffic_class.value}: {decision.reason}"
+            )
+
         acquire = getattr(self, "_acquire_role", None)
         if acquire:
             with acquire(role):
