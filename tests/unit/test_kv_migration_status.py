@@ -28,32 +28,34 @@ def _build(role: str = "frontdoor"):
     )
 
 
-def test_migration_disabled_under_per_region_locks(monkeypatch) -> None:
-    """When PER_REGION_LOCKS=1, KV migration must be flagged disabled."""
+def test_migration_enabled_under_per_region_locks(monkeypatch) -> None:
+    """2026-05-24: migration is now ported into the per-region-locks dispatch
+    path, so the flag should be True under PER_REGION_LOCKS=1 (assuming httpx)."""
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     cab = _build()
-    assert cab._kv_migration_enabled is False
+    assert cab._kv_migration_enabled is ca_mod._HTTPX_AVAILABLE
     status = cab.kv_migration_status()
-    assert status["enabled"] is False
+    assert status["enabled"] is ca_mod._HTTPX_AVAILABLE
     assert status["per_region_locks"] is True
-    assert "follow-up" in status["reason"].lower() or "Phase E" in status["follow_up"]
+    assert status["dispatch_path"] == "per_region_locks"
 
 
-def test_migration_enabled_when_per_region_locks_off(monkeypatch) -> None:
-    """When PER_REGION_LOCKS=0, the legacy migration path is available (assuming httpx)."""
+def test_migration_enabled_under_legacy_select(monkeypatch) -> None:
+    """Under PER_REGION_LOCKS=0, the legacy _select path migrates (status reports
+    dispatch_path='legacy_select')."""
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "0")
     cab = _build()
-    # Should be True iff httpx is available; in this repo it is.
     assert cab._kv_migration_enabled is ca_mod._HTTPX_AVAILABLE
     status = cab.kv_migration_status()
     assert status["per_region_locks"] is False
+    assert status["dispatch_path"] == "legacy_select"
 
 
 def test_migration_status_keys_present(monkeypatch) -> None:
     monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
     cab = _build()
     s = cab.kv_migration_status()
-    for key in ("enabled", "per_region_locks", "reason", "follow_up"):
+    for key in ("enabled", "per_region_locks", "reason", "dispatch_path"):
         assert key in s
 
 

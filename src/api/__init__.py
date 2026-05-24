@@ -284,6 +284,30 @@ def create_app() -> FastAPI:
     router = create_api_router()
     app.include_router(router)
 
+    # 2026-05-24 Phase B (cross-role-bw-aware-routing): map ContentionDenied
+    # to 503 + Retry-After so foreground callers see clean backpressure
+    # instead of a generic 500. Background callers (autopilot seeder) catch
+    # the 503 and skip/defer the probe.
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+    from src.scheduling.contention_gate import ContentionDenied
+
+    @app.exception_handler(ContentionDenied)
+    async def _contention_denied_handler(request: Request, exc: ContentionDenied):
+        # Retry-After: short for foreground (next active decode should clear
+        # within ~5 s), longer when explicitly background. We can't fully
+        # introspect the request priority from here without re-parsing, so
+        # use a conservative middle-ground default.
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "contention_denied",
+                "detail": str(exc),
+                "retry_after_s": 5,
+            },
+            headers={"Retry-After": "5"},
+        )
+
     return app
 
 

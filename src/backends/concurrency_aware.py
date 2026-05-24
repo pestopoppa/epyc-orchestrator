@@ -179,17 +179,14 @@ class ConcurrencyAwareBackend:
         self._quarter_preference_order: list[int] = self._compute_quarter_preference()
 
         # Phase E (cross-role-bw-aware-routing): KV migration status.
-        # The legacy `_select` path migrates KV state from full → quarter via
-        # `/slots/{id}?action=save`+`?action=restore`. The newer per-region-locks
-        # `_dispatch` path does NOT use migration — it only picks the first
-        # free region-lock. Production runs with PER_REGION_LOCKS=1 by default,
-        # so today migration is effectively dormant. We expose this status
-        # explicitly so operators don't reason about KV-warm sessions that
-        # aren't actually being preserved. Phase E in the routing handoff
-        # accepts either porting migration into the per-region-locks path OR
-        # explicitly disabling+reporting; we take the second path here. The
-        # first is tracked as a follow-up (see open issues in the handoff).
-        self._kv_migration_enabled = (not self._per_region_locks_enabled()) and _HTTPX_AVAILABLE
+        # 2026-05-24 update: migration is NOW also wired into the per-region-
+        # locks `_dispatch` path (the "port" the handoff asked for). The flag
+        # now means "any path actually performs save/restore migration" and
+        # is enabled whenever httpx is available. Operators can disable per-
+        # instance via `ConcurrencyAwareBackend(..., kv_migration_disabled=True)`
+        # for opt-out testing. Status reporting via `kv_migration_status()`
+        # tells the dashboard which dispatch path is live.
+        self._kv_migration_enabled = _HTTPX_AVAILABLE
 
         logger.info(
             "ConcurrencyAwareBackend[%s]: 1 full (%s) + %d quarters, "
@@ -207,27 +204,25 @@ class ConcurrencyAwareBackend:
 
         Returns:
             {
-              "enabled": bool,           # legacy migration path active?
-              "per_region_locks": bool,  # the newer dispatch is in effect
-              "reason": str,             # human description of why disabled
-              "follow_up": str,          # pointer to the design follow-up
+              "enabled": bool,           # migration code is active in current dispatch path
+              "per_region_locks": bool,  # which dispatch path is in effect
+              "dispatch_path": str,      # "legacy_select" | "per_region_locks"
+              "reason": str,             # human description (when disabled)
             }
 
-        Surfaced via /dashboard so a session like "frontdoor warm KV moved to
-        a quarter after a second request" isn't silently false. Today (with
-        per_region_locks=1 in production) migration is OFF — sessions that
-        hit the full instance are served on full or fall back to a cold-start
-        quarter; the warm KV is NOT preserved across the move.
+        2026-05-24: migration is now ported into both dispatch paths. The
+        per-region-locks `_dispatch` path kicks off the same async save/restore
+        thread the legacy `_select` path uses, on the same conditions (full
+        acquired by new session, old session has no quarter affinity yet).
         """
+        path = "per_region_locks" if self._per_region_locks_enabled() else "legacy_select"
         return {
             "enabled": self._kv_migration_enabled,
             "per_region_locks": self._per_region_locks_enabled(),
+            "dispatch_path": path,
             "reason": (
-                "" if self._kv_migration_enabled
-                else "per-region-locks dispatch does not invoke save/restore; "
-                     "porting is a follow-up (handoff Phase E open issue)"
+                "" if self._kv_migration_enabled else "httpx unavailable"
             ),
-            "follow_up": "handoffs/active/cross-role-bw-aware-routing.md Phase E",
         }
 
     def _compute_quarter_preference(self) -> list[int]:
@@ -592,8 +587,20 @@ class ConcurrencyAwareBackend:
         # the full lock is held, the next attempted quarter is one that's
         # NUMA-disjoint from full (no cpu-set overlap). For frontdoor full on
         # NUMA_NODE0 this picks q3/q2 before q1/q0.
-        candidates: list[tuple[int, int]] = [(-1, 0)]  # full first
+        # 2026-05-24 Phase E port: when session_id has a known quarter
+        # affinity from a prior migration (in `_session_quarter`), try THAT
+        # quarter first so the warm KV state actually gets reused.
+        sticky_q_idx: int | None = None
+        if session_id:
+            with self._lock:
+                sticky_q_idx = self._session_quarter.get(session_id)
+        candidates: list[tuple[int, int]] = []
+        if sticky_q_idx is not None and 0 <= sticky_q_idx < len(self._quarters):
+            candidates.append((sticky_q_idx, sticky_q_idx + 1))
+        candidates.append((-1, 0))  # full
         for q_idx in self._quarter_preference_order:
+            if q_idx == sticky_q_idx:
+                continue  # already at the head
             candidates.append((q_idx, q_idx + 1))  # quarter q_idx → topology idx q_idx+1
 
         chosen_ctx = None
@@ -618,11 +625,40 @@ class ConcurrencyAwareBackend:
             chosen_idx = -1
 
         # Update in-process telemetry (best-effort; not authoritative).
+        # 2026-05-24 Phase E port: when full is acquired by a DIFFERENT session
+        # than the previous holder AND legacy migration is enabled (via
+        # `_kv_migration_enabled` — defaults disabled under PER_REGION_LOCKS=1
+        # but operators can re-enable per-instance for opt-in testing of the
+        # ported migration path), kick off async save/restore of the OLD
+        # session's KV to a disjoint quarter.
+        migrate_old_session: str | None = None
+        migrate_target_quarter: int | None = None
         with self._lock:
             self._total_requests += 1
             if chosen_idx == -1:
                 self._full_active = True
                 self._full_requests += 1
+                old_session = self._full_last_session
+                if (
+                    self._kv_migration_enabled
+                    and old_session
+                    and session_id
+                    and old_session != session_id
+                    and old_session not in self._session_quarter
+                ):
+                    # Find an idle quarter in preference order (disjoint first)
+                    for q_idx in self._quarter_preference_order:
+                        if not self._quarter_active[q_idx]:
+                            migrate_old_session = old_session
+                            migrate_target_quarter = q_idx
+                            # Reserve the quarter so concurrent dispatch doesn't grab it
+                            self._migrations += 1
+                            self._set_session_state(
+                                old_session,
+                                state=_STATE_MIGRATION_PENDING,
+                                quarter=q_idx,
+                            )
+                            break
                 if session_id:
                     self._full_last_session = session_id
                     self._set_session_state(
@@ -635,11 +671,26 @@ class ConcurrencyAwareBackend:
                 self._quarter_requests += 1
                 if session_id:
                     self._session_quarter[session_id] = chosen_idx
-                    self._set_session_state(
-                        session_id,
-                        state=_STATE_ASSIGNED_QUARTER,
-                        quarter=chosen_idx,
-                    )
+
+        # Kick off migration outside the lock (the thread does its own locking)
+        if migrate_old_session is not None and migrate_target_quarter is not None:
+            threading.Thread(
+                target=self._migrate_kv,
+                args=(migrate_old_session, migrate_target_quarter),
+                daemon=True,
+                name=f"kv-migrate-{self._role}-{migrate_old_session[:8]}",
+            ).start()
+
+        # Telemetry: stamp quarter-assignment session state outside the lock
+        # (orphaned from the with-self._lock block above during the 2026-05-24
+        # migration-port refactor; quarter branch sets this here.)
+        if chosen_idx != -1 and session_id:
+            with self._lock:
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_ASSIGNED_QUARTER,
+                    quarter=chosen_idx,
+                )
 
         backend = self._full if chosen_idx == -1 else self._quarters[chosen_idx]
         is_full = (chosen_idx == -1)

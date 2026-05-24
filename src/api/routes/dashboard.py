@@ -125,6 +125,28 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     })
 
 
+@router.get("/dashboard/api/contention")
+async def contention_gate_snapshot() -> JSONResponse:
+    """Cross-role admission-gate metrics + matrix status.
+
+    2026-05-24 Phase B of cross-role-bw-aware-routing. Returns:
+      - matrix_status: "ok"|"missing"|"stale"|"invalid"
+      - active_decodes_by_role: {role: count} from region-lock holders
+      - contention_blocked_count: {"roleA+roleB": int}
+      - contention_wait_seconds: cumulative
+      - contention_timeout_count, contention_admitted_count, etc.
+      - generated_at: time.time() for client cache-busting
+    """
+    import time as _time
+    try:
+        from src.scheduling.contention_gate import get_gate
+        snap = get_gate().metrics_snapshot()
+    except Exception as exc:  # noqa: BLE001
+        snap = {"error": str(exc), "matrix_status": "unavailable"}
+    snap["generated_at"] = _time.time()
+    return JSONResponse(snap)
+
+
 @router.get("/dashboard/api/region_locks")
 async def region_locks_snapshot() -> JSONResponse:
     """Per-CPU-region lock state — which (role, region) lock files are

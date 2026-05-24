@@ -448,6 +448,77 @@ The safety_gate's in-process host-throttle remediation (`safety_gate.py:256-278`
 uses the same flush+rewarm path automatically when it detects sustained-load
 slowdown.
 
+## Cross-role Contention Matrix (2026-05-24)
+
+The orchestrator's cross-role admission gate (`src/scheduling/contention_gate.py`)
+queues requests when a new role's decode would catastrophically contend with
+another role currently decoding. Source-of-truth: `orchestration/contention_matrix.yaml`.
+
+### When to re-run the matrix
+
+Re-run after ANY of:
+- Adding/removing/renaming a role in `scripts/server/stack_numa.py` `NUMA_CONFIG`
+- Changing a role's CPU pinning, thread count, or numactl_policy
+- Swapping a role's model file or quantization (affects per-token BW demand)
+- Upgrading the llama.cpp binary (kernel changes can shift BW characteristics)
+- Reboot if it changed BIOS NPS mode
+
+How:
+```bash
+python scripts/server/contention_matrix.py run
+```
+
+Validate without re-running:
+```bash
+python scripts/server/contention_matrix.py validate
+# or
+python scripts/validate/check_contention_matrix_fresh.py
+```
+
+Both report `MatrixStatus.OK | MISSING | STALE | INVALID`. The CI/pre-commit
+script exits with code 2 on MISSING/STALE so a `NUMA_CONFIG` change without a
+matrix refresh fails loud.
+
+### Interpreting gate decisions
+
+The gate emits decisions as `PairDecision` enum values. For a request to role X
+with role Y currently decoding:
+
+| Pair ratio | Foreground | Background |
+|---|---|---|
+| ≥ 1.0 | ALLOW (parallel beats sequential) | ALLOW |
+| 0.85 ≤ r < 1.0 | ALLOW (mild loss tolerated) | QUEUE |
+| < 0.85 | QUEUE (foreground may DEGRADED_ALLOW on SLO) | QUEUE |
+| Unknown pair | ALLOW (loud warning) | QUEUE |
+
+The 0.85 floor is `CONTENTION_RATIO_FLOOR` in `src/scheduling/contention.py`.
+
+Background traffic (autopilot seeding, batch evals) always queues on
+known-bad or unknown pairs — even just `worker_vision` decoding can hold an
+autopilot probe back if the probe targets `frontdoor` (worker_vision's Q0B
+overlaps frontdoor's NUMA_NODE0).
+
+### When a request gets denied
+
+If the gate times out (`max_queue_wait_ms` exceeded), the chat route returns
+**HTTP 503** with a `Retry-After` header. Callers should back off and retry;
+autopilot's seeding loop catches the timeout and skips/defers the probe.
+
+### Dashboard signals
+
+The orchestrator dashboard exposes a "CONTENTION GATE" panel at the top showing:
+- `matrix_status` — OK/MISSING/STALE/INVALID with a colored badge
+- `active_decodes_by_role` — live region-lock holders
+- `contention_blocked_count` — per-pair admission denials since process start
+- `contention_wait_seconds` — cumulative queue time
+- `contention_timeout_count` — requests that exhausted their budget
+
+A STALE matrix doesn't break the orchestrator; foreground requests fail-open
+and background campaigns block (per Phase B of the cross-role-bw-aware-routing
+handoff). The operator should still re-run the matrix promptly.
+
+---
+
 ## Interaction with Autopilot Infrastructure
 
 This program.md guides autonomous Claude sessions. The existing autopilot infrastructure (`scripts/autopilot/`) provides:
