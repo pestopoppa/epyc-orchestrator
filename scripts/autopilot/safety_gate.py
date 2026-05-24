@@ -68,6 +68,22 @@ class EvalResult:
     # From intake-378 deep-dive: high branching (>0.30) = unproductive exploration.
     # 0.0 when no <think> blocks are present in eval answers.
     branching_density: float = 0.0
+    # 2026-05-23 exogenous-restart resilience (handoff Phase 4).
+    # n_exogenous_recovered: questions whose initial /chat raised but the
+    #   retry-after-wait succeeded. Audit-only signal — the trial is still
+    #   sound.
+    # n_exogenous_unrecovered: questions whose initial /chat raised, a
+    #   service reload was detected, the wait+retry FAILED. Trial gets
+    #   tagged bug_corrupted_by="exogenous_operator_reload" in Phase 5.
+    # n_external_restart: subset of recovered+unrecovered whose marker
+    #   source was != stack_commands. Surfaced for audit.
+    # exogenous_question_ids: per-question audit trail.
+    # exogenous_marker_log: each retry's marker_changes dict, in order.
+    n_exogenous_recovered: int = 0
+    n_exogenous_unrecovered: int = 0
+    n_external_restart: int = 0
+    exogenous_question_ids: list[str] = field(default_factory=list)
+    exogenous_marker_log: list[dict] = field(default_factory=list)
 
     @property
     def objectives(self) -> tuple[float, float, float, float]:

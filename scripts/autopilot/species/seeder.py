@@ -49,6 +49,17 @@ class SeederBatchResult:
     elapsed_s: float = 0.0
     per_action_stats: dict[str, dict[str, int]] = field(default_factory=dict)
     results: list[dict[str, Any]] = field(default_factory=list)
+    # 2026-05-23 exogenous-restart resilience (handoff Phase 4).
+    # Aggregated from per-role RoleResult.exogenous_* across all questions
+    # in the batch. The seed phase happens BEFORE tower.hybrid_eval; if any
+    # role call in any question failed exogenously and stayed unrecovered,
+    # _action_seed_batch merges these counts into the final trial EvalResult
+    # so Phase 5's pre-gate classifier can tag the trial bug_corrupted.
+    n_exogenous_recovered: int = 0
+    n_exogenous_unrecovered: int = 0
+    n_external_restart: int = 0
+    exogenous_question_ids: list[str] = field(default_factory=list)
+    exogenous_marker_log: list[dict] = field(default_factory=list)
 
 
 # How often to re-discover active roles (in batches)
@@ -107,6 +118,7 @@ class Seeder:
         n_questions: int | None = None,
         suites: list[str] | None = None,
         seed: int | None = None,
+        watcher: "Any | None" = None,
     ) -> SeederBatchResult:
         """Run a batch of per-role evaluations and inject rewards."""
         import httpx
@@ -162,7 +174,28 @@ class Seeder:
                         timeout=self.timeout,
                         client=client,
                         dry_run=self.dry_run,
+                        watcher=watcher,
                     )
+
+                    # 2026-05-23 Phase 4 — aggregate per-question exogenous
+                    # signals into batch-level counters. metadata fields
+                    # exogenous_*_roles are lists of role names; we count
+                    # any-of-roles per question.
+                    qid = q.get("id", q.get("question_id", f"q_{i}"))
+                    exo_rec = bool(metadata.get("exogenous_recovered_roles"))
+                    exo_unrec = bool(metadata.get("exogenous_unrecovered_roles"))
+                    ext_restart = bool(metadata.get("external_restart_roles"))
+                    if exo_rec:
+                        batch_result.n_exogenous_recovered += 1
+                    if exo_unrec:
+                        batch_result.n_exogenous_unrecovered += 1
+                    if ext_restart:
+                        batch_result.n_external_restart += 1
+                    if exo_rec or exo_unrec:
+                        batch_result.exogenous_question_ids.append(qid)
+                    for marker in (metadata.get("exogenous_marker_log") or []):
+                        if marker:
+                            batch_result.exogenous_marker_log.append(marker)
 
                     # Track per-role stats
                     for role_name, reward in rewards.items():

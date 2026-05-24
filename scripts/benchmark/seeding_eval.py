@@ -223,6 +223,14 @@ def _build_role_result(
         # Difficulty signal shadow telemetry (NIB2-35, reasoning-compression Action 3)
         difficulty_score=float(resp.get("difficulty_score", 0.0) or 0.0),
         difficulty_band=str(resp.get("difficulty_band", "") or ""),
+        # 2026-05-23 Phase 4 — exogenous-restart resilience.
+        # resp["_meta"] is set by call_orchestrator_forced when a watcher is
+        # active; absent when the legacy code path ran (no autopilot watcher).
+        exogenous_recovered=bool((resp.get("_meta") or {}).get("exogenous_recovered", False)),
+        exogenous_unrecovered=bool((resp.get("_meta") or {}).get("exogenous_unrecovered", False)),
+        external_restart=bool((resp.get("_meta") or {}).get("external_restart", False)),
+        retry_count=int((resp.get("_meta") or {}).get("retry_count", 0)),
+        resilient_meta=dict(resp.get("_meta") or {}),
     )
     return rr, error_type
 
@@ -907,6 +915,23 @@ def evaluate_question_per_role(
         ),
         "roles_tested": list(role_results.keys()),
     }
+
+    # 2026-05-23 Phase 4 — surface aggregated exogenous-restart info so
+    # Seeder.run_batch can roll up SeederBatchResult counters.
+    metadata["exogenous_recovered_roles"] = [
+        n for n, rr in role_results.items() if rr.exogenous_recovered
+    ]
+    metadata["exogenous_unrecovered_roles"] = [
+        n for n, rr in role_results.items() if rr.exogenous_unrecovered
+    ]
+    metadata["external_restart_roles"] = [
+        n for n, rr in role_results.items() if rr.external_restart
+    ]
+    metadata["exogenous_marker_log"] = [
+        rr.resilient_meta.get("marker_changes", {})
+        for rr in role_results.values()
+        if (rr.exogenous_recovered or rr.exogenous_unrecovered) and rr.resilient_meta.get("marker_changes")
+    ]
 
     for role_name, reward in sorted(rewards.items()):
         logger.info("    reward[%s] = %.1f", role_name, reward)

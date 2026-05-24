@@ -348,6 +348,15 @@ class RoleResult:
     # Populated from routing_meta so NIB2-32 re-validation has queryable data.
     difficulty_score: float = 0.0
     difficulty_band: str = ""
+    # 2026-05-23 exogenous-restart resilience (handoff Phase 4).
+    # Populated from resilient_post `_meta` dict via _eval_single_config.
+    # See QuestionResult.exogenous_* fields for the same semantics — these
+    # are the per-role-call counterpart on the seeding side.
+    exogenous_recovered: bool = False
+    exogenous_unrecovered: bool = False
+    external_restart: bool = False
+    retry_count: int = 0
+    resilient_meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

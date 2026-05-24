@@ -110,7 +110,15 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
 
     import time as _time
     _batch_start = _time.perf_counter()
-    ctx.seeder.run_batch(n_questions=n, suites=suites)
+    # 2026-05-23 Phase 4: pass the watcher (if ctx supplies one) so the
+    # seeder's per-role calls can detect exogenous service reloads. Phase 5
+    # wires the watcher into ctx; for now ctx.watcher may be None (backward
+    # compatible — Seeder.run_batch's watcher kwarg defaults to None).
+    seeder_result = ctx.seeder.run_batch(
+        n_questions=n,
+        suites=suites,
+        watcher=getattr(ctx, "watcher", None),
+    )
     _batch_elapsed = _time.perf_counter() - _batch_start
 
     # Record duration so the next batch can adapt
@@ -126,6 +134,27 @@ def _action_seed_batch(action: dict[str, Any], ctx: _ActionContext):
 
     # After seeding, run T0 eval
     eval_result = ctx.tower.hybrid_eval()
+
+    # 2026-05-23 Phase 4 — merge seeding-phase exogenous-restart metadata
+    # into the trial-level EvalResult. The seed phase happens BEFORE
+    # tower.hybrid_eval; if a reload corrupted the seed phase but the
+    # later eval came up clean, the EvalResult would (without this merge)
+    # look entirely sound and the trial would not be tagged. Per the
+    # handoff Section 5.4: aggregate counters via additive merge,
+    # concatenate the per-question id list and marker log.
+    if seeder_result is not None:
+        eval_result.n_exogenous_recovered += seeder_result.n_exogenous_recovered
+        eval_result.n_exogenous_unrecovered += seeder_result.n_exogenous_unrecovered
+        eval_result.n_external_restart += seeder_result.n_external_restart
+        # Avoid double-counting question ids if the eval phase also tagged
+        # the same id (different question pool, but defensive).
+        existing_ids = set(eval_result.exogenous_question_ids)
+        for qid in seeder_result.exogenous_question_ids:
+            if qid not in existing_ids:
+                eval_result.exogenous_question_ids.append(qid)
+                existing_ids.add(qid)
+        eval_result.exogenous_marker_log.extend(seeder_result.exogenous_marker_log)
+
     return eval_result, "seeder"
 
 

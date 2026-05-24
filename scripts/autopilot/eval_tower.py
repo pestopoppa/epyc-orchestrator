@@ -82,6 +82,24 @@ class QuestionResult:
     degraded: bool = False  # Inference completed in degraded mode
     confidence: float = 0.0  # EV-1: Model confidence proxy (0-1). Initially float(correct); upgraded to logprobs when available.
     branching_density: float = 0.0  # Fraction of <think> steps with branching keywords (intake-378)
+    # 2026-05-23 exogenous-restart resilience (handoff Phase 4).
+    # Populated by reading the resilient_post `_meta` dict from the /chat response.
+    # exogenous_recovered: a service reload was detected and a retry inside
+    #   call_orchestrator_forced succeeded — this QuestionResult's `answer`
+    #   came from the retry attempt. Trial-level aggregation surfaces this
+    #   as audit info only; does NOT trigger bug_corrupted tagging.
+    # exogenous_unrecovered: a service reload was detected but the retry
+    #   did not recover. This question has no real answer; if any question
+    #   in a trial has this flag, the trial's bug_corrupted_by gets set
+    #   to "exogenous_operator_reload" (handled in autopilot.py Phase 5).
+    # external_restart: the restart's marker source was != stack_commands
+    #   (e.g. a watchdog or manual llama-server invocation). Surfaced for
+    #   audit but does not by itself flag the trial as corrupted.
+    # retry_count: 0 (clean / real failure) or 1 (one resilient retry).
+    exogenous_recovered: bool = False
+    exogenous_unrecovered: bool = False
+    external_restart: bool = False
+    retry_count: int = 0
 
 
 # EV-6: Cross-family verification constraint.
@@ -184,6 +202,7 @@ class EvalTower:
                 timeout=self.timeout,
                 image_path=image_path,
                 client=client,
+                watcher=getattr(self, "watcher", None),
             )
             elapsed = time.time() - start
             answer = resp.get("answer", "")
@@ -206,6 +225,12 @@ class EvalTower:
             if scoring_method == "code_execution":
                 confidence = float(scoring_config.get("pass_rate", correct))
 
+            # 2026-05-23 Phase 4 — exogenous-restart metadata propagation.
+            # call_orchestrator_forced attaches the resilient_post meta dict
+            # as resp["_meta"] when watcher is set. Surface the classification
+            # bits onto QuestionResult so _aggregate can roll them up into
+            # the trial-level EvalResult.
+            meta = resp.get("_meta") or {}
             return QuestionResult(
                 question_id=qid,
                 suite=suite,
@@ -223,6 +248,10 @@ class EvalTower:
                 degraded=bool(resp.get("degraded", False)),
                 confidence=confidence,
                 branching_density=_compute_branching_density(answer),
+                exogenous_recovered=bool(meta.get("exogenous_recovered", False)),
+                exogenous_unrecovered=bool(meta.get("exogenous_unrecovered", False)),
+                external_restart=bool(meta.get("external_restart", False)),
+                retry_count=int(meta.get("retry_count", 0)),
             )
         except Exception as e:
             elapsed = time.time() - start
@@ -356,6 +385,14 @@ class EvalTower:
             auroc=auroc,
             calibration_violations=cal_violations,
             branching_density=avg_branching,
+            # 2026-05-23 Phase 4 — roll up exogenous-restart counters.
+            n_exogenous_recovered=sum(1 for r in results if r.exogenous_recovered),
+            n_exogenous_unrecovered=sum(1 for r in results if r.exogenous_unrecovered),
+            n_external_restart=sum(1 for r in results if r.external_restart),
+            exogenous_question_ids=[
+                r.question_id for r in results
+                if (r.exogenous_recovered or r.exogenous_unrecovered)
+            ],
         )
 
     def _count_instruction_tokens(self) -> int:

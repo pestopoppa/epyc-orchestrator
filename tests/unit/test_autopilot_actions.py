@@ -93,7 +93,7 @@ def test_seed_batch_handler_runs_eval_after_seed() -> None:
     calls = []
 
     class FakeSeeder:
-        def run_batch(self, *, n_questions, suites):
+        def run_batch(self, *, n_questions, suites, watcher=None):
             calls.append(("seed", n_questions, suites))
             return None
 
