@@ -86,12 +86,74 @@ def test_journal_entry_persists_new_fields(tmp_path: Path) -> None:
         hypothesis="seed math broadly",
         falsifier="no quality gain after 20 questions",
         rubric_scores={"info_gain": 4, "coherence": 5, "usefulness": 3},
+        stagnation_signal="hv_slope_10=+0.00000 < eps=0.00100",
     ))
     # Reload from disk and confirm fields survived.
     reloaded = ExperimentJournal(journal_dir=tmp_path)
     e = reloaded.all_entries()[-1]
     assert e.falsifier == "no quality gain after 20 questions"
     assert e.rubric_scores == {"info_gain": 4, "coherence": 5, "usefulness": 3}
+    assert e.stagnation_signal == "hv_slope_10=+0.00000 < eps=0.00100"
+
+
+def test_action_diversity_by_gate_buckets_correctly(tmp_path: Path) -> None:
+    j = _fresh_journal(tmp_path)
+    # 4 rich (stagnation fired) trials with 3 distinct action_types.
+    for i, t in enumerate(["seed_batch", "numeric_trial", "prompt_mutation", "numeric_trial"]):
+        j.record(_entry(i, t, stagnation_signal="hv_slope_10 < eps"))
+    # 6 lean trials, all seed_batch (the exploit phase).
+    for i, t in enumerate(["seed_batch"] * 6):
+        j.record(_entry(i + 10, t, stagnation_signal=""))
+
+    stats = j.action_diversity_by_gate(window=20)
+    assert stats["window"] == 20
+    assert stats["rich"]["count"] == 4
+    assert stats["rich"]["distinct_action_types"] == 3
+    assert stats["rich"]["entropy_bits"] > 1.0   # 3 types across 4 trials
+    assert stats["lean"]["count"] == 6
+    assert stats["lean"]["distinct_action_types"] == 1
+    assert stats["lean"]["entropy_bits"] == 0.0
+
+
+# ── hv_slope noise-floor auto-calibration ───────────────────────
+
+
+def _empty_archive(tmp_path: Path) -> "ParetoArchive":
+    """Build a ParetoArchive that doesn't load production state."""
+    return ParetoArchive(state_path=tmp_path / "nonexistent_archive.json")
+
+
+def test_hv_slope_noise_floor_falls_back_to_default_with_short_history(tmp_path: Path) -> None:
+    a = _empty_archive(tmp_path)
+    # No history at all → must return the supplied default unchanged.
+    floor = a.hv_slope_noise_floor(floor_default=1e-3)
+    assert floor == 1e-3
+
+
+def test_hv_slope_noise_floor_clips_below_default_with_calm_history(tmp_path: Path) -> None:
+    a = _empty_archive(tmp_path)
+    # Push a long, very-low-noise hypervolume trajectory (linear-ish).
+    # Slopes should be near-zero variance → calibrated floor below default.
+    for tid in range(50):
+        a._hypervolume_history.append((tid, 10.0 + 0.001 * tid))
+    floor = a.hv_slope_noise_floor(floor_default=1e-3, floor_min=1e-6)
+    assert floor <= 1e-3
+    assert floor >= 1e-6
+
+
+def test_hv_slope_noise_floor_never_exceeds_default_even_with_noisy_history(tmp_path: Path) -> None:
+    a = _empty_archive(tmp_path)
+    import random
+    rng = random.Random(0)
+    # Inject a high-noise random walk: slope variance will be large, but the
+    # function must clip up to (i.e. never exceed) floor_default.
+    h = 10.0
+    for tid in range(80):
+        h += rng.uniform(-2.0, 2.0)
+        a._hypervolume_history.append((tid, h))
+    floor = a.hv_slope_noise_floor(floor_default=1e-3, floor_min=1e-6)
+    assert floor <= 1e-3
+    assert floor >= 1e-6
 
 
 def test_journal_entry_defaults_when_legacy_jsonl_missing_fields(tmp_path: Path) -> None:

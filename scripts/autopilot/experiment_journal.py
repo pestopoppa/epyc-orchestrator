@@ -100,6 +100,12 @@ class JournalEntry:
     # empty so legacy entries stay loadable.
     falsifier: str = ""
     rubric_scores: dict[str, Any] = field(default_factory=dict)
+    # 2026-05-24: stagnation gate signal that fired for this trial (empty for
+    # lean-prompt trials, or e.g. "hv_slope_10=+0.00000 < eps=0.00100;
+    # last 3 trials all action_type=seed_batch" when the rich prompt was used).
+    # Enables retrospective behavioral analysis: action-type diversity under
+    # rich vs lean prompts without running a separate experiment.
+    stagnation_signal: str = ""
 
 
 class ExperimentJournal:
@@ -174,6 +180,7 @@ class ExperimentJournal:
                         bug_corrupted_reason=data.get("bug_corrupted_reason", ""),
                         falsifier=data.get("falsifier", ""),
                         rubric_scores=data.get("rubric_scores", {}),
+                        stagnation_signal=data.get("stagnation_signal", ""),
                     )
                     self._entries.append(entry)
             batch += 1
@@ -325,6 +332,44 @@ class ExperimentJournal:
         )
         with_hyp = [e for e in pool if e.hypothesis]
         return with_hyp[-n:]
+
+    def action_diversity_by_gate(
+        self, window: int = 50
+    ) -> dict[str, Any]:
+        """Compare action-type diversity for rich-fragment trials (stagnation
+        signal fired) vs lean-fragment trials (empty signal) over the last
+        `window` controller-mode entries.
+
+        Returns counts, distinct action_types, and Shannon entropy per bucket
+        so operators can verify the gate is doing what it should: rich-prompt
+        trials ought to explore more action_types than lean-prompt trials.
+        Empty buckets return entropy=0.0 with count=0.
+        """
+        import math
+        recent = self._entries[-window:]
+        rich = [e for e in recent if e.stagnation_signal]
+        lean = [e for e in recent if not e.stagnation_signal]
+
+        def _stats(bucket: list[JournalEntry]) -> dict[str, Any]:
+            if not bucket:
+                return {"count": 0, "distinct_action_types": 0, "entropy_bits": 0.0}
+            counts: dict[str, int] = {}
+            for e in bucket:
+                counts[e.action_type] = counts.get(e.action_type, 0) + 1
+            total = sum(counts.values())
+            h = 0.0
+            for c in counts.values():
+                p = c / total
+                if p > 0:
+                    h -= p * math.log2(p)
+            return {
+                "count": total,
+                "distinct_action_types": len(counts),
+                "entropy_bits": h,
+                "histogram": counts,
+            }
+
+        return {"window": window, "rich": _stats(rich), "lean": _stats(lean)}
 
     def unfalsified_hypotheses(
         self, n: int = 5, exclude_bug_corrupted: bool = True

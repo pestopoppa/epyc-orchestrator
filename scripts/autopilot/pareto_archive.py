@@ -199,6 +199,61 @@ class ParetoArchive:
         den = sum((x - mean_x) ** 2 for x in xs)
         return num / den if den > 0 else 0.0
 
+    def hv_slope_noise_floor(
+        self,
+        *,
+        window_slopes: int = 50,
+        slope_window: int = 10,
+        floor_default: float = 1e-3,
+        floor_min: float = 1e-5,
+        k: float = 0.5,
+    ) -> float:
+        """Estimate the noise floor of hv_slope_<slope_window> from recent history.
+
+        Used by the autopilot stagnation gate so STAGNATION_HV_EPS doesn't have
+        to be hand-tuned. The rule: compute rolling hv_slope over the last
+        `window_slopes` positions, take their standard deviation, scale by k.
+        Below ~20 hypervolume entries (or near-zero variance), fall back to
+        `floor_default` (the prior hardcoded constant) so behaviour is
+        backward-compatible.
+
+        Returns a value in [floor_min, floor_default] — never above the prior
+        default, so auto-calibration can only TIGHTEN the gate (require flatter
+        slopes than 1e-3 before declaring stagnation). False negatives missing
+        real stagnation are recoverable on the next trial; false positives
+        running the expensive rich prompt during a healthy exploit phase are
+        not. The clip enforces the safer direction.
+        """
+        hist = self._hypervolume_history
+        if len(hist) < max(slope_window + 5, 20):
+            return floor_default
+        # Compute rolling slope ending at each position from slope_window onward.
+        slopes: list[float] = []
+        for end in range(slope_window, len(hist)):
+            chunk = hist[end - slope_window:end]
+            n = len(chunk)
+            if n < 2:
+                continue
+            xs = list(range(n))
+            ys = [h[1] for h in chunk]
+            mx = sum(xs) / n
+            my = sum(ys) / n
+            num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+            den = sum((x - mx) ** 2 for x in xs)
+            slopes.append(num / den if den > 0 else 0.0)
+        # Only the most recent `window_slopes` matter — older noise regimes are
+        # not representative if the system underwent a regime change.
+        slopes = slopes[-window_slopes:]
+        if len(slopes) < 5:
+            return floor_default
+        mean_s = sum(slopes) / len(slopes)
+        var_s = sum((s - mean_s) ** 2 for s in slopes) / len(slopes)
+        std_s = var_s ** 0.5
+        floor = k * std_s
+        # Clip to [floor_min, floor_default]; never let the gate go below the
+        # known-good prior default — auto-calibration only tightens it.
+        return max(floor_min, min(floor, floor_default))
+
     # ── genealogy ────────────────────────────────────────────────
 
     def children_of(self, trial_id: int) -> list[ParetoEntry]:

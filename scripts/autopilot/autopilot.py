@@ -301,14 +301,22 @@ def _build_exploration_block(
     reasons: list[str] = []
 
     # Pareto-hypervolume slope (already computed by archive.geometry()).
+    # The threshold auto-calibrates from recent hv_slope noise where possible;
+    # falls back to STAGNATION_HV_EPS (the hand-tuned constant) early on.
     hv_slope_10 = None
     try:
         geom = archive.geometry()
         hv_slope_10 = geom.get("hv_slope_10") if isinstance(geom, dict) else None
     except Exception:
         pass
-    if hv_slope_10 is not None and hv_slope_10 < STAGNATION_HV_EPS:
-        reasons.append(f"hv_slope_10={hv_slope_10:+.5f} < {STAGNATION_HV_EPS}")
+    eps = STAGNATION_HV_EPS
+    try:
+        if hasattr(archive, "hv_slope_noise_floor"):
+            eps = archive.hv_slope_noise_floor(floor_default=STAGNATION_HV_EPS)
+    except Exception:
+        eps = STAGNATION_HV_EPS
+    if hv_slope_10 is not None and hv_slope_10 < eps:
+        reasons.append(f"hv_slope_10={hv_slope_10:+.5f} < eps={eps:.5f}")
 
     # Trustworthiness low-signal flag.
     try:
@@ -822,6 +830,7 @@ def _run_loop_inner(
             action = _auto_action(species, memory_count, converged, seeder)
             predicted_objectives = {}  # PEAF: autonomous mode has no controller forecast
             rationale = {"falsifier": "", "rubric_scores": {}}  # no controller call
+            stagnation_signal = ""  # gate is controller-only; autonomous mode skips it
 
         if not action:
             log.warning("No action proposed, defaulting to seed_batch")
@@ -1031,6 +1040,7 @@ def _run_loop_inner(
                 ),
                 falsifier=rationale.get("falsifier", ""),
                 rubric_scores=rationale.get("rubric_scores", {}),
+                stagnation_signal=stagnation_signal,
             )
         )
 
