@@ -386,6 +386,167 @@ def _build_exploration_block(
 _MODEL_SIGNATURES_PATH = ORCH_ROOT / "orchestration" / "model_quality_signatures.yaml"
 
 
+def _maybe_reimport_pareto_from_journal(
+    archive: "ParetoArchive",
+    journal: "ExperimentJournal",
+    trial_id: int,
+) -> bool:
+    """Re-add a single journal entry to the Pareto archive if missing.
+
+    Per handoffs/active/autopilot-exogenous-restart-resilience.md Section 5.7.
+    Handles the corruption window where the journal advanced (line 837)
+    but archive.save (line 929) was never reached → on restart the journal
+    has the entry but the on-disk Pareto archive doesn't.
+
+    Returns True if the entry was re-imported, False otherwise.
+
+    Edge cases:
+      - SKIP if no JournalEntry matches trial_id.
+      - SKIP if entry.bug_corrupted_by is non-empty (placeholders + tagged
+        trials must never enter the archive).
+      - SKIP if the archive already has an entry with this trial_id.
+      - For valid entries: construct ParetoEntry from journal fields and
+        call archive.update() — let the dominance check re-classify;
+        do NOT preserve the JournalEntry's stale pareto_status.
+    """
+    entry = next(
+        (e for e in journal.all_entries() if e.trial_id == trial_id), None
+    )
+    if entry is None:
+        log.info("Pareto re-import: no journal entry for trial %d", trial_id)
+        return False
+    if entry.bug_corrupted_by:
+        log.info(
+            "Pareto re-import: trial %d is bug_corrupted_by=%s, skipping",
+            trial_id, entry.bug_corrupted_by,
+        )
+        return False
+    # Already in archive? (use the private _all_entries list — it's the
+    # only enumeration of every observed trial; the public surface exposes
+    # only frontier-related views, and re-importing a duplicate would
+    # double-count in archive statistics.)
+    existing_ids = {e.trial_id for e in getattr(archive, "_all_entries", [])}
+    if trial_id in existing_ids:
+        log.info("Pareto re-import: trial %d already in archive", trial_id)
+        return False
+    p_entry = ParetoEntry(
+        trial_id=entry.trial_id,
+        # ParetoArchive convention: (quality, speed, -cost, reliability) so
+        # higher-is-better on all four axes.
+        objectives=(entry.quality, entry.speed, -entry.cost, entry.reliability),
+        config_snapshot=entry.config_snapshot,
+        git_tag=entry.git_tag,
+        eval_tier=entry.tier,
+        reasoning=(entry.reasoning or "")[:200],
+        parent_trial=entry.parent_trial,
+        memory_count=entry.memory_count,
+        active_flags=list(entry.active_flags or []),
+        species=entry.species,
+        timestamp=entry.timestamp,
+    )
+    new_status = archive.update(p_entry)
+    log.info(
+        "Pareto re-import: trial %d added (status=%s)", trial_id, new_status
+    )
+    # Persist the re-imported entry immediately so a subsequent crash
+    # doesn't lose it again.
+    try:
+        archive.save({"trial_counter": max(trial_id + 1, 0)})
+    except Exception as exc:
+        log.warning("Pareto re-import: archive.save failed: %s", exc)
+    return True
+
+
+def _recover_from_in_flight_trial(
+    state: dict[str, Any],
+    journal: "ExperimentJournal",
+    archive: "ParetoArchive",
+    trial_counter: int,
+) -> int:
+    """Apply the Phase 6b in_flight_trial recovery sequence.
+
+    Returns the new trial_counter. Mutates `state` in place but does NOT
+    save_state() — caller owns persistence so save can be paired with
+    other startup-time state mutations.
+
+    No-op (returns trial_counter unchanged) if state["in_flight_trial"]
+    is None.
+
+    Two recovery cases (handoff Section 5.7):
+      (a) journal_max >= prior_in_flight.trial_id → trial was journaled
+          before the crash. Bump trial_counter past it and attempt to
+          re-import a missing Pareto entry from the journal.
+      (b) journal_max < prior_in_flight.trial_id → trial died BEFORE
+          journal.record. Write an AUTOPILOT_KILLED placeholder so the
+          planner sees the gap, and bump trial_counter past it.
+
+    On exit, state["in_flight_trial"] is None.
+    """
+    prior_in_flight = state.get("in_flight_trial")
+    if prior_in_flight is None:
+        return trial_counter
+
+    journal_max = journal.next_trial_id() - 1
+    prior_tid = int(prior_in_flight.get("trial_id", -1))
+    log.warning(
+        "Autopilot recovery: detected in_flight_trial marker "
+        "(trial_id=%d, host_pid=%s, host_started_at=%s). "
+        "Journal max trial_id=%d.",
+        prior_tid,
+        prior_in_flight.get("host_pid"),
+        prior_in_flight.get("host_started_at"),
+        journal_max,
+    )
+    if journal_max >= prior_tid:
+        new_counter = max(trial_counter, journal_max + 1)
+        log.info(
+            "Recovery: trial %d was journaled before crash; "
+            "bumping trial_counter %d → %d",
+            prior_tid, trial_counter, new_counter,
+        )
+        trial_counter = new_counter
+        state["trial_counter"] = trial_counter
+        try:
+            _maybe_reimport_pareto_from_journal(archive, journal, prior_tid)
+        except Exception as exc:
+            log.warning("Pareto re-import for trial %d failed: %s", prior_tid, exc)
+    else:
+        log.warning(
+            "Recovery: trial %d died BEFORE journal.record. Writing "
+            "AUTOPILOT_KILLED placeholder.",
+            prior_tid,
+        )
+        try:
+            placeholder = JournalEntry(
+                trial_id=prior_tid,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                species="(killed)",
+                action_type=(prior_in_flight.get("action") or {}).get("type", "unknown"),
+                tier=0,
+                quality=0.0, speed=0.0, cost=0.0, reliability=0.0,
+                pareto_status="dominated",
+                failure_analysis=(
+                    f"Autopilot process killed before journal.record() "
+                    f"(prior host_pid={prior_in_flight.get('host_pid')}, "
+                    f"prior host_started_at={prior_in_flight.get('host_started_at')}, "
+                    f"died at trial_id={prior_tid})."
+                ),
+                bug_corrupted_by="autopilot_killed_mid_trial",
+                bug_corrupted_reason="incomplete trial; no eval evidence available",
+                deficiency_category="autopilot_killed_mid_trial",
+            )
+            journal.record(placeholder)
+            trial_counter = prior_tid + 1
+            state["trial_counter"] = trial_counter
+        except Exception as exc:
+            log.error(
+                "Failed to write AUTOPILOT_KILLED placeholder for trial %d: %s",
+                prior_tid, exc,
+            )
+    state["in_flight_trial"] = None
+    return trial_counter
+
+
 def _default_state() -> dict[str, Any]:
     return {
         "trial_counter": 0,
@@ -393,6 +554,18 @@ def _default_state() -> dict[str, Any]:
         "paused": False,
         "species_budget": SpeciesBudget().as_dict(),
         "td_errors": [],
+        # 2026-05-23 Phase 6b — autopilot self-crash recovery markers.
+        # in_flight_trial is set immediately BEFORE dispatch_action and
+        # cleared only AFTER the final atomic save_state. On startup,
+        # _recover_in_flight_trial inspects it: if non-None, the prior
+        # autopilot instance died mid-trial. See cmd_start's recovery
+        # block for the exact taxonomy of cases handled.
+        # autopilot_fleet_started_at is bumped on every autopilot start
+        # so operators (and future watchdogs) can detect whether the
+        # currently-running instance is the same one that recorded a
+        # given trial.
+        "in_flight_trial": None,
+        "autopilot_fleet_started_at": None,
     }
 
 
@@ -592,6 +765,25 @@ def _run_loop_inner(
 
     trial_counter = state.get("trial_counter", 0)
     plot_paths: list[str] = []
+
+    # 2026-05-23 Phase 6b — autopilot self-crash recovery.
+    # Check for an in_flight_trial marker left by a prior crashed instance.
+    # Recovery handles two cases (handoff Section 5.7):
+    #   (a) journal_max >= prior_in_flight.trial_id → trial DID get recorded;
+    #       we died between journal.record (line 837) and save_state (line 930).
+    #       Re-sync trial_counter + attempt Pareto re-import from the journal.
+    #   (b) journal_max <  prior_in_flight.trial_id → trial died BEFORE
+    #       journal.record. Write a placeholder JournalEntry tagged
+    #       bug_corrupted_by=autopilot_killed_mid_trial so the planner sees
+    #       the gap and excludes it from hypothesis chains. Skip gate + archive.
+    trial_counter = _recover_from_in_flight_trial(
+        state, journal, archive, trial_counter,
+    )
+    # Bump the fleet-startup timestamp on every start (recovery path or
+    # normal startup) so downstream watchers can detect autopilot
+    # restarts the same way they detect orchestrator/llama restarts.
+    state["autopilot_fleet_started_at"] = time.time()
+    save_state(state)
 
     # Graceful shutdown handler
     shutdown_requested = False
@@ -877,6 +1069,23 @@ def _run_loop_inner(
                 prompt_preview = json.dumps(action, indent=2)[:500]
             tui.set_prompt(prompt_preview)
 
+        # Phase 6b — write in_flight_trial marker BEFORE dispatch_action.
+        # Atomic save_state (Phase 6a) guarantees this either lands fully
+        # or not at all. The marker is cleared after the final save_state
+        # at the end of the trial; if autopilot crashes in between, the
+        # next startup's recovery block sees the marker and either:
+        #   - finds the trial in the journal (case a) → re-syncs counter
+        #   - finds nothing (case b) → writes AUTOPILOT_KILLED placeholder
+        # Both cases prevent silent corruption of the planner's view.
+        state["in_flight_trial"] = {
+            "trial_id": trial_counter,
+            "action": action,
+            "started_at": time.time(),
+            "host_pid": os.getpid(),
+            "host_started_at": state.get("autopilot_fleet_started_at"),
+        }
+        save_state(state)
+
         if dry_run:
             eval_result = EvalResult(
                 tier=0, quality=2.5, speed=15.0, cost=0.3, reliability=0.95
@@ -891,8 +1100,11 @@ def _run_loop_inner(
 
         # ── 4. Evaluate ─────────────────────────────────────────
         if eval_result is None:
+            # Skipped action (e.g. AP-9 scope violation). Clear marker
+            # so a subsequent crash doesn't trigger spurious recovery.
             trial_counter += 1
             state["trial_counter"] = trial_counter
+            state["in_flight_trial"] = None
             save_state(state)
             continue
 
@@ -1192,6 +1404,15 @@ def _run_loop_inner(
         state["trial_counter"] = trial_counter
         state["consecutive_failures"] = gate.consecutive_failures
         archive.save(state)
+        save_state(state)
+
+        # Phase 6b — clear in_flight_trial marker AFTER final save_state.
+        # This is the closing half of the WAL pattern: a crash between
+        # the pre-dispatch marker write and this clear leaves the marker
+        # in place, which triggers the recovery branch on the next
+        # startup. By the time we reach here both the journal and the
+        # Pareto archive are durable on disk, so it is safe to clear.
+        state["in_flight_trial"] = None
         save_state(state)
 
         log.info(
