@@ -83,7 +83,10 @@ class GateMetrics:
     contention_degraded_allow_count: int = 0
     contention_admitted_count: int = 0
     contention_timeout_count: int = 0
+    # active_decodes_by_role: {role: count} for back-compat;
+    # active_instances_by_role: {role: [instance_idx, ...]} for richer dashboard rendering
     active_decodes_by_role: dict[str, int] = field(default_factory=dict)
+    active_instances_by_role: dict[str, list[int]] = field(default_factory=dict)
 
 
 class ContentionGate:
@@ -162,9 +165,10 @@ class ContentionGate:
         matrix = self._get_matrix()
         holders = self._active_holders()
 
-        # Update active-by-role snapshot for metrics
+        # Update active-by-role snapshot for metrics (both shapes)
         with self._lock:
             self._metrics.active_decodes_by_role = {r: len(idxs) for r, idxs in holders.items()}
+            self._metrics.active_instances_by_role = {r: list(idxs) for r, idxs in holders.items()}
 
         if not holders:
             return GateDecision(admitted=True, decision=PairDecision.ALLOW, reason="no active decodes")
@@ -283,7 +287,13 @@ class ContentionGate:
     # ── metrics ─────────────────────────────────────────────────────
 
     def metrics_snapshot(self) -> dict[str, Any]:
-        """Read-only snapshot of current counters (for /dashboard exposure)."""
+        """Read-only snapshot of current counters (for /dashboard exposure).
+
+        Per-role scheduling state (quarter preference, migration counts) is
+        gathered separately by the dashboard endpoint since it lives on
+        `app.state.llm_primitives._backends` (per-request injection), not
+        on a module-level singleton this gate can reach.
+        """
         with self._lock:
             return {
                 "contention_blocked_count": {
@@ -295,6 +305,7 @@ class ContentionGate:
                 "contention_admitted_count": self._metrics.contention_admitted_count,
                 "contention_timeout_count": self._metrics.contention_timeout_count,
                 "active_decodes_by_role": dict(self._metrics.active_decodes_by_role),
+                "active_instances_by_role": {r: list(idxs) for r, idxs in self._metrics.active_instances_by_role.items()},
                 "matrix_status": self.matrix_health().value,
             }
 

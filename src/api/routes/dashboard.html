@@ -2605,11 +2605,18 @@ function startDashboard() {
             }
             const rows = [];
             const active = d.active_decodes_by_role || {};
+            const activeInstances = d.active_instances_by_role || {};
             const activeRoles = Object.keys(active).sort();
             rows.push(`<div style="color:var(--muted);font-size:10px">active decodes (by region-lock)</div>`);
             rows.push(`<div style="color:var(--fg)">${
                 activeRoles.length === 0 ? '<span style="color:var(--muted)">(none)</span>'
-                : activeRoles.map(r => `<span style="display:inline-block;margin-right:8px"><b>${r}</b>×${active[r]}</span>`).join('')
+                : activeRoles.map(r => {
+                    const idxs = activeInstances[r] || [];
+                    // Instance 0 = full, 1..N = quarters (so quarter q_idx = topology idx q_idx+1).
+                    // Map back to user-friendly: 0 → "full", 1 → "q0", 2 → "q1", etc.
+                    const labels = idxs.map(i => i === 0 ? 'full' : `q${i - 1}`).join(',') || '?';
+                    return `<span style="display:inline-block;margin-right:8px"><b>${r}</b> [${labels}]</span>`;
+                  }).join('')
             }</div>`);
             rows.push(`<div style="color:var(--muted);font-size:10px">admitted / timed out / degraded</div>`);
             rows.push(`<div style="color:var(--fg)">${d.contention_admitted_count || 0} / ${d.contention_timeout_count || 0} / ${d.contention_degraded_allow_count || 0}</div>`);
@@ -2627,6 +2634,27 @@ function startDashboard() {
             } else {
                 rows.push(`<div style="color:var(--muted);font-size:10px">blocked pairs</div>`);
                 rows.push(`<div style="color:var(--muted)">(none yet)</div>`);
+            }
+            // Per-role scheduling state (quarter preference + migration status)
+            const perRole = d.per_role_scheduling || {};
+            const perRoleKeys = Object.keys(perRole).sort();
+            if (perRoleKeys.length) {
+                rows.push(`<div style="color:var(--muted);font-size:10px">per-role topology + migration</div>`);
+                const inner = perRoleKeys.map(role => {
+                    const r = perRole[role] || {};
+                    const order = (r.quarter_preference_order || []).map(q => `q${q}`).join('→') || '—';
+                    const km = r.kv_migration || {};
+                    const migOK = km.enabled ? 'on' : 'off';
+                    const migColor = km.enabled ? 'var(--good, #34d399)' : 'var(--muted)';
+                    const path = km.dispatch_path || '?';
+                    const mStarted = r.migrations_started || 0;
+                    const mFailed = r.migration_failures || 0;
+                    return `<div style="margin:2px 0;line-height:1.6"><b style="color:var(--accent, #60a5fa)">${role}</b>
+                        <span style="color:var(--muted);font-size:10px"> · pref ${order}</span>
+                        <span style="color:${migColor};font-size:10px"> · mig=${migOK}(${path})</span>
+                        <span style="color:var(--muted);font-size:10px"> · started=${mStarted} failed=${mFailed}</span></div>`;
+                }).join('');
+                rows.push(`<div style="color:var(--fg)">${inner}</div>`);
             }
             grid.innerHTML = rows.join('');
         } catch (e) {

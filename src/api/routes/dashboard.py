@@ -126,15 +126,18 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
 
 
 @router.get("/dashboard/api/contention")
-async def contention_gate_snapshot() -> JSONResponse:
-    """Cross-role admission-gate metrics + matrix status.
+async def contention_gate_snapshot(request: Request) -> JSONResponse:
+    """Cross-role admission-gate metrics + per-role scheduling state.
 
-    2026-05-24 Phase B of cross-role-bw-aware-routing. Returns:
+    2026-05-24 cross-role-bw-aware-routing. Returns:
       - matrix_status: "ok"|"missing"|"stale"|"invalid"
       - active_decodes_by_role: {role: count} from region-lock holders
       - contention_blocked_count: {"roleA+roleB": int}
       - contention_wait_seconds: cumulative
       - contention_timeout_count, contention_admitted_count, etc.
+      - per_role_scheduling: {role: {quarter_preference_order, migrations_started,
+            migration_failures, kv_migration: {enabled, dispatch_path, ...}}}
+          for every role backed by ConcurrencyAwareBackend
       - generated_at: time.time() for client cache-busting
     """
     import time as _time
@@ -143,6 +146,30 @@ async def contention_gate_snapshot() -> JSONResponse:
         snap = get_gate().metrics_snapshot()
     except Exception as exc:  # noqa: BLE001
         snap = {"error": str(exc), "matrix_status": "unavailable"}
+
+    # Per-role scheduling state (quarter preference + migration counts).
+    # Fetched here because it lives on app.state.llm_primitives._backends,
+    # which is per-request-injectable but not module-singleton.
+    per_role: dict[str, Any] = {}
+    try:
+        primitives = getattr(request.app.state, "llm_primitives", None)
+        if primitives is not None:
+            for role, backend in getattr(primitives, "_backends", {}).items():
+                if not hasattr(backend, "_quarter_preference_order"):
+                    continue
+                per_role[role] = {
+                    "quarter_preference_order": list(getattr(backend, "_quarter_preference_order", [])),
+                    "migrations_started": int(getattr(backend, "_migrations", 0)),
+                    "migration_failures": int(getattr(backend, "_migration_failures", 0)),
+                    "kv_migration": (
+                        backend.kv_migration_status()
+                        if hasattr(backend, "kv_migration_status")
+                        else {}
+                    ),
+                }
+    except Exception as exc:  # noqa: BLE001
+        per_role = {"_error": str(exc)}
+    snap["per_role_scheduling"] = per_role
     snap["generated_at"] = _time.time()
     return JSONResponse(snap)
 
