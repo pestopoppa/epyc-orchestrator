@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,22 +22,84 @@ import yaml
 log = logging.getLogger("autopilot")
 
 
+# 2026-05-23 Phase 6a — exit code for "state file corrupt, refuse to start".
+# 70 = EX_SOFTWARE per sysexits.h. Distinguishes config/state failure from
+# normal-exit (0) or signal-exit (>=128). Tests assert this exact code.
+EXIT_CORRUPT_STATE = 70
+
+
+def _print_corrupt_state_message(
+    state_path: Path,
+    exc: Exception,
+    stream=None,
+) -> None:
+    """Verbatim stderr format per handoff Section 5.6.
+
+    Format pinned so log scrapers can match. Do NOT change without
+    updating the handoff + the corresponding tests.
+    """
+    if stream is None:
+        stream = sys.stderr
+    try:
+        size = state_path.stat().st_size
+    except Exception:
+        size = -1
+    msg = (
+        f"FATAL: orchestration/autopilot_state.json is corrupt\n"
+        f"  error: {type(exc).__name__}: {exc}\n"
+        f"  path:  {state_path}\n"
+        f"  size:  {size}\n"
+        f"Recovery options:\n"
+        f"  1. cp /tmp/autopilot_state.baseline-*.json {state_path}\n"
+        f"     (latest baseline from Phase 0 snapshot)\n"
+        f"  2. cp orchestration/autopilot_checkpoints/<timestamp>/autopilot_state.json {state_path}\n"
+        f"     (most recent autopilot-managed checkpoint)\n"
+        f"Autopilot refuses to start with reset state.\n"
+    )
+    stream.write(msg)
+    stream.flush()
+
+
 def load_state(state_path: Path, default_factory) -> dict[str, Any]:
     """Load autopilot state JSON from `state_path` or return `default_factory()`.
 
     `default_factory` is a no-arg callable that builds the initial state dict
     (autopilot supplies one that includes SpeciesBudget().as_dict() — we keep
     that dependency on the caller's side to avoid pulling species code in here).
+
+    2026-05-23 Phase 6a — corrupt-state handling: if the file exists but
+    `json.loads` raises, REFUSE to start. Print the verbatim recovery
+    message to stderr and exit with code EXIT_CORRUPT_STATE (70). DO NOT
+    silently reset to default — that would overwrite the corrupt file
+    on the next save_state, destroying the operator's recovery options.
     """
     if state_path.exists():
-        return json.loads(state_path.read_text())
+        try:
+            return json.loads(state_path.read_text())
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            _print_corrupt_state_message(state_path, exc)
+            sys.exit(EXIT_CORRUPT_STATE)
     return default_factory()
 
 
 def save_state(state_path: Path, state: dict[str, Any]) -> None:
-    """Persist autopilot state JSON to `state_path` (creates parent dir)."""
+    """Atomically persist autopilot state JSON to `state_path`.
+
+    2026-05-23 Phase 6a — atomic write via temp file + os.replace.
+    Required so that a SIGKILL or process crash during persistence
+    cannot leave a truncated state file. The previous direct write_text
+    semantics meant a kill mid-write would leave half-written JSON,
+    causing the next startup's load_state to fail (which now exits 70
+    rather than silently resetting — see the corrupt-state path).
+    """
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, indent=2, default=str))
+    tmp = state_path.with_suffix(state_path.suffix + f".tmp.{os.getpid()}")
+    payload = json.dumps(state, indent=2, default=str)
+    with open(tmp, "w") as fh:
+        fh.write(payload)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, state_path)
 
 
 def load_blacklist(blacklist_path: Path) -> list[dict[str, Any]]:

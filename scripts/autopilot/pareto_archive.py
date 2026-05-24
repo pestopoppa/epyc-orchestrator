@@ -104,7 +104,13 @@ class ParetoArchive:
             )
 
     def save(self, state: dict[str, Any] | None = None) -> None:
-        """Save archive to state file, merging with existing state."""
+        """Atomically save archive to state file, merging with existing state.
+
+        2026-05-23 Phase 6a — atomic write via temp + os.replace. The
+        autopilot_state.json holds pareto_archive as a sub-key alongside
+        trial_counter et al.; a partial write would brick startup. Symmetric
+        with state_store.save_state's atomic semantics.
+        """
         if self.state_path.exists():
             existing = json.loads(self.state_path.read_text())
         else:
@@ -117,7 +123,14 @@ class ParetoArchive:
             "hypervolume_history": list(self._hypervolume_history),
         }
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(json.dumps(existing, indent=2, default=str))
+        import os as _os
+        tmp = self.state_path.with_suffix(self.state_path.suffix + f".tmp.{_os.getpid()}")
+        payload = json.dumps(existing, indent=2, default=str)
+        with open(tmp, "w") as fh:
+            fh.write(payload)
+            fh.flush()
+            _os.fsync(fh.fileno())
+        _os.replace(tmp, self.state_path)
 
     # ── core operations ─────────────────────────────────────────
 
