@@ -594,6 +594,19 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         autopilot activity
         <span class="count-suffix" id="autopilot-status">— real-time tail (eval / seed_batch / meta-planning / rollback / safety)</span>
       </h2>
+      <!-- 2026-05-24: current-trial progress bar. Estimates % from
+           elapsed / median(recent_trial_durations). Hidden when no trial
+           is in flight. Source: /dashboard/api/autopilot_progress -->
+      <div id="autopilot-trial-progress" style="display:none;margin:8px 0 12px;padding:8px 10px;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:11px">
+          <span id="autopilot-trial-label" style="color:var(--fg);font-family:var(--font-mono)"></span>
+          <span id="autopilot-trial-pct" style="color:var(--accent,#60a5fa);font-family:var(--font-mono);font-weight:600"></span>
+        </div>
+        <div style="width:100%;height:6px;background:rgba(255,255,255,0.05);border-radius:3px;overflow:hidden">
+          <div id="autopilot-trial-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent,#60a5fa),var(--good,#34d399));transition:width 0.5s ease"></div>
+        </div>
+        <div id="autopilot-trial-meta" style="margin-top:4px;color:var(--muted);font-size:10px;font-family:var(--font-mono)"></div>
+      </div>
       <pre id="autopilot-log-pre" class="stream-pre stream-medium"></pre>
 
       <details class="section-accordion" style="margin-top:14px" open>
@@ -699,12 +712,17 @@ function renderTopologyStrip() {
                 if (m2 && m2[1] === 'embedder') { base = m2[1]; quarter = `_${m2[2]}`; }
             }
         }
-        if (!groups.has(base)) groups.set(base, { base, kind: n.kind, color: n.color, instances: [] });
+        if (!groups.has(base)) groups.set(base, { base, kind: n.kind, color: n.color, instances: [], aliases: [] });
         const g = groups.get(base);
         g.instances.push({ ...n, quarter });
         // Adopt the parent process (no quarter) as the canonical entry — use
         // its port as the default in the collapsed view header.
         if (!quarter && !g.parent) g.parent = n;
+        // Aliases come from the topology endpoint per-node; take the union
+        // across instances so quarters carrying alias metadata also surface.
+        if (Array.isArray(n.aliases)) {
+            for (const a of n.aliases) { if (!g.aliases.includes(a)) g.aliases.push(a); }
+        }
     }
 
     // Sort: orchestrator first, llama-servers (by base label), services last.
@@ -736,7 +754,17 @@ function renderTopologyStrip() {
         const labelText = hasQuarters
             ? `${escapeHTML(g.base)} <span style="color:var(--dim);font-size:10px;margin-left:4px">×${nInstances}</span>`
             : escapeHTML((parent.label || '').length > 22 ? parent.label.slice(0, 21) + '…' : (parent.label || ''));
-        label.innerHTML = `<span class="role-expand-chev">▸</span>${labelText}` +
+        // Alias chip — same llama-server process also serves traffic for these
+        // role names (e.g. frontdoor also handles coder_escalation + worker_summarize,
+        // worker_general also handles worker_explore + worker_math + toolrunner).
+        // Without this hint the operator can't tell where to look for those roles.
+        let aliasChip = '';
+        if (g.aliases && g.aliases.length) {
+            const aliasStr = g.aliases.map(escapeHTML).join(' + ');
+            aliasChip = ` <span style="color:var(--dim);font-size:9px;margin-left:6px;font-style:italic"`
+                      + ` title="this server also routes traffic for: ${aliasStr}">+ ${aliasStr}</span>`;
+        }
+        label.innerHTML = `<span class="role-expand-chev">▸</span>${labelText}${aliasChip}` +
             `<span class="active-badge zero" id="active_badge_${g.base}" title="active in-flight tasks for ${g.base}">0</span>`;
 
         const port = document.createElement('div');
@@ -850,22 +878,34 @@ function updateTopologyInflight(inflight) {
     // directly here because _lastRawTapSections is only refreshed in "rendered"
     // tap mode — in "raw" mode (the default) it stays stale, but the buffer
     // itself is always up to date via the SSE stream.
-    const TAP_RECENT_SEC = 60;
+    // Match the live-tap pane's visibility: show every section in the rolling
+    // buffer, capped at MAX_TAP_PER_ROLE per role (newest first). Previously
+    // gated to 60s which made completed sections vanish from the accordion
+    // even while still visible in the live tap pane above — confusing
+    // mismatch. Tap rolling buffer is ~50KB (≈ last 5-10 min depending on
+    // verbosity); cap per-role bounds the accordion size.
+    const MAX_TAP_PER_ROLE = 8;
     const tapByBase = {};
     const tapSrc = (typeof _rawTapBuffer === 'string' && typeof parseRawTapSections === 'function')
         ? parseRawTapSections(_rawTapBuffer) : [];
-    // Cache so openTapSectionDetail() — which keys off section index — has
-    // something to look up when the operator clicks a tap-derived card
-    // before the rendered-mode parser has ever run.
+    // Cache for openTapSectionDetail() — keyed by index, see openTapByKey.
     if (tapSrc.length) _lastRawTapSections = tapSrc;
     tapSrc.forEach((s) => {
         if (!s.role) return;
-        if (!_isRecentTapTs(s.timestamp, TAP_RECENT_SEC)) return;
         const base = clientBaseRole(s.role);
         if (!base) return;
         if (!tapByBase[base]) tapByBase[base] = [];
         tapByBase[base].push(s);
     });
+    // Sort newest first + cap per role
+    for (const base of Object.keys(tapByBase)) {
+        tapByBase[base].sort((a, b) => {
+            const ta = Date.parse((a.timestamp || '').replace(' ', 'T')) || 0;
+            const tb = Date.parse((b.timestamp || '').replace(' ', 'T')) || 0;
+            return tb - ta;
+        });
+        tapByBase[base] = tapByBase[base].slice(0, MAX_TAP_PER_ROLE);
+    }
 
     // Iterate every active-badge — these were created with id="active_badge_<base>"
     document.querySelectorAll('[id^="active_badge_"]').forEach(badge => {
@@ -1376,16 +1416,27 @@ function renderTapActivityCard(s) {
     // stable (timestamp, role) key — NOT the section index — because the
     // rendered-mode parser reverses _lastRawTapSections and would otherwise
     // collide with our chronological-order cache.
+    //
+    // A section is "in-flight" iff it has no TIMINGS line yet (the tap writer
+    // appends TIMINGS once generation completes). In-flight sections get a
+    // pulsing dot + green text so the operator distinguishes them at a glance
+    // from recently-completed sections still in the rolling buffer.
     const role = s.role || '?';
     const color = roleColor(role);
     const ts = s.timestamp || '';
     const ageSec = ts ? Math.max(0, (Date.now() - Date.parse(ts.replace(' ', 'T'))) / 1000) : 0;
-    const ageLabel = ageSec < 5 ? 'live' : `${ageSec.toFixed(0)}s ago`;
-    const ageColor = ageSec < 5 ? 'var(--good)' : 'var(--muted)';
+    const inFlight = !s.timings;
+    const ageLabel = inFlight
+        ? (ageSec < 2 ? 'live' : `running ${ageSec.toFixed(0)}s`)
+        : `done ${ageSec < 5 ? 'just now' : ageSec.toFixed(0) + 's ago'}`;
+    const ageColor = inFlight ? 'var(--good, #34d399)' : 'var(--muted)';
     const promptPreview = (s.prompt || '').slice(0, 160).replace(/\s+/g, ' ');
+    const flightDot = inFlight
+        ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--good,#34d399);margin-right:4px;animation:pulse 1.5s infinite"></span>'
+        : '';
     return `
-        <div class="task-card tap-derived" data-tap-ts="${escapeHTML(ts)}" data-tap-role="${escapeHTML(role)}" title="tap-derived activity (no chat-XXX id) · click for prompt+response snapshot">
-            <div class="role" style="color:${color}">${escapeHTML(role)}<span style="float:right;color:${ageColor};font-size:10px">↻ ${ageLabel}</span></div>
+        <div class="task-card tap-derived${inFlight ? ' tap-inflight' : ''}" data-tap-ts="${escapeHTML(ts)}" data-tap-role="${escapeHTML(role)}" title="tap-derived activity (no chat-XXX id) · click for prompt+response snapshot">
+            <div class="role" style="color:${color}">${flightDot}${escapeHTML(role)}<span style="float:right;color:${ageColor};font-size:10px">${inFlight ? '⟳' : '✓'} ${ageLabel}</span></div>
             <div class="meta">tap section · ${s.prompt_len}c prompt · ${s.response_len}c resp${s.timings ? ' · ' + escapeHTML(s.timings) : ''}</div>
             <div class="prompt">${escapeHTML(promptPreview)}</div>
         </div>
@@ -2584,6 +2635,43 @@ function checkRenderLibs() {
 
 function startDashboard() {
     checkRenderLibs();
+    async function updateAutopilotProgress() {
+        try {
+            const r = await fetch('/dashboard/api/autopilot_progress');
+            const d = await r.json();
+            const wrap = document.getElementById('autopilot-trial-progress');
+            const label = document.getElementById('autopilot-trial-label');
+            const pct = document.getElementById('autopilot-trial-pct');
+            const bar = document.getElementById('autopilot-trial-bar');
+            const meta = document.getElementById('autopilot-trial-meta');
+            if (!wrap) return;
+            if (!d.in_flight) {
+                wrap.style.display = 'none';
+                return;
+            }
+            wrap.style.display = '';
+            const action = d.action_type || '?';
+            label.textContent = `trial #${d.trial_id} (${action})`;
+            const p = d.percent != null ? d.percent : 0;
+            pct.textContent = `${p.toFixed(0)}%${p >= 99 ? ' (overrun)' : ''}`;
+            bar.style.width = `${Math.min(100, p)}%`;
+            if (p >= 99) {
+                bar.style.background = 'linear-gradient(90deg,var(--warn,#fbbf24),var(--bad,#f87171))';
+            } else {
+                bar.style.background = 'linear-gradient(90deg,var(--accent,#60a5fa),var(--good,#34d399))';
+            }
+            const fmt = (s) => s == null ? '?' : (s < 60 ? `${s.toFixed(0)}s` : `${(s/60).toFixed(1)}m`);
+            const metaBits = [
+                `elapsed ${fmt(d.elapsed_s)}`,
+                `expected ~${fmt(d.expected_s)}`,
+            ];
+            if (d.recent_p50 != null) metaBits.push(`recent p50 ${fmt(d.recent_p50)}`);
+            if (!d.autopilot_alive) metaBits.push('⚠ autopilot process not running');
+            meta.textContent = metaBits.join(' · ');
+        } catch (e) {
+            // Silent fail — panel just stays hidden
+        }
+    }
     async function updateContentionGate() {
         try {
             const r = await fetch('/dashboard/api/contention');
@@ -2729,12 +2817,14 @@ function startDashboard() {
         updateBuildRev();
         updateRegionLocks();
         updateContentionGate();
+        updateAutopilotProgress();
         updatePareto();  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
         setInterval(updateBuildRev, 30000);  // build-drift poll
         setInterval(updateRegionLocks, 1500);  // 1.5s poll — fast enough to catch transient locks during inference
         setInterval(updateContentionGate, 2000);  // 2s poll — gate metrics are cumulative counters; cheap
+        setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
         updateTopologyActivity();
         setInterval(updateTopologyActivity, 5000);  // topology row activity stats
         // Pareto poll: only fetch when the GEPA accordion is open. Cheap when

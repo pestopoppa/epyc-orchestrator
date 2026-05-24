@@ -38,8 +38,15 @@ _PORT_HINTS: dict[int, str] = {
     9000: "whisper",
     9001: "document_formalizer",
 }
-# NUMA quarters share the parent role.
-for _parent_base, _parent_role in ((8080, "frontdoor"), (8082, "worker_general")):
+# NUMA quarters share the parent role. Extended 2026-05-24 to cover
+# ingest_long_context (8185/8285/8385/8485) and vision_escalation (8187/8287/8387/8487)
+# that were added by Phase 1b of the cross-role-bw-aware-routing handoff.
+for _parent_base, _parent_role in (
+    (8080, "frontdoor"),
+    (8082, "worker_general"),
+    (8185, "ingest_long_context"),
+    (8187, "vision_escalation"),
+):
     for _q in range(4):
         _PORT_HINTS[_parent_base + _q * 100] = f"{_parent_role}.q{_q}"
 
@@ -92,6 +99,30 @@ def _role_color(role: str) -> str:
     if m and m.group(1) in _ROLE_COLORS:
         base = m.group(1)
     return _ROLE_COLORS.get(base, "#64748b")
+
+
+def role_aliases(role: str) -> list[str]:
+    """Return the list of alias role names served by the same llama-server.
+
+    Reads `shared_with_first_n` from stack_manifest.ROLE_LAUNCH_META. e.g.
+    `frontdoor` returns `["coder_escalation", "worker_summarize"]`. Returns []
+    when the role has no aliases or when the manifest cannot be imported
+    (test contexts, scripts run outside the stack tree).
+    """
+    base = base_role(role)
+    try:
+        # Lazy import — keeps dashboard_topology importable without the scripts
+        # tree on sys.path (e.g. unit tests).
+        import sys
+        scripts_dir = Path(__file__).resolve().parents[3] / "scripts" / "server"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+        from stack_manifest import ROLE_LAUNCH_META  # type: ignore
+        meta = ROLE_LAUNCH_META.get(base, {})
+        aliases = meta.get("shared_with_first_n") or []
+        return list(aliases)
+    except Exception:
+        return []
 
 
 def _discover_llama_ports() -> dict[int, str]:

@@ -57,6 +57,7 @@ from src.api.routes.dashboard_tasks import (
 )
 from src.api.routes.dashboard_topology import (
     _PORT_HINTS,
+    role_aliases,
     _ROLE_COLORS,
     _discover_llama_ports,
     _process_info_by_match,
@@ -701,6 +702,117 @@ def _read_git_short_sha() -> str | None:
 
 
 _AUTOPILOT_STATE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
+_AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_journal.jsonl"
+
+
+@router.get("/dashboard/api/autopilot_progress")
+async def autopilot_progress() -> JSONResponse:
+    """Live progress estimate for the autopilot's currently-running trial.
+
+    Reads `in_flight_trial` from autopilot_state.json (added by AP-39 exogenous-
+    restart-resilience work) and estimates completion percentage as
+    `elapsed_s / median(recent_trial_durations_s)`, clamped to [0, 1].
+
+    Returns:
+        in_flight: bool — is there a trial currently running?
+        trial_id, action_type, started_at, elapsed_s
+        expected_s: median of last 10 trustworthy trials' durations
+        percent: 0..100 (clamped; > 100 caps at 99 to signal overrun)
+        recent_avg_duration_s, recent_p50, recent_p90 — duration distribution stats
+        autopilot_alive: bool — is the autopilot process even running?
+    """
+    out: dict[str, Any] = {
+        "in_flight": False,
+        "autopilot_alive": False,
+        "trial_id": None,
+        "action_type": None,
+        "started_at": None,
+        "elapsed_s": None,
+        "expected_s": None,
+        "percent": None,
+        "recent_avg_duration_s": None,
+        "recent_p50": None,
+        "recent_p90": None,
+    }
+    # Is autopilot alive? Quick pgrep-equivalent
+    try:
+        for p in Path("/proc").iterdir():
+            if not p.name.isdigit():
+                continue
+            try:
+                cmd = (p / "cmdline").read_bytes().decode(errors="replace")
+            except Exception:
+                continue
+            if "autopilot.py" in cmd and "start" in cmd:
+                out["autopilot_alive"] = True
+                break
+    except Exception:
+        pass
+
+    # Read state.json for in_flight_trial
+    if _AUTOPILOT_STATE_PATH.exists():
+        try:
+            state = json.loads(_AUTOPILOT_STATE_PATH.read_text())
+            in_flight = state.get("in_flight_trial") or {}
+            if in_flight and in_flight.get("trial_id") is not None:
+                started_at = float(in_flight.get("started_at", 0)) or None
+                elapsed = (time.time() - started_at) if started_at else None
+                out.update({
+                    "in_flight": True,
+                    "trial_id": in_flight.get("trial_id"),
+                    "action_type": (in_flight.get("action") or {}).get("type"),
+                    "started_at": started_at,
+                    "elapsed_s": elapsed,
+                })
+        except Exception:
+            pass
+
+    # Compute expected duration from journal — median of last 10 trustworthy trials
+    if _AUTOPILOT_JOURNAL_PATH.exists():
+        try:
+            durations: list[float] = []
+            with open(_AUTOPILOT_JOURNAL_PATH) as f:
+                # Tail-read: parse last ~50 lines and pull duration if present.
+                # The journal is append-only; reading line-by-line is fine at typical sizes.
+                lines = f.readlines()[-50:]
+            for raw in lines:
+                try:
+                    e = json.loads(raw)
+                except Exception:
+                    continue
+                # Skip bug-corrupted trials (their durations are also suspect)
+                if e.get("bug_corrupted_by"):
+                    continue
+                ed = e.get("eval_details") or {}
+                # Try several known duration fields
+                dur = ed.get("trial_duration_s") or ed.get("wall_time_s") or e.get("duration_s")
+                if dur and dur > 0:
+                    durations.append(float(dur))
+            if durations:
+                durations.sort()
+                n = len(durations)
+                med = durations[n // 2]
+                p90 = durations[min(n - 1, int(n * 0.9))]
+                avg = sum(durations) / n
+                out["recent_avg_duration_s"] = round(avg, 1)
+                out["recent_p50"] = round(med, 1)
+                out["recent_p90"] = round(p90, 1)
+                out["expected_s"] = round(med, 1)
+        except Exception:
+            pass
+
+    # Fallback expected_s if journal had no durations: 1200s (~20 min — typical recent cycle)
+    if out["expected_s"] is None and out["in_flight"]:
+        out["expected_s"] = 1200.0
+
+    # Percent
+    if out["in_flight"] and out["elapsed_s"] is not None and out["expected_s"]:
+        pct = (out["elapsed_s"] / out["expected_s"]) * 100.0
+        # Cap at 99 to signal "overrun" rather than "done"; the actual completion
+        # event is the next state.json write.
+        out["percent"] = round(min(99.0, max(0.0, pct)), 1)
+
+    return JSONResponse(out)
 
 
 @router.get("/dashboard/api/pareto")
@@ -985,6 +1097,10 @@ async def topology() -> JSONResponse:
             "port": port,
             "color": _role_color(role),
             "kind": "llama-server",
+            # Alias roles served by the same process (e.g. frontdoor port 8070
+            # also serves coder_escalation + worker_summarize). Surfaced so the
+            # dashboard can render them under the primary role label.
+            "aliases": role_aliases(role),
         })
 
     # Auxiliary services not already covered.
