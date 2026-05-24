@@ -91,17 +91,61 @@ def _inject_single_reward(
     url: str,
     payload: dict[str, Any],
     action_key: str,
+    watcher: Any | None = None,
 ) -> tuple[bool, str]:
-    """Inject a single reward (runs in background thread)."""
+    """Inject a single reward (runs in background thread).
+
+    When ``watcher`` is set, the POST uses resilient_post so an exogenous
+    orchestrator/llama reload doesn't get logged as a real reward-injection
+    failure. Bare /chat/reward POSTs (watcher=None) preserve the prior
+    behavior exactly — non-autopilot callers (if any) unaffected.
+
+    Reward injection runs in a background ThreadPoolExecutor; a per-call
+    httpx.Client is created here to avoid sharing across threads.
+    """
     import httpx
+
+    if watcher is None:
+        try:
+            with httpx.Client() as client:
+                resp = client.post(f"{url}/chat/reward", json=payload, timeout=30)
+                if resp.status_code == 200:
+                    return True, ""
+                logger.warning("Reward injection failed for %s: HTTP %d", action_key, resp.status_code)
+                return False, f"http_{resp.status_code}"
+        except Exception as e:
+            logger.warning("Reward injection error for %s: %s", action_key, e)
+            return False, f"{type(e).__name__}: {e}"
+
+    # Watcher path: use resilient_post for exogenous-reload detection.
+    import sys
+    from pathlib import Path
+    _ap = Path(__file__).resolve().parents[1] / "autopilot"
+    if str(_ap) not in sys.path:
+        sys.path.insert(0, str(_ap))
+    from resilient_http import resilient_post  # type: ignore
 
     try:
         with httpx.Client() as client:
-            resp = client.post(f"{url}/chat/reward", json=payload, timeout=30)
-            if resp.status_code == 200:
+            data, meta = resilient_post(
+                f"{url}/chat/reward",
+                json=payload,
+                timeout=30,
+                client=client,
+                watcher=watcher,
+                llama_role=payload.get("role") if isinstance(payload, dict) else None,
+            )
+            if not data.get("error"):
                 return True, ""
-            logger.warning("Reward injection failed for %s: HTTP %d", action_key, resp.status_code)
-            return False, f"http_{resp.status_code}"
+            # When the failure was exogenous + unrecovered, log differently
+            # so it's visible in the seeder's stats but doesn't get flagged as
+            # a real failure mode.
+            if meta.get("exogenous_unrecovered"):
+                logger.info("Reward injection skipped for %s: exogenous reload unrecovered", action_key)
+                return False, "exogenous_unrecovered"
+            err = data.get("error", "")
+            logger.warning("Reward injection failed for %s: %s", action_key, err)
+            return False, err
     except Exception as e:
         logger.warning("Reward injection error for %s: %s", action_key, e)
         return False, f"{type(e).__name__}: {e}"

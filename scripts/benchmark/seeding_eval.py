@@ -244,6 +244,7 @@ def _eval_single_config(
     image_path: str = "",
     log_label: str = "",
     format_fn=None,
+    watcher: Any | None = None,
 ) -> tuple[RoleResult, dict]:
     """Call the orchestrator, score, build RoleResult, and handle infra errors.
 
@@ -289,6 +290,7 @@ def _eval_single_config(
         poll_port=port,
         session_id=state.session_id,
         scoring_method=scoring_method,
+        watcher=watcher,
     )
 
     # Merge slot progress into response
@@ -348,6 +350,7 @@ def _eval_single_config(
                     poll_port=port,
                     session_id=state.session_id,
                     scoring_method=scoring_method,
+                    watcher=watcher,
                 )
                 max_decoded2 = int(slot_progress2.get("max_decoded", 0) or 0)
                 max_decoded = max(max_decoded, max_decoded2)
@@ -800,6 +803,7 @@ def evaluate_question_per_role(
     timeout: int,
     client: "httpx.Client",
     dry_run: bool = False,
+    watcher: Any | None = None,
 ) -> tuple[dict[str, RoleResult], dict[str, float], dict[str, Any]]:
     """Evaluate one question across all active roles dynamically.
 
@@ -873,6 +877,7 @@ def evaluate_question_per_role(
             allow_delegation=True,    # All roles can delegate/escalate
             image_path=image_path,
             log_label=role_name,
+            watcher=watcher,
         )
 
         role_results[role_name] = rr

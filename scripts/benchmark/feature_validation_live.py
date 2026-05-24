@@ -192,7 +192,28 @@ class LiveValidator:
 
         Includes mid-run health checks: if the stack goes down between prompts,
         remaining prompts are skipped with an error marker.
+
+        When self.watcher is set (autopilot-managed feature validation), each
+        POST uses resilient_post for exogenous-reload detection + retry;
+        watcher-aware metadata is captured in each result's `_meta` key so
+        downstream consumers (autopilot's feature-validation gate) can tell
+        which prompt results were contaminated by operator-initiated reloads.
         """
+        # Lazy import: pulls resilient_post + watcher only when needed.
+        watcher = getattr(self, "watcher", None)
+        resilient = None
+        if watcher is not None:
+            try:
+                import sys
+                from pathlib import Path
+                _ap = Path(__file__).resolve().parents[1] / "autopilot"
+                if str(_ap) not in sys.path:
+                    sys.path.insert(0, str(_ap))
+                from resilient_http import resilient_post as resilient  # type: ignore
+            except Exception as exc:
+                logger.warning("feature_validation_live: resilient_post unavailable (%s); falling back to legacy", exc)
+                resilient = None
+
         results = []
         for i, p in enumerate(prompts):
             # Mid-run health check every 3 prompts (avoid overhead on every call)
@@ -213,16 +234,31 @@ class LiveValidator:
                            "mock_mode": False,
                            "real_mode": True}
                 start = time.monotonic()
-                resp = self._client.post(f"{API_URL}/chat", json=payload)
-                elapsed = time.monotonic() - start
-                data = resp.json() if resp.status_code == 200 else {}
+                meta: dict[str, Any] = {}
+                if resilient is not None:
+                    data, meta = resilient(
+                        f"{API_URL}/chat",
+                        json=payload,
+                        timeout=120.0,
+                        client=self._client,
+                        watcher=watcher,
+                        llama_role=p.get("role", "frontdoor"),
+                    )
+                    elapsed = time.monotonic() - start
+                    status = 200 if not data.get("error") else 0
+                else:
+                    resp = self._client.post(f"{API_URL}/chat", json=payload)
+                    elapsed = time.monotonic() - start
+                    data = resp.json() if resp.status_code == 200 else {}
+                    status = resp.status_code
                 results.append({
                     "prompt_id": p.get("id", ""),
                     "elapsed_seconds": elapsed,
                     "predicted_tps": data.get("predicted_tps", 0),
                     "answer": data.get("answer", ""),
-                    "status": resp.status_code,
+                    "status": status,
                     "raw": data,
+                    "_meta": meta,
                 })
             except Exception as e:
                 results.append({"prompt_id": p.get("id", ""), "error": str(e)})

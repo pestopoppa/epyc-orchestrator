@@ -268,8 +268,16 @@ def _call_orchestrator_with_slot_poll(
     session_id: str = "",
     scoring_method: str = "",
     stop_sequences: list[str] | None = None,
+    watcher: Any | None = None,
 ) -> tuple[dict[str, Any], float, dict[str, Any]]:
-    """Call orchestrator while polling slot progress for live visibility."""
+    """Call orchestrator while polling slot progress for live visibility.
+
+    Optional ``watcher`` (OrchestratorWatcher) — when supplied, exogenous
+    reloads of the orchestrator API or the target llama-server are detected
+    and the request is retried after waiting for /health. Backward-compatible:
+    watcher=None preserves the legacy direct-post-with-exception-swallow
+    behavior.
+    """
 
     progress: dict[str, Any] = {
         "max_decoded": 0,
@@ -300,6 +308,7 @@ def _call_orchestrator_with_slot_poll(
             session_id=session_id,
             scoring_method=scoring_method,
             stop_sequences=stop_sequences,
+            watcher=watcher,
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -514,6 +523,8 @@ def call_orchestrator_forced(
     session_id: str = "",
     scoring_method: str = "",
     stop_sequences: list[str] | None = None,
+    watcher: Any | None = None,
+    llama_port: int | None = None,
 ) -> dict[str, Any]:
     """Call orchestrator with forced role and mode routing.
 
@@ -528,9 +539,22 @@ def call_orchestrator_forced(
         client: Reusable httpx.Client for connection pooling.
         allow_delegation: Override delegation (None=feature flag, True=allow, False=disable).
         session_id: Optional session ID for cross-request persistence (Phase 3 checkpoints).
+        watcher: Optional OrchestratorWatcher (autopilot.scripts.autopilot.
+            orchestrator_watch) — when supplied, exogenous reloads of the
+            orchestrator API or the target llama-server are detected and
+            the request is retried after waiting for /health. Backward-
+            compatible: watcher=None preserves the legacy direct-post-with-
+            exception-swallow behavior exactly.
+        llama_port: Optional explicit port hint for the target llama-server.
+            When omitted, the watcher resolves it from force_role via
+            /llama_fleet_ids.
 
     Returns:
-        Response dict with answer, tokens, timing, etc.
+        Response dict with answer, tokens, timing, etc. When a watcher is
+        supplied, an extra "_meta" key carries the resilient_post meta dict
+        (clean / exogenous_recovered / exogenous_unrecovered / external_restart
+        / real_failure / retry_count / wait_s / marker_changes) for the
+        seeding/eval pipeline to propagate up to EvalResult.
     """
     import httpx
 
@@ -555,22 +579,55 @@ def call_orchestrator_forced(
     if stop_sequences:
         payload["stop_sequences"] = stop_sequences
 
-    try:
-        if client is not None:
-            response = client.post(f"{url}/chat", json=payload, timeout=timeout)
-        else:
-            response = httpx.post(
-                f"{url}/chat",
-                json=payload,
-                timeout=timeout,
-            )
-        response.raise_for_status()
-        data = response.json()
-        if isinstance(data, dict):
-            error_code = data.get("error_code")
-            if error_code and not data.get("error"):
-                data["error"] = data.get("error_detail") or f"HTTP {error_code}"
-            _normalize_tool_telemetry(data)
-        return data
-    except Exception as e:
-        return {"answer": "", "error": str(e)}
+    # When no watcher: preserve the EXACT legacy code path. Critical for
+    # the non-autopilot callers of this function (14 impacted symbols per
+    # GitNexus blast-radius audit). Any change here that newly escapes an
+    # exception or alters the response dict shape would break them.
+    if watcher is None:
+        try:
+            if client is not None:
+                response = client.post(f"{url}/chat", json=payload, timeout=timeout)
+            else:
+                response = httpx.post(
+                    f"{url}/chat",
+                    json=payload,
+                    timeout=timeout,
+                )
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, dict):
+                error_code = data.get("error_code")
+                if error_code and not data.get("error"):
+                    data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+                _normalize_tool_telemetry(data)
+            return data
+        except Exception as e:
+            return {"answer": "", "error": str(e)}
+
+    # Watcher path: delegate to resilient_post for exogenous-reload detection.
+    # Lazy-imported so the legacy path doesn't even touch autopilot modules.
+    import sys
+    from pathlib import Path
+    _ap_dir = Path(__file__).resolve().parents[1] / "autopilot"
+    if str(_ap_dir) not in sys.path:
+        sys.path.insert(0, str(_ap_dir))
+    from resilient_http import resilient_post  # type: ignore[import-not-found]
+
+    data, meta = resilient_post(
+        f"{url}/chat",
+        json=payload,
+        timeout=timeout,
+        client=client,
+        watcher=watcher,
+        llama_port=llama_port,
+        llama_role=force_role,
+    )
+    if isinstance(data, dict):
+        error_code = data.get("error_code")
+        if error_code and not data.get("error"):
+            data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+        _normalize_tool_telemetry(data)
+        # Attach meta as _meta so downstream consumers can inspect without
+        # disturbing existing data keys.
+        data["_meta"] = meta
+    return data
