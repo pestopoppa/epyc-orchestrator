@@ -278,12 +278,30 @@ def trace_from_completion_probabilities(
 ) -> Trace:
     """Build a Trace from a llama.cpp ``completion_probabilities`` list.
 
-    Each element looks like ``{"content": "tok", "probs": [{"tok_str": ..., "prob": p}, ...]}``
-    (the shape ``logit_probe`` already reads via payload ``n_probs``). Linear ``prob``
-    values are carried through; ``token_confidence`` takes the log internally.
+    Handles both shapes llama.cpp has shipped (confirmed against the production
+    Qwen3.6 server 2026-05-24, P21.A2):
+
+      * OpenAI-style (current builds): each token is
+        ``{"token": t, "logprob": lp, "top_logprobs": [{"token": t, "logprob": lp}, ...]}``
+        — log-probabilities.
+      * legacy: ``{"content": t, "probs": [{"tok_str": t, "prob": p}, ...]}`` — linear probs.
+
+    Linear probabilities are produced either way (logprobs are exp'd); the caller's
+    ``token_confidence`` takes the log again. Robust to missing / non-dict entries.
     """
     token_top_probs: list[list[float]] = []
     for tok in completion_probabilities or []:
-        probs = tok.get("probs", []) if isinstance(tok, dict) else []
-        token_top_probs.append([float(p.get("prob", 0.0)) for p in probs])
+        if not isinstance(tok, dict):
+            token_top_probs.append([])
+            continue
+        cands = tok.get("top_logprobs") or tok.get("probs") or []
+        row: list[float] = []
+        for c in cands:
+            if not isinstance(c, dict):
+                continue
+            if "logprob" in c:
+                row.append(math.exp(c["logprob"]))
+            elif "prob" in c:
+                row.append(float(c["prob"]))
+        token_top_probs.append(row)
     return Trace(text=text, token_top_probs=token_top_probs)
