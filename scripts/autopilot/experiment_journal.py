@@ -31,6 +31,17 @@ class DeficiencyCategory(str, Enum):
     CODE_VALIDATION = "code_validation"
     SHRINKAGE = "shrinkage"
     REVERT = "revert"
+    # 2026-05-23 exogenous-restart resilience (handoff Phase 5).
+    # EXOGENOUS_RELOAD: trial corrupted by an operator/external service reload
+    #   detected via fleet markers; at least one question stayed unrecovered.
+    #   bug_corrupted_by is set to "exogenous_operator_reload" so the planner's
+    #   trustworthiness gate excludes it from hypothesis chains. SafetyGate +
+    #   Pareto archive are explicitly SKIPPED for this trial.
+    # AUTOPILOT_KILLED: placeholder JournalEntry written by the cmd_start
+    #   recovery path when in_flight_trial indicates a crash between
+    #   dispatch_action and journal.record. No eval evidence available.
+    EXOGENOUS_RELOAD = "exogenous_reload"
+    AUTOPILOT_KILLED = "autopilot_killed_mid_trial"
 
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 MAX_TRIALS_PER_FILE = 1000

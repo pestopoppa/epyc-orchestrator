@@ -71,6 +71,11 @@ class _ActionContext:
     state: dict[str, Any]
     strategy_store: "StrategyStore | None" = None
     evo: "EvolutionManager | None" = None
+    # 2026-05-23 Phase 5 — OrchestratorWatcher for exogenous-restart
+    # detection. None = legacy behavior (no retry, no metadata propagation).
+    # Phase 6/7 deployments construct one in autopilot.py main() and pass
+    # it through dispatch_action → _action_seed_batch → Seeder.run_batch.
+    watcher: Any | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -655,8 +660,15 @@ def dispatch_action(
     state: dict[str, Any],
     strategy_store: "StrategyStore | None" = None,
     evo: "EvolutionManager | None" = None,
+    watcher: Any | None = None,
 ) -> tuple[EvalResult | None, str]:
-    """Execute an action and return (eval_result, species_name)."""
+    """Execute an action and return (eval_result, species_name).
+
+    `watcher`: OrchestratorWatcher (Phase 5). When non-None, action handlers
+    that issue /chat traffic (seed_batch + variants) use it to detect operator
+    reloads of the orchestrator or llama-servers and retry inline. None
+    preserves pre-Phase-5 behavior exactly.
+    """
     action_type = action.get("type", "")
 
     # AP-9: Single-variable scope enforcement
@@ -674,6 +686,6 @@ def dispatch_action(
     ctx = _ActionContext(
         seeder=seeder, swarm=swarm, forge=forge, lab=lab, tower=tower,
         gate=gate, archive=archive, journal=journal, state=state,
-        strategy_store=strategy_store, evo=evo,
+        strategy_store=strategy_store, evo=evo, watcher=watcher,
     )
     return handler(action, ctx)

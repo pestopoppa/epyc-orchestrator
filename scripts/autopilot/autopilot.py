@@ -537,6 +537,25 @@ def _run_loop_inner(
     )
     meta = MetaOptimizer()
 
+    # Phase 5 — OrchestratorWatcher for exogenous-restart detection.
+    # Single instance shared across the trial loop, the seeder, and the
+    # eval tower. Disabled via AUTOPILOT_WATCHER_DISABLED=1 for tests/dev
+    # without fleet markers; in that mode all methods no-op safely.
+    try:
+        from orchestrator_watch import OrchestratorWatcher
+        watcher = OrchestratorWatcher(api_url=ORCHESTRATOR_URL)
+        # Attach to the tower so its _eval_question call can pass it down
+        # into call_orchestrator_forced (Phase 4 reads via
+        # getattr(self, "watcher", None)).
+        tower.watcher = watcher
+        log.info(
+            "OrchestratorWatcher attached (disabled=%s, marker dir=/mnt/raid0/llm/tmp)",
+            watcher.disabled,
+        )
+    except Exception as exc:
+        log.warning("OrchestratorWatcher init failed (%s); falling back to legacy retry-less path", exc)
+        watcher = None
+
     seeder = Seeder(
         url=ORCHESTRATOR_URL,
         dry_run=dry_run,
@@ -867,6 +886,7 @@ def _run_loop_inner(
             eval_result, species_name = dispatch_action(
                 action, seeder, swarm, forge, lab, tower, gate, archive,
                 journal, state, strategy_store=strategy_store, evo=evo,
+                watcher=watcher,
             )
 
         # ── 4. Evaluate ─────────────────────────────────────────
@@ -879,24 +899,59 @@ def _run_loop_inner(
         # AP-13: Emit grep-parseable metrics
         log.info("\n%s", eval_result.to_grep_lines(trial_counter, species_name))
 
-        # Safety gate
-        verdict = gate.check(eval_result)
-        failure_analysis = gate.analyze_failure(eval_result, verdict)
-        if not verdict:
-            log.warning(
-                "Safety violations: %s", "; ".join(verdict.violations)
+        # ── Pre-gate exogenous-reload classification (handoff Phase 5) ──
+        # If the trial picked up an operator/external service reload (and at
+        # least one question stayed unrecovered after retry), classify it as
+        # bug-corrupted BEFORE running the safety gate or admitting it to the
+        # Pareto archive. The aggregate quality/reliability numbers are
+        # partially based on missing data; treating it as a real failure would
+        # increment consecutive_failures + trigger spurious rollback + admit
+        # a (0, 0, ?, ?) point to the archive.
+        #
+        # Trials that detected exogenous reloads but RECOVERED via retry are
+        # sound — they just carry audit metadata in eval_details so the
+        # operator can see this trial weathered a reload cleanly.
+        has_exo_unrecovered = (
+            getattr(eval_result, "n_exogenous_unrecovered", 0) > 0
+        )
+        has_exo_recovered = (
+            getattr(eval_result, "n_exogenous_recovered", 0) > 0
+        )
+
+        if has_exo_unrecovered:
+            # Bypass safety gate + archive update. Trial is journaled below
+            # as a bug-corrupted placeholder for audit; the planner's
+            # trustworthiness gate excludes it from learning surfaces.
+            from safety_gate import SafetyVerdict  # type: ignore
+            verdict = SafetyVerdict(passed=True)
+            failure_analysis = (
+                f"Excluded: unrecovered operator/service reload during trial "
+                f"({eval_result.n_exogenous_unrecovered}/{eval_result.n_questions} "
+                f"questions affected)"
             )
-            if gate.should_rollback():
-                log.error("Consecutive failure limit reached, rolling back")
-                state["_dispatch_deficiency"] = "consecutive_failures"  # AP-14
-                # B2: Auto-append failing config to blacklist
-                append_blacklist(
-                    action, trial_counter,
-                    f"Auto-blacklisted: 3 consecutive failures ending at trial {trial_counter}",
+            log.warning(
+                "Trial %d skipped safety gate + archive: %s",
+                trial_counter, failure_analysis,
+            )
+        else:
+            # Safety gate
+            verdict = gate.check(eval_result)
+            failure_analysis = gate.analyze_failure(eval_result, verdict)
+            if not verdict:
+                log.warning(
+                    "Safety violations: %s", "; ".join(verdict.violations)
                 )
-                blacklist = load_blacklist()  # Reload after append
-                lab.restore_checkpoint()
-                gate.reset_failures()
+                if gate.should_rollback():
+                    log.error("Consecutive failure limit reached, rolling back")
+                    state["_dispatch_deficiency"] = "consecutive_failures"  # AP-14
+                    # B2: Auto-append failing config to blacklist
+                    append_blacklist(
+                        action, trial_counter,
+                        f"Auto-blacklisted: 3 consecutive failures ending at trial {trial_counter}",
+                    )
+                    blacklist = load_blacklist()  # Reload after append
+                    lab.restore_checkpoint()
+                    gate.reset_failures()
 
         # ── 4b. Self-Criticism (AP-23/AP-24) ────────────────────
         # Get baseline and previous per-suite for comparison
@@ -919,18 +974,31 @@ def _run_loop_inner(
         last_criticism_text = criticism.as_text()
 
         # ── 5. Record ────────────────────────────────────────────
-        pareto_status = archive.update(
-            ParetoEntry(
-                trial_id=trial_counter,
-                objectives=eval_result.objectives,
-                config_snapshot=action,
-                species=species_name,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                eval_tier=eval_result.tier,
-                memory_count=memory_count,
-                reasoning=json.dumps(action),
+        # Phase 5: skip archive.update for unrecovered exogenous trials.
+        # Quality/reliability numbers are based on partially-missing data;
+        # admitting them to the Pareto archive would distort the frontier
+        # (e.g. a perfectly-good config could be "dominated" by a
+        # corrupted (0, 0, ?, ?) point). bug_corrupted_by tagging below
+        # ensures the planner's trustworthiness gate excludes the trial.
+        if has_exo_unrecovered:
+            pareto_status = "dominated"  # placeholder for JournalEntry only
+            log.info(
+                "Trial %d: archive.update SKIPPED (exogenous reload corrupted trial)",
+                trial_counter,
             )
-        )
+        else:
+            pareto_status = archive.update(
+                ParetoEntry(
+                    trial_id=trial_counter,
+                    objectives=eval_result.objectives,
+                    config_snapshot=action,
+                    species=species_name,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    eval_tier=eval_result.tier,
+                    memory_count=memory_count,
+                    reasoning=json.dumps(action),
+                )
+            )
 
         # B1: Store strategy on Pareto frontier improvements
         if pareto_status == "frontier" and strategy_store is not None:
@@ -997,6 +1065,43 @@ def _run_loop_inner(
         if not deficiency_category:
             deficiency_category = state.pop("_dispatch_deficiency", "")
 
+        # Phase 5 — exogenous-reload tagging.
+        # bug_corrupted_by is set ONLY when at least one question stayed
+        # unrecovered after the retry. Recovered-only trials are sound and
+        # get audit metadata in eval_details instead.
+        bug_corrupted_by = ""
+        bug_corrupted_reason = ""
+        eval_details_dict: dict[str, Any] = {
+            "per_suite_quality": eval_result.per_suite_quality,
+            "routing_distribution": eval_result.routing_distribution,
+            "details": eval_result.details,
+            "ece": eval_result.ece,
+            "auroc": eval_result.auroc,
+            "calibration_violations": eval_result.calibration_violations,
+            "gepa_ratio": state.get("gepa_ratio", 0.30),
+        }
+        if has_exo_unrecovered:
+            bug_corrupted_by = "exogenous_operator_reload"
+            preview_ids = eval_result.exogenous_question_ids[:10]
+            total_q = eval_result.n_questions or len(eval_result.exogenous_question_ids)
+            bug_corrupted_reason = (
+                f"{eval_result.n_exogenous_unrecovered}/{total_q} questions "
+                f"remained unrecovered after detected service reload "
+                f"(sample ids: {preview_ids})"
+            )
+            deficiency_category = "exogenous_reload"
+        if has_exo_unrecovered or has_exo_recovered:
+            # Surface audit info regardless — recovered trials carry this
+            # so the operator can see "this trial weathered a reload"
+            # without the planner downgrading it.
+            eval_details_dict["exogenous_retries"] = {
+                "n_recovered": getattr(eval_result, "n_exogenous_recovered", 0),
+                "n_unrecovered": getattr(eval_result, "n_exogenous_unrecovered", 0),
+                "n_external_restart": getattr(eval_result, "n_external_restart", 0),
+                "question_ids": list(getattr(eval_result, "exogenous_question_ids", [])),
+                "marker_observations": list(getattr(eval_result, "exogenous_marker_log", [])),
+            }
+
         journal.record(
             JournalEntry(
                 trial_id=trial_counter,
@@ -1016,15 +1121,7 @@ def _run_loop_inner(
                 memory_count=memory_count,
                 active_flags=active_flags_list,
                 failure_analysis=failure_analysis,
-                eval_details={
-                    "per_suite_quality": eval_result.per_suite_quality,
-                    "routing_distribution": eval_result.routing_distribution,
-                    "details": eval_result.details,
-                    "ece": eval_result.ece,
-                    "auroc": eval_result.auroc,
-                    "calibration_violations": eval_result.calibration_violations,
-                    "gepa_ratio": state.get("gepa_ratio", 0.30),
-                },
+                eval_details=eval_details_dict,
                 reasoning=json.dumps(action),
                 hypothesis=hypothesis,
                 expected_mechanism=expected_mechanism,
@@ -1041,6 +1138,8 @@ def _run_loop_inner(
                 falsifier=rationale.get("falsifier", ""),
                 rubric_scores=rationale.get("rubric_scores", {}),
                 stagnation_signal=stagnation_signal,
+                bug_corrupted_by=bug_corrupted_by,
+                bug_corrupted_reason=bug_corrupted_reason,
             )
         )
 
