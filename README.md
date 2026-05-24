@@ -1,162 +1,193 @@
 # epyc-orchestrator
 
-Hierarchical multi-model orchestration for local LLM inference on AMD EPYC. Routes tasks across 29 model servers + 3 infrastructure services with automatic escalation, speculative decoding, KV cache compression, and autonomous prompt optimization.
+Hierarchical multi-model orchestration for **CPU-only local LLM inference** on AMD EPYC. Routes tasks across 20 llama-server ports + 3 infrastructure services with automatic escalation, speculative decoding, KV-cache compression, a learned routing classifier, episodic memory, and a continuously-running autonomous-optimization loop (AutoPilot).
+
+Running on a single AMD EPYC 9655 (96C/192T, 1.13 TB DDR5-5600). No GPU.
+
+---
+
+## 📚 Knowledge Base — Start Here
+
+This repo is the production substrate; the *why* lives in [epyc-root](https://github.com/pestopoppa/epyc-root):
+
+| Index | What's there |
+|---|---|
+| **[wiki/INDEX.md (epyc-root)](https://github.com/pestopoppa/epyc-root/blob/main/wiki/INDEX.md)** | 30 compiled topic articles — speculative decoding, KV cache, routing, hardware optimization, autonomous research, … |
+| **[handoffs/active/master-handoff-index.md (epyc-root)](https://github.com/pestopoppa/epyc-root/blob/main/handoffs/active/master-handoff-index.md)** | Active cross-repo work queue (95 active items) |
+| **[research/deep-dives/ (epyc-root)](https://github.com/pestopoppa/epyc-root/tree/main/research/deep-dives)** | 105 long-form analyses |
+| **[research/intake_index.yaml (epyc-root)](https://github.com/pestopoppa/epyc-root/blob/main/research/intake_index.yaml)** | 595 triaged papers/repos with verdicts |
+| **In-repo docs** | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/chapters/INDEX.md`](docs/chapters/INDEX.md) (17 chapters: runtime, REPL, MemRL, escalation, tools, SkillBank), [`scripts/autopilot/program.md`](scripts/autopilot/program.md) |
+
+---
 
 ## What It Does
 
-- **Multi-tier routing**: Routes tasks to the optimal model — fast workers for simple queries, architects for complex reasoning
-- **Automatic escalation**: Failed or timed-out tasks escalate to more capable tiers
-- **Speculative decoding**: Draft models accelerate generation (2-4x speedup depending on model)
-- **AM KV compaction**: Attention-score-driven KV cache compression via `POST /slots/{id}?action=compact` — 5x compression with zero quality degradation
-- **EA KV compression**: Expected Attention scoring for importance-weighted cache eviction
-- **Web search**: SearXNG metasearch (local Docker) with DuckDuckGo + Brave fallback
-- **ColBERT retrieval**: Multi-vector code and document retrieval via NextPLAID
-- **Episodic memory**: FAISS-backed session memory with skill tracking
-- **Tool execution**: Sandboxed REPL with code execution, web fetch, and plugins
-- **Vision pipeline**: Multi-modal support with OCR and image understanding (7B worker + 30B escalation)
-- **AutoPilot**: Autonomous prompt optimization with safety gates and Pareto archive
+- **Multi-tier routing** with **learned classifier** (98.7% val acc, in shadow mode pending 24-48 h window): routes tasks to the right model — fast workers for simple queries, architects for complex reasoning.
+- **Automatic escalation**: failed or timed-out tasks escalate to a more capable tier.
+- **Speculative decoding** — draft models accelerate generation (2–4× depending on target).
+- **KV-cache compression** — AM (Attention Matching) `POST /slots/{id}?action=compact` endpoint for 5× compression at zero quality cost; EA (Expected Attention) scoring for importance-weighted eviction.
+- **Web search** via SearXNG metasearch (local Docker) with DuckDuckGo + Brave + Qwant fallback.
+- **ColBERT retrieval** — multi-vector code + document retrieval via NextPLAID; internal markdown KB indexed (409 files / 13.5 K chunks / 861 MiB / 17-min build).
+- **Episodic memory (MemRL)** — FAISS-backed session memory with skill tracking; routing weights converged.
+- **Sandboxed REPL** — code execution, web fetch, plugin tools.
+- **Vision pipeline** — Qwen2.5-VL-7B worker + Qwen3-VL-30B-A3B escalation, OCR, image understanding.
+- **AutoPilot** — autonomous optimization loop with 4 species (Seeder, NumericSwarm, PromptForge, StructuralLab), 4D Pareto archive (quality × speed × −cost × reliability), tiered eval tower (T0/T1/T2), safety gate, experiment journal, GEPA evolutionary prompt mutation, Evolution Manager strategy distillation, episodic-memory routing, constrained-creativity stagnation-gated planner, and (since 2026-05-24) full resilience against operator-initiated orchestrator/llama reloads.
 
-## Production Stack
+---
 
-All servers run on a single AMD EPYC 9655 (96C/192T, 1.13TB DDR5) via llama.cpp `production-consolidated-v3` with KV quantization (q4_0 K / f16 V), flash attention, and Hadamard auto-rotation.
+## Production Stack (2026-05-24)
 
-### LLM Servers (29 instances)
+All servers run on a single AMD EPYC 9655 via the `production-consolidated-v5` llama.cpp branch (Hadamard auto-rotation, flash attention, KV q4_0 K / f16 V, NPS4 NUMA + CCD work distribution, AVX-512BW 8×8 Q8_0 kernel, OMP idle-spin fix).
 
-Each HOT role deploys as 1 full-speed instance (96 threads) + 4 quarter instances (48 threads each). The concurrency router sends single sessions to the full-speed instance for maximum per-request throughput, and distributes concurrent sessions across quarters.
+### LLM Servers (20 llama-server ports — query live via `/dashboard/api/llama_fleet_ids`)
 
-| Role | Model | Instances | Speed (per inst) | Context | Acceleration |
-|------|-------|:---------:|:-----------------:|:-------:|:------------|
-| frontdoor | Qwen3.5-35B-A3B Q4_K_M | 1+4 | 12.7 t/s | 32K | moe6 (expert reduction) |
-| coder | Qwen2.5-Coder-32B Q4_K_M | 1+4 | 10.8 t/s | 32K | spec decode (dm=32) + tree + lookup |
-| worker | Qwen3-Coder-30B-A3B Q4_K_M | 1+4 | 39 t/s | 8K | spec decode (dm=8) |
-| architect_general | Qwen3.5-122B-A10B Q4_K_M | 2 | 4.3 t/s | 16K | spec decode (dm=24), 2×NUMA |
-| architect_coding | REAP-246B-A35B Q4_K_M | 2 | 8.0 t/s | 16K | spec decode (dm=32), 2×NUMA |
-| ingest | Qwen3-Next-80B-A3B | 1 | ~12 t/s | 32K | — |
-| worker_vision | Qwen2.5-VL-7B Q4_K_M | 1 | — | 8K | — |
-| vision_escalation | Qwen3-VL-30B-A3B Q4_K_M | 1 | — | 16K | — |
-| worker_fast | Qwen2.5-Coder-1.5B Q4_K_M | 1 | ~100 t/s | 8K | 4 parallel slots |
-| embedder | BGE-large-en-v1.5 f16 | 6 | — | 512 | — |
+| Role | Model | Quant | Port(s) | Notes |
+|---|---|---|---|---|
+| frontdoor / coder_escalation / worker_summarize | Qwen3.6-35B-A3B | Q8_0 (37 GB) | 8070, 8080, 8180, 8280, 8380 | Shared GGUF mmap. `enable_thinking=False` mandatory. +33pp accuracy + 80% t/s vs prior Qwen3.5-35B Q4_K_M baseline. |
+| worker_general | gemma-4-26B-A4B | Q4_K_M (16 GB) | 8082, 8182, 8282, 8382 | ik_llama.cpp PR #1744 MTP. +18pp tool_compliance, 76.5 t/s solo. Needs `KMP_BLOCKTIME=10` (OMP idle-spin fix). |
+| worker_explore / worker_math / toolrunner | Qwen3-Coder-30B-A3B-Instruct | Q4_K_M (17 GB) | 8072 | Secondary worker pool. |
+| architect_general | Qwen3.5-122B-A10B | Q4_K_M (69 GB) | 8083 | Hybrid MoE. `enable_thinking=False`. |
+| ingest_long_context | Qwen3-Next-80B-A3B-Instruct | Q4_K_M (45 GB) | 8085 | SSM+MoE hybrid. Thinking ON (exception to the Qwen3.x default). |
+| worker_vision | Qwen2.5-VL-7B-Instruct | Q4_K_M (4 GB) | 8086 | |
+| vision_escalation | Qwen3-VL-30B-A3B-Instruct | Q4_K_M (18 GB) | 8087 | |
+| embedder pool ×6 | BGE-large-en-v1.5 | f16 (0.6 GB) | 8090–8095 | 1024-dim embeddings. |
 
-**Memory footprint**: ~515 GB for HOT servers (46% of 1130 GB). Architect servers are WARM (started on demand).
+**Note:** `architect_coding` (formerly REAP-246B) was retired 2026-05-09 — Qwen3.6-35B-Q8 on coder_escalation beats it by ≈27 pp at <1/7 the memory. See [project_stack_consolidation_2026_05](../epyc-root/wiki/inference-serving.md) for the deconsolidation rationale.
 
-### Infrastructure Services (3 Docker containers)
+### Infrastructure Services (Docker)
 
-| Service | Port | Image | Purpose |
-|---------|:----:|-------|---------|
-| nextplaid-code | 8088 | next-plaid:cpu-1.0.4 | ColBERT multi-vector code retrieval (LateOn-Code) |
-| nextplaid-docs | 8089 | next-plaid:cpu-1.0.4 | ColBERT multi-vector doc retrieval (GTE-ModernColBERT) |
-| searxng | 8090 | searxng/searxng:latest | Metasearch aggregator (JSON API for web_search) |
+| Service | Port | Purpose |
+|---|---|---|
+| nextplaid-code | 8088 | ColBERT multi-vector code retrieval (LateOn-Code) |
+| nextplaid-docs | 8089 | ColBERT multi-vector doc retrieval (GTE-ModernColBERT) |
+| searxng | local | Metasearch (JSON API; DuckDuckGo + Brave + Qwant + Wikipedia consensus) |
+
+---
 
 ## AutoPilot: Continuous Optimization
 
 The orchestrator includes an autonomous optimization loop (AutoPilot) that continuously improves prompts, routing, and model configurations through controlled experiments with safety gates.
 
-**192 trials completed** — quality stable at 2.1/3.0, speed at 64 t/s, 80% reliability. AutoPilot uses 4 species (Seeder, NumericSwarm, PromptForge, StructuralLab) to explore prompt mutations, hyperparameter tuning, and feature flag combinations.
+**513 trials completed** (96.3% trustworthy — 13 historically corrupted by a known chat-template bug, scrubbed). 4 optimizer species, tiered eval tower (T0 = 10 q / 30 s; T1 = 100 q / 5 min; T2 = 500+ q / 30 min), 4D Pareto archive, safety gate with MAD-based statistical noise filtering, atomic experiment journal with planner-trustworthiness gating, full crash-resilience (operator reloads no longer pollute; autopilot SIGKILL is recoverable via WAL-style in-flight marker).
 
 ### Diagnostic Plots
 
+The plots committed below are a **2026-04-15 snapshot at trial 192** — captured before the May 2026 stack consolidation and the constrained-creativity / exogenous-restart upgrades. Refreshing them past the latest model swaps is queued under [readme-refresh.md](https://github.com/pestopoppa/epyc-root/blob/main/handoffs/active/readme-refresh.md).
+
 #### Objectives Overview
 ![Objectives Overview](docs/autopilot/objectives_2x2.png)
-Four-objective optimization tracked over 192 trials: quality (Claude-as-Judge 0-3), speed (end-to-end tokens/s), cost (normalized 0-1), and reliability (fraction of successful completions). Quality converged at 2.1/3.0 by trial ~10, speed climbed from near-zero (cold start, broken telemetry in early trials) to 64 t/s by trial ~50, and reliability stabilized at 80%.
+Quality (Claude-as-Judge 0–3), speed (e2e t/s), cost (normalized 0–1), reliability (success fraction).
 
-#### Pareto Frontier: Quality vs Speed
+#### Pareto Frontier
 ![Pareto Frontier](docs/autopilot/pareto_frontier_2d.png)
-Quality-speed tradeoff across all Pareto-optimal configurations. Speed values (47-65 t/s) represent **end-to-end pipeline throughput**, not single-model generation speed. These exceed individual model speeds (4-39 t/s) because the orchestrator blends tiers: most requests route to fast workers (39 t/s), REPL tool-use tasks amortize inference latency across code execution rounds, multi-instance routing parallelizes concurrent sessions across 15 HOT instances, and speculative decoding accelerates all tiers. The frontier shows two clusters: a dominated region at ~48 t/s / quality ~1.2, and the optimal cluster at ~64 t/s / quality ~2.1 discovered by NumericSwarm and PromptForge species.
+Quality × speed. End-to-end pipeline speeds (47–65 t/s) exceed any single model because of multi-instance NUMA fan-out, draft acceleration, and REPL amortization.
 
 #### Hypervolume Trend
 ![Hypervolume Trend](docs/autopilot/hypervolume_trend.png)
-Hypervolume indicator (higher = better) measures the volume of objective space dominated by the Pareto archive. The step increases around trials 115 and 125 correspond to PromptForge discovering prompt mutations that improved quality without sacrificing speed. The plateau after trial ~130 indicates the optimization frontier has converged — further trials explore but do not expand the dominated region.
+Hypervolume indicator over trial count — measures Pareto-dominated volume in objective space.
 
 #### Species Effectiveness
 ![Species Effectiveness](docs/autopilot/species_effectiveness.png)
-Pareto improvement rate per mutation species — the fraction of trials from each species that expanded the Pareto frontier. Seeder (baseline configurations) leads at 36% (27/75 trials) because early exploration covers uncharted space. StructuralLab (24%, 6/25) tests structural prompt changes. NumericSwarm (26%, 11/42) tunes numeric hyperparameters (temperature, token budgets, timeouts). PromptForge (20%, 9/46) mutates system prompt phrasing. All four species contribute, confirming that no single strategy dominates.
+Pareto-improvement rate per optimization species.
 
 #### Per-Suite Quality
 ![Per-Suite Quality](docs/autopilot/per_suite_quality.png)
-Quality breakdown by benchmark suite for the current best configuration. Scores are Claude-as-Judge (0-3 scale) evaluated against reference answers. Variation across suites highlights which domains benefit most from prompt optimization and which remain challenging.
+Quality breakdown by benchmark suite for the current best configuration.
 
 #### Trial Timeline
 ![Trial Timeline](docs/autopilot/trial_timeline.png)
-Chronological view of all 192 trials, colored by species. Bar height shows quality delta versus baseline. The dense cluster of high-delta trials (0.93+) after trial ~25 indicates the optimizer found a strong prompt region early and subsequent species refine within it. Negative-delta bars (below zero) represent regressions caught and rejected by the safety gate.
+Chronological view colored by species.
 
 #### Memory Convergence
 ![Memory Convergence](docs/autopilot/memory_convergence.png)
-Q-value temporal difference (TD) error magnitude for the episodic memory system's routing policy. The moving average (MA-10) sits at zero with the convergence threshold (dashed green) never breached, indicating the MemRL routing weights have fully converged — the system's learned routing preferences are stable and no longer updating.
+Q-value TD-error magnitude for MemRL routing — converged (MA-10 ≈ 0, below threshold).
+
+---
 
 ## Quick Start
 
 ```bash
-# 1. Clone and install
+# 1. Clone
 git clone https://github.com/pestopoppa/epyc-orchestrator.git
 cd epyc-orchestrator
 pip install -e ".[dev]"
 
-# 2. Launch stack (production)
+# 2. Launch full stack (orchestrator + all llama-servers)
 python scripts/server/orchestrator_stack.py start
 
-# 3. Pre-flight audit
+# 3. Verify live state
+curl http://localhost:8000/dashboard/api/version       # orchestrator git_sha + start time
+curl http://localhost:8000/dashboard/api/llama_fleet_ids   # per-port marker map
+curl http://localhost:8000/health                       # backend probes + knowledge-tool status
+
+# 4. Pre-flight diagnostic + AutoPilot
 python scripts/autopilot/preflight_audit.py
-
-# 4. Launch AutoPilot
 python scripts/autopilot/autopilot.py start --tui
-
-# 5. Monitor (separate terminal)
-python scripts/autopilot/autopilot.py monitor
 ```
+
+Dashboard at `http://localhost:8000/dashboard/`.
+
+---
 
 ## Architecture
 
 ```
-Request → FastAPI(:8000) → ChatPipeline → Mode Selection
-                                            ├── Direct → LLM call → Response
-                                            ├── REPL → Tool loop → Response
+Request → FastAPI (:8000) → ChatPipeline → Mode selection
+                                            ├── Direct  → LLM call → Response
+                                            ├── REPL    → Tool loop → Response
                                             └── Delegated → Architect plan → Worker execution
 
-Model Stack (29 servers, 2 NUMA nodes):
-  Tier A: Front door (5× Qwen3.5-35B, interactive)
-  Tier B: Specialists (5× Coder-32B, 2× Architect-122B, 2× REAP-246B)
-  Tier C: Workers (5× 30B-A3B, 1× 80B ingest, 2× VL, 1× 1.5B fast)
+Model stack (20 llama-server ports, NPS4 across 4 NUMA quarters):
+  Tier A: Front door (5× Qwen3.6-35B-A3B Q8 shared mmap)
+  Tier B: Architects (Qwen3.5-122B-A10B Q4 dense-MoE, Qwen3-Next-80B-A3B SSM-hybrid)
+  Tier C: Workers (4× gemma-4-26B-A4B MTP, 1× Qwen3-Coder-30B-A3B, VL 7B + 30B)
   Tier D: Embedders (6× BGE-large)
 
-Infrastructure:
-  ColBERT retrieval (2× NextPLAID), SearXNG metasearch
+Routing: LearnedRoutingClassifier (98.7%, shadow mode) → falls through to MemRL
+         → falls through to rule-based difficulty heuristics
 
-AutoPilot: Controller → Species (Seeder/NumericSwarm/PromptForge/StructuralLab)
+AutoPilot: Controller → 4 species (Seeder / NumericSwarm / PromptForge / StructuralLab)
            → EvalTower (T0 sentinel → T1 deep → T2 full)
-           → SafetyGate → ParetoArchive → Journal
+           → SafetyGate (MAD-noise-filtered) → ParetoArchive → Journal
+           → Evolution Manager (strategy distillation every 5 trials)
+           → OrchestratorWatcher + resilient_post (exogenous-reload resilience)
 ```
+
+---
 
 ## Eval Suites
 
-30+ benchmark suites with automated scoring:
+Benchmarks live in the [epyc-inference-research](https://github.com/pestopoppa/epyc-inference-research) repo (30+ suites, 57 K questions). The autopilot eval tower references them via shared model registry. See:
 
-| Suite | Questions | Scoring | Status |
-|-------|:---------:|---------|--------|
-| math (GSM8K) | 1,819 | exact_match | scoring |
-| coder (MBPP) | 664 | substring | scoring |
-| general (MMLU) | 14,042 | multiple_choice | scoring |
-| gpqa | 448 | multiple_choice | scoring |
-| hotpotqa | 7,405 | f1 | scoring |
-| usaco | 520 | code_execution | scoring |
-| web_research | 50 | f1 | scoring |
-| physics (PHYBench) | 100 | llm_judge | scoring |
-| vl (OCRBench) | 2,575 | exact_match | scoring |
-| + 20 more | 30K+ | various | scoring |
+- [Master results table](https://github.com/pestopoppa/epyc-inference-research/blob/main/docs/reference/benchmarks/RESULTS.md)
+- [Benchmark methodology wiki](https://github.com/pestopoppa/epyc-root/blob/main/wiki/benchmark-methodology.md)
+
+---
 
 ## Documentation
 
-- **[Architecture Reference](docs/ARCHITECTURE.md)** — module responsibilities, request flow
-- **[Chapter Index](docs/chapters/INDEX.md)** — 17 chapters: runtime, REPL, MemRL, escalation, tools, SkillBank
-- **[AutoPilot Program](scripts/autopilot/program.md)** — optimization strategy and constraints
+| Doc | What's there |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Module responsibilities, request flow |
+| [`docs/chapters/INDEX.md`](docs/chapters/INDEX.md) | 17 deep chapters: runtime, REPL, MemRL, escalation, tools, SkillBank |
+| [`scripts/autopilot/program.md`](scripts/autopilot/program.md) | Operator-editable strategy doc the controller reads |
+| [`scripts/server/orchestrator_stack.py`](scripts/server/orchestrator_stack.py) | Single source of truth for the stack launch (HOT/WARM, NUMA pinning, OMP env) |
+| [`orchestration/model_registry.yaml`](orchestration/model_registry.yaml) | Active stack + drafter catalogue (~80 entries) |
+
+---
 
 ## Development
 
 ```bash
-pytest tests/ -n 8       # Run tests (parallel)
-ruff check src/           # Lint
-python scripts/autopilot/preflight_audit.py  # 9-check diagnostic
+pytest tests/ -n 8                             # parallel test run
+ruff check src/                                # lint
+python scripts/autopilot/preflight_audit.py    # 9-check diagnostic
 ```
+
+Pre-edit gate for non-trivial changes: run `gitnexus impact <symbol> --direction upstream` (see [CLAUDE.md](CLAUDE.md)). The wrapper script `scripts/gitnexus-analyze.sh` re-indexes without re-bloating agent files.
+
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Model licenses vary; see registry entries.
