@@ -489,11 +489,9 @@ async def _handle_chat(
         # routing to expensive specialists. On quality gate pass, returns the
         # cheap answer (2-3x faster). On fail, falls through to normal pipeline.
         # Bypass cheap-first for: factual recall questions (coding model hallucinates),
-        # and any prompt _select_mode() classified as 'repl' (>300 chars or multi-step
-        # structure). The old task_type check ('coder'/'agentic') was dead code —
-        # 'agentic' is never returned by derive_task_type_from_route(), and coder/agentic
-        # questions always exceed 300 chars so execution_mode=='repl' subsumes both.
-        if request.prompt.lower().startswith(_FACTUAL_QUESTION_PREFIXES) or execution_mode == 'repl':
+        # and task types that require multi-step REPL execution (coder, agentic).
+        _task_type = routing.task_ir.get("task_type")
+        if request.prompt.lower().startswith(_FACTUAL_QUESTION_PREFIXES) or _task_type in _REPL_ONLY_TASK_TYPES:
             cheap_result = None
         else:
             cheap_result = await _try_cheap_first(
