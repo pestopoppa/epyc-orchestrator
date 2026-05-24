@@ -32,6 +32,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from src.api.routes.dashboard_snapshot import (
+    INFLIGHT_MAX_AGE_DEFAULT_S,
     count_log_events as _count_log_events_impl,
     scan_orchestrator_tasks as _scan_orchestrator_tasks_impl,
     scan_recent_decisions as _scan_recent_decisions_impl,
@@ -60,6 +61,7 @@ from src.api.routes.dashboard_topology import (
     _discover_llama_ports,
     _process_info_by_match,
     _role_color,
+    base_role,
 )
 from src.api.routes.dashboard_topology import _load_state_services as _load_state_services_impl
 
@@ -837,7 +839,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     # "YYYY-MM-DD HH:MM:SS" in local time (writer uses datetime.now()).
     per_role: dict[str, dict[str, Any]] = {}
     for s in sections:
-        role = s.get("role") or ""
+        role = base_role(s.get("role") or "")
         if not role:
             continue
         bucket = per_role.setdefault(role, {
@@ -877,7 +879,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
         max_items=80,
     )
     for t in recent_completed:
-        role = t.get("final_role") or t.get("chosen_action") or ""
+        role = base_role(t.get("final_role") or t.get("chosen_action") or "")
         if not role:
             continue
         bucket = per_role.setdefault(role, {
@@ -1007,7 +1009,7 @@ def _scan_recent_decisions(
 
 def _scan_orchestrator_tasks(
     path: Path,
-    in_flight_max_age_s: float = 300.0,
+    in_flight_max_age_s: float = INFLIGHT_MAX_AGE_DEFAULT_S,
     completed_window_s: float = 600.0,
     max_items: int = 40,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1017,6 +1019,41 @@ def _scan_orchestrator_tasks(
         completed_window_s=completed_window_s,
         max_items=max_items,
     )
+
+
+# Always-show window for in-flight tasks (Fix 3). A task younger than this is
+# kept regardless of live slot state: its llama-server slot may not have flipped
+# to is_processing yet (the /slots poll is 2 Hz), or the poll briefly missed the
+# server. Older tasks must be corroborated by a busy slot on their role's
+# server, which is what drops restart-orphans.
+_FRESH_INFLIGHT_S = 20.0
+
+
+def _gate_inflight_by_live_slots(
+    tasks: list[dict[str, Any]], role_busy: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Reconcile JSONL-derived in-flight tasks with live slot occupancy.
+
+    The progress JSONL alone cannot tell a genuinely-running task from a
+    restart-orphan (a `task_started` whose terminal event was lost when the API
+    restarted). The live `/slots` poll can: if a role's server reports zero
+    busy slots, nothing for that role is actually in flight. So per base role we
+    keep at most ``max(busy_slots, fresh_tasks)`` of the newest started-but-
+    unterminated tasks. This makes the in-flight list, the active badge, and the
+    slot dots agree, hides stale orphans, and keeps long-running tasks visible
+    for as long as their slot stays busy.
+    """
+    by_role: dict[str, list[dict[str, Any]]] = {}
+    for t in tasks:
+        by_role.setdefault(t.get("role") or "unknown", []).append(t)
+    gated: list[dict[str, Any]] = []
+    for role, group in by_role.items():
+        group.sort(key=lambda x: x.get("age_s", 0.0))  # newest first
+        busy = role_busy.get(role, 0)
+        n_fresh = sum(1 for t in group if t.get("age_s", 0.0) <= _FRESH_INFLIGHT_S)
+        gated.extend(group[: max(busy, n_fresh)])
+    gated.sort(key=lambda x: x.get("age_s", 0.0))
+    return gated
 
 
 def _count_log_events(
@@ -1039,11 +1076,16 @@ async def snapshot() -> JSONResponse:
         "watchdog_force_release": r"Lock hold watchdog: force-releasing",
     })
 
-    # Derive per-node activity from slot states
+    # Derive per-node activity from slot states + live busy slots per base role.
+    port_roles = _discover_llama_ports()
+    role_busy: dict[str, int] = {}
     activity: dict[int, dict[str, Any]] = {}
     for port, slots in slots_by_port.items():
         n_total = len(slots)
         n_active = sum(1 for s in slots if s.get("is_processing"))
+        role = base_role(port_roles.get(port, ""))
+        if role:
+            role_busy[role] = role_busy.get(role, 0) + n_active
         active_slots: list[dict[str, Any]] = []
         for s in slots:
             if not s.get("is_processing"):
@@ -1071,12 +1113,16 @@ async def snapshot() -> JSONResponse:
         }
 
     in_flight_tasks, recent_completed_tasks = _scan_orchestrator_tasks(progress_log)
+    # Gate in-flight tasks on live slot occupancy so the task list, the active
+    # badge, and the slot dots can't disagree (drops restart-orphans).
+    in_flight_tasks = _gate_inflight_by_live_slots(in_flight_tasks, role_busy)
 
     return JSONResponse({
         "generated_at": time.time(),
         "activity": activity,
         "in_flight_tasks": in_flight_tasks,
         "recent_completed_tasks": recent_completed_tasks,
+        "live_busy_by_role": role_busy,
         "recent_decisions": recent,
         "source_counts_rolling": rolling,
         "source_counts_cumulative": cumulative,

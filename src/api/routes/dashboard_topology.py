@@ -60,6 +60,26 @@ _ROLE_COLORS: dict[str, str] = {
 }
 
 
+def base_role(role: str) -> str:
+    """Collapse an instance/quarter label to its canonical base role.
+
+    Mirrors the grouping the dashboard front-end (`renderTopologyStrip`) applies
+    so that every surface — topology rows, slot-dot aggregation, in-flight task
+    grouping, and the recent-activity headline — keys off the same string:
+
+        "frontdoor.q2"  -> "frontdoor"   (NUMA quarter)
+        "embedder_3"    -> "embedder"    (numbered sibling)
+        "architect_general" -> unchanged
+
+    Only a trailing `_<digits>` is stripped, so multi-word roles like
+    `architect_general` / `ingest_long_context` are left intact.
+    """
+    if not role:
+        return ""
+    base = role.split(".")[0]
+    return re.sub(r"_\d+$", "", base)
+
+
 def _role_color(role: str) -> str:
     """Resolve a role label to its display color, falling back to gray.
 

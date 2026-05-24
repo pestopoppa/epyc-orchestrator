@@ -17,7 +17,26 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.api.routes.dashboard_topology import base_role
+
 logger = logging.getLogger(__name__)
+
+# Per-role in-flight age ceilings. A started chat task is treated as in-flight
+# only until it is this old without a terminal event; older ones are assumed to
+# be restart-orphans (the API restarted and the task_completed/_failed line was
+# never written). Slow roles legitimately hold a slot far longer than the
+# default for a single generation, so they get a wider ceiling — otherwise a
+# live ingest/architect task is misclassified as an orphan and vanishes from the
+# topology panel while it is still generating. Live-slot gating in the snapshot
+# route is the authoritative guard against surfacing *stale* orphans, so these
+# ceilings can be generous.
+INFLIGHT_MAX_AGE_DEFAULT_S = 300.0
+INFLIGHT_MAX_AGE_BY_ROLE_S: dict[str, float] = {
+    "ingest_long_context": 1800.0,   # long-context ingest, ~0.5 t/s
+    "architect_general": 900.0,      # long reasoning, ~0.4 t/s
+    "architect_coding": 900.0,
+    "coder_escalation": 900.0,
+}
 
 
 def todays_progress_log(progress_log_dir: Path) -> Path:
@@ -82,21 +101,26 @@ def scan_recent_decisions(
 
 def scan_orchestrator_tasks(
     path: Path,
-    in_flight_max_age_s: float = 90.0,
+    in_flight_max_age_s: float = INFLIGHT_MAX_AGE_DEFAULT_S,
     completed_window_s: float = 600.0,
     max_items: int = 40,
+    role_max_age_overrides: dict[str, float] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Scan today's progress JSONL for in-flight + recently-completed chat tasks.
 
     Uses the orchestrator's `chat-XXX` task_ids (not llama-server's internal
-    numeric id_task). Returns (in_flight, recent_completed).
+    numeric id_task). Returns (in_flight, recent_completed). Every task carries a
+    canonical ``role`` field (base-normalised `chosen_action` for in-flight,
+    `final_role` for completed) so all dashboard surfaces group by one key.
 
     NB: we DO NOT time-filter routing_decision events during the scan — we
     need them merged into every started/completed task even if the routing
-    happened minutes before our window. Tasks that started > in_flight_max_age_s
-    ago and never completed are treated as orphans (typically killed by an
-    API restart) and excluded from in-flight.
+    happened minutes before our window. Tasks that started older than their
+    role's in-flight ceiling (``role_max_age_overrides`` falling back to
+    ``in_flight_max_age_s``) and never completed are treated as orphans
+    (typically killed by an API restart) and excluded from in-flight.
     """
+    overrides = INFLIGHT_MAX_AGE_BY_ROLE_S if role_max_age_overrides is None else role_max_age_overrides
     if not path.exists():
         return [], []
     now = time.time()
@@ -153,7 +177,11 @@ def scan_orchestrator_tasks(
     for tid, s in started.items():
         s.update(routing_meta.get(tid, {}))
         if tid not in terminal_events:
-            if s["age_s"] <= in_flight_max_age_s:
+            # Canonical grouping key (Fix 2): base-normalised routed role.
+            role = base_role(s.get("chosen_action") or "")
+            s["role"] = role or (s.get("chosen_action") or "")
+            cutoff = overrides.get(role, in_flight_max_age_s)
+            if s["age_s"] <= cutoff:
                 in_flight.append(s)
         else:
             t = terminal_events[tid]
@@ -164,6 +192,8 @@ def scan_orchestrator_tasks(
             s["outcome"] = t["event_type"]
             s["duration_s"] = round(t["ended_at"] - s["started_at"], 2)
             s["final_role"] = t.get("final_role")
+            # Completed tasks group by producer role, falling back to the route.
+            s["role"] = base_role(s.get("final_role") or s.get("chosen_action") or "")
             recent_completed.append(s)
     in_flight.sort(key=lambda x: x["age_s"])
     recent_completed.sort(key=lambda x: x["end_age_s"])

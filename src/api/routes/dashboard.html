@@ -815,10 +815,11 @@ function updateTopologyInflight(inflight) {
     // container from the snapshot's in_flight_tasks list. Called from
     // updateTopology so it stays in lock-step with slot-dot updates.
     if (!topology) return;
-    // Group inflight by chosen_action (the routed role).
+    // Group inflight by the canonical base role (server-stamped `role`, which
+    // matches the active_badge_<base> ids); fall back for older snapshots.
     const byRole = {};
     for (const t of inflight || []) {
-        const role = t.chosen_action || t.final_role || 'unknown';
+        const role = t.role || t.chosen_action || t.final_role || 'unknown';
         if (!byRole[role]) byRole[role] = [];
         byRole[role].push(t);
     }
@@ -836,7 +837,7 @@ function updateTopologyInflight(inflight) {
         const container = document.getElementById(`active_tasks_${base}`);
         if (!container) return;
         if (tasks.length === 0) {
-            container.innerHTML = '<div style="color:var(--dim);font-size:10px;padding:4px 6px">no in-flight tasks for this role</div>';
+            container.innerHTML = '<div style="color:var(--dim);font-size:10px;padding:4px 6px">no in-flight tasks · headline counts the last 10 min of completed activity</div>';
         } else {
             // Sort newest first
             const sorted = [...tasks].sort((a, b) => (a.age_s || 0) - (b.age_s || 0));
@@ -1028,7 +1029,7 @@ function roleColor(role) {
 
 function renderTaskCard(t, kind) {
     // kind: 'in_flight' or 'completed'
-    const role = t.chosen_action || t.final_role || '?';
+    const role = t.role || t.chosen_action || t.final_role || '?';
     const color = roleColor(role);
     const conf = t.classifier_confidence != null ? ` · conf ${t.classifier_confidence.toFixed(2)}` : '';
     const src = t.decision_source ? ` · <span class="tag" style="background:rgba(255,255,255,0.08)">${t.decision_source}</span>` : '';

@@ -7,14 +7,20 @@ Route handlers themselves are unchanged (smoke-tested only via module import).
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from src.api.routes import dashboard_snapshot, dashboard_tap, dashboard_tasks, dashboard_topology
+from src.api.routes import (
+    dashboard,
+    dashboard_snapshot,
+    dashboard_tap,
+    dashboard_tasks,
+    dashboard_topology,
+)
 
 
 # ----- dashboard_topology -----
@@ -305,6 +311,80 @@ def test_scan_orchestrator_tasks_skips_non_chat_task_ids(tmp_path) -> None:
     in_flight, completed = dashboard_snapshot.scan_orchestrator_tasks(log)
     assert in_flight == []
     assert completed == []
+
+
+def _aged_ts(seconds_ago: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
+
+
+def test_base_role_normalization() -> None:
+    assert dashboard_topology.base_role("frontdoor.q2") == "frontdoor"
+    assert dashboard_topology.base_role("embedder_3") == "embedder"
+    assert dashboard_topology.base_role("worker_general.q0") == "worker_general"
+    # Multi-word roles without a numeric instance suffix are left intact.
+    assert dashboard_topology.base_role("architect_general") == "architect_general"
+    assert dashboard_topology.base_role("ingest_long_context") == "ingest_long_context"
+    assert dashboard_topology.base_role("") == ""
+
+
+def test_scan_orchestrator_tasks_role_aware_inflight_cutoff(tmp_path) -> None:
+    """Slow roles keep a wider in-flight ceiling; default roles are truncated."""
+    log = tmp_path / "p.jsonl"
+    old = _aged_ts(600)  # past the 300s default, inside the 900s architect ceiling
+    log.write_text(
+        json.dumps({"event_type": "task_started", "timestamp": old, "task_id": "chat-slow",
+                    "data": {"objective": "long reasoning"}}) + "\n"
+        + json.dumps({"event_type": "routing_decision", "timestamp": old, "task_id": "chat-slow",
+                      "data": {"chosen_action": "architect_general"}}) + "\n"
+        + json.dumps({"event_type": "task_started", "timestamp": old, "task_id": "chat-fd",
+                      "data": {"objective": "chat"}}) + "\n"
+        + json.dumps({"event_type": "routing_decision", "timestamp": old, "task_id": "chat-fd",
+                      "data": {"chosen_action": "frontdoor"}}) + "\n"
+    )
+    in_flight, _ = dashboard_snapshot.scan_orchestrator_tasks(log)
+    ids = {t["task_id"] for t in in_flight}
+    assert "chat-slow" in ids  # architect_general ceiling is 900s
+    assert "chat-fd" not in ids  # frontdoor uses the 300s default
+
+
+def test_scan_orchestrator_tasks_stamps_canonical_role(tmp_path) -> None:
+    """In-flight tasks carry a base-normalised `role` for consistent grouping."""
+    log = tmp_path / "p.jsonl"
+    now = _aged_ts(2)
+    log.write_text(
+        json.dumps({"event_type": "task_started", "timestamp": now, "task_id": "chat-q",
+                    "data": {"objective": "q"}}) + "\n"
+        + json.dumps({"event_type": "routing_decision", "timestamp": now, "task_id": "chat-q",
+                      "data": {"chosen_action": "frontdoor.q2"}}) + "\n"
+    )
+    in_flight, _ = dashboard_snapshot.scan_orchestrator_tasks(log)
+    assert in_flight and in_flight[0]["role"] == "frontdoor"
+
+
+def test_gate_inflight_drops_idle_orphans() -> None:
+    """An old started-but-unterminated task with no busy slot is a restart-orphan."""
+    orphan = [{"task_id": "chat-x", "age_s": 500.0, "role": "frontdoor"}]
+    assert dashboard._gate_inflight_by_live_slots(orphan, {}) == []
+    assert dashboard._gate_inflight_by_live_slots(orphan, {"frontdoor": 0}) == []
+
+
+def test_gate_inflight_keeps_fresh_without_busy_slot() -> None:
+    """A just-started task is kept even before its slot flips to processing."""
+    fresh = [{"task_id": "chat-y", "age_s": 3.0, "role": "frontdoor"}]
+    assert len(dashboard._gate_inflight_by_live_slots(fresh, {})) == 1
+
+
+def test_gate_inflight_keeps_live_long_task() -> None:
+    """An old task is kept while its role's server reports a busy slot."""
+    long_task = [{"task_id": "chat-z", "age_s": 500.0, "role": "ingest_long_context"}]
+    assert len(dashboard._gate_inflight_by_live_slots(long_task, {"ingest_long_context": 1})) == 1
+
+
+def test_gate_inflight_caps_to_busy_slots() -> None:
+    """With one busy slot, only the newest non-fresh candidate is shown."""
+    many = [{"task_id": f"chat-{i}", "age_s": 100.0 + i * 10, "role": "frontdoor"} for i in range(3)]
+    gated = dashboard._gate_inflight_by_live_slots(many, {"frontdoor": 1})
+    assert [t["task_id"] for t in gated] == ["chat-0"]
 
 
 def test_count_log_events_counts_pattern_matches(tmp_path) -> None:
