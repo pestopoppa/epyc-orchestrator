@@ -241,6 +241,15 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     color: var(--text); font-size: 11px; margin-top: 6px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Tap-derived activity card — distinct from chat-XXX in-flight cards.
+   Violet accent matches the "N tap" badge in the role row above. */
+.task-card.tap-derived {
+    border-left: 2px solid #a855f7;
+    background: rgba(168,85,247,0.04);
+}
+.task-card.tap-derived:hover {
+    background: rgba(168,85,247,0.08);
+}
 
 /* Tags */
 .tag {
@@ -605,11 +614,13 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
       <h2>topology <span class="count-suffix" id="inflight-count"></span></h2>
       <div class="topology-strip" id="topology-strip"></div>
       <div id="inflight-explainer" style="color:var(--dim);font-size:10px;margin-top:10px;line-height:1.5;display:none">
-        in-flight tasks (chat-XXX in progress JSONL) are nested under their
-        chosen role above. Click a role row's ▸ to expand and see its
-        active tasks; click a task to open the detail panel. Tap entries
-        without a chat-XXX id (seeding / eval / internal probes) appear in
-        the live tap only — click the tap section's ↗ detail link there.
+        Each role row's ▸ expands to show its live activity. Orchestrator-tracked
+        chat-XXX tasks render as <span class="tag" style="background:rgba(56,189,248,0.15);color:var(--accent);border:1px solid rgba(56,189,248,0.3)">N active</span>
+        and click through to the full event stream. Tap-only activity (seeding,
+        eval, internal probes — no chat-XXX id) renders as
+        <span class="tag" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">N tap</span>
+        and click-through opens the captured prompt+response snapshot from
+        <code>inference_tap.log</code>. Recent window: 60s.
       </div>
     </div>
 
@@ -823,25 +834,73 @@ function updateTopologyInflight(inflight) {
         if (!byRole[role]) byRole[role] = [];
         byRole[role].push(t);
     }
+    // Tap-derived activity fallback: when a role has no chat-XXX in-flight task
+    // but the live tap shows recent activity for it (seeding / eval / probes),
+    // surface those tap sections in the accordion so the operator can click
+    // through to the captured prompt+response. We parse the rolling tap buffer
+    // directly here because _lastRawTapSections is only refreshed in "rendered"
+    // tap mode — in "raw" mode (the default) it stays stale, but the buffer
+    // itself is always up to date via the SSE stream.
+    const TAP_RECENT_SEC = 60;
+    const tapByBase = {};
+    const tapSrc = (typeof _rawTapBuffer === 'string' && typeof parseRawTapSections === 'function')
+        ? parseRawTapSections(_rawTapBuffer) : [];
+    // Cache so openTapSectionDetail() — which keys off section index — has
+    // something to look up when the operator clicks a tap-derived card
+    // before the rendered-mode parser has ever run.
+    if (tapSrc.length) _lastRawTapSections = tapSrc;
+    tapSrc.forEach((s) => {
+        if (!s.role) return;
+        if (!_isRecentTapTs(s.timestamp, TAP_RECENT_SEC)) return;
+        const base = clientBaseRole(s.role);
+        if (!base) return;
+        if (!tapByBase[base]) tapByBase[base] = [];
+        tapByBase[base].push(s);
+    });
+
     // Iterate every active-badge — these were created with id="active_badge_<base>"
     document.querySelectorAll('[id^="active_badge_"]').forEach(badge => {
         const base = badge.id.substring('active_badge_'.length);
         const tasks = byRole[base] || [];
-        if (tasks.length === 0) {
+        const tapEntries = tapByBase[base] || [];
+        if (tasks.length === 0 && tapEntries.length === 0) {
             badge.textContent = '0';
             badge.classList.add('zero');
-        } else {
+            badge.style.removeProperty('background');
+            badge.style.removeProperty('color');
+            badge.style.removeProperty('border-color');
+        } else if (tasks.length > 0) {
             badge.textContent = `${tasks.length} active`;
             badge.classList.remove('zero');
+            badge.style.removeProperty('background');
+            badge.style.removeProperty('color');
+            badge.style.removeProperty('border-color');
+        } else {
+            // Tap-only activity — distinguish visually from chat-XXX with a
+            // violet pill so the operator knows it's seeding/eval, not a
+            // user-driven chat request.
+            badge.textContent = `${tapEntries.length} tap`;
+            badge.classList.remove('zero');
+            badge.style.background = 'rgba(168,85,247,0.15)';
+            badge.style.color = '#c084fc';
+            badge.style.borderColor = 'rgba(168,85,247,0.3)';
         }
         const container = document.getElementById(`active_tasks_${base}`);
         if (!container) return;
-        if (tasks.length === 0) {
-            container.innerHTML = '<div style="color:var(--dim);font-size:10px;padding:4px 6px">no in-flight tasks · headline counts the last 10 min of completed activity</div>';
-        } else {
+        if (tasks.length > 0) {
             // Sort newest first
             const sorted = [...tasks].sort((a, b) => (a.age_s || 0) - (b.age_s || 0));
             container.innerHTML = sorted.map(t => renderTaskCard(t, 'in_flight')).join('');
+        } else if (tapEntries.length > 0) {
+            // Newest first by timestamp.
+            const sorted = [...tapEntries].sort((a, b) => {
+                const ta = Date.parse((a.timestamp || '').replace(' ', 'T')) || 0;
+                const tb = Date.parse((b.timestamp || '').replace(' ', 'T')) || 0;
+                return tb - ta;
+            });
+            container.innerHTML = sorted.map(s => renderTapActivityCard(s)).join('');
+        } else {
+            container.innerHTML = '<div style="color:var(--dim);font-size:10px;padding:4px 6px">no live activity · headline counts the last 10 min of completed tap traffic</div>';
         }
     });
 }
@@ -1279,6 +1338,87 @@ function parseRawTapSections(buf) {
 // Stash parsed sections so the "open detail" link can hand the
 // pre-rendered content to the detail panel without re-parsing.
 let _lastRawTapSections = [];
+
+// ── Tap-derived activity helpers (used by updateTopologyInflight to surface
+// seeding/eval/probe traffic in the role accordion when no chat-XXX in-flight
+// task is present). Pure client-side — relies on the rolling tap buffer that
+// paintRawTap() already parses every ~200ms.
+
+function clientBaseRole(role) {
+    // Mirror of server-side dashboard_topology.base_role(): collapses
+    // "frontdoor.q2" → "frontdoor", "embedder_3" → "embedder", leaves
+    // multi-word roles like "ingest_long_context" untouched.
+    if (!role) return '';
+    const base = role.split('.')[0];
+    return base.replace(/_\d+$/, '');
+}
+
+function _isRecentTapTs(tsStr, maxAgeSec) {
+    // Tap writer uses datetime.now().strftime("%Y-%m-%d %H:%M:%S") — local time,
+    // no timezone. Browser is on the same host so local parsing is correct.
+    if (!tsStr) return false;
+    const t = Date.parse(tsStr.replace(' ', 'T'));
+    if (isNaN(t)) return false;
+    return (Date.now() - t) / 1000 <= maxAgeSec;
+}
+
+function renderTapActivityCard(s) {
+    // Compact card matching renderTaskCard's shape. Click handler uses a
+    // stable (timestamp, role) key — NOT the section index — because the
+    // rendered-mode parser reverses _lastRawTapSections and would otherwise
+    // collide with our chronological-order cache.
+    const role = s.role || '?';
+    const color = roleColor(role);
+    const ts = s.timestamp || '';
+    const ageSec = ts ? Math.max(0, (Date.now() - Date.parse(ts.replace(' ', 'T'))) / 1000) : 0;
+    const ageLabel = ageSec < 5 ? 'live' : `${ageSec.toFixed(0)}s ago`;
+    const ageColor = ageSec < 5 ? 'var(--good)' : 'var(--muted)';
+    const promptPreview = (s.prompt || '').slice(0, 160).replace(/\s+/g, ' ');
+    return `
+        <div class="task-card tap-derived" data-tap-ts="${escapeHTML(ts)}" data-tap-role="${escapeHTML(role)}" title="tap-derived activity (no chat-XXX id) · click for prompt+response snapshot">
+            <div class="role" style="color:${color}">${escapeHTML(role)}<span style="float:right;color:${ageColor};font-size:10px">↻ ${ageLabel}</span></div>
+            <div class="meta">tap section · ${s.prompt_len}c prompt · ${s.response_len}c resp${s.timings ? ' · ' + escapeHTML(s.timings) : ''}</div>
+            <div class="prompt">${escapeHTML(promptPreview)}</div>
+        </div>
+    `;
+}
+
+// Delegated click handler for tap-derived cards — installed once at startup.
+// Using data-attr + delegation avoids embedding raw strings inside an onclick
+// attribute (which would break if a role or timestamp ever contained a quote).
+function _installTapCardClickDelegate() {
+    if (window._tapCardClickDelegateInstalled) return;
+    window._tapCardClickDelegateInstalled = true;
+    document.addEventListener('click', (ev) => {
+        const card = ev.target.closest && ev.target.closest('.task-card.tap-derived');
+        if (!card) return;
+        const ts = card.getAttribute('data-tap-ts') || '';
+        const role = card.getAttribute('data-tap-role') || '';
+        openTapByKey(ts, role);
+    });
+}
+
+function openTapByKey(ts, role) {
+    // Re-parse the live buffer, find the matching (timestamp, role) section,
+    // and reuse the existing openTapSectionDetail path. Reparsing is cheap and
+    // immune to _lastRawTapSections being reversed by rendered-mode painting.
+    const sections = (typeof _rawTapBuffer === 'string' && typeof parseRawTapSections === 'function')
+        ? parseRawTapSections(_rawTapBuffer) : [];
+    const idx = sections.findIndex(s => (s.timestamp || '') === ts && (s.role || '') === role);
+    if (idx < 0) {
+        // Buffer rolled past it — pop a minimal detail panel with what we know.
+        const panel = document.getElementById('detail-panel');
+        if (panel) panel.style.display = 'block';
+        const title = document.getElementById('detail-title');
+        if (title) title.textContent = `tap section · ${role} · ${ts}`;
+        const content = document.getElementById('detail-content');
+        if (content) content.innerHTML = '<div style="color:var(--muted);padding:8px">section is no longer in the live buffer · open the tap log directly if you need the full text</div>';
+        return;
+    }
+    // Stash in chronological order so openTapSectionDetail finds the right one.
+    _lastRawTapSections = sections;
+    openTapSectionDetail(idx);
+}
 
 function paintRawTapRendered(container) {
     // Replace container content with one styled block per section. Newest
@@ -2496,6 +2636,7 @@ function startDashboard() {
         await loadTopology();
         startStream();
         startTapStream();
+        _installTapCardClickDelegate();
         updateGepa();
         updateProcessStatus();
         updateBuildRev();
