@@ -262,10 +262,17 @@ def wait_for_health(port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str 
 # -----------------------------------------------------------------------------
 
 
-def _build_vision_command(port: int, vision_type: str | None) -> list[str]:
-    """VL launch: Qwen3-VL-30B MoE (escalation) or Qwen2.5-VL-7B (worker)."""
+def _build_vision_command(port: int, vision_type: str | None, numa_instance: int = 0) -> list[str]:
+    """VL launch: Qwen3-VL-30B MoE (escalation) or Qwen2.5-VL-7B (worker).
+
+    Thread count comes from NUMA_CONFIG per (role, numa_instance) — added
+    2026-05-24 along with the per-instance fix for `_build_role_command`, so
+    that the newly-quartered vision roles get the correct -t per instance.
+    Pre-fix: vision_escalation = hardcoded 96, worker_vision = hardcoded 24.
+    """
     if vision_type == "escalation":
         # Qwen3-VL-30B MoE - larger model, expert reduction
+        thread_count = _resolve_thread_count("vision_escalation", numa_instance)
         return [
             str(LLAMA_SERVER),
             "-m", VISION_ESCALATION_MODEL,
@@ -275,10 +282,11 @@ def _build_vision_command(port: int, vision_type: str | None) -> list[str]:
             "--port", str(port),
             "-np", "1",
             "-c", "16384",
-            "-t", "96",
+            "-t", thread_count,
             "--flash-attn", "on",
         ]
     # Qwen2.5-VL-7B - smaller worker model
+    thread_count = _resolve_thread_count("worker_vision", numa_instance)
     return [
         str(LLAMA_SERVER),
         "-m", VISION_WORKER_MODEL,
@@ -287,7 +295,7 @@ def _build_vision_command(port: int, vision_type: str | None) -> list[str]:
         "--port", str(port),
         "-np", "2",
         "-c", "8192",
-        "-t", "24",
+        "-t", thread_count,
         "--flash-attn", "on",
     ]
 
@@ -323,7 +331,7 @@ def _build_worker_fast_command(port: int, model_path: str) -> list[str]:
 
 
 def _build_worker_explore_command(
-    port: int, model_path: str, binary_override: str | None
+    port: int, model_path: str, binary_override: str | None, numa_instance: int = 0
 ) -> list[str]:
     """Explore worker: gemma4-26B-A4B Q4_K_M MTP via ik_llama.cpp PR #1744.
 
@@ -333,15 +341,11 @@ def _build_worker_explore_command(
     not the production llama.cpp build.
     """
     binary = binary_override if binary_override else str(LLAMA_SERVER)
-    # Derive thread count from NUMA_CONFIG by matching this instance's port.
-    # Pre-2026-05-08 was hardcoded -t 24 (1.5B-era leftover), then briefly -t 96
-    # which over-subscribed the 4 quarter instances (24 cores each) and crashed
-    # the load average to 420. Per-instance lookup gets full=96 + quarters=48.
-    numa_thread_count = 96  # default fallback (full canonical instance)
-    for _cpu_list, inst_port, threads in NUMA_CONFIG.get("worker_general", {}).get("instances", []):
-        if inst_port == port:
-            numa_thread_count = threads
-            break
+    # 2026-05-24: now uses generic _resolve_thread_count(role, numa_instance).
+    # Pre-2026-05-24 used a port-matching workaround here because the generic
+    # _resolve_thread_count ignored numa_instance — that bug is now fixed at
+    # the source, so the workaround is no longer needed.
+    numa_thread_count = int(_resolve_thread_count("worker_general", numa_instance))
     return [
         binary,
         "-m", model_path,
@@ -426,11 +430,24 @@ _KV_QUANT_CONFIGS = {
 }
 
 
-def _resolve_thread_count(role_name: str) -> str:
-    """NUMA-aware thread count for a role's primary instance (fallback: 96)."""
+def _resolve_thread_count(role_name: str, numa_instance: int = 0) -> str:
+    """NUMA-aware thread count for the given role + instance index (fallback: 96).
+
+    Pre-2026-05-24 this function always returned `instances[0][2]` regardless of
+    which instance was being launched. The launcher therefore always passed
+    `-t 96` to every frontdoor quarter (which intends `-t 48`), `-t 48` to
+    every worker_general quarter (which intends `-t 48` correctly only because
+    worker_general had a manual workaround in `_build_worker_explore_command`),
+    and so on. Threading `numa_instance` through lets each instance get the
+    thread count its NUMA_CONFIG entry actually specifies.
+    """
     numa_cfg = NUMA_CONFIG.get(role_name)
     if numa_cfg and numa_cfg["instances"]:
-        return str(numa_cfg["instances"][0][2])
+        # Defensive: out-of-range instance falls back to the first instance's
+        # thread count rather than crashing — the wrong number is better than
+        # a launcher abort during stack startup.
+        idx = numa_instance if 0 <= numa_instance < len(numa_cfg["instances"]) else 0
+        return str(numa_cfg["instances"][idx][2])
     return "96"
 
 
@@ -521,13 +538,19 @@ def _apply_numa_spec_overrides(cmd: list[str], numa_cfg: dict | None) -> None:
     # see git history for re-enable conditions if/when a future binary restores them.
 
 
-def _build_role_command(role_config: Any, port: int) -> list[str]:
-    """Build llama-server command for a registry-backed role (default path)."""
+def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> list[str]:
+    """Build llama-server command for a registry-backed role (default path).
+
+    `numa_instance` selects which entry in NUMA_CONFIG[role]["instances"] this
+    invocation refers to. 0 = the primary/full instance; 1..N = quarter
+    instances. The thread count comes from that specific instance's tuple so
+    quarters get `-t 48` and the full instance gets its declared `-t 96`.
+    """
     model_path = role_config.model.full_path
     accel = role_config.acceleration
     role_name = role_config.name
     parallel_slots = "1" if role_name in SERIAL_ROLES else "2"
-    thread_count = _resolve_thread_count(role_name)
+    thread_count = _resolve_thread_count(role_name, numa_instance)
     context_size = _KV_CONTEXT_SIZES.get(role_name, "32768")
     binary = _resolve_binary_for_role(role_name)
 
@@ -582,15 +605,21 @@ def build_server_command(
     vision_mode: bool = False,
     vision_type: str = None,
     binary_override: str | None = None,
+    numa_instance: int = 0,
 ) -> list[str]:
     """Dispatch to the per-mode command builder.
 
     `binary_override`: when set, replaces `LLAMA_SERVER` for the worker_pool explore
     branch (used by worker_general / gemma4 MTP to launch ik_llama.cpp PR #1744).
     Other branches ignore this argument today.
+
+    `numa_instance`: which instance in NUMA_CONFIG[role]["instances"] is being
+    launched (0 = full/primary, 1..N = quarters). Used by `_build_role_command`
+    to pick per-instance thread count. Defaults to 0 so callers that don't
+    care about quarters (vision, embedding, dev, worker_pool) are unaffected.
     """
     if vision_mode:
-        return _build_vision_command(port, vision_type)
+        return _build_vision_command(port, vision_type, numa_instance)
     if embedding_mode:
         return _build_embedding_command(port)
     if worker_pool_mode and worker_type:
@@ -599,10 +628,10 @@ def build_server_command(
             raise ValueError(f"Unknown worker type: {worker_type}")
         if worker_type == "fast":
             return _build_worker_fast_command(port, model_path)
-        return _build_worker_explore_command(port, model_path, binary_override)
+        return _build_worker_explore_command(port, model_path, binary_override, numa_instance)
     if dev_mode:
         return _build_dev_command(port)
-    return _build_role_command(role_config, port)
+    return _build_role_command(role_config, port, numa_instance)
 
 
 def start_server(
@@ -862,8 +891,10 @@ def start_server(
     log_file = LOG_DIR / f"llama-server-{port}.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Build command
-    cmd = build_server_command(role_config, port, dev_mode)
+    # Build command. `numa_instance` flows through so per-quarter thread counts
+    # come from the role's NUMA_CONFIG entry rather than always defaulting to
+    # the first instance's count.
+    cmd = build_server_command(role_config, port, dev_mode, numa_instance=numa_instance)
 
     model_name = DEV_MODEL if dev_mode else role_config.model.name
     numa_cfg = NUMA_CONFIG.get(primary_role)

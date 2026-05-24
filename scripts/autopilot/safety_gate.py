@@ -256,11 +256,20 @@ class SafetyGate:
                 from scripts.autopilot.host_health import (
                     HostHealthState,
                     remediate as _hh_remediate,
+                    _numa_interleave_rewarm,
                 )
                 _hh_state = HostHealthState.snapshot()
                 host_throttled, host_triggers = _hh_state.is_throttled()
                 if host_throttled:
+                    # In-process safety_gate path: trial already ran, so no need
+                    # to pause autopilot (we ARE autopilot). Flush + rewarm so
+                    # the NEXT trial starts with warm NUMA-interleaved cache;
+                    # mark THIS trial as exogenous_cache_flush so the planner
+                    # doesn't learn from data taken in the suspected cold-cache
+                    # window (see DeficiencyCategory.EXOGENOUS_CACHE_FLUSH).
                     host_remediated = _hh_remediate()
+                    if host_remediated:
+                        _numa_interleave_rewarm()
             except Exception:  # noqa: BLE001 — never let host check crash gate
                 pass
 
@@ -271,11 +280,15 @@ class SafetyGate:
             )
             if host_throttled and host_remediated:
                 # Soft-fail: throttle was the likely cause; retry next tick.
+                # 2026-05-24: tag the trial with EXOGENOUS_CACHE_FLUSH so the
+                # planner's trustworthiness gate excludes it from hypothesis
+                # chains (data was taken under suspect host state).
                 warnings.append(
                     f"{base_msg}. Host throttle detected ({'; '.join(host_triggers)}); "
-                    f"drop_caches issued — RECOMMEND retry."
+                    f"drop_caches + NUMA-interleave rewarm issued — RECOMMEND retry."
                 )
                 categories.append("throughput_host_throttle_retry")
+                categories.append("exogenous_cache_flush")
             elif host_throttled:
                 # Throttled but couldn't remediate — still flag for retry, log the gap.
                 warnings.append(

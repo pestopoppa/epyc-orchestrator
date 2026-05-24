@@ -229,6 +229,179 @@ def is_throttled() -> tuple[bool, list[str]]:
     return HostHealthState.snapshot().is_throttled()
 
 
+# ---------------------------------------------------------------------------
+# Pause-around-flush wrapper (2026-05-24)
+# ---------------------------------------------------------------------------
+#
+# The bare remediate() above only runs `sync && drop_caches` — it does NOT pause
+# the autopilot trial loop nor warm the GGUFs back in NUMA-interleaved. Either
+# of those omissions can corrupt a trial that lands during the flush window:
+# - Trial in flight when sync runs: completes with degraded throughput (cold cache)
+# - Trial that starts immediately after: hits cold cache, throughput tanks ~50%
+# - Non-NUMA-aware re-warm (naïve cat) pins all pages to ONE NUMA node, halving
+#   sustained t/s per `feedback_drop_caches_numa_eviction`.
+#
+# flush_cache_with_pause() handles all three: set state["paused"]=True (relies on
+# the 2026-05-24 autopilot loop fix that reloads state at the top of every
+# iteration), run flush, NUMA-interleave-rewarm all active role GGUFs serially
+# (parallel rewarm would defeat the interleave benefit), restore paused state.
+# Any trial that DID complete during the window gets tagged with
+# DeficiencyCategory.EXOGENOUS_CACHE_FLUSH by the safety_gate wire-in.
+
+# Active role GGUFs to rewarm post-flush. Source-of-truth would be NUMA_CONFIG +
+# the model registry; this list is the conservative fallback used when the
+# launcher modules aren't importable (e.g., when running host_health standalone).
+# Models too small to need NUMA-interleave rewarm (embedders, drafters) are
+# omitted — bare `cat` on a 4 GB file is fine.
+_DEFAULT_REWARM_GGUFS = (
+    "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",                              # frontdoor / coder_escalation / worker_summarize
+    "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",                              # worker_general
+    "/mnt/raid0/llm/lmstudio/models/unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",  # architect_general (multipart; cat pulls all 3 via mmap follow)
+    "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",  # ingest_long_context
+    "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",      # vision_escalation
+    "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",            # worker_vision
+)
+
+
+def _numa_interleave_rewarm(gguf_paths: tuple[str, ...] = _DEFAULT_REWARM_GGUFS,
+                            timeout_per_gguf: int = 120) -> dict[str, bool]:
+    """Warm each GGUF back into the page cache with `numactl --interleave=all`.
+
+    Serial, not parallel — running multiple `numactl --interleave=all cat`
+    concurrently would interleave on a per-process basis but the kernel page
+    cache is shared, so the second process re-reads pages the first already
+    placed and the interleave property degrades. Serial keeps the
+    one-process-one-walk invariant.
+
+    Returns {gguf_path: success_bool} for the operator to see what got warmed.
+    """
+    if not shutil.which("numactl"):
+        log.warning("numactl not found; cannot do NUMA-interleaved rewarm")
+        return {p: False for p in gguf_paths}
+
+    results: dict[str, bool] = {}
+    for gguf in gguf_paths:
+        if not Path(gguf).exists():
+            log.info("skip rewarm (missing): %s", gguf)
+            results[gguf] = False
+            continue
+        try:
+            t0 = time.monotonic()
+            # numactl --interleave=all cat <gguf> > /dev/null
+            proc = subprocess.run(
+                ["numactl", "--interleave=all", "cat", gguf],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=timeout_per_gguf,
+            )
+            elapsed = time.monotonic() - t0
+            ok = (proc.returncode == 0)
+            size_gb = Path(gguf).stat().st_size / (1024 ** 3)
+            log.info("rewarm %s: %.1f GB in %.1fs (%.1f GB/s) %s",
+                     Path(gguf).name, size_gb, elapsed,
+                     size_gb / max(elapsed, 0.001), "OK" if ok else "FAIL")
+            results[gguf] = ok
+        except subprocess.TimeoutExpired:
+            log.error("rewarm timed out after %ds: %s", timeout_per_gguf, gguf)
+            results[gguf] = False
+        except OSError as exc:
+            log.error("rewarm failed for %s: %s", gguf, exc)
+            results[gguf] = False
+    return results
+
+
+def flush_cache_with_pause(
+    *,
+    state_path: Path | None = None,
+    rewarm: bool = True,
+    rewarm_paths: tuple[str, ...] = _DEFAULT_REWARM_GGUFS,
+) -> dict[str, object]:
+    """The robust pause+flush+rewarm+resume sequence.
+
+    Used by both the autopilot safety_gate path (when it detects throttle) and
+    the operator-facing `flush_cache_safely.py` wrapper. Returns a dict with
+    `paused_pre`, `flush_ok`, `rewarm` (dict per-gguf), `elapsed_s` so callers
+    can log + journal the outcome.
+
+    Pause mechanic depends on the 2026-05-24 loop fix that reloads state at
+    the top of every iteration. Without that fix, an externally-set paused=True
+    is clobbered by save_state at trial end and the trial loop never honors it.
+
+    `state_path` defaults to the autopilot state file the same way the rest of
+    the autopilot module locates it (env override `AUTOPILOT_STATE`, then
+    default under orchestration/).
+    """
+    import json
+    if state_path is None:
+        # Resolve via the same path the autopilot CLI uses, without importing
+        # the heavy autopilot module here.
+        env_override = os.environ.get("AUTOPILOT_STATE")
+        if env_override:
+            state_path = Path(env_override)
+        else:
+            # Default: <repo>/orchestration/autopilot_state.json. host_health
+            # lives at scripts/autopilot/, so go two parents up + orchestration.
+            state_path = Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_state.json"
+
+    started = time.monotonic()
+    result: dict[str, object] = {"paused_pre": None, "flush_ok": False, "rewarm": {}, "elapsed_s": 0.0}
+
+    # Step 1: set paused=True via atomic write (mirror AP-39 atomic state pattern).
+    paused_pre = None
+    try:
+        if state_path.exists():
+            with open(state_path) as f:
+                state = json.load(f)
+            paused_pre = state.get("paused", False)
+            state["paused"] = True
+            tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+            with open(tmp, "w") as f:
+                json.dump(state, f, indent=2)
+            os.replace(tmp, state_path)
+            log.info("autopilot paused via state.json (pre=%s)", paused_pre)
+        else:
+            log.warning("state file %s does not exist; flush will proceed without pause", state_path)
+    except Exception as exc:
+        log.error("could not set paused=True on %s: %s", state_path, exc)
+    result["paused_pre"] = paused_pre
+
+    # Step 2: brief grace window for the trial loop to notice the new paused state
+    # (loop reloads at top of every iteration, so 11s covers the 10s sleep inside
+    # the paused branch plus jitter).
+    time.sleep(11)
+
+    # Step 3: run the canonical flush.
+    flush_ok = remediate()
+    result["flush_ok"] = flush_ok
+
+    # Step 4: NUMA-interleave-rewarm.
+    if rewarm and flush_ok:
+        result["rewarm"] = _numa_interleave_rewarm(rewarm_paths)
+
+    # Step 5: restore previous paused state (if there was one).
+    try:
+        with open(state_path) as f:
+            state = json.load(f)
+        # Only restore if we set it ourselves AND nothing else changed it
+        # to a stricter value (operator may have run `autopilot.py pause` mid-flush).
+        if state.get("paused") is True and paused_pre is False:
+            state["paused"] = False
+            tmp = state_path.with_suffix(state_path.suffix + ".tmp")
+            with open(tmp, "w") as f:
+                json.dump(state, f, indent=2)
+            os.replace(tmp, state_path)
+            log.info("autopilot resume (paused=False)")
+    except Exception as exc:
+        log.error("could not restore paused state: %s", exc)
+
+    result["elapsed_s"] = time.monotonic() - started
+    log.info("flush_cache_with_pause done in %.1fs (flush=%s, %d/%d gguf rewarmed)",
+             result["elapsed_s"], flush_ok,
+             sum(1 for v in result["rewarm"].values() if v),
+             len(result["rewarm"]))
+    return result
+
+
 # --- CLI -------------------------------------------------------------------
 
 def _format_state(state: HostHealthState) -> str:

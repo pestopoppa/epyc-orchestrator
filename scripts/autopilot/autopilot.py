@@ -803,10 +803,28 @@ def _run_loop_inner(
             log.info("Max trials reached (%d)", max_trials)
             break
 
+        # 2026-05-24 pause-bug fix: re-read state from disk at the top of
+        # every iteration so that an external `autopilot.py pause` actually
+        # takes effect on a running autopilot. Pre-fix the loop's local
+        # `state` was loaded once at startup and only refreshed inside the
+        # paused branch; meanwhile `save_state(state)` after each trial wrote
+        # the cached `paused=False` back to disk, clobbering any externally-
+        # set True. Net effect: `pause` was silently a no-op on a running
+        # autopilot. See `feedback_autopilot_pause_broken_use_sigterm` memory.
+        # Re-loading here is cheap (one small JSON file) and merges any
+        # externally-set fields (paused, _in_cache_flush) without losing the
+        # in-memory trial counters that get written back at end of iteration.
+        try:
+            disk_state = load_state()
+            for key in ("paused", "_in_cache_flush"):
+                if key in disk_state:
+                    state[key] = disk_state[key]
+        except Exception as _exc:
+            log.warning("Failed to reload state at iteration top: %s", _exc)
+
         if state.get("paused"):
             log.info("AutoPilot paused, waiting...")
             time.sleep(10)
-            state = load_state()
             continue
 
         # Check orchestrator health

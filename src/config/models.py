@@ -391,8 +391,12 @@ class ServerURLsConfig:
     worker_general: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
     worker_explore: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
     worker_math: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
-    worker_vision: str = "http://localhost:8086"
-    vision_escalation: str = "http://localhost:8087"
+    # 2026-05-24: worker_vision + vision_escalation upgraded to full+4×quarters
+    # following Phase 0.5 quarter-fit benches (worker_vision 11.39 t/s @ 24t,
+    # vision_escalation 20.09 t/s @ 48t — best quarter-throughput of any role).
+    # "full:" prefix triggers ConcurrencyAwareBackend (solo→full, concurrent→quarters).
+    worker_vision: str = "full:http://localhost:8086,http://localhost:8186,http://localhost:8286,http://localhost:8386,http://localhost:8486"
+    vision_escalation: str = "full:http://localhost:8087,http://localhost:8187,http://localhost:8287,http://localhost:8387,http://localhost:8487"
     worker_coder: str = "http://localhost:8102"
     worker_fast: str = "http://localhost:8102"
     # 2026-05-09: worker_summarize consolidated onto frontdoor's process. Mirror
@@ -408,7 +412,10 @@ class ServerURLsConfig:
     # with connect_error rather than silently routing elsewhere. Full purge
     # of architect_coding is tracked as a separate refactor.
     architect_coding: str = "http://localhost:8084,http://localhost:8184"
-    ingest_long_context: str = "http://localhost:8085"
+    # 2026-05-24: ingest_long_context upgraded to full+4×quarters following
+    # Phase 0.5 quarter-fit bench (Qwen3-Next-80B Q4 = 12.34 t/s @ 48t/quarter,
+    # snug at 45 GB GGUF + KV but viable). Solo → full (8085), concurrent → quarters.
+    ingest_long_context: str = "full:http://localhost:8085,http://localhost:8185,http://localhost:8285,http://localhost:8385,http://localhost:8485"
 
     # Services
     api_url: str = "http://localhost:8000"

@@ -416,6 +416,38 @@ Knobs live at the top of `autopilot.py`: `CREATIVITY_N`, `TAIL_WINDOW`,
 
 ---
 
+## Cache Flushes (Operator-Initiated) — 2026-05-24
+
+If you need to drop the kernel page cache (e.g., to re-baseline frontdoor
+throughput after a multi-day uptime, or before running a controlled bench),
+**always** go through the canonical wrapper rather than calling the bare flush
+helper:
+
+```
+python scripts/autopilot/flush_cache_safely.py
+```
+
+The wrapper does three things the bare `sudo /usr/local/sbin/autopilot-flush-cache`
+does NOT:
+
+1. Pauses the autopilot via `state.json` (the 2026-05-24 loop fix actually
+   honors this now — pre-fix, `autopilot.py pause` was a no-op on a running
+   autopilot because state was cached in-memory).
+2. NUMA-interleave-rewarms every active role GGUF serially after the flush.
+   Without this re-warm, the first non-NUMA-aware re-read pins the model to
+   ONE NUMA node and HALVES sustained t/s (per `feedback_drop_caches_numa_eviction`).
+3. Restores the pre-flush paused state (if the operator had explicitly paused).
+
+If a trial happens to complete during the flush window, its journal entry is
+tagged `bug_corrupted_by = exogenous_cache_flush` via the new
+`DeficiencyCategory.EXOGENOUS_CACHE_FLUSH`. The planner's trustworthiness
+gate then excludes it from hypothesis chains so the suspect data doesn't
+contaminate future decisions.
+
+The safety_gate's in-process host-throttle remediation (`safety_gate.py:256-278`)
+uses the same flush+rewarm path automatically when it detects sustained-load
+slowdown.
+
 ## Interaction with Autopilot Infrastructure
 
 This program.md guides autonomous Claude sessions. The existing autopilot infrastructure (`scripts/autopilot/`) provides:

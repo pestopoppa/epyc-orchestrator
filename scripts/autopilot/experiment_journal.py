@@ -42,6 +42,12 @@ class DeficiencyCategory(str, Enum):
     #   dispatch_action and journal.record. No eval evidence available.
     EXOGENOUS_RELOAD = "exogenous_reload"
     AUTOPILOT_KILLED = "autopilot_killed_mid_trial"
+    # 2026-05-24: trial completed during a host page-cache flush + NUMA re-warm
+    # window (`host_health.flush_cache_with_pause()` runs serial GGUF rewarms
+    # taking ~30-60s during which decode throughput is suppressed). Like
+    # EXOGENOUS_RELOAD, bug_corrupted_by gets set so the planner's
+    # trustworthiness gate excludes the affected trial from hypothesis chains.
+    EXOGENOUS_CACHE_FLUSH = "exogenous_cache_flush"
 
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 MAX_TRIALS_PER_FILE = 1000
