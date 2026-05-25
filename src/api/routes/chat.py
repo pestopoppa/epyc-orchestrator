@@ -572,17 +572,18 @@ async def _handle_chat(
                     request.prompt,
                     registry=getattr(state, "registry", None),
                 )
-            return _finalize(
-                await asyncio.to_thread(
-                    _execute_direct,
-                    request,
-                    routing,
-                    primitives,
-                    state,
-                    start_time,
-                    initial_role,
-                )
+            _direct_result = await asyncio.to_thread(
+                _execute_direct,
+                request,
+                routing,
+                primitives,
+                state,
+                start_time,
+                initial_role,
             )
+            if _direct_result.answer:
+                _direct_result.answer = _direct_result.answer.lstrip('\n ')
+            return _finalize(_direct_result)
 
         # 8d: REPL orchestration mode (default fallback)
         _repl_result = await _execute_repl(request, routing, primitives, state, start_time, initial_role)
