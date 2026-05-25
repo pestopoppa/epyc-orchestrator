@@ -195,5 +195,7 @@ def append_blacklist(
         except Exception:
             log.debug("Blacklist read failed", exc_info=True)
     data.setdefault("blacklist", []).append(entry)
-    blacklist_path.write_text(yaml.dump(data, default_flow_style=False, sort_keys=False))
+    blacklist_path.write_text(yaml.dump(
+        data, default_flow_style=False, sort_keys=False, allow_unicode=True,
+    ))
     log.info("Blacklisted pattern: %s (reason: %s)", pattern, reason)

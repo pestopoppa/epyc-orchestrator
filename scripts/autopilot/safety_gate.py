@@ -169,7 +169,7 @@ class Baseline:
             "per_suite_quality": self.per_suite_quality,
             "frontdoor_speed": self.frontdoor_speed,
         }
-        path.write_text(yaml.dump(data, default_flow_style=False))
+        path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
 
 
 class SafetyGate:
