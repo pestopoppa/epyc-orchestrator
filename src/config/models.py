@@ -403,8 +403,11 @@ class ServerURLsConfig:
     # frontdoor's port set; old :8071 family no longer has a server.
     worker_summarize: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
 
-    # Tier B - Architects (2×96t cross-NUMA, round-robin)
-    architect_general: str = "http://localhost:8083,http://localhost:8183"
+    # Tier B - Architect (1×96t canonical, NUMA_FULL + interleave=all)
+    # 2026-05-04 Probe B: consolidated from 2×cross-NUMA round-robin to single
+    # full instance; +184% per-request latency. NUMA_CONFIG[architect_general]
+    # has 1 instance @ 8083; the prior :8183 port is dead.
+    architect_general: str = "http://localhost:8083"
     # 2026-05-06: architect_coding role REMOVED (REAP-246B eliminated, 139 GB
     # freed). Field kept because ~25 modules still reference it (chat_routing,
     # admission, openai_compat, role enum, parsing_config, langgraph nodes).

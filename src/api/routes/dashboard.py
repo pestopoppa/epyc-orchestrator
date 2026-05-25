@@ -212,9 +212,18 @@ async def region_locks_snapshot() -> JSONResponse:
         all_regions = ["q0", "q1", "q2", "q3"]
 
     # Set of roles with at least one quarter-sized instance (the rows we'll
-    # always include in the panel, wired or not).
+    # always include in the panel, wired or not). Single-instance roles are
+    # excluded — there's nothing for cross-process region locks to coordinate
+    # when only one server process exists (worker_vision, architect_general
+    # post 2026-05-04 consolidation).
+    role_instance_count: dict[str, int] = {}
+    for (role, _idx), _regs in topology.items():
+        role_instance_count[role] = role_instance_count.get(role, 0) + 1
+
     topology_roles: set[str] = set()
     for (role, _idx), regs in topology.items():
+        if role_instance_count.get(role, 0) < 2:
+            continue
         if 0 < len(regs) < 4:
             topology_roles.add(role)
     # Roles with a full-socket instance also belong on the panel — when the
@@ -222,6 +231,8 @@ async def region_locks_snapshot() -> JSONResponse:
     # every quarter it spans, so the operator can SEE that frontdoor.full
     # is occupying both q0 and q1 simultaneously.
     for (role, _idx), regs in topology.items():
+        if role_instance_count.get(role, 0) < 2:
+            continue
         if len(regs) >= 2:
             topology_roles.add(role)
 
@@ -897,15 +908,23 @@ async def autopilot_progress() -> JSONResponse:
       1. For deep_eval/structural_experiment: tails the autopilot stdout log
          for `T2 progress: X/Y` lines — these are the authoritative per-question
          completion markers, so percent = X/Y exactly (no estimation).
-      2. Otherwise: median of historical durations for the same `action_type`,
-         derived from successive `timestamp` deltas in the journal (autopilot
-         runs trials serially, so gap ≈ runtime).
-      3. Fallback: aggregate p50 across all action types if no same-type data.
+      2. Otherwise: full quantile distribution (p25/p50/p75/p90) of historical
+         durations for the same `action_type`, derived from successive
+         `timestamp` deltas in the journal (autopilot runs trials serially,
+         so gap ≈ runtime).
+      3. Fallback: aggregate distribution across all action types.
 
     The journal schema has NO numeric duration field — only an ISO `timestamp`
     written when the trial completes. Earlier versions of this endpoint looked
-    for `trial_duration_s`/`wall_time_s`/`duration_s` which don't exist and
-    fell back to a hardcoded 1200s, producing badly wrong percentages.
+    for `trial_duration_s`/`wall_time_s`/`duration_s` which don't exist.
+
+    Bar denominator is **p90, not p50**: trial-runtime distributions are
+    heavily right-skewed (rollback has p90 ≈ 6× p50), so a p50 bar saturates
+    to 99% on the majority of trials and conveys nothing. With p90 as the
+    "expected ceiling," ~10% of trials cross into the slow tail (`slow_tail=True`),
+    making that signal actually meaningful. The frontend draws ticks at
+    p25/p50/p75 inside the bar so the operator can see where elapsed sits
+    in the distribution at a glance; `now_percentile` is the precise CDF rank.
     """
     out: dict[str, Any] = {
         "in_flight": False,
@@ -914,14 +933,18 @@ async def autopilot_progress() -> JSONResponse:
         "action_type": None,
         "started_at": None,
         "elapsed_s": None,
-        "expected_s": None,
-        "percent": None,
+        "expected_s": None,                # log_tail: extrapolated projected total; others: p50 (legacy meta label)
+        "percent": None,                   # elapsed/p90 * 100 (action_p50/aggregate_p50); X/Y * 100 (log_tail)
         "recent_avg_duration_s": None,
+        "recent_p25": None,                # distribution quantiles used by the tick-style bar
         "recent_p50": None,
-        "recent_p90": None,
-        "percent_source": None,           # "log_tail" | "action_p50" | "aggregate_p50" | "fallback"
-        "n_action_type_samples": None,    # how many historical samples backed the p50
-        "log_tail_progress": None,        # {"completed": X, "total": Y} when percent_source=log_tail
+        "recent_p75": None,
+        "recent_p90": None,                # bar denominator for action_p50/aggregate_p50
+        "now_percentile": None,            # CDF rank of elapsed within same-action history, 0.0..1.0
+        "slow_tail": False,                # True when elapsed > p90 — bar saturates, signals genuine tail
+        "percent_source": None,            # "log_tail" | "action_p50" | "aggregate_p50" | "fallback"
+        "n_action_type_samples": None,
+        "log_tail_progress": None,         # {"completed": X, "total": Y} when percent_source=log_tail
     }
     # Is autopilot alive? Quick pgrep-equivalent
     try:
@@ -1000,8 +1023,20 @@ async def autopilot_progress() -> JSONResponse:
             return None
         ss = sorted(durs)
         n = len(ss)
-        return {"p50": ss[n // 2], "p90": ss[min(n - 1, int(n * 0.9))],
-                "avg": sum(ss) / n, "n": n}
+        def q(p: float) -> float:
+            return ss[min(n - 1, int(n * p))]
+        return {"p25": q(0.25), "p50": q(0.5), "p75": q(0.75),
+                "p90": q(0.9), "avg": sum(ss) / n, "n": n}
+
+    def _cdf_rank(value: float, durs: list[float]) -> float | None:
+        # Fraction of past durations <= value. Used so the bar can answer
+        # "where does *now* sit in the historical distribution?" instead of
+        # the meaningless elapsed/p50 ratio. With small n, this is granular
+        # (n=18 → 5.5pp steps) but still strictly more informative than a
+        # saturating bar capped at 99%.
+        if not durs:
+            return None
+        return sum(1 for d in durs if d <= value) / len(durs)
 
     # 1. Log-tail (authoritative for deep_eval-style multi-question evals)
     if out["in_flight"] and out["action_type"] in ("deep_eval", "structural_experiment"):
@@ -1020,43 +1055,66 @@ async def autopilot_progress() -> JSONResponse:
                     if completed > 0 and out["elapsed_s"]:
                         out["expected_s"] = round(out["elapsed_s"] * total / completed, 1)
 
-    # 2. Action-type-stratified historical p50 (when log-tail didn't apply)
+    # 2. Action-type-stratified distribution (when log-tail didn't apply)
     if out["expected_s"] is None and out["in_flight"]:
         at = out["action_type"] or "unknown"
-        s = _stats(by_action.get(at, []))
+        durs = by_action.get(at, [])
+        s = _stats(durs)
         if s and s["n"] >= 2:
             out["expected_s"] = round(s["p50"], 1)
+            out["recent_p25"] = round(s["p25"], 1)
             out["recent_p50"] = round(s["p50"], 1)
+            out["recent_p75"] = round(s["p75"], 1)
             out["recent_p90"] = round(s["p90"], 1)
             out["recent_avg_duration_s"] = round(s["avg"], 1)
             out["n_action_type_samples"] = s["n"]
             out["percent_source"] = "action_p50"
+            if out["elapsed_s"] is not None:
+                rank = _cdf_rank(out["elapsed_s"], durs)
+                if rank is not None:
+                    out["now_percentile"] = round(rank, 3)
 
-    # 3. Aggregate p50 across all action types
+    # 3. Aggregate distribution across all action types
     if out["expected_s"] is None and out["in_flight"]:
         s = _stats(all_durations)
         if s:
             out["expected_s"] = round(s["p50"], 1)
+            out["recent_p25"] = round(s["p25"], 1)
             out["recent_p50"] = round(s["p50"], 1)
+            out["recent_p75"] = round(s["p75"], 1)
             out["recent_p90"] = round(s["p90"], 1)
             out["recent_avg_duration_s"] = round(s["avg"], 1)
             out["n_action_type_samples"] = s["n"]
             out["percent_source"] = "aggregate_p50"
+            if out["elapsed_s"] is not None:
+                rank = _cdf_rank(out["elapsed_s"], all_durations)
+                if rank is not None:
+                    out["now_percentile"] = round(rank, 3)
 
     # 4. Hard fallback only if we have literally no journal data
     if out["expected_s"] is None and out["in_flight"]:
         out["expected_s"] = 1200.0
         out["percent_source"] = "fallback"
 
-    # Percent (only set if log_tail didn't already set it)
+    # Percent: bar fill ratio.
+    #   - log_tail: already set above to X/Y (true progress).
+    #   - action_p50/aggregate_p50: elapsed/p90. p90 is "the slow-tail edge" —
+    #     ~90% of past trials of this action_type finish by then, so the bar
+    #     saturates only when we're genuinely in the tail. Allowed to exceed
+    #     100 (slow_tail=True) so the JS can render "p93+" without lying.
+    #   - fallback: elapsed/1200, clamped at 100.
     if (
         out["percent"] is None
         and out["in_flight"]
         and out["elapsed_s"] is not None
-        and out["expected_s"]
     ):
-        pct = (out["elapsed_s"] / out["expected_s"]) * 100.0
-        out["percent"] = round(min(99.0, max(0.0, pct)), 1)
+        denom = out["recent_p90"] if out["recent_p90"] else out["expected_s"]
+        if denom:
+            pct = (out["elapsed_s"] / denom) * 100.0
+            out["slow_tail"] = pct > 100.0
+            # Cap at 150 — anything beyond is visually identical "deep tail";
+            # the precise number is in elapsed_s if anyone needs it.
+            out["percent"] = round(min(150.0, max(0.0, pct)), 1)
 
     return JSONResponse(out)
 

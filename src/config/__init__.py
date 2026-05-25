@@ -150,14 +150,17 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         worker_explore: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
         worker_math: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
         worker_vision: str = "http://localhost:8086"
-        vision_escalation: str = "http://localhost:8087"
+        # 2026-05-24: vision_escalation upgraded to full+4×quarters (see stack_numa.py)
+        vision_escalation: str = "full:http://localhost:8087,http://localhost:8187,http://localhost:8287,http://localhost:8387,http://localhost:8487"
         worker_coder: str = "http://localhost:8102"
         worker_fast: str = "http://localhost:8102"
         # 2026-05-09: consolidated onto frontdoor's process
         worker_summarize: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
-        architect_general: str = "http://localhost:8083,http://localhost:8183"
+        # 2026-05-04: consolidated to single 1×96t canonical instance (Probe B)
+        architect_general: str = "http://localhost:8083"
         architect_coding: str = "http://localhost:8084,http://localhost:8184"
-        ingest_long_context: str = "http://localhost:8085"
+        # 2026-05-24: ingest_long_context upgraded to full+4×quarters (see stack_numa.py)
+        ingest_long_context: str = "full:http://localhost:8085,http://localhost:8185,http://localhost:8285,http://localhost:8385,http://localhost:8485"
         api_url: str = "http://localhost:8000"
         ocr_server: str = "http://localhost:9001"
         vision_api: str = "http://localhost:8000/v1/vision/analyze"

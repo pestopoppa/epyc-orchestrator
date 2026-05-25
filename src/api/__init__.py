@@ -88,6 +88,35 @@ async def lifespan(app: FastAPI):
     state.progress_logger = ProgressLogger() if ProgressLogger else None
     state.gate_runner = GateRunner(progress_logger=state.progress_logger)
 
+    # Pre-create cpu_region_lock files for any role whose backend was wired
+    # as ConcurrencyAwareBackend, so the dashboard's per-region-locks panel
+    # shows the role as `wired` before the first dispatch arrives. Without
+    # this, freshly-restarted roles with zero traffic look "not wired" even
+    # though the lock-acquisition code path is fully in place.
+    try:
+        from src.backends.concurrency_aware import ConcurrencyAwareBackend
+        from src.runtime.cpu_region_lock import region_lock_path
+        from src.runtime.instance_topology import get_instance_regions, ATOMIC_REGIONS
+
+        _topology = get_instance_regions()
+        _role_regions: dict[str, set[str]] = {}
+        for (_role, _idx), _regs in _topology.items():
+            _role_regions.setdefault(_role, set()).update(_regs)
+
+        _warmed = 0
+        for _role, _backend in (state.llm_primitives._backends or {}).items():
+            if not isinstance(_backend, ConcurrencyAwareBackend):
+                continue
+            for _region in _role_regions.get(_role, set(ATOMIC_REGIONS)):
+                _path = region_lock_path(_role, _region)
+                _path.parent.mkdir(parents=True, exist_ok=True)
+                _path.touch(exist_ok=True)
+                _warmed += 1
+        if _warmed:
+            logger.info("cpu_region_lock warm-up: pre-created %d lock files", _warmed)
+    except Exception as _exc:
+        logger.debug("cpu_region_lock warm-up skipped: %s", _exc)
+
     # Tool registry (feature-gated)
     ToolRegistry = get_tool_registry_class()
     if f.tools and ToolRegistry:
