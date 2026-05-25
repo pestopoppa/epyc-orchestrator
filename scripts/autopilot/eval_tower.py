@@ -26,15 +26,19 @@ SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT = 120
 
-# Concurrent fan-out for sentinel/pool evaluations. Default 4 = number of
-# quarter instances on frontdoor (the bottleneck role for autopilot trials);
-# overflow to full happens automatically via ConcurrencyAwareBackend's
-# region-lock dispatcher. Set to 1 to force the legacy serial path.
+# Concurrent fan-out for sentinel/pool evaluations. Default 1 (legacy serial
+# path) because the dispatcher does not yet model within-role full↔quarter
+# cpuset overlap — N>1 lands an overlapping quarter onto full on at least one
+# request for most roles. WP-1..WP-3 of within-role-placement-state-machine.md
+# (epyc-root) close that gap; until WP-1 lands a topology-derived per-role
+# cap, override only via this env var after manually confirming the role's
+# safe-N from NUMA_CONFIG. Reference safe-N: frontdoor=3, ingest_long_context=3,
+# vision_escalation=3, worker_general=1, architect_general=1, worker_vision=1.
 def _eval_concurrency() -> int:
     try:
-        return max(1, int(os.environ.get("AUTOPILOT_EVAL_CONCURRENCY", "4")))
+        return max(1, int(os.environ.get("AUTOPILOT_EVAL_CONCURRENCY", "1")))
     except (TypeError, ValueError):
-        return 4
+        return 1
 
 # Import seeding infrastructure
 import sys
