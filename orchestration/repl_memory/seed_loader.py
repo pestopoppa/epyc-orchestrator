@@ -96,9 +96,17 @@ def _get_persona_seeds() -> list[dict]:
 def _get_routing_seeds() -> list[dict]:
     """Return mode-annotated routing seed examples.
 
-    These teach MemRL which execution mode (direct/react/repl) works
-    best for which task types, bootstrapping the mode selection before
-    enough real task outcomes accumulate.
+    These teach MemRL which execution mode (direct/repl) works best for
+    which task types, bootstrapping the mode selection before enough
+    real task outcomes accumulate.
+
+    2026-05-25 — react mode was unified into repl (REPL is a superset of
+    direct+react with structured_mode for one-tool-per-turn execution).
+    Five legacy "frontdoor:react" seeds were rewritten to "frontdoor:repl"
+    so tool-needing queries land on the unified REPL surface. Without
+    this fix the learned router replayed react-tagged seeds and emitted
+    `chosen_action="frontdoor:react"` in routing decisions even though
+    no live code path actually serves react anymore.
 
     Returns:
         List of routing seed dictionaries.
@@ -117,17 +125,18 @@ def _get_routing_seeds() -> list[dict]:
          "task_type": "math", "action": "frontdoor:direct", "mode": "direct", "outcome": "success"},
         {"task": "Generate JSON output with user name and age fields",
          "task_type": "formatting", "action": "frontdoor:direct", "mode": "direct", "outcome": "success"},
-        # React mode seeds — tool-needing queries
+        # Tool-needing queries — REPL with structured_mode handles these
+        # (the legacy "react" mode was a subset of REPL; unified 2026-05-25).
         {"task": "Search for recent papers on transformer architectures",
-         "task_type": "research", "action": "frontdoor:react", "mode": "react", "outcome": "success"},
+         "task_type": "research", "action": "frontdoor:repl", "mode": "repl", "outcome": "success"},
         {"task": "What is today's date?",
-         "task_type": "factual", "action": "frontdoor:react", "mode": "react", "outcome": "success"},
+         "task_type": "factual", "action": "frontdoor:repl", "mode": "repl", "outcome": "success"},
         {"task": "Calculate the compound interest on $10000 at 5% for 10 years",
-         "task_type": "math", "action": "frontdoor:react", "mode": "react", "outcome": "success"},
+         "task_type": "math", "action": "frontdoor:repl", "mode": "repl", "outcome": "success"},
         {"task": "Look up the Wikipedia article about quantum entanglement",
-         "task_type": "research", "action": "frontdoor:react", "mode": "react", "outcome": "success"},
+         "task_type": "research", "action": "frontdoor:repl", "mode": "repl", "outcome": "success"},
         {"task": "Search arXiv for papers about reinforcement learning from human feedback",
-         "task_type": "research", "action": "frontdoor:react", "mode": "react", "outcome": "success"},
+         "task_type": "research", "action": "frontdoor:repl", "mode": "repl", "outcome": "success"},
         # REPL mode seeds — file exploration, large context, code execution
         {"task": "Read the configuration file and summarize its settings",
          "task_type": "file_exploration", "action": "frontdoor:repl", "mode": "repl", "outcome": "success"},

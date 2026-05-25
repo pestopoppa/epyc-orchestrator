@@ -652,7 +652,7 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
     </div>
 
     <div class="panel">
-      <h2>routing decisions <span class="count-suffix">distribution over last 50</span></h2>
+      <h2>routing decisions <span class="count-suffix" id="decision-window-suffix">distribution over last 200</span></h2>
       <div id="decision-feed"></div>
     </div>
   </div>
@@ -1861,18 +1861,12 @@ function updateDecisions(snap) {
     // Aggregates
     const byRole = {};
     const bySource = {};
-    const confBucket = { high: 0, medium: 0, low: 0, none: 0 };
     const verifierBucket = { accept: 0, reject: 0, shadow: 0, none: 0 };
     for (const d of decisions) {
         const role = d.chosen_action || 'unknown';
         byRole[role] = (byRole[role] || 0) + 1;
         const src = d.source || 'unknown';
         bySource[src] = (bySource[src] || 0) + 1;
-        const c = d.classifier_confidence;
-        if (c == null) confBucket.none++;
-        else if (c >= 0.8) confBucket.high++;
-        else if (c >= 0.5) confBucket.medium++;
-        else confBucket.low++;
         const v = d.verifier_verdict;
         if (v === 'accept') verifierBucket.accept++;
         else if (v === 'reject') verifierBucket.reject++;
@@ -1880,6 +1874,20 @@ function updateDecisions(snap) {
         else verifierBucket.none++;
     }
     const total = decisions.length;
+    // Server-side aggregates carried under underscore-prefixed keys (snap.source_counts_rolling).
+    // _today_roles spans the full day so the panel can show diversity even when the window is
+    // dominated by chat→frontdoor traffic. _classifier_conf only counts classifier-source
+    // decisions; learned/rules/forced sources structurally have no classifier_confidence.
+    const rolling = (snap && snap.source_counts_rolling) || {};
+    const cumulative = (snap && snap.source_counts_cumulative) || {};
+    const todayRoles = rolling._today_roles || {};
+    const todayRolesTotal = Object.values(todayRoles).reduce((s, n) => s + n, 0);
+    const classifierConf = rolling._classifier_conf || { high: 0, medium: 0, low: 0 };
+    const classifierTotal = bySource.classifier || 0;
+    const verifierGated = (bySource.classifier || 0);  // verifier only runs on classifier-path
+    // Update the panel header to reflect today's broader picture, not just the window.
+    const suffEl = document.getElementById('decision-window-suffix');
+    if (suffEl) suffEl.textContent = `window ${total} · today ${todayRolesTotal}`;
 
     // Sort role + source buckets by count descending
     const roleEntries = Object.entries(byRole).sort((a, b) => b[1] - a[1]);
@@ -1901,41 +1909,73 @@ function updateDecisions(snap) {
         classifier: 'good', learned: 'good', rules: 'warn', forced: 'bad', fallback: 'dim',
     }[src] || '');
 
+    // Today's role mix (full-day, not window) — sorted, only render if non-trivially populated.
+    const todayRoleEntries = Object.entries(todayRoles).sort((a, b) => b[1] - a[1]);
+    const todayRoleSection = (todayRolesTotal > 0 && todayRolesTotal > total)
+        ? `<div class="dec-stats-section">
+              <div class="section-label" title="full-day base-role distribution across all routing_decision events; the window above is dominated by chat traffic so this exposes broader routing diversity">role chosen — today (${todayRolesTotal})</div>
+              ${todayRoleEntries.map(([role, n]) => _barRow(
+                  role, n, todayRolesTotal, '',
+                  `color:${(typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--text)'};font-weight:500`,
+              )).join('')}
+            </div>`
+        : '';
+    // Classifier-confidence + verifier-verdict denominators are bySource.classifier,
+    // not total. Learned/rules/forced never carry these fields by design, so the
+    // old "X% no-confidence / no-verdict" rows were structurally noisy.
+    const confDenom = classifierTotal;
+    const confSection = (confDenom > 0)
+        ? `<div class="dec-stats-section">
+              <div class="section-label" title="histogram across classifier-source decisions only (${confDenom} of ${total}); learned/rules/forced sources do not produce a classifier_confidence value">classifier confidence (of ${confDenom} classifier-source)</div>
+              ${_barRow('high (≥0.8)',      classifierConf.high,   confDenom, 'good')}
+              ${_barRow('medium (0.5-0.8)', classifierConf.medium, confDenom, 'warn')}
+              ${_barRow('low (<0.5)',       classifierConf.low,    confDenom, 'bad')}
+            </div>`
+        : `<div class="dec-stats-section">
+              <div class="section-label" style="color:var(--muted)">classifier confidence</div>
+              <div style="color:var(--muted);font-size:10px;padding:2px 0">no classifier-source decisions in window — learned/rules/forced sources structurally carry no classifier confidence</div>
+            </div>`;
+    const verdAccept = verifierBucket.accept;
+    const verdReject = verifierBucket.reject;
+    const verdShadow = verifierBucket.shadow;
+    const verdDenom = verdAccept + verdReject + verdShadow;
+    const verdSection = (verdDenom > 0)
+        ? `<div class="dec-stats-section">
+              <div class="section-label" title="verifier only runs on classifier-path decisions (${verifierGated} in window); other sources skip the verifier">verifier verdict (of ${verdDenom} gated)</div>
+              ${_barRow('accept', verdAccept, verdDenom, 'good')}
+              ${_barRow('reject', verdReject, verdDenom, 'bad')}
+              ${verdShadow > 0 ? _barRow('shadow', verdShadow, verdDenom, 'warn') : ''}
+            </div>`
+        : `<div class="dec-stats-section">
+              <div class="section-label" style="color:var(--muted)">verifier verdict</div>
+              <div style="color:var(--muted);font-size:10px;padding:2px 0">no verifier-gated decisions in window — verifier only runs on classifier-path</div>
+            </div>`;
+
     feed.innerHTML = `
       <div class="dec-stats">
         <div class="dec-stats-header">
-          <span><span class="total">${total}</span> decisions</span>
-          <span>window: last ${total}</span>
+          <span><span class="total">${total}</span> decisions in window</span>
+          <span title="cumulative today across all sources">today total: ${todayRolesTotal}</span>
         </div>
 
         <div class="dec-stats-section">
-          <div class="section-label">role chosen</div>
+          <div class="section-label">role chosen — window (${total})</div>
           ${roleEntries.map(([role, n]) => _barRow(
               role, n, total, '',
               `color:${(typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--text)'};font-weight:500`,
           )).join('')}
         </div>
 
+        ${todayRoleSection}
+
         <div class="dec-stats-section">
           <div class="section-label">decision source</div>
           ${sourceEntries.map(([src, n]) => _barRow(src, n, total, sourceColorFor(src))).join('')}
         </div>
 
-        <div class="dec-stats-section">
-          <div class="section-label">classifier confidence</div>
-          ${_barRow('high (≥0.8)',      confBucket.high,   total, 'good')}
-          ${_barRow('medium (0.5-0.8)', confBucket.medium, total, 'warn')}
-          ${_barRow('low (<0.5)',       confBucket.low,    total, 'bad')}
-          ${confBucket.none > 0 ? _barRow('no-confidence',  confBucket.none, total, 'dim') : ''}
-        </div>
+        ${confSection}
 
-        <div class="dec-stats-section">
-          <div class="section-label">verifier verdict</div>
-          ${_barRow('accept', verifierBucket.accept, total, 'good')}
-          ${_barRow('reject', verifierBucket.reject, total, 'bad')}
-          ${verifierBucket.shadow > 0 ? _barRow('shadow', verifierBucket.shadow, total, 'warn') : ''}
-          ${verifierBucket.none > 0 ? _barRow('no-verdict', verifierBucket.none, total, 'dim') : ''}
-        </div>
+        ${verdSection}
 
         <div class="dec-stats-footer">
           <div>last decision: <span class="last-action" style="color:${lastColor}">${escapeHTML(lastAction)}</span> · ${lastAge} ago${lastConf}${lastVerifier}</div>
@@ -2304,7 +2344,15 @@ async function openDetail(taskId, port, slotId) {
     panel.classList.add('open');
     try {
         const r = await fetch(`/dashboard/api/task/${encodeURIComponent(taskId)}`);
+        if (!r.ok) {
+            content.innerHTML = `<div style="color:var(--bad,#f87171)">task fetch failed: HTTP ${r.status}</div>`;
+            return;
+        }
         const d = await r.json();
+        // Defensive: the endpoint can return non-task shapes on 5xx (e.g.
+        // FastAPI's {"detail": "..."} on a downstream error). Normalize so
+        // downstream .find/.map/.length calls don't crash on undefined.
+        const events = Array.isArray(d.events) ? d.events : [];
         let promptText = '';
         let initialContent = '';
         let dataSource = '';
@@ -2318,17 +2366,19 @@ async function openDetail(taskId, port, slotId) {
             initialContent = (d.tap_section.response || '').toString();
             dataSource = `inference_tap.log section @ ${d.tap_section.timestamp} (role=${d.tap_section.role})`;
         } else {
-            const startedEv = d.events.find(e => e.event_type === 'task_started');
+            const startedEv = events.find(e => e.event_type === 'task_started');
             if (startedEv) {
                 promptText = startedEv.data.objective || '';
             }
-            dataSource = 'task_started.objective (no slot or tap match)';
+            dataSource = events.length
+                ? 'task_started.objective (no slot or tap match)'
+                : 'no events, no slot, no tap match — task may have been pruned';
         }
         _currentTaskRawText = {
             taskId,
             prompt: promptText,
             stream: initialContent,
-            repl: d.events,
+            repl: events,
         };
         content.innerHTML = `
             <div class="detail-actions">
@@ -2342,13 +2392,13 @@ async function openDetail(taskId, port, slotId) {
             <div class="prompt-text" id="prompt-text"></div>
             <h3>${d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference')}</h3>
             <div class="stream-text ${d.slot ? 'live' : ''}" id="stream-text"></div>
-            <h3>task events (${d.events.length}) <span style="font-weight:normal;color:var(--muted);font-size:10px">orchestrator-side; not REPL turns</span></h3>
+            <h3>task events (${events.length}) <span style="font-weight:normal;color:var(--muted);font-size:10px">orchestrator-side; not REPL turns</span></h3>
             <div id="repl-history"></div>
         `;
         renderMarkdownInto(document.getElementById('prompt-text'), promptText || '*(prompt not available)*');
         renderMarkdownInto(document.getElementById('stream-text'), initialContent);
         const replEl = document.getElementById('repl-history');
-        replEl.innerHTML = d.events.map(ev => `
+        replEl.innerHTML = events.map(ev => `
             <div class="repl-event">
                 <span class="ts">${(ev.timestamp || '').replace('T', ' ').slice(11, 19)}</span>
                 <span class="ev">${ev.event_type}</span>
@@ -2661,11 +2711,25 @@ function startDashboard() {
                 bar.style.background = 'linear-gradient(90deg,var(--accent,#60a5fa),var(--good,#34d399))';
             }
             const fmt = (s) => s == null ? '?' : (s < 60 ? `${s.toFixed(0)}s` : `${(s/60).toFixed(1)}m`);
-            const metaBits = [
-                `elapsed ${fmt(d.elapsed_s)}`,
-                `expected ~${fmt(d.expected_s)}`,
-            ];
-            if (d.recent_p50 != null) metaBits.push(`recent p50 ${fmt(d.recent_p50)}`);
+            const metaBits = [`elapsed ${fmt(d.elapsed_s)}`];
+            // The percent-source determines how to describe the "expected" estimate:
+            // log_tail = X/Y from the eval tower's own progress markers (authoritative);
+            // action_p50 = median runtime of past trials of THE SAME action_type;
+            // aggregate_p50 = median across all action types (less precise);
+            // fallback = no journal data, hardcoded 20 min (treat skeptically).
+            if (d.percent_source === 'log_tail' && d.log_tail_progress) {
+                const lp = d.log_tail_progress;
+                metaBits.push(`tower ${lp.completed}/${lp.total}`);
+                metaBits.push(`projected total ~${fmt(d.expected_s)}`);
+            } else if (d.percent_source === 'action_p50') {
+                metaBits.push(`p50(${d.action_type}, n=${d.n_action_type_samples}) ~${fmt(d.expected_s)}`);
+            } else if (d.percent_source === 'aggregate_p50') {
+                metaBits.push(`p50(all, n=${d.n_action_type_samples}) ~${fmt(d.expected_s)} ⚠ no same-type history`);
+            } else if (d.percent_source === 'fallback') {
+                metaBits.push(`expected ~${fmt(d.expected_s)} ⚠ no journal data, hardcoded estimate`);
+            } else {
+                metaBits.push(`expected ~${fmt(d.expected_s)}`);
+            }
             if (!d.autopilot_alive) metaBits.push('⚠ autopilot process not running');
             meta.textContent = metaBits.join(' · ');
         } catch (e) {
@@ -2767,41 +2831,84 @@ function startDashboard() {
             const REGIONS = ['q0', 'q1', 'q2', 'q3'];
             const rows = [];
             // Header row
-            rows.push(`<div style="color:var(--muted);font-size:10px">role / region</div>`);
+            rows.push(`<div style="color:var(--muted);font-size:10px">role / region · instances</div>`);
             for (const r of REGIONS) rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center">${r}</div>`);
-            const roles = Object.keys(d.by_role || {}).sort();
-            for (const role of roles) {
-                rows.push(`<div style="color:var(--fg);overflow:hidden;text-overflow:ellipsis">${role}</div>`);
+            // by_role from the server is { role: { wired, regions, instances[], active_instance_idxs[] } }.
+            // Sort wired-first.
+            const byRole = d.by_role || {};
+            const roleEntries = Object.entries(byRole).sort((a, b) => {
+                const wa = a[1].wired ? 0 : 1, wb = b[1].wired ? 0 : 1;
+                if (wa !== wb) return wa - wb;
+                return a[0].localeCompare(b[0]);
+            });
+            let nWired = 0, nUnwired = 0;
+            for (const [role, info] of roleEntries) {
+                const wired = info.wired !== false;
+                if (wired) nWired++; else nUnwired++;
+                const badge = wired
+                    ? ''
+                    : ` <span style="display:inline-block;padding:0 4px;font-size:9px;background:rgba(251,191,36,0.2);color:var(--warn,#fbbf24);border-radius:2px;margin-left:4px" title="quartered in NUMA_CONFIG but backend does not acquire cpu_region_lock — cross-process concurrency is NOT enforced for this role yet">not wired</span>`;
+                // Compose role label cell with instance pills below the name.
+                // Pill width is proportional to its region span (full = wider).
+                // Active instance pills are tinted red to match the held-cells visual.
+                const insts = info.instances || [];
+                const activeSet = new Set(info.active_instance_idxs || []);
+                const pillsHtml = insts.map(inst => {
+                    const isActive = activeSet.has(inst.idx);
+                    const widthPct = Math.max(8, inst.span * 22);  // span 1 → 22%, span 2 → 44%, span 4 → 88%
+                    const label = inst.span >= 4 ? 'full'
+                                : inst.span === 2 ? 'half'
+                                : inst.regions[0];
+                    const bg = isActive
+                        ? 'background:rgba(248,113,113,0.55);color:#fff;font-weight:600'
+                        : (wired ? 'background:rgba(52,211,153,0.16);color:var(--good,#34d399)'
+                                 : 'background:rgba(100,100,100,0.10);color:var(--dim);font-style:italic');
+                    const title = `instance ${inst.idx} · regions {${inst.regions.join(',')}}` + (isActive ? ' · ACTIVE (holding locks)' : ' · idle');
+                    return `<span style="${bg};display:inline-block;padding:1px 4px;border-radius:3px;font-size:9px;line-height:1.4;margin-right:2px;min-width:${widthPct}px;text-align:center;font-family:var(--font-mono)" title="${title}">${label}</span>`;
+                }).join('');
+                const labelColor = wired ? 'var(--fg)' : 'var(--muted)';
+                rows.push(`
+                    <div style="overflow:hidden">
+                        <div style="color:${labelColor};font-size:11px;line-height:1.3">${role}${badge}</div>
+                        <div style="margin-top:2px;display:flex;flex-wrap:wrap;align-items:center">${pillsHtml}</div>
+                    </div>
+                `);
                 const region_map = {};
-                for (const e of d.by_role[role]) region_map[e.region] = e;
+                for (const e of (info.regions || [])) region_map[e.region] = e;
                 for (const r of REGIONS) {
                     const entry = region_map[r];
                     if (!entry) {
                         rows.push(`<div style="background:rgba(100,100,100,0.1);border-radius:3px;padding:3px;text-align:center;color:var(--muted)">—</div>`);
                     } else if (entry.held) {
                         const pids = (entry.holder_pids || []).join(',');
-                        rows.push(`<div style="background:rgba(248,113,113,0.4);border-radius:3px;padding:3px;text-align:center;color:#fff" title="pids: ${pids}">🔒 ${pids.slice(0,30)}</div>`);
-                    } else {
+                        const heldByIdxs = entry.holder_instance_idxs || [];
+                        const heldByLabel = heldByIdxs.length
+                            ? heldByIdxs.map(i => (insts.find(x => x.idx === i)
+                                    ? (insts.find(x => x.idx === i).span >= 4 ? 'full'
+                                       : insts.find(x => x.idx === i).span === 2 ? 'half'
+                                       : insts.find(x => x.idx === i).regions[0])
+                                    : `i${i}`)).join(',')
+                            : '?';
+                        rows.push(`<div style="background:rgba(248,113,113,0.4);border-radius:3px;padding:3px;text-align:center;color:#fff" title="held by instance(s) ${heldByIdxs.join(',')} · pids ${pids}">🔒 ${heldByLabel}</div>`);
+                    } else if (wired) {
                         rows.push(`<div style="background:rgba(52,211,153,0.18);border-radius:3px;padding:3px;text-align:center;color:var(--good,#34d399)">idle</div>`);
+                    } else {
+                        rows.push(`<div style="background:rgba(100,100,100,0.08);border-radius:3px;padding:3px;text-align:center;color:var(--dim);font-style:italic" title="quartered topology slot but no lock file exists — backend not lock-aware">—</div>`);
                     }
                 }
             }
-            if (!roles.length) {
-                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--muted);font-size:11px">no lock files yet — fire an inference to populate</div>`;
+            if (!roleEntries.length) {
+                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--muted);font-size:11px">no quartered roles in topology — check stack_numa.py</div>`;
             } else {
                 grid.innerHTML = rows.join('');
-                // Explainer footer: the per-region-lock infrastructure is opt-in
-                // per role. Only roles wired to src/runtime/cpu_region_lock.py
-                // (currently frontdoor + worker_general) ever create
-                // /mnt/raid0/llm/tmp/cpu_region.<role>.<region>.lock files.
-                // Other roles (architect_general, ingest_long_context, worker_vision,
-                // vision_escalation, embedder) are intentionally absent — they
-                // either run as singletons (one process, no per-region sharding) or
-                // use a different concurrency primitive. This footer prevents the
-                // empty rows from reading as a bug.
                 const footer = document.createElement('div');
                 footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
-                footer.innerHTML = `Only roles wired to <code style="font-size:10px;color:var(--muted)">src/runtime/cpu_region_lock.py</code> appear here. Other roles (architect_general, ingest_long_context, worker_vision, vision_escalation, embedder) are singletons or use a different concurrency primitive — intentionally absent, not missing.`;
+                let footMsg = `${nWired} role(s) wired to <code style="font-size:10px;color:var(--muted)">cpu_region_lock</code>`;
+                if (nUnwired > 0) {
+                    footMsg += ` · <span style="color:var(--warn,#fbbf24)">${nUnwired} role(s) quartered but unwired</span> (backend still RoundRobin, no cross-process concurrency)`;
+                }
+                footMsg += `. <strong>full</strong>/<strong>half</strong>/<strong>qN</strong> pills show each instance's region span; red pill = ACTIVE (holding locks). When a full instance dispatches, it acquires every quarter it spans simultaneously (you'll see multiple 🔒 cells with the same instance label).`;
+                footer.innerHTML = footMsg;
                 grid.appendChild(footer);
             }
         } catch {}

@@ -106,6 +106,21 @@ class HybridRouter:
                 logger.warning("DAR-4 bilinear scorer init failed: %s", e)
                 self._bilinear_scorer = None
 
+    @staticmethod
+    def _normalize_action(action: Optional[str]) -> str:
+        """Defensive remap of legacy mode suffixes to current vocabulary.
+
+        2026-05-25: React mode was unified into REPL (REPL is a superset).
+        Any `<role>:react` reaching this layer is replayed legacy seed data
+        — rewrite to `<role>:repl` so the routing-decision telemetry +
+        the downstream dispatch agree.
+        """
+        if not action:
+            return ""
+        if action.endswith(":react"):
+            return action[:-len(":react")] + ":repl"
+        return action
+
     def _record_decision_meta(
         self,
         *,
@@ -115,6 +130,7 @@ class HybridRouter:
         risk_gate: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Store metadata for telemetry logging."""
+        chosen_action = self._normalize_action(chosen_action)
         top = results[:5]
         self.last_decision_meta = {
             "decision_source": strategy,

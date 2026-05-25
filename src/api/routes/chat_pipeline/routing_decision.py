@@ -214,7 +214,17 @@ def routing_meta(
             pass
     if state.hybrid_router and hasattr(state.hybrid_router, "last_decision_meta"):
         try:
-            meta.update(state.hybrid_router.last_decision_meta or {})
+            router_meta = dict(state.hybrid_router.last_decision_meta or {})
+            # Defensive remap: legacy episodic-memory seeds tagged actions as
+            # `<role>:react` (a mode unified into REPL 2026-05-25). Normalize
+            # here so the routing-decision event reflects current vocabulary
+            # even if a stale seed slips through. The hybrid_router writes
+            # last_decision_meta from ~7 inline sites; centralizing the
+            # rewrite here is cheaper than patching each writer.
+            ca = router_meta.get("chosen_action")
+            if isinstance(ca, str) and ca.endswith(":react"):
+                router_meta["chosen_action"] = ca[:-len(":react")] + ":repl"
+            meta.update(router_meta)
         except Exception:
             pass
     return meta

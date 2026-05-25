@@ -50,11 +50,28 @@ def scan_recent_decisions(
     """Tail today's progress JSONL, return recent decisions + counters.
 
     Returns (recent_list, source_counts_rolling, source_counts_cumulative).
+
+    source_counts_rolling additionally carries non-counter payloads under
+    underscore-prefixed keys (filtered out of percentage math by the frontend):
+        _verifier_verdicts   — {accept: n, reject: n} for in-window decisions
+        _today_roles         — {role: count} across the FULL day's decisions
+                               (not the window) so the panel can show routing
+                               diversity even when the window is dominated by
+                               chat traffic to one role
+        _classifier_conf     — {high: n, medium: n, low: n} for in-window
+                               classifier-source decisions only. The denominator
+                               is `source_rolling.classifier`, NOT total. Learned
+                               and rules sources structurally never carry a
+                               classifier_confidence; the old "100% no-confidence"
+                               line was true but misleading — it just meant the
+                               window happened to be all learned.
     """
     recent: deque = deque(maxlen=max_items)
     source_rolling: dict[str, int] = {}
     source_cumulative: dict[str, int] = {}
     verifier_verdicts: dict[str, int] = {}
+    today_roles: dict[str, int] = {}
+    classifier_conf: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
     now = time.time()
     if not path.exists():
         return list(recent), source_rolling, source_cumulative
@@ -70,6 +87,12 @@ def scan_recent_decisions(
                 d = e.get("data", {})
                 src = d.get("decision_source") or d.get("strategy") or "?"
                 source_cumulative[src] = source_cumulative.get(src, 0) + 1
+                # Cumulative role mix across the whole day — the panel uses this
+                # to show diversity even when the window is one-role-dominated.
+                routing = d.get("routing")
+                if isinstance(routing, list) and routing:
+                    role0 = base_role(str(routing[0])) or str(routing[0])
+                    today_roles[role0] = today_roles.get(role0, 0) + 1
                 ts_str = e.get("timestamp", "")
                 try:
                     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
@@ -81,6 +104,18 @@ def scan_recent_decisions(
                     if d.get("verifier_verdict"):
                         v = d["verifier_verdict"]
                         verifier_verdicts[v] = verifier_verdicts.get(v, 0) + 1
+                    # Classifier-confidence histogram: ONLY meaningful when
+                    # decision_source=classifier. Other sources have no
+                    # confidence field by design.
+                    if src == "classifier":
+                        c = d.get("classifier_confidence")
+                        if isinstance(c, (int, float)):
+                            if c >= 0.8:
+                                classifier_conf["high"] += 1
+                            elif c >= 0.5:
+                                classifier_conf["medium"] += 1
+                            else:
+                                classifier_conf["low"] += 1
                 # Build a compact summary
                 recent.append({
                     "task_id": e.get("task_id"),
@@ -96,6 +131,8 @@ def scan_recent_decisions(
     except Exception as exc:
         logger.debug("scan_recent_decisions failed: %s", exc)
     source_rolling["_verifier_verdicts"] = verifier_verdicts  # type: ignore[assignment]
+    source_rolling["_today_roles"] = today_roles               # type: ignore[assignment]
+    source_rolling["_classifier_conf"] = classifier_conf       # type: ignore[assignment]
     return list(recent), source_rolling, source_cumulative
 
 

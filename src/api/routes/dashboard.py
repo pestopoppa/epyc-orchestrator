@@ -180,16 +180,15 @@ async def region_locks_snapshot() -> JSONResponse:
     """Per-CPU-region lock state — which (role, region) lock files are
     currently held, and by which PIDs.
 
-    Built from /proc/locks scan of the orchestrator's lock files. Used
-    by the dashboard to surface real-time concurrent dispatch — a glance
-    at this endpoint shows whether the cross-process per-region lock
-    layer (Phase 5 of 2026-05-22) is actually achieving multi-instance
-    concurrency.
-
-    Returns a list of {role, region, lock_path, holder_pids[]} entries
-    for every region lock file that exists. Empty list when no lock
-    files have been created yet (orchestrator was just started, no
-    inference has flown through region-lock-aware path).
+    Built from /proc/locks scan of the orchestrator's lock files, plus
+    the static topology from `instance_topology.get_instance_regions()`
+    so the panel surfaces ALL roles that *have* quartered instances —
+    not just the ones whose dispatch path created a lock file. Roles
+    with quarter instances but no lock files are tagged
+    ``wired=False`` so the dashboard can render them greyed out with
+    an explanatory badge (they were quartered at launch but their
+    backend never acquires `cpu_region_lock`, so cross-process
+    concurrency isn't actually enforced for them yet).
     """
     import os
     from pathlib import Path
@@ -201,7 +200,101 @@ async def region_locks_snapshot() -> JSONResponse:
         tmp_dir = Path("/mnt/raid0/llm/tmp")
         from src.runtime.cpu_region_lock import _current_lock_owner_pids
 
+    # Pull the live (role, idx) → {regions} map. Anything with >1 instance OR
+    # an instance pinned to a strict subset of {q0..q3} is a candidate for
+    # region-locking — those are the rows the panel should always show.
+    try:
+        from src.runtime.instance_topology import get_instance_regions, ATOMIC_REGIONS
+        topology = get_instance_regions()
+        all_regions = list(ATOMIC_REGIONS)
+    except Exception:
+        topology = {}
+        all_regions = ["q0", "q1", "q2", "q3"]
+
+    # Set of roles with at least one quarter-sized instance (the rows we'll
+    # always include in the panel, wired or not).
+    topology_roles: set[str] = set()
+    for (role, _idx), regs in topology.items():
+        if 0 < len(regs) < 4:
+            topology_roles.add(role)
+    # Roles with a full-socket instance also belong on the panel — when the
+    # full instance dispatches, it acquires the union of region locks for
+    # every quarter it spans, so the operator can SEE that frontdoor.full
+    # is occupying both q0 and q1 simultaneously.
+    for (role, _idx), regs in topology.items():
+        if len(regs) >= 2:
+            topology_roles.add(role)
+
+    # Per-role instance topology: ordered list of {idx, regions[], span}
+    # for every (role, idx) in NUMA_CONFIG. Sorted by idx so the dashboard
+    # can render instance pills in stable order (instance 0 = full, then
+    # the quarter instances).
+    instance_topology: dict[str, list[dict[str, Any]]] = {}
+    for (role, idx), regs in topology.items():
+        if not regs:
+            continue
+        instance_topology.setdefault(role, []).append({
+            "idx": idx,
+            "regions": sorted(regs),
+            "span": len(regs),
+            "is_full": len(regs) >= 2,  # multi-region = "full" (or half-full like frontdoor)
+        })
+    for role in instance_topology:
+        instance_topology[role].sort(key=lambda x: (-x["span"], x["regions"]))
+
+    # PID → (role, instance_idx) resolution. Scan /proc for llama-server
+    # processes, extract --port, then map port → (role, idx) using the
+    # convention: NUMA_CONFIG instance 0 = full instance (parent port);
+    # instances 1..4 = quarters on consecutive +100 ports.
+    pid_to_instance: dict[str, tuple[str, int]] = {}
+    try:
+        from src.api.routes.dashboard_topology import _discover_llama_ports
+        port_to_role = _discover_llama_ports()
+        # port→pid by re-reading /proc (cheap; ~5ms)
+        import subprocess
+        ps_out = subprocess.run(
+            ["ps", "-eo", "pid,cmd"], capture_output=True, text=True, timeout=2,
+        ).stdout
+        port_to_pid: dict[int, str] = {}
+        for line in ps_out.splitlines():
+            if "llama-server" not in line:
+                continue
+            m_port = re.search(r"--port\s+(\d+)", line)
+            m_pid = re.match(r"\s*(\d+)\s+", line)
+            if m_port and m_pid:
+                port_to_pid[int(m_port.group(1))] = m_pid.group(1)
+        # Resolve port → (role, instance_idx). Convention from stack_numa.py:
+        # full instance on base port (e.g. 8070), q0..q3 on base+100..base+400
+        # (e.g. 8080/8180/8280/8380). Role labels like "frontdoor.q2" carry
+        # the quarter explicitly, so the label is authoritative.
+        for port, role_label in port_to_role.items():
+            pid = port_to_pid.get(port)
+            if not pid:
+                continue
+            if "." in role_label:
+                base, suffix = role_label.split(".", 1)
+                if suffix.startswith("q") and suffix[1:].isdigit():
+                    quarter_n = int(suffix[1:])
+                    # Quarter instances are idx 1..4 in NUMA_CONFIG
+                    pid_to_instance[pid] = (base, quarter_n + 1)
+            else:
+                # Bare role label = the full instance = idx 0
+                pid_to_instance[pid] = (role_label, 0)
+    except Exception:
+        pass
+
+    def _resolve_holder_instances(role: str, pids: list[str]) -> list[int]:
+        """Map lock-holder PIDs to instance indices (idx 0 = full, 1..4 = quarters)."""
+        out_idx: list[int] = []
+        for pid in pids:
+            entry = pid_to_instance.get(pid)
+            if entry and entry[0] == role:
+                out_idx.append(entry[1])
+        return sorted(set(out_idx))
+
+    # Pass 1: read whatever lock files exist on disk.
     out: list[dict[str, Any]] = []
+    seen_roles: set[str] = set()
     try:
         for p in sorted(tmp_dir.glob("cpu_region.*.lock")):
             stem = p.stem  # "cpu_region.<role>.<region>"
@@ -215,19 +308,52 @@ async def region_locks_snapshot() -> JSONResponse:
                 "region": region,
                 "lock_path": str(p),
                 "holder_pids": holders,
+                "holder_instance_idxs": _resolve_holder_instances(role, holders),
                 "held": bool(holders),
+                "wired": True,
             })
+            seen_roles.add(role)
     except Exception as exc:
         return JSONResponse({"error": str(exc), "entries": []}, status_code=200)
 
-    # Group by role for easier dashboard rendering
-    by_role: dict[str, list[dict[str, Any]]] = {}
+    # Pass 2: any topology-quartered role with NO lock files is "unwired" —
+    # surface synthetic placeholder rows so the operator sees the gap.
+    for role in sorted(topology_roles - seen_roles):
+        for region in all_regions:
+            out.append({
+                "role": role,
+                "region": region,
+                "lock_path": str(tmp_dir / f"cpu_region.{role}.{region}.lock"),
+                "holder_pids": [],
+                "holder_instance_idxs": [],
+                "held": False,
+                "wired": False,   # quartered in NUMA_CONFIG but backend not lock-aware
+            })
+
+    # Group by role for easier dashboard rendering. Each role bucket also
+    # carries its full instance topology + per-instance "active" computed
+    # from holder_instance_idxs union across regions.
+    by_role: dict[str, dict[str, Any]] = {}
     for entry in out:
-        by_role.setdefault(entry["role"], []).append({
+        bucket = by_role.setdefault(entry["role"], {
+            "wired": entry["wired"],
+            "regions": [],
+            "instances": instance_topology.get(entry["role"], []),
+            "active_instance_idxs": set(),
+        })
+        bucket["regions"].append({
             "region": entry["region"],
             "held": entry["held"],
             "holder_pids": entry["holder_pids"],
+            "holder_instance_idxs": entry["holder_instance_idxs"],
         })
+        if entry["wired"]:
+            bucket["wired"] = True
+        for idx in entry["holder_instance_idxs"]:
+            bucket["active_instance_idxs"].add(idx)
+    # JSON can't serialize sets — convert at the end.
+    for role, bucket in by_role.items():
+        bucket["active_instance_idxs"] = sorted(bucket["active_instance_idxs"])
 
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return JSONResponse({
@@ -235,6 +361,7 @@ async def region_locks_snapshot() -> JSONResponse:
         "tmp_dir": str(tmp_dir),
         "entries": out,
         "by_role": by_role,
+        "topology_quartered_roles": sorted(topology_roles),
         "now": time.time(),
     })
 
@@ -703,23 +830,82 @@ def _read_git_short_sha() -> str | None:
 
 _AUTOPILOT_STATE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
 _AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_journal.jsonl"
+_AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+
+
+def _parse_journal_ts(value: Any) -> float | None:
+    """Parse a journal `timestamp` value (ISO-8601 string or unix float) to unix seconds."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+    return None
+
+
+def _newest_autopilot_log() -> Path | None:
+    """Return the most-recently-modified autopilot stdout log, if any."""
+    try:
+        candidates = sorted(
+            _AUTOPILOT_LOG_DIR.glob("autopilot_restart_*.log"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
+    except Exception:
+        return None
+
+
+def _tail_deep_eval_progress(log_path: Path) -> tuple[int, int] | None:
+    """Scan the autopilot log for the most-recent `T2 progress: X/Y` line.
+
+    The eval tower emits these lines as each question completes, so this gives
+    the *true* completion fraction for a deep_eval trial — far more accurate
+    than the historical-median estimate. Returns (completed, total) or None.
+    """
+    if not log_path.exists():
+        return None
+    pat = re.compile(r"T[12] progress: (\d+)/(\d+)")
+    try:
+        # Tail-read: tier-2 evals can run hours and the log can be large; read
+        # only the last 64 KB to find the most recent progress marker.
+        with open(log_path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 65536))
+            chunk = fh.read().decode("utf-8", errors="replace")
+        last_match = None
+        for m in pat.finditer(chunk):
+            last_match = m
+        if last_match:
+            return int(last_match.group(1)), int(last_match.group(2))
+    except Exception:
+        pass
+    return None
 
 
 @router.get("/dashboard/api/autopilot_progress")
 async def autopilot_progress() -> JSONResponse:
     """Live progress estimate for the autopilot's currently-running trial.
 
-    Reads `in_flight_trial` from autopilot_state.json (added by AP-39 exogenous-
-    restart-resilience work) and estimates completion percentage as
-    `elapsed_s / median(recent_trial_durations_s)`, clamped to [0, 1].
+    Sources, in priority order:
+      1. For deep_eval/structural_experiment: tails the autopilot stdout log
+         for `T2 progress: X/Y` lines — these are the authoritative per-question
+         completion markers, so percent = X/Y exactly (no estimation).
+      2. Otherwise: median of historical durations for the same `action_type`,
+         derived from successive `timestamp` deltas in the journal (autopilot
+         runs trials serially, so gap ≈ runtime).
+      3. Fallback: aggregate p50 across all action types if no same-type data.
 
-    Returns:
-        in_flight: bool — is there a trial currently running?
-        trial_id, action_type, started_at, elapsed_s
-        expected_s: median of last 10 trustworthy trials' durations
-        percent: 0..100 (clamped; > 100 caps at 99 to signal overrun)
-        recent_avg_duration_s, recent_p50, recent_p90 — duration distribution stats
-        autopilot_alive: bool — is the autopilot process even running?
+    The journal schema has NO numeric duration field — only an ISO `timestamp`
+    written when the trial completes. Earlier versions of this endpoint looked
+    for `trial_duration_s`/`wall_time_s`/`duration_s` which don't exist and
+    fell back to a hardcoded 1200s, producing badly wrong percentages.
     """
     out: dict[str, Any] = {
         "in_flight": False,
@@ -733,6 +919,9 @@ async def autopilot_progress() -> JSONResponse:
         "recent_avg_duration_s": None,
         "recent_p50": None,
         "recent_p90": None,
+        "percent_source": None,           # "log_tail" | "action_p50" | "aggregate_p50" | "fallback"
+        "n_action_type_samples": None,    # how many historical samples backed the p50
+        "log_tail_progress": None,        # {"completed": X, "total": Y} when percent_source=log_tail
     }
     # Is autopilot alive? Quick pgrep-equivalent
     try:
@@ -767,49 +956,106 @@ async def autopilot_progress() -> JSONResponse:
         except Exception:
             pass
 
-    # Compute expected duration from journal — median of last 10 trustworthy trials
+    # Per-action_type durations from journal: successive-timestamp deltas
+    # (autopilot is serial, so entry[i].timestamp − entry[i-1].timestamp
+    # approximates the runtime of entry[i] modulo ~seconds of dispatch overhead).
+    by_action: dict[str, list[float]] = {}
+    all_durations: list[float] = []
     if _AUTOPILOT_JOURNAL_PATH.exists():
         try:
-            durations: list[float] = []
             with open(_AUTOPILOT_JOURNAL_PATH) as f:
-                # Tail-read: parse last ~50 lines and pull duration if present.
-                # The journal is append-only; reading line-by-line is fine at typical sizes.
-                lines = f.readlines()[-50:]
-            for raw in lines:
-                try:
-                    e = json.loads(raw)
-                except Exception:
+                # Read the whole file (~1 MB at typical scale; cheap). For
+                # multi-MB futures, switch to a tail-bytes seek.
+                entries = []
+                for raw in f:
+                    try:
+                        entries.append(json.loads(raw))
+                    except Exception:
+                        continue
+            # Sort by timestamp ascending so deltas make sense even if the
+            # journal was rewritten out-of-order (shouldn't happen, but cheap).
+            entries.sort(key=lambda e: _parse_journal_ts(e.get("timestamp")) or 0)
+            for i in range(1, len(entries)):
+                a = _parse_journal_ts(entries[i].get("timestamp"))
+                b = _parse_journal_ts(entries[i-1].get("timestamp"))
+                if a is None or b is None:
                     continue
-                # Skip bug-corrupted trials (their durations are also suspect)
-                if e.get("bug_corrupted_by"):
+                dt = a - b
+                # Drop: negative gaps, sub-30s (likely back-to-back fast failures
+                # or quarantined trials), and >6h (likely overnight pauses or
+                # exogenous-pause windows that don't reflect trial runtime).
+                if not (30 < dt < 6 * 3600):
                     continue
-                ed = e.get("eval_details") or {}
-                # Try several known duration fields
-                dur = ed.get("trial_duration_s") or ed.get("wall_time_s") or e.get("duration_s")
-                if dur and dur > 0:
-                    durations.append(float(dur))
-            if durations:
-                durations.sort()
-                n = len(durations)
-                med = durations[n // 2]
-                p90 = durations[min(n - 1, int(n * 0.9))]
-                avg = sum(durations) / n
-                out["recent_avg_duration_s"] = round(avg, 1)
-                out["recent_p50"] = round(med, 1)
-                out["recent_p90"] = round(p90, 1)
-                out["expected_s"] = round(med, 1)
+                # Trust filter: skip if THIS entry was bug-quarantined
+                if entries[i].get("bug_corrupted_by"):
+                    continue
+                at = entries[i].get("action_type") or "unknown"
+                by_action.setdefault(at, []).append(dt)
+                all_durations.append(dt)
         except Exception:
             pass
 
-    # Fallback expected_s if journal had no durations: 1200s (~20 min — typical recent cycle)
+    def _stats(durs: list[float]) -> dict[str, float] | None:
+        if not durs:
+            return None
+        ss = sorted(durs)
+        n = len(ss)
+        return {"p50": ss[n // 2], "p90": ss[min(n - 1, int(n * 0.9))],
+                "avg": sum(ss) / n, "n": n}
+
+    # 1. Log-tail (authoritative for deep_eval-style multi-question evals)
+    if out["in_flight"] and out["action_type"] in ("deep_eval", "structural_experiment"):
+        log = _newest_autopilot_log()
+        if log:
+            progress = _tail_deep_eval_progress(log)
+            if progress:
+                completed, total = progress
+                if total > 0:
+                    pct = (completed / total) * 100.0
+                    out["percent"] = round(min(99.0, max(0.0, pct)), 1)
+                    out["percent_source"] = "log_tail"
+                    out["log_tail_progress"] = {"completed": completed, "total": total}
+                    # Also extrapolate an expected_s for the meta line:
+                    # if X/Y done in elapsed_s, projected total ≈ elapsed_s × Y/X
+                    if completed > 0 and out["elapsed_s"]:
+                        out["expected_s"] = round(out["elapsed_s"] * total / completed, 1)
+
+    # 2. Action-type-stratified historical p50 (when log-tail didn't apply)
+    if out["expected_s"] is None and out["in_flight"]:
+        at = out["action_type"] or "unknown"
+        s = _stats(by_action.get(at, []))
+        if s and s["n"] >= 2:
+            out["expected_s"] = round(s["p50"], 1)
+            out["recent_p50"] = round(s["p50"], 1)
+            out["recent_p90"] = round(s["p90"], 1)
+            out["recent_avg_duration_s"] = round(s["avg"], 1)
+            out["n_action_type_samples"] = s["n"]
+            out["percent_source"] = "action_p50"
+
+    # 3. Aggregate p50 across all action types
+    if out["expected_s"] is None and out["in_flight"]:
+        s = _stats(all_durations)
+        if s:
+            out["expected_s"] = round(s["p50"], 1)
+            out["recent_p50"] = round(s["p50"], 1)
+            out["recent_p90"] = round(s["p90"], 1)
+            out["recent_avg_duration_s"] = round(s["avg"], 1)
+            out["n_action_type_samples"] = s["n"]
+            out["percent_source"] = "aggregate_p50"
+
+    # 4. Hard fallback only if we have literally no journal data
     if out["expected_s"] is None and out["in_flight"]:
         out["expected_s"] = 1200.0
+        out["percent_source"] = "fallback"
 
-    # Percent
-    if out["in_flight"] and out["elapsed_s"] is not None and out["expected_s"]:
+    # Percent (only set if log_tail didn't already set it)
+    if (
+        out["percent"] is None
+        and out["in_flight"]
+        and out["elapsed_s"] is not None
+        and out["expected_s"]
+    ):
         pct = (out["elapsed_s"] / out["expected_s"]) * 100.0
-        # Cap at 99 to signal "overrun" rather than "done"; the actual completion
-        # event is the next state.json write.
         out["percent"] = round(min(99.0, max(0.0, pct)), 1)
 
     return JSONResponse(out)
@@ -1167,8 +1413,13 @@ def _todays_progress_log() -> Path:
 
 
 def _scan_recent_decisions(
-    path: Path, window_s: float = 600.0, max_items: int = 50,
+    path: Path, window_s: float = 600.0, max_items: int = 200,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, int]]:
+    # 2026-05-25: window widened 50 → 200 — at typical chat traffic the
+    # last-50 cut was overwhelmingly frontdoor (~93% of all chat hits today),
+    # making the panel look like routing was frontdoor-only when in reality
+    # 6+ distinct base roles get hit per day. 200 gives a more honest mix
+    # without paying the cost of scanning the whole day's JSONL.
     return _scan_recent_decisions_impl(path, window_s=window_s, max_items=max_items)
 
 
