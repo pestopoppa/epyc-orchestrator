@@ -531,6 +531,20 @@ class ConcurrencyAwareBackend:
             "1", "true", "yes", "on",
         }
 
+    @staticmethod
+    def _placement_state_machine_enabled() -> bool:
+        """WP-2: gate the topology-safe placement filter + poll-on-queue
+        fallback. Default off — operators flip to 1 after the WP-2 gate
+        (4-way frontdoor shows 3 active + 1 queued, never overlap).
+
+        When off, falls back to the prior greedy try-loop + blocking-on-full
+        fallback so existing deployments are unaffected by this code landing.
+        """
+        import os as _os
+        return _os.environ.get("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "0").strip() in {
+            "1", "true", "yes", "on",
+        }
+
     @contextmanager
     def _dispatch(self, session_id: str = ""):
         """Yield (backend, idx, is_full) with the right lock held.
@@ -605,24 +619,79 @@ class ConcurrencyAwareBackend:
 
         chosen_ctx = None
         chosen_idx = -2
-        for ca_idx, topo_idx in candidates:
-            attempt = _try_instance(self._role, topo_idx)
-            if attempt is not None:
-                chosen_ctx, _paths = attempt
-                chosen_idx = ca_idx
-                break
 
-        if chosen_ctx is None:
-            # All non-blocking attempts failed → block on full's region locks.
-            # Use a generous timeout (60s) — caller's own deadline still
-            # propagates via deadline_s if set.
-            blocking_ctx = cpu_region_lock_for_instance(
-                self._role, 0,
-                timeout_s=60.0, deadline_s=deadline_s,
-            )
-            chosen_ctx = blocking_ctx
-            blocking_ctx.__enter__()
-            chosen_idx = -1
+        if self._placement_state_machine_enabled():
+            # WP-2 path: topology-safe filter + poll-on-queue. The placement
+            # policy filters dispatcher-priority `candidates` down to those
+            # whose cpuset is disjoint from currently-held regions for this
+            # role. If at least one survives, try-acquire each non-blocking.
+            # If none survive (every candidate overlaps), poll until a release
+            # makes a candidate safe; cap by 60s wall-clock (the same generous
+            # bound the legacy block-on-full fallback used).
+            from src.scheduling.placement import evaluate_placement, QueueReason
+            from src.runtime.cpu_region_lock import active_region_holders
+            from src.runtime.instance_topology import get_instance_regions
+            from src.scheduling.contention_gate import ContentionDenied
+
+            instance_regions = get_instance_regions()
+            poll_deadline = time.perf_counter() + 60.0
+            poll_interval_s = 0.150  # matches contention_gate._GATE_POLL_S
+            queue_log_emitted = False
+            while True:
+                holders_for_role = active_region_holders().get(self._role, [])
+                placement = evaluate_placement(
+                    role=self._role,
+                    candidates=candidates,
+                    holder_idxs=holders_for_role,
+                    instance_regions=instance_regions,
+                )
+                if not placement.is_queue:
+                    # At least one safe candidate — try them in priority order.
+                    for place in placement.places:
+                        attempt = _try_instance(self._role, place.topology_idx)
+                        if attempt is not None:
+                            chosen_ctx, _paths = attempt
+                            chosen_idx = place.internal_idx
+                            break
+                    if chosen_ctx is not None:
+                        break  # acquired; exit poll loop
+                    # Race: every safe candidate's lock was stolen between
+                    # the holder snapshot and the try-acquire. Re-poll.
+                else:
+                    if not queue_log_emitted:
+                        logger.info(
+                            "placement queued role=%s reason=%s detail=%s",
+                            self._role, placement.queue.reason.value, placement.queue.detail,
+                        )
+                        queue_log_emitted = True
+                if time.perf_counter() >= poll_deadline:
+                    raise ContentionDenied(
+                        f"placement timeout role={self._role} "
+                        f"reason={placement.queue.reason.value if placement.queue else 'race_lost'} "
+                        f"holders={holders_for_role} after 60.0s"
+                    )
+                time.sleep(poll_interval_s)
+        else:
+            # Legacy path: greedy try-loop + blocking-on-full fallback.
+            for ca_idx, topo_idx in candidates:
+                attempt = _try_instance(self._role, topo_idx)
+                if attempt is not None:
+                    chosen_ctx, _paths = attempt
+                    chosen_idx = ca_idx
+                    break
+
+            if chosen_ctx is None:
+                # All non-blocking attempts failed → block on full's region
+                # locks. Lock layer's union-acquisition prevents overlap
+                # (full's lock takes all of full's regions), but this can
+                # wait on full even when a quarter would have been safe sooner.
+                blocking_ctx = cpu_region_lock_for_instance(
+                    self._role, 0,
+                    timeout_s=60.0, deadline_s=deadline_s,
+                )
+                chosen_ctx = blocking_ctx
+                blocking_ctx.__enter__()
+                chosen_idx = -1
 
         # Update in-process telemetry (best-effort; not authoritative).
         # 2026-05-24 Phase E port: when full is acquired by a DIFFERENT session
