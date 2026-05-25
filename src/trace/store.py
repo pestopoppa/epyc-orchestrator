@@ -166,6 +166,11 @@ def ensure_schema(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SCHEMA)
     conn.commit()
+    # Apply the shared harness/trace schema (intake-607 cluster: HLE/BSV/URE/EXM).
+    # Imported lazily to keep the event-store core importable on its own.
+    from src.trace.harness_schema import ensure_harness_schema
+
+    ensure_harness_schema(conn)
     return conn
 
 
