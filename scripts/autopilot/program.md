@@ -340,6 +340,9 @@ Some open research items in the repo handoffs are tracked but cannot be executed
 | `gpu-acceleration-path.md` §ECHO 3-gate trigger watch (intake-571) | Pure monitoring; advertised `microsoft/echo-rl` repo is currently 404. Reproduction requires 8×B200 even if repo lands. |
 | `internal-kb-rag.md` Mirage K-A/K-F/K-V patterns | Design references for K1–K7 work; lands when the relevant K-task is actively worked, not via autopilot mutation. |
 | `hermes-outer-shell.md` Mirage HOS-S/HOS-R patterns | Design references for adapter shim + session replay; out of autopilot's mutation scope. |
+| `routing-and-optimization-index.md` P21.A (DeepConf-offline sweep) — intake-603 | **DO NOT WIRE — A2 negative (2026-05-24).** Built + validated on live Qwen3.6: DeepConf's confidence-weighted vote ties plain majority (no accuracy gain) and the confidence signal is anti-correlated with correctness (top-1-confidence 1/4; gap −0.158). Adds N× generation + `n_probs` cost for zero benefit. There is NO DeepConf knob surface and there will not be one — never emit DeepConf trials. Reference impl lives on default-OFF branch `feat/p21a-deepconf` (not merged). |
+| `routing-and-optimization-index.md` P21.B (method-selection axis) — intake-601 | **GATED, not yet actionable.** The "which test-time technique" axis (self_consistency first) is a structural build in a dedicated session. Once the axis + flags exist, StructuralLab/PromptForge may optimize the policy — but not before. |
+| `optillm-test-time-techniques.md` CoT-decoding / DeepConf-online | Decoder/sampler work in the `epyc-llama` fork (k× BW multiplier; needs a manual speed bench). Outside autopilot's repo entirely — never propose. |
 
 ---
 
