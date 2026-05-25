@@ -7,8 +7,10 @@ Training set (debug suites) is kept separate from validation set (HF benchmarks)
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,6 +25,16 @@ log = logging.getLogger("autopilot.eval")
 SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT = 120
+
+# Concurrent fan-out for sentinel/pool evaluations. Default 4 = number of
+# quarter instances on frontdoor (the bottleneck role for autopilot trials);
+# overflow to full happens automatically via ConcurrencyAwareBackend's
+# region-lock dispatcher. Set to 1 to force the legacy serial path.
+def _eval_concurrency() -> int:
+    try:
+        return max(1, int(os.environ.get("AUTOPILOT_EVAL_CONCURRENCY", "4")))
+    except (TypeError, ValueError):
+        return 4
 
 # Import seeding infrastructure
 import sys
@@ -264,6 +276,56 @@ class EvalTower:
                 elapsed_s=elapsed,
             )
 
+    def _eval_batch(
+        self,
+        questions: list[dict],
+        client: httpx.Client,
+        log_every: int | None = None,
+        label: str = "",
+    ) -> list[QuestionResult]:
+        """Evaluate a batch of questions, fanning out across N workers.
+
+        Results are returned in the same order as `questions`. With
+        AUTOPILOT_EVAL_CONCURRENCY > 1, the orchestrator's
+        ConcurrencyAwareBackend spreads inflight requests across the
+        full instance + idle quarter instances (frontdoor: 1 full + 4
+        quarters). With concurrency=1, behavior matches the legacy
+        serial loop.
+        """
+        n = len(questions)
+        if n == 0:
+            return []
+        workers = min(n, _eval_concurrency())
+        results: list[QuestionResult | None] = [None] * n
+        if workers <= 1:
+            for i, q in enumerate(questions):
+                results[i] = self._eval_question(q, client)
+                if log_every and (i + 1) % log_every == 0:
+                    correct_so_far = sum(1 for r in results if r and r.correct)
+                    log.info(
+                        "%s progress: %d/%d (%.0f%% correct)",
+                        label, i + 1, n, 100 * correct_so_far / (i + 1),
+                    )
+            return [r for r in results if r is not None]
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"eval-{label}") as ex:
+            future_to_idx = {
+                ex.submit(self._eval_question, q, client): i
+                for i, q in enumerate(questions)
+            }
+            done = 0
+            for fut in as_completed(future_to_idx):
+                idx = future_to_idx[fut]
+                results[idx] = fut.result()
+                done += 1
+                if log_every and done % log_every == 0:
+                    correct_so_far = sum(1 for r in results if r and r.correct)
+                    log.info(
+                        "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
+                        label, done, n, 100 * correct_so_far / done, workers,
+                    )
+        return [r for r in results if r is not None]
+
     # ── aggregate results ────────────────────────────────────────
 
     def _aggregate(self, results: list[QuestionResult], tier: int) -> EvalResult:
@@ -418,17 +480,15 @@ class EvalTower:
             log.error("No sentinel questions available for T0")
             return EvalResult(tier=0, quality=0, speed=0, cost=0, reliability=0)
 
-        results = []
         with httpx.Client(timeout=self.timeout) as client:
-            for q in sentinels[:10]:
-                r = self._eval_question(q, client)
-                results.append(r)
-                log.info(
-                    "T0 [%s/%s] %s → %s",
-                    r.suite, r.question_id,
-                    "PASS" if r.correct else "FAIL",
-                    r.error or "",
-                )
+            results = self._eval_batch(sentinels[:10], client, label="T0")
+        for r in results:
+            log.info(
+                "T0 [%s/%s] %s → %s",
+                r.suite, r.question_id,
+                "PASS" if r.correct else "FAIL",
+                r.error or "",
+            )
 
         return self._aggregate(results, tier=0)
 
@@ -451,18 +511,8 @@ class EvalTower:
         rng.shuffle(questions)
         questions = questions[:n]
 
-        results = []
         with httpx.Client(timeout=self.timeout) as client:
-            for i, q in enumerate(questions):
-                r = self._eval_question(q, client)
-                results.append(r)
-                if (i + 1) % 10 == 0:
-                    correct_so_far = sum(1 for r in results if r.correct)
-                    log.info(
-                        "T1 progress: %d/%d (%.0f%% correct)",
-                        i + 1, len(questions),
-                        100 * correct_so_far / len(results),
-                    )
+            results = self._eval_batch(questions, client, log_every=10, label="T1")
 
         return self._aggregate(results, tier=1)
 
@@ -484,18 +534,8 @@ class EvalTower:
         rng.shuffle(questions)
         questions = questions[:n]
 
-        results = []
         with httpx.Client(timeout=self.timeout) as client:
-            for i, q in enumerate(questions):
-                r = self._eval_question(q, client)
-                results.append(r)
-                if (i + 1) % 50 == 0:
-                    correct_so_far = sum(1 for r in results if r.correct)
-                    log.info(
-                        "T2 progress: %d/%d (%.0f%% correct)",
-                        i + 1, len(questions),
-                        100 * correct_so_far / len(results),
-                    )
+            results = self._eval_batch(questions, client, log_every=50, label="T2")
 
         return self._aggregate(results, tier=2)
 

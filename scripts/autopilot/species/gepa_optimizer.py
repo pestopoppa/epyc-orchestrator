@@ -93,27 +93,31 @@ class OrchestratorGEPAAdapter:
         outputs: list[dict[str, Any]] = []
         traces: list[dict[str, Any]] | None = [] if capture_traces else None
 
+        # Fan-out across frontdoor quarters via EvalTower._eval_batch
+        # (AUTOPILOT_EVAL_CONCURRENCY, default 4). Results preserve input
+        # order, so the zip with `batch` for trace building is correct.
         with httpx.Client(timeout=self.tower.timeout) as client:
-            for q in batch:
-                r = self.tower._eval_question(q, client)
-                score = 1.0 if r.correct else 0.0
-                scores.append(score)
-                outputs.append({
+            results = self.tower._eval_batch(list(batch), client, label="GEPA")
+
+        for q, r in zip(batch, results):
+            score = 1.0 if r.correct else 0.0
+            scores.append(score)
+            outputs.append({
+                "answer": r.answer,
+                "route": r.route_used,
+                "correct": r.correct,
+            })
+            if traces is not None:
+                traces.append({
+                    "question": q.get("prompt", ""),
+                    "expected": q.get("expected", ""),
+                    "suite": q.get("suite", "unknown"),
                     "answer": r.answer,
                     "route": r.route_used,
                     "correct": r.correct,
+                    "error": r.error,
+                    "elapsed_s": r.elapsed_s,
                 })
-                if traces is not None:
-                    traces.append({
-                        "question": q.get("prompt", ""),
-                        "expected": q.get("expected", ""),
-                        "suite": q.get("suite", "unknown"),
-                        "answer": r.answer,
-                        "route": r.route_used,
-                        "correct": r.correct,
-                        "error": r.error,
-                        "elapsed_s": r.elapsed_s,
-                    })
 
         return EvaluationBatch(
             outputs=outputs,

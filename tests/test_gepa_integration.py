@@ -95,14 +95,15 @@ def test_adapter_evaluate_returns_evaluation_batch():
     mock_tower = MagicMock()
     mock_tower.timeout = 30
 
-    # Mock _eval_question to return a QuestionResult-like object
+    # Mock _eval_batch to return a list of QuestionResult-like objects
+    # (one per input question, in input order).
     mock_result = MagicMock()
     mock_result.correct = True
     mock_result.answer = "Canberra"
     mock_result.route_used = "frontdoor"
     mock_result.error = None
     mock_result.elapsed_s = 1.5
-    mock_tower._eval_question.return_value = mock_result
+    mock_tower._eval_batch.side_effect = lambda batch, client, **kw: [mock_result] * len(batch)
 
     mock_forge = MagicMock()
 
@@ -144,7 +145,7 @@ def test_adapter_evaluate_wrong_answer():
     mock_result.route_used = "frontdoor"
     mock_result.error = None
     mock_result.elapsed_s = 2.0
-    mock_tower._eval_question.return_value = mock_result
+    mock_tower._eval_batch.side_effect = lambda batch, client, **kw: [mock_result] * len(batch)
 
     mock_forge = MagicMock()
 
