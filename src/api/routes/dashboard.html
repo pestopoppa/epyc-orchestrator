@@ -97,6 +97,22 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     50% { opacity: 0.35; }
 }
 
+/* Autopilot trial-progress distribution-bar ticks. Drawn over the bar at
+   p25/p50/p75 positions; p90 is the bar's right edge so it needs no tick. */
+.autopilot-tick {
+    position: absolute;
+    top: -2px;
+    width: 1px;
+    height: 14px;
+    background: rgba(255,255,255,0.45);
+    pointer-events: none;
+    z-index: 2;
+}
+.autopilot-tick.autopilot-tick-major {
+    width: 2px;
+    background: rgba(255,255,255,0.85);
+}
+
 .layout {
     display: grid;
     grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr);
@@ -594,16 +610,27 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         autopilot activity
         <span class="count-suffix" id="autopilot-status">— real-time tail (eval / seed_batch / meta-planning / rollback / safety)</span>
       </h2>
-      <!-- 2026-05-24: current-trial progress bar. Estimates % from
-           elapsed / median(recent_trial_durations). Hidden when no trial
-           is in flight. Source: /dashboard/api/autopilot_progress -->
+      <!-- Current-trial progress bar.
+           Distribution modes (action_p50 / aggregate_p50): bar fills to p90
+           with p25/p50/p75 ticks. Slow tail (elapsed > p90) shifts color.
+           Log-tail mode (deep_eval / structural_experiment): true X/Y progress,
+           ticks hidden. Source: /dashboard/api/autopilot_progress -->
       <div id="autopilot-trial-progress" style="display:none;margin:8px 0 12px;padding:8px 10px;background:rgba(0,0,0,0.25);border:1px solid var(--border);border-radius:6px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:11px">
           <span id="autopilot-trial-label" style="color:var(--fg);font-family:var(--font-mono)"></span>
           <span id="autopilot-trial-pct" style="color:var(--accent,#60a5fa);font-family:var(--font-mono);font-weight:600"></span>
         </div>
-        <div style="width:100%;height:6px;background:rgba(255,255,255,0.05);border-radius:3px;overflow:hidden">
-          <div id="autopilot-trial-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent,#60a5fa),var(--good,#34d399));transition:width 0.5s ease"></div>
+        <div id="autopilot-trial-bar-wrap" style="position:relative;width:100%;height:10px;background:rgba(255,255,255,0.05);border-radius:3px">
+          <div id="autopilot-trial-bar" style="position:absolute;left:0;top:0;height:100%;width:0%;background:linear-gradient(90deg,var(--accent,#60a5fa),var(--good,#34d399));transition:width 0.5s ease;border-radius:3px"></div>
+          <div id="autopilot-trial-tick-p25" class="autopilot-tick" style="display:none"></div>
+          <div id="autopilot-trial-tick-p50" class="autopilot-tick autopilot-tick-major" style="display:none"></div>
+          <div id="autopilot-trial-tick-p75" class="autopilot-tick" style="display:none"></div>
+        </div>
+        <div id="autopilot-trial-ticklabels" style="position:relative;height:10px;margin-top:2px;display:none">
+          <span id="autopilot-trial-ticklabel-p25" style="position:absolute;transform:translateX(-50%);font-size:9px;color:var(--dim);font-family:var(--font-mono)">p25</span>
+          <span id="autopilot-trial-ticklabel-p50" style="position:absolute;transform:translateX(-50%);font-size:9px;color:var(--muted);font-family:var(--font-mono);font-weight:600">p50</span>
+          <span id="autopilot-trial-ticklabel-p75" style="position:absolute;transform:translateX(-50%);font-size:9px;color:var(--dim);font-family:var(--font-mono)">p75</span>
+          <span style="position:absolute;right:0;font-size:9px;color:var(--muted);font-family:var(--font-mono);font-weight:600">p90</span>
         </div>
         <div id="autopilot-trial-meta" style="margin-top:4px;color:var(--muted);font-size:10px;font-family:var(--font-mono)"></div>
       </div>
@@ -2694,6 +2721,13 @@ function startDashboard() {
             const pct = document.getElementById('autopilot-trial-pct');
             const bar = document.getElementById('autopilot-trial-bar');
             const meta = document.getElementById('autopilot-trial-meta');
+            const tickP25 = document.getElementById('autopilot-trial-tick-p25');
+            const tickP50 = document.getElementById('autopilot-trial-tick-p50');
+            const tickP75 = document.getElementById('autopilot-trial-tick-p75');
+            const tickLabels = document.getElementById('autopilot-trial-ticklabels');
+            const tickLabelP25 = document.getElementById('autopilot-trial-ticklabel-p25');
+            const tickLabelP50 = document.getElementById('autopilot-trial-ticklabel-p50');
+            const tickLabelP75 = document.getElementById('autopilot-trial-ticklabel-p75');
             if (!wrap) return;
             if (!d.in_flight) {
                 wrap.style.display = 'none';
@@ -2702,29 +2736,77 @@ function startDashboard() {
             wrap.style.display = '';
             const action = d.action_type || '?';
             label.textContent = `trial #${d.trial_id} (${action})`;
+
             const p = d.percent != null ? d.percent : 0;
-            pct.textContent = `${p.toFixed(0)}%${p >= 99 ? ' (overrun)' : ''}`;
+            const fmt = (s) => s == null ? '?' : (s < 60 ? `${s.toFixed(0)}s` : `${(s/60).toFixed(1)}m`);
+
+            // Distribution mode = bar denominated by p90 with ticks at p25/p50/p75.
+            // Log-tail mode = true X/Y progress, denom is the eval tower's own
+            // count, ticks are meaningless so we hide them.
+            const isDistMode = (d.percent_source === 'action_p50' || d.percent_source === 'aggregate_p50');
+            const showTicks = isDistMode && d.recent_p90 && d.recent_p90 > 0;
+
+            if (showTicks) {
+                const denom = d.recent_p90;
+                const posPct = (v) => Math.max(0, Math.min(100, (v / denom) * 100));
+                const setTick = (tick, tickLabel, value) => {
+                    if (value == null) { tick.style.display = 'none'; tickLabel.style.display = 'none'; return; }
+                    const x = posPct(value);
+                    tick.style.left = `${x}%`;
+                    tick.style.display = '';
+                    tickLabel.style.left = `${x}%`;
+                    tickLabel.style.display = '';
+                };
+                setTick(tickP25, tickLabelP25, d.recent_p25);
+                setTick(tickP50, tickLabelP50, d.recent_p50);
+                setTick(tickP75, tickLabelP75, d.recent_p75);
+                tickLabels.style.display = '';
+            } else {
+                tickP25.style.display = 'none';
+                tickP50.style.display = 'none';
+                tickP75.style.display = 'none';
+                tickLabels.style.display = 'none';
+            }
+
+            // Bar fill: clamp at 100% visually (slow tail keeps it pinned right
+            // but the color shift + label tells you you're beyond p90).
             bar.style.width = `${Math.min(100, p)}%`;
-            if (p >= 99) {
+            if (d.slow_tail) {
+                // Deep tail past p90 — amber → red gradient. The further past,
+                // the more saturated the right side; capped at 150% in backend
+                // so the gradient doesn't visually drift after that.
                 bar.style.background = 'linear-gradient(90deg,var(--warn,#fbbf24),var(--bad,#f87171))';
+            } else if (isDistMode && d.recent_p75 && d.elapsed_s > d.recent_p75) {
+                // Between p75 and p90 — yellow-tinted to flag "running long but not abnormal."
+                bar.style.background = 'linear-gradient(90deg,var(--accent,#60a5fa),var(--warn,#fbbf24))';
             } else {
                 bar.style.background = 'linear-gradient(90deg,var(--accent,#60a5fa),var(--good,#34d399))';
             }
-            const fmt = (s) => s == null ? '?' : (s < 60 ? `${s.toFixed(0)}s` : `${(s/60).toFixed(1)}m`);
+
+            // Percent text: CDF rank (p87 of past runs) is far more informative
+            // than elapsed/p50 ratio. Fall back to raw % only for log_tail/fallback.
+            if (isDistMode && d.now_percentile != null) {
+                const pctile = Math.round(d.now_percentile * 100);
+                pct.textContent = d.slow_tail ? `p${pctile} · slow tail` : `p${pctile}`;
+            } else if (d.percent_source === 'log_tail') {
+                pct.textContent = `${p.toFixed(0)}%`;
+            } else {
+                pct.textContent = `${p.toFixed(0)}%`;
+            }
+
             const metaBits = [`elapsed ${fmt(d.elapsed_s)}`];
-            // The percent-source determines how to describe the "expected" estimate:
-            // log_tail = X/Y from the eval tower's own progress markers (authoritative);
-            // action_p50 = median runtime of past trials of THE SAME action_type;
-            // aggregate_p50 = median across all action types (less precise);
-            // fallback = no journal data, hardcoded 20 min (treat skeptically).
             if (d.percent_source === 'log_tail' && d.log_tail_progress) {
                 const lp = d.log_tail_progress;
                 metaBits.push(`tower ${lp.completed}/${lp.total}`);
                 metaBits.push(`projected total ~${fmt(d.expected_s)}`);
             } else if (d.percent_source === 'action_p50') {
-                metaBits.push(`p50(${d.action_type}, n=${d.n_action_type_samples}) ~${fmt(d.expected_s)}`);
+                metaBits.push(`${d.action_type} n=${d.n_action_type_samples}`);
+                metaBits.push(`p50 ~${fmt(d.recent_p50)}`);
+                metaBits.push(`p90 ~${fmt(d.recent_p90)}`);
             } else if (d.percent_source === 'aggregate_p50') {
-                metaBits.push(`p50(all, n=${d.n_action_type_samples}) ~${fmt(d.expected_s)} ⚠ no same-type history`);
+                metaBits.push(`all-actions n=${d.n_action_type_samples} ⚠ no same-type history`);
+                metaBits.push(`p50 ~${fmt(d.recent_p50)}`);
+                metaBits.push(`p90 ~${fmt(d.recent_p90)}`);
             } else if (d.percent_source === 'fallback') {
                 metaBits.push(`expected ~${fmt(d.expected_s)} ⚠ no journal data, hardcoded estimate`);
             } else {
