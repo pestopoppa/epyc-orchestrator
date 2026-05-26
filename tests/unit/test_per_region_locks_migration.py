@@ -84,7 +84,7 @@ def test_per_region_locks_dispatch_kicks_off_migration_on_session_swap(monkeypat
     migrate_calls: list[tuple[str, int]] = []
     migrate_event = threading.Event()
 
-    def fake_migrate(session_id, target_quarter):
+    def fake_migrate(session_id, target_quarter, transaction=None):
         migrate_calls.append((session_id, target_quarter))
         migrate_event.set()
 

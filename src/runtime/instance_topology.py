@@ -158,3 +158,88 @@ def get_instance_regions() -> dict[tuple[str, int], frozenset[str]]:
             # missing entries as no-CPU-conflict → no-op blocking).
             _INSTANCE_REGIONS_CACHE = {}
     return _INSTANCE_REGIONS_CACHE
+
+
+# ── Topology-derived safe-N for autopilot fan-out (WP-1) ───────────────
+
+def compute_max_safe_concurrency(numa_config: dict, role: str) -> int:
+    """Return the largest N such that N concurrent requests for `role` can
+    be placed on mutually-disjoint cpusets under the dispatcher's current
+    full-first policy.
+
+    The count = 1 (instance 0, "full" by NUMA_CONFIG convention) + the
+    number of remaining instances whose region set is disjoint from both
+    the full instance AND every other already-accepted instance, walked
+    in NUMA-disjoint preference order from full.
+
+    Boundary cases:
+      * Role not in numa_config → 1.
+      * Role has 0 or 1 instance → 1.
+      * Role has full instance that covers ALL atomic regions (e.g.
+        worker_general with `0-95`) → 1; every quarter overlaps full and
+        cannot co-place under the full-first dispatcher.
+
+    Pure function (no I/O). Tests pass synthetic NUMA_CONFIG dicts.
+
+    Until WP-3 (within-role-placement-state-machine.md) lands forward KV
+    migration, this is the operational ceiling for autopilot eval fan-out.
+    With WP-3, a quarters-only configuration becomes reachable by evicting
+    the full session and achievable concurrency rises to the largest
+    disjoint subset of all instances (e.g. frontdoor: 3 → 4).
+    """
+    cfg = (numa_config or {}).get(role) if numa_config else None
+    if not cfg:
+        return 1
+    instances = cfg.get("instances") or []
+    if len(instances) <= 1:
+        return 1
+
+    regions_for: list[frozenset[str]] = [
+        cpu_list_to_regions(entry[0]) if entry else frozenset()
+        for entry in instances
+    ]
+    full_regions = regions_for[0]
+    if not full_regions:
+        return 1
+
+    # Visit non-full instances in NUMA-disjoint-from-full preference order,
+    # matching ConcurrencyAwareBackend._compute_quarter_preference.
+    quarter_order = sorted(
+        range(1, len(instances)),
+        key=lambda i: (bool(full_regions & regions_for[i]), i),
+    )
+
+    accepted_union: set[str] = set(full_regions)
+    safe_n = 1  # full always counted
+    for q_idx in quarter_order:
+        q_regions = regions_for[q_idx]
+        if not q_regions:
+            continue
+        if accepted_union & q_regions:
+            continue
+        accepted_union |= q_regions
+        safe_n += 1
+    return safe_n
+
+
+_MAX_SAFE_CONCURRENCY_CACHE: dict[str, int] = {}
+
+
+def max_safe_concurrency(role: str) -> int:
+    """Live counterpart to `compute_max_safe_concurrency` — reads the
+    orchestrator's NUMA_CONFIG once and caches per-role results.
+
+    Use this from runtime code (autopilot eval defaults, dispatcher
+    placement). Use `compute_max_safe_concurrency` directly in tests
+    with synthetic configs.
+    """
+    if role in _MAX_SAFE_CONCURRENCY_CACHE:
+        return _MAX_SAFE_CONCURRENCY_CACHE[role]
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+    except Exception:
+        _MAX_SAFE_CONCURRENCY_CACHE[role] = 1
+        return 1
+    n = compute_max_safe_concurrency(NUMA_CONFIG, role)
+    _MAX_SAFE_CONCURRENCY_CACHE[role] = n
+    return n

@@ -35,7 +35,7 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Optional
 
 try:
     import httpx
@@ -169,6 +169,13 @@ class ConcurrencyAwareBackend:
         # pinned to a cold-start quarter following migration failure.
         self._session_quarter: dict[str, int] = {}
         self._session_state: dict[str, dict[str, Any]] = {}
+
+        # WP-4 reverse-migration state: per-session last-seen timestamps + per-session
+        # migration counts + in-flight guard to prevent double-firing.
+        self._full_idle_since: float | None = None  # monotonic time when full last released
+        self._session_last_seen: dict[str, float] = {}
+        self._reverse_migration_counts: dict[str, int] = {}
+        self._reverse_migration_in_flight: dict[str, bool] = {}
 
         # Phase D (cross-role-bw-aware-routing): topology-aware quarter ordering.
         # When the full instance is busy, try quarters in an order that prefers
@@ -421,20 +428,59 @@ class ConcurrencyAwareBackend:
             self._session_quarter[session_id] = quarter
             self._set_session_state(session_id, state=state, quarter=quarter, detail=detail)
 
-    def _migrate_kv(self, session_id: str, target_quarter: int) -> None:
+    def _migrate_kv(
+        self,
+        session_id: str,
+        target_quarter: int,
+        transaction: Optional["MigrationTransaction"] = None,
+    ) -> Optional["MigrationTransaction"]:
         """Migrate KV state from full instance to a quarter (background thread).
 
-        Best-effort: if save or restore fails, the quarter starts cold.
-        """
-        if not self._full_url:
-            return
-        target_url = self._quarter_urls[target_quarter] if target_quarter < len(self._quarter_urls) else None
-        if not target_url:
-            return
+        WP-3 refactor: drives an explicit MigrationTransaction state machine
+        (planned → saving → restoring → verified → source_erased → committed
+        or → aborted) so callers can await completion + observe failure
+        modes. Best-effort still — if save/restore fails, the transaction
+        moves to ABORTED and the quarter starts cold.
 
-        t0 = time.monotonic()
+        Args:
+          session_id: KV cache owner.
+          target_quarter: destination quarter index (0..N-1 in self._quarters).
+          transaction: optional pre-allocated transaction (e.g. created by
+            the dispatcher's load-transition trigger so it can wait on
+            transaction.event). If None, an internal one is created and
+            returned for telemetry-only consumers.
+
+        Returns the (possibly-created) MigrationTransaction.
+        """
+        from src.scheduling.migration_transaction import (
+            MigrationState,
+            MigrationTransaction,
+        )
+
+        if not self._full_url:
+            return transaction
+
+        target_url = (
+            self._quarter_urls[target_quarter]
+            if target_quarter < len(self._quarter_urls)
+            else None
+        )
+        if not target_url:
+            return transaction
+
+        if transaction is None:
+            transaction = MigrationTransaction(
+                role=self._role,
+                session_id=session_id,
+                source_url=self._full_url,
+                target_quarter=target_quarter,
+                target_url=target_url,
+            )
+
+        transaction.advance(MigrationState.SAVING)
         saved = _slot_save(self._full_url)
         if not saved:
+            transaction.advance(MigrationState.ABORTED, detail="save_failed")
             with self._lock:
                 self._migration_failures += 1
                 self._set_session_state(
@@ -444,15 +490,15 @@ class ConcurrencyAwareBackend:
                     detail="save_failed",
                 )
             logger.warning(
-                "KV migration save failed for %s session=%s, quarter %d starts cold",
-                self._role,
-                session_id,
-                target_quarter,
+                "KV migration save failed for %s session=%s, quarter %d starts cold (txn=%s)",
+                self._role, session_id, target_quarter, transaction.txn_id,
             )
-            return
+            return transaction
 
+        transaction.advance(MigrationState.RESTORING)
         restored = _slot_restore(target_url)
         if not restored:
+            transaction.advance(MigrationState.ABORTED, detail="restore_failed")
             with self._lock:
                 self._migration_failures += 1
                 self._set_session_state(
@@ -462,37 +508,203 @@ class ConcurrencyAwareBackend:
                     detail="restore_failed",
                 )
             logger.warning(
-                "KV migration restore failed for %s session=%s quarter %d; session will run cold",
-                self._role,
-                session_id,
-                target_quarter,
+                "KV migration restore failed for %s session=%s quarter %d; session will run cold (txn=%s)",
+                self._role, session_id, target_quarter, transaction.txn_id,
             )
-            return
+            return transaction
 
-        # Erase KV from full instance (it now belongs to the quarter)
+        # Restore confirmed — placement waiters may now proceed (audit refinement:
+        # incoming request must wait for VERIFIED before placing on the freed slot).
+        transaction.advance(MigrationState.VERIFIED, detail="restore_confirmed")
+
+        # Source erase happens AFTER verification — destructive on failure, so
+        # we want to be 100% sure the restore succeeded before clearing source.
         _slot_erase(self._full_url)
+        transaction.advance(MigrationState.SOURCE_ERASED)
+
         self._finalize_quarter_assignment(
             session_id,
             target_quarter,
             state=_STATE_ASSIGNED_QUARTER,
             detail="restored",
         )
+        transaction.advance(MigrationState.COMMITTED)
 
-        elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(
-            "KV migration complete: %s session=%s full → quarter %d (%.0fms)",
-            self._role,
-            session_id,
-            target_quarter,
-            elapsed_ms,
+            "KV migration complete: %s session=%s full → quarter %d (%.0fms, txn=%s)",
+            self._role, session_id, target_quarter,
+            transaction.elapsed_ms, transaction.txn_id,
         )
+        return transaction
 
     def _release(self, idx: int, is_full: bool) -> None:
         with self._lock:
             if is_full:
                 self._full_active = False
+                self._full_idle_since = time.monotonic()
             elif 0 <= idx < len(self._quarter_active):
                 self._quarter_active[idx] = False
+        # WP-4: opportunistically migrate the released quarter's session back
+        # to full when load drops, cooldown elapsed, session is warm, and the
+        # per-session migration cap hasn't been exceeded. Spawned as a daemon
+        # thread so the dispatcher's finally-block stays fast.
+        if not is_full and self._reverse_migration_enabled():
+            self._maybe_spawn_reverse_migration(idx)
+
+    @staticmethod
+    def _reverse_migration_enabled() -> bool:
+        """WP-4: gate the quarter→full reverse migration trigger. Default off
+        until the gate passes (30-min mixed traffic shows reverse migrations
+        firing; solo-after-burst latency ≤+10% vs solo-only baseline)."""
+        import os as _os
+        return _os.environ.get("ORCHESTRATOR_REVERSE_MIGRATION", "0").strip() in {
+            "1", "true", "yes", "on",
+        }
+
+    def _maybe_spawn_reverse_migration(self, released_quarter_idx: int) -> None:
+        """WP-4: check the four reverse-migration guards and, if all pass,
+        spawn `_reverse_migrate_kv(session_id, source_quarter)` in a daemon
+        thread. Idempotent — all guards short-circuit on failure.
+        """
+        now = time.monotonic()
+        # Find the session whose quarter affinity matches the released quarter.
+        with self._lock:
+            session_id: Optional[str] = None
+            for sid, q_idx in self._session_quarter.items():
+                if q_idx == released_quarter_idx:
+                    session_id = sid
+                    break
+            if session_id is None:
+                return  # released quarter has no affinity owner
+
+            # Guard 1: full has been idle for ≥ cooldown.
+            cooldown_s = self._reverse_migration_cooldown_ms() / 1000.0
+            if self._full_active or self._full_idle_since is None:
+                return
+            if (now - self._full_idle_since) < cooldown_s:
+                return
+
+            # Guard 2: session has had a recent request (within window).
+            window_s = self._reverse_migration_window_ms() / 1000.0
+            last_seen = self._session_last_seen.get(session_id, 0.0)
+            if last_seen == 0.0 or (now - last_seen) > window_s:
+                return  # session idle too long to be worth warming back to full
+
+            # Guard 3: per-session migration cap (avoid ping-pong).
+            cap = self._reverse_migration_session_cap()
+            if self._reverse_migration_counts.get(session_id, 0) >= cap:
+                return
+
+            # Guard 4: don't double-fire.
+            if self._reverse_migration_in_flight.get(session_id, False):
+                return
+            self._reverse_migration_in_flight[session_id] = True
+            self._reverse_migration_counts[session_id] = (
+                self._reverse_migration_counts.get(session_id, 0) + 1
+            )
+
+        threading.Thread(
+            target=self._reverse_migrate_kv,
+            args=(session_id, released_quarter_idx),
+            daemon=True,
+            name=f"kv-reverse-{self._role}-{session_id[:8]}",
+        ).start()
+
+    @staticmethod
+    def _reverse_migration_cooldown_ms() -> int:
+        import os as _os
+        try:
+            return max(0, int(_os.environ.get("ORCHESTRATOR_REVERSE_MIGRATION_COOLDOWN_MS", "2000")))
+        except (TypeError, ValueError):
+            return 2000
+
+    @staticmethod
+    def _reverse_migration_window_ms() -> int:
+        import os as _os
+        try:
+            return max(0, int(_os.environ.get("ORCHESTRATOR_REVERSE_MIGRATION_WINDOW_MS", "30000")))
+        except (TypeError, ValueError):
+            return 30000
+
+    @staticmethod
+    def _reverse_migration_session_cap() -> int:
+        import os as _os
+        try:
+            return max(0, int(_os.environ.get("ORCHESTRATOR_REVERSE_MIGRATION_SESSION_CAP", "5")))
+        except (TypeError, ValueError):
+            return 5
+
+    def _reverse_migrate_kv(self, session_id: str, source_quarter: int) -> None:
+        """WP-4: quarter → full migration. Mirrors _migrate_kv but in the
+        opposite direction. Uses a MigrationTransaction so observability
+        is consistent across forward and reverse. Best-effort — on failure
+        the session stays on the quarter and the in-flight flag is cleared
+        so a future opportunity can retry."""
+        from src.scheduling.migration_transaction import (
+            MigrationState,
+            MigrationTransaction,
+        )
+
+        try:
+            if not self._full_url:
+                return
+            source_url = (
+                self._quarter_urls[source_quarter]
+                if source_quarter < len(self._quarter_urls)
+                else None
+            )
+            if not source_url:
+                return
+
+            txn = MigrationTransaction(
+                role=self._role,
+                session_id=session_id,
+                source_url=source_url,
+                target_quarter=-1,  # convention: -1 = full
+                target_url=self._full_url,
+            )
+
+            txn.advance(MigrationState.SAVING)
+            if not _slot_save(source_url):
+                txn.advance(MigrationState.ABORTED, detail="save_failed")
+                logger.warning(
+                    "WP-4 reverse migration save failed role=%s session=%s txn=%s",
+                    self._role, session_id, txn.txn_id,
+                )
+                return
+
+            txn.advance(MigrationState.RESTORING)
+            if not _slot_restore(self._full_url):
+                txn.advance(MigrationState.ABORTED, detail="restore_failed")
+                logger.warning(
+                    "WP-4 reverse migration restore failed role=%s session=%s txn=%s",
+                    self._role, session_id, txn.txn_id,
+                )
+                return
+
+            txn.advance(MigrationState.VERIFIED, detail="restore_confirmed")
+            _slot_erase(source_url)
+            txn.advance(MigrationState.SOURCE_ERASED)
+
+            # Clear the quarter affinity — session now belongs to full again.
+            with self._lock:
+                if self._session_quarter.get(session_id) == source_quarter:
+                    self._session_quarter.pop(session_id, None)
+                self._full_last_session = session_id
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_ASSIGNED_FULL,
+                    quarter=None,
+                    detail="reverse_migrated",
+                )
+            txn.advance(MigrationState.COMMITTED)
+            logger.info(
+                "WP-4 reverse migration committed role=%s session=%s quarter%d→full (%.0fms, txn=%s)",
+                self._role, session_id, source_quarter, txn.elapsed_ms, txn.txn_id,
+            )
+        finally:
+            with self._lock:
+                self._reverse_migration_in_flight.pop(session_id, None)
 
     def clear_session(self, session_id: str) -> None:
         """Remove session affinity (call when session completes)."""
@@ -531,8 +743,36 @@ class ConcurrencyAwareBackend:
             "1", "true", "yes", "on",
         }
 
+    @staticmethod
+    def _placement_state_machine_enabled() -> bool:
+        """WP-2: gate the topology-safe placement filter + poll-on-queue
+        fallback. Default off — operators flip to 1 after the WP-2 gate
+        (4-way frontdoor shows 3 active + 1 queued, never overlap).
+
+        When off, falls back to the prior greedy try-loop + blocking-on-full
+        fallback so existing deployments are unaffected by this code landing.
+        """
+        import os as _os
+        return _os.environ.get("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "0").strip() in {
+            "1", "true", "yes", "on",
+        }
+
+    def _extract_migration_budget_ms(self, request: Any) -> Optional[int]:
+        """Best-effort read of ChatRequest.migration_budget_ms for the WP-3
+        load-transition trigger. Returns None if not present."""
+        if request is None:
+            return None
+        v = getattr(request, "migration_budget_ms", None)
+        if v is None:
+            return None
+        try:
+            iv = int(v)
+            return iv if iv > 0 else None
+        except (TypeError, ValueError):
+            return None
+
     @contextmanager
-    def _dispatch(self, session_id: str = ""):
+    def _dispatch(self, session_id: str = "", migration_budget_ms: Optional[int] = None):
         """Yield (backend, idx, is_full) with the right lock held.
 
         Two paths:
@@ -544,6 +784,13 @@ class ConcurrencyAwareBackend:
         locks. Caller calls backend.infer/infer_stream_text inside the
         with-block; nothing else.
         """
+        # WP-4: stamp per-session last-seen so the reverse-migration trigger
+        # can distinguish warm sessions (recently active → worth migrating
+        # back to full) from cold ones (idle long enough that the KV save
+        # cost isn't repaid by future requests).
+        if session_id:
+            with self._lock:
+                self._session_last_seen[session_id] = time.monotonic()
         if not self._per_region_locks_enabled():
             backend, idx, is_full = self._select(session_id=session_id)
             try:
@@ -605,24 +852,89 @@ class ConcurrencyAwareBackend:
 
         chosen_ctx = None
         chosen_idx = -2
-        for ca_idx, topo_idx in candidates:
-            attempt = _try_instance(self._role, topo_idx)
-            if attempt is not None:
-                chosen_ctx, _paths = attempt
-                chosen_idx = ca_idx
-                break
 
-        if chosen_ctx is None:
-            # All non-blocking attempts failed → block on full's region locks.
-            # Use a generous timeout (60s) — caller's own deadline still
-            # propagates via deadline_s if set.
-            blocking_ctx = cpu_region_lock_for_instance(
-                self._role, 0,
-                timeout_s=60.0, deadline_s=deadline_s,
-            )
-            chosen_ctx = blocking_ctx
-            blocking_ctx.__enter__()
-            chosen_idx = -1
+        if self._placement_state_machine_enabled():
+            # WP-2 path: topology-safe filter + poll-on-queue. The placement
+            # policy filters dispatcher-priority `candidates` down to those
+            # whose cpuset is disjoint from currently-held regions for this
+            # role. If at least one survives, try-acquire each non-blocking.
+            # If none survive (every candidate overlaps), poll until a release
+            # makes a candidate safe; cap by 60s wall-clock (the same generous
+            # bound the legacy block-on-full fallback used).
+            #
+            # WP-3 layer (this dispatch path is unchanged from WP-2): the
+            # transactional migration model + policy gating + migration
+            # budget threading apply to the EXISTING session-handover
+            # trigger below (lines following "chosen_idx == -1"), not here.
+            # A proactive load-transition trigger inside the poll loop was
+            # explored and removed: _migrate_kv cannot preempt an in-flight
+            # decode, so triggering it during a queue-wait does not unblock
+            # the queue — the existing inference must complete and release
+            # its lock, after which the WP-2 poll re-evaluates and succeeds.
+            from src.scheduling.placement import evaluate_placement
+            from src.runtime.cpu_region_lock import active_region_holders
+            from src.runtime.instance_topology import get_instance_regions
+            from src.scheduling.contention_gate import ContentionDenied
+
+            instance_regions = get_instance_regions()
+            poll_deadline = time.perf_counter() + 60.0
+            poll_interval_s = 0.150  # matches contention_gate._GATE_POLL_S
+            queue_log_emitted = False
+            while True:
+                holders_for_role = active_region_holders().get(self._role, [])
+                placement = evaluate_placement(
+                    role=self._role,
+                    candidates=candidates,
+                    holder_idxs=holders_for_role,
+                    instance_regions=instance_regions,
+                )
+                if not placement.is_queue:
+                    # At least one safe candidate — try them in priority order.
+                    for place in placement.places:
+                        attempt = _try_instance(self._role, place.topology_idx)
+                        if attempt is not None:
+                            chosen_ctx, _paths = attempt
+                            chosen_idx = place.internal_idx
+                            break
+                    if chosen_ctx is not None:
+                        break  # acquired; exit poll loop
+                    # Race: every safe candidate's lock was stolen between
+                    # the holder snapshot and the try-acquire. Re-poll.
+                else:
+                    if not queue_log_emitted:
+                        logger.info(
+                            "placement queued role=%s reason=%s detail=%s",
+                            self._role, placement.queue.reason.value, placement.queue.detail,
+                        )
+                        queue_log_emitted = True
+                if time.perf_counter() >= poll_deadline:
+                    raise ContentionDenied(
+                        f"placement timeout role={self._role} "
+                        f"reason={placement.queue.reason.value if placement.queue else 'race_lost'} "
+                        f"holders={holders_for_role} after 60.0s"
+                    )
+                time.sleep(poll_interval_s)
+        else:
+            # Legacy path: greedy try-loop + blocking-on-full fallback.
+            for ca_idx, topo_idx in candidates:
+                attempt = _try_instance(self._role, topo_idx)
+                if attempt is not None:
+                    chosen_ctx, _paths = attempt
+                    chosen_idx = ca_idx
+                    break
+
+            if chosen_ctx is None:
+                # All non-blocking attempts failed → block on full's region
+                # locks. Lock layer's union-acquisition prevents overlap
+                # (full's lock takes all of full's regions), but this can
+                # wait on full even when a quarter would have been safe sooner.
+                blocking_ctx = cpu_region_lock_for_instance(
+                    self._role, 0,
+                    timeout_s=60.0, deadline_s=deadline_s,
+                )
+                chosen_ctx = blocking_ctx
+                blocking_ctx.__enter__()
+                chosen_idx = -1
 
         # Update in-process telemetry (best-effort; not authoritative).
         # 2026-05-24 Phase E port: when full is acquired by a DIFFERENT session
@@ -633,6 +945,18 @@ class ConcurrencyAwareBackend:
         # session's KV to a disjoint quarter.
         migrate_old_session: str | None = None
         migrate_target_quarter: int | None = None
+        # WP-3 policy gate: FULL_DISABLED + QUEUE_ONLY skip migration; the
+        # other two policies (SOLO_PREFER_FULL = default, BURST_PREFER_QUARTERS)
+        # leave the existing session-handover migration trigger active.
+        from src.scheduling.placement_policy import (
+            RolePlacementPolicy,
+            get_placement_policy,
+        )
+        _policy = get_placement_policy(self._role)
+        _migration_allowed_by_policy = _policy in (
+            RolePlacementPolicy.SOLO_PREFER_FULL,
+            RolePlacementPolicy.BURST_PREFER_QUARTERS,
+        )
         with self._lock:
             self._total_requests += 1
             if chosen_idx == -1:
@@ -641,6 +965,7 @@ class ConcurrencyAwareBackend:
                 old_session = self._full_last_session
                 if (
                     self._kv_migration_enabled
+                    and _migration_allowed_by_policy
                     and old_session
                     and session_id
                     and old_session != session_id
@@ -672,13 +997,30 @@ class ConcurrencyAwareBackend:
                 if session_id:
                     self._session_quarter[session_id] = chosen_idx
 
-        # Kick off migration outside the lock (the thread does its own locking)
+        # Kick off migration outside the lock (the thread does its own locking).
+        # WP-3: pre-allocate the MigrationTransaction with the per-request
+        # budget honored from ChatRequest.migration_budget_ms (default 30s
+        # when no per-request override; matches the legacy _SLOT_SAVE_TIMEOUT).
         if migrate_old_session is not None and migrate_target_quarter is not None:
+            from src.scheduling.migration_transaction import MigrationTransaction
+            _target_url = (
+                self._quarter_urls[migrate_target_quarter]
+                if migrate_target_quarter < len(self._quarter_urls)
+                else ""
+            )
+            _txn = MigrationTransaction(
+                role=self._role,
+                session_id=migrate_old_session,
+                source_url=self._full_url or "",
+                target_quarter=migrate_target_quarter,
+                target_url=_target_url,
+                migration_budget_ms=(migration_budget_ms or 30_000),
+            )
             threading.Thread(
                 target=self._migrate_kv,
-                args=(migrate_old_session, migrate_target_quarter),
+                args=(migrate_old_session, migrate_target_quarter, _txn),
                 daemon=True,
-                name=f"kv-migrate-{self._role}-{migrate_old_session[:8]}",
+                name=f"kv-migrate-{self._role}-{migrate_old_session[:8]}-{_txn.txn_id}",
             ).start()
 
         # Telemetry: stamp quarter-assignment session state outside the lock
@@ -711,17 +1053,20 @@ class ConcurrencyAwareBackend:
 
     def infer(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
-        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
+        mb = self._extract_migration_budget_ms(request)
+        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
             return backend.infer(role_config, request)
 
     def infer_streaming(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
-        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
+        mb = self._extract_migration_budget_ms(request)
+        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
             return backend.infer_streaming(role_config, request)
 
     def infer_stream_text(self, role_config: Any, request: Any, on_chunk: Any = None) -> Any:
         sid = self._extract_session_id(request)
-        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
+        mb = self._extract_migration_budget_ms(request)
+        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
             return backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
 
     def health_check(self, pid: int = 0) -> bool:

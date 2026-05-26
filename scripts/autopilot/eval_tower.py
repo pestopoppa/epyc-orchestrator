@@ -26,15 +26,34 @@ SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
 DEFAULT_TIMEOUT = 120
 
-# Concurrent fan-out for sentinel/pool evaluations. Default 4 = number of
-# quarter instances on frontdoor (the bottleneck role for autopilot trials);
-# overflow to full happens automatically via ConcurrencyAwareBackend's
-# region-lock dispatcher. Set to 1 to force the legacy serial path.
+# Concurrent fan-out for sentinel/pool evaluations.
+#
+# Default behavior (WP-1): topology-derived safe-N from the bottleneck role
+# (`AUTOPILOT_EVAL_BOTTLENECK_ROLE`, default "frontdoor"). For the current
+# stack, that's 3 (full + q3 + q2 disjoint) — the largest fan-out that lands
+# every request on a cpuset disjoint from all the others under
+# ConcurrencyAwareBackend's full-first dispatcher. Roles whose full instance
+# covers all 0-95 (worker_general, architect_general) cap the default at 1.
+#
+# Operators can still override via `AUTOPILOT_EVAL_CONCURRENCY=N`. The env
+# override always wins, even over the topology cap, because some test/diag
+# paths intentionally exceed it (e.g. WP-3 migration smoke tests).
+#
+# Reference topology safe-N: frontdoor=3, ingest_long_context=3,
+# vision_escalation=3, worker_general=1, architect_general=1, worker_vision=1.
 def _eval_concurrency() -> int:
+    raw = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
+    if raw is not None:
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            pass  # fall through to topology default
+    bottleneck = os.environ.get("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
     try:
-        return max(1, int(os.environ.get("AUTOPILOT_EVAL_CONCURRENCY", "4")))
-    except (TypeError, ValueError):
-        return 4
+        from src.runtime.instance_topology import max_safe_concurrency
+        return max(1, max_safe_concurrency(bottleneck))
+    except Exception:
+        return 1
 
 # Import seeding infrastructure
 import sys
