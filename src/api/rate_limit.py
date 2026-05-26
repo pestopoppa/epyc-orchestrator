@@ -50,6 +50,20 @@ _SKIP_PATHS = frozenset({"/health", "/healthz", "/ready"})
 _RATE_LIMIT_BODY = json.dumps({"detail": "Rate limit exceeded. Try again later."}).encode()
 
 
+def _is_loopback_peer(scope: Scope) -> bool:
+    """True iff the transport-layer peer is loopback.
+
+    Checks scope["client"] directly (ignores X-Forwarded-For) so a remote
+    caller cannot spoof bypass via headers. Local processes and
+    SSH-forwarded browsers both appear as 127.0.0.0/8 or ::1.
+    """
+    client = scope.get("client")
+    if not client:
+        return False
+    host = client[0]
+    return host.startswith("127.") or host == "::1"
+
+
 class RateLimitMiddleware:
     """Pure-ASGI per-IP rate limiting middleware using token buckets.
 
@@ -128,6 +142,13 @@ class RateLimitMiddleware:
 
         # Skip rate limiting for health checks
         if path in _SKIP_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        # Loopback peers (local processes, SSH tunnels) bypass rate limiting:
+        # all dashboard polls share one 127.0.0.1 bucket and would otherwise
+        # starve each other. Access is already gated by SSH.
+        if _is_loopback_peer(scope):
             await self.app(scope, receive, send)
             return
 
