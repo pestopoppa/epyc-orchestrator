@@ -741,6 +741,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
             vision_mode = False
             vision_type = None
 
+            numa_instance = 0
             for server in HOT_SERVERS + WARM_SERVERS:
                 if server["port"] == port:
                     roles = server["roles"]
@@ -749,6 +750,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                     embedding_mode = server.get("embedding", False)
                     vision_mode = server.get("vision", False)
                     vision_type = server.get("vision_type")
+                    numa_instance = server.get("numa_instance", 0)  # fix: reload must preserve per-quarter -t
                     break
 
             # Stop existing
@@ -766,6 +768,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 worker_type=worker_type,
                 vision_mode=vision_mode,
                 vision_type=vision_type,
+                numa_instance=numa_instance,
             )
             if info:
                 state[key] = info

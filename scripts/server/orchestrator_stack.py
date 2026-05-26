@@ -660,7 +660,8 @@ def start_server(
             model_name = "Qwen2.5-VL-7B (vision worker)"
 
         cmd = build_server_command(
-            None, port, vision_mode=True, vision_type=vision_type
+            None, port, vision_mode=True, vision_type=vision_type,
+            numa_instance=numa_instance,  # fix: forward so quarters get NUMA_CONFIG -t (was always -t 96)
         )
 
         print(f"  Starting vision server [{vision_type or 'worker'}] on port {port}: {model_name}")
@@ -774,6 +775,7 @@ def start_server(
         cmd = build_server_command(
             None, port, worker_pool_mode=True, worker_type=worker_type,
             binary_override=binary_override,
+            numa_instance=numa_instance,  # fix: forward so gemma4 quarters get NUMA_CONFIG -t 48 (was always -t 96)
         )
         model_name = Path(model_path).stem
 
