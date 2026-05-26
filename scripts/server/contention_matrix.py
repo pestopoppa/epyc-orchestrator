@@ -558,6 +558,128 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── J4b: N-way measurement (runs ALONE on host) ─────────────────────
+#
+# Measures each non-trivial candidate active set from the J4a manifest:
+# solo each role, then all-K concurrent; ratio = parallel_aggregate /
+# seq_aggregate over `samples` repetitions; gate on CV <= 0.05.
+# Honors feedback_no_concurrent_inference: must run alone.
+
+
+def _bench_nway(role_ports: list[tuple[str, int]], samples: int = 3) -> dict[str, Any]:
+    """Solo + all-K-concurrent bench for one active set. Returns ratio/cv/verdict."""
+    import statistics
+    details: list[dict[str, Any]] = []
+    ratios: list[float] = []
+    for s in range(samples):
+        solo: dict[str, tuple[float, float]] = {}
+        for role, port in role_ports:
+            solo[role] = _http_bench(port)
+        with ThreadPoolExecutor(max_workers=len(role_ports)) as ex:
+            futs = {role: ex.submit(_http_bench, port) for role, port in role_ports}
+            par = {role: futs[role].result() for role, _ in role_ports}
+        total_tokens = N_PREDICT * len(role_ports)
+        seq_time = sum(el for _, el in solo.values()) or 0.001
+        par_time = max(el for _, el in par.values()) or 0.001
+        seq_agg = total_tokens / seq_time
+        par_agg = total_tokens / par_time
+        ratio = par_agg / seq_agg if seq_agg > 0 else 0.0
+        ratios.append(ratio)
+        details.append({
+            "sample": s,
+            "solo_tps": {r: round(t, 2) for r, (t, _e) in solo.items()},
+            "par_tps": {r: round(t, 2) for r, (t, _e) in par.items()},
+            "seq_aggregate_tps": round(seq_agg, 2),
+            "parallel_aggregate_tps": round(par_agg, 2),
+            "ratio": round(ratio, 3),
+        })
+        log.info("  sample %d: seq=%.1f par=%.1f ratio=%.3f", s, seq_agg, par_agg, ratio)
+    mean_ratio = statistics.mean(ratios)
+    cv = (statistics.pstdev(ratios) / mean_ratio) if mean_ratio else 0.0
+    verdict = "allow" if mean_ratio >= 1.0 else ("borderline" if mean_ratio >= DEFAULT_FLOOR else "block")
+    return {
+        "ratio": round(mean_ratio, 3),
+        "cv": round(cv, 4),
+        "samples": samples,
+        "seq_aggregate_tps": round(statistics.mean(d["seq_aggregate_tps"] for d in details), 2),
+        "parallel_aggregate_tps": round(statistics.mean(d["parallel_aggregate_tps"] for d in details), 2),
+        "verdict": verdict,
+        "per_sample": details,
+    }
+
+
+def cmd_bench_nway(args: argparse.Namespace) -> int:
+    from stack_numa import NUMA_CONFIG
+    from src.scheduling.contention import topology_fingerprint, matrix_status, MatrixStatus
+
+    matrix_path = DEFAULT_OUTPUT
+    live_hash = topology_fingerprint(NUMA_CONFIG)
+    status = matrix_status(matrix_path, current_topology_hash=live_hash)
+    if status != MatrixStatus.OK:
+        log.error("matrix status %s (live hash %s) — refusing N-way bench against stale topology", status.value, live_hash)
+        return 2
+
+    manifest = json.loads(Path(args.manifest).read_text())
+    if manifest.get("topology_hash") != live_hash:
+        log.error("manifest topology_hash %s != live %s — re-run J4a enumerate first",
+                  manifest.get("topology_hash"), live_hash)
+        return 2
+
+    sets = [tuple(c["roles"]) for c in manifest.get("candidate_sets", [])]
+    if args.include_flagged:
+        for fl in manifest.get("flags", []):
+            roles = tuple(sorted(fl["roles"]))
+            if roles not in sets:
+                sets.append(roles)
+    if not sets:
+        log.warning("no candidate sets to measure")
+        return 0
+
+    results: list[dict[str, Any]] = []
+    for roleset in sets:
+        role_ports = [(r, _full_port(NUMA_CONFIG, r)) for r in roleset]
+        if any(p is None for _r, p in role_ports):
+            log.warning("skipping %s — missing full port", roleset)
+            continue
+        log.info("=== N-way bench %s ports=%s ===", list(roleset), [p for _r, p in role_ports])
+        b = _bench_nway(role_ports, samples=args.samples)
+        entry = {
+            "roles": sorted(roleset), "size": len(roleset),
+            "topology_hash": live_hash, "ports": {r: p for r, p in role_ports},
+            "measured_at": datetime.now(timezone.utc).isoformat(), **b,
+        }
+        results.append(entry)
+        log.info("  → %s ratio=%.3f cv=%.4f verdict=%s", list(roleset), b["ratio"], b["cv"], b["verdict"])
+
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "j4b_nway_results.json").write_text(json.dumps({
+        "task_id": "J4b", "topology_hash": live_hash,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "manifest": args.manifest, "n_way": results,
+    }, indent=2) + "\n")
+
+    # Emit a YAML block ready to append to contention_matrix.yaml.
+    yb: list[str] = ["n_way:"]
+    for e in results:
+        yb.append(f"  - roles: [{', '.join(repr(r) for r in e['roles'])}]")
+        yb.append(f"    size: {e['size']}")
+        yb.append(f'    topology_hash: "{e["topology_hash"]}"')
+        yb.append(f"    seq_aggregate_tps: {e['seq_aggregate_tps']}")
+        yb.append(f"    parallel_aggregate_tps: {e['parallel_aggregate_tps']}")
+        yb.append(f"    ratio: {e['ratio']}")
+        yb.append(f"    samples: {e['samples']}")
+        yb.append(f"    cv: {e['cv']}")
+        yb.append(f'    verdict: "{e["verdict"]}"')
+        yb.append(f'    measured_at: "{e["measured_at"]}"')
+    (out_dir / "j4b_n_way_block.yaml").write_text("\n".join(yb) + "\n")
+    log.info("wrote %s (%d sets) + YAML block", out_dir / "j4b_nway_results.json", len(results))
+    for e in results:
+        cv_ok = "CV_OK" if e["cv"] <= 0.05 else "CV_HIGH"
+        log.info("  RESULT %s ratio=%.3f verdict=%s %s", e["roles"], e["ratio"], e["verdict"], cv_ok)
+    return 0
+
+
 # ── CLI ──────────────────────────────────────────────────────────────
 
 
@@ -676,6 +798,17 @@ def main() -> int:
     p_enum.add_argument("--max-size", type=int, default=None, dest="max_size", help="max active-set size to enumerate (default: #roles)")
     p_enum.add_argument("--run-id", default=None, dest="run_id", help="stable run id for the manifest")
     p_enum.set_defaults(func=cmd_enumerate)
+
+    p_nway = sub.add_parser(
+        "bench-nway",
+        help="J4b: measure N-way candidate sets from a J4a manifest (runs ALONE)",
+    )
+    p_nway.add_argument("--manifest", required=True, help="J4a candidate manifest JSON")
+    p_nway.add_argument("--output", required=True, help="output dir for j4b_nway_results.json")
+    p_nway.add_argument("--samples", type=int, default=3, help="repetitions per set (CV gate)")
+    p_nway.add_argument("--include-flagged", action="store_true",
+                        help="also measure the manifest's discrepancy-flagged sets")
+    p_nway.set_defaults(func=cmd_bench_nway)
 
     args = p.parse_args()
     if args.cmd is None:

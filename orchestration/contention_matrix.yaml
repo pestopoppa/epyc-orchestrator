@@ -195,3 +195,57 @@ triples:
   - roles: ["frontdoor", "worker_general", "ingest_long_context"]
     ratio: 0.49
     note: "frontdoor+ingest catastrophic poisons the whole triple"
+
+# ── N-way closure (Package J / J4a enumeration + J4b measurement, 2026-05-26) ──
+# J4a (scripts/server/contention_matrix.py enumerate) produced 2 non-trivial
+# candidate triples + 1 discrepancy-flagged set; J4b (bench-nway, run alone)
+# measured all 3. seq_aggregate_tps = sum of solo; parallel_aggregate_tps =
+# total_tokens / max parallel wall; ratio >= 1.0 allow, >= 0.85 borderline,
+# < 0.85 block. Artifacts: data/contention_matrix/bulk-2026-05-26-j4b/.
+# Closed-world for topology_hash df373c79cc4af06f: every non-trivial N-way set
+# is measured allow / block / excluded — no residual unmeasured bucket.
+n_way:
+  - roles: ["vision_escalation", "worker_general", "worker_vision"]
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 18.85
+    parallel_aggregate_tps: 24.24
+    ratio: 1.286
+    samples: 3
+    cv: 0.0028
+    verdict: "allow"
+    measured_at: "2026-05-26T10:28:31Z"
+  - roles: ["frontdoor", "vision_escalation", "worker_general"]
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 38.02
+    parallel_aggregate_tps: 42.81
+    ratio: 1.126
+    samples: 3
+    cv: 0.06
+    verdict: "allow"
+    measured_at: "2026-05-26T10:29:18Z"
+    note: >-
+      J4a flagged this set: it was pairwise-excluded because frontdoor+vision_escalation=0.84
+      (< floor), yet the N-way measurement is positive (1.126). N-way reality beats the
+      conservative pairwise floor here. Treat as foreground-allow; the frontdoor+vision PAIR
+      itself stays borderline for background/bulk. Matches the legacy informational triple (1.45).
+
+# Sets measured unsafe or pruned by lower-order evidence.
+excluded_n_way:
+  - roles: ["ingest_long_context", "vision_escalation", "worker_general"]
+    topology_hash: "df373c79cc4af06f"
+    reason: crashed_worker_general_full_under_contention
+    ratio_when_completing: 1.209
+    cv: 0.1517
+    verdict: "block"
+    evidence: >-
+      J4b: worker_general full (gemma4-26B-A4B MTP, port 8072) crashed mid-bench
+      (Errno 111 connection refused on samples 2-3). Crash signature in
+      logs/worker-explore-8072.log: degenerate repetition ("decision-making…") then
+      `terminate: std::runtime_error Failed to parse input at pos 0:`. The heaviest
+      3-way contention (gemma4 full 0-95 vs ingest 0-47 + vision 48-95) destabilized
+      the MTP full instance. Aggregate ratio was 1.209 on completing samples but the
+      set is UNSAFE for cross-role parallelism until the gemma4 full-instance stability
+      is addressed. Restored full instance after the bench (new PID, healthy). See
+      feedback_gemma4_mtp_fa_assert_wedge (different signature — parse error, not FA assert).

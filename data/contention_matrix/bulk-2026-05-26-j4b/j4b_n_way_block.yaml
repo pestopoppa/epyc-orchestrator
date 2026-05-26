@@ -1,0 +1,31 @@
+n_way:
+  - roles: ['ingest_long_context', 'vision_escalation', 'worker_general']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 30.07
+    parallel_aggregate_tps: 36.09
+    ratio: 1.209
+    samples: 3
+    cv: 0.1517
+    verdict: "allow"
+    measured_at: "2026-05-26T10:27:05.050046+00:00"
+  - roles: ['vision_escalation', 'worker_general', 'worker_vision']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 18.85
+    parallel_aggregate_tps: 24.24
+    ratio: 1.286
+    samples: 3
+    cv: 0.0028
+    verdict: "allow"
+    measured_at: "2026-05-26T10:28:31.492726+00:00"
+  - roles: ['frontdoor', 'vision_escalation', 'worker_general']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 38.02
+    parallel_aggregate_tps: 42.81
+    ratio: 1.126
+    samples: 3
+    cv: 0.06
+    verdict: "allow"
+    measured_at: "2026-05-26T10:29:18.396751+00:00"

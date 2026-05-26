@@ -1,0 +1,56 @@
+{
+  "task": "placement_fanout_probe",
+  "role": "frontdoor",
+  "mode": "serial",
+  "n": 3,
+  "ts": "2026-05-26T10:02:28Z",
+  "metrics": {
+    "speed_metric_mode": "serial_median",
+    "eval_concurrency": 1,
+    "n_requests": 3,
+    "n_ok": 3,
+    "median_request_tps": 25.52913752942448,
+    "aggregate_batch_tps": 25.511718741139916,
+    "eval_wall_s": 155.576,
+    "p50_latency_s": 51.83428301406093,
+    "p99_latency_s": 52.05912252899725,
+    "total_tokens_generated": 3969
+  },
+  "placement": {
+    "per_region_locks_enabled": null,
+    "max_distinct_active_instances": null,
+    "observed_active_instance_idxs": null,
+    "n_poll_samples": 0
+  },
+  "queue_log_lines": [],
+  "queue_log_count": 0,
+  "requests": [
+    {
+      "idx": 0,
+      "ok": true,
+      "status": 200,
+      "latency_s": 52.05912252899725,
+      "tokens_generated": 1323,
+      "elapsed_seconds": 52.031898769084364,
+      "req_tps": 25.42670998556914
+    },
+    {
+      "idx": 1,
+      "ok": true,
+      "status": 200,
+      "latency_s": 51.682096380973235,
+      "tokens_generated": 1323,
+      "elapsed_seconds": 51.67454768391326,
+      "req_tps": 25.602546307567614
+    },
+    {
+      "idx": 2,
+      "ok": true,
+      "status": 200,
+      "latency_s": 51.83428301406093,
+      "tokens_generated": 1323,
+      "elapsed_seconds": 51.8231373259332,
+      "req_tps": 25.52913752942448
+    }
+  ]
+}

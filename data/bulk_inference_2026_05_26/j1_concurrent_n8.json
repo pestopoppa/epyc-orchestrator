@@ -1,0 +1,105 @@
+{
+  "task": "placement_fanout_probe",
+  "role": "frontdoor",
+  "mode": "concurrent",
+  "n": 8,
+  "ts": "2026-05-26T10:20:18Z",
+  "metrics": {
+    "speed_metric_mode": "aggregate_batch",
+    "eval_concurrency": 8,
+    "n_requests": 8,
+    "n_ok": 4,
+    "median_request_tps": 14.94973710129348,
+    "aggregate_batch_tps": 45.55874723622494,
+    "eval_wall_s": 145.197,
+    "p50_latency_s": 92.74008491600398,
+    "p99_latency_s": 145.1959571490297,
+    "total_tokens_generated": 6615
+  },
+  "placement": {
+    "per_region_locks_enabled": null,
+    "max_distinct_active_instances": null,
+    "observed_active_instance_idxs": null,
+    "n_poll_samples": 0
+  },
+  "queue_log_lines": [],
+  "queue_log_count": 0,
+  "requests": [
+    {
+      "idx": 0,
+      "ok": true,
+      "status": 200,
+      "latency_s": 145.1959571490297,
+      "tokens_generated": 2646,
+      "elapsed_seconds": 145.09541783493478,
+      "req_tps": 18.236275407471343
+    },
+    {
+      "idx": 1,
+      "ok": true,
+      "status": 200,
+      "latency_s": 89.51164104999043,
+      "tokens_generated": 1323,
+      "elapsed_seconds": 89.48091290297452,
+      "req_tps": 14.785276067026142
+    },
+    {
+      "idx": 2,
+      "ok": false,
+      "status": 429,
+      "latency_s": 0.02918592293281108,
+      "tokens_generated": 0,
+      "elapsed_seconds": null,
+      "req_tps": null,
+      "error": "HTTPStatusError: Client error '429 Too Many Requests' for url 'http://127.0.0.1:8000/chat'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"
+    },
+    {
+      "idx": 3,
+      "ok": false,
+      "status": 429,
+      "latency_s": 0.029572426923550665,
+      "tokens_generated": 0,
+      "elapsed_seconds": null,
+      "req_tps": null,
+      "error": "HTTPStatusError: Client error '429 Too Many Requests' for url 'http://127.0.0.1:8000/chat'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"
+    },
+    {
+      "idx": 4,
+      "ok": false,
+      "status": 429,
+      "latency_s": 0.029360065003857017,
+      "tokens_generated": 0,
+      "elapsed_seconds": null,
+      "req_tps": null,
+      "error": "HTTPStatusError: Client error '429 Too Many Requests' for url 'http://127.0.0.1:8000/chat'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"
+    },
+    {
+      "idx": 5,
+      "ok": true,
+      "status": 200,
+      "latency_s": 92.74008491600398,
+      "tokens_generated": 1323,
+      "elapsed_seconds": 92.7106267591007,
+      "req_tps": 14.270208780247849
+    },
+    {
+      "idx": 6,
+      "ok": false,
+      "status": 429,
+      "latency_s": 0.028803470078855753,
+      "tokens_generated": 0,
+      "elapsed_seconds": null,
+      "req_tps": null,
+      "error": "HTTPStatusError: Client error '429 Too Many Requests' for url 'http://127.0.0.1:8000/chat'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429"
+    },
+    {
+      "idx": 7,
+      "ok": true,
+      "status": 200,
+      "latency_s": 87.56303269800264,
+      "tokens_generated": 1323,
+      "elapsed_seconds": 87.53358849301003,
+      "req_tps": 15.114198135560818
+    }
+  ]
+}
