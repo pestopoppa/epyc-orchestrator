@@ -180,6 +180,51 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
     return JSONResponse(snap)
 
 
+# ── region_locks helpers (module-scope so tests can import) ─────────────
+
+def _shape_for_regions(regs: "frozenset[str] | set[str] | list[str]") -> str:
+    """Canonical column-bucket name for an instance covering `regs`.
+
+    Returns one of: "full" (all 4 quarters), "half0" (q0+q1), "half1"
+    (q2+q3), "q0".."q3" (single quarter), or "+".join(sorted(regs)) as
+    a fallback for exotic shapes not yet in NUMA_CONFIG.
+    """
+    rs = set(regs)
+    if rs == {"q0", "q1", "q2", "q3"}:
+        return "full"
+    if rs == {"q0", "q1"}:
+        return "half0"
+    if rs == {"q2", "q3"}:
+        return "half1"
+    if len(rs) == 1:
+        return next(iter(rs))
+    return "+".join(sorted(rs))
+
+
+def _resolve_pid_to_instance_idx(
+    role_pid_regions: dict[str, dict[str, set[str]]],
+    role_instances_by_regions: dict[str, dict["frozenset[str]", int]],
+) -> dict[tuple[str, str], int]:
+    """Map each (role, pid) to its NUMA_CONFIG instance idx by matching the
+    set of regions the PID currently holds against the role's instance
+    region-sets.
+
+    Each NUMA_CONFIG instance has a unique region set within a role, so
+    holding {q0,q1} unambiguously identifies the half0 instance, etc.
+    Locks are acquired by orchestrator uvicorn workers (not llama-server
+    processes), so this region-set-based lookup is the only reliable
+    way to attribute holders to instances.
+    """
+    out: dict[tuple[str, str], int] = {}
+    for role, pid_regs in role_pid_regions.items():
+        region_map = role_instances_by_regions.get(role) or {}
+        for pid, regs in pid_regs.items():
+            idx = region_map.get(frozenset(regs))
+            if idx is not None:
+                out[(role, pid)] = idx
+    return out
+
+
 @router.get("/dashboard/api/region_locks")
 async def region_locks_snapshot() -> JSONResponse:
     """Per-CPU-region lock state — which (role, region) lock files are
@@ -241,10 +286,9 @@ async def region_locks_snapshot() -> JSONResponse:
         if len(regs) >= 2:
             topology_roles.add(role)
 
-    # Per-role instance topology: ordered list of {idx, regions[], span}
-    # for every (role, idx) in NUMA_CONFIG. Sorted by idx so the dashboard
-    # can render instance pills in stable order (instance 0 = full, then
-    # the quarter instances).
+    # Per-role instance topology: ordered list of {idx, regions[], span, shape}
+    # for every (role, idx) in NUMA_CONFIG. See _shape_for_regions() at
+    # module scope.
     instance_topology: dict[str, list[dict[str, Any]]] = {}
     for (role, idx), regs in topology.items():
         if not regs:
@@ -253,64 +297,28 @@ async def region_locks_snapshot() -> JSONResponse:
             "idx": idx,
             "regions": sorted(regs),
             "span": len(regs),
-            "is_full": len(regs) >= 2,  # multi-region = "full" (or half-full like frontdoor)
+            "shape": _shape_for_regions(regs),
+            "is_full": len(regs) >= 2,  # deprecated
         })
     for role in instance_topology:
         instance_topology[role].sort(key=lambda x: (-x["span"], x["regions"]))
 
-    # PID → (role, instance_idx) resolution. Scan /proc for llama-server
-    # processes, extract --port, then map port → (role, idx) using the
-    # convention: NUMA_CONFIG instance 0 = full instance (parent port);
-    # instances 1..4 = quarters on consecutive +100 ports.
-    pid_to_instance: dict[str, tuple[str, int]] = {}
-    try:
-        from src.api.routes.dashboard_topology import _discover_llama_ports
-        port_to_role = _discover_llama_ports()
-        # port→pid by re-reading /proc (cheap; ~5ms)
-        import subprocess
-        ps_out = subprocess.run(
-            ["ps", "-eo", "pid,cmd"], capture_output=True, text=True, timeout=2,
-        ).stdout
-        port_to_pid: dict[int, str] = {}
-        for line in ps_out.splitlines():
-            if "llama-server" not in line:
-                continue
-            m_port = re.search(r"--port\s+(\d+)", line)
-            m_pid = re.match(r"\s*(\d+)\s+", line)
-            if m_port and m_pid:
-                port_to_pid[int(m_port.group(1))] = m_pid.group(1)
-        # Resolve port → (role, instance_idx). Convention from stack_numa.py:
-        # full instance on base port (e.g. 8070), q0..q3 on base+100..base+400
-        # (e.g. 8080/8180/8280/8380). Role labels like "frontdoor.q2" carry
-        # the quarter explicitly, so the label is authoritative.
-        for port, role_label in port_to_role.items():
-            pid = port_to_pid.get(port)
-            if not pid:
-                continue
-            if "." in role_label:
-                base, suffix = role_label.split(".", 1)
-                if suffix.startswith("q") and suffix[1:].isdigit():
-                    quarter_n = int(suffix[1:])
-                    # Quarter instances are idx 1..4 in NUMA_CONFIG
-                    pid_to_instance[pid] = (base, quarter_n + 1)
-            else:
-                # Bare role label = the full instance = idx 0
-                pid_to_instance[pid] = (role_label, 0)
-    except Exception:
-        pass
+    # Per-role: held-region-set → instance idx. Each instance in NUMA_CONFIG
+    # has a unique region set, so this map is unambiguous.
+    role_instances_by_regions: dict[str, dict[frozenset[str], int]] = {
+        role: {frozenset(inst["regions"]): inst["idx"] for inst in insts}
+        for role, insts in instance_topology.items()
+    }
 
-    def _resolve_holder_instances(role: str, pids: list[str]) -> list[int]:
-        """Map lock-holder PIDs to instance indices (idx 0 = full, 1..4 = quarters)."""
-        out_idx: list[int] = []
-        for pid in pids:
-            entry = pid_to_instance.get(pid)
-            if entry and entry[0] == role:
-                out_idx.append(entry[1])
-        return sorted(set(out_idx))
-
-    # Pass 1: read whatever lock files exist on disk.
+    # Pass 1a: collect raw lock-holder PIDs per (role, region). We need the
+    # full picture before resolving PIDs to instance idxs, because the lock
+    # is acquired by an orchestrator uvicorn worker (not the llama-server)
+    # and the only way to identify which instance dispatched it is the SET
+    # of regions that worker is holding.
     out: list[dict[str, Any]] = []
     seen_roles: set[str] = set()
+    # role → pid → set of regions that pid currently holds for this role
+    role_pid_regions: dict[str, dict[str, set[str]]] = {}
     try:
         for p in sorted(tmp_dir.glob("cpu_region.*.lock")):
             stem = p.stem  # "cpu_region.<role>.<region>"
@@ -324,13 +332,27 @@ async def region_locks_snapshot() -> JSONResponse:
                 "region": region,
                 "lock_path": str(p),
                 "holder_pids": holders,
-                "holder_instance_idxs": _resolve_holder_instances(role, holders),
+                "holder_instance_idxs": [],  # populated in Pass 1b
                 "held": bool(holders),
                 "wired": True,
             })
             seen_roles.add(role)
+            if holders:
+                role_pid_regions.setdefault(role, {})
+                for pid in holders:
+                    role_pid_regions[role].setdefault(pid, set()).add(region)
     except Exception as exc:
         return JSONResponse({"error": str(exc), "entries": []}, status_code=200)
+
+    # Pass 1b: resolve {role: {pid: held_regions}} → per-entry holder_instance_idxs.
+    pid_to_instance = _resolve_pid_to_instance_idx(role_pid_regions, role_instances_by_regions)
+    for entry in out:
+        if not entry["holder_pids"]:
+            continue
+        idxs = {pid_to_instance[(entry["role"], pid)]
+                for pid in entry["holder_pids"]
+                if (entry["role"], pid) in pid_to_instance}
+        entry["holder_instance_idxs"] = sorted(idxs)
 
     # Pass 2: any topology-quartered role with NO lock files is "unwired" —
     # surface synthetic placeholder rows so the operator sees the gap.
