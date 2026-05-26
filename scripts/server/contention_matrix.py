@@ -115,8 +115,14 @@ class PairBench:
 # ── HTTP bench primitive ────────────────────────────────────────────
 
 
-def _http_bench(port: int, n_predict: int = N_PREDICT) -> tuple[float, float]:
-    """Single /completion call → (tps, elapsed_s). 0.0 on error."""
+def _http_bench(port: int, n_predict: int = N_PREDICT, *, safe_sampling: bool = False) -> tuple[float, float]:
+    """Single /completion call → (tps, elapsed_s). 0.0 on error.
+
+    safe_sampling=True uses temp>0 + repetition penalty to avoid greedy
+    degeneration loops that can produce un-parseable output. Decode speed is
+    effectively unchanged; this only steers token selection. Use for the
+    quarter-level N-way re-bench (2026-05-26 gemma4 degeneration crash).
+    """
     try:
         import httpx
     except ImportError:
@@ -126,9 +132,12 @@ def _http_bench(port: int, n_predict: int = N_PREDICT) -> tuple[float, float]:
     payload = {
         "prompt": PROMPT,
         "n_predict": n_predict,
-        "temperature": 0,
+        "temperature": 0.7 if safe_sampling else 0,
         "cache_prompt": False,
     }
+    if safe_sampling:
+        payload["repeat_penalty"] = 1.1
+        payload["top_p"] = 0.95
     try:
         with httpx.Client(timeout=TIMEOUT_PER_REQUEST_S) as client:
             resp = client.post(f"http://localhost:{port}/completion", json=payload)
@@ -474,6 +483,92 @@ def enumerate_n_way(
     }
 
 
+def _role_footprints(numa_config: dict, role: str) -> list[tuple[int, int, frozenset]]:
+    """(instance_idx, port, regions) for every instance of `role`."""
+    from src.runtime.instance_topology import cpu_list_to_regions
+    out = []
+    for idx, inst in enumerate(numa_config.get(role, {}).get("instances", []) or []):
+        out.append((idx, int(inst[1]), frozenset(cpu_list_to_regions(inst[0]))))
+    return out
+
+
+def feasible_assignment(roleset, numa_config) -> dict | None:
+    """Find a mutually-disjoint cpuset assignment (one instance per role).
+
+    Models the corrected concurrency rule (2026-05-26 audit): roles can co-run
+    only on non-overlapping cpusets. A full-machine instance (all 4 regions,
+    e.g. worker_general-full or architect-full) occupies everything, so it can
+    only be selected when it is the sole role; otherwise the role must fall back
+    to a quarter instance. Roles with no disjoint option (e.g. architect, which
+    has ONLY a full instance) cannot co-run and make the set infeasible.
+
+    Returns {role: {instance_idx, port, regions}} (prefers quarters / smaller
+    footprints first to leave room for others), or None if infeasible.
+    """
+    foot = {r: _role_footprints(numa_config, r) for r in roleset}
+    if any(not foot[r] for r in roleset):
+        return None
+    # Try smaller footprints first (quarters before full) so the packing leaves
+    # room; order roles by fewest options first to prune the search.
+    for r in foot:
+        foot[r] = sorted(foot[r], key=lambda t: (len(t[2]), t[0]))
+    order = sorted(roleset, key=lambda r: len(foot[r]))
+    chosen: dict = {}
+    used: set = set()
+
+    def rec(i: int) -> bool:
+        if i == len(order):
+            return True
+        r = order[i]
+        for idx, port, regs in foot[r]:
+            if used & regs:
+                continue
+            chosen[r] = (idx, port, sorted(regs))
+            used.update(regs)
+            if rec(i + 1):
+                return True
+            used.difference_update(regs)
+            del chosen[r]
+        return False
+
+    if rec(0):
+        return {r: {"instance_idx": chosen[r][0], "port": chosen[r][1], "regions": chosen[r][2]} for r in roleset}
+    return None
+
+
+def enumerate_feasible(numa_config: dict, *, max_size: int | None = None) -> dict[str, Any]:
+    """Quarter-level placement-feasibility enumeration (corrected cross-role model).
+
+    A role-set is a candidate iff its roles admit a mutually-disjoint cpuset
+    assignment; otherwise it is excluded `topology_infeasible`. Throughput is
+    NOT judged here — the assignment is the realizable placement to measure.
+    """
+    roles = sorted(r for r in numa_config if numa_config[r].get("instances"))
+    hi = max_size or len(roles)
+    candidates: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for size in range(2, hi + 1):
+        for combo in itertools.combinations(roles, size):
+            assign = feasible_assignment(combo, numa_config)
+            if assign:
+                candidates.append({
+                    "roles": list(combo), "size": size,
+                    "assignment": {r: {"port": assign[r]["port"], "regions": assign[r]["regions"]} for r in combo},
+                })
+            else:
+                excluded.append({
+                    "roles": list(combo), "size": size,
+                    "reason": "topology_infeasible",
+                    "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)",
+                })
+    return {
+        "roles": roles,
+        "candidate_sets": sorted(candidates, key=lambda x: (x["size"], x["roles"])),
+        "excluded_sets": sorted(excluded, key=lambda x: (x["size"], x["roles"])),
+        "summary": {"n_candidates": len(candidates), "n_excluded": len(excluded), "max_size": hi},
+    }
+
+
 def cmd_enumerate(args: argparse.Namespace) -> int:
     from stack_numa import NUMA_CONFIG
     from src.scheduling.contention import (
@@ -495,14 +590,17 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
         return 2
 
     matrix = load_contention_matrix(matrix_path)
-    floor = args.floor if args.floor is not None else matrix.default_floor
-    body = enumerate_n_way(
-        NUMA_CONFIG,
-        matrix,
-        floor=floor,
-        matrix_triples=_read_matrix_triples(matrix_path),
-        max_size=args.max_size,
-    )
+    if getattr(args, "feasibility", False):
+        body = enumerate_feasible(NUMA_CONFIG, max_size=args.max_size)
+    else:
+        floor = args.floor if args.floor is not None else matrix.default_floor
+        body = enumerate_n_way(
+            NUMA_CONFIG,
+            matrix,
+            floor=floor,
+            matrix_triples=_read_matrix_triples(matrix_path),
+            max_size=args.max_size,
+        )
 
     # Deterministic content hash (excludes timestamp/run_id) for the J4a
     # "deterministic across two dry runs" closure gate.
@@ -519,8 +617,10 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
+    _feas = getattr(args, "feasibility", False)
     manifest = {
-        "task_id": "J4a",
+        "task_id": "J4a-feasible" if _feas else "J4a",
+        "model": "quarter_level_disjoint_cpuset" if _feas else "full_instance_pairwise",
         "run_id": args.run_id or f"j4a-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "topology_hash": live_hash,
@@ -538,22 +638,26 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
     if args.output:
         out_dir = Path(args.output)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "j4a_candidate_manifest.json"
+        out_path = out_dir / ("j4a_feasible_manifest.json" if _feas else "j4a_candidate_manifest.json")
         out_path.write_text(json.dumps(manifest, indent=2) + "\n")
         log.info("wrote manifest → %s", out_path)
     else:
         print(json.dumps(manifest, indent=2))
 
     log.info(
-        "J4a enumeration: %d candidates, %d excluded, %d flags (content_hash=%s)",
+        "enumeration (%s): %d candidates, %d excluded, %d flags (content_hash=%s)",
+        manifest["model"],
         manifest["summary"]["n_candidates"],
         manifest["summary"]["n_excluded"],
-        len(manifest["flags"]),
+        len(manifest.get("flags", [])),
         content_hash,
     )
     for c in manifest["candidate_sets"]:
-        log.info("  CANDIDATE %s (min_pair_ratio=%s)", c["roles"], c["min_pair_ratio"])
-    for f in manifest["flags"]:
+        if "assignment" in c:
+            log.info("  CANDIDATE %s ports=%s", c["roles"], {r: c["assignment"][r]["port"] for r in c["roles"]})
+        else:
+            log.info("  CANDIDATE %s (min_pair_ratio=%s)", c["roles"], c.get("min_pair_ratio"))
+    for f in manifest.get("flags", []):
         log.warning("  FLAG %s: %s (triple=%.2f)", f["roles"], f["issue"], f["measured_triple_ratio"])
     return 0
 
@@ -566,17 +670,19 @@ def cmd_enumerate(args: argparse.Namespace) -> int:
 # Honors feedback_no_concurrent_inference: must run alone.
 
 
-def _bench_nway(role_ports: list[tuple[str, int]], samples: int = 3) -> dict[str, Any]:
+def _bench_nway(role_ports: list[tuple[str, int]], samples: int = 3, *, safe_sampling: bool = False) -> dict[str, Any]:
     """Solo + all-K-concurrent bench for one active set. Returns ratio/cv/verdict."""
     import statistics
+    import functools
+    bench = functools.partial(_http_bench, safe_sampling=safe_sampling)
     details: list[dict[str, Any]] = []
     ratios: list[float] = []
     for s in range(samples):
         solo: dict[str, tuple[float, float]] = {}
         for role, port in role_ports:
-            solo[role] = _http_bench(port)
+            solo[role] = bench(port)
         with ThreadPoolExecutor(max_workers=len(role_ports)) as ex:
-            futs = {role: ex.submit(_http_bench, port) for role, port in role_ports}
+            futs = {role: ex.submit(bench, port) for role, port in role_ports}
             par = {role: futs[role].result() for role, _ in role_ports}
         total_tokens = N_PREDICT * len(role_ports)
         seq_time = sum(el for _, el in solo.values()) or 0.001
@@ -625,24 +731,36 @@ def cmd_bench_nway(args: argparse.Namespace) -> int:
                   manifest.get("topology_hash"), live_hash)
         return 2
 
-    sets = [tuple(c["roles"]) for c in manifest.get("candidate_sets", [])]
+    # Each spec: (roleset_tuple, {role: port}). Feasible-manifest candidates
+    # carry an `assignment` (disjoint quarter ports); full-manifest candidates
+    # fall back to each role's full/primary port.
+    setspecs: list[tuple[tuple, dict]] = []
+    for c in manifest.get("candidate_sets", []):
+        roles = tuple(c["roles"])
+        if len(roles) < args.min_size:
+            continue
+        if "assignment" in c:
+            ports = {r: c["assignment"][r]["port"] for r in roles}
+        else:
+            ports = {r: _full_port(NUMA_CONFIG, r) for r in roles}
+        setspecs.append((roles, ports))
     if args.include_flagged:
         for fl in manifest.get("flags", []):
             roles = tuple(sorted(fl["roles"]))
-            if roles not in sets:
-                sets.append(roles)
-    if not sets:
+            if roles not in [s[0] for s in setspecs]:
+                setspecs.append((roles, {r: _full_port(NUMA_CONFIG, r) for r in roles}))
+    if not setspecs:
         log.warning("no candidate sets to measure")
         return 0
 
     results: list[dict[str, Any]] = []
-    for roleset in sets:
-        role_ports = [(r, _full_port(NUMA_CONFIG, r)) for r in roleset]
+    for roleset, ports in setspecs:
+        role_ports = [(r, ports[r]) for r in roleset]
         if any(p is None for _r, p in role_ports):
-            log.warning("skipping %s — missing full port", roleset)
+            log.warning("skipping %s — missing port", roleset)
             continue
-        log.info("=== N-way bench %s ports=%s ===", list(roleset), [p for _r, p in role_ports])
-        b = _bench_nway(role_ports, samples=args.samples)
+        log.info("=== N-way bench %s ports=%s safe_sampling=%s ===", list(roleset), [p for _r, p in role_ports], args.safe_sampling)
+        b = _bench_nway(role_ports, samples=args.samples, safe_sampling=args.safe_sampling)
         entry = {
             "roles": sorted(roleset), "size": len(roleset),
             "topology_hash": live_hash, "ports": {r: p for r, p in role_ports},
@@ -797,6 +915,9 @@ def main() -> int:
     p_enum.add_argument("--floor", type=float, default=None, help="bulk/background floor (default: matrix default_floor)")
     p_enum.add_argument("--max-size", type=int, default=None, dest="max_size", help="max active-set size to enumerate (default: #roles)")
     p_enum.add_argument("--run-id", default=None, dest="run_id", help="stable run id for the manifest")
+    p_enum.add_argument("--feasibility", action="store_true",
+                        help="quarter-level disjoint-cpuset model: candidates = role-sets with a "
+                             "mutually-disjoint placement (full-machine/solo-only instances pruned)")
     p_enum.set_defaults(func=cmd_enumerate)
 
     p_nway = sub.add_parser(
@@ -806,6 +927,9 @@ def main() -> int:
     p_nway.add_argument("--manifest", required=True, help="J4a candidate manifest JSON")
     p_nway.add_argument("--output", required=True, help="output dir for j4b_nway_results.json")
     p_nway.add_argument("--samples", type=int, default=3, help="repetitions per set (CV gate)")
+    p_nway.add_argument("--min-size", type=int, default=2, dest="min_size", help="skip candidate sets smaller than this")
+    p_nway.add_argument("--safe-sampling", action="store_true", dest="safe_sampling",
+                        help="temp>0 + repeat_penalty to avoid greedy degeneration (gemma4 crash mitigation)")
     p_nway.add_argument("--include-flagged", action="store_true",
                         help="also measure the manifest's discrepancy-flagged sets")
     p_nway.set_defaults(func=cmd_bench_nway)

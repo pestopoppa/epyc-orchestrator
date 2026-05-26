@@ -1,0 +1,1037 @@
+{
+  "task_id": "J4a-feasible",
+  "model": "quarter_level_disjoint_cpuset",
+  "run_id": "bulk-2026-05-26-j4a-feasible",
+  "generated_at": "2026-05-26T11:34:26.983916+00:00",
+  "topology_hash": "df373c79cc4af06f",
+  "content_hash": "97e999450814dbdc",
+  "matrix_source": {
+    "path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/contention_matrix.yaml",
+    "sha256": "0e05df663a4a5d0f7464ad145265d50a6cf9669c408bebfc50b473ec7852fb3a",
+    "git_sha": "1d95008761c57ee29ce2b99691302d5f7659cc4b",
+    "topology_hash": "df373c79cc4af06f",
+    "measured_at": "2026-05-24T12:48:38Z"
+  },
+  "roles": [
+    "architect_general",
+    "frontdoor",
+    "ingest_long_context",
+    "vision_escalation",
+    "worker_general",
+    "worker_vision"
+  ],
+  "candidate_sets": [
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context"
+      ],
+      "size": 2,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "ingest_long_context": {
+          "port": 8285,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation"
+      ],
+      "size": 2,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8287,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "worker_general"
+      ],
+      "size": 2,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_general": {
+          "port": 8182,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "worker_vision"
+      ],
+      "size": 2,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "vision_escalation"
+      ],
+      "size": 2,
+      "assignment": {
+        "ingest_long_context": {
+          "port": 8185,
+          "regions": [
+            "q0"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8287,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "worker_general"
+      ],
+      "size": 2,
+      "assignment": {
+        "ingest_long_context": {
+          "port": 8185,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_general": {
+          "port": 8182,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "worker_vision"
+      ],
+      "size": 2,
+      "assignment": {
+        "ingest_long_context": {
+          "port": 8185,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 2,
+      "assignment": {
+        "vision_escalation": {
+          "port": 8187,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_general": {
+          "port": 8182,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 2,
+      "assignment": {
+        "vision_escalation": {
+          "port": 8187,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 2,
+      "assignment": {
+        "worker_general": {
+          "port": 8082,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation"
+      ],
+      "size": 3,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "ingest_long_context": {
+          "port": 8285,
+          "regions": [
+            "q1"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8387,
+          "regions": [
+            "q2"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general"
+      ],
+      "size": 3,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "ingest_long_context": {
+          "port": 8285,
+          "regions": [
+            "q1"
+          ]
+        },
+        "worker_general": {
+          "port": 8282,
+          "regions": [
+            "q2"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "worker_vision"
+      ],
+      "size": 3,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "ingest_long_context": {
+          "port": 8385,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 3,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8287,
+          "regions": [
+            "q1"
+          ]
+        },
+        "worker_general": {
+          "port": 8282,
+          "regions": [
+            "q2"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 3,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8387,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_general": {
+          "port": 8282,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 3,
+      "assignment": {
+        "ingest_long_context": {
+          "port": 8185,
+          "regions": [
+            "q0"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8287,
+          "regions": [
+            "q1"
+          ]
+        },
+        "worker_general": {
+          "port": 8282,
+          "regions": [
+            "q2"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 3,
+      "assignment": {
+        "ingest_long_context": {
+          "port": 8185,
+          "regions": [
+            "q0"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8387,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "assignment": {
+        "ingest_long_context": {
+          "port": 8185,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_general": {
+          "port": 8282,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "assignment": {
+        "vision_escalation": {
+          "port": 8187,
+          "regions": [
+            "q0"
+          ]
+        },
+        "worker_general": {
+          "port": 8282,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 4,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "ingest_long_context": {
+          "port": 8285,
+          "regions": [
+            "q1"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8387,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_general": {
+          "port": 8382,
+          "regions": [
+            "q3"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 4,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "ingest_long_context": {
+          "port": 8385,
+          "regions": [
+            "q2"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8487,
+          "regions": [
+            "q3"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "ingest_long_context": {
+          "port": 8385,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_general": {
+          "port": 8382,
+          "regions": [
+            "q3"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "assignment": {
+        "frontdoor": {
+          "port": 8080,
+          "regions": [
+            "q0"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8387,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_general": {
+          "port": 8382,
+          "regions": [
+            "q3"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "assignment": {
+        "ingest_long_context": {
+          "port": 8185,
+          "regions": [
+            "q0"
+          ]
+        },
+        "vision_escalation": {
+          "port": 8387,
+          "regions": [
+            "q2"
+          ]
+        },
+        "worker_general": {
+          "port": 8382,
+          "regions": [
+            "q3"
+          ]
+        },
+        "worker_vision": {
+          "port": 8086,
+          "regions": [
+            "q1"
+          ]
+        }
+      }
+    }
+  ],
+  "excluded_sets": [
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "size": 2,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context"
+      ],
+      "size": 2,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "vision_escalation"
+      ],
+      "size": 2,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "worker_general"
+      ],
+      "size": 2,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "worker_vision"
+      ],
+      "size": 2,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "vision_escalation"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "worker_general"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "vision_escalation"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "worker_general"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 5,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 6,
+      "reason": "topology_infeasible",
+      "evidence": "no mutually-disjoint cpuset assignment exists (over-subscribed or solo-only full instance)"
+    }
+  ],
+  "summary": {
+    "n_candidates": 25,
+    "n_excluded": 32,
+    "max_size": 6
+  }
+}
