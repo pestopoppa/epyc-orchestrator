@@ -201,6 +201,34 @@ def _shape_for_regions(regs: "frozenset[str] | set[str] | list[str]") -> str:
     return "+".join(sorted(rs))
 
 
+def _panel_shapes_from_matrix(sr, primary_shape: str) -> set[str]:
+    """Canonical shapes a role's region-locks-panel row should display, per
+    the contention matrix `same_role` entry (the operator-blessed source of
+    truth for which within-role shapes are usable).
+
+    Strict interpretation:
+      - sr is None                       → empty set (role not in matrix → hide)
+      - sr has no instance_pairs         → {primary_shape} (single-instance or
+                                            'primary only' roles like ingest)
+      - sr has instance_pairs            → union of all a/b labels, with the
+                                            matrix's "full" alias translated to
+                                            the role's primary shape
+
+    `primary_shape` is the canonical shape of the role's idx=0 NUMA_CONFIG
+    instance ("full", "half0", "half1", or "qN") — i.e. what the matrix means
+    when it says "full" for that specific role.
+    """
+    if sr is None:
+        return set()
+    if not sr.instance_pairs:
+        return {primary_shape}
+    out: set[str] = set()
+    for ip in sr.instance_pairs:
+        for label in (ip.a, ip.b):
+            out.add(primary_shape if label == "full" else label)
+    return out
+
+
 def _resolve_pid_to_instance_idx(
     role_pid_regions: dict[str, dict[str, set[str]]],
     role_instances_by_regions: dict[str, dict["frozenset[str]", int]],
@@ -261,64 +289,81 @@ async def region_locks_snapshot() -> JSONResponse:
         topology = {}
         all_regions = ["q0", "q1", "q2", "q3"]
 
-    # Set of roles with at least one quarter-sized instance (the rows we'll
-    # always include in the panel, wired or not). Single-instance roles are
-    # excluded — there's nothing for cross-process region locks to coordinate
-    # when only one server process exists (worker_vision, architect_general
-    # post 2026-05-04 consolidation).
-    role_instance_count: dict[str, int] = {}
-    for (role, _idx), _regs in topology.items():
-        role_instance_count[role] = role_instance_count.get(role, 0) + 1
+    # Source of truth for which roles/shapes appear in the panel: the
+    # operator-curated contention matrix (`orchestration/contention_matrix.yaml`).
+    # A role appears iff it has a `same_role` entry. Its visible shapes come
+    # from `_panel_shapes_from_matrix()` (strict: union of a/b labels in
+    # instance_pairs, with "full" → role's primary idx=0 shape; n/a or no
+    # pairs → only the primary shape). Lock-file existence is NO LONGER used
+    # to gate "wiring" — it's just a runtime hot/cold signal (cells stay
+    # ✅ Ready until the backend first acquires a lock).
+    matrix = None
+    try:
+        from src.scheduling.contention import load_contention_matrix
+        matrix = load_contention_matrix()
+    except Exception:
+        matrix = None  # fail-open: panel still renders with NUMA-only fallback below
 
-    topology_roles: set[str] = set()
-    for (role, _idx), regs in topology.items():
-        if role_instance_count.get(role, 0) < 2:
-            continue
-        if 0 < len(regs) < 4:
-            topology_roles.add(role)
-    # Roles with a full-socket instance also belong on the panel — when the
-    # full instance dispatches, it acquires the union of region locks for
-    # every quarter it spans, so the operator can SEE that frontdoor.full
-    # is occupying both q0 and q1 simultaneously.
-    for (role, _idx), regs in topology.items():
-        if role_instance_count.get(role, 0) < 2:
-            continue
-        if len(regs) >= 2:
-            topology_roles.add(role)
-
-    # Per-role instance topology: ordered list of {idx, regions[], span, shape}
-    # for every (role, idx) in NUMA_CONFIG. See _shape_for_regions() at
-    # module scope.
-    instance_topology: dict[str, list[dict[str, Any]]] = {}
+    # Build instance_topology from NUMA_CONFIG, filtered to matrix-allowed shapes.
+    instance_topology_all: dict[str, list[dict[str, Any]]] = {}
     for (role, idx), regs in topology.items():
         if not regs:
             continue
-        instance_topology.setdefault(role, []).append({
+        instance_topology_all.setdefault(role, []).append({
             "idx": idx,
             "regions": sorted(regs),
             "span": len(regs),
             "shape": _shape_for_regions(regs),
             "is_full": len(regs) >= 2,  # deprecated
         })
-    for role in instance_topology:
-        instance_topology[role].sort(key=lambda x: (-x["span"], x["regions"]))
+    for role in instance_topology_all:
+        instance_topology_all[role].sort(key=lambda x: (-x["span"], x["regions"]))
 
-    # Per-role: held-region-set → instance idx. Each instance in NUMA_CONFIG
-    # has a unique region set, so this map is unambiguous.
+    # Determine the panel rows + per-role allowed shapes.
+    panel_roles: set[str] = set()
+    role_allowed_shapes: dict[str, set[str]] = {}
+    if matrix is not None and matrix.same_role:
+        for role, sr in matrix.same_role.items():
+            insts = instance_topology_all.get(role) or []
+            # primary = idx=0 (NUMA_CONFIG convention); fall back to span-sort first.
+            primary = next((i for i in insts if i["idx"] == 0), insts[0] if insts else None)
+            if primary is None:
+                continue  # matrix mentions a role we have no NUMA_CONFIG for
+            allowed = _panel_shapes_from_matrix(sr, primary["shape"])
+            if not allowed:
+                continue
+            role_allowed_shapes[role] = allowed
+            panel_roles.add(role)
+    else:
+        # Fallback: matrix missing/unreadable → fall back to the prior
+        # NUMA_CONFIG-based behavior (every multi-instance + multi-region role).
+        for role, insts in instance_topology_all.items():
+            if len(insts) >= 2:
+                panel_roles.add(role)
+                role_allowed_shapes[role] = {i["shape"] for i in insts}
+
+    # Filter the per-role instance list to just the matrix-allowed shapes.
+    instance_topology: dict[str, list[dict[str, Any]]] = {}
+    for role in panel_roles:
+        allowed = role_allowed_shapes[role]
+        instance_topology[role] = [
+            i for i in (instance_topology_all.get(role) or [])
+            if i["shape"] in allowed
+        ]
+
+    # Per-role: held-region-set → instance idx, used to attribute lock holders
+    # to a specific instance after we scan /proc/locks.
     role_instances_by_regions: dict[str, dict[frozenset[str], int]] = {
         role: {frozenset(inst["regions"]): inst["idx"] for inst in insts}
         for role, insts in instance_topology.items()
     }
 
-    # Pass 1a: collect raw lock-holder PIDs per (role, region). We need the
-    # full picture before resolving PIDs to instance idxs, because the lock
-    # is acquired by an orchestrator uvicorn worker (not the llama-server)
-    # and the only way to identify which instance dispatched it is the SET
-    # of regions that worker is holding.
+    # Pass 1a: collect raw lock-holder PIDs per (role, region) for matrix-included
+    # roles only. Locks are acquired by orchestrator uvicorn workers (not by
+    # llama-server processes) so the only reliable identification is the SET of
+    # regions a worker is currently holding.
     out: list[dict[str, Any]] = []
-    seen_roles: set[str] = set()
-    # role → pid → set of regions that pid currently holds for this role
-    role_pid_regions: dict[str, dict[str, set[str]]] = {}
+    role_pid_regions: dict[str, dict[str, set[str]]] = {}  # role → pid → held regions
     try:
         for p in sorted(tmp_dir.glob("cpu_region.*.lock")):
             stem = p.stem  # "cpu_region.<role>.<region>"
@@ -326,6 +371,8 @@ async def region_locks_snapshot() -> JSONResponse:
             if len(parts) < 3:
                 continue
             _prefix, role, region = parts[0], parts[1], parts[2]
+            if role not in panel_roles:
+                continue  # role isn't in the matrix → don't surface lock state for it
             holders = _current_lock_owner_pids(p)
             out.append({
                 "role": role,
@@ -336,7 +383,6 @@ async def region_locks_snapshot() -> JSONResponse:
                 "held": bool(holders),
                 "wired": True,
             })
-            seen_roles.add(role)
             if holders:
                 role_pid_regions.setdefault(role, {})
                 for pid in holders:
@@ -344,7 +390,7 @@ async def region_locks_snapshot() -> JSONResponse:
     except Exception as exc:
         return JSONResponse({"error": str(exc), "entries": []}, status_code=200)
 
-    # Pass 1b: resolve {role: {pid: held_regions}} → per-entry holder_instance_idxs.
+    # Pass 1b: resolve held-region SET per PID to a NUMA_CONFIG instance idx.
     pid_to_instance = _resolve_pid_to_instance_idx(role_pid_regions, role_instances_by_regions)
     for entry in out:
         if not entry["holder_pids"]:
@@ -354,10 +400,15 @@ async def region_locks_snapshot() -> JSONResponse:
                 if (entry["role"], pid) in pid_to_instance}
         entry["holder_instance_idxs"] = sorted(idxs)
 
-    # Pass 2: any topology-quartered role with NO lock files is "unwired" —
-    # surface synthetic placeholder rows so the operator sees the gap.
-    for role in sorted(topology_roles - seen_roles):
+    # Pass 2: ensure every panel role has a row even when no lock file exists
+    # yet on disk (a wired-but-never-dispatched role like vision_escalation
+    # before its first request). Synthesize empty (free) region entries for
+    # all 4 quarters so the frontend can render ✅ Ready cells.
+    seen_role_regions = {(e["role"], e["region"]) for e in out}
+    for role in sorted(panel_roles):
         for region in all_regions:
+            if (role, region) in seen_role_regions:
+                continue
             out.append({
                 "role": role,
                 "region": region,
@@ -365,16 +416,14 @@ async def region_locks_snapshot() -> JSONResponse:
                 "holder_pids": [],
                 "holder_instance_idxs": [],
                 "held": False,
-                "wired": False,   # quartered in NUMA_CONFIG but backend not lock-aware
+                "wired": True,   # matrix-membership = wired; lock files appear lazily
             })
 
-    # Group by role for easier dashboard rendering. Each role bucket also
-    # carries its full instance topology + per-instance "active" computed
-    # from holder_instance_idxs union across regions.
+    # Group by role for easier dashboard rendering.
     by_role: dict[str, dict[str, Any]] = {}
     for entry in out:
         bucket = by_role.setdefault(entry["role"], {
-            "wired": entry["wired"],
+            "wired": True,
             "regions": [],
             "instances": instance_topology.get(entry["role"], []),
             "active_instance_idxs": set(),
@@ -385,21 +434,19 @@ async def region_locks_snapshot() -> JSONResponse:
             "holder_pids": entry["holder_pids"],
             "holder_instance_idxs": entry["holder_instance_idxs"],
         })
-        if entry["wired"]:
-            bucket["wired"] = True
         for idx in entry["holder_instance_idxs"]:
             bucket["active_instance_idxs"].add(idx)
-    # JSON can't serialize sets — convert at the end.
     for role, bucket in by_role.items():
         bucket["active_instance_idxs"] = sorted(bucket["active_instance_idxs"])
 
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return JSONResponse({
         "per_region_locks_enabled": feature_flag in {"1", "true", "yes", "on"},
+        "matrix_loaded": matrix is not None,
         "tmp_dir": str(tmp_dir),
         "entries": out,
         "by_role": by_role,
-        "topology_quartered_roles": sorted(topology_roles),
+        "topology_quartered_roles": sorted(panel_roles),  # back-compat field
         "now": time.time(),
     })
 

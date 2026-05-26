@@ -2945,22 +2945,17 @@ function startDashboard() {
                 if (wa !== wb) return wa - wb;
                 return a[0].localeCompare(b[0]);
             });
-            let nWired = 0, nUnwired = 0;
+            let nRoles = 0;
             for (const [role, info] of roleEntries) {
-                const wired = info.wired !== false;
-                if (wired) nWired++; else nUnwired++;
-                const badge = wired
-                    ? ''
-                    : ` <span style="display:inline-block;padding:0 4px;font-size:9px;background:rgba(251,191,36,0.2);color:var(--warn,#fbbf24);border-radius:2px;margin-left:4px" title="quartered in NUMA_CONFIG but backend does not acquire cpu_region_lock — cross-process concurrency is NOT enforced for this role yet">not wired</span>`;
+                nRoles++;
                 const insts = info.instances || [];
                 const activeSet = new Set(info.active_instance_idxs || []);
                 const heldRegions = new Set((info.regions || []).filter(e => e.held).map(e => e.region));
-                const labelColor = wired ? 'var(--fg)' : 'var(--muted)';
-                rows.push(`<div style="overflow:hidden;color:${labelColor};font-size:11px;line-height:1.3">${role}${badge}</div>`);
+                rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${role}</div>`);
                 for (const col of COLS) {
                     const inst = pickInstForCol(insts, col.key);
                     if (!inst) {
-                        rows.push(`<div class="rl-cell rl-na" title="${role} has no ${col.label} instance configured in NUMA_CONFIG">—</div>`);
+                        rows.push(`<div class="rl-cell rl-na" title="${role} has no ${col.label} shape per contention_matrix.yaml">—</div>`);
                         continue;
                     }
                     if (activeSet.has(inst.idx)) {
@@ -2970,9 +2965,7 @@ function startDashboard() {
                     }
                     const needed = inst.regions || [];
                     const blocked = needed.some(q => heldRegions.has(q));
-                    if (!wired) {
-                        rows.push(`<div class="rl-cell rl-na" title="role not wired to cpu_region_lock (backend RoundRobin)">—</div>`);
-                    } else if (blocked) {
+                    if (blocked) {
                         const heldOnes = needed.filter(q => heldRegions.has(q)).join(',');
                         rows.push(`<div class="rl-cell rl-blocked" title="${role}.${col.label} BLOCKED — needs {${needed.join(',')}}; {${heldOnes}} held by another instance">🔒</div>`);
                     } else {
@@ -2981,16 +2974,16 @@ function startDashboard() {
                 }
             }
             if (!roleEntries.length) {
-                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--muted);font-size:11px">no quartered roles in topology — check stack_numa.py</div>`;
+                const reason = d.matrix_loaded === false
+                    ? 'orchestration/contention_matrix.yaml not loadable — check that it exists and is valid YAML'
+                    : 'no roles in same_role section of contention_matrix.yaml';
+                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--muted);font-size:11px">${reason}</div>`;
             } else {
                 grid.innerHTML = rows.join('');
                 const footer = document.createElement('div');
                 footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
-                let footMsg = `${nWired} role(s) wired to <code style="font-size:10px;color:var(--muted)">cpu_region_lock</code>`;
-                if (nUnwired > 0) {
-                    footMsg += ` · <span style="color:var(--warn,#fbbf24)">${nUnwired} role(s) quartered but unwired</span> (backend still RoundRobin, no cross-process concurrency)`;
-                }
-                footMsg += `. Legend: <span style="color:#fbbf24">⚡ active</span> · <span style="color:#f87171">🔒 blocked by concurrency matrix</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
+                let footMsg = `${nRoles} role(s) from <code style="font-size:10px;color:var(--muted)">contention_matrix.yaml</code> · `;
+                footMsg += `Legend: <span style="color:#fbbf24">⚡ active</span> · <span style="color:#f87171">🔒 blocked by concurrency matrix</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not in this role's same_role matrix</span>.`;
                 footer.innerHTML = footMsg;
                 grid.appendChild(footer);
             }

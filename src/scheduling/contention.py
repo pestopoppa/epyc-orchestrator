@@ -81,10 +81,26 @@ class Pair:
 
 
 @dataclass(frozen=True)
+class InstancePair:
+    """One within-role instance-pair measurement (a co-runs with b).
+
+    Labels match the YAML: typically "full" (the role's primary multi-region
+    instance — could be a true full or a half depending on NUMA_CONFIG) or
+    "q0".."q3" (single-quarter instances).
+    """
+    a: str
+    b: str
+    ratio: float = 0.0
+    verdict: str = ""  # raw verdict from YAML
+    cv: float = 0.0
+
+
+@dataclass(frozen=True)
 class SameRole:
     role: str
     verdict: str  # "allow" / "block" / "n/a"
     note: str = ""
+    instance_pairs: tuple[InstancePair, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -172,10 +188,25 @@ def load_contention_matrix(path: Path | None = None) -> ContentionMatrix:
         role = entry.get("role")
         if not role:
             raise ValueError(f"same_role entry missing role: {entry}")
+        raw_pairs = entry.get("instance_pairs") or []
+        pairs_parsed: list[InstancePair] = []
+        for ip in raw_pairs:
+            if not isinstance(ip, dict):
+                continue
+            a, b = ip.get("a"), ip.get("b")
+            if not a or not b:
+                continue
+            pairs_parsed.append(InstancePair(
+                a=str(a), b=str(b),
+                ratio=float(ip.get("ratio", 0.0)),
+                verdict=str(ip.get("verdict", "")),
+                cv=float(ip.get("cv", 0.0)),
+            ))
         same_role[role] = SameRole(
             role=role,
             verdict=str(entry.get("verdict", "")),
             note=str(entry.get("note", "")),
+            instance_pairs=tuple(pairs_parsed),
         )
 
     unknown_pairs: list[tuple[str, str]] = []
