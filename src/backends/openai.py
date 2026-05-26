@@ -270,8 +270,18 @@ class OpenAIBackend:
         # use the kwarg silently ignore it. See handoffs/active/x-mas-text-routing.md
         # § "Stack-simplification probe (2026-05-20)" for the empirical fix
         # (frontdoor 47% → 80% acc on cheap-kill task set; architect 40% → 60%).
-        if request.extra.get("chat_template_kwargs"):
-            payload["chat_template_kwargs"] = request.extra["chat_template_kwargs"]
+        # Explicit per-request override wins; otherwise fall back to the role's
+        # registry default (J12 — auto-inject so callers needn't set it manually;
+        # frontdoor/coder/summarize/architect declare enable_thinking=false).
+        ctk = request.extra.get("chat_template_kwargs")
+        if not ctk and getattr(request, "role", None):
+            try:
+                from src.registry.registry_loader import chat_template_kwargs_for_role
+                ctk = chat_template_kwargs_for_role(request.role)
+            except Exception:
+                ctk = None
+        if ctk:
+            payload["chat_template_kwargs"] = ctk
 
         return payload
 

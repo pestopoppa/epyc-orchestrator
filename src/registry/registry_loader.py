@@ -492,6 +492,19 @@ class RegistryLoader:
         except KeyError:
             return (-1, None, None)
 
+    def get_role_chat_template_kwargs(self, role_name: str) -> dict[str, Any] | None:
+        """Per-role Jinja chat-template kwargs (e.g. {enable_thinking: False}), or
+        None if the role declares none. Read from the `server_mode.<role>` block
+        (where the deployment-time chat-template config lives), NOT the `roles`
+        section. Backends auto-inject this into request.extra["chat_template_kwargs"]
+        when the caller hasn't set it explicitly (J12)."""
+        sm = (self._raw.get("server_mode") or {}).get(role_name)
+        if isinstance(sm, dict):
+            ctk = sm.get("chat_template_kwargs")
+            if isinstance(ctk, dict) and ctk:
+                return ctk
+        return None
+
     @property
     def escalation_chains(self) -> dict[str, EscalationChain]:
         """Get all escalation chains."""
@@ -856,6 +869,31 @@ def main() -> int:
     except RegistryError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
+
+
+# ── Cached module-level accessor (J12) ───────────────────────────────
+# Lets a backend auto-inject per-role chat_template_kwargs without threading a
+# RegistryLoader handle through every call site. Lazily loads the default
+# registry once (validate_paths=False — read-only metadata lookup).
+_CTK_LOADER: "RegistryLoader | None" = None
+
+
+def chat_template_kwargs_for_role(role_name: str) -> dict[str, Any] | None:
+    """Per-role chat_template_kwargs from the default registry, or None.
+
+    Cached + fail-soft: any load/lookup error returns None (no injection),
+    so a missing/invalid registry never breaks inference.
+    """
+    global _CTK_LOADER
+    if _CTK_LOADER is None:
+        try:
+            _CTK_LOADER = RegistryLoader(validate_paths=False)
+        except Exception:
+            return None
+    try:
+        return _CTK_LOADER.get_role_chat_template_kwargs(role_name)
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":
