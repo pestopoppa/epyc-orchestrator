@@ -200,8 +200,15 @@ class TestPanelShapesFromMatrix:
         }
 
     def test_worker_general_strict_no_full(self) -> None:
-        """worker_general: instance_pairs are ONLY q+q (no full+q). Strict
-        result excludes Full even though NUMA_CONFIG defines one."""
+        """Regression of the strict shape filter: with instance_pairs containing
+        ONLY q+q entries (no full+q), Full is excluded even though NUMA_CONFIG
+        defines a full instance.
+
+        Note: as of 2026-05-26 the *live* worker_general YAML entry has structural
+        full+qN block pairs added (so the panel surfaces a Full cell that renders
+        🔒 whenever any quarter is held). This test deliberately uses a fixture
+        without those entries to keep covering the no-full-pairs branch.
+        """
         sr = SameRole(
             role="worker_general",
             verdict="borderline",

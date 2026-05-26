@@ -158,7 +158,7 @@ pairs:
 same_role:
   - role: "frontdoor"
     verdict: "allow"
-    note: "J5 (WP-6, 2026-05-26): all 8 disjoint instance pairs allow (1.37-1.67x); quartering wins. Quarters correctly -t 48."
+    note: "J5 (WP-6, 2026-05-26): all 8 disjoint instance pairs allow (1.37-1.67x); quartering wins. Quarters correctly -t 48. full+q0/q1 are structural overlaps (full = half0 = q0+q1), not benched — added 2026-05-26 to surface the Full cell in the dashboard region-locks panel."
     instance_pairs:   # J5 measured, --safe-sampling, topology df373c79cc4af06f
       - {a: full, b: q3, ratio: 1.367, cv: 0.059, verdict: allow}
       - {a: q0,   b: q2, ratio: 1.415, cv: 0.079, verdict: allow}
@@ -168,6 +168,12 @@ same_role:
       - {a: q1,   b: q2, ratio: 1.616, cv: 0.029, verdict: allow}
       - {a: q2,   b: q3, ratio: 1.649, cv: 0.043, verdict: allow}
       - {a: q1,   b: q3, ratio: 1.670, cv: 0.038, verdict: allow}
+      # Structural overlaps — frontdoor "full" is the half0 instance (q0+q1).
+      # full+q0 and full+q1 cannot run concurrently because they share physical
+      # cores (the half0 cpuset 0-47 fully contains q0=0-23 and q1=24-47). Not
+      # benched; presence here surfaces the Full cell in the dashboard panel.
+      - {a: full, b: q0, verdict: block, note: "structural: half0 cpuset contains q0"}
+      - {a: full, b: q1, verdict: block, note: "structural: half0 cpuset contains q1"}
 
   - role: "ingest_long_context"
     verdict: "allow"
@@ -192,13 +198,24 @@ same_role:
       FOLLOW-UPS: (1) flip takes effect on next API restart (matrix is load-once cached) — J6/WP-7 will apply it;
       (2) placement_policy=burst_prefer_quarters for worker_general is the matching NUMA_CONFIG change (WP-7);
       (3) a node-aware burst that avoids the q0+q2/q1+q3 cross-node pairs would lift every co-run >=0.85.
-    instance_pairs:   # documentation only — loader reads role/verdict/note (extra keys ignored)
+    instance_pairs:   # J5 measured + structural full+q overlap markers
       - {a: q0, b: q1, ratio: 0.946, cv: 0.104, verdict: borderline}
       - {a: q0, b: q3, ratio: 0.938, cv: 0.050, verdict: borderline}
       - {a: q1, b: q2, ratio: 0.920, cv: 0.077, verdict: borderline}
       - {a: q2, b: q3, ratio: 0.855, cv: 0.065, verdict: borderline}
       - {a: q0, b: q2, ratio: 0.844, cv: 0.091, verdict: block}
       - {a: q1, b: q3, ratio: 0.772, cv: 0.169, verdict: block}
+      # Structural overlaps — worker_general "full" spans all 4 quarters (cpus 0-95).
+      # Every full+qN pair is structurally impossible to co-run (the full instance's
+      # cpuset fully contains every quarter's cpuset). Empirically confirmed: gemma4
+      # full crashed under contention during the J4b {ingest,vision,worker_general}
+      # bench (progress 2026-05-26 §J4b). Not benched in J5; presence here surfaces
+      # the Full cell in the dashboard region-locks panel + correctly renders it
+      # 🔒 whenever any quarter is held.
+      - {a: full, b: q0, verdict: block, note: "structural: full cpuset 0-95 contains q0=0-23"}
+      - {a: full, b: q1, verdict: block, note: "structural: full cpuset 0-95 contains q1=24-47"}
+      - {a: full, b: q2, verdict: block, note: "structural: full cpuset 0-95 contains q2=48-71"}
+      - {a: full, b: q3, verdict: block, note: "structural: full cpuset 0-95 contains q3=72-95"}
 
   - role: "vision_escalation"
     verdict: "allow"   # RATIFIED at samples=8 (2026-05-26): 6/6 quarter-pairs allow super-linear
@@ -215,7 +232,7 @@ same_role:
       pairs: full+q0 0.705, full+q1 0.587 — vision "full" is node1-only (48-95), core-disjoint from q0/q1
       but the 48-core full starves the co-running quarter. PLACEMENT: burst_prefer_quarters with
       FULL-DISABLED-UNDER-BURST (never co-run full + a quarter). Runtime gate ALLOWs quarter co-run.
-    instance_pairs:   # samples=8 ratified; loader reads role/verdict/note (instance_pairs documentation only)
+    instance_pairs:   # samples=8 ratified; structural overlap markers added 2026-05-26
       - {a: q0, b: q3, ratio: 1.250, cv: 0.071, verdict: allow}
       - {a: q1, b: q3, ratio: 1.214, cv: 0.070, verdict: allow}
       - {a: q1, b: q2, ratio: 1.208, cv: 0.060, verdict: allow}
@@ -224,6 +241,11 @@ same_role:
       - {a: q0, b: q2, ratio: 1.129, cv: 0.203, verdict: allow, cv_gate: FAIL}
       - {a: full, b: q0, ratio: 0.705, cv: 0.438, verdict: block, cv_gate: FAIL}
       - {a: full, b: q1, ratio: 0.587, cv: 0.092, verdict: block, cv_gate: FAIL}
+      # Structural overlaps — vision "full" is the half1 instance (q2+q3, cpus 48-95).
+      # full+q2 and full+q3 cannot run concurrently because the half1 cpuset fully
+      # contains both q2=48-71 and q3=72-95. Not benched.
+      - {a: full, b: q2, verdict: block, note: "structural: half1 cpuset contains q2"}
+      - {a: full, b: q3, verdict: block, note: "structural: half1 cpuset contains q3"}
 
   - role: "architect_general"
     verdict: "n/a"
