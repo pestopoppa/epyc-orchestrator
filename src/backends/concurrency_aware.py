@@ -170,6 +170,13 @@ class ConcurrencyAwareBackend:
         self._session_quarter: dict[str, int] = {}
         self._session_state: dict[str, dict[str, Any]] = {}
 
+        # WP-4 reverse-migration state: per-session last-seen timestamps + per-session
+        # migration counts + in-flight guard to prevent double-firing.
+        self._full_idle_since: float | None = None  # monotonic time when full last released
+        self._session_last_seen: dict[str, float] = {}
+        self._reverse_migration_counts: dict[str, int] = {}
+        self._reverse_migration_in_flight: dict[str, bool] = {}
+
         # Phase D (cross-role-bw-aware-routing): topology-aware quarter ordering.
         # When the full instance is busy, try quarters in an order that prefers
         # NUMA-disjoint placement first. For frontdoor with full on NUMA_NODE0
@@ -534,8 +541,170 @@ class ConcurrencyAwareBackend:
         with self._lock:
             if is_full:
                 self._full_active = False
+                self._full_idle_since = time.monotonic()
             elif 0 <= idx < len(self._quarter_active):
                 self._quarter_active[idx] = False
+        # WP-4: opportunistically migrate the released quarter's session back
+        # to full when load drops, cooldown elapsed, session is warm, and the
+        # per-session migration cap hasn't been exceeded. Spawned as a daemon
+        # thread so the dispatcher's finally-block stays fast.
+        if not is_full and self._reverse_migration_enabled():
+            self._maybe_spawn_reverse_migration(idx)
+
+    @staticmethod
+    def _reverse_migration_enabled() -> bool:
+        """WP-4: gate the quarter→full reverse migration trigger. Default off
+        until the gate passes (30-min mixed traffic shows reverse migrations
+        firing; solo-after-burst latency ≤+10% vs solo-only baseline)."""
+        import os as _os
+        return _os.environ.get("ORCHESTRATOR_REVERSE_MIGRATION", "0").strip() in {
+            "1", "true", "yes", "on",
+        }
+
+    def _maybe_spawn_reverse_migration(self, released_quarter_idx: int) -> None:
+        """WP-4: check the four reverse-migration guards and, if all pass,
+        spawn `_reverse_migrate_kv(session_id, source_quarter)` in a daemon
+        thread. Idempotent — all guards short-circuit on failure.
+        """
+        now = time.monotonic()
+        # Find the session whose quarter affinity matches the released quarter.
+        with self._lock:
+            session_id: Optional[str] = None
+            for sid, q_idx in self._session_quarter.items():
+                if q_idx == released_quarter_idx:
+                    session_id = sid
+                    break
+            if session_id is None:
+                return  # released quarter has no affinity owner
+
+            # Guard 1: full has been idle for ≥ cooldown.
+            cooldown_s = self._reverse_migration_cooldown_ms() / 1000.0
+            if self._full_active or self._full_idle_since is None:
+                return
+            if (now - self._full_idle_since) < cooldown_s:
+                return
+
+            # Guard 2: session has had a recent request (within window).
+            window_s = self._reverse_migration_window_ms() / 1000.0
+            last_seen = self._session_last_seen.get(session_id, 0.0)
+            if last_seen == 0.0 or (now - last_seen) > window_s:
+                return  # session idle too long to be worth warming back to full
+
+            # Guard 3: per-session migration cap (avoid ping-pong).
+            cap = self._reverse_migration_session_cap()
+            if self._reverse_migration_counts.get(session_id, 0) >= cap:
+                return
+
+            # Guard 4: don't double-fire.
+            if self._reverse_migration_in_flight.get(session_id, False):
+                return
+            self._reverse_migration_in_flight[session_id] = True
+            self._reverse_migration_counts[session_id] = (
+                self._reverse_migration_counts.get(session_id, 0) + 1
+            )
+
+        threading.Thread(
+            target=self._reverse_migrate_kv,
+            args=(session_id, released_quarter_idx),
+            daemon=True,
+            name=f"kv-reverse-{self._role}-{session_id[:8]}",
+        ).start()
+
+    @staticmethod
+    def _reverse_migration_cooldown_ms() -> int:
+        import os as _os
+        try:
+            return max(0, int(_os.environ.get("ORCHESTRATOR_REVERSE_MIGRATION_COOLDOWN_MS", "2000")))
+        except (TypeError, ValueError):
+            return 2000
+
+    @staticmethod
+    def _reverse_migration_window_ms() -> int:
+        import os as _os
+        try:
+            return max(0, int(_os.environ.get("ORCHESTRATOR_REVERSE_MIGRATION_WINDOW_MS", "30000")))
+        except (TypeError, ValueError):
+            return 30000
+
+    @staticmethod
+    def _reverse_migration_session_cap() -> int:
+        import os as _os
+        try:
+            return max(0, int(_os.environ.get("ORCHESTRATOR_REVERSE_MIGRATION_SESSION_CAP", "5")))
+        except (TypeError, ValueError):
+            return 5
+
+    def _reverse_migrate_kv(self, session_id: str, source_quarter: int) -> None:
+        """WP-4: quarter → full migration. Mirrors _migrate_kv but in the
+        opposite direction. Uses a MigrationTransaction so observability
+        is consistent across forward and reverse. Best-effort — on failure
+        the session stays on the quarter and the in-flight flag is cleared
+        so a future opportunity can retry."""
+        from src.scheduling.migration_transaction import (
+            MigrationState,
+            MigrationTransaction,
+        )
+
+        try:
+            if not self._full_url:
+                return
+            source_url = (
+                self._quarter_urls[source_quarter]
+                if source_quarter < len(self._quarter_urls)
+                else None
+            )
+            if not source_url:
+                return
+
+            txn = MigrationTransaction(
+                role=self._role,
+                session_id=session_id,
+                source_url=source_url,
+                target_quarter=-1,  # convention: -1 = full
+                target_url=self._full_url,
+            )
+
+            txn.advance(MigrationState.SAVING)
+            if not _slot_save(source_url):
+                txn.advance(MigrationState.ABORTED, detail="save_failed")
+                logger.warning(
+                    "WP-4 reverse migration save failed role=%s session=%s txn=%s",
+                    self._role, session_id, txn.txn_id,
+                )
+                return
+
+            txn.advance(MigrationState.RESTORING)
+            if not _slot_restore(self._full_url):
+                txn.advance(MigrationState.ABORTED, detail="restore_failed")
+                logger.warning(
+                    "WP-4 reverse migration restore failed role=%s session=%s txn=%s",
+                    self._role, session_id, txn.txn_id,
+                )
+                return
+
+            txn.advance(MigrationState.VERIFIED, detail="restore_confirmed")
+            _slot_erase(source_url)
+            txn.advance(MigrationState.SOURCE_ERASED)
+
+            # Clear the quarter affinity — session now belongs to full again.
+            with self._lock:
+                if self._session_quarter.get(session_id) == source_quarter:
+                    self._session_quarter.pop(session_id, None)
+                self._full_last_session = session_id
+                self._set_session_state(
+                    session_id,
+                    state=_STATE_ASSIGNED_FULL,
+                    quarter=None,
+                    detail="reverse_migrated",
+                )
+            txn.advance(MigrationState.COMMITTED)
+            logger.info(
+                "WP-4 reverse migration committed role=%s session=%s quarter%d→full (%.0fms, txn=%s)",
+                self._role, session_id, source_quarter, txn.elapsed_ms, txn.txn_id,
+            )
+        finally:
+            with self._lock:
+                self._reverse_migration_in_flight.pop(session_id, None)
 
     def clear_session(self, session_id: str) -> None:
         """Remove session affinity (call when session completes)."""
@@ -615,6 +784,13 @@ class ConcurrencyAwareBackend:
         locks. Caller calls backend.infer/infer_stream_text inside the
         with-block; nothing else.
         """
+        # WP-4: stamp per-session last-seen so the reverse-migration trigger
+        # can distinguish warm sessions (recently active → worth migrating
+        # back to full) from cold ones (idle long enough that the KV save
+        # cost isn't repaid by future requests).
+        if session_id:
+            with self._lock:
+                self._session_last_seen[session_id] = time.monotonic()
         if not self._per_region_locks_enabled():
             backend, idx, is_full = self._select(session_id=session_id)
             try:
