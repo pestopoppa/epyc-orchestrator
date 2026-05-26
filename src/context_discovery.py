@@ -235,3 +235,43 @@ def assemble_delegation_bundle(
     hits = discover_candidates(query, code_search_fn=code_search_fn, limit=limit, max_files=max_files)
     candidates = cost_candidates(hits, file_reader_fn=file_reader_fn)
     return pack_to_budget(candidates, budget, bands=bands, bundle_id=bundle_id, repo_sha=repo_sha)
+
+
+# ─── DCP-4: render a packed bundle to prompt text ────────────────────────────────
+
+
+def render_bundle(
+    bundle: ContextBundle,
+    *,
+    file_reader_fn,
+    codemap_fn=build_python_codemap,
+) -> str:
+    """Render a packed ContextBundle's *included* entries to prompt text (DCP-4).
+
+    The bundle is a budget-bounded *plan* (which file at which inclusion mode); this reads
+    each included entry's body via `file_reader_fn` and materializes it per mode: FULL = whole
+    file, SLICES = the selected line ranges, CODEMAP_ONLY = the ast signature skeleton. Entries
+    whose body can't be read (or render empty) are skipped. Pure given the injected reader.
+    """
+    blocks: list[str] = []
+    for e in bundle.included():
+        try:
+            body = file_reader_fn(e.path)
+        except Exception:
+            body = None
+        if not body:
+            continue
+        if e.mode == InclusionMode.FULL:
+            text = body
+        elif e.mode == InclusionMode.SLICES and e.line_ranges:
+            lines = body.splitlines()
+            text = "\n".join(
+                "\n".join(lines[r.start - 1: r.end]) for r in e.line_ranges
+            )
+        elif e.mode == InclusionMode.CODEMAP_ONLY:
+            text = (codemap_fn(body) if e.path.endswith(".py") else None) or ""
+        else:
+            text = ""
+        if text.strip():
+            blocks.append(f"### {e.path} ({e.mode})\n{text}")
+    return "\n\n".join(blocks)

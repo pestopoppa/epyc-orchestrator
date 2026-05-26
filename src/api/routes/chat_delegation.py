@@ -244,6 +244,57 @@ def _run_architect_decision(
 
 
 
+def _maybe_dcp_seed_context(
+    query: str,
+    *,
+    code_search_fn,
+    base_ctx: str,
+    budget: int = 2000,
+) -> str:
+    """DCP-4 (J7): advisory delegation context pre-assembly (flag-gated, default off).
+
+    Returns `base_ctx` augmented with a budget-bounded, rendered bundle of code relevant to
+    `query` (so the specialist sees it upfront → fewer reactive top-ups), or `base_ctx`
+    unchanged when the flag is off OR assembly fails. Advisory only: reactive discovery in
+    the specialist REPL stays fully enabled; this is a seed, not a context firewall.
+    Handoff: handoffs/active/delegation-context-preassembly.md (DCP-4).
+    """
+    from src.features import features as _get_features
+
+    if not _get_features().dcp_pre_assembly:
+        return base_ctx
+    try:
+        from pathlib import Path as _Path
+
+        from src.context_discovery import assemble_delegation_bundle, render_bundle
+        from src.repl_environment.file_mutation import _get_project_root
+
+        _root = _Path(_get_project_root())
+
+        def _file_reader_fn(path: str):
+            try:
+                return (_root / path).read_text(encoding="utf-8")
+            except Exception:
+                return None
+
+        bundle = assemble_delegation_bundle(
+            query,
+            budget=budget,
+            code_search_fn=code_search_fn,
+            file_reader_fn=_file_reader_fn,
+        )
+        seed = render_bundle(bundle, file_reader_fn=_file_reader_fn)
+        if seed:
+            return (
+                f"{base_ctx}\n\n[DCP pre-assembled context]\n{seed}".strip()
+                if base_ctx
+                else seed
+            )
+    except Exception as e:  # noqa: BLE001 — advisory; never block delegation
+        log.debug("DCP-4 pre-assembly skipped: %s", e)
+    return base_ctx
+
+
 def _run_specialist_loop(
     question: str,
     context: str,
@@ -336,6 +387,14 @@ def _run_specialist_loop(
             build_corpus_context(role=delegate_to, task_description=q_for_specialist)
             if cfg.specialist_corpus_context
             else ""
+        )
+        # DCP-4 (J7): advisory pre-assembled code bundle (flag-gated, default off).
+        # No-op (returns corpus_ctx unchanged) when dcp_pre_assembly is off; otherwise seeds
+        # the specialist with relevant code via the same ColGREP the REPL uses reactively.
+        corpus_ctx = _maybe_dcp_seed_context(
+            q_for_specialist,
+            code_search_fn=lambda q, limit=20: deleg_repl._code_search(q, limit=limit),  # noqa: SLF001
+            base_ctx=corpus_ctx,
         )
 
         for _turn in range(max_delegate_turns):
