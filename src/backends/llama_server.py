@@ -490,6 +490,21 @@ class LlamaServerBackend(ModelBackend):
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
 
+        # J12: per-role chat-template kwargs (e.g. enable_thinking=False for
+        # Qwen3.6 frontdoor / Qwen3.5 architect — load-bearing per
+        # feedback_qwen3x_enable_thinking_false). Explicit request override wins;
+        # otherwise fall back to the role's registry default. Only meaningful on
+        # this /v1/chat/completions path (the GGUF jinja template applies the kwarg).
+        ctk = request.extra.get("chat_template_kwargs") if getattr(request, "extra", None) else None
+        if not ctk:
+            try:
+                from src.registry.registry_loader import chat_template_kwargs_for_role
+                ctk = chat_template_kwargs_for_role(getattr(request, "role", None) or role_config.name)
+            except Exception:
+                ctk = None
+        if ctk:
+            payload["chat_template_kwargs"] = ctk
+
         try:
             http_start = time.perf_counter()
             _overall = request.timeout or self.config.timeout

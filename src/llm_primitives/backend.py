@@ -30,9 +30,19 @@ class BackendMixin:
             # (gemma-4 multi-channel format, etc.). Comma-separated names.
             # Default: worker_general (gemma-4-26B-A4B-it).
             import os as _os
+            # J12 (2026-05-26): frontdoor/coder_escalation/architect_general route through
+            # /v1/chat/completions so their registry chat_template_kwargs.enable_thinking=false
+            # applies (load-bearing, feedback_qwen3x_enable_thinking_false). On /completion the
+            # kwarg is inert and Qwen3.6/3.5 emit <think> blocks (J1: degenerate 1390-token
+            # thinking on hard prompts). VERIFIED (max_turns=4, reading `answer`): chat-completions
+            # frontdoor answers a moderate prompt in 270 tokens / 1 turn, no <think>, vs /completion
+            # 2643 tokens / 4 turns thinking-on — ~10x fewer tokens, single turn. (An earlier
+            # "0 tokens" reading was a max_turns=1 probe artifact, not a backend bug.)
+            # ingest_long_context is EXCLUDED — thinking-on is load-bearing for Qwen3-Next-80B.
             _ccl_raw = _os.environ.get(
                 "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES",
-                "worker_general,worker_explore,worker_math,worker_summarize,worker_coder",
+                "worker_general,worker_explore,worker_math,worker_summarize,worker_coder,"
+                "frontdoor,coder_escalation,architect_general",
             )
             _chat_completion_roles = {
                 r.strip() for r in _ccl_raw.split(",") if r.strip()
