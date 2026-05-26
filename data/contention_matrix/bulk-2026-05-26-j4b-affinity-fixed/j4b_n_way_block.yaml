@@ -1,0 +1,81 @@
+n_way:
+  - roles: ['frontdoor', 'ingest_long_context', 'vision_escalation']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 19.2
+    parallel_aggregate_tps: 33.19
+    ratio: 1.731
+    samples: 3
+    cv: 0.0538
+    verdict: "allow"
+    measured_at: "2026-05-26T21:08:55.223009+00:00"
+  - roles: ['frontdoor', 'ingest_long_context', 'worker_general']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 21.62
+    parallel_aggregate_tps: 33.05
+    ratio: 1.535
+    samples: 3
+    cv: 0.1126
+    verdict: "allow"
+    measured_at: "2026-05-26T21:10:08.125102+00:00"
+  - roles: ['frontdoor', 'vision_escalation', 'worker_general']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 24.08
+    parallel_aggregate_tps: 45.08
+    ratio: 1.874
+    samples: 3
+    cv: 0.0305
+    verdict: "allow"
+    measured_at: "2026-05-26T21:11:08.339724+00:00"
+  - roles: ['frontdoor', 'vision_escalation', 'worker_vision']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 13.75
+    parallel_aggregate_tps: 22.78
+    ratio: 1.658
+    samples: 3
+    cv: 0.024
+    verdict: "allow"
+    measured_at: "2026-05-26T21:12:55.680006+00:00"
+  - roles: ['frontdoor', 'worker_general', 'worker_vision']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 14.86
+    parallel_aggregate_tps: 21.85
+    ratio: 1.472
+    samples: 3
+    cv: 0.0405
+    verdict: "allow"
+    measured_at: "2026-05-26T21:14:40.119848+00:00"
+  - roles: ['ingest_long_context', 'vision_escalation', 'worker_general']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 21.99
+    parallel_aggregate_tps: 35.24
+    ratio: 1.609
+    samples: 3
+    cv: 0.1255
+    verdict: "allow"
+    measured_at: "2026-05-26T21:15:50.256771+00:00"
+  - roles: ['vision_escalation', 'worker_general', 'worker_vision']
+    size: 3
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 15.96
+    parallel_aggregate_tps: 23.18
+    ratio: 1.453
+    samples: 3
+    cv: 0.0312
+    verdict: "allow"
+    measured_at: "2026-05-26T21:17:27.601732+00:00"
+  - roles: ['frontdoor', 'vision_escalation', 'worker_general', 'worker_vision']
+    size: 4
+    topology_hash: "df373c79cc4af06f"
+    seq_aggregate_tps: 16.51
+    parallel_aggregate_tps: 28.87
+    ratio: 1.749
+    samples: 3
+    cv: 0.0216
+    verdict: "allow"
+    measured_at: "2026-05-26T21:19:24.828904+00:00"

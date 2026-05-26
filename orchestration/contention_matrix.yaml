@@ -305,16 +305,20 @@ n_way:   # quarter-level, role-set keyed; placement = disjoint quarters (ingest 
   - {roles: ["vision_escalation","worker_general"],         ratio: 1.475, cv: 0.035, verdict: allow, samples: 3, contains_heavy: false}
   - {roles: ["vision_escalation","worker_vision"],          ratio: 1.290, cv: 0.002, verdict: allow, samples: 3, contains_heavy: false}
   - {roles: ["worker_general","worker_vision"],             ratio: 1.086, cv: 0.019, verdict: allow, samples: 3, contains_heavy: false}
-  # --- triples (size 3) ---
-  - {roles: ["frontdoor","ingest_long_context","vision_escalation"],   ratio: 0.847, cv: 0.053, verdict: block, samples: 3, contains_heavy: true}
-  - {roles: ["frontdoor","ingest_long_context","worker_general"],      ratio: 1.805, cv: 0.098, verdict: allow, samples: 3, contains_heavy: true}
-  - {roles: ["frontdoor","vision_escalation","worker_general"],        ratio: 1.607, cv: 0.065, verdict: allow, samples: 3, contains_heavy: false}
-  - {roles: ["frontdoor","vision_escalation","worker_vision"],         ratio: 1.585, cv: 0.019, verdict: allow, samples: 3, contains_heavy: false}
-  - {roles: ["frontdoor","worker_general","worker_vision"],            ratio: 1.320, cv: 0.013, verdict: allow, samples: 3, contains_heavy: false}
-  - {roles: ["ingest_long_context","vision_escalation","worker_general"], ratio: 1.578, cv: 0.030, verdict: allow, samples: 3, contains_heavy: true}
-  - {roles: ["vision_escalation","worker_general","worker_vision"],    ratio: 1.332, cv: 0.021, verdict: allow, samples: 3, contains_heavy: false}
+  # --- triples (size 3) — AFFINITY-FIXED re-bench 2026-05-26 (certified disjoint quarters, live_affinity_verified=true) ---
+  - {roles: ["frontdoor","ingest_long_context","vision_escalation"],   ratio: 1.731, cv: 0.054, verdict: allow, samples: 3, contains_heavy: true}   # was 0.847 BLOCK on BAD affinity — that "pairwise≠N-way block" was an artifact, REFUTED
+  - {roles: ["frontdoor","ingest_long_context","worker_general"],      ratio: 1.535, cv: 0.113, verdict: allow, samples: 3, contains_heavy: true}
+  - {roles: ["frontdoor","vision_escalation","worker_general"],        ratio: 1.874, cv: 0.030, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["frontdoor","vision_escalation","worker_vision"],         ratio: 1.658, cv: 0.024, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["frontdoor","worker_general","worker_vision"],            ratio: 1.472, cv: 0.041, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["ingest_long_context","vision_escalation","worker_general"], ratio: 1.609, cv: 0.126, verdict: allow, samples: 3, contains_heavy: true}
+  - {roles: ["vision_escalation","worker_general","worker_vision"],    ratio: 1.453, cv: 0.031, verdict: allow, samples: 3, contains_heavy: false}
   # --- quad (size 4) — the only all-quarterable 4-way ---
-  - {roles: ["frontdoor","vision_escalation","worker_general","worker_vision"], ratio: 1.605, cv: 0.016, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["frontdoor","vision_escalation","worker_general","worker_vision"], ratio: 1.749, cv: 0.022, verdict: allow, samples: 3, contains_heavy: false}
+  # NOTE: size-2 pairs above were NOT in this re-bench (--min-size 3); those involving worker_general/
+  # vision quarters were measured under the bad affinity → treat as suspect, re-bench (--min-size 2)
+  # pending. All size-3+ here are certified-affinity. The famous {frontdoor,ingest,vision} "block"
+  # (0.847) was a bad-affinity artifact — it is ALLOW (1.731) on correctly-disjoint quarters.
 
 # Note: {ingest_long_context, vision_escalation, worker_general} = 1.578 ALLOW at
 # quarter level (ingest-half + two light quarters). This SUPERSEDES the earlier
