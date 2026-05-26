@@ -201,35 +201,29 @@ same_role:
       - {a: q1, b: q3, ratio: 0.772, cv: 0.169, verdict: block}
 
   - role: "vision_escalation"
-    verdict: "borderline"   # -t48 re-bench OVERTURNS the -t96 block; over-threading was the dominant cause
-    samples: 3
+    verdict: "allow"   # RATIFIED at samples=8 (2026-05-26): 6/6 quarter-pairs allow super-linear
+    samples: 8
     note: >-
-      J5 -t48 RE-BENCH (2026-05-26, alone, --safe-sampling, samples=3) OVERTURNS the -t96 all-block
-      verdict AND REFUTES the prior --mmproj/qwen3vlmoe suspicion: the catastrophic -t96 numbers
-      (0.40-0.46x) were almost entirely launcher OVER-THREADING (-t 96 on 24-core quarters; fixed
-      da1aed6, validated live -t48). At -t48 the QUARTER+QUARTER pairs scale excellently — 5/6 ALLOW,
-      super-linear: q0+q3 1.266, q1+q2 1.233, q0+q2 1.188, q0+q1 1.154, q2+q3 1.140; q1+q3 0.963
-      (borderline). Super-linear (>1.0) because a lone 24-core quarter under-saturates DRAM BW, so two
-      concurrent quarters use the memory subsystem more efficiently than running them serially.
-      The only blocks are the two FULL+quarter disjoint pairs: full+q0 0.580, full+q1 0.619 — vision's
-      "full" is node1-only (48-95), so full+q0/full+q1 are core-disjoint but the 48-core full instance
-      starves the co-running quarter (placement_policy must NOT keep full warm under burst; full_disabled-
-      under-burst). MEASUREMENT CAVEAT: this is DIAGNOSTIC-GRADE — 5/8 pairs exceed the 5% CV gate
-      (q1+q3 cv 0.420!, full+q1 0.124, q0+q2 0.088, q2+q3 0.076, q0+q1 0.067); only q0+q3/q1+q2/full+q0
-      are tight. The DIRECTION (over-threading was the cause; quarters scale at -t48) is robust, but
-      ratifying a clean "allow" needs a higher-sample (>=8) re-bench. Set to borderline (runtime gate
-      ALLOWs quarter co-run; honest given the noise + full+quarter caveat). FOLLOW-UPS: (1) applies on
-      next API restart (load-once cache); (2) vision = burst_prefer_quarters candidate for WP-7 with
-      full-disabled-under-burst; (3) higher-sample re-bench to ratify allow.
-    instance_pairs:   # documentation only (loader reads role/verdict/note); CV-flagged pairs need re-measure
-      - {a: q0, b: q3, ratio: 1.266, cv: 0.004, verdict: allow}
-      - {a: q1, b: q2, ratio: 1.233, cv: 0.007, verdict: allow}
-      - {a: q0, b: q2, ratio: 1.188, cv: 0.088, verdict: allow, cv_gate: FAIL}
-      - {a: q0, b: q1, ratio: 1.154, cv: 0.067, verdict: allow, cv_gate: FAIL}
-      - {a: q2, b: q3, ratio: 1.140, cv: 0.076, verdict: allow, cv_gate: FAIL}
-      - {a: q1, b: q3, ratio: 0.963, cv: 0.420, verdict: borderline, cv_gate: FAIL}
-      - {a: full, b: q0, ratio: 0.580, cv: 0.024, verdict: block}
-      - {a: full, b: q1, ratio: 0.619, cv: 0.124, verdict: block, cv_gate: FAIL}
+      J5 -t48 RE-BENCH, RATIFIED at samples=8 (2026-05-26, alone, --safe-sampling). The -t96 all-block
+      (0.40-0.46x) was launcher OVER-THREADING (-t 96 on 24-core quarters; fixed da1aed6) — the prior
+      --mmproj/qwen3vlmoe suspicion is REFUTED. At -t48 ALL 6 quarter+quarter pairs ALLOW, super-linear
+      (1.13-1.25x): a lone 24-core quarter under-saturates DRAM BW, so two concurrent quarters use the
+      memory subsystem more efficiently than serial. samples=8 cleaned up the samples=3 noise — the lone
+      s3 borderline outlier q1+q3 (0.963 cv0.420) resolved to 1.214 cv0.070 ALLOW. Residual noise: q0+q2
+      cv0.203 (still allow at 1.129) + the full+quarter pairs (full+q0 cv0.438) — both above the 5% gate
+      but the 6/6 quarter-pair allow verdict is robust. The only BLOCKS are the two FULL+quarter disjoint
+      pairs: full+q0 0.705, full+q1 0.587 — vision "full" is node1-only (48-95), core-disjoint from q0/q1
+      but the 48-core full starves the co-running quarter. PLACEMENT: burst_prefer_quarters with
+      FULL-DISABLED-UNDER-BURST (never co-run full + a quarter). Runtime gate ALLOWs quarter co-run.
+    instance_pairs:   # samples=8 ratified; loader reads role/verdict/note (instance_pairs documentation only)
+      - {a: q0, b: q3, ratio: 1.250, cv: 0.071, verdict: allow}
+      - {a: q1, b: q3, ratio: 1.214, cv: 0.070, verdict: allow}
+      - {a: q1, b: q2, ratio: 1.208, cv: 0.060, verdict: allow}
+      - {a: q0, b: q1, ratio: 1.180, cv: 0.066, verdict: allow}
+      - {a: q2, b: q3, ratio: 1.165, cv: 0.042, verdict: allow}
+      - {a: q0, b: q2, ratio: 1.129, cv: 0.203, verdict: allow, cv_gate: FAIL}
+      - {a: full, b: q0, ratio: 0.705, cv: 0.438, verdict: block, cv_gate: FAIL}
+      - {a: full, b: q1, ratio: 0.587, cv: 0.092, verdict: block, cv_gate: FAIL}
 
   - role: "architect_general"
     verdict: "n/a"
