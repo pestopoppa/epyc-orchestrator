@@ -256,7 +256,12 @@ def cmd_start(args: argparse.Namespace) -> int:
 
     # Load registry
     registry = RegistryLoader()
-    state: dict[str, ProcessInfo] = {}
+    # In --only mode we start a SUBSET of roles, so seed `state` from the
+    # existing on-disk state and merge — otherwise save_state() at the end
+    # clobbers every other still-running role's entry, leaving live processes
+    # untracked (stop/reload can no longer find them). A full start (no --only)
+    # rebuilds from scratch, which is correct since it (re)launches everything.
+    state: dict[str, ProcessInfo] = load_state() if getattr(args, "only", None) else {}
 
     # Validate model paths (prevents hallucinations about missing models)
     if not args.dev:

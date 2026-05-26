@@ -88,19 +88,27 @@ def test_build_worker_explore_command_falls_back_to_llama_server() -> None:
 
 
 def test_build_worker_explore_command_uses_numa_thread_count_for_port() -> None:
-    """Quarter instances must get the per-instance thread count from NUMA_CONFIG, not 96."""
-    # Find a quarter port for worker_general (not the full instance)
-    full_port, full_threads, *_ = (
-        (inst[1], inst[2], None) for inst in oss.NUMA_CONFIG["worker_general"]["instances"]
-        if inst[1] != 8072
-    )
-    quarter_port = full_port[0]  # generator returns first
-    expected_threads = full_port[1]
+    """Quarter instances must get the per-instance thread count from NUMA_CONFIG, not 96.
 
-    cmd = oss._build_worker_explore_command(
-        port=quarter_port, model_path="/m/gemma4.gguf", binary_override=None,
-    )
-    assert cmd[cmd.index("-t") + 1] == str(expected_threads)
+    Post-da1aed6 the thread count is resolved by ``numa_instance`` *index* (not by
+    port): the start loop / dispatcher pass the index of the instance being
+    launched, and _resolve_thread_count picks instances[numa_instance].threads.
+    This is what makes gemma4 quarters get -t 48 (idx 1..4) while the full
+    instance (idx 0) gets -t 96.
+    """
+    instances = oss.NUMA_CONFIG["worker_general"]["instances"]
+    for idx, inst in enumerate(instances):
+        port, expected_threads = inst[1], inst[2]
+        cmd = oss._build_worker_explore_command(
+            port=port, model_path="/m/gemma4.gguf", binary_override=None,
+            numa_instance=idx,
+        )
+        assert cmd[cmd.index("-t") + 1] == str(expected_threads), (
+            f"instance {idx} (port {port}) expected -t {expected_threads}"
+        )
+    # Full instance (idx 0) is -t 96 — the over-subscription the launcher bug
+    # wrongly applied to quarters too (now fixed by forwarding numa_instance).
+    assert instances[0][2] == 96
 
 
 def test_build_worker_explore_command_unknown_port_uses_fallback_96() -> None:
@@ -234,7 +242,9 @@ def test_dispatcher_routes_vision_mode() -> None:
     with patch.object(oss, "_build_vision_command", return_value=["VISION"]) as m:
         out = oss.build_server_command(None, 8087, vision_mode=True, vision_type="escalation")
     assert out == ["VISION"]
-    m.assert_called_once_with(8087, "escalation")
+    # numa_instance defaults to 0 (full) and is forwarded post-da1aed6 so quarters
+    # get NUMA_CONFIG -t (was always -t 96).
+    m.assert_called_once_with(8087, "escalation", 0)
 
 
 def test_dispatcher_routes_embedding_mode() -> None:
@@ -286,4 +296,5 @@ def test_dispatcher_routes_default_to_role_builder() -> None:
     with patch.object(oss, "_build_role_command", return_value=["ROLE"]) as m:
         out = oss.build_server_command(fake_role, 8070)
     assert out == ["ROLE"]
-    m.assert_called_once_with(fake_role, 8070)
+    # numa_instance (default 0) forwarded post-da1aed6.
+    m.assert_called_once_with(fake_role, 8070, 0)
