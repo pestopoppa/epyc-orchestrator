@@ -35,7 +35,7 @@ import logging
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Optional
 
 try:
     import httpx
@@ -421,20 +421,59 @@ class ConcurrencyAwareBackend:
             self._session_quarter[session_id] = quarter
             self._set_session_state(session_id, state=state, quarter=quarter, detail=detail)
 
-    def _migrate_kv(self, session_id: str, target_quarter: int) -> None:
+    def _migrate_kv(
+        self,
+        session_id: str,
+        target_quarter: int,
+        transaction: Optional["MigrationTransaction"] = None,
+    ) -> Optional["MigrationTransaction"]:
         """Migrate KV state from full instance to a quarter (background thread).
 
-        Best-effort: if save or restore fails, the quarter starts cold.
-        """
-        if not self._full_url:
-            return
-        target_url = self._quarter_urls[target_quarter] if target_quarter < len(self._quarter_urls) else None
-        if not target_url:
-            return
+        WP-3 refactor: drives an explicit MigrationTransaction state machine
+        (planned → saving → restoring → verified → source_erased → committed
+        or → aborted) so callers can await completion + observe failure
+        modes. Best-effort still — if save/restore fails, the transaction
+        moves to ABORTED and the quarter starts cold.
 
-        t0 = time.monotonic()
+        Args:
+          session_id: KV cache owner.
+          target_quarter: destination quarter index (0..N-1 in self._quarters).
+          transaction: optional pre-allocated transaction (e.g. created by
+            the dispatcher's load-transition trigger so it can wait on
+            transaction.event). If None, an internal one is created and
+            returned for telemetry-only consumers.
+
+        Returns the (possibly-created) MigrationTransaction.
+        """
+        from src.scheduling.migration_transaction import (
+            MigrationState,
+            MigrationTransaction,
+        )
+
+        if not self._full_url:
+            return transaction
+
+        target_url = (
+            self._quarter_urls[target_quarter]
+            if target_quarter < len(self._quarter_urls)
+            else None
+        )
+        if not target_url:
+            return transaction
+
+        if transaction is None:
+            transaction = MigrationTransaction(
+                role=self._role,
+                session_id=session_id,
+                source_url=self._full_url,
+                target_quarter=target_quarter,
+                target_url=target_url,
+            )
+
+        transaction.advance(MigrationState.SAVING)
         saved = _slot_save(self._full_url)
         if not saved:
+            transaction.advance(MigrationState.ABORTED, detail="save_failed")
             with self._lock:
                 self._migration_failures += 1
                 self._set_session_state(
@@ -444,15 +483,15 @@ class ConcurrencyAwareBackend:
                     detail="save_failed",
                 )
             logger.warning(
-                "KV migration save failed for %s session=%s, quarter %d starts cold",
-                self._role,
-                session_id,
-                target_quarter,
+                "KV migration save failed for %s session=%s, quarter %d starts cold (txn=%s)",
+                self._role, session_id, target_quarter, transaction.txn_id,
             )
-            return
+            return transaction
 
+        transaction.advance(MigrationState.RESTORING)
         restored = _slot_restore(target_url)
         if not restored:
+            transaction.advance(MigrationState.ABORTED, detail="restore_failed")
             with self._lock:
                 self._migration_failures += 1
                 self._set_session_state(
@@ -462,30 +501,34 @@ class ConcurrencyAwareBackend:
                     detail="restore_failed",
                 )
             logger.warning(
-                "KV migration restore failed for %s session=%s quarter %d; session will run cold",
-                self._role,
-                session_id,
-                target_quarter,
+                "KV migration restore failed for %s session=%s quarter %d; session will run cold (txn=%s)",
+                self._role, session_id, target_quarter, transaction.txn_id,
             )
-            return
+            return transaction
 
-        # Erase KV from full instance (it now belongs to the quarter)
+        # Restore confirmed — placement waiters may now proceed (audit refinement:
+        # incoming request must wait for VERIFIED before placing on the freed slot).
+        transaction.advance(MigrationState.VERIFIED, detail="restore_confirmed")
+
+        # Source erase happens AFTER verification — destructive on failure, so
+        # we want to be 100% sure the restore succeeded before clearing source.
         _slot_erase(self._full_url)
+        transaction.advance(MigrationState.SOURCE_ERASED)
+
         self._finalize_quarter_assignment(
             session_id,
             target_quarter,
             state=_STATE_ASSIGNED_QUARTER,
             detail="restored",
         )
+        transaction.advance(MigrationState.COMMITTED)
 
-        elapsed_ms = (time.monotonic() - t0) * 1000
         logger.info(
-            "KV migration complete: %s session=%s full → quarter %d (%.0fms)",
-            self._role,
-            session_id,
-            target_quarter,
-            elapsed_ms,
+            "KV migration complete: %s session=%s full → quarter %d (%.0fms, txn=%s)",
+            self._role, session_id, target_quarter,
+            transaction.elapsed_ms, transaction.txn_id,
         )
+        return transaction
 
     def _release(self, idx: int, is_full: bool) -> None:
         with self._lock:
@@ -545,8 +588,22 @@ class ConcurrencyAwareBackend:
             "1", "true", "yes", "on",
         }
 
+    def _extract_migration_budget_ms(self, request: Any) -> Optional[int]:
+        """Best-effort read of ChatRequest.migration_budget_ms for the WP-3
+        load-transition trigger. Returns None if not present."""
+        if request is None:
+            return None
+        v = getattr(request, "migration_budget_ms", None)
+        if v is None:
+            return None
+        try:
+            iv = int(v)
+            return iv if iv > 0 else None
+        except (TypeError, ValueError):
+            return None
+
     @contextmanager
-    def _dispatch(self, session_id: str = ""):
+    def _dispatch(self, session_id: str = "", migration_budget_ms: Optional[int] = None):
         """Yield (backend, idx, is_full) with the right lock held.
 
         Two paths:
@@ -628,7 +685,17 @@ class ConcurrencyAwareBackend:
             # If none survive (every candidate overlaps), poll until a release
             # makes a candidate safe; cap by 60s wall-clock (the same generous
             # bound the legacy block-on-full fallback used).
-            from src.scheduling.placement import evaluate_placement, QueueReason
+            #
+            # WP-3 layer (this dispatch path is unchanged from WP-2): the
+            # transactional migration model + policy gating + migration
+            # budget threading apply to the EXISTING session-handover
+            # trigger below (lines following "chosen_idx == -1"), not here.
+            # A proactive load-transition trigger inside the poll loop was
+            # explored and removed: _migrate_kv cannot preempt an in-flight
+            # decode, so triggering it during a queue-wait does not unblock
+            # the queue — the existing inference must complete and release
+            # its lock, after which the WP-2 poll re-evaluates and succeeds.
+            from src.scheduling.placement import evaluate_placement
             from src.runtime.cpu_region_lock import active_region_holders
             from src.runtime.instance_topology import get_instance_regions
             from src.scheduling.contention_gate import ContentionDenied
@@ -702,6 +769,18 @@ class ConcurrencyAwareBackend:
         # session's KV to a disjoint quarter.
         migrate_old_session: str | None = None
         migrate_target_quarter: int | None = None
+        # WP-3 policy gate: FULL_DISABLED + QUEUE_ONLY skip migration; the
+        # other two policies (SOLO_PREFER_FULL = default, BURST_PREFER_QUARTERS)
+        # leave the existing session-handover migration trigger active.
+        from src.scheduling.placement_policy import (
+            RolePlacementPolicy,
+            get_placement_policy,
+        )
+        _policy = get_placement_policy(self._role)
+        _migration_allowed_by_policy = _policy in (
+            RolePlacementPolicy.SOLO_PREFER_FULL,
+            RolePlacementPolicy.BURST_PREFER_QUARTERS,
+        )
         with self._lock:
             self._total_requests += 1
             if chosen_idx == -1:
@@ -710,6 +789,7 @@ class ConcurrencyAwareBackend:
                 old_session = self._full_last_session
                 if (
                     self._kv_migration_enabled
+                    and _migration_allowed_by_policy
                     and old_session
                     and session_id
                     and old_session != session_id
@@ -741,13 +821,30 @@ class ConcurrencyAwareBackend:
                 if session_id:
                     self._session_quarter[session_id] = chosen_idx
 
-        # Kick off migration outside the lock (the thread does its own locking)
+        # Kick off migration outside the lock (the thread does its own locking).
+        # WP-3: pre-allocate the MigrationTransaction with the per-request
+        # budget honored from ChatRequest.migration_budget_ms (default 30s
+        # when no per-request override; matches the legacy _SLOT_SAVE_TIMEOUT).
         if migrate_old_session is not None and migrate_target_quarter is not None:
+            from src.scheduling.migration_transaction import MigrationTransaction
+            _target_url = (
+                self._quarter_urls[migrate_target_quarter]
+                if migrate_target_quarter < len(self._quarter_urls)
+                else ""
+            )
+            _txn = MigrationTransaction(
+                role=self._role,
+                session_id=migrate_old_session,
+                source_url=self._full_url or "",
+                target_quarter=migrate_target_quarter,
+                target_url=_target_url,
+                migration_budget_ms=(migration_budget_ms or 30_000),
+            )
             threading.Thread(
                 target=self._migrate_kv,
-                args=(migrate_old_session, migrate_target_quarter),
+                args=(migrate_old_session, migrate_target_quarter, _txn),
                 daemon=True,
-                name=f"kv-migrate-{self._role}-{migrate_old_session[:8]}",
+                name=f"kv-migrate-{self._role}-{migrate_old_session[:8]}-{_txn.txn_id}",
             ).start()
 
         # Telemetry: stamp quarter-assignment session state outside the lock
@@ -780,17 +877,20 @@ class ConcurrencyAwareBackend:
 
     def infer(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
-        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
+        mb = self._extract_migration_budget_ms(request)
+        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
             return backend.infer(role_config, request)
 
     def infer_streaming(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
-        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
+        mb = self._extract_migration_budget_ms(request)
+        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
             return backend.infer_streaming(role_config, request)
 
     def infer_stream_text(self, role_config: Any, request: Any, on_chunk: Any = None) -> Any:
         sid = self._extract_session_id(request)
-        with self._dispatch(session_id=sid) as (backend, _idx, _is_full):
+        mb = self._extract_migration_budget_ms(request)
+        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
             return backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
 
     def health_check(self, pid: int = 0) -> bool:
