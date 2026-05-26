@@ -151,3 +151,30 @@ async def test_stale_base_does_not_promote(monkeypatch, tmp_path):
     result = await _run(_wrap(body))
     assert result is not None and result[2] is False  # nudge, not terminal
     assert (tmp_path / "f.py").read_text() == "real = 1\n"  # unchanged
+
+
+# ─── BEP-1c telemetry: malformed != absent (hard gate) ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_telemetry_distinguishes_absent_vs_malformed(monkeypatch, tmp_path):
+    _set_flag(monkeypatch, True)
+    _point_repo(monkeypatch, tmp_path)
+    H._BATCH_EDIT_STATE_COUNTS.clear()
+    await _run('FINAL("done")')  # no patchset block → absent
+    bad = '{"files": [{"path": "m.py", "operation": "modify", "hunks": [{"start_line": 1, "end_line": 1, "replacement": "x"}]}]}'
+    await _run(_wrap(bad))       # block present, invalid (modify w/o base sha) → malformed
+    assert H._BATCH_EDIT_STATE_COUNTS.get("absent") == 1
+    assert H._BATCH_EDIT_STATE_COUNTS.get("malformed") == 1   # DISTINCT signal, not collapsed
+
+
+@pytest.mark.asyncio
+async def test_telemetry_records_applied_and_verify_failed(monkeypatch, tmp_path):
+    _set_flag(monkeypatch, True)
+    _point_repo(monkeypatch, tmp_path)
+    H._BATCH_EDIT_STATE_COUNTS.clear()
+    good = '{"files": [{"path": "ok.py", "operation": "create", "new_content": "V = 7\\n"}]}'
+    await _run(_wrap(good))
+    bad_py = '{"files": [{"path": "broken.py", "operation": "create", "new_content": "def (:\\n"}]}'
+    await _run(_wrap(bad_py))    # py_compile verify fails
+    assert H._BATCH_EDIT_STATE_COUNTS.get("applied") == 1
+    assert H._BATCH_EDIT_STATE_COUNTS.get("verify_failed") == 1

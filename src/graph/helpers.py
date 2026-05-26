@@ -392,6 +392,19 @@ def _finalize_batch_edit(
     return summary, None, True, artifacts
 
 
+# BEP-1c telemetry: per-turn batch-edit outcome counts. The states are distinct (the hard gate
+# requires malformed != absent): "absent" = no ```patchset block (model chose not to batch);
+# "malformed" = block present but invalid JSON/schema (parse error); "applied" = sandbox-verified
+# + promoted; "verify_failed" / "apply_failed" / "promote_failed" / "apply_error" = failure modes.
+# The BEP-2 A/B reads these to separate parse-failure rate from "didn't batch".
+_BATCH_EDIT_STATE_COUNTS: dict[str, int] = {}
+
+
+def _record_batch_edit_state(state_name: str, *, turn: int | None = None, detail: str = "") -> None:
+    _BATCH_EDIT_STATE_COUNTS[state_name] = _BATCH_EDIT_STATE_COUNTS.get(state_name, 0) + 1
+    log.info("batch_edit_state=%s turn=%s %s", state_name, turn, detail.replace("\n", " ")[:160])
+
+
 async def _maybe_batch_edit_turn(
     ctx: Ctx, role: Role | str, raw_llm_output: str
 ) -> tuple[str, str | None, bool, dict] | None:
@@ -402,16 +415,21 @@ async def _maybe_batch_edit_turn(
 
     if not _get_features().batch_edit_mode:
         return None
+    state = ctx.state
+    turn = getattr(state, "turns", None)
+    # BEP-1c: "absent" (no patchset block) and "malformed" (block present but invalid) MUST be
+    # distinguishable — both fall through to REPL, but they are different signals for the A/B.
     try:
         from src.batch_edit_parse import parse_patchset_from_model_output
 
         ps = parse_patchset_from_model_output(raw_llm_output)  # None if no fenced block
-    except ValueError:
-        ps = None  # present-but-malformed → fall back to REPL (model re-emits)
+    except ValueError as exc:
+        _record_batch_edit_state("malformed", turn=turn, detail=str(exc))
+        return None  # present-but-malformed → fall back to REPL (model re-emits)
     if ps is None:
+        _record_batch_edit_state("absent", turn=turn)
         return None
 
-    state = ctx.state
     from src.batch_edit_runner import (
         apply_patchset_sandboxed,
         cleanup_sandbox,
@@ -427,6 +445,7 @@ async def _maybe_batch_edit_turn(
             verify_fn=_batch_edit_verify_fn,
         )
     except Exception as e:  # noqa: BLE001 — apply must never crash the turn
+        _record_batch_edit_state("apply_error", turn=turn, detail=str(e))
         log.warning(
             "batch-edit apply raised (turn %d): %s — falling back to REPL", state.turns, e
         )
@@ -439,12 +458,14 @@ async def _maybe_batch_edit_turn(
         finally:
             cleanup_sandbox(result)
         if promoted:
+            _record_batch_edit_state("applied", turn=turn, detail=f"{len(result.diff_paths)} file(s)")
             log.info(
                 "batch-edit (turn %d): applied+promoted %d file(s)",
                 state.turns,
                 len(result.diff_paths),
             )
             return _finalize_batch_edit(state, role, result, ps)
+        _record_batch_edit_state("promote_failed", turn=turn)
         log.warning(
             "batch-edit verify passed but promotion failed (turn %d) — falling back to REPL",
             state.turns,
@@ -453,6 +474,11 @@ async def _maybe_batch_edit_turn(
 
     # apply/verify failed → never touch the live tree; nudge to re-emit or fall back
     cleanup_sandbox(result)
+    _record_batch_edit_state(
+        "verify_failed" if result.verify_passed is False else "apply_failed",
+        turn=turn,
+        detail=_batch_edit_failure_summary(result),
+    )
     nudge = _batch_edit_failure_summary(result)
     _record_session_turn(state, role=str(role), nudge=nudge)
     return "", None, False, {"_nudge": nudge}

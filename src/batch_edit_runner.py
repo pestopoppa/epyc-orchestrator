@@ -52,7 +52,9 @@ class ApplyResult:
     failed: list[dict] = field(default_factory=list)  # {path, failure_type, detail}
     verify_passed: bool | None = None  # None = not requested
     sandbox_path: str | None = None
-    diff_paths: list[str] = field(default_factory=list)
+    diff_paths: list[str] = field(default_factory=list)  # created/modified + rename-to (copy on promote)
+    deleted_paths: list[str] = field(default_factory=list)  # BEP-1b: unlink from live on promote
+    renamed_paths: list[tuple[str, str]] = field(default_factory=list)  # (from, to): unlink `from` on promote
 
     @property
     def ok(self) -> bool:
@@ -147,12 +149,17 @@ def apply_patchset_to_dir(ps: PatchSet, target_dir: Path | str, current_shas: di
                     if p.exists():
                         p.unlink()
                     result.applied.append(fp.path)
+                    result.deleted_paths.append(fp.path)  # BEP-1b: promote must unlink from live
                 elif fp.operation == EditOperation.RENAME:
                     dst = root / (fp.rename_to or "")
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     if p.exists():
                         shutil.move(str(p), str(dst))
                     result.applied.append(f"{fp.path} -> {fp.rename_to}")
+                    # BEP-1b: copy the rename-to file on promote (diff_paths) + unlink the old path.
+                    if fp.rename_to:
+                        result.diff_paths.append(fp.rename_to)
+                        result.renamed_paths.append((fp.path, fp.rename_to))
     except Exception as e:  # apply error mid-set → sandbox is discarded by caller (not promoted)
         result.add_failure("*", FailureType.APPLY_ERROR, str(e))
     return result
@@ -194,12 +201,19 @@ def promote_sandbox(result: ApplyResult, repo_root: Path | str) -> bool:
         return False
     sandbox = Path(result.sandbox_path)
     root = Path(repo_root)
-    for rel in result.diff_paths:  # created/modified files
+    for rel in result.diff_paths:  # created/modified files + rename-to targets
         src = sandbox / rel
         if src.exists():
             dst = root / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+    # BEP-1b: deletions + rename sources must be removed from the LIVE tree (copying diff_paths
+    # alone leaves deleted/old-renamed files behind). Done after copies so a rename to an existing
+    # path still lands the new content first.
+    for rel in result.deleted_paths:
+        (root / rel).unlink(missing_ok=True)
+    for frm, _to in result.renamed_paths:
+        (root / frm).unlink(missing_ok=True)
     return True
 
 

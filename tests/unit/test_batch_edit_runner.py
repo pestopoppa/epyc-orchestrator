@@ -157,3 +157,29 @@ def test_stale_in_sandboxed_path_never_touches_live(tmp_path: Path) -> None:
     assert promote_sandbox(res, root) is False
     assert (root / "a.py").read_text() == "CHANGED\n"
     cleanup_sandbox(res)
+
+
+# ─── BEP-1b: delete / rename promotion to the live tree ──────────────────────────
+
+def test_promote_delete_removes_from_live(tmp_path):
+    root = _repo(tmp_path, {"keep.py": "x\n", "gone.py": "y\n"})
+    ps = PatchSet(files=[FilePatch(path="gone.py", operation="delete",
+                                   base_content_sha256=sha256_text("y\n"))])
+    res = apply_patchset_sandboxed(ps, repo_root=root, current_shas=compute_current_shas(ps, root))
+    assert res.ok, res.failed
+    assert "gone.py" in res.deleted_paths
+    assert promote_sandbox(res, root) is True
+    assert not (root / "gone.py").exists()   # deletion promoted
+    assert (root / "keep.py").exists()         # untouched
+
+
+def test_promote_rename_moves_in_live(tmp_path):
+    root = _repo(tmp_path, {"old.py": "content\n"})
+    ps = PatchSet(files=[FilePatch(path="old.py", operation="rename", rename_to="new.py",
+                                   base_content_sha256=sha256_text("content\n"))])
+    res = apply_patchset_sandboxed(ps, repo_root=root, current_shas=compute_current_shas(ps, root))
+    assert res.ok, res.failed
+    assert ("old.py", "new.py") in res.renamed_paths
+    assert promote_sandbox(res, root) is True
+    assert (root / "new.py").read_text() == "content\n"  # rename-to promoted with content
+    assert not (root / "old.py").exists()                # rename-from removed
