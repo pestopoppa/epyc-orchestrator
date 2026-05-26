@@ -162,6 +162,11 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
                     "quarter_preference_order": list(getattr(backend, "_quarter_preference_order", [])),
                     "migrations_started": int(getattr(backend, "_migrations", 0)),
                     "migration_failures": int(getattr(backend, "_migration_failures", 0)),
+                    # WP-4 reverse migration (quarter→full on load drop) — surfaced for J2/J3
+                    # observation (forward = migrations_started above; this is the reverse leg).
+                    "reverse_migrations": int(
+                        sum((getattr(backend, "_reverse_migration_counts", {}) or {}).values())
+                    ),
                     "kv_migration": (
                         backend.kv_migration_status()
                         if hasattr(backend, "kv_migration_status")
