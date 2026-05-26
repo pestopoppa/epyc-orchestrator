@@ -339,9 +339,11 @@ def _log_state_snapshot(ctx: Ctx, role: str) -> None:
 
 
 def _batch_edit_repo_root() -> Path:
-    """Apply target — the same project root the interleaved REPL already writes to."""
-    from src.repl_environment.file_mutation import _get_project_root
-    return Path(_get_project_root())
+    """Apply target. Scratch task-root when ORCHESTRATOR_EDIT_ROOT is active (BEP A/B, #8); else
+    the project root the interleaved REPL writes to — get_task_root() returns project_root when
+    inactive, so this is default-off parity with the prior _get_project_root()."""
+    from src.repl_environment.task_root import get_task_root
+    return get_task_root()
 
 
 def _batch_edit_verify_fn(sandbox_root: Path) -> bool:

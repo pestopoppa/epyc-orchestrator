@@ -267,9 +267,12 @@ def _maybe_dcp_seed_context(
         from pathlib import Path as _Path
 
         from src.context_discovery import assemble_delegation_bundle, render_bundle
-        from src.repl_environment.file_mutation import _get_project_root
+        from src.repl_environment.task_root import get_task_root
 
-        _root = _Path(_get_project_root())
+        # BEP/DCP harness (Phase 1, #10): DCP bundle bodies come from the scratch task-root when
+        # ORCHESTRATOR_EDIT_ROOT is active; else project_root (get_task_root() == project_root when
+        # inactive → default-off parity).
+        _root = _Path(get_task_root())
 
         def _file_reader_fn(path: str):
             try:

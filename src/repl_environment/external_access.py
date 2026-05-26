@@ -199,12 +199,17 @@ class _ExternalAccessMixin:
         timeout = min(timeout, 120)
 
         try:
+            # BEP harness (Phase 1, #5): run model shell/tests from the scratch task-root when
+            # ORCHESTRATOR_EDIT_ROOT is active; else project root (default-off parity).
+            from src.repl_environment.task_root import get_task_root, task_root_active
+
+            _shell_cwd = str(get_task_root()) if task_root_active() else _get_project_root()
             result = subprocess.run(
                 shlex.split(cmd),
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd=_get_project_root(),  # Always run from project root
+                cwd=_shell_cwd,  # task-root under A/B, else project root
             )
 
             output = result.stdout

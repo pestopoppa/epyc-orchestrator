@@ -83,9 +83,9 @@ def test_seed_flag_off_returns_base_unchanged(monkeypatch):
 
 def test_seed_flag_on_augments_context(monkeypatch, tmp_path):
     monkeypatch.setattr("src.features.features", lambda: SimpleNamespace(dcp_pre_assembly=True))
-    monkeypatch.setattr(
-        "src.repl_environment.file_mutation._get_project_root", lambda: tmp_path
-    )
+    # DCP file_reader now sources get_task_root() (Phase 1 #10) — drive it via the real
+    # ORCHESTRATOR_EDIT_ROOT task-root mechanism instead of the old _get_project_root.
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
     (tmp_path / "target.py").write_text("def target():\n    return 99\n")
     out = CD._maybe_dcp_seed_context(
         "target",
@@ -108,9 +108,7 @@ def test_seed_flag_on_failure_falls_back(monkeypatch):
 
 def test_seed_empty_base_returns_only_bundle(monkeypatch, tmp_path):
     monkeypatch.setattr("src.features.features", lambda: SimpleNamespace(dcp_pre_assembly=True))
-    monkeypatch.setattr(
-        "src.repl_environment.file_mutation._get_project_root", lambda: tmp_path
-    )
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))  # task-root (Phase 1 #10)
     (tmp_path / "only.py").write_text("ONLY = 1\n")
     out = CD._maybe_dcp_seed_context(
         "only",

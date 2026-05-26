@@ -133,9 +133,56 @@ class _CodeSearchMixin:
         Returns:
             JSON with matching code passages, file paths, and line ranges.
         """
+        # BEP/DCP harness (Phase 1, #7): ColGREP/NextPLAID are indexed over the production
+        # corpus and cannot search an arbitrary scratch repo. When ORCHESTRATOR_EDIT_ROOT is
+        # active, search the (small) scratch task-root directly so the model + DCP discover the
+        # files they actually edit. Default-off: falls through to ColGREP exactly as before.
+        from src.repl_environment.task_root import task_root_active
+
+        if task_root_active():
+            return self._task_root_code_search(query, limit=limit)
         if _colgrep_enabled():
             return self._colgrep_search(query, limit=limit)
         return self._nextplaid_search(query, index="code", limit=limit)
+
+    def _task_root_code_search(self, query: str, limit: int) -> str:
+        """Index-free code search over the scratch task-root (#7). Returns a ColGREP-JSON-shaped
+        string (path/score/start_line) so `parse_colgrep_json` consumes it unchanged. Used only
+        when ORCHESTRATOR_EDIT_ROOT is active (small scratch repos)."""
+        import json
+        import re
+
+        from src.repl_environment.task_root import get_task_root
+
+        root = get_task_root()
+        terms = [t for t in re.split(r"\W+", query.lower()) if len(t) > 2]
+        code_exts = {".py", ".txt", ".md", ".cfg", ".toml", ".json", ".yaml", ".yml", ".js", ".ts"}
+        hits: list[dict] = []
+        for p in sorted(root.rglob("*")):
+            if not p.is_file() or p.suffix not in code_exts:
+                continue
+            rel = p.relative_to(root)
+            if any(part.startswith(".") for part in rel.parts):  # skip .git, etc.
+                continue
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            low = text.lower()
+            rel_s = str(rel)
+            name_score = sum(2 for t in terms if t in rel_s.lower())
+            body_score = sum(low.count(t) for t in terms)
+            score = name_score * 5 + body_score
+            if score <= 0:
+                continue
+            first_ln = 1
+            for i, line in enumerate(text.splitlines(), 1):
+                if any(t in line.lower() for t in terms):
+                    first_ln = i
+                    break
+            hits.append({"path": rel_s, "score": float(score), "start_line": first_ln})
+        hits.sort(key=lambda h: -h["score"])
+        return json.dumps(hits[:limit])
 
     def _doc_search(self, query: str, limit: int = 5) -> str:
         """Search project documentation for relevant sections.

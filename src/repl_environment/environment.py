@@ -486,11 +486,25 @@ class REPLEnvironment(
         """
         import os
 
-        resolved = os.path.realpath(path)
-        for allowed in self.ALLOWED_FILE_PATHS:
+        # BEP harness (Phase 1, #1/#2): when ORCHESTRATOR_EDIT_ROOT is active, a RELATIVE model
+        # path resolves under the scratch task-root (not the process cwd), and the task-root is an
+        # allowed prefix — so the model inspects/edits the same scratch repo. Default-off:
+        # resolve_task_path == os.path.realpath and the allowed list is unchanged → exact parity.
+        from src.repl_environment.task_root import (
+            get_task_root,
+            resolve_task_path,
+            task_root_active,
+        )
+
+        resolved = resolve_task_path(path)
+        allowed_prefixes = list(self.ALLOWED_FILE_PATHS)
+        if task_root_active():
+            tr = str(get_task_root())
+            allowed_prefixes.append(tr if tr.endswith("/") else f"{tr}/")
+        for allowed in allowed_prefixes:
             if resolved.startswith(allowed):
                 return True, None
-        return False, f"Path not in allowed locations: {self.ALLOWED_FILE_PATHS}"
+        return False, f"Path not in allowed locations: {allowed_prefixes}"
 
     def _maybe_wrap_tool_output(self, output: str) -> str:
         """Return wrapped tool output in legacy mode, raw output in deferred mode."""
