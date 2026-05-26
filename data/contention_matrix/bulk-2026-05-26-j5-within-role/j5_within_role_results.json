@@ -1,0 +1,255 @@
+{
+  "task_id": "J5",
+  "topology_hash": "df373c79cc4af06f",
+  "generated_at": "2026-05-26T14:15:32.395662+00:00",
+  "same_role_instance_pairs": {
+    "frontdoor": [
+      {
+        "a": "full",
+        "b": "q2",
+        "port_a": 8070,
+        "port_b": 8280,
+        "ratio": 1.454,
+        "cv": 0.0164,
+        "verdict": "allow",
+        "seq_aggregate_tps": 22.62,
+        "parallel_aggregate_tps": 32.88
+      },
+      {
+        "a": "full",
+        "b": "q3",
+        "port_a": 8070,
+        "port_b": 8380,
+        "ratio": 1.367,
+        "cv": 0.0595,
+        "verdict": "allow",
+        "seq_aggregate_tps": 23.22,
+        "parallel_aggregate_tps": 31.74
+      },
+      {
+        "a": "q0",
+        "b": "q1",
+        "port_a": 8080,
+        "port_b": 8180,
+        "ratio": 1.507,
+        "cv": 0.0701,
+        "verdict": "allow",
+        "seq_aggregate_tps": 22.58,
+        "parallel_aggregate_tps": 34.03
+      },
+      {
+        "a": "q0",
+        "b": "q2",
+        "port_a": 8080,
+        "port_b": 8280,
+        "ratio": 1.415,
+        "cv": 0.0786,
+        "verdict": "allow",
+        "seq_aggregate_tps": 22.48,
+        "parallel_aggregate_tps": 31.82
+      },
+      {
+        "a": "q0",
+        "b": "q3",
+        "port_a": 8080,
+        "port_b": 8380,
+        "ratio": 1.553,
+        "cv": 0.0541,
+        "verdict": "allow",
+        "seq_aggregate_tps": 22.81,
+        "parallel_aggregate_tps": 35.42
+      },
+      {
+        "a": "q1",
+        "b": "q2",
+        "port_a": 8180,
+        "port_b": 8280,
+        "ratio": 1.616,
+        "cv": 0.0295,
+        "verdict": "allow",
+        "seq_aggregate_tps": 21.85,
+        "parallel_aggregate_tps": 35.3
+      },
+      {
+        "a": "q1",
+        "b": "q3",
+        "port_a": 8180,
+        "port_b": 8380,
+        "ratio": 1.67,
+        "cv": 0.0383,
+        "verdict": "allow",
+        "seq_aggregate_tps": 21.59,
+        "parallel_aggregate_tps": 35.99
+      },
+      {
+        "a": "q2",
+        "b": "q3",
+        "port_a": 8280,
+        "port_b": 8380,
+        "ratio": 1.649,
+        "cv": 0.0432,
+        "verdict": "allow",
+        "seq_aggregate_tps": 22.13,
+        "parallel_aggregate_tps": 36.42
+      }
+    ],
+    "vision_escalation": [
+      {
+        "a": "full",
+        "b": "q0",
+        "port_a": 8087,
+        "port_b": 8187,
+        "ratio": 0.442,
+        "cv": 0.094,
+        "verdict": "block",
+        "seq_aggregate_tps": 27.17,
+        "parallel_aggregate_tps": 11.94
+      },
+      {
+        "a": "full",
+        "b": "q1",
+        "port_a": 8087,
+        "port_b": 8287,
+        "ratio": 0.44,
+        "cv": 0.0949,
+        "verdict": "block",
+        "seq_aggregate_tps": 26.51,
+        "parallel_aggregate_tps": 11.6
+      },
+      {
+        "a": "q0",
+        "b": "q1",
+        "port_a": 8187,
+        "port_b": 8287,
+        "ratio": 0.406,
+        "cv": 0.0427,
+        "verdict": "block",
+        "seq_aggregate_tps": 28.1,
+        "parallel_aggregate_tps": 11.42
+      },
+      {
+        "a": "q0",
+        "b": "q2",
+        "port_a": 8187,
+        "port_b": 8387,
+        "ratio": 0.434,
+        "cv": 0.1174,
+        "verdict": "block",
+        "seq_aggregate_tps": 26.98,
+        "parallel_aggregate_tps": 11.62
+      },
+      {
+        "a": "q0",
+        "b": "q3",
+        "port_a": 8187,
+        "port_b": 8487,
+        "ratio": 0.449,
+        "cv": 0.0999,
+        "verdict": "block",
+        "seq_aggregate_tps": 26.81,
+        "parallel_aggregate_tps": 11.97
+      },
+      {
+        "a": "q1",
+        "b": "q2",
+        "port_a": 8287,
+        "port_b": 8387,
+        "ratio": 0.435,
+        "cv": 0.0382,
+        "verdict": "block",
+        "seq_aggregate_tps": 28.01,
+        "parallel_aggregate_tps": 12.17
+      },
+      {
+        "a": "q1",
+        "b": "q3",
+        "port_a": 8287,
+        "port_b": 8487,
+        "ratio": 0.434,
+        "cv": 0.067,
+        "verdict": "block",
+        "seq_aggregate_tps": 26.81,
+        "parallel_aggregate_tps": 11.59
+      },
+      {
+        "a": "q2",
+        "b": "q3",
+        "port_a": 8387,
+        "port_b": 8487,
+        "ratio": 0.456,
+        "cv": 0.1327,
+        "verdict": "block",
+        "seq_aggregate_tps": 26.8,
+        "parallel_aggregate_tps": 12.11
+      }
+    ],
+    "worker_general": [
+      {
+        "a": "q0",
+        "b": "q1",
+        "port_a": 8082,
+        "port_b": 8182,
+        "ratio": 0.736,
+        "cv": 0.1111,
+        "verdict": "block",
+        "seq_aggregate_tps": 54.77,
+        "parallel_aggregate_tps": 40.01
+      },
+      {
+        "a": "q0",
+        "b": "q2",
+        "port_a": 8082,
+        "port_b": 8282,
+        "ratio": 0.584,
+        "cv": 0.1877,
+        "verdict": "block",
+        "seq_aggregate_tps": 65.8,
+        "parallel_aggregate_tps": 37.79
+      },
+      {
+        "a": "q0",
+        "b": "q3",
+        "port_a": 8082,
+        "port_b": 8382,
+        "ratio": 0.778,
+        "cv": 0.0998,
+        "verdict": "block",
+        "seq_aggregate_tps": 55.97,
+        "parallel_aggregate_tps": 42.95
+      },
+      {
+        "a": "q1",
+        "b": "q2",
+        "port_a": 8182,
+        "port_b": 8282,
+        "ratio": 0.837,
+        "cv": 0.0563,
+        "verdict": "block",
+        "seq_aggregate_tps": 54.34,
+        "parallel_aggregate_tps": 45.44
+      },
+      {
+        "a": "q1",
+        "b": "q3",
+        "port_a": 8182,
+        "port_b": 8382,
+        "ratio": 0.726,
+        "cv": 0.0658,
+        "verdict": "block",
+        "seq_aggregate_tps": 55.26,
+        "parallel_aggregate_tps": 39.93
+      },
+      {
+        "a": "q2",
+        "b": "q3",
+        "port_a": 8282,
+        "port_b": 8382,
+        "ratio": 0.723,
+        "cv": 0.0151,
+        "verdict": "block",
+        "seq_aggregate_tps": 59.88,
+        "parallel_aggregate_tps": 43.28
+      }
+    ]
+  }
+}

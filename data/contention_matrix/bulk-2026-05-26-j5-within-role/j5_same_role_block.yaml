@@ -1,0 +1,29 @@
+# same_role instance_pairs (J5 / WP-6) — disjoint pairs only
+  - role: "frontdoor"
+    instance_pairs:
+      - {a: full, b: q2, ratio: 1.454, cv: 0.0164, verdict: allow}
+      - {a: full, b: q3, ratio: 1.367, cv: 0.0595, verdict: allow}
+      - {a: q0, b: q1, ratio: 1.507, cv: 0.0701, verdict: allow}
+      - {a: q0, b: q2, ratio: 1.415, cv: 0.0786, verdict: allow}
+      - {a: q0, b: q3, ratio: 1.553, cv: 0.0541, verdict: allow}
+      - {a: q1, b: q2, ratio: 1.616, cv: 0.0295, verdict: allow}
+      - {a: q1, b: q3, ratio: 1.67, cv: 0.0383, verdict: allow}
+      - {a: q2, b: q3, ratio: 1.649, cv: 0.0432, verdict: allow}
+  - role: "vision_escalation"
+    instance_pairs:
+      - {a: full, b: q0, ratio: 0.442, cv: 0.094, verdict: block}
+      - {a: full, b: q1, ratio: 0.44, cv: 0.0949, verdict: block}
+      - {a: q0, b: q1, ratio: 0.406, cv: 0.0427, verdict: block}
+      - {a: q0, b: q2, ratio: 0.434, cv: 0.1174, verdict: block}
+      - {a: q0, b: q3, ratio: 0.449, cv: 0.0999, verdict: block}
+      - {a: q1, b: q2, ratio: 0.435, cv: 0.0382, verdict: block}
+      - {a: q1, b: q3, ratio: 0.434, cv: 0.067, verdict: block}
+      - {a: q2, b: q3, ratio: 0.456, cv: 0.1327, verdict: block}
+  - role: "worker_general"
+    instance_pairs:
+      - {a: q0, b: q1, ratio: 0.736, cv: 0.1111, verdict: block}
+      - {a: q0, b: q2, ratio: 0.584, cv: 0.1877, verdict: block}
+      - {a: q0, b: q3, ratio: 0.778, cv: 0.0998, verdict: block}
+      - {a: q1, b: q2, ratio: 0.837, cv: 0.0563, verdict: block}
+      - {a: q1, b: q3, ratio: 0.726, cv: 0.0658, verdict: block}
+      - {a: q2, b: q3, ratio: 0.723, cv: 0.0151, verdict: block}
