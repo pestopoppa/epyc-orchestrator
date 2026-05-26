@@ -91,7 +91,10 @@ def _chat(prompt: str, *, max_turns: int, session_id: str, timeout: float = 180.
     # mock_mode/real_mode MUST be explicit: ChatRequest.mock_mode defaults to True
     # (safety default), so omitting these yields "[MOCK] Processed prompt" responses
     # instead of real inference (caught 2026-05-26 — stub mode never exercises _chat).
-    payload = {"prompt": prompt, "force_role": "coder_escalation",
+    # force_mode="repl": without it the coder routes to "direct" (turns=1 text answer,
+    # no file edits) for these tasks, so the batch-edit divergence (helpers.py:852, REPL
+    # turn loop) is never reached and quality is 0 in BOTH arms — an uninterpretable A/B.
+    payload = {"prompt": prompt, "force_role": "coder_escalation", "force_mode": "repl",
                "max_turns": max_turns, "cache_prompt": False, "session_id": session_id,
                "mock_mode": False, "real_mode": True}
     t0 = time.time()
