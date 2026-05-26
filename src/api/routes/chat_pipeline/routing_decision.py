@@ -227,6 +227,19 @@ def routing_meta(
             meta.update(router_meta)
         except Exception:
             pass
+    # J10 (URE-1): shadow-log routing-decision uncertainty. Flag-gated
+    # (features().ure_uncertainty_shadow_log, default off) + try/except-safe —
+    # zero behavior change when off and MUST NOT break the routing hot path.
+    # The assembled `meta` carries the q_topk / selection_score_topk /
+    # classifier_confidence / decision_source signals compute_routing_uncertainty
+    # consumes.
+    try:
+        from src.features import features
+        if features().ure_uncertainty_shadow_log:
+            from src.uncertainty_shadow import emit_uncertainty_shadow
+            emit_uncertainty_shadow(meta, request_id=getattr(request, "session_id", None))
+    except Exception:
+        pass
     return meta
 
 
