@@ -181,6 +181,17 @@ class HybridRouter:
             ) if self.graph_router else 0.0,
         }
 
+        # URE-1 (J10): shadow-log routing decision-uncertainty. Default-off flag; this NEVER
+        # affects the routing decision. Fully self-contained + exception-safe so a logging
+        # failure cannot break a live decision (single chokepoint — all route() paths land here).
+        try:
+            from src.features import features as _features
+            if _features().ure_uncertainty_shadow_log:
+                from src.uncertainty_shadow import emit_uncertainty_shadow
+                emit_uncertainty_shadow(self.last_decision_meta)
+        except Exception:
+            logger.debug("URE-1 uncertainty shadow hook failed", exc_info=True)
+
     def _get_adaptive_graph_weight(self) -> float:
         """Compute adaptive blend weight based on episodic store size.
 
