@@ -1,0 +1,763 @@
+{
+  "task_id": "J4a",
+  "run_id": "bulk-2026-05-26-j4a",
+  "generated_at": "2026-05-26T09:38:32.965220+00:00",
+  "topology_hash": "df373c79cc4af06f",
+  "content_hash": "8dd5f740f3651bfb",
+  "matrix_source": {
+    "path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/contention_matrix.yaml",
+    "sha256": "14234b991ce1ea92dda1c7ac65df3715bef1ee85b41a01509593f00061b070c0",
+    "git_sha": "535cca6df03541d9ff5d875248478410f802e56c",
+    "topology_hash": "df373c79cc4af06f",
+    "measured_at": "2026-05-24T12:48:38Z"
+  },
+  "floor": 0.85,
+  "roles": [
+    "architect_general",
+    "frontdoor",
+    "ingest_long_context",
+    "vision_escalation",
+    "worker_general",
+    "worker_vision"
+  ],
+  "pair_evidence": {
+    "architect_general|frontdoor": {
+      "ratio": 0.5,
+      "verdict": "block",
+      "bulk_allowed": false,
+      "kind": "below_floor"
+    },
+    "architect_general|ingest_long_context": {
+      "ratio": 0.6,
+      "verdict": "block",
+      "bulk_allowed": false,
+      "kind": "below_floor"
+    },
+    "architect_general|vision_escalation": {
+      "ratio": 0.59,
+      "verdict": "block",
+      "bulk_allowed": false,
+      "kind": "below_floor"
+    },
+    "architect_general|worker_general": {
+      "ratio": 1.11,
+      "verdict": "allow",
+      "bulk_allowed": true,
+      "kind": "allowed"
+    },
+    "architect_general|worker_vision": {
+      "ratio": null,
+      "verdict": "unknown",
+      "bulk_allowed": false,
+      "kind": "unknown"
+    },
+    "frontdoor|ingest_long_context": {
+      "ratio": 0.37,
+      "verdict": "block",
+      "bulk_allowed": false,
+      "kind": "below_floor"
+    },
+    "frontdoor|vision_escalation": {
+      "ratio": 0.84,
+      "verdict": "borderline",
+      "bulk_allowed": false,
+      "kind": "below_floor"
+    },
+    "frontdoor|worker_general": {
+      "ratio": 1.28,
+      "verdict": "allow",
+      "bulk_allowed": true,
+      "kind": "allowed"
+    },
+    "frontdoor|worker_vision": {
+      "ratio": 0.64,
+      "verdict": "block",
+      "bulk_allowed": false,
+      "kind": "below_floor"
+    },
+    "ingest_long_context|vision_escalation": {
+      "ratio": 1.43,
+      "verdict": "allow",
+      "bulk_allowed": true,
+      "kind": "allowed"
+    },
+    "ingest_long_context|worker_general": {
+      "ratio": 1.18,
+      "verdict": "allow",
+      "bulk_allowed": true,
+      "kind": "allowed"
+    },
+    "ingest_long_context|worker_vision": {
+      "ratio": null,
+      "verdict": "unknown",
+      "bulk_allowed": false,
+      "kind": "unknown"
+    },
+    "vision_escalation|worker_general": {
+      "ratio": 1.48,
+      "verdict": "allow",
+      "bulk_allowed": true,
+      "kind": "allowed"
+    },
+    "vision_escalation|worker_vision": {
+      "ratio": 1.33,
+      "verdict": "allow",
+      "bulk_allowed": true,
+      "kind": "allowed"
+    },
+    "worker_general|worker_vision": {
+      "ratio": 1.07,
+      "verdict": "allow",
+      "bulk_allowed": true,
+      "kind": "allowed"
+    }
+  },
+  "candidate_sets": [
+    {
+      "roles": [
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 3,
+      "min_pair_ratio": 1.18,
+      "constituent_pairs": [
+        "ingest_long_context|vision_escalation",
+        "ingest_long_context|worker_general",
+        "vision_escalation|worker_general"
+      ]
+    },
+    {
+      "roles": [
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "min_pair_ratio": 1.07,
+      "constituent_pairs": [
+        "vision_escalation|worker_general",
+        "vision_escalation|worker_vision",
+        "worker_general|worker_vision"
+      ]
+    }
+  ],
+  "excluded_sets": [
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "vision_escalation"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "worker_general"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "vision_escalation"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "worker_general"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "contains failed triple frontdoor+ingest_long_context+worker_general"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)",
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "contains failed triple frontdoor+ingest_long_context+worker_general"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)",
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "contains failed triple frontdoor+ingest_long_context+worker_general"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)",
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)",
+        "ingest_long_context+worker_vision unknown pair (not measured)",
+        "contains failed triple frontdoor+ingest_long_context+worker_general"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 5,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "contains failed triple frontdoor+ingest_long_context+worker_general"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)",
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)",
+        "ingest_long_context+worker_vision unknown pair (not measured)",
+        "contains failed triple frontdoor+ingest_long_context+worker_general"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "ingest_long_context+worker_vision unknown pair (not measured)"
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 5,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)",
+        "ingest_long_context+worker_vision unknown pair (not measured)",
+        "contains failed triple frontdoor+ingest_long_context+worker_general"
+      ]
+    },
+    {
+      "roles": [
+        "architect_general",
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 6,
+      "reason": "contains_below_floor_or_unknown_pair",
+      "evidence": [
+        "architect_general+frontdoor ratio 0.5 < floor 0.85 (block)",
+        "architect_general+ingest_long_context ratio 0.6 < floor 0.85 (block)",
+        "architect_general+vision_escalation ratio 0.59 < floor 0.85 (block)",
+        "architect_general+worker_vision unknown pair (not measured)",
+        "frontdoor+ingest_long_context ratio 0.37 < floor 0.85 (block)",
+        "frontdoor+vision_escalation ratio 0.84 < floor 0.85 (borderline)",
+        "frontdoor+worker_vision ratio 0.64 < floor 0.85 (block)",
+        "ingest_long_context+worker_vision unknown pair (not measured)",
+        "contains failed triple frontdoor+ingest_long_context+worker_general"
+      ]
+    }
+  ],
+  "flags": [
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "issue": "excluded_by_pairwise_floor_but_measured_positive_as_triple",
+      "measured_triple_ratio": 1.45,
+      "recommendation": "J4b should measure this set explicitly; a constituent pair is below the background floor while the measured triple is positive. Reconsider for foreground-only allow or revisit the pair floor."
+    }
+  ],
+  "summary": {
+    "n_roles": 6,
+    "n_candidates": 2,
+    "n_excluded": 40,
+    "max_size_enumerated": 6
+  }
+}

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import logging
 import os
@@ -310,6 +311,253 @@ def _emit_yaml(
     return "\n".join(lines)
 
 
+# ── J4a: N-way candidate enumeration (no inference) ──────────────────
+#
+# Cross-role N-way closure (handoffs/active/cross-role-nway-contention-matrix.md).
+# Reads the live role topology + the existing pairwise matrix and emits a
+# deterministic, topology-stamped manifest of:
+#   * candidate_sets   — non-trivial N-way active sets whose every constituent
+#                        pair is bulk-allowed (ratio >= floor, measured); these
+#                        REQUIRE J4b measurement before any cross-role launch.
+#   * excluded_sets    — every other size>=3 set, each with the concrete
+#                        lower-order evidence (block / below-floor / unknown
+#                        pair, or a measured failed triple) that pruned it.
+# Pairwise-allowed is a precondition only; nothing here is launch-certified.
+
+
+def _pair_key_str(a: str, b: str) -> str:
+    return "|".join(sorted([a, b]))
+
+
+def _read_matrix_triples(matrix_path: Path) -> list[dict[str, Any]]:
+    """Read the informational `triples:` block (not parsed by the dataclass)."""
+    try:
+        import yaml
+
+        data = yaml.safe_load(matrix_path.read_text()) or {}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not read triples from %s: %s", matrix_path, exc)
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in data.get("triples", []) or []:
+        roles = entry.get("roles")
+        if isinstance(roles, list) and len(roles) >= 3:
+            out.append(
+                {
+                    "roles": tuple(sorted(roles)),
+                    "ratio": float(entry.get("ratio", 0.0)),
+                    "note": str(entry.get("note", "")),
+                }
+            )
+    return out
+
+
+def _classify_pair(matrix, a: str, b: str, floor: float) -> dict[str, Any]:
+    """Bulk/background classification of a cross-role pair.
+
+    bulk_allowed iff measured AND ratio >= floor. block / below-floor /
+    unknown / missing are all NOT bulk-allowed (they queue or are unmeasured).
+    """
+    pair = matrix.get_pair(a, b)
+    if pair is None:
+        kind = "unknown" if matrix.is_unknown_pair(a, b) else "missing"
+        return {"ratio": None, "verdict": kind, "bulk_allowed": False, "kind": kind}
+    below = pair.ratio < floor
+    return {
+        "ratio": round(pair.ratio, 4),
+        "verdict": pair.verdict,
+        "bulk_allowed": (not below),
+        "kind": "below_floor" if below else "allowed",
+    }
+
+
+def enumerate_n_way(
+    numa_config: dict,
+    matrix,
+    *,
+    floor: float,
+    matrix_triples: list[dict[str, Any]] | None = None,
+    max_size: int | None = None,
+) -> dict[str, Any]:
+    """Pure enumeration core. Returns the manifest body (no I/O, no timestamp)."""
+    roles = sorted(r for r in numa_config if (numa_config[r].get("instances")))
+    matrix_triples = matrix_triples or []
+    failed_triples = {t["roles"] for t in matrix_triples if t["ratio"] < floor}
+
+    # Lower-order pair evidence over every cross-role pair (deterministic order).
+    pair_evidence: dict[str, dict[str, Any]] = {}
+    for a, b in itertools.combinations(roles, 2):
+        pair_evidence[_pair_key_str(a, b)] = _classify_pair(matrix, a, b, floor)
+
+    hi = max_size or len(roles)
+    candidate_sets: list[dict[str, Any]] = []
+    excluded_sets: list[dict[str, Any]] = []
+    flags: list[dict[str, Any]] = []
+
+    for size in range(3, hi + 1):
+        for combo in itertools.combinations(roles, size):
+            combo_sorted = tuple(sorted(combo))
+            offending: list[str] = []
+            min_ratio = None
+            for a, b in itertools.combinations(combo_sorted, 2):
+                ev = pair_evidence[_pair_key_str(a, b)]
+                if not ev["bulk_allowed"]:
+                    if ev["kind"] in ("unknown", "missing"):
+                        offending.append(f"{a}+{b} {ev['kind']} pair (not measured)")
+                    else:
+                        offending.append(
+                            f"{a}+{b} ratio {ev['ratio']} < floor {floor} ({ev['verdict']})"
+                        )
+                else:
+                    r = ev["ratio"]
+                    min_ratio = r if min_ratio is None else min(min_ratio, r)
+            # measured-failed-triple pruning (superset of a known-bad triple)
+            bad_sub = [
+                "+".join(ft) for ft in failed_triples if set(ft).issubset(set(combo_sorted))
+            ]
+
+            if not offending and not bad_sub:
+                candidate_sets.append(
+                    {
+                        "roles": list(combo_sorted),
+                        "size": size,
+                        "min_pair_ratio": min_ratio,
+                        "constituent_pairs": [
+                            _pair_key_str(a, b)
+                            for a, b in itertools.combinations(combo_sorted, 2)
+                        ],
+                    }
+                )
+            else:
+                reason = (
+                    "contains_failed_triple"
+                    if bad_sub and not offending
+                    else "contains_below_floor_or_unknown_pair"
+                )
+                evidence = offending + [f"contains failed triple {s}" for s in bad_sub]
+                excluded_sets.append(
+                    {"roles": list(combo_sorted), "size": size, "reason": reason, "evidence": evidence}
+                )
+
+    # Discrepancy flags: an excluded set that the matrix actually measured >= floor
+    # as an informational triple (pairwise-conservative vs N-way reality — the
+    # exact phenomenon this closure exists to catch).
+    excluded_role_sets = {tuple(e["roles"]) for e in excluded_sets}
+    for t in matrix_triples:
+        if t["roles"] in excluded_role_sets and t["ratio"] >= floor:
+            flags.append(
+                {
+                    "roles": list(t["roles"]),
+                    "issue": "excluded_by_pairwise_floor_but_measured_positive_as_triple",
+                    "measured_triple_ratio": t["ratio"],
+                    "recommendation": (
+                        "J4b should measure this set explicitly; a constituent pair is "
+                        "below the background floor while the measured triple is positive. "
+                        "Reconsider for foreground-only allow or revisit the pair floor."
+                    ),
+                }
+            )
+
+    return {
+        "floor": floor,
+        "roles": roles,
+        "pair_evidence": pair_evidence,
+        "candidate_sets": sorted(candidate_sets, key=lambda x: (x["size"], x["roles"])),
+        "excluded_sets": sorted(excluded_sets, key=lambda x: (x["size"], x["roles"])),
+        "flags": flags,
+        "summary": {
+            "n_roles": len(roles),
+            "n_candidates": len(candidate_sets),
+            "n_excluded": len(excluded_sets),
+            "max_size_enumerated": hi,
+        },
+    }
+
+
+def cmd_enumerate(args: argparse.Namespace) -> int:
+    from stack_numa import NUMA_CONFIG
+    from src.scheduling.contention import (
+        load_contention_matrix,
+        matrix_status,
+        topology_fingerprint,
+        MatrixStatus,
+    )
+
+    matrix_path = Path(args.matrix) if args.matrix else DEFAULT_OUTPUT
+    live_hash = topology_fingerprint(NUMA_CONFIG)
+    status = matrix_status(matrix_path, current_topology_hash=live_hash)
+    if status != MatrixStatus.OK:
+        log.error(
+            "matrix status %s (live hash %s) — enumeration requires a fresh, "
+            "topology-matching matrix; refusing to emit a manifest against stale evidence.",
+            status.value, live_hash,
+        )
+        return 2
+
+    matrix = load_contention_matrix(matrix_path)
+    floor = args.floor if args.floor is not None else matrix.default_floor
+    body = enumerate_n_way(
+        NUMA_CONFIG,
+        matrix,
+        floor=floor,
+        matrix_triples=_read_matrix_triples(matrix_path),
+        max_size=args.max_size,
+    )
+
+    # Deterministic content hash (excludes timestamp/run_id) for the J4a
+    # "deterministic across two dry runs" closure gate.
+    content = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    src_bytes = matrix_path.read_bytes()
+    git_sha = ""
+    try:
+        git_sha = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        pass
+
+    manifest = {
+        "task_id": "J4a",
+        "run_id": args.run_id or f"j4a-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "topology_hash": live_hash,
+        "content_hash": content_hash,
+        "matrix_source": {
+            "path": str(matrix_path),
+            "sha256": hashlib.sha256(src_bytes).hexdigest(),
+            "git_sha": git_sha,
+            "topology_hash": matrix.topology_hash,
+            "measured_at": matrix.measured_at,
+        },
+        **body,
+    }
+
+    if args.output:
+        out_dir = Path(args.output)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "j4a_candidate_manifest.json"
+        out_path.write_text(json.dumps(manifest, indent=2) + "\n")
+        log.info("wrote manifest → %s", out_path)
+    else:
+        print(json.dumps(manifest, indent=2))
+
+    log.info(
+        "J4a enumeration: %d candidates, %d excluded, %d flags (content_hash=%s)",
+        manifest["summary"]["n_candidates"],
+        manifest["summary"]["n_excluded"],
+        len(manifest["flags"]),
+        content_hash,
+    )
+    for c in manifest["candidate_sets"]:
+        log.info("  CANDIDATE %s (min_pair_ratio=%s)", c["roles"], c["min_pair_ratio"])
+    for f in manifest["flags"]:
+        log.warning("  FLAG %s: %s (triple=%.2f)", f["roles"], f["issue"], f["measured_triple_ratio"])
+    return 0
+
+
 # ── CLI ──────────────────────────────────────────────────────────────
 
 
@@ -417,6 +665,17 @@ def main() -> int:
     p_val = sub.add_parser("validate", help="check freshness against live NUMA_CONFIG")
     p_val.add_argument("--output", help="matrix YAML path to validate")
     p_val.set_defaults(func=cmd_validate)
+
+    p_enum = sub.add_parser(
+        "enumerate",
+        help="J4a: emit N-way candidate/exclusion manifest (no inference)",
+    )
+    p_enum.add_argument("--matrix", help="input matrix YAML (default: orchestration/contention_matrix.yaml)")
+    p_enum.add_argument("--output", help="output dir for j4a_candidate_manifest.json (default: stdout)")
+    p_enum.add_argument("--floor", type=float, default=None, help="bulk/background floor (default: matrix default_floor)")
+    p_enum.add_argument("--max-size", type=int, default=None, dest="max_size", help="max active-set size to enumerate (default: #roles)")
+    p_enum.add_argument("--run-id", default=None, dest="run_id", help="stable run id for the manifest")
+    p_enum.set_defaults(func=cmd_enumerate)
 
     args = p.parse_args()
     if args.cmd is None:
