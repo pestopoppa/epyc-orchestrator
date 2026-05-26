@@ -196,56 +196,65 @@ triples:
     ratio: 0.49
     note: "frontdoor+ingest catastrophic poisons the whole triple"
 
-# ── N-way closure (Package J / J4a enumeration + J4b measurement, 2026-05-26) ──
-# J4a (scripts/server/contention_matrix.py enumerate) produced 2 non-trivial
-# candidate triples + 1 discrepancy-flagged set; J4b (bench-nway, run alone)
-# measured all 3. seq_aggregate_tps = sum of solo; parallel_aggregate_tps =
-# total_tokens / max parallel wall; ratio >= 1.0 allow, >= 0.85 borderline,
-# < 0.85 block. Artifacts: data/contention_matrix/bulk-2026-05-26-j4b/.
-# Closed-world for topology_hash df373c79cc4af06f: every non-trivial N-way set
-# is measured allow / block / excluded — no residual unmeasured bucket.
-n_way:
-  - roles: ["vision_escalation", "worker_general", "worker_vision"]
-    size: 3
-    topology_hash: "df373c79cc4af06f"
-    seq_aggregate_tps: 18.85
-    parallel_aggregate_tps: 24.24
-    ratio: 1.286
-    samples: 3
-    cv: 0.0028
-    verdict: "allow"
-    measured_at: "2026-05-26T10:28:31Z"
-  - roles: ["frontdoor", "vision_escalation", "worker_general"]
-    size: 3
-    topology_hash: "df373c79cc4af06f"
-    seq_aggregate_tps: 38.02
-    parallel_aggregate_tps: 42.81
-    ratio: 1.126
-    samples: 3
-    cv: 0.06
-    verdict: "allow"
-    measured_at: "2026-05-26T10:29:18Z"
-    note: >-
-      J4a flagged this set: it was pairwise-excluded because frontdoor+vision_escalation=0.84
-      (< floor), yet the N-way measurement is positive (1.126). N-way reality beats the
-      conservative pairwise floor here. Treat as foreground-allow; the frontdoor+vision PAIR
-      itself stays borderline for background/bulk. Matches the legacy informational triple (1.45).
+# ── N-way contention matrix (Package J — corrected quarter-level model, 2026-05-26) ──
+# Cross-role concurrency is mutually-disjoint cpusets. The AUTHORITATIVE layer is
+# quarter-level: each role placed on a disjoint quarter via the WP-2 PlacementPolicy.
+# Large models that cannot run on a 24-core quarter co-run only via their full/half
+# instance: ingest_long_context = half (0-47); architect_general = whole-machine full
+# (0-95) and has no half/quarter, so it is strictly SOLO (never in a feasible set).
+# Measured with --safe-sampling (temp>0 + repeat_penalty) after the gemma4 PEG-parser
+# crash fix (ik_llama.cpp d84755dc). ratio = parallel_aggregate_tps / seq_aggregate_tps;
+# >=1.0 allow, 0.85-1.0 borderline-allow(foreground), <0.85 block.
+# topology_hash df373c79cc4af06f. Artifacts: data/contention_matrix/
+# bulk-2026-05-26-j4b-feasible-{v2 (size>=3), pairs (size 2)} + -j4a-feasible-v2.
+#
+# RUNTIME POLICY (consumed by src/scheduling/contention.py nway_policy + the gate, J4c):
+#   * all-light-quarter sets -> allow. Every role BW-light + on its own quarter
+#     (frontdoor, vision_escalation, worker_general, worker_vision). Anchored by the
+#     measured 4-way 1.605x + within-role same_role 1.88-2.86x. Mixed multi-instance
+#     light sets (e.g. 2x frontdoor + worker_general + worker_vision) fall in this
+#     class and need no separate measurement — contention is per-NUMA-node BW, ~role
+#     -identity-independent for light models.
+#   * any set containing a HEAVY instance (ingest_long_context / architect_general)
+#     MUST consult the measured entries below; do NOT infer from pairwise. PROOF that
+#     pairwise-allow != N-way-safe: {frontdoor, ingest, vision} has all three pairs
+#     allow (1.72 / 1.43 / 1.06) yet the TRIPLE is 0.847 BLOCK (ingest's half saturates
+#     BW with two co-runners). This is the exact case J4c must block at runtime.
+nway_default_floor: 0.85
+nway_light_roles: ["frontdoor", "vision_escalation", "worker_general", "worker_vision"]
+nway_heavy_roles: ["ingest_long_context", "architect_general"]
 
-# Sets measured unsafe or pruned by lower-order evidence.
-excluded_n_way:
-  - roles: ["ingest_long_context", "vision_escalation", "worker_general"]
-    topology_hash: "df373c79cc4af06f"
-    reason: crashed_worker_general_full_under_contention
-    ratio_when_completing: 1.209
-    cv: 0.1517
-    verdict: "block"
-    evidence: >-
-      J4b: worker_general full (gemma4-26B-A4B MTP, port 8072) crashed mid-bench
-      (Errno 111 connection refused on samples 2-3). Crash signature in
-      logs/worker-explore-8072.log: degenerate repetition ("decision-making…") then
-      `terminate: std::runtime_error Failed to parse input at pos 0:`. The heaviest
-      3-way contention (gemma4 full 0-95 vs ingest 0-47 + vision 48-95) destabilized
-      the MTP full instance. Aggregate ratio was 1.209 on completing samples but the
-      set is UNSAFE for cross-role parallelism until the gemma4 full-instance stability
-      is addressed. Restored full instance after the bench (new PID, healthy). See
-      feedback_gemma4_mtp_fa_assert_wedge (different signature — parse error, not FA assert).
+n_way:   # quarter-level, role-set keyed; placement = disjoint quarters (ingest = full-half)
+  # --- pairs (size 2) ---
+  - {roles: ["frontdoor","ingest_long_context"],            ratio: 1.716, cv: 0.031, verdict: allow, samples: 3, contains_heavy: true}
+  - {roles: ["frontdoor","vision_escalation"],              ratio: 1.434, cv: 0.040, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["frontdoor","worker_general"],                 ratio: 1.290, cv: 0.074, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["frontdoor","worker_vision"],                  ratio: 1.313, cv: 0.061, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["ingest_long_context","vision_escalation"],    ratio: 1.059, cv: 0.168, verdict: allow, samples: 3, contains_heavy: true}
+  - {roles: ["ingest_long_context","worker_general"],       ratio: 1.087, cv: 0.117, verdict: allow, samples: 3, contains_heavy: true}
+  - {roles: ["vision_escalation","worker_general"],         ratio: 1.475, cv: 0.035, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["vision_escalation","worker_vision"],          ratio: 1.290, cv: 0.002, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["worker_general","worker_vision"],             ratio: 1.086, cv: 0.019, verdict: allow, samples: 3, contains_heavy: false}
+  # --- triples (size 3) ---
+  - {roles: ["frontdoor","ingest_long_context","vision_escalation"],   ratio: 0.847, cv: 0.053, verdict: block, samples: 3, contains_heavy: true}
+  - {roles: ["frontdoor","ingest_long_context","worker_general"],      ratio: 1.805, cv: 0.098, verdict: allow, samples: 3, contains_heavy: true}
+  - {roles: ["frontdoor","vision_escalation","worker_general"],        ratio: 1.607, cv: 0.065, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["frontdoor","vision_escalation","worker_vision"],         ratio: 1.585, cv: 0.019, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["frontdoor","worker_general","worker_vision"],            ratio: 1.320, cv: 0.013, verdict: allow, samples: 3, contains_heavy: false}
+  - {roles: ["ingest_long_context","vision_escalation","worker_general"], ratio: 1.578, cv: 0.030, verdict: allow, samples: 3, contains_heavy: true}
+  - {roles: ["vision_escalation","worker_general","worker_vision"],    ratio: 1.332, cv: 0.021, verdict: allow, samples: 3, contains_heavy: false}
+  # --- quad (size 4) — the only all-quarterable 4-way ---
+  - {roles: ["frontdoor","vision_escalation","worker_general","worker_vision"], ratio: 1.605, cv: 0.016, verdict: allow, samples: 3, contains_heavy: false}
+
+# Note: {ingest_long_context, vision_escalation, worker_general} = 1.578 ALLOW at
+# quarter level (ingest-half + two light quarters). This SUPERSEDES the earlier
+# full-instance pass where it appeared to "block" — that pass ran worker_general on
+# its solo-only FULL (0-95) instance concurrently (a placement the SM never makes)
+# and crashed the gemma4 MTP server via an uncaught PEG-parse exception (now fixed,
+# ik_llama.cpp d84755dc; see feedback_gemma4_mtp_fa_assert_wedge — distinct signature).
+
+# Full-instance coarse layer (historical, NOT used for placement; kept because
+# gemma4 MTP is BW-light so full co-running can still boost — per operator).
+n_way_full_instance_coarse:
+  - {roles: ["vision_escalation","worker_general","worker_vision"], ratio: 1.286, verdict: allow, placement: full}
+  - {roles: ["frontdoor","vision_escalation","worker_general"],     ratio: 1.126, verdict: allow, placement: full}

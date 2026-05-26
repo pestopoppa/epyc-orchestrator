@@ -45,6 +45,7 @@ from src.scheduling.contention import (
     load_contention_matrix,
     matrix_status,
     pair_policy,
+    nway_policy,
 )
 
 log = logging.getLogger("scheduling.contention_gate")
@@ -83,6 +84,7 @@ class GateMetrics:
     contention_degraded_allow_count: int = 0
     contention_admitted_count: int = 0
     contention_timeout_count: int = 0
+    contention_nway_restricted_count: int = 0  # J4c: N-way set more restrictive than pairwise
     # active_decodes_by_role: {role: count} for back-compat;
     # active_instances_by_role: {role: [instance_idx, ...]} for richer dashboard rendering
     active_decodes_by_role: dict[str, int] = field(default_factory=dict)
@@ -191,8 +193,30 @@ class ContentionGate:
                 worst = PairDecision.QUEUE
             blocking.append(active_role)
 
+        # N-way check (J4c): pairwise-allow does NOT certify the full active set.
+        # Consult the measured n_way matrix for the EXACT active-set union so a
+        # measured-block N-way set is queued even when every constituent pair is
+        # allow. Proof this matters: {frontdoor,ingest,vision} pairs all allow
+        # (1.72/1.43/1.06) but the triple is 0.847 -> block.
+        active_set = sorted(set(holders.keys()) | {role})
+        if len(active_set) >= 2:
+            nway_decision = nway_policy(active_set, traffic_class, matrix=matrix)
+            if nway_decision != PairDecision.ALLOW:
+                _prec = {
+                    PairDecision.ALLOW: 0,
+                    PairDecision.DEGRADED_ALLOW: 1,
+                    PairDecision.QUEUE: 2,
+                    PairDecision.BLOCK: 3,
+                }
+                if _prec[nway_decision] > _prec[worst]:
+                    worst = nway_decision
+                if not blocking:
+                    blocking = [r for r in active_set if r != role]
+                with self._lock:
+                    self._metrics.contention_nway_restricted_count += 1
+
         if worst == PairDecision.ALLOW:
-            return GateDecision(admitted=True, decision=PairDecision.ALLOW, reason="all pairs allow")
+            return GateDecision(admitted=True, decision=PairDecision.ALLOW, reason="all pairs + n-way allow")
 
         if worst == PairDecision.DEGRADED_ALLOW:
             # Foreground SLO override — let the request through but tag it

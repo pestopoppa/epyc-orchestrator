@@ -483,11 +483,34 @@ def enumerate_n_way(
     }
 
 
+# Large models that are impractical to run on a 24-core quarter — an 80B/122B
+# model on a quarter thrashes (every llama-server carries ~241-289 OMP threads;
+# on 24 cores that is ~10x over-subscription → ~0.1 t/s, measured 2026-05-26;
+# ingest-FULL on 48 cores is fine at ~16.8 t/s).
+# Each NON_QUARTERABLE role co-runs (if at all) only via its instance-0 footprint:
+#   - ingest_long_context: instance-0 is a HALF (0-47), so it co-runs as a half
+#     against the other half (e.g. ingest 0-47 + vision 48-95 = disjoint, fine).
+#   - architect_general: instance-0 is the WHOLE machine (0-95) and it has NO
+#     half/quarter instance (confirmed: it cannot be made to run on a half, only
+#     full), so it can NEVER co-run — it is strictly solo.
+# This is the per-role "quarterable" property the WP-5 placement policy needs:
+# small MoE-light models (gemma4-26B, frontdoor-35B-A3B, vision-30B-A3B) quarter
+# well; large models stay full/half; architect is full-only/solo.
+NON_QUARTERABLE: set[str] = {"ingest_long_context", "architect_general"}
+
+
 def _role_footprints(numa_config: dict, role: str) -> list[tuple[int, int, frozenset]]:
-    """(instance_idx, port, regions) for every instance of `role`."""
+    """(instance_idx, port, regions) for every instance of `role`.
+
+    For NON_QUARTERABLE roles, only the full/primary instance (idx 0) is
+    offered — they are never placed on a quarter.
+    """
     from src.runtime.instance_topology import cpu_list_to_regions
+    insts = numa_config.get(role, {}).get("instances", []) or []
+    if role in NON_QUARTERABLE:
+        insts = insts[:1]
     out = []
-    for idx, inst in enumerate(numa_config.get(role, {}).get("instances", []) or []):
+    for idx, inst in enumerate(insts):
         out.append((idx, int(inst[1]), frozenset(cpu_list_to_regions(inst[0]))))
     return out
 
@@ -737,7 +760,7 @@ def cmd_bench_nway(args: argparse.Namespace) -> int:
     setspecs: list[tuple[tuple, dict]] = []
     for c in manifest.get("candidate_sets", []):
         roles = tuple(c["roles"])
-        if len(roles) < args.min_size:
+        if len(roles) < args.min_size or (args.max_size and len(roles) > args.max_size):
             continue
         if "assignment" in c:
             ports = {r: c["assignment"][r]["port"] for r in roles}
@@ -928,6 +951,7 @@ def main() -> int:
     p_nway.add_argument("--output", required=True, help="output dir for j4b_nway_results.json")
     p_nway.add_argument("--samples", type=int, default=3, help="repetitions per set (CV gate)")
     p_nway.add_argument("--min-size", type=int, default=2, dest="min_size", help="skip candidate sets smaller than this")
+    p_nway.add_argument("--max-size", type=int, default=None, dest="max_size", help="skip candidate sets larger than this")
     p_nway.add_argument("--safe-sampling", action="store_true", dest="safe_sampling",
                         help="temp>0 + repeat_penalty to avoid greedy degeneration (gemma4 crash mitigation)")
     p_nway.add_argument("--include-flagged", action="store_true",

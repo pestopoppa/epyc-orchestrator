@@ -1,0 +1,584 @@
+{
+  "task_id": "J4b",
+  "topology_hash": "df373c79cc4af06f",
+  "generated_at": "2026-05-26T12:10:09.785479+00:00",
+  "manifest": "data/contention_matrix/bulk-2026-05-26-j4a-feasible-v2/j4a_feasible_manifest.json",
+  "n_way": [
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "vision_escalation"
+      ],
+      "size": 3,
+      "topology_hash": "df373c79cc4af06f",
+      "ports": {
+        "frontdoor": 8280,
+        "ingest_long_context": 8085,
+        "vision_escalation": 8487
+      },
+      "measured_at": "2026-05-26T12:00:07.243157+00:00",
+      "ratio": 0.847,
+      "cv": 0.0531,
+      "samples": 3,
+      "seq_aggregate_tps": 20.07,
+      "parallel_aggregate_tps": 17.0,
+      "verdict": "block",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 22.3,
+            "ingest_long_context": 14.33,
+            "vision_escalation": 27.43
+          },
+          "par_tps": {
+            "frontdoor": 5.77,
+            "ingest_long_context": 7.86,
+            "vision_escalation": 5.98
+          },
+          "seq_aggregate_tps": 19.86,
+          "parallel_aggregate_tps": 17.31,
+          "ratio": 0.872
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 21.83,
+            "ingest_long_context": 15.19,
+            "vision_escalation": 27.46
+          },
+          "par_tps": {
+            "frontdoor": 5.29,
+            "ingest_long_context": 10.17,
+            "vision_escalation": 5.56
+          },
+          "seq_aggregate_tps": 20.26,
+          "parallel_aggregate_tps": 15.88,
+          "ratio": 0.784
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 18.94,
+            "ingest_long_context": 16.63,
+            "vision_escalation": 27.55
+          },
+          "par_tps": {
+            "frontdoor": 5.94,
+            "ingest_long_context": 11.09,
+            "vision_escalation": 6.41
+          },
+          "seq_aggregate_tps": 20.1,
+          "parallel_aggregate_tps": 17.81,
+          "ratio": 0.886
+        }
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "ingest_long_context",
+        "worker_general"
+      ],
+      "size": 3,
+      "topology_hash": "df373c79cc4af06f",
+      "ports": {
+        "frontdoor": 8280,
+        "ingest_long_context": 8085,
+        "worker_general": 8382
+      },
+      "measured_at": "2026-05-26T12:01:14.834488+00:00",
+      "ratio": 1.805,
+      "cv": 0.0977,
+      "samples": 3,
+      "seq_aggregate_tps": 23.39,
+      "parallel_aggregate_tps": 42.08,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 20.73,
+            "ingest_long_context": 16.05,
+            "worker_general": 63.67
+          },
+          "par_tps": {
+            "frontdoor": 15.4,
+            "ingest_long_context": 14.66,
+            "worker_general": 61.55
+          },
+          "seq_aggregate_tps": 23.76,
+          "parallel_aggregate_tps": 43.97,
+          "ratio": 1.851
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 22.17,
+            "ingest_long_context": 14.29,
+            "worker_general": 50.99
+          },
+          "par_tps": {
+            "frontdoor": 15.72,
+            "ingest_long_context": 14.8,
+            "worker_general": 73.29
+          },
+          "seq_aggregate_tps": 22.28,
+          "parallel_aggregate_tps": 44.41,
+          "ratio": 1.994
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 22.33,
+            "ingest_long_context": 16.73,
+            "worker_general": 50.62
+          },
+          "par_tps": {
+            "frontdoor": 13.6,
+            "ingest_long_context": 12.62,
+            "worker_general": 65.2
+          },
+          "seq_aggregate_tps": 24.13,
+          "parallel_aggregate_tps": 37.87,
+          "ratio": 1.569
+        }
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 3,
+      "topology_hash": "df373c79cc4af06f",
+      "ports": {
+        "frontdoor": 8080,
+        "vision_escalation": 8287,
+        "worker_general": 8282
+      },
+      "measured_at": "2026-05-26T12:02:10.921482+00:00",
+      "ratio": 1.607,
+      "cv": 0.0648,
+      "samples": 3,
+      "seq_aggregate_tps": 30.41,
+      "parallel_aggregate_tps": 48.8,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 22.74,
+            "vision_escalation": 26.91,
+            "worker_general": 51.44
+          },
+          "par_tps": {
+            "frontdoor": 16.65,
+            "vision_escalation": 24.74,
+            "worker_general": 46.71
+          },
+          "seq_aggregate_tps": 29.83,
+          "parallel_aggregate_tps": 49.96,
+          "ratio": 1.675
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 22.71,
+            "vision_escalation": 28.03,
+            "worker_general": 66.43
+          },
+          "par_tps": {
+            "frontdoor": 15.41,
+            "vision_escalation": 20.91,
+            "worker_general": 62.84
+          },
+          "seq_aggregate_tps": 31.65,
+          "parallel_aggregate_tps": 46.22,
+          "ratio": 1.46
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 22.78,
+            "vision_escalation": 27.94,
+            "worker_general": 47.37
+          },
+          "par_tps": {
+            "frontdoor": 16.74,
+            "vision_escalation": 25.04,
+            "worker_general": 0.0
+          },
+          "seq_aggregate_tps": 29.76,
+          "parallel_aggregate_tps": 50.21,
+          "ratio": 1.687
+        }
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_vision"
+      ],
+      "size": 3,
+      "topology_hash": "df373c79cc4af06f",
+      "ports": {
+        "frontdoor": 8080,
+        "vision_escalation": 8387,
+        "worker_vision": 8086
+      },
+      "measured_at": "2026-05-26T12:03:56.130743+00:00",
+      "ratio": 1.585,
+      "cv": 0.0194,
+      "samples": 3,
+      "seq_aggregate_tps": 14.3,
+      "parallel_aggregate_tps": 22.65,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 22.75,
+            "vision_escalation": 22.21,
+            "worker_vision": 8.05
+          },
+          "par_tps": {
+            "frontdoor": 15.81,
+            "vision_escalation": 25.41,
+            "worker_vision": 7.57
+          },
+          "seq_aggregate_tps": 14.07,
+          "parallel_aggregate_tps": 22.71,
+          "ratio": 1.614
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 19.43,
+            "vision_escalation": 27.79,
+            "worker_vision": 8.05
+          },
+          "par_tps": {
+            "frontdoor": 15.83,
+            "vision_escalation": 25.57,
+            "worker_vision": 7.55
+          },
+          "seq_aggregate_tps": 14.18,
+          "parallel_aggregate_tps": 22.64,
+          "ratio": 1.597
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 22.15,
+            "vision_escalation": 27.9,
+            "worker_vision": 8.09
+          },
+          "par_tps": {
+            "frontdoor": 15.81,
+            "vision_escalation": 25.45,
+            "worker_vision": 7.54
+          },
+          "seq_aggregate_tps": 14.66,
+          "parallel_aggregate_tps": 22.61,
+          "ratio": 1.542
+        }
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "topology_hash": "df373c79cc4af06f",
+      "ports": {
+        "frontdoor": 8080,
+        "worker_general": 8282,
+        "worker_vision": 8086
+      },
+      "measured_at": "2026-05-26T12:05:35.529060+00:00",
+      "ratio": 1.32,
+      "cv": 0.0133,
+      "samples": 3,
+      "seq_aggregate_tps": 16.27,
+      "parallel_aggregate_tps": 21.47,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 22.73,
+            "worker_general": 50.01,
+            "worker_vision": 8.09
+          },
+          "par_tps": {
+            "frontdoor": 18.79,
+            "worker_general": 20.07,
+            "worker_vision": 7.07
+          },
+          "seq_aggregate_tps": 15.99,
+          "parallel_aggregate_tps": 21.2,
+          "ratio": 1.326
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 22.66,
+            "worker_general": 71.24,
+            "worker_vision": 8.12
+          },
+          "par_tps": {
+            "frontdoor": 18.76,
+            "worker_general": 19.71,
+            "worker_vision": 7.15
+          },
+          "seq_aggregate_tps": 16.55,
+          "parallel_aggregate_tps": 21.44,
+          "ratio": 1.296
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 22.62,
+            "worker_general": 58.39,
+            "worker_vision": 8.13
+          },
+          "par_tps": {
+            "frontdoor": 18.6,
+            "worker_general": 23.41,
+            "worker_vision": 7.25
+          },
+          "seq_aggregate_tps": 16.27,
+          "parallel_aggregate_tps": 21.76,
+          "ratio": 1.337
+        }
+      ]
+    },
+    {
+      "roles": [
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_general"
+      ],
+      "size": 3,
+      "topology_hash": "df373c79cc4af06f",
+      "ports": {
+        "ingest_long_context": 8085,
+        "vision_escalation": 8387,
+        "worker_general": 8382
+      },
+      "measured_at": "2026-05-26T12:06:44.797990+00:00",
+      "ratio": 1.578,
+      "cv": 0.03,
+      "samples": 3,
+      "seq_aggregate_tps": 25.08,
+      "parallel_aggregate_tps": 39.57,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "ingest_long_context": 16.72,
+            "vision_escalation": 27.36,
+            "worker_general": 53.44
+          },
+          "par_tps": {
+            "ingest_long_context": 13.61,
+            "vision_escalation": 22.11,
+            "worker_general": 48.79
+          },
+          "seq_aggregate_tps": 26.07,
+          "parallel_aggregate_tps": 40.83,
+          "ratio": 1.566
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "ingest_long_context": 14.39,
+            "vision_escalation": 27.34,
+            "worker_general": 68.47
+          },
+          "par_tps": {
+            "ingest_long_context": 12.66,
+            "vision_escalation": 23.84,
+            "worker_general": 50.24
+          },
+          "seq_aggregate_tps": 24.86,
+          "parallel_aggregate_tps": 37.98,
+          "ratio": 1.528
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "ingest_long_context": 16.65,
+            "vision_escalation": 22.73,
+            "worker_general": 51.58
+          },
+          "par_tps": {
+            "ingest_long_context": 13.3,
+            "vision_escalation": 22.21,
+            "worker_general": 49.66
+          },
+          "seq_aggregate_tps": 24.3,
+          "parallel_aggregate_tps": 39.89,
+          "ratio": 1.641
+        }
+      ]
+    },
+    {
+      "roles": [
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 3,
+      "topology_hash": "df373c79cc4af06f",
+      "ports": {
+        "vision_escalation": 8187,
+        "worker_general": 8282,
+        "worker_vision": 8086
+      },
+      "measured_at": "2026-05-26T12:08:18.600787+00:00",
+      "ratio": 1.332,
+      "cv": 0.0209,
+      "samples": 3,
+      "seq_aggregate_tps": 17.14,
+      "parallel_aggregate_tps": 22.83,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "vision_escalation": 27.89,
+            "worker_general": 70.13,
+            "worker_vision": 8.11
+          },
+          "par_tps": {
+            "vision_escalation": 18.57,
+            "worker_general": 26.07,
+            "worker_vision": 7.54
+          },
+          "seq_aggregate_tps": 17.29,
+          "parallel_aggregate_tps": 22.62,
+          "ratio": 1.308
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "vision_escalation": 28.3,
+            "worker_general": 67.29,
+            "worker_vision": 8.12
+          },
+          "par_tps": {
+            "vision_escalation": 18.52,
+            "worker_general": 29.7,
+            "worker_vision": 7.6
+          },
+          "seq_aggregate_tps": 17.31,
+          "parallel_aggregate_tps": 22.81,
+          "ratio": 1.318
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "vision_escalation": 28.3,
+            "worker_general": 49.71,
+            "worker_vision": 8.14
+          },
+          "par_tps": {
+            "vision_escalation": 22.53,
+            "worker_general": 28.45,
+            "worker_vision": 7.69
+          },
+          "seq_aggregate_tps": 16.82,
+          "parallel_aggregate_tps": 23.06,
+          "ratio": 1.371
+        }
+      ]
+    },
+    {
+      "roles": [
+        "frontdoor",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision"
+      ],
+      "size": 4,
+      "topology_hash": "df373c79cc4af06f",
+      "ports": {
+        "frontdoor": 8080,
+        "vision_escalation": 8387,
+        "worker_general": 8382,
+        "worker_vision": 8086
+      },
+      "measured_at": "2026-05-26T12:10:09.785282+00:00",
+      "ratio": 1.605,
+      "cv": 0.0158,
+      "samples": 3,
+      "seq_aggregate_tps": 17.94,
+      "parallel_aggregate_tps": 28.79,
+      "verdict": "allow",
+      "per_sample": [
+        {
+          "sample": 0,
+          "solo_tps": {
+            "frontdoor": 22.29,
+            "vision_escalation": 27.35,
+            "worker_general": 69.05,
+            "worker_vision": 8.1
+          },
+          "par_tps": {
+            "frontdoor": 12.94,
+            "vision_escalation": 17.02,
+            "worker_general": 29.52,
+            "worker_vision": 7.16
+          },
+          "seq_aggregate_tps": 18.24,
+          "parallel_aggregate_tps": 28.62,
+          "ratio": 1.569
+        },
+        {
+          "sample": 1,
+          "solo_tps": {
+            "frontdoor": 22.65,
+            "vision_escalation": 27.55,
+            "worker_general": 50.04,
+            "worker_vision": 8.08
+          },
+          "par_tps": {
+            "frontdoor": 14.88,
+            "vision_escalation": 23.08,
+            "worker_general": 35.42,
+            "worker_vision": 7.25
+          },
+          "seq_aggregate_tps": 17.85,
+          "parallel_aggregate_tps": 29.0,
+          "ratio": 1.625
+        },
+        {
+          "sample": 2,
+          "solo_tps": {
+            "frontdoor": 22.63,
+            "vision_escalation": 27.69,
+            "worker_general": 46.64,
+            "worker_vision": 8.08
+          },
+          "par_tps": {
+            "frontdoor": 14.71,
+            "vision_escalation": 23.9,
+            "worker_general": 29.51,
+            "worker_vision": 7.19
+          },
+          "seq_aggregate_tps": 17.74,
+          "parallel_aggregate_tps": 28.75,
+          "ratio": 1.621
+        }
+      ]
+    }
+  ]
+}

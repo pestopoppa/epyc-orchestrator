@@ -306,3 +306,69 @@ def test_real_matrix_against_live_numa_config() -> None:
     import stack_numa
     h = contention.topology_fingerprint(stack_numa.NUMA_CONFIG)
     assert isinstance(h, str) and len(h) == 16
+
+
+# ── nway_policy (J4c — N-way active-set admission) ───────────────────
+
+
+def _nway_test_matrix():
+    """Synthetic matrix: one measured-block triple + one measured-allow triple,
+    with the production light/heavy role classification."""
+    Nway = contention.Nway
+    return contention.ContentionMatrix(
+        version=1, measured_at="", host="", topology_hash="t", default_floor=0.85,
+        n_way={
+            ("frontdoor", "ingest_long_context", "vision_escalation"): Nway(
+                roles=("frontdoor", "ingest_long_context", "vision_escalation"),
+                ratio=0.847, verdict="block", contains_heavy=True),
+            ("frontdoor", "vision_escalation", "worker_general"): Nway(
+                roles=("frontdoor", "vision_escalation", "worker_general"),
+                ratio=1.607, verdict="allow"),
+        },
+        light_roles=frozenset({"frontdoor", "vision_escalation", "worker_general", "worker_vision"}),
+        heavy_roles=frozenset({"ingest_long_context", "architect_general"}),
+    )
+
+
+def test_nway_policy_measured_block_queues_even_when_pairs_allow():
+    """The crux of J4c: a measured-block N-way set queues even though every
+    constituent pair is allow ({frontdoor,ingest,vision} = 0.847)."""
+    m = _nway_test_matrix()
+    roles = ["frontdoor", "ingest_long_context", "vision_escalation"]
+    assert contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m) == contention.PairDecision.QUEUE
+    assert contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m) == contention.PairDecision.QUEUE
+
+
+def test_nway_policy_measured_allow():
+    m = _nway_test_matrix()
+    assert contention.nway_policy(
+        ["frontdoor", "vision_escalation", "worker_general"],
+        contention.TrafficClass.BACKGROUND, matrix=m) == contention.PairDecision.ALLOW
+
+
+def test_nway_policy_all_light_unmeasured_allows_both_classes():
+    """Unmeasured but all-light (covers mixed multi-instance via role-set dedup)."""
+    m = _nway_test_matrix()
+    roles = ["frontdoor", "worker_general", "worker_vision"]  # not in n_way, all light
+    assert contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m) == contention.PairDecision.ALLOW
+    assert contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m) == contention.PairDecision.ALLOW
+
+
+def test_nway_policy_heavy_unmeasured_fail_open_fg_closed_bg():
+    m = _nway_test_matrix()
+    roles = ["ingest_long_context", "worker_vision"]  # not in n_way, contains heavy
+    assert contention.nway_policy(roles, contention.TrafficClass.BACKGROUND, matrix=m) == contention.PairDecision.QUEUE
+    assert contention.nway_policy(roles, contention.TrafficClass.FOREGROUND_INTERACTIVE, matrix=m) == contention.PairDecision.ALLOW
+
+
+def test_nway_policy_single_role_is_allow():
+    m = _nway_test_matrix()
+    assert contention.nway_policy(["frontdoor"], matrix=m) == contention.PairDecision.ALLOW
+    assert contention.nway_policy([], matrix=m) == contention.PairDecision.ALLOW
+
+
+def test_nway_policy_order_independent():
+    m = _nway_test_matrix()
+    a = contention.nway_policy(["vision_escalation", "frontdoor", "ingest_long_context"], "background", matrix=m)
+    b = contention.nway_policy(["ingest_long_context", "vision_escalation", "frontdoor"], "background", matrix=m)
+    assert a == b == contention.PairDecision.QUEUE

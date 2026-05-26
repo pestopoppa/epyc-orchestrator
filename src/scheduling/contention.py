@@ -87,6 +87,17 @@ class SameRole:
     note: str = ""
 
 
+@dataclass(frozen=True)
+class Nway:
+    """A measured N-way (>=2 role) cross-role active set (quarter-level)."""
+    roles: tuple[str, ...]  # sorted
+    ratio: float
+    verdict: str  # "allow" / "borderline" / "block"
+    cv: float = 0.0
+    samples: int = 1
+    contains_heavy: bool = False
+
+
 @dataclass
 class ContentionMatrix:
     """In-memory contention matrix. Use `load_contention_matrix` to construct."""
@@ -99,6 +110,9 @@ class ContentionMatrix:
     pairs: dict[tuple[str, str], Pair] = field(default_factory=dict)  # sorted-tuple keys
     same_role: dict[str, SameRole] = field(default_factory=dict)
     unknown_pairs: list[tuple[str, str]] = field(default_factory=list)
+    n_way: dict[tuple[str, ...], Nway] = field(default_factory=dict)  # sorted-role-tuple keys
+    light_roles: frozenset[str] = field(default_factory=frozenset)
+    heavy_roles: frozenset[str] = field(default_factory=frozenset)
 
     def get_pair(self, role_a: str, role_b: str) -> Pair | None:
         return self.pairs.get(_sorted_pair_key(role_a, role_b))
@@ -108,6 +122,10 @@ class ContentionMatrix:
 
     def get_same_role(self, role: str) -> SameRole | None:
         return self.same_role.get(role)
+
+    def get_nway(self, roles) -> Nway | None:
+        """Exact-match lookup for an N-way active set (order-independent)."""
+        return self.n_way.get(tuple(sorted(set(roles))))
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -166,6 +184,21 @@ def load_contention_matrix(path: Path | None = None) -> ContentionMatrix:
         if isinstance(roles, list) and len(roles) == 2:
             unknown_pairs.append(_sorted_pair_key(roles[0], roles[1]))
 
+    n_way: dict[tuple[str, ...], Nway] = {}
+    for entry in data.get("n_way", []) or []:
+        roles = entry.get("roles")
+        if not isinstance(roles, list) or len(roles) < 2:
+            continue
+        key = tuple(sorted(roles))
+        n_way[key] = Nway(
+            roles=key,
+            ratio=float(entry.get("ratio", 0.0)),
+            verdict=str(entry.get("verdict", "")),
+            cv=float(entry.get("cv", 0.0)),
+            samples=int(entry.get("samples", 1)),
+            contains_heavy=bool(entry.get("contains_heavy", False)),
+        )
+
     return ContentionMatrix(
         version=int(data.get("version", 1)),
         measured_at=str(data.get("measured_at", "")),
@@ -175,6 +208,9 @@ def load_contention_matrix(path: Path | None = None) -> ContentionMatrix:
         pairs=pairs,
         same_role=same_role,
         unknown_pairs=unknown_pairs,
+        n_way=n_way,
+        light_roles=frozenset(data.get("nway_light_roles", []) or []),
+        heavy_roles=frozenset(data.get("nway_heavy_roles", []) or []),
     )
 
 
@@ -304,6 +340,65 @@ def pair_policy(
         # to DEGRADED_ALLOW based on SLO budget.
         return PairDecision.QUEUE
     return PairDecision.QUEUE
+
+
+_DEFAULT_HEAVY_ROLES = frozenset({"ingest_long_context", "architect_general"})
+
+
+def nway_policy(
+    roles,
+    traffic_class: TrafficClass | str = TrafficClass.FOREGROUND_INTERACTIVE,
+    matrix: ContentionMatrix | None = None,
+    floor: float | None = None,
+) -> PairDecision:
+    """Admission decision for an N-way (>=2 distinct roles) cross-role active set.
+
+    Pairwise `pair_policy` is necessary but NOT sufficient — an all-pairwise-allowed
+    set can be aggregate-negative. Measured proof (2026-05-26): {frontdoor, ingest,
+    vision} has all three pairs allow (1.72/1.43/1.06) yet the triple is 0.847 BLOCK.
+    This consults the measured `n_way` matrix for the EXACT active set, then applies
+    a policy for unmeasured sets:
+      * measured allow      -> ALLOW
+      * measured borderline -> ALLOW (foreground) / QUEUE (background)
+      * measured block      -> QUEUE (serialize; aggregate-negative)
+      * unmeasured, all roles BW-light + quartered -> ALLOW (anchored by the measured
+        4-way 1.605x + within-role 1.88-2.86x; covers mixed multi-instance light sets)
+      * unmeasured, contains a heavy full/half instance -> QUEUE (fail-closed)
+    """
+    rs = tuple(sorted(set(roles)))
+    if len(rs) < 2:
+        return PairDecision.ALLOW
+    if isinstance(traffic_class, str):
+        try:
+            traffic_class = TrafficClass(traffic_class)
+        except ValueError:
+            traffic_class = TrafficClass.BACKGROUND
+    if matrix is None:
+        try:
+            matrix = load_contention_matrix()
+        except FileNotFoundError:
+            return PairDecision.QUEUE if traffic_class == TrafficClass.BACKGROUND else PairDecision.ALLOW
+
+    is_background = traffic_class == TrafficClass.BACKGROUND
+
+    entry = matrix.get_nway(rs)
+    if entry is not None:
+        if entry.verdict == "allow":
+            return PairDecision.ALLOW
+        if entry.verdict == "borderline":
+            return PairDecision.QUEUE if is_background else PairDecision.ALLOW
+        # block: measured aggregate-negative -> serialize (foreground caller may
+        # promote to DEGRADED_ALLOW on SLO budget, mirroring pair_policy below-floor).
+        return PairDecision.QUEUE
+
+    # Unmeasured active set. An all-light quartered set is allow-by-policy (anchored
+    # by the measured 4-way 1.605x + within-role 1.88-2.86x; covers mixed light sets).
+    # Everything else fails OPEN for foreground runtime, CLOSED for background/bulk —
+    # matching pair_policy + the cross-role-bw handoff (fail-open foreground, block
+    # background campaigns). The heavy-vs-light split only changes the background path.
+    if matrix.light_roles and all(r in matrix.light_roles for r in rs):
+        return PairDecision.ALLOW
+    return PairDecision.QUEUE if is_background else PairDecision.ALLOW
 
 
 def topology_fingerprint(numa_config: dict[str, Any]) -> str:
