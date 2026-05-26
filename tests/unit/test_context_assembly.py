@@ -14,6 +14,8 @@ from src.context_assembly import (
     BundleEntry,
     BudgetBands,
     ContextBundle,
+    Candidate,
+    pack_to_budget,
 )
 
 
@@ -166,3 +168,72 @@ def test_manifest_separates_metadata_from_text() -> None:
 def test_budget_bands_total() -> None:
     bands = BudgetBands(task=10, codemap=20, editable=40, tests=10, output_reserve=20)
     assert bands.total_reserved() == 100
+
+
+# ─── DCP-2 packing ───────────────────────────────────────────────────────────────
+
+def test_pack_includes_high_priority_full_then_downgrades() -> None:
+    cands = [
+        Candidate(path="hot.py", priority=10, cost_full=60, cost_slices=20, cost_codemap=5),
+        Candidate(path="warm.py", priority=5, cost_full=60, cost_slices=20, cost_codemap=5),
+        Candidate(path="cold.py", priority=1, cost_full=60, cost_slices=20, cost_codemap=5),
+    ]
+    bundle = pack_to_budget(cands, budget=70)
+    by_path = {e.path: e for e in bundle.entries}
+    assert by_path["hot.py"].mode == InclusionMode.FULL       # 60 fits first
+    assert by_path["warm.py"].mode == InclusionMode.CODEMAP_ONLY  # only 5 left after 60 → codemap
+    assert bundle.total_tokens() <= 70
+    assert bundle.fits()
+
+
+def test_pack_excludes_when_nothing_fits() -> None:
+    cands = [
+        Candidate(path="a.py", priority=10, cost_full=100, cost_slices=100, cost_codemap=100),
+    ]
+    bundle = pack_to_budget(cands, budget=50)
+    assert bundle.entries[0].mode == InclusionMode.EXCLUDED
+    assert "fail-closed" in bundle.entries[0].reason_downgraded_or_excluded
+    assert bundle.total_tokens() == 0
+
+
+def test_pack_respects_desired_mode_ceiling() -> None:
+    # desired_mode=SLICES means never include as FULL even if it fits
+    cands = [Candidate(path="a.py", priority=10, cost_full=10, cost_slices=8, cost_codemap=2,
+                       desired_mode=InclusionMode.SLICES)]
+    bundle = pack_to_budget(cands, budget=100)
+    assert bundle.entries[0].mode == InclusionMode.SLICES
+    assert bundle.entries[0].estimated_tokens == 8
+
+
+def test_pack_reserves_output_band() -> None:
+    # budget 100 with output_reserve 80 → only 20 usable
+    bands = BudgetBands(output_reserve=80)
+    cands = [Candidate(path="a.py", priority=10, cost_full=50, cost_slices=15, cost_codemap=5)]
+    bundle = pack_to_budget(cands, budget=100, bands=bands)
+    assert bundle.entries[0].mode == InclusionMode.SLICES  # 50 doesn't fit in 20, 15 does
+    assert bundle.total_tokens() == 15
+
+
+def test_pack_applies_exclusion_policy_without_consuming_budget() -> None:
+    cands = [
+        Candidate(path="node_modules/x.js", priority=100, cost_full=5, cost_slices=5, cost_codemap=5),
+        Candidate(path="real.py", priority=1, cost_full=10, cost_slices=5, cost_codemap=2),
+    ]
+    bundle = pack_to_budget(cands, budget=12)
+    by_path = {e.path: e for e in bundle.entries}
+    assert by_path["node_modules/x.js"].mode == InclusionMode.EXCLUDED  # policy, despite top priority
+    assert by_path["real.py"].mode == InclusionMode.FULL  # budget not consumed by the vendored file
+    assert bundle.total_tokens() == 10
+
+
+def test_pack_priority_order_determines_richness() -> None:
+    # Equal costs; the higher-priority file should get the richer mode when budget is tight.
+    cands = [
+        Candidate(path="low.py", priority=1, cost_full=40, cost_slices=10, cost_codemap=2),
+        Candidate(path="high.py", priority=9, cost_full=40, cost_slices=10, cost_codemap=2),
+    ]
+    bundle = pack_to_budget(cands, budget=45)
+    by_path = {e.path: e for e in bundle.entries}
+    assert by_path["high.py"].mode == InclusionMode.FULL          # 40 first
+    assert by_path["low.py"].mode in (InclusionMode.SLICES, InclusionMode.CODEMAP_ONLY)
+    assert bundle.fits()

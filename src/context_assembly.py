@@ -263,3 +263,103 @@ class ContextBundle:
                 for e in self.entries
             ],
         }
+
+
+# ─── DCP-2: budget-bounded packing (pure core; discovery is the live part) ────────
+
+# Downgrade ladder: try the richest mode that fits, fall back toward cheaper ones.
+_DOWNGRADE_LADDER = [InclusionMode.FULL, InclusionMode.SLICES, InclusionMode.CODEMAP_ONLY]
+
+
+@dataclass
+class Candidate:
+    """A discovered file with per-mode token costs and a ranking priority (DCP-2 input).
+
+    Discovery (ColGREP top-k + GitNexus caller/callee neighborhoods) produces these; the
+    packing loop below is pure so it is unit-testable without inference or live indexes.
+    """
+
+    path: str
+    priority: float                                   # higher = include first
+    cost_full: int
+    cost_slices: int
+    cost_codemap: int
+    desired_mode: str = InclusionMode.FULL            # best mode we'd like for this file
+    line_ranges: list[LineRange] = field(default_factory=list)
+    symbol_ids: list[str] = field(default_factory=list)
+    content_sha256: str | None = None
+    source: str = SourceKind.COLGREP
+
+    def cost_for(self, mode: str) -> int:
+        return {
+            InclusionMode.FULL: self.cost_full,
+            InclusionMode.SLICES: self.cost_slices,
+            InclusionMode.CODEMAP_ONLY: self.cost_codemap,
+        }[mode]
+
+
+def _ladder_from(desired: str) -> list[str]:
+    """Modes to try, richest-first, starting no richer than `desired`."""
+    if desired not in _DOWNGRADE_LADDER:
+        return [InclusionMode.CODEMAP_ONLY]
+    start = _DOWNGRADE_LADDER.index(desired)
+    return _DOWNGRADE_LADDER[start:]
+
+
+def pack_to_budget(
+    candidates: Iterable[Candidate],
+    budget: int,
+    *,
+    bands: BudgetBands | None = None,
+    bundle_id: str | None = None,
+    repo_sha: str | None = None,
+    gitnexus_index_commit: str | None = None,
+) -> ContextBundle:
+    """Greedily pack candidates into a token budget, downgrading mode to fit (DCP-2 core).
+
+    By descending priority, include each candidate at the richest mode (no richer than its
+    `desired_mode`) whose cost fits the remaining budget; otherwise exclude it with a reason
+    ("fail closed" rather than overflow). Policy-excluded paths (binaries/secrets/...) are
+    recorded as EXCLUDED and never consume budget. Pure — no I/O.
+    """
+    effective_budget = budget if bands is None else budget - bands.output_reserve
+    bundle = ContextBundle(
+        budget=effective_budget, bundle_id=bundle_id, repo_sha=repo_sha,
+        gitnexus_index_commit=gitnexus_index_commit, bands=bands,
+    )
+    for cand in sorted(candidates, key=lambda c: (-c.priority, c.path)):
+        policy_reason = (
+            default_exclusion_reason(cand.path)
+            if cand.source != SourceKind.MANUAL_SEED else None
+        )
+        if policy_reason is not None:
+            bundle.entries.append(BundleEntry(
+                path=cand.path, mode=InclusionMode.EXCLUDED, source=cand.source,
+                reason_downgraded_or_excluded=policy_reason,
+            ))
+            continue
+
+        placed = False
+        for mode in _ladder_from(cand.desired_mode):
+            cost = cand.cost_for(mode)
+            if bundle.total_tokens() + cost <= effective_budget:
+                downgraded = mode != cand.desired_mode
+                entry = BundleEntry(
+                    path=cand.path, mode=mode,
+                    line_ranges=list(cand.line_ranges) if mode == InclusionMode.SLICES else [],
+                    symbol_ids=list(cand.symbol_ids), content_sha256=cand.content_sha256,
+                    source=cand.source, estimated_tokens=cost,
+                    reason_included=f"priority={cand.priority:g}",
+                    reason_downgraded_or_excluded=(
+                        f"downgraded {cand.desired_mode}->{mode} to fit budget" if downgraded else None
+                    ),
+                )
+                bundle.entries.append(entry)
+                placed = True
+                break
+        if not placed:
+            bundle.entries.append(BundleEntry(
+                path=cand.path, mode=InclusionMode.EXCLUDED, source=cand.source,
+                reason_downgraded_or_excluded="no mode fits remaining budget (fail-closed)",
+            ))
+    return bundle
