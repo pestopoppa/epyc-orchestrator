@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-05-26T21:36:35",
+  "live_affinity_verified": true,
+  "roles_checked": [
+    "frontdoor"
+  ],
+  "instances": [
+    {
+      "role": "frontdoor",
+      "instance_idx": 0,
+      "port": 8070,
+      "pid": "790517",
+      "expected_cpus": "0-47,96-143",
+      "observed_thread_union": "0-47,96-143",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 1,
+      "port": 8080,
+      "pid": "549098",
+      "expected_cpus": "0-23,96-119",
+      "observed_thread_union": "0-23,96-119",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 2,
+      "port": 8180,
+      "pid": "549367",
+      "expected_cpus": "24-47,120-143",
+      "observed_thread_union": "24-47,120-143",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 3,
+      "port": 8280,
+      "pid": "549620",
+      "expected_cpus": "48-71,144-167",
+      "observed_thread_union": "48-71,144-167",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 4,
+      "port": 8380,
+      "pid": "549899",
+      "expected_cpus": "72-95,168-191",
+      "observed_thread_union": "72-95,168-191",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "frontdoor",
+      "instance_idx": 5,
+      "port": 8073,
+      "pid": "1920661",
+      "expected_cpus": "48-95,144-191",
+      "observed_thread_union": "48-95,144-191",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "note": "ok"
+    }
+  ]
+}

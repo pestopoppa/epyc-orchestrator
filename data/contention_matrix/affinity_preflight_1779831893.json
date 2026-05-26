@@ -1,0 +1,154 @@
+{
+  "generated_at": "2026-05-26T21:44:53",
+  "live_affinity_verified": true,
+  "roles_checked": [
+    "ingest_long_context",
+    "vision_escalation"
+  ],
+  "instances": [
+    {
+      "role": "ingest_long_context",
+      "instance_idx": 0,
+      "port": 8085,
+      "pid": "552147",
+      "expected_cpus": "0-47,96-143",
+      "observed_thread_union": "0-47,96-143",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "ingest_long_context",
+      "instance_idx": 1,
+      "port": 8185,
+      "pid": "552520",
+      "expected_cpus": "0-23,96-119",
+      "observed_thread_union": "0-23,96-119",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "ingest_long_context",
+      "instance_idx": 2,
+      "port": 8285,
+      "pid": "552805",
+      "expected_cpus": "24-47,120-143",
+      "observed_thread_union": "24-47,120-143",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "ingest_long_context",
+      "instance_idx": 3,
+      "port": 8385,
+      "pid": "553098",
+      "expected_cpus": "48-71,144-167",
+      "observed_thread_union": "48-71,144-167",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "ingest_long_context",
+      "instance_idx": 4,
+      "port": 8485,
+      "pid": "553376",
+      "expected_cpus": "72-95,168-191",
+      "observed_thread_union": "72-95,168-191",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "ingest_long_context",
+      "instance_idx": 5,
+      "port": 8074,
+      "pid": "1929977",
+      "expected_cpus": "48-95,144-191",
+      "observed_thread_union": "48-95,144-191",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "vision_escalation",
+      "instance_idx": 0,
+      "port": 8087,
+      "pid": "1870107",
+      "expected_cpus": "48-95,144-191",
+      "observed_thread_union": "48-95,144-191",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "vision_escalation",
+      "instance_idx": 1,
+      "port": 8187,
+      "pid": "1870441",
+      "expected_cpus": "0-23,96-119",
+      "observed_thread_union": "0-23,96-119",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "vision_escalation",
+      "instance_idx": 2,
+      "port": 8287,
+      "pid": "1870716",
+      "expected_cpus": "24-47,120-143",
+      "observed_thread_union": "24-47,120-143",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "vision_escalation",
+      "instance_idx": 3,
+      "port": 8387,
+      "pid": "1871016",
+      "expected_cpus": "48-71,144-167",
+      "observed_thread_union": "48-71,144-167",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "vision_escalation",
+      "instance_idx": 4,
+      "port": 8487,
+      "pid": "1871321",
+      "expected_cpus": "72-95,168-191",
+      "observed_thread_union": "72-95,168-191",
+      "n_expected": 48,
+      "n_observed": 48,
+      "match": true,
+      "note": "ok"
+    },
+    {
+      "role": "vision_escalation",
+      "instance_idx": 5,
+      "port": 8075,
+      "pid": "1930356",
+      "expected_cpus": "0-47,96-143",
+      "observed_thread_union": "0-47,96-143",
+      "n_expected": 96,
+      "n_observed": 96,
+      "match": true,
+      "note": "ok"
+    }
+  ]
+}
