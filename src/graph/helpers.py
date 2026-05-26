@@ -327,6 +327,135 @@ def _log_state_snapshot(ctx: Ctx, role: str) -> None:
         log.debug("State snapshot failed", exc_info=True)
 
 
+# ── BEP (J8): batched-edit parallel-apply turn divergence ────────────────────
+# Flag-gated by features().batch_edit_mode (default OFF). When the root LM emits a
+# fenced ```patchset block, apply it transactionally (sandbox → verify → promote)
+# instead of running the interleaved REPL loop this turn. Zero behavior change when
+# the flag is off OR no patchset block is present — _maybe_batch_edit_turn returns
+# None and the caller falls through to the normal REPL path. Mirrors the existing
+# file_mutation edit surface (same repo), so it adds no new write surface and is in
+# fact safer than _file_write_safe (sandbox+verify before promote vs immediate write).
+# Handoff: handoffs/active/batched-edit-parallel-apply.md (BEP-4/BEP-5).
+
+
+def _batch_edit_repo_root() -> Path:
+    """Apply target — the same project root the interleaved REPL already writes to."""
+    from src.repl_environment.file_mutation import _get_project_root
+    return Path(_get_project_root())
+
+
+def _batch_edit_verify_fn(sandbox_root: Path) -> bool:
+    """Inference-free accept gate: py_compile every .py in the sandbox (only touched
+    files are staged). Catches syntax errors before promotion. Whole-repo test/type-check
+    is the eventual accept gate (BEP audit #4) — a follow-up, not wired here."""
+    import py_compile
+
+    for p in Path(sandbox_root).rglob("*.py"):
+        try:
+            py_compile.compile(str(p), doraise=True)
+        except Exception:
+            return False
+    return True
+
+
+def _batch_edit_failure_summary(result: Any) -> str:
+    parts = [
+        f"{f.get('path', '?')}: {f.get('failure_type', '?')} {f.get('detail', '')}".strip()
+        for f in (result.failed or [])
+    ][:6]
+    detail = "; ".join(parts) or "apply/verify failed"
+    return (
+        "[SYSTEM: batch-edit patchset could not be applied cleanly (" + detail + "). "
+        "Re-emit a corrected ```patchset block, or proceed with normal step-by-step edits.]"
+    )
+
+
+def _finalize_batch_edit(
+    state: Any, role: Role | str, result: Any, ps: Any
+) -> tuple[str, str | None, bool, dict]:
+    """Synthesize the terminal turn result for a successfully applied + promoted patch set."""
+    files = ", ".join(sorted(result.diff_paths)) or "(none)"
+    summary = (
+        f"Batch edit applied {len(ps.files)} file change(s) [{files}] — "
+        f"sandbox-verified (py_compile) and promoted transactionally."
+    )
+    artifacts = {
+        "_batch_edit": {
+            "files": sorted(result.diff_paths),
+            "n_patches": len(ps.files),
+            "verified": result.verify_passed,
+        }
+    }
+    _record_session_turn(state, role=str(role), output=summary, is_final=True)
+    return summary, None, True, artifacts
+
+
+async def _maybe_batch_edit_turn(
+    ctx: Ctx, role: Role | str, raw_llm_output: str
+) -> tuple[str, str | None, bool, dict] | None:
+    """BEP J8 divergence. Returns a 4-tuple to short-circuit the turn, or None to fall
+    through to the normal REPL path. Default-off; only the flag-on + patchset-present
+    path diverges, so flag-off behavior is provably unchanged."""
+    from src.features import features as _get_features
+
+    if not _get_features().batch_edit_mode:
+        return None
+    try:
+        from src.batch_edit_parse import parse_patchset_from_model_output
+
+        ps = parse_patchset_from_model_output(raw_llm_output)  # None if no fenced block
+    except ValueError:
+        ps = None  # present-but-malformed → fall back to REPL (model re-emits)
+    if ps is None:
+        return None
+
+    state = ctx.state
+    from src.batch_edit_runner import (
+        apply_patchset_sandboxed,
+        cleanup_sandbox,
+        promote_sandbox,
+    )
+
+    repo_root = _batch_edit_repo_root()
+    try:
+        result = await asyncio.to_thread(
+            apply_patchset_sandboxed,
+            ps,
+            repo_root=repo_root,
+            verify_fn=_batch_edit_verify_fn,
+        )
+    except Exception as e:  # noqa: BLE001 — apply must never crash the turn
+        log.warning(
+            "batch-edit apply raised (turn %d): %s — falling back to REPL", state.turns, e
+        )
+        return None
+
+    if result.ok:
+        promoted = False
+        try:
+            promoted = promote_sandbox(result, repo_root)
+        finally:
+            cleanup_sandbox(result)
+        if promoted:
+            log.info(
+                "batch-edit (turn %d): applied+promoted %d file(s)",
+                state.turns,
+                len(result.diff_paths),
+            )
+            return _finalize_batch_edit(state, role, result, ps)
+        log.warning(
+            "batch-edit verify passed but promotion failed (turn %d) — falling back to REPL",
+            state.turns,
+        )
+        return None
+
+    # apply/verify failed → never touch the live tree; nudge to re-emit or fall back
+    cleanup_sandbox(result)
+    nudge = _batch_edit_failure_summary(result)
+    _record_session_turn(state, role=str(role), nudge=nudge)
+    return "", None, False, {"_nudge": nudge}
+
+
 async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bool, dict]:
     """Execute one LLM → REPL turn.
 
@@ -468,6 +597,16 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
         if gathered_context:
             prompt += "\n\n[Auto Gathered Context]\n" + gathered_context
         prompt += "\n\n" + _workspace_prompt_block(state)
+
+        # BEP (J8): batch-edit instructions rider — flag-gated (default off) + only for
+        # file-editing roles (coder/architect). Tells the model it MAY emit one fenced
+        # ```patchset block instead of interleaved edits; _maybe_batch_edit_turn applies it.
+        if _get_features().batch_edit_mode and any(
+            k in str(role).lower() for k in ("coder", "architect")
+        ):
+            from src.batch_edit_parse import build_batch_edit_instructions
+
+            prompt += "\n\n" + build_batch_edit_instructions()
 
     # Inject session log summary (processing history across turns)
     await _maybe_refresh_session_summary(state, deps)
@@ -679,6 +818,12 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
                 raw_llm_output = code
             except Exception as e:
                 log.warning("Reasoning length alarm retry failed: %s", e)
+
+    # BEP (J8): flag-gated batched-edit divergence. No-op (returns None → fall through)
+    # when batch_edit_mode is off or the model emitted no ```patchset block.
+    _batch_edit_result = await _maybe_batch_edit_turn(ctx, role, raw_llm_output)
+    if _batch_edit_result is not None:
+        return _batch_edit_result
 
     # Extract and wrap code
     from src.prompt_builders import extract_code_from_response, auto_wrap_final
