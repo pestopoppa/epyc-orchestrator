@@ -1,0 +1,9 @@
+# same_role instance_pairs (J5 / WP-6) — disjoint pairs only
+  - role: "worker_general"
+    instance_pairs:
+      - {a: q0, b: q1, ratio: 0.946, cv: 0.1045, verdict: borderline}
+      - {a: q0, b: q2, ratio: 0.844, cv: 0.0906, verdict: block}
+      - {a: q0, b: q3, ratio: 0.938, cv: 0.0501, verdict: borderline}
+      - {a: q1, b: q2, ratio: 0.92, cv: 0.0772, verdict: borderline}
+      - {a: q1, b: q3, ratio: 0.772, cv: 0.1691, verdict: block}
+      - {a: q2, b: q3, ratio: 0.855, cv: 0.0652, verdict: borderline}

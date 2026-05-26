@@ -1,0 +1,75 @@
+{
+  "task_id": "J5",
+  "topology_hash": "df373c79cc4af06f",
+  "generated_at": "2026-05-26T16:50:03.718834+00:00",
+  "same_role_instance_pairs": {
+    "worker_general": [
+      {
+        "a": "q0",
+        "b": "q1",
+        "port_a": 8082,
+        "port_b": 8182,
+        "ratio": 0.946,
+        "cv": 0.1045,
+        "verdict": "borderline",
+        "seq_aggregate_tps": 41.51,
+        "parallel_aggregate_tps": 39.26
+      },
+      {
+        "a": "q0",
+        "b": "q2",
+        "port_a": 8082,
+        "port_b": 8282,
+        "ratio": 0.844,
+        "cv": 0.0906,
+        "verdict": "block",
+        "seq_aggregate_tps": 50.63,
+        "parallel_aggregate_tps": 42.58
+      },
+      {
+        "a": "q0",
+        "b": "q3",
+        "port_a": 8082,
+        "port_b": 8382,
+        "ratio": 0.938,
+        "cv": 0.0501,
+        "verdict": "borderline",
+        "seq_aggregate_tps": 46.92,
+        "parallel_aggregate_tps": 43.83
+      },
+      {
+        "a": "q1",
+        "b": "q2",
+        "port_a": 8182,
+        "port_b": 8282,
+        "ratio": 0.92,
+        "cv": 0.0772,
+        "verdict": "borderline",
+        "seq_aggregate_tps": 43.8,
+        "parallel_aggregate_tps": 40.19
+      },
+      {
+        "a": "q1",
+        "b": "q3",
+        "port_a": 8182,
+        "port_b": 8382,
+        "ratio": 0.772,
+        "cv": 0.1691,
+        "verdict": "block",
+        "seq_aggregate_tps": 48.51,
+        "parallel_aggregate_tps": 36.69
+      },
+      {
+        "a": "q2",
+        "b": "q3",
+        "port_a": 8282,
+        "port_b": 8382,
+        "ratio": 0.855,
+        "cv": 0.0652,
+        "verdict": "borderline",
+        "seq_aggregate_tps": 46.52,
+        "parallel_aggregate_tps": 39.78
+      }
+    ]
+  }
+}
