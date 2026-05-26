@@ -1,0 +1,5 @@
+{"id": "t1_create_util", "write": {"mathutil.py": "def add(a, b):\n    return a + b\n"}, "delete": []}
+{"id": "t2_add_and_use", "write": {"calc.py": "def double(x):\n    return x * 2\n\n\ndef square(x):\n    return x * x\n", "main.py": "from calc import square\nprint(square(5))\n"}, "delete": []}
+{"id": "t3_method_and_caller", "write": {"shapes.py": "class Rect:\n    def __init__(self, w, h):\n        self.width = w\n        self.height = h\n\n    def area(self):\n        return self.width * self.height\n"}, "delete": []}
+{"id": "t4_rename_module", "write": {"utils.py": "def greet():\n    return 'hi'\n", "app.py": "from utils import greet\nprint(greet())\n"}, "delete": ["helpers.py"]}
+{"id": "t5_bugfix", "write": {"tax.py": "def total(price):\n    return price * 1.1\n"}, "delete": []}
