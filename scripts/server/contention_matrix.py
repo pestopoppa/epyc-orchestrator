@@ -821,6 +821,69 @@ def cmd_bench_nway(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── J5: within-role instance-pair bench (WP-6, runs ALONE) ──────────
+#
+# Re-measures same_role contention at instance-pair granularity. For each
+# multi-instance quarterable role, benches every DISJOINT instance pair
+# (overlapping pairs are a hard topology veto — never co-placed — so they are
+# skipped, not measured). NON_QUARTERABLE roles (ingest/architect) are excluded:
+# they are not quartered. Reuses _bench_nway keyed by instance label.
+
+
+def cmd_bench_within_role(args: argparse.Namespace) -> int:
+    from stack_numa import NUMA_CONFIG
+    from src.scheduling.contention import topology_fingerprint, matrix_status, MatrixStatus
+
+    live_hash = topology_fingerprint(NUMA_CONFIG)
+    if matrix_status(DEFAULT_OUTPUT, current_topology_hash=live_hash) != MatrixStatus.OK:
+        log.error("matrix stale/missing for live topology %s — refusing within-role bench", live_hash)
+        return 2
+
+    roles = args.roles or [
+        r for r in sorted(NUMA_CONFIG)
+        if len(NUMA_CONFIG[r].get("instances", []) or []) >= 2 and r not in NON_QUARTERABLE
+    ]
+    out: dict[str, list[dict[str, Any]]] = {}
+    for role in roles:
+        fps = _role_footprints(NUMA_CONFIG, role)  # quarterable -> all instances
+        labels = {idx: ("full" if idx == 0 else f"q{idx - 1}") for idx, _p, _r in fps}
+        pairs: list[dict[str, Any]] = []
+        for (ia, pa, ra), (ib, pb, rb) in itertools.combinations(fps, 2):
+            if ra & rb:
+                continue  # overlapping cpusets — hard topology veto, never co-placed
+            la, lb = labels[ia], labels[ib]
+            log.info("=== within-role %s: %s(%d) + %s(%d) ===", role, la, pa, lb, pb)
+            b = _bench_nway([(la, pa), (lb, pb)], samples=args.samples, safe_sampling=args.safe_sampling)
+            pairs.append({
+                "a": la, "b": lb, "port_a": pa, "port_b": pb,
+                "ratio": b["ratio"], "cv": b["cv"], "verdict": b["verdict"],
+                "seq_aggregate_tps": b["seq_aggregate_tps"], "parallel_aggregate_tps": b["parallel_aggregate_tps"],
+            })
+            log.info("  → %s %s+%s ratio=%.3f cv=%.4f %s", role, la, lb, b["ratio"], b["cv"], b["verdict"])
+        out[role] = pairs
+
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "j5_within_role_results.json").write_text(json.dumps({
+        "task_id": "J5", "topology_hash": live_hash,
+        "generated_at": datetime.now(timezone.utc).isoformat(), "same_role_instance_pairs": out,
+    }, indent=2) + "\n")
+
+    # Emit a same_role.instance_pairs YAML fragment.
+    yb: list[str] = ["# same_role instance_pairs (J5 / WP-6) — disjoint pairs only"]
+    for role, pairs in out.items():
+        yb.append(f"  - role: \"{role}\"")
+        yb.append("    instance_pairs:")
+        for p in pairs:
+            yb.append(f"      - {{a: {p['a']}, b: {p['b']}, ratio: {p['ratio']}, cv: {p['cv']}, verdict: {p['verdict']}}}")
+    (out_dir / "j5_same_role_block.yaml").write_text("\n".join(yb) + "\n")
+    log.info("wrote %s", out_dir / "j5_within_role_results.json")
+    for role, pairs in out.items():
+        blocks = [f"{p['a']}+{p['b']}={p['ratio']}" for p in pairs if p["verdict"] == "block"]
+        log.info("  %s: %d disjoint pairs, %d block %s", role, len(pairs), len(blocks), blocks or "")
+    return 0
+
+
 # ── CLI ──────────────────────────────────────────────────────────────
 
 
@@ -957,6 +1020,17 @@ def main() -> int:
     p_nway.add_argument("--include-flagged", action="store_true",
                         help="also measure the manifest's discrepancy-flagged sets")
     p_nway.set_defaults(func=cmd_bench_nway)
+
+    p_wr = sub.add_parser(
+        "bench-within-role",
+        help="J5 (WP-6): measure same-role disjoint instance pairs (runs ALONE)",
+    )
+    p_wr.add_argument("--roles", nargs="+", help="roles to sweep (default: multi-instance quarterable roles)")
+    p_wr.add_argument("--output", required=True, help="output dir for j5_within_role_results.json")
+    p_wr.add_argument("--samples", type=int, default=3)
+    p_wr.add_argument("--safe-sampling", action="store_true", dest="safe_sampling",
+                      help="temp>0 + repeat_penalty (gemma4 crash mitigation)")
+    p_wr.set_defaults(func=cmd_bench_within_role)
 
     args = p.parse_args()
     if args.cmd is None:
