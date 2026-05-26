@@ -583,7 +583,19 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         cpu region locks
         <span class="count-suffix" id="region-locks-status">— per-region cross-process lock state (Phase 5 / 2026-05-22)</span>
       </h2>
-      <div id="region-locks-grid" style="display:grid;grid-template-columns:160px repeat(4,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center"></div>
+      <div id="region-locks-grid" style="display:grid;grid-template-columns:160px repeat(6,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center"></div>
+      <style>
+        @keyframes regionLockActivePulse {
+          0%   { opacity: 1; }
+          50%  { opacity: 0.55; }
+          100% { opacity: 1; }
+        }
+        .rl-cell { border-radius:3px; padding:4px 2px; text-align:center; font-size:14px; line-height:1.1; }
+        .rl-active  { background: rgba(251,191,36,0.30); color: #fbbf24; animation: regionLockActivePulse 1.4s ease-in-out infinite; }
+        .rl-blocked { background: rgba(248,113,113,0.30); color: #f87171; }
+        .rl-ready   { background: rgba(52,211,153,0.18); color: var(--good, #34d399); }
+        .rl-na      { background: rgba(100,100,100,0.10); color: var(--dim, #6b7280); font-style: italic; }
+      </style>
     </div>
 
     <div class="panel">
@@ -2911,12 +2923,23 @@ function startDashboard() {
                 status.style.color = enabled ? 'var(--good, #34d399)' : 'var(--warn, #fbbf24)';
             }
             const REGIONS = ['q0', 'q1', 'q2', 'q3'];
+            const COLS = ['Full', 'Half', 'q0', 'q1', 'q2', 'q3'];
+            // Map a column header to the list of quarter-regions an instance of that
+            // shape would need to acquire to dispatch.
+            const colRegions = (col) => col === 'Full' ? REGIONS
+                                     : col === 'Half' ? null   // half varies per instance; resolved against inst.regions
+                                     : [col];
+            // Pick the instance (if any) that fits a given column for this role.
+            const pickInstForCol = (insts, col) => {
+                if (col === 'Full') return insts.find(i => i.span >= 4) || null;
+                if (col === 'Half') return insts.find(i => i.span === 2) || null;
+                return insts.find(i => i.span === 1 && (i.regions || [])[0] === col) || null;
+            };
             const rows = [];
             // Header row
-            rows.push(`<div style="color:var(--muted);font-size:10px">role / region · instances</div>`);
-            for (const r of REGIONS) rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center">${r}</div>`);
+            rows.push(`<div style="color:var(--muted);font-size:10px">role / instance shape</div>`);
+            for (const c of COLS) rows.push(`<div style="color:var(--muted);font-size:10px;text-align:center;font-weight:600">${c}</div>`);
             // by_role from the server is { role: { wired, regions, instances[], active_instance_idxs[] } }.
-            // Sort wired-first.
             const byRole = d.by_role || {};
             const roleEntries = Object.entries(byRole).sort((a, b) => {
                 const wa = a[1].wired ? 0 : 1, wb = b[1].wired ? 0 : 1;
@@ -2930,52 +2953,31 @@ function startDashboard() {
                 const badge = wired
                     ? ''
                     : ` <span style="display:inline-block;padding:0 4px;font-size:9px;background:rgba(251,191,36,0.2);color:var(--warn,#fbbf24);border-radius:2px;margin-left:4px" title="quartered in NUMA_CONFIG but backend does not acquire cpu_region_lock — cross-process concurrency is NOT enforced for this role yet">not wired</span>`;
-                // Compose role label cell with instance pills below the name.
-                // Pill width is proportional to its region span (full = wider).
-                // Active instance pills are tinted red to match the held-cells visual.
                 const insts = info.instances || [];
                 const activeSet = new Set(info.active_instance_idxs || []);
-                const pillsHtml = insts.map(inst => {
-                    const isActive = activeSet.has(inst.idx);
-                    const widthPct = Math.max(8, inst.span * 22);  // span 1 → 22%, span 2 → 44%, span 4 → 88%
-                    const label = inst.span >= 4 ? 'full'
-                                : inst.span === 2 ? 'half'
-                                : inst.regions[0];
-                    const bg = isActive
-                        ? 'background:rgba(248,113,113,0.55);color:#fff;font-weight:600'
-                        : (wired ? 'background:rgba(52,211,153,0.16);color:var(--good,#34d399)'
-                                 : 'background:rgba(100,100,100,0.10);color:var(--dim);font-style:italic');
-                    const title = `instance ${inst.idx} · regions {${inst.regions.join(',')}}` + (isActive ? ' · ACTIVE (holding locks)' : ' · idle');
-                    return `<span style="${bg};display:inline-block;padding:1px 4px;border-radius:3px;font-size:9px;line-height:1.4;margin-right:2px;min-width:${widthPct}px;text-align:center;font-family:var(--font-mono)" title="${title}">${label}</span>`;
-                }).join('');
+                const heldRegions = new Set((info.regions || []).filter(e => e.held).map(e => e.region));
                 const labelColor = wired ? 'var(--fg)' : 'var(--muted)';
-                rows.push(`
-                    <div style="overflow:hidden">
-                        <div style="color:${labelColor};font-size:11px;line-height:1.3">${role}${badge}</div>
-                        <div style="margin-top:2px;display:flex;flex-wrap:wrap;align-items:center">${pillsHtml}</div>
-                    </div>
-                `);
-                const region_map = {};
-                for (const e of (info.regions || [])) region_map[e.region] = e;
-                for (const r of REGIONS) {
-                    const entry = region_map[r];
-                    if (!entry) {
-                        rows.push(`<div style="background:rgba(100,100,100,0.1);border-radius:3px;padding:3px;text-align:center;color:var(--muted)">—</div>`);
-                    } else if (entry.held) {
-                        const pids = (entry.holder_pids || []).join(',');
-                        const heldByIdxs = entry.holder_instance_idxs || [];
-                        const heldByLabel = heldByIdxs.length
-                            ? heldByIdxs.map(i => (insts.find(x => x.idx === i)
-                                    ? (insts.find(x => x.idx === i).span >= 4 ? 'full'
-                                       : insts.find(x => x.idx === i).span === 2 ? 'half'
-                                       : insts.find(x => x.idx === i).regions[0])
-                                    : `i${i}`)).join(',')
-                            : '?';
-                        rows.push(`<div style="background:rgba(248,113,113,0.4);border-radius:3px;padding:3px;text-align:center;color:#fff" title="held by instance(s) ${heldByIdxs.join(',')} · pids ${pids}">🔒 ${heldByLabel}</div>`);
-                    } else if (wired) {
-                        rows.push(`<div style="background:rgba(52,211,153,0.18);border-radius:3px;padding:3px;text-align:center;color:var(--good,#34d399)">idle</div>`);
+                rows.push(`<div style="overflow:hidden;color:${labelColor};font-size:11px;line-height:1.3">${role}${badge}</div>`);
+                for (const col of COLS) {
+                    const inst = pickInstForCol(insts, col);
+                    if (!inst) {
+                        rows.push(`<div class="rl-cell rl-na" title="${role} has no ${col.toLowerCase()}-shape instance">—</div>`);
+                        continue;
+                    }
+                    if (activeSet.has(inst.idx)) {
+                        const t = `${role}.${col} ACTIVE — instance ${inst.idx} holding ${(inst.regions || []).join(',')}`;
+                        rows.push(`<div class="rl-cell rl-active" title="${t}">⚡</div>`);
+                        continue;
+                    }
+                    const needed = inst.regions || [];
+                    const blocked = needed.some(q => heldRegions.has(q));
+                    if (!wired) {
+                        rows.push(`<div class="rl-cell rl-na" title="role not wired to cpu_region_lock (backend RoundRobin)">—</div>`);
+                    } else if (blocked) {
+                        const heldOnes = needed.filter(q => heldRegions.has(q)).join(',');
+                        rows.push(`<div class="rl-cell rl-blocked" title="${role}.${col} BLOCKED — would need ${heldOnes} which is held by another instance">🔒</div>`);
                     } else {
-                        rows.push(`<div style="background:rgba(100,100,100,0.08);border-radius:3px;padding:3px;text-align:center;color:var(--dim);font-style:italic" title="quartered topology slot but no lock file exists — backend not lock-aware">—</div>`);
+                        rows.push(`<div class="rl-cell rl-ready" title="${role}.${col} READY — could dispatch now (regions ${needed.join(',')} free)">✅</div>`);
                     }
                 }
             }
@@ -2989,7 +2991,7 @@ function startDashboard() {
                 if (nUnwired > 0) {
                     footMsg += ` · <span style="color:var(--warn,#fbbf24)">${nUnwired} role(s) quartered but unwired</span> (backend still RoundRobin, no cross-process concurrency)`;
                 }
-                footMsg += `. <strong>full</strong>/<strong>half</strong>/<strong>qN</strong> pills show each instance's region span; red pill = ACTIVE (holding locks). When a full instance dispatches, it acquires every quarter it spans simultaneously (you'll see multiple 🔒 cells with the same instance label).`;
+                footMsg += `. Legend: <span style="color:#fbbf24">⚡ active</span> · <span style="color:#f87171">🔒 blocked by concurrency matrix</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not configured for this role</span>.`;
                 footer.innerHTML = footMsg;
                 grid.appendChild(footer);
             }
