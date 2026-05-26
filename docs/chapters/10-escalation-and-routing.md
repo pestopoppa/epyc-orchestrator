@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The orchestrator uses an **explicit pydantic-graph** to drive escalation decisions. Seven node classes encode valid transitions in Union return types. Rules from `escalation.py` are authoritative, and MemRL's learned escalation is advisory (injected via `TaskDeps`). Proactive delegation with complexity-aware routing (`proactive_delegation.py`) remains a separate execution strategy.
+The orchestrator uses an **explicit pydantic-graph** to drive escalation decisions. Six node classes (down from seven after `ArchitectCodingNode` was removed on 2026-05-06) encode valid transitions in Union return types. Rules from `escalation.py` are authoritative, and MemRL's learned routing is now wired through `HybridRouter` (2026-05-21 deployment) — Q-values plus posterior scoring reach the graph layer via `TaskDeps.primitives.select_role()`. Proactive delegation with complexity-aware routing (`proactive_delegation.py`) remains a separate execution strategy.
 
 As of 2026-02-07, the legacy `FailureRouter` and `RoutingFacade` have been deleted. All escalation logic is now in `src/graph/nodes.py`.
 
@@ -133,8 +133,8 @@ class Role(Enum):
 
     def escalates_to(self) -> Role | None:
         escalation_map = {
-            Role.WORKER_GENERAL: Role.CODER_PRIMARY,
-            Role.CODER_PRIMARY: Role.ARCHITECT_GENERAL,
+            Role.WORKER_GENERAL: Role.CODER_ESCALATION,
+            Role.CODER_ESCALATION: Role.ARCHITECT_GENERAL,
             Role.ARCHITECT_GENERAL: None,  # Terminal
         }
         return escalation_map.get(self)
@@ -142,17 +142,19 @@ class Role(Enum):
 
 </details>
 
-**Full Chains**:
-- Worker → Coder → Architect (general tasks)
-- Frontdoor → Coder → Architect (chat escalation)
-- Ingest → Architect (long-context ingestion)
-- Architect → FAIL (no further escalation)
+**Full Chains** (post-2026-05-06):
+- Worker_general → Coder_escalation → Architect_general (general tasks)
+- Frontdoor → Coder_escalation → Architect_general (chat escalation)
+- Ingest_long_context → Architect_general (long-context ingestion)
+- Architect_general → FAIL (no further escalation; terminal)
+
+The `architect_coding` role was eliminated on 2026-05-06 (REAP-246B Q4 scored 70% on the coder suite vs 97% for the frontdoor model on the same suite). With it went the corresponding tier of the escalation chain — `max_escalations` for coder paths dropped from 2 to 1, and hard coding escalations now terminate at coder_escalation rather than escalating to a dedicated coder-architect.
 
 </details>
 
 ## Pydantic-Graph Orchestration (February 2026)
 
-The escalation loop is implemented as an explicit `pydantic_graph.Graph` with 7 node classes. Each node's `run()` method returns a Union of valid next nodes or `End[TaskResult]`, so transitions are type-safe and visible at a glance. MemRL components are injected as immutable `TaskDeps`, which means the learned escalation signals are actually wired up now -- they were dead code in the old `RoutingFacade` architecture.
+The escalation loop is implemented as an explicit `pydantic_graph.Graph` with 6 node classes (was 7 before `ArchitectCodingNode` removal on 2026-05-06). Each node's `run()` method returns a Union of valid next nodes or `End[TaskResult]`, so transitions are type-safe and visible at a glance. MemRL components are injected as immutable `TaskDeps`, which means the learned escalation signals are actually wired up now -- they were dead code in the old `RoutingFacade` architecture.
 
 <details>
 <summary>Node classes and execution flow</summary>
@@ -179,7 +181,7 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
 
 @dataclass
 class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
-    async def run(self, ctx) -> CoderEscalationNode | ArchitectCodingNode | End[TaskResult]: ...
+    async def run(self, ctx) -> CoderEscalationNode | ArchitectNode | End[TaskResult]: ...
 
 @dataclass
 class IngestNode(BaseNode[TaskState, TaskDeps, TaskResult]):
@@ -189,12 +191,10 @@ class IngestNode(BaseNode[TaskState, TaskDeps, TaskResult]):
 class ArchitectNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     async def run(self, ctx) -> ArchitectNode | End[TaskResult]: ...  # Terminal
 
-@dataclass
-class ArchitectCodingNode(BaseNode[TaskState, TaskDeps, TaskResult]):
-    async def run(self, ctx) -> ArchitectCodingNode | End[TaskResult]: ...  # Terminal
-
-orchestration_graph = Graph(nodes=[all 7 classes])
+orchestration_graph = Graph(nodes=[all 6 classes])
 ```
+
+`ArchitectCodingNode` was removed alongside the `architect_coding` role on 2026-05-06; the union return type on `CoderEscalationNode` now terminates at `ArchitectNode` (or `End[TaskResult]`) rather than escalating to a separate coder-architect.
 
 </details>
 
@@ -240,6 +240,20 @@ def _handle_error(ctx, error_cat, error):
 
 </details>
 
+## Learned Routing Controller (2026-05-21)
+
+`HybridRouter` (in `orchestration/repl_memory/retriever.py`) now wires MemRL Q-values into routing decisions instead of treating them as advisory hints. For each candidate role on an escalation or delegation choice, the router computes a posterior P(success | role) by combining:
+
+- **Learned evidence**: top-k Q-values retrieved from the episodic store via `TwoPhaseRetriever`, summarized as a robust statistic (median / trimmed mean) so a single outlier trajectory does not pull the estimate.
+- **Heuristic priors**: classifier signals (factual risk, difficulty band) and registry-declared role aptitudes, blended in with a `prior_strength` weight that decays as evidence accumulates.
+- **Cost adjustment**: the posterior is divided by an expected-latency term (`selection_score`) so an expensive architect is only chosen when the expected success gain justifies the wall-clock cost.
+
+Confidence thresholding prevents low-confidence routes from escalating. When the calibrated effective confidence (base + conformal margin) falls below threshold, the router emits `risk_abstain_escalate` and routes to a configured fallback role instead of forcing an escalation it cannot defend. Provenance fields (`risk_gate_action`, `risk_gate_reason`, `risk_budget_id`, plus per-decision `prior_term_topk` / `posterior_score_topk` / `learned_evidence_topk` / `cost_term_topk`) are emitted into telemetry on every routing decision.
+
+**Integration**: graph nodes call into the router through `TaskDeps.primitives.select_role()`; the router's choice overrides the static escalation map when feature flag `specialist_routing` is enabled. `HybridRouter.route()` also calls `retriever.update_last_role(role)` after every decision, feeding the Phase 2.5 cache-affinity bonus described later in this chapter.
+
+**Files**: `orchestration/repl_memory/retriever.py` (`HybridRouter`, `TwoPhaseRetriever`), `src/api/routes/chat_pipeline/routing.py`, `src/graph/nodes.py` (call sites). Active handoff: `handoffs/active/learned-routing-controller.md`.
+
 ## 3-Way Confidence Routing (February 2026)
 
 Instead of rigid mode-based routing, the frontdoor estimates P(success|action) for three approaches: handle it directly, handle it with tools, or escalate to an architect. Cost tiers are applied at routing time so Q-values stay faithful. Any role can now delegate downward, not just architects -- the old Tier C restriction is gone.
@@ -255,7 +269,7 @@ The Unified Execution Model introduces 3-way confidence routing for faithful pro
 |----------|---------|---------|
 | **SELF:direct** | Handle without tools | `frontdoor` with `mode=direct` |
 | **SELF:repl** | Handle with tools, no delegation | `frontdoor` with `mode=repl`, `allow_delegation=False` |
-| **ARCHITECT** | Escalate for complex reasoning | `architect_coding` or `architect_general` |
+| **ARCHITECT** | Escalate for complex reasoning | `architect_general` (architect_coding removed 2026-05-06) |
 | **WORKER** | Delegate to faster workers | Scored via canonical `DelegationEvent` telemetry |
 
 <details>
@@ -426,7 +440,9 @@ if has_thinking_trigger(objective):
 | MODERATE | specialist | coder_escalation | Good (single model) |
 | COMPLEX | architect | architect_general → TaskIR → multi-specialist | Lower (coordination overhead) |
 
-**Design Goal**: Only invoke expensive architect (235B/480B models) when truly needed.
+**Design Goal**: Only invoke the expensive architect (Qwen3.5-122B-A10B Q4_K_M, ~12.19 t/s) when truly needed. (The 235B and 480B architects referenced in earlier revisions of this doc were retired in 2026-03-19 and 2026-05-06 respectively.)
+
+**Note (2026-05-20)**: Both frontdoor and coder_escalation now run Qwen3.6-35B-A3B Q8 with `chat_template_kwargs.enable_thinking=false`. This prevents the degenerate `<think>` loops that collapsed mixed-domain accuracy from 80% to 47% on chat-completions defaults. Escalation to `architect_general` is therefore triggered by genuine architectural complexity or repeat failures, not by thinking-mode degradation in the lower tiers. The architect_general role (Qwen3.5-122B) carries the same override for the same reason. `ingest_long_context` (Qwen3-Next-80B-A3B) is the exception — it requires thinking enabled.
 
 ### Architect Review Loop
 
@@ -522,16 +538,16 @@ Defined in `src/roles.py` as `_FALLBACK_MAP`:
 
 ```python
 _FALLBACK_MAP: dict[Role, list[Role]] = {
-    Role.ARCHITECT_GENERAL: [Role.ARCHITECT_CODING, Role.CODER_PRIMARY],
-    Role.ARCHITECT_CODING: [Role.ARCHITECT_GENERAL, Role.CODER_ESCALATION],
-    Role.CODER_PRIMARY: [Role.CODER_ESCALATION],
-    Role.CODER_ESCALATION: [Role.CODER_PRIMARY],
+    Role.ARCHITECT_GENERAL: [Role.CODER_ESCALATION],
+    Role.CODER_ESCALATION: [Role.ARCHITECT_GENERAL],
     Role.WORKER_MATH: [Role.WORKER_GENERAL],
     Role.INGEST_LONG_CONTEXT: [Role.ARCHITECT_GENERAL],
     Role.FRONTDOOR: [],            # Always-on, no fallback
     Role.WORKER_VISION: [],        # Hardware-specific, no fallback
 }
 ```
+
+`ARCHITECT_CODING` and `CODER_PRIMARY` were removed from the map alongside the `architect_coding` role on 2026-05-06.
 
 </details>
 
@@ -637,12 +653,13 @@ Graph node -> should_halt(from_role, to_role)
 _TIER_MAP = {
     "frontdoor": "A",
     "coder_escalation": "B",
-    "architect_general": "B", "architect_coding": "B",
+    "architect_general": "B",
     "ingest_long_context": "B",
     "worker_general": "C", "worker_math": "C",
     "worker_explore": "C", "worker_summarize": "C",
     "worker_vision": "C",
 }
+# architect_coding removed from _TIER_MAP alongside the role on 2026-05-06.
 ```
 
 </details>
@@ -1029,7 +1046,7 @@ This chapter's routing and escalation mechanics are grounded in several research
 
 `EscalationPrewarmer` (`src/services/escalation_prewarmer.py`) speculatively prefills architect KV cache when `classify_task_complexity()` returns COMPLEX at turn 1. Sends `n_predict=0, cache_prompt=true` to warm the system prompt prefix (~500 tokens) before escalation actually happens.
 
-**Validation**: Both architect servers (8083 general, 8084 coding) confirmed receiving pre-warm requests. Process-wide singleton via `get_shared_prewarmer()` with thread-safe hit/port telemetry.
+**Validation**: The architect server (8083 general) confirmed receiving pre-warm requests; port 8084 (architect_coding) was decommissioned on 2026-05-06. Process-wide singleton via `get_shared_prewarmer()` with thread-safe hit/port telemetry.
 
 **Bug found and fixed**: `_check_slot_available()` checked `s.get("state") == 0` but modern llama-server uses `is_processing` (boolean). Also assumed `/slots` returns a list, but single-slot servers (`-np 1`) return a dict. Fixed to `not s.get("is_processing", True)` with `isinstance(data, list)` guard.
 

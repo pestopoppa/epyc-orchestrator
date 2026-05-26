@@ -43,11 +43,12 @@ Effective routing threshold:
 
 When confidence is below this threshold under strict gate enforcement, hybrid routing
 emits `risk_abstain_escalate` and routes to `risk_abstain_target_role`.
-Gate provenance is logged with:
+Gate provenance is logged on every routing decision (via `HybridRouter.last_decision_meta`):
 
-- `risk_gate_action`
-- `risk_gate_reason`
-- `risk_budget_id`
+- `risk_gate_action` — logged action taken by the gate (e.g., `"risk_abstain_escalate"`, `"not_enforced"`, `""` when enforced but passed)
+- `risk_gate_reason` — human-readable reason for the gate action
+- `risk_budget_id` — the active budget identifier
+- `assigned_role` — the role actually assigned after gating runs, persisted on every `MemoryEntry` (Trinity tri-role axis). May differ from the routing recommendation when the gate intervenes.
 
 </details>
 
@@ -57,6 +58,7 @@ Gate provenance is logged with:
 - deterministic rollout sampling by route key (`risk_gate_rollout_ratio`)
 - emergency kill switch (`risk_gate_kill_switch`)
 - budget guardrail to auto-disable strict gating if abstain rate exceeds configured budget
+- **cross-role bandwidth-aware rollout (2026-05-24)**: confidence thresholds are modulated by target-role utilization so that highly-loaded roles see a stricter effective threshold, achieving load-balancing at the gate level. This is a runtime refinement of `effective_threshold`; the formal conformal-margin model is unchanged. Implemented in `orchestration/repl_memory/retriever.py` / `src/api/routes/chat_routing.py`; design recorded in [cross-role-bw-aware-routing.md](../../../epyc-root/handoffs/completed/cross-role-bw-aware-routing.md).
 
 </details>
 
@@ -177,14 +179,31 @@ When SkillBank is active (`ORCHESTRATOR_SKILLBANK=1`), skill retrieval outcomes 
 
 ### Interaction with Risk Control
 
-Skill effectiveness data provides an additional signal for calibration:
-- High-effectiveness skills increase routing confidence for covered task types
-- Low-effectiveness or deprecated skills are excluded, preventing confidence inflation from bad memories
-- The `min_confidence` parameter in `SkillRetrievalConfig` (default 0.3) acts as a quality gate aligned with the risk control's confidence thresholds
+Skill effectiveness data and routing confidence operate on **separate, orthogonal axes** — they are not aligned thresholds:
+
+- **Routing confidence** (`RetrievalConfig.confidence_threshold`): derived from Q-value statistics over memory neighbors; gates whether to trust the routing decision.
+- **Skill effectiveness** (`SkillRetrievalConfig.min_confidence`, default 0.3): tracks whether a skill, once retrieved, correlates with successful task outcomes; gates whether to inject a skill into the prompt.
+
+A task may route with high confidence but retrieve low-effectiveness skills (or vice versa). The `min_confidence=0.3` threshold acts as a quality gate to exclude deprecated/ineffective skills from prompt injection — complementary to, not stacked with, the routing threshold. High-effectiveness skills supply better context to the model, which indirectly improves the routing-side success rate, but the two confidence values are computed independently and never compared directly.
 
 </details>
 
 See [Chapter 15: SkillBank](15-skillbank-experience-distillation.md) for the full evolution mechanism.
+
+## Verifier Quality Gate (May 2026)
+
+In addition to the retrieval-side confidence gates, a post-routing quality verifier runs on frontdoor decisions when `ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE=1`. The verifier is a 2-layer numpy MLP trained to predict `P(success | embedding, selected_action)`. It fires after the classifier picks top-class=frontdoor with sufficient confidence; if verifier `P_success` is below `FRONTDOOR_VERIFIER_THRESHOLD` (default 0.5), the fast-path is bypassed and the request falls through to the full KNN pipeline.
+
+A separate shadow mode (`FRONTDOOR_VERIFIER_SHADOW=1`, default OFF) lets the verifier compute and log its verdict without affecting the routing decision — used for offline calibration before flipping the env var to enforce.
+
+**Performance** (as of 2026-05-21, 40.9K fresh memories):
+- Brier: 0.0072 (vs 0.073 softmax-max baseline, ~9x margin)
+- AUC: 0.9996
+- ECE: 0.0145
+
+This gate is **orthogonal to the conformal margin formula** — it operates post-decision, not on the retrieval confidence that feeds the margin computation. Verifier confidence is logged to routing-decision metadata for post-hoc analysis but is not yet folded into the replay harness's calibration metrics; integration into joint ECE/Brier study is open work.
+
+**Source**: `orchestration/repl_memory/verifier_head.py`, `orchestration/repl_memory/hybrid_router.py` (P6.2-A2), `/workspace/progress/2026-05/2026-05-21.md` Session 4, commit `4882d9b2`.
 
 ## Input-Side Classifiers (`src/classifiers/`)
 
@@ -250,6 +269,8 @@ They should not double-gate: if conformal prediction already rejects a routing, 
 2. **Garbled output** — mostly very short lines mixed with long ones
 3. **Near-empty output** — content too short after prefix stripping
 4. **Think-block loop detection** — 4-gram repetition inside `<think>` blocks (reasoning model failure mode where the model enters a repetitive reasoning loop). Threshold: >15% duplicate 4-grams. Research backing: SEER shows failed outputs are ~1,193 tokens longer than successful ones; repetition within reasoning is a strong failure signal.
+
+The think-block loop detector was added 2026-04-15 specifically for reasoning models that emit explicit `<think>` reasoning traces. It catches a failure mode (repetitive reasoning loops) that the generic 3-gram uniqueness ratio (item 1) misses because the loop occurs only inside the reasoning block, not the final answer.
 
 Config-driven thresholds via `ChatPipelineConfig`. The quality detector is always active (no mode gate).
 

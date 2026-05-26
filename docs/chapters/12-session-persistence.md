@@ -14,6 +14,8 @@ The system was implemented in 7 phases (2026-01-21 to 2026-01-26) and uses SQLit
 
 **Cross-reference: Context compaction** — When session compaction fires (C1 in `src/graph/helpers.py`), full context is externalized to `/mnt/raid0/llm/tmp/session_{id}_ctx_{n}.md` and tracked via `TaskState.context_file_paths`. These files are not managed by the session persistence layer directly but are referenced by the compaction index so the model can `read_file()` them on demand. See Chapter 10 "Session Compaction" for details.
 
+**Cross-reference: Autopilot crash recovery (2026-05-24)** — Autopilot's exogenous-restart resilience work (atomic state persistence and the `in_flight_trial` crash-recovery marker) lives in the autopilot subsystem, not the session-persistence layer. It uses the same atomic-write patterns this chapter describes and is fully compatible with `SQLiteSessionStore`; there are no API changes to session persistence. See `handoffs/completed/autopilot-exogenous-restart-resilience.md` for the autopilot side of the story.
+
 ## Architecture Overview
 
 The persistence layer is split into five components, each owning a single responsibility. `SessionPersister` decides *when* to checkpoint, `SQLiteSessionStore` handles *where* the data lands, and `DocumentCache` avoids expensive OCR re-runs. Data classes live in `models.py`, and a CLI wraps everything for interactive use.

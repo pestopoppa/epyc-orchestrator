@@ -63,18 +63,17 @@ The system organizes models into tiers: a fast always-resident front door (Tier 
 
 - Emits: `TaskIR` (JSON)
 - Must be: Low-latency, always resident
-- **Model**: Qwen3-Coder-30B-A3B with expert reduction (41.55 t/s)
+- **Model**: Qwen3.6-35B-A3B Q8 (swapped 2026-05-04 from Qwen3-Coder-30B-A3B; +11pp quality, +80% t/s); 24.3 t/s aggregate in NUMA-quarter mode
 
 ### Tier B - Specialists
 
 | Role | Purpose | Model | Acceleration |
 |------|---------|-------|--------------|
-| **B1: Coder** | Code generation, refactors | Qwen2.5-Coder-32B | Speculative (K=24) → 33 t/s |
-| **B2: Ingestion** | Long-context synthesis | Qwen3-Next-80B-A3B | MoE reduction only (SSM!) |
-| **B3: Architect (General)** | System design, invariants | Qwen3-235B-A22B | MoE reduction → 6.75 t/s |
-| **B4: Architect (Coding)** | Ultimate code escalation | Qwen3-Coder-480B-A35B | MoE3 only → 10.3 t/s |
+| **B1: Coder** | Code generation, refactors | Qwen3.6-35B-A3B Q8 (shared GGUF with frontdoor since 2026-05-06; consolidated onto port 8070 on 2026-05-09) | None (Q8 MoE baseline) → 24.3 t/s (NUMA-quarter aggregate) |
+| **B2: Ingestion** | Long-context synthesis | Qwen3-Next-80B-A3B Q4_K_M | None (SSM); 14.4–20.8 t/s at ~12K context (May-4 bench) |
+| **B3: Architect (General)** | System design, invariants | Qwen3.5-122B-A10B Q4_K_M (swapped from Qwen3-235B on 2026-03-19) | MoE reduction → 12.19 t/s (Probe B canonical, 2026-05-04) |
 
-**Note**: Qwen3-Coder-480B (271GB) has a BOS token mismatch that breaks all speculation methods. Use expert reduction (MoE3) only. Despite being only ~35B active parameters per token, it achieves 95% quality on coding benchmarks with MoE3.
+**Note**: The B4 "Architect (Coding)" role was eliminated on 2026-05-06. REAP-246B scored 70% on the coder suite, worse than worker_general (77%) and far worse than frontdoor (97%); the role was removed and its 139 GB of warm-tier RAM reclaimed. Hard coding escalations now terminate at coder_escalation, which shares the frontdoor GGUF (Qwen3.6-35B-A3B Q8).
 
 ### Detailed Escalation Flow
 
@@ -88,8 +87,8 @@ User Request
 ┌─────────────────────────────────────────────────────────────┐
 │           FRONTDOOR (Tier A - Always Resident)              │
 │                                                             │
-│  Model: Qwen3-Coder-30B-A3B + MoE6                          │
-│  Speed: 18.3 t/s | Quality: 90%                             │
+│  Model: Qwen3.6-35B-A3B Q8 (swapped 2026-05-04)              │
+│  Speed: 24.3 t/s aggregate | Quality: 93% (170/183)          │
 │                                                             │
 │  • Intent classification                                    │
 │  • TaskIR emission (JSON)                                   │
@@ -106,37 +105,33 @@ User Request
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  CODER PRIMARY (B1) — Port 8080                              │
-│  Model: Qwen3-Coder-30B-A3B + MoE6                          │
-│  Speed: 18 t/s | Quality: 90%                               │
+│  FRONTDOOR (Tier A) — Port 8070 (or 8080/8180/8280/8380     │
+│                                  in quarter-mode)            │
+│  Model: Qwen3.6-35B-A3B Q8                                   │
+│  Speed: 24.3 t/s aggregate | Quality: 93%                    │
 │  Handles: Single-file changes, simple refactors             │
 └─────────────────────────────────────────────────────────────┘
      │ [failure OR multi-file OR review needed]
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  CODER ESCALATION / WORKER_SUMMARIZE — Port 8081             │
-│  Model: Qwen2.5-Coder-32B + spec K=24 + lookup              │
-│  Speed: 39 t/s | Quality: 96%                               │
+│  CODER ESCALATION — Port 8070 (separate slot, shared GGUF)  │
+│  Model: Qwen3.6-35B-A3B Q8 (same GGUF as frontdoor)         │
+│  Speed: 24.3 t/s aggregate | Quality: 93% (97% on coder)    │
 │  Handles: Code review, summarization, multi-file refactors  │
+│  Note: Consolidated 2026-05-09 from separate 8081 instance; │
+│        shared mmap with frontdoor, separate admission slot. │
 └─────────────────────────────────────────────────────────────┘
      │ [architectural decision needed]
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  ARCHITECT_GENERAL (B3) — Port 8083                          │
-│  Model: Qwen3-235B-A22B + MoE4                              │
-│  Speed: 6.75 t/s | Quality: high                            │
+│  ARCHITECT_GENERAL (B3) — Port 8083 (terminal)               │
+│  Model: Qwen3.5-122B-A10B Q4_K_M                             │
+│  Speed: 12.19 t/s | Quality: high                            │
 │  Handles: Multi-module design, API contracts, invariants    │
 └─────────────────────────────────────────────────────────────┘
-     │ [ultimate escalation]
-     ▼
-┌─────────────────────────────────────────────────────────────┐
-│  ARCHITECT_CODING (B4) — Port 8084                           │
-│  Model: Qwen3-Coder-480B-A35B + MoE3                        │
-│  Speed: 10.3 t/s | Quality: 83%                             │
-│  Handles: Hardest architecture, novel algorithms            │
-│  ⚠️  NO speculation - BOS mismatch breaks all drafting     │
-└─────────────────────────────────────────────────────────────┘
 ```
+
+**Note**: The former B4 ARCHITECT_CODING tier (Qwen3-Coder-480B-A35B on port 8084) was eliminated 2026-05-06. Hard coding escalations now terminate at coder_escalation rather than escalating further.
 
 #### THINKING / INGESTION Escalation Path
 
@@ -152,8 +147,8 @@ User Request
      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  INGESTION (B2) — Port 8085                                  │
-│  Model: Qwen3-Next-80B-A3B + MoE4                           │
-│  Speed: 6.3 t/s | 128K context                              │
+│  Model: Qwen3-Next-80B-A3B Q4_K_M (SSM-hybrid)              │
+│  Speed: 14.4–20.8 t/s @ ~12K context | 128K context window  │
 │  Handles: Long-context synthesis, deep reasoning            │
 │  ⚠️  SSM architecture - NO speculation/prompt lookup!       │
 └─────────────────────────────────────────────────────────────┘
@@ -161,8 +156,8 @@ User Request
      ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  ARCHITECT_GENERAL (B3) — Port 8083                          │
-│  Model: Qwen3-235B-A22B + MoE4                              │
-│  Speed: 6.75 t/s                                            │
+│  Model: Qwen3.5-122B-A10B Q4_K_M                             │
+│  Speed: 12.19 t/s (Probe B canonical, 2026-05-04)            │
 │  Handles: System design, invariants, hardest reasoning      │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -170,6 +165,8 @@ User Request
 </details>
 
 **Note**: Dedicated thinking models (Qwen3-4B-Thinking, DeepSeek-R1-Distill-Qwen-32B) were evaluated during benchmarking but are not deployed in the production stack. The Qwen3 family has native `<think>` tag support, so reasoning is handled by the existing frontdoor and specialist models.
+
+**Note (2026-05-20)**: Both frontdoor and coder_escalation (Qwen3.6-35B-A3B Q8) now run with `chat_template_kwargs.enable_thinking=false`. Raw chat-completions with default thinking-on caused degenerate `<think>` loops with empty content; disabling thinking lifted mixed-domain accuracy from 47% (7/15) to 80% (12/15). The architect_general role (Qwen3.5-122B) carries the same override for the same reason. The exception is ingest_long_context (Qwen3-Next-80B-A3B), which requires thinking enabled.
 
 **Escalation Triggers**:
 - Gate failure (lint, typecheck, unit tests)
@@ -187,19 +184,19 @@ Workers are stateless, cheap, and many run concurrently. They handle file-level 
 
 | Worker | Model | Port | Tier | Acceleration |
 |--------|-------|------|------|--------------|
-| explore / math | Qwen2.5-7B-Instruct-f16 | 8082 | HOT | Spec K=24 + lookup (44 t/s) |
-| summarize | Qwen2.5-Coder-32B (shared with coder_escalation) | 8081 | HOT | Spec K=24 + lookup (39 t/s) |
+| general / explore / math | gemma-4-26B-A4B-it Q4_K_M (swapped 2026-05-08; MTP via ik_llama.cpp PR #1744) | 8072 (full-mode) or 8082/8182/8282/8382 (quarter-mode) | HOT | MTP spec decode (60.7 t/s per instance) |
+| summarize | Qwen3.6-35B-A3B Q8 (consolidated 2026-05-09; shares GGUF with frontdoor) | 8070 | HOT | None (Q8 baseline); 24.3 t/s aggregate |
 | vision | Qwen2.5-VL-7B Q4_K_M + mmproj | 8086 | HOT | None (VL model, ~15 t/s) |
 | vision_escalation | Qwen3-VL-30B-A3B Q4_K_M + mmproj | 8087 | HOT | MoE4 (~10 t/s) |
-| fast_1, fast_2 | Qwen2.5-Coder-1.5B Q4_K_M | 8102, 8112 | WARM | None (burst capacity) |
+| fast_1, fast_2 | Qwen2.5-Coder-1.5B Q4_K_M | 8102, 8112 | WARM | None (burst capacity); deprecated 2026-05-06 (GGUFs not on disk) |
 
-**Note**: `worker_coder` is the coding worker semantic role (backed by the fast worker pool). Fast workers spin up on demand when concurrent load exceeds 4 tasks, and idle-shutdown after 5 minutes.
+**Note**: `worker_coder` is the coding worker semantic role (now backed by worker_general — gemma-4-26B-A4B-it on port 8072). The fast worker pool (`fast_1`/`fast_2`) was deprecated on 2026-05-06; canonical-recipe quality (44% on Qwen2.5-7B Q4_K_S) underperformed worker_general (84%) by ~40 percentage points, and the 1.5B coder GGUFs were removed from disk.
 
 ### Tier D - Draft / Embedder
 
 - Tiny model for speculative decoding (co-loaded with spec decode servers)
 - Embedding server for episodic memory (MemRL)
-- **Draft Model**: Qwen2.5-Coder-0.5B-Instruct Q8_0 (co-loaded on ports 8081, 8082)
+- **Draft Model**: gemma-4-26B-A4B-it-assistant Q8_0 (in-house MTP drafter, 4 layers; co-loaded with worker_general on port 8072 via ik_llama.cpp PR #1744)
 - **Embedder**: BGE-large-en-v1.5 F16 (6 parallel instances, ports 8090-8095)
   - Probe-first architecture: health probe all servers, first responder gets request
   - 1024-dim embeddings with CLS pooling (standard BERT)
@@ -259,6 +256,15 @@ User: "Download the file, parse it, and upload results to S3"
 </details>
 
 </details>
+
+## Stack Consolidation (2026-05-09)
+
+The Tier B layout underwent two material changes in May 2026 that the diagrams above already reflect; the rationale is captured here for operators reading the current state.
+
+- **architect_coding role eliminated (2026-05-06)**. REAP-246B benchmarking showed 70% on the coder suite — worse than worker_general at 77% and far worse than frontdoor at 97%. The role and its 139 GB warm-tier footprint were removed. Hard coding escalations now terminate at coder_escalation rather than escalating further. The escalation chain shortened by one (max_escalations went from 2 to 1 for coder paths).
+- **frontdoor + coder_escalation consolidated onto a single server (2026-05-09)**. Both roles run the same Qwen3.6-35B-A3B Q8 GGUF since the 2026-05-06 swap, so the dedicated port-8071 server was retired. They now share one mmap on port 8070 (full-mode) or 8080/8180/8280/8380 (quarter-mode), with separate admission slots so routing remains deterministic. Net savings: ~36 GB of duplicate mlock plus a competing 96-thread OMP team.
+- **worker_general swapped to gemma-4-26B-A4B-it Q4_K_M with MTP (2026-05-08)** via ik_llama.cpp PR #1744. Per-instance throughput rose from 39.1 t/s (Qwen3-Coder-30B-A3B Q4) to 60.7 t/s, with +18pp tool_compliance and +6pp full suite per Claude-as-Judge. Worker now lives on port 8072 (full-mode) or 8082/8182/8282/8382 (quarter-mode).
+- **OMP idle-spin (2026-05-09)**. The gemma-4 worker exhibited a load-spike regression (420 → 9 t/s on saturated workloads) traced to `OMP_WAIT_POLICY=passive` in the launch env. Production now keeps the default active wait policy on the ik_llama.cpp PR #1744 binary.
 
 ## TaskIR Schema
 
@@ -486,7 +492,7 @@ Eight concepts from OpenClaw and Lobster were integrated behind feature flags. M
 
 ### Content-Addressable LLM Cache
 
-SHA-256 keyed prompt-to-response cache (`src/llm_cache.py`). JSON files on disk with TTL (168h default) and LRU eviction (10K max entries). Cache key includes prompt, role, token count, and model hash. Checked before `_real_call_single()` in inference, stored after success. Highest-value targets: `architect_general` (6.75 t/s), `ingest_long_context` (6.3 t/s).
+SHA-256 keyed prompt-to-response cache (`src/llm_cache.py`). JSON files on disk with TTL (168h default) and LRU eviction (10K max entries). Cache key includes prompt, role, token count, and model hash. Checked before `_real_call_single()` in inference, stored after success. Highest-value targets: `architect_general` (12.19 t/s), `ingest_long_context` (14.4–20.8 t/s at long context).
 
 Feature flag: `content_cache`.
 
@@ -496,13 +502,14 @@ When a backend is circuit-open or times out, same-tier alternatives are tried be
 
 | Primary | Fallbacks |
 |---------|-----------|
-| architect_general | architect_coding, coder_escalation |
-| architect_coding | architect_general, coder_escalation |
-| coder_escalation | architect_coding |
+| architect_general | coder_escalation |
+| coder_escalation | architect_general |
 | worker_math | worker_general |
 | ingest_long_context | architect_general |
 | frontdoor | (none) |
 | worker_vision | (none) |
+
+**Note**: `architect_coding` was eliminated 2026-05-06 and removed from the fallback map.
 
 `BackendHealthTracker.classify_failure()` maps error messages to `FailoverReason` (circuit_open, timeout, connection_error, oom). Feature flag: `model_fallback`.
 
@@ -652,6 +659,8 @@ The orchestration layer is implemented in:
 ## Posterior Routing with Risk Controls (2026-02)
 
 Routing now combines heuristic priors from the classifier with learned posterior evidence from MemRL retrieval, cost-aware ranking, and risk-controlled confidence thresholding. This gives the system a principled way to balance speed, cost, and quality when picking which model handles a request.
+
+As of 2026-05-21, the learned routing controller is fully wired: `HybridRouter` (in `orchestration/repl_memory/retriever.py`) consumes MemRL Q-values plus posterior scoring and exposes routing decisions to graph nodes via `TaskDeps.primitives.select_role()`. Confidence thresholding lets the router abstain (route to a configured fallback) rather than escalate when learned evidence is too thin. Feature flag: `specialist_routing`. See [Chapter 10](10-escalation-and-routing.md) for the integration walkthrough.
 
 <details>
 <summary>Routing signal sources and implementation</summary>

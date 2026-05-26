@@ -261,6 +261,10 @@ python scripts/benchmark/seed_specialist_routing.py --3way --dry-run --suites th
 
 **Search-R1 reward integration (2026-03-03):** When `web_research` tool usage is detected during seeding, multi-dimensional rewards (`wr_accuracy`, `wr_source_diversity`, `wr_efficiency`, `wr_completeness`) and scratchpad rewards (`sp_insight_count`, `sp_web_insight_ratio`, `sp_answer_containment`) are computed per-config and injected alongside binary rewards. See [Chapter 07: MemRL System](07-memrl-system.md) for reward dimension details.
 
+**Exploration epsilon control (2026-05):** The seeding pipeline now supports epsilon-greedy exploration via the `SPO_PLUS_EPSILON` environment variable (default `0.0`). When set to a non-zero value (e.g. `0.2`), that fraction of routes during seeding are forced to non-classifier alternatives — overriding the classifier even when it is highly confident — so the system can build counterfactual data for cost-aware routing and model comparison. This addresses the 91% frontdoor-concentration issue observed in the 2026-05-21 autopilot routing-distribution diagnosis. The mechanism is live in `orchestration/repl_memory/hybrid_router.py`; dedicated epsilon tuning was deferred to a follow-up session. See [cross-role-bw-aware-routing.md](../../../epyc-root/handoffs/completed/cross-role-bw-aware-routing.md) for related load-aware routing controls.
+
+**Regret signal (2026-05):** In addition to the binary pass/fail reward, `orchestration/repl_memory/q_scorer.py` (lines ~220-250) now computes a per-episode **regret signal** — the engineer-gain from having chosen an alternative action, discounted by the cost delta — and folds it into Q-value updates. Cost remains stored in metadata; the regret term is what couples cost back into learned utility without contaminating the raw `P(success|action)` estimate. See [learned-routing-controller.md](../../../epyc-root/handoffs/active/learned-routing-controller.md) for the regret-optimized replay objective design.
+
 </details>
 
 <details><summary>Question pool and pre-extracted data</summary>
@@ -304,6 +308,16 @@ python scripts/benchmark/seed_specialist_routing.py --3way --debug --debug-dry-r
 </details>
 
 </details>
+
+## Embedding Health Preflight (2026-05)
+
+Before any seeding script runs, the pipeline checks that the FAISS index is in sync with the live episodic database. If coverage falls below 50% — i.e., a significant fraction of memories cannot be retrieved by similarity — `scripts/maintenance/repair_episodic_embeddings.py` rebuilds the index atomically. The preflight is wired into `orchestrator_stack.py` step `[0.7]` and runs on startup; it can also be invoked manually:
+
+```bash
+python3 scripts/maintenance/repair_episodic_embeddings.py
+```
+
+**Historical context (2026-05-21):** A latent `ACTION_NORMALIZATION` bug was truncating the `id_map`, leaving 40,862 FAISS vectors unaddressable — 22.9% of memories were silently being dropped from retrieval. The repair script and the preflight step landed together to ensure seeding always sees complete coverage. See `/workspace/progress/2026-05/2026-05-21.md` Session 4 for the diagnosis.
 
 ## Seeding Order & Dependencies
 
@@ -391,6 +405,10 @@ Recent successes: 78%
 ## 3-Way Action Keys (February 2026)
 
 The 3-way evaluation mode uses a distinct action vocabulary that maps to routing decisions. These keys are stored in episodic memory and the HybridRouter's `route_3way()` method retrieves memories by them.
+
+> **Stack-consolidation distribution shift (2026-05-09):** The orchestrator stack consolidation on 2026-05-09 renamed several roles and removed `architect_coding` (folded into `architect_general`), producing a sharp distribution shift in live-db routing data. Pre-change memories show `architect_general` at 100% success over 1,640 routes and `architect_coding` at 100% over 1,589 routes; post-change (which is ~86% of the current corpus) shows `architect_general` at 9.1% over 5,101 routes, `architect_coding` absent, `worker_general` at 0.1% over 3,506 routes, and `ingest_long_context` at 99.6%. The seeding recommendations below assume a stable role distribution — when analyzing memory composition or tuning seeding mixes, account for the pre/post-2026-05-09 split and consider gating on `created_at`. See `/workspace/progress/2026-05/2026-05-21.md` Session 4 "Distribution shift findings" for the full table.
+
+In parallel with forced 3-way seeding, the classifier + verifier gates introduced in 2026-05-21 (see [Ch07 Phases 8.1-8.2](07-memrl-system.md#routing-classifier-fast-path-phase-81)) now generate natural routing diversity at inference time — forced seeding is no longer the only mechanism for building memory. Where the classifier is highly confident, the `SPO_PLUS_EPSILON` exploration lever (above) is the complementary path for counterfactual data collection.
 
 <details><summary>Action key definitions</summary>
 

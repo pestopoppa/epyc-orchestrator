@@ -317,17 +317,26 @@ LLM generates code
   - Abort if combined_threshold > 0.7
         |
         v
-[5. Output Capping]
+[5. Schema Validation] (if final_schema_validation enabled, 2026-05-20)
+  - Capture FINAL() value
+  - Validate against optional caller-supplied JSON Schema
+  - On failure: inject error + schema into next turn, retry within repl_executions budget
+  - On success: pass through
+        |
+        v
+[6. Output Capping]
   - Max 100,000 chars (REPL)
   - Max 8,192 chars (RestrictedPython)
   - Truncation with marker
         |
         v
-[6. Result or Error]
+[7. Result or Error]
   - ExecutionResult with stdout, is_final, error
   - EARLY_ABORT -> immediate escalation
   - REPLSecurityError -> logged + blocked
 ```
+
+Schema validation is opt-in (default off) and gated by the `final_schema_validation` feature flag. When disabled, Stage 5 is skipped and the flow collapses to the original six stages. The retry loop is bounded by the existing `repl_executions` budget so there is no new runaway risk; see Chapter 1 (Feature Flag System) and Chapter 3 (Final Output Validation) for details.
 
 </details>
 
@@ -350,9 +359,13 @@ class REPLConfig:
 
 </details>
 
+When `final_schema_validation` is enabled, the effective output budget available for the agent's own prose may be lower than `output_cap` suggests, because validation-failure messages and the injected schema consume tokens within the shared per-turn budget on retry. See Chapter 1 ("Graph Execution Controls" and "Structured Output & Budget Interaction") for the full interaction.
+
 ## Skill Diagnostics (SkillBank Monitoring)
 
 When SkillBank is active (`ORCHESTRATOR_SKILLBANK=1`), the monitoring system surfaces skill health anomalies.
+
+> **Note**: SkillBank and the skill diagnostics described below are opt-in features (default off; feature flag `skillbank` requires the `memrl` feature). The operational queries shown here apply only when the skill-evolution system is enabled and has populated the `skills.db` database. See [Chapter 15: SkillBank](15-skillbank-experience-distillation.md) for full SkillBank architecture and lifecycle.
 
 <details>
 <summary>Diagnostic signals and recommended actions</summary>

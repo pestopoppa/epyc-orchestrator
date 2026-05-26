@@ -107,7 +107,7 @@ result = tool_call("math_simplify", {"expression": "x^2 + 2x + 1"})
 
 </details>
 
-Agents can invoke the tool registry (41 deterministic tools) from within REPL code.
+Agents can invoke the tool registry (40+ deterministic tools; see `src/registry/tool_registry.py` for the current list) from within REPL code.
 
 </details>
 
@@ -188,6 +188,12 @@ When execution output exceeds `output_cap` (8192 chars), the full output is writ
 | **User** | Agent-generated code | AST validation, no file I/O |
 
 Built-in functions execute in the trusted layer with access to file system (for archives) and network (for `web_fetch`), but user code is sandboxed.
+
+### Final Output Validation (2026-05-20)
+
+When `final_schema_validation` is enabled (opt-in feature flag; default off in both test and production), `FINAL()` values are validated against an optional caller-supplied JSON Schema before the turn is accepted as the final answer. On validation failure, the error message and schema are injected into the next REPL turn and the agent retries within the remaining `repl_executions` budget. On success the value passes through unchanged.
+
+The retry loop is bounded by the existing `ORCHESTRATOR_WORKER_CALL_BUDGET_CAP` so there is no new runaway risk, but retries do consume both REPL turns and per-turn completion tokens from the shared turn budget. See Chapter 1 ("Feature Flag System" and "Structured Output & Budget Interaction") and `handoffs/completed/repl-final-schema-validation.md` for the full design and acceptance criteria.
 
 </details>
 

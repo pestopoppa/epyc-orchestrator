@@ -434,6 +434,10 @@ class OutcomeTracker:
 
 </details>
 
+### ClaudeDebugger Integration (May 2026)
+
+As of 2026-05, the EvolutionMonitor / SkillBank pair is integrated with the `ClaudeDebugger` anomaly-detection system in `src/pipeline_monitor/claude_debugger.py`. Low-confidence skill retrievals (skill confidence < 0.3) emit the `skill_mismatch` anomaly signal (severity 0.5), and tasks where no skills are available for the relevant category emit `no_skills_available` (severity 0.3). This gives operator-level observability of skill-library health during inference without requiring a full evolution cycle to surface gaps.
+
 ### EvolutionReport
 
 Each cycle produces an `EvolutionReport`:
@@ -579,6 +583,10 @@ All skill retrieval paths are wrapped in try/except with debug logging. If Skill
 - Routing proceeds normally via `HybridRouter.route()`
 - No skill context is injected into prompts
 - The system operates identically to pre-SkillBank behavior
+
+### Current Status (May 2026)
+
+SkillBank implementation is complete (139 unit tests passing) and the initial distillation run on 2026-03-09 produced 57 skills (27 routing, 18 failure-lesson, 12 escalation) from 180 sample trajectories (100 success / 40 failure / 40 escalation). The feature flag remains **OFF in production** — full-scale distillation against the 40K+ episodic-memory corpus and A/B testing are deferred pending operator review. The flag is safe to enable for local testing and validation runs. See `/workspace/handoffs/completed/skillbank-distillation.md` completion checklist for operational status.
 
 </details>
 

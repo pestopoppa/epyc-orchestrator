@@ -384,18 +384,22 @@ The system has evolved through 8 phases, from manual YAML-based routing all the 
 <details>
 <summary>Phase progression table</summary>
 
-| Phase | Capability | Status (2026-01) |
-|-------|------------|------------------|
+| Phase | Capability | Status |
+|-------|------------|--------|
 | 1 | Manual routing via `model_registry.yaml` | Production |
-| 2 | Episodic store with embeddings | Production (2714 memories) |
+| 2 | Episodic store with embeddings | Production (2714 memories at 2026-01-31) |
 | 3 | Two-phase retrieval (semantic + Q-value) | Production |
 | 4 | Learned routing (HybridRouter) | Production |
 | 5 | Proactive delegation (complexity-aware) | Production |
 | 6 | Graph-enhanced retrieval (failure anti-memory) | Production |
 | 7 | FAISS migration (O(log n) embedding search) | Production |
 | 8 | Model self-routing (REPL tools + routing context) | Production |
+| 8.1 | Routing classifier fast-path (98.7% val acc MLP) | Production (2026-05-21) |
+| 8.2 | Frontdoor verifier quality gate (Brier 0.0072) | Production (2026-05-21, default-off; enable via `ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE=1`) |
 
-**Current Focus**: Phase 8 (model self-routing) is production-ready. Models can query MemRL Q-values directly via REPL tools and make informed escalation/delegation decisions.
+Phases 8.1 and 8.2 were wired 2026-05-21. Phase 8.1's classifier code shipped 2026-04-15 but remained dead-code for five weeks — `ORCHESTRATOR_ROUTING_CLASSIFIER=1` was set, but no caller invoked `RoutingClassifier.load()` until the 2026-05-21 wiring patch (commit `4882d9b2`). This is preserved here as a cautionary example: feature flags must be verified end-to-end (data flow + caller invocation), not just toggled at the environment layer.
+
+**Current Focus**: Phase 8 (model self-routing) is production-ready. Models can query MemRL Q-values directly via REPL tools and make informed escalation/delegation decisions. Phases 8.1-8.2 add a learned fast-path and a quality verifier ahead of (8.1) and after (8.2) classifier routing.
 
 </details>
 
@@ -440,6 +444,40 @@ Models now have agency in routing decisions through 5 REPL functions. On the fir
 | `recall(query)` | Episodic memory search with Q-values |
 
 **Routing context** injected on turn 0: compact MemRL Q-values for similar tasks (TOON-encoded when >=2 results). Models use this to make informed routing decisions without explicit REPL calls.
+
+</details>
+
+Since 2026-05-21, Phase 8 has two parallel decision sub-paths in `HybridRouter`: the **classifier fast-path** (Phase 8.1) which can short-circuit retrieval entirely when confident, and the **learned KNN path** which uses the routing context above. The verifier (Phase 8.2) sits between them as a post-classifier quality gate.
+
+## Routing Classifier Fast-Path (Phase 8.1)
+
+Before any FAISS retrieval, `HybridRouter` consults the offline-trained `RoutingClassifier`. If the classifier's top-class confidence is ≥ 0.8 (configurable via `classifier_confidence_threshold`) and the selected action is not `"unknown"`, FAISS retrieval is skipped entirely. Otherwise the request falls through to the normal TwoPhaseRetriever + KNN path.
+
+<details>
+<summary>Architecture, training, performance, and reset safety</summary>
+
+- **Architecture**: 2-layer numpy MLP, `Input(1031) → Dense(128, ReLU) → Dense(64, ReLU) → Dense(N_actions, Softmax)`, ~140K parameters, pure numpy (no PyTorch). Inference <0.1ms.
+- **Training**: Q-value weighted cross-entropy loss — high-Q memories contribute more, so the classifier learns from confident routing decisions. Mini-batch SGD with cosine LR decay and early stopping.
+- **Performance (2026-05-21 retrain on 41K fresh memories)**: 98.7% validation accuracy. Pre-wiring telemetry showed "0 classifier decisions / 508 rule+learned" — confirming the dead-code gap. Post-wiring: 93 classifier decisions observed within the same window.
+- **Reset safety**: Weights are auto-deleted when episodic memory is reset. `RoutingClassifier.load()` returns `None` for missing weights and the retriever silently falls back to the KNN path.
+- **Feature flag**: `ORCHESTRATOR_ROUTING_CLASSIFIER=1` (now actually wired through `src/api/services/memrl.py` — see the dead-code lesson above).
+- **Sources**: `orchestration/repl_memory/routing_classifier.py`, `orchestration/repl_memory/hybrid_router.py`, `scripts/graph_router/train_routing_classifier.py`, `scripts/maintenance/verify_routing_wiring.py` (pre-flight smoke test), commit `4882d9b2`.
+
+</details>
+
+## Frontdoor Verifier Quality Gate (Phase 8.2)
+
+The Phase 8.1 classifier decides **which role to route to**; the Phase 8.2 verifier is a post-routing **quality gate** that decides whether to trust that fast-path decision. These are architecturally distinct: the classifier is a routing engine, the verifier is a quality estimator over `(prompt embedding, selected action)` pairs. They should not be conflated.
+
+When `ORCHESTRATOR_FRONTDOOR_VERIFIER_GATE=1` and the classifier picked `frontdoor` with sufficient confidence, the verifier predicts `P(success)`. If `P_success < FRONTDOOR_VERIFIER_THRESHOLD` (default 0.5), the fast-path is bypassed and the request falls through to the full KNN pipeline. If `FRONTDOOR_VERIFIER_SHADOW=1`, the verifier's verdict is logged in routing-decision metadata but never blocks the route — used for offline calibration before flipping enforcement on.
+
+<details>
+<summary>Architecture, performance, integration</summary>
+
+- **Architecture**: 2-layer numpy MLP (~140K params equivalent), BCE training, single-action specialist (n_actions=0, frontdoor only). The single-action design follows from counterfactual probe findings against a multi-action variant.
+- **Performance (40.9K fresh memories, 2026-05-21)**: Brier 0.0072 (vs softmax-magnitude baseline 0.073, ~9x margin), AUC 0.9996, ECE 0.0145.
+- **Integration**: Implemented in `HybridRouter` as P6.2-A2; verifier is constructed only when the env gate is on, so the production default is verifier-OFF.
+- **Sources**: `orchestration/repl_memory/verifier_head.py` (~250 LoC), `orchestration/repl_memory/hybrid_router.py`, `/workspace/progress/2026-05/2026-05-21.md` Session 4, commit `4882d9b2`.
 
 </details>
 
@@ -666,7 +704,7 @@ The MemRL distillation pipeline extracts routing knowledge from episodic memory 
 
 **Key files**: `routing_classifier.py`, `scripts/graph_router/extract_training_data.py`, `scripts/graph_router/train_routing_classifier.py`, `scripts/graph_router/ab_test_classifier.py`
 
-See [MEMRL_DISTILLATION_DESIGN.md](../reference/agent-config/MEMRL_DISTILLATION_DESIGN.md) for full design document.
+See [MEMRL_DISTILLATION_DESIGN.md](../reference/agent-config/MEMRL_DISTILLATION_DESIGN.md) for the original distillation design, and [learned-routing-controller.md](../../../epyc-root/handoffs/active/learned-routing-controller.md) for the Phase 6 verifier validation arc and the 2026-05-21 production-wiring narrative.
 
 ## Literature Mapping (Architecture Review Alignment)
 

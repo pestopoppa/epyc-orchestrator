@@ -8,10 +8,10 @@ The configuration system uses **pydantic-settings** for type-safe environment va
 
 ## Feature Flag System
 
-Fifteen independent feature flags let us turn orchestration modules on and off without touching code. In test mode everything defaults to off for isolation; in production everything flips on. The flags live in `src/features.py` and are validated at startup — if you enable `scripts` without `tools`, for example, initialization will complain.
+Independent feature flags let us turn orchestration modules on and off without touching code. In test mode everything defaults to off for isolation; in production most flags flip on. The flags live in `src/features.py` and are validated at startup — if you enable `scripts` without `tools`, for example, initialization will complain. The registry has grown substantially since the initial release; the table below shows a representative subset for readability. For the complete current registry (78+ feature specs as of 2026-05-26), see `src/features.py:75-184`.
 
 <details>
-<summary>Core feature flags table</summary>
+<summary>Core feature flags table (representative subset)</summary>
 
 | Flag | Environment Variable | Purpose | Dependencies |
 |------|---------------------|---------|--------------|
@@ -28,6 +28,9 @@ Fifteen independent feature flags let us turn orchestration modules on and off w
 | `cascading_tool_policy` | `ORCHESTRATOR_CASCADING_TOOL_POLICY` | PolicyLayer chain for tool permissions | None |
 | `session_log` | `ORCHESTRATOR_SESSION_LOG` | Append-only REPL processing journal per task | None |
 | `session_scratchpad` | `ORCHESTRATOR_SESSION_SCRATCHPAD` | Model-extracted semantic insights per turn | `session_log` |
+| `structured_tool_output` | `ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT` | ToolOutput envelope (human + machine modes) | None |
+| `final_schema_validation` | `ORCHESTRATOR_FINAL_SCHEMA_VALIDATION` | Validate FINAL() value against caller-supplied JSON Schema; retry-with-error on failure (2026-05-20) | None |
+| `skillbank` | `ORCHESTRATOR_SKILLBANK` | SkillRL experience distillation | `memrl` |
 | `worker_call_budget` | `ORCHESTRATOR_WORKER_CALL_BUDGET` | Cap total REPL executions per task (default 30) | None |
 | `task_token_budget` | `ORCHESTRATOR_TASK_TOKEN_BUDGET` | Cap cumulative completion tokens per task (default 200K) | None |
 
@@ -219,6 +222,16 @@ Environment variables that control REPL turn budgets and token caps. These are s
 | `ORCHESTRATOR_TASK_TOKEN_BUDGET_CAP` | 200000 | Max cumulative completion tokens per task |
 | `ORCHESTRATOR_CASCADING_TOOL_POLICY` | 1 | Enable PolicyLayer chain (legacy path denies all tools) |
 
+### Structured Output & Budget Interaction
+
+The REPL turn token budget (`ORCHESTRATOR_REPL_TURN_N_TOKENS`) is shared across regular completion output, the `structured_tool_output` envelope (when enabled), and any `session_log` / `session_scratchpad` summary injection. When both `structured_tool_output` and the session log/scratchpad features are enabled, the effective budget available for code-execution prose may be noticeably lower than the raw token cap suggests.
+
+When `final_schema_validation` is enabled (2026-05-20, default off), validation failures on `FINAL()` values inject a retry-with-error into the next REPL turn. Retries consume completion tokens within the same per-turn budget and decrement the `repl_executions` counter; the loop is bounded by `ORCHESTRATOR_WORKER_CALL_BUDGET_CAP` so there is no new runaway risk. See `handoffs/completed/repl-final-schema-validation.md` for the full design.
+
+### Path-Config Module Refactor (2026-05-22)
+
+The cache redirects above remain canonical. As of 2026-05-22, the environment-variable construction was centralized in `scripts/server/stack_env.py` (`_CANONICAL_OMP_ENV`, `_ROLE_ENV_BLOCKS`) and path constants in `scripts/server/stack_paths.py`. These are implementation-level changes — documented behavior is unchanged — but operator runbooks should reference the new module layout when modifying startup paths.
+
 ## OMP & NUMA Runtime Tuning
 
 Every inference command needs the same three-setting prefix: single OMP thread (llama.cpp manages its own parallelism), NUMA interleaving across all 12 memory channels, and 96 physical cores. Getting any of these wrong can halve throughput or worse.
@@ -307,6 +320,8 @@ bash /mnt/raid0/llm/epyc-orchestrator/scripts/session/session_init.sh
 ```
 
 </details>
+
+**Known issue (2026-05-22)**: `scripts/utils/agent_log.sh` has an unmet dependency on `scripts/lib/env.sh` and should be fixed in a separate governance pass. Until then, set environment variables manually or invoke the `stack_env` module directly.
 
 The initialization script:
 1. Checks llama.cpp is on `production-consolidated` branch

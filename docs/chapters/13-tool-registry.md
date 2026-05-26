@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The orchestration system defines **40+ callable tools** across 8 categories with role-scoped permissions. Tools are declared in YAML (`orchestration/tool_registry.yaml`) and enforced at runtime by `src/tool_registry.py`. Each local orchestrator role (frontdoor, coder, architect, worker, etc.) receives scoped tool access via allow/deny lists.
+The orchestration system defines **40+ callable tools** across 8 categories with role-scoped permissions. Tools are declared in YAML (`orchestration/tool_registry.yaml`) and enforced at runtime by `src/tool_registry.py` — a backward-compatibility shim that re-exports `src/registry/tool_registry.py` (the actual implementation lives under `src/registry/` after the package reorganization). Cascading policy resolution is implemented separately in `src/tool_policy.py`. Each local orchestrator role (frontdoor, coder, architect, worker, etc.) receives scoped tool access via allow/deny lists.
 
 This chapter covers the tool inventory, permission model, and invocation patterns.
 
@@ -263,6 +263,8 @@ Task-level constraints are injected as additional policy layers at the end of th
 
 Feature flag: `cascading_tool_policy` (default: False).
 
+**Implementation**: Cascading policy resolution lives in `src/tool_policy.py`. The module exports `PolicyLayer` (frozen dataclass with `allow`/`deny` frozensets), `TOOL_GROUPS` (the `group:` prefix expansions), `resolve_policy_chain(layers, all_tools)` (the iterative narrowing function), and `permissions_to_policy(name, perms, all_tools)` (a back-compat adapter from the flat `ToolPermissions` model). `ToolRegistry.can_use_tool()` consults this chain when the feature flag is enabled and falls back to the flat permission model otherwise.
+
 </details>
 
 ## Permission Model
@@ -472,8 +474,9 @@ User-specific settings stored in `src/tool_settings/{plugin_name}.json` (gitigno
 ### Project Files
 
 - Tool definitions: `orchestration/tool_registry.yaml`
-- Python implementation: `src/tool_registry.py`
-- Plugin loader: `src/tool_loader.py`
+- Python implementation: `src/registry/tool_registry.py` (re-exported via `src/tool_registry.py` shim)
+- Cascading policy resolution: `src/tool_policy.py`
+- Plugin loader: `src/tool_loader.py` (also re-exported via `src/registry/tool_loader.py`)
 - Plugin manifests: `src/tools/*/manifest.json`
 
 ### Related Chapters

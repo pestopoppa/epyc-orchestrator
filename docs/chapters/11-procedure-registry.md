@@ -25,9 +25,12 @@ The registry is built around five components: a `ProcedureRegistry` that loads a
 |-----------|---------|----------|
 | `ProcedureRegistry` | Load/validate/execute procedures | `orchestration/procedure_registry.py` |
 | `ProcedureScheduler` | Dependency-aware execution | `orchestration/procedure_scheduler.py` |
+| Procedure data models | `StepResult`, `ProcedureResult`, `ProcedureInput`, `ProcedureStep`, `Procedure`, `ProcedureValidationError`, `ProcedureExecutionError` | `orchestration/procedure_models.py` |
 | Procedure YAMLs | Declarative task definitions | `orchestration/procedures/*.yaml` |
 | Schema | JSON Schema for validation | `orchestration/procedure.schema.json` |
 | State directory | Execution state/checkpoints | `orchestration/procedures/state/` |
+
+**Note (2026-05 refactor, Task J)**: Pure data models were extracted from `procedure_registry.py` into a dedicated `procedure_models.py` module for clearer separation between declarative shape and executor logic. `ProcedureRegistry` and `ProcedureScheduler` remain in their original modules, and every model class is re-exported from `procedure_registry` for backward compatibility — existing `from orchestration.procedure_registry import Procedure, StepResult, ...` imports continue to work unchanged.
 
 ### Procedure Definition Format
 
@@ -426,6 +429,7 @@ Procedures cut token usage by roughly 88% compared to having the LLM reason thro
 
 - **ProcedureRegistry**: `orchestration/procedure_registry.py`
 - **ProcedureScheduler**: `orchestration/procedure_scheduler.py`
+- **Procedure data models**: `orchestration/procedure_models.py` (extracted 2026-05)
 - **Procedure YAMLs**: `orchestration/procedures/*.yaml` (11 files)
 - **Schema**: `orchestration/procedure.schema.json`
 - **State directory**: `orchestration/procedures/state/`

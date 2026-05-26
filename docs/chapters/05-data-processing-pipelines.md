@@ -514,17 +514,49 @@ Both pipelines have been profiled on the EPYC 9655. The document pipeline's head
 - Figure-description analysis (`FigureAnalyzer`) renders pages via PDFium and therefore applies only to PDF inputs.
 - Non-PDF image inputs (png/jpg/etc.) skip figure-render analysis to avoid PDFium decode errors and continue through OCR/chunking flow.
 
+## Recent Additions (2026-04 / 2026-05)
+
+Two feature landings extend the pipeline beyond the original March documentation. Both are additive and gated, so the baseline born-digital fast path and OCR fallback above remain unchanged when the feature flags are off.
+
+<details>
+<summary>ODL Phase 2 structured output and ERNIE-Image-Turbo image generation</summary>
+
+### ODL Phase 2: Structured Output (commit `18c4f9d7`, 2026-05-06)
+
+Phase 2 of the OpenDataLoader integration adds a normalized structured-JSON branch to the PDF router. Opt in by setting `ORCHESTRATOR_ODL_STRUCTURED=1`; the path is additive and falls through to pdftotext on empty ODL output.
+
+- `src/models/odl_structured.py` — `ODLBoundingBox`, `HeadingNode` (with `build_heading_tree` / `flatten_heading_tree` walkers), `FigureContext` (bbox, `semantic_type`, caption, `surrounding_text`, `heading_breadcrumb`), `TableContext`, and `ODLStructuredDocument.from_json()` (tolerant of partial/missing keys across ODL versions).
+- `src/services/pdf_router.py` — `_extract_with_opendataloader_structured()` invokes ODL with `format=["markdown","json"]`, parses both outputs, and returns `(text, ODLStructuredDocument | None, latency_ms)`. `PDFExtractionResult` gains an optional `structured_data` field (default `None` preserves back-compat).
+- `src/services/figure_analyzer.py` — `build_figure_prompt_with_context()` helper folds heading breadcrumb + `semantic_type` + caption + `surrounding_text` into the VL prompt when a `FigureContext` is supplied; returns the base prompt unchanged when `None`.
+- `src/services/document_chunker.py` — `chunk_by_odl_headings()` uses the ODL heading tree directly instead of regex header detection.
+
+### ERNIE-Image-Turbo Image Generation (commit `c10ffb29`, 2026-04)
+
+Image *generation* (distinct from the vision-analysis pipeline above) is wired through `sd-server` running ERNIE-Image-Turbo, replacing the prior ComfyUI path with a +2.54× CPU speedup. The frontdoor TaskIR exposes `kind="image"` for create/draw/render intents.
+
+- `src/services/sd_server_client.py` — sd-server HTTP client (replaces `comfyui_client.py` for the ERNIE path).
+- `src/services/image_generator.py` — single-image generation entry point with CLI.
+- `src/models/image.py` — data models with recommended dimensions per the ERNIE-Image-Turbo model card.
+
+</details>
+
 ## References
 
 <details>
 <summary>Source file references</summary>
 
 - `src/services/document_preprocessor.py` - Main document pipeline
-- `src/services/pdf_router.py` - Fast-path PDF routing
-- `src/services/figure_analyzer.py` - VL figure descriptions
+- `src/services/pdf_router.py` - Fast-path PDF routing (incl. ODL Phase 2 structured branch)
+- `src/services/figure_analyzer.py` - VL figure descriptions (incl. ODL context-aware prompt builder)
+- `src/services/document_chunker.py` - Markdown- and ODL-heading-aware chunking
 - `src/services/archive_extractor.py` - Multi-document archives
+- `src/services/sd_server_client.py` - ERNIE-Image-Turbo image-generation client
+- `src/services/image_generator.py` - Image generation entry point
+- `src/models/odl_structured.py` - ODL structured-document models
+- `src/models/image.py` - Image generation request/response models
 - `src/vision/pipeline.py` - Vision analyzer orchestration
 - `src/vision/models.py` - Pydantic models for vision API
+- `src/db/models/vision.py` - SQLite ORM models for photos/faces
 
 </details>
 

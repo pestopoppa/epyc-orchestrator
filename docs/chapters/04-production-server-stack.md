@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The production server stack runs 9 llama-server instances plus 2 auxiliary services, organized into HOT/WARM/COLD memory tiers. The HOT tier (~535GB, 47% of 1.13TB RAM) stays resident for immediate availability. Worker pools provide heterogeneous parallelism with different models optimized for specific task types.
+The production server stack runs llama-server instances plus a small set of auxiliary services, organized into HOT/WARM/COLD memory tiers. The HOT tier (~600 GB post-2026-05-09 consolidation; ~53% of 1.13 TB RAM) stays resident for immediate availability. Roles backed by the same GGUF (frontdoor and coder_escalation since 2026-05-06) share a single server process with separate admission slots, eliminating duplicate mlock. Launch mode (`--numa-mode full|quarter|both`) controls whether each role runs as a single 96-thread process or as four 48-thread NUMA-quarter instances.
 
 Managed by `orchestrator_stack.py`, the system provides graceful start/stop, health monitoring, and granular component reload without full restart.
 
@@ -13,21 +13,23 @@ The stack spans three tiers of servers, each mapped to a port range. The HOT tie
 <details>
 <summary>Server port assignments and tier breakdown</summary>
 
-### HOT Tier (Always Resident) — NUMA-Optimized (2026-03-19)
+### HOT Tier (Always Resident) — NUMA-Optimized (2026-05-09 consolidation)
 
 | Port(s) | Roles | Model | NUMA | Acceleration | Speed | RAM |
 |---------|-------|-------|------|--------------|-------|-----|
-| 8080,8180,8280,8380 | frontdoor (4×) | Qwen3.5-35B-A3B Q4_K_M | 4×48t quarters | MoE6 + lookup, mlock | ~78 t/s agg | 19GB×4 |
-| 8081,8181,8281,8381 | coder_escalation (4×) | Qwen2.5-Coder-32B f16 + 0.5B draft | 4×48t quarters | Spec K=24 + lookup | ~26 t/s agg | 65GB×4 |
-| 8082 | worker_explore, worker_math | Qwen2.5-7B-Instruct f16 + 0.5B draft | Q0A pinned | Spec K=24 + tree + lookup | 44 t/s | ~14GB |
-| 8083 | architect_general | Qwen3.5-122B-A10B Q4_K_M + 0.8B draft | Node 0, 96t | MoE8 + spec K=8 + lookup | 12.6 t/s | ~69GB |
-| 8084 | architect_coding | Qwen3-Coder-480B-A35B Q4_K_M | Node 0, 96t | Spec + tree dm=48 + lookup | 3.82 t/s | ~250GB |
-| 8085 | ingest_long_context | Qwen3-Next-80B-A3B Q4_K_M | Node 0, 96t | None (SSM), mlock | ~12 t/s | ~46GB |
+| 8070 (full-mode) or 8080,8180,8280,8380 (quarter-mode) | frontdoor + coder_escalation (shared GGUF, separate slots) | Qwen3.6-35B-A3B Q8 (swapped 2026-05-04 from Qwen3.5-35B Q4_K_M) | 1×96t full or 4×48t quarters | None (Q8 MoE baseline); `enable_thinking=false` | ~12.7 t/s per instance (full); ~24.3 t/s aggregate (quarter) | 37GB shared mmap |
+| 8072 (full-mode) or 8082,8182,8282,8382 (quarter-mode) | worker_general (explore, math, summarize aliases) | gemma-4-26B-A4B-it Q4_K_M + MTP drafter (swapped 2026-05-08 from Qwen2.5-7B / Qwen3-Coder-30B) | 1×96t full or 4×48t quarters | MTP spec decode (ik_llama.cpp PR #1744); `KMP_BLOCKTIME=10` | 60.7 t/s per instance | ~16GB |
+| 8083 | architect_general | Qwen3.5-122B-A10B Q4_K_M (swapped 2026-03-19 from Qwen3-235B-A22B) | Node 0, 96t | MoE reduction; `enable_thinking=false` | 12.19 t/s (Probe B canonical, 2026-05-04) | ~69GB |
+| 8085 | ingest_long_context | Qwen3-Next-80B-A3B Q4_K_M | Node 0, 96t | None (SSM-hybrid), mlock | 14.4–20.8 t/s @ ~12K context | ~46GB |
 | 8086 | worker_vision | Qwen2.5-VL-7B Q4_K_M + mmproj | Q0B pinned | None (VL) | ~15 t/s | ~8GB |
 | 8087 | vision_escalation | Qwen3-VL-30B-A3B Q4_K_M + mmproj | Node 1, 96t | MoE4 | ~10 t/s | ~20GB |
 | 8090-8095 | embedder (6x) | BGE-large-en-v1.5 F16 | unpinned | probe-first | — | ~4GB |
 
-**Total HOT RAM**: ~701GB (62% of 1130GB) with multi-instance copies, leaving ~429GB for KV cache and OS.
+**Notes**:
+- The former port 8084 (architect_coding, Qwen3-Coder-480B-A35B) was **removed on 2026-05-06**. REAP-246B scored 70% on the coder suite — worse than worker_general (77%) and far worse than the frontdoor model (97%); the role was eliminated and its 139 GB warm-tier footprint reclaimed. Hard coding escalations now terminate at coder_escalation.
+- The former port 8081 (separate coder_escalation instance) was retired on 2026-05-09. Since the 2026-05-06 swap both frontdoor and coder_escalation back onto the same Qwen3.6-35B-A3B Q8 GGUF, the dedicated server was redundant; they now share one mmap on port 8070 with separate admission slots (~36 GB of duplicate mlock + a competing 96-thread OMP team reclaimed).
+
+**Total HOT RAM**: ~600 GB (post-2026-05-09 consolidation: architect_coding removed, frontdoor+coder_escalation share GGUF, worker swapped to 16 GB gemma-4 Q4_K_M), leaving ~460 GB for KV cache and ~70 GB for OS/buffers.
 
 ### Auxiliary Services
 
@@ -49,6 +51,24 @@ The stack spans three tiers of servers, each mapped to a port range. The HOT tie
 
 </details>
 
+## Port Assignment and NUMA Modes (2026-05-09)
+
+Default operation uses **full-mode**: one 1×96-thread instance per role on a single canonical port (frontdoor on 8070, worker on 8072, architect_general on 8083, ingest_long_context on 8085). Launch with:
+
+```bash
+python3 scripts/server/orchestrator_stack.py start --numa-mode full   # default
+```
+
+For NUMA-optimized throughput, **quarter-mode** runs 4×48-thread instances per role pinned to NUMA quarters, using the multi-port lists in the table above (frontdoor 8080/8180/8280/8380, worker 8082/8182/8282/8382):
+
+```bash
+python3 scripts/server/orchestrator_stack.py start --numa-mode quarter
+```
+
+`--numa-mode both` launches both layouts side by side for A/B benchmarking. Aggregate throughput in quarter-mode is roughly 2× full-mode per role for MoE workloads; latency is comparable.
+
+**Consolidation**. Since 2026-05-09, frontdoor and coder_escalation share a single GGUF mmap (Qwen3.6-35B-A3B Q8) on whichever port the launch mode picks; the two roles differ only by admission slot and prompt modifier. Operators querying `/health` on `localhost:8070` see one process handling both roles. Worker_general lives on its own port (8072 full / 8082-series quarter) because the gemma-4 binary path differs from frontdoor (PR #1744 ik_llama.cpp build, separate `LD_LIBRARY_PATH`).
+
 ## Memory Architecture
 
 About half the system RAM is pinned to HOT-tier models so they never get evicted. The remaining half is split between dynamic KV cache (which grows with concurrent requests) and OS buffers. Larger models like the 235B and 480B architects dominate the budget, but keeping them resident avoids 30-90 second reload penalties that would wreck interactive latency.
@@ -63,18 +83,20 @@ About half the system RAM is pinned to HOT-tier models so they never get evicted
 
 ```
 Total RAM: 1130GB
-├── HOT Tier: 535GB (47%) - Always resident
-│   ├── Frontdoor: 18GB
-│   ├── Coder escalation: 22GB
-│   ├── Worker pool: 14GB
-│   ├── Architects: 420GB (235B + 480B models)
-│   ├── Ingest: 45GB
-│   ├── Vision: 28GB
-│   ├── Embedder: 1GB
-│   └── NextPLAID (2x): ~1.4GB (code: 1.2GB LateOn-Code 130M + docs: 0.2GB colbert-small)
+├── HOT Tier: ~600GB (53%) - Always resident (post-2026-05-09 consolidation)
+│   ├── Frontdoor + coder_escalation (shared Qwen3.6-35B Q8 mmap): 37GB
+│   ├── Worker (gemma-4-26B-A4B Q4_K_M + MTP drafter): ~16GB
+│   ├── Architect_general (Qwen3.5-122B-A10B Q4_K_M): ~69GB
+│   ├── Ingest (Qwen3-Next-80B-A3B Q4_K_M): ~46GB
+│   ├── Vision (Qwen2.5-VL-7B + Qwen3-VL-30B-A3B): ~28GB
+│   ├── Embedder (BGE-large-en-v1.5 F16, 6×): ~4GB
+│   ├── NextPLAID (2x): ~1.4GB (code: 1.2GB LateOn-Code 130M + docs: 0.2GB colbert-small)
+│   └── NUMA-quarter multi-instance copies (when --numa-mode quarter): +3-4× per HOT role
 ├── KV Cache: ~460GB (41%) - Dynamic allocation
-└── OS + Buffers: ~135GB (12%)
+└── OS + Buffers: ~70GB (6%)
 ```
+
+**Reclaimed since last revision**: architect_coding (~139 GB) removed 2026-05-06; coder_escalation duplicate mlock (~36 GB) removed 2026-05-09; worker swap to gemma-4 Q4_K_M dropped per-instance footprint from ~14 GB (Qwen2.5-7B f16) but is comparable per instance.
 
 </details>
 
@@ -95,7 +117,9 @@ Total RAM: 1130GB
 
 ## Worker Pool Architecture
 
-Workers are not one-size-fits-all. Different models handle different task types, and the pool expands on demand when concurrent load spikes. The original 7B coder worker was removed after benchmarks proved the 32B coder-escalation endpoint was both faster and higher quality.
+> **DEPRECATED 2026-05-06.** The heterogeneous worker-pool design described below (multiple small models per task type, fast 1.5B WARM workers spinning up on burst) was superseded by the unified `worker_general` role: a single gemma-4-26B-A4B-it Q4_K_M instance with MTP speculative decoding on port 8072 (full-mode) or 8082/8182/8282/8382 (quarter-mode). The Qwen2.5-7B and Qwen2.5-Coder-1.5B GGUFs referenced in this section are not on disk; `worker_pool.enabled=false` by default in the registry. The text below is retained for historical reference only — operational control runs through `roles.worker_general` in `model_registry.yaml`.
+
+Historically, workers were not one-size-fits-all. Different models handled different task types, and the pool expanded on demand when concurrent load spiked. The original 7B coder worker was removed after benchmarks proved the 32B coder-escalation endpoint was both faster and higher quality; that 32B model was itself superseded in 2026-05-08 by gemma-4-26B-A4B-it with MTP, which now handles all worker traffic.
 
 <details>
 <summary>Worker routing, pool config, and expansion strategy</summary>
@@ -186,6 +210,10 @@ python3 scripts/server/orchestrator_stack.py reload orchestrator
 
 All startup paths (`orchestrator_stack.py start`, `reset_episodic_memory.sh`, `seeding_infra.py --preflight`) set `ORCHESTRATOR_CASCADING_TOOL_POLICY=1`. Without this, the legacy tool permission path denies ALL roles ALL tools because no role has `tool_permissions` defined in `model_registry.yaml`. This was fixed on 2026-03-03 after circuit breaker cascades caused seeding stalls.
 
+**Launch-time NUMA selection (2026-05-08/09)**: `--numa-mode {full|quarter|both}` controls instance layout (see "Port Assignment and NUMA Modes" above).
+
+**OMP tuning (2026-05-09)**: the worker_general (gemma-4-26B-A4B with MTP) launch env keeps `OMP_WAIT_POLICY` at its **active** default. Setting it to `passive` causes a load-spike regression (decode drops from ~420 t/s back to ~9 t/s on saturated workloads) because AOCC libomp ignores `omp_pause_resource`. `KMP_BLOCKTIME=10` is set explicitly to keep idle cores from busy-spinning under MTP.
+
 ### State Persistence
 
 <details>
@@ -250,9 +278,11 @@ def wait_for_health(port: int, timeout: int = 120) -> bool:
 ```
 COMPONENT                 PORT     PID        STATUS     MODEL
 --------------------------------------------------------------------------------
-frontdoor                 8080     12345      healthy    Qwen3.5-35B-A3B-UD-Q4_K_M
-coder_escalation          8081     12346      healthy    Qwen2.5-Coder-32B-Q4_K_M
+frontdoor                 8070     12345      healthy    Qwen_Qwen3.6-35B-A3B-Q8_0
+coder_escalation          8070     12345      healthy    Qwen_Qwen3.6-35B-A3B-Q8_0  (shared slot)
+worker_general            8072     12346      healthy    gemma-4-26B-A4B-it-Q4_K_M
 architect_general         8083     12348      healthy    Qwen3.5-122B-A10B-Q4_K_M
+ingest_long_context       8085     12349      healthy    Qwen3-Next-80B-A3B-Q4_K_M
 orchestrator              8000     12350      healthy    uvicorn
 ```
 
@@ -341,19 +371,21 @@ Stored in `/mnt/raid0/llm/epyc-orchestrator/orchestration/checkpoints/`.
 
 Benchmarked optimal `-np`/concurrency per model tier using `scripts/benchmark/concurrent_inference_sweep.py` (asyncio + httpx.AsyncClient, 2 warmup + 5 measured batches, incremental CSV output).
 
-**Results**:
-| Role | Port | Recommended `-np` | Rationale |
+**Results** (sweep run pre-2026-05 consolidation; ports noted in their then-current form):
+| Role | Port (then) | Recommended `-np` | Rationale |
 |------|------|--------------------|-----------|
 | frontdoor (30B MoE) | 8080 | **2** (was 1) | +121% aggregate TPS, p95 multiplier 1.33 |
 | coder (32B dense) | 8081 | 1 (keep) | c=2 rejected: p95 multiplier 1.98 |
 | worker (7B) | 8082 | 1 (keep) | c=2+ rejected: p95 multiplier ≥1.505 |
 | fast_worker (1.5B) | 8102 | — | Port unavailable during sweep |
 
+Post-consolidation (2026-05-09), the sweep should be re-run: frontdoor now lives on 8070 (full-mode) with `-np 2`, coder_escalation shares that port via a separate slot, and worker is gemma-4-26B-A4B with MTP on 8072 — its `-np` profile is not yet re-measured under MTP.
+
 **Action taken**: Removed `frontdoor` from `SERIAL_ROLES` in `orchestrator_stack.py` so it starts with `-np 2`.
 
 ### SERIAL_ROLES
 
-`SERIAL_ROLES` in `orchestrator_stack.py` forces `-np 1` for roles where concurrent slot contention degrades latency: `coder_escalation`, `worker_summarize`, `architect_general`, `architect_coding`, `ingest_long_context`.
+`SERIAL_ROLES` in `orchestrator_stack.py` forces `-np 1` for roles where concurrent slot contention degrades latency: `coder_escalation`, `worker_summarize`, `architect_general`, `ingest_long_context`. (`architect_coding` was removed from the set on 2026-05-06 along with the role itself.)
 
 ---
 
