@@ -988,6 +988,15 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     # ORCHESTRATOR_PER_REGION_LOCKS=0 to fall back to the legacy global
     # heavy lock if a regression surfaces.
     env.setdefault("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    # WP-7/J6 (2026-05-26): within-role placement rollout. These were previously
+    # shell-env-only, so ANY API restart (autopilot config-apply, watcher relaunch,
+    # manual) silently reverted the placement state machine to OFF — J6 ran without it
+    # after a 19:11 restart until this was caught. Make them durable defaults (still
+    # overridable via the env). PLACEMENT_STATE_MACHINE = WP-2 topology-safe placement;
+    # REVERSE_MIGRATION = WP-4 quarter→full on load drop; URE shadow = J10 (no behavior change).
+    env.setdefault("ORCHESTRATOR_PLACEMENT_STATE_MACHINE", "1")
+    env.setdefault("ORCHESTRATOR_REVERSE_MIGRATION", "1")
+    env.setdefault("ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG", "1")
     # P6.2-A2 (2026-05-21): frontdoor-specialist verifier loaded by the API
     # service when the gate flag is on. Defaults below put it in SHADOW MODE —
     # the verifier runs and logs P(success) to last_decision_meta but never
