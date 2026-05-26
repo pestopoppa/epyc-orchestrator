@@ -67,6 +67,10 @@ NUMA_CONFIG: dict[str, dict] = {
             (NUMA_Q1B[0], 8380, NUMA_Q1B[1]),      # quarter 3
         ],
         "full_instance_idx": 0,  # index of 1×96t instance in list above
+        # WP-7/J6 (2026-05-26): J5 ratified frontdoor quarters scale 1.37-1.67x
+        # (all 8 disjoint pairs allow, incl. full+quarter); placement SM places
+        # 3 disjoint live. Prefer quarters under burst, full for solo.
+        "placement_policy": "burst_prefer_quarters",
         "mlock": True,   # 19 GB per instance — latency-critical (S2: 30x improvement)
         # NOTE: NPS4 single-quarter at -t 48 gives ~8.90 t/s on this model per
         # Phase 0.5 (Qwen3-Coder-30B Q4's 46.6 t/s NPS4 sweep does NOT transfer
@@ -144,6 +148,15 @@ NUMA_CONFIG: dict[str, dict] = {
             (NUMA_Q1B[0], 8382, NUMA_Q1B[1]),      # quarter 3
         ],
         "full_instance_idx": 0,
+        # WP-7/J6 (2026-05-26): J5 -t48 re-bench → same_role borderline (mean
+        # 0.879, all 6 quarter pairs net-positive 1.54-1.89x aggregate; gate
+        # block→borderline). NOTE full="0-95" OVERLAPS all quarters, so full+
+        # quarter never co-place (topology veto) — under burst the placement SM
+        # queues behind full until it frees, or use FULL_DISABLED to reclaim
+        # full's mlock and always quarter. Starting burst_prefer_quarters; the
+        # J6 observe will show whether full_disabled is the better worker_general
+        # policy (cross-node pairs q0+q2/q1+q3 are the weak ones).
+        "placement_policy": "burst_prefer_quarters",
         "mlock": True,
         "spec_overrides": {"draft_max": 2, "p_split": 0},  # gemma4 MTP recipe (was dm=8 for Qwen3-Coder)
         "numactl_policy": "interleave=all",  # 2026-05-08: required for gemma4 MTP buffer allocation
