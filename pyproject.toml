@@ -32,7 +32,12 @@ dependencies = [
     # Vision pipeline (src/vision/, image handling)
     "Pillow>=10.0.0",
 
-    # MCP server (src/mcp_server.py)
+    # MCP server scaffold (src/mcp_server.py) — standalone FastMCP v3 (superset of the
+    # FastMCP 1.0 fork vendored inside the official `mcp` SDK).
+    "fastmcp>=3,<4",
+    # Official MCP SDK — used directly by src/mcp_client.py (ClientSession,
+    # StdioServerParameters, stdio_client, mcp.types.*). fastmcp depends on it
+    # transitively, but pin it explicitly so a future fastmcp release can't drop us.
     "mcp>=1.0.0",
 
     # Orchestration graph (escalation flow)
