@@ -1,0 +1,11 @@
+# same_role instance_pairs (J5 / WP-6) — disjoint pairs only
+  - role: "vision_escalation"
+    instance_pairs:
+      - {a: full, b: q0, ratio: 1.663, cv: 0.0889, verdict: allow}
+      - {a: full, b: q1, ratio: 1.382, cv: 0.1284, verdict: allow}
+      - {a: q0, b: q1, ratio: 1.858, cv: 0.0574, verdict: allow}
+      - {a: q0, b: q2, ratio: 1.533, cv: 0.1289, verdict: allow}
+      - {a: q0, b: q3, ratio: 1.83, cv: 0.0613, verdict: allow}
+      - {a: q1, b: q2, ratio: 1.952, cv: 0.0549, verdict: allow}
+      - {a: q1, b: q3, ratio: 2.523, cv: 0.3315, verdict: allow}
+      - {a: q2, b: q3, ratio: 1.917, cv: 0.0535, verdict: allow}

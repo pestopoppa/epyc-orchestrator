@@ -180,31 +180,26 @@ same_role:
     note: "4-quarters @ 2.86× — strongest signal in matrix. NOTE: ingest is NON_QUARTERABLE for cross-role (80B on 24 cores ~0.1 t/s, over-threaded); this same-role 2.86x predates the -t finding and may itself be confounded — runs full/half in practice."
 
   - role: "worker_general"
-    verdict: "borderline"   # CLEAN -t48 re-bench 2026-05-26: 4/6 borderline, 2/6 block, all net-positive
+    verdict: "allow"   # AFFINITY-FIXED re-bench 2026-05-26: all 6 quarter pairs allow (1.34-2.04x)
     samples: 3
+    live_affinity_verified: true   # affinity_preflight artifact db9f2ad: quarters disjoint q0=0-23/q1=24-47/q2=48-71/q3=72-95
     note: >-
-      J5 -t48 RE-BENCH (2026-05-26, alone on host, --safe-sampling, samples=3): mean ratio 0.879
-      across the 6 disjoint quarter pairs → role verdict BORDERLINE. This SUPERSEDES the confounded
-      -t96 first pass (0.58-0.84x BLOCK). The over-threading was a real *contributing* factor
-      (every pair improved +0.05 to +0.26 once quarters launched -t 48 via launcher fix da1aed6),
-      but a residual cross-node DRAM-BW ceiling keeps 2 pairs sub-floor — consistent with BW-bound
-      CPU decode (never super-linear; "allow" ratio>=1.0 is structurally unreachable here, so
-      borderline IS the realistic green light). Per-pair -t48: q0+q1 0.946, q0+q3 0.938, q1+q2 0.920,
-      q2+q3 0.855 (borderline) | q0+q2 0.844, q1+q3 0.772 (block; both cross-NUMA-node, worst contention).
-      ALL 6 sit well above the 0.5 co-run-vs-serialize break-even (1.54-1.89x aggregate), so concurrent
-      quartering is net-positive on every pair — the runtime gate now ALLOWs same-role co-run instead of
-      serializing. Cross-role n_way (1.58-1.81x allow) was benched while these quarters were -t96-over-threaded,
-      so it is conservative and remains valid (a -t48 cross-role re-bench would only improve it).
-      FOLLOW-UPS: (1) flip takes effect on next API restart (matrix is load-once cached) — J6/WP-7 will apply it;
-      (2) placement_policy=burst_prefer_quarters for worker_general is the matching NUMA_CONFIG change (WP-7);
-      (3) a node-aware burst that avoids the q0+q2/q1+q3 cross-node pairs would lift every co-run >=0.85.
-    instance_pairs:   # J5 measured + structural full+q overlap markers
-      - {a: q0, b: q1, ratio: 0.946, cv: 0.104, verdict: borderline}
-      - {a: q0, b: q3, ratio: 0.938, cv: 0.050, verdict: borderline}
-      - {a: q1, b: q2, ratio: 0.920, cv: 0.077, verdict: borderline}
-      - {a: q2, b: q3, ratio: 0.855, cv: 0.065, verdict: borderline}
-      - {a: q0, b: q2, ratio: 0.844, cv: 0.091, verdict: block}
-      - {a: q1, b: q3, ratio: 0.772, cv: 0.169, verdict: block}
+      J5 RE-BENCH on CERTIFIED affinity (2026-05-26, alone, --safe-sampling, samples=3) → verdict ALLOW.
+      SUPERSEDES BOTH the -t96 (block) AND the -t48 "borderline 0.88" pass: that borderline was measured
+      while the launcher pinned ALL quarters to core 0 (_numa_prefix ignored numa_instance — fixed at
+      orchestrator_stack.py:681/732/847), so it measured core-0 contention, NOT disjoint-quarter scaling.
+      With quarters correctly disjoint (live_affinity_verified=true) ALL 6 pairs ALLOW: q2+q3 1.339,
+      q0+q2 1.451, q0+q3 1.504, q1+q2 1.842, q0+q1 1.915, q1+q3 2.036 (mean ~1.68). DIAGNOSTIC-GRADE cv on
+      some pairs (0.18-0.28) from occasional gemma4 /completion HTTP 500s poisoning a sample (low seq →
+      inflated ratio) — the direction (all allow) is robust; a higher-sample re-bench would tighten cv.
+      Cross-role n_way involving worker_general was ALSO measured under the bad affinity → J4b/J4c re-run pending.
+    instance_pairs:   # affinity-fixed (certified disjoint) + structural full+q overlap markers
+      - {a: q2, b: q3, ratio: 1.339, cv: 0.282, verdict: allow, cv_gate: FAIL}
+      - {a: q0, b: q2, ratio: 1.451, cv: 0.080, verdict: allow}
+      - {a: q0, b: q3, ratio: 1.504, cv: 0.181, verdict: allow, cv_gate: FAIL}
+      - {a: q1, b: q2, ratio: 1.842, cv: 0.199, verdict: allow, cv_gate: FAIL}
+      - {a: q0, b: q1, ratio: 1.915, cv: 0.267, verdict: allow, cv_gate: FAIL}
+      - {a: q1, b: q3, ratio: 2.036, cv: 0.259, verdict: allow, cv_gate: FAIL}
       # Structural overlaps — worker_general "full" spans all 4 quarters (cpus 0-95).
       # Every full+qN pair is structurally impossible to co-run (the full instance's
       # cpuset fully contains every quarter's cpuset). Empirically confirmed: gemma4
@@ -218,29 +213,29 @@ same_role:
       - {a: full, b: q3, verdict: block, note: "structural: full cpuset 0-95 contains q3=72-95"}
 
   - role: "vision_escalation"
-    verdict: "allow"   # RATIFIED at samples=8 (2026-05-26): 6/6 quarter-pairs allow super-linear
-    samples: 8
+    verdict: "allow"   # AFFINITY-FIXED re-bench 2026-05-26: all 8 disjoint pairs allow (1.38-2.52x)
+    samples: 3
+    live_affinity_verified: true   # affinity_preflight db9f2ad: full=48-95(node1), quarters disjoint q0-q3
     note: >-
-      J5 -t48 RE-BENCH, RATIFIED at samples=8 (2026-05-26, alone, --safe-sampling). The -t96 all-block
-      (0.40-0.46x) was launcher OVER-THREADING (-t 96 on 24-core quarters; fixed da1aed6) — the prior
-      --mmproj/qwen3vlmoe suspicion is REFUTED. At -t48 ALL 6 quarter+quarter pairs ALLOW, super-linear
-      (1.13-1.25x): a lone 24-core quarter under-saturates DRAM BW, so two concurrent quarters use the
-      memory subsystem more efficiently than serial. samples=8 cleaned up the samples=3 noise — the lone
-      s3 borderline outlier q1+q3 (0.963 cv0.420) resolved to 1.214 cv0.070 ALLOW. Residual noise: q0+q2
-      cv0.203 (still allow at 1.129) + the full+quarter pairs (full+q0 cv0.438) — both above the 5% gate
-      but the 6/6 quarter-pair allow verdict is robust. The only BLOCKS are the two FULL+quarter disjoint
-      pairs: full+q0 0.705, full+q1 0.587 — vision "full" is node1-only (48-95), core-disjoint from q0/q1
-      but the 48-core full starves the co-running quarter. PLACEMENT: burst_prefer_quarters with
-      FULL-DISABLED-UNDER-BURST (never co-run full + a quarter). Runtime gate ALLOWs quarter co-run.
-    instance_pairs:   # samples=8 ratified; structural overlap markers added 2026-05-26
-      - {a: q0, b: q3, ratio: 1.250, cv: 0.071, verdict: allow}
-      - {a: q1, b: q3, ratio: 1.214, cv: 0.070, verdict: allow}
-      - {a: q1, b: q2, ratio: 1.208, cv: 0.060, verdict: allow}
-      - {a: q0, b: q1, ratio: 1.180, cv: 0.066, verdict: allow}
-      - {a: q2, b: q3, ratio: 1.165, cv: 0.042, verdict: allow}
-      - {a: q0, b: q2, ratio: 1.129, cv: 0.203, verdict: allow, cv_gate: FAIL}
-      - {a: full, b: q0, ratio: 0.705, cv: 0.438, verdict: block, cv_gate: FAIL}
-      - {a: full, b: q1, ratio: 0.587, cv: 0.092, verdict: block, cv_gate: FAIL}
+      J5 RE-BENCH on CERTIFIED affinity (2026-05-26, alone, --safe-sampling, samples=3) → verdict ALLOW.
+      SUPERSEDES the prior samples=8 "ratify" (d71b8a9), which was ALSO measured on WRONG affinity — the
+      vision quarters were all pinned to cores 72,168 (launcher ignored numa_instance; fixed at
+      orchestrator_stack.py:681/732/847). With quarters correctly disjoint (live_affinity_verified=true)
+      ALL 8 disjoint pairs ALLOW (1.38-2.52x): q0+q1 1.858, q0+q2 1.533, q0+q3 1.830, q1+q2 1.952,
+      q1+q3 2.523, q2+q3 1.917, AND full+q0 1.663, full+q1 1.382. The earlier "full+quarter block"
+      (0.705/0.587) was a bad-affinity artifact — REFUTED: vision "full" is half1 (48-95, node1),
+      core-disjoint from q0/q1 (node0), so it co-runs fine. The full-disabled-under-burst caveat is DROPPED.
+      CVs mostly tight (0.05-0.13); q1+q3 cv0.33 is the one noisy pair. Cross-role n_way involving vision was
+      also under bad affinity → J4b/J4c re-run pending. Gate ALLOWs quarter co-run.
+    instance_pairs:   # affinity-fixed (certified disjoint) + structural full+q2/q3 overlap markers
+      - {a: full, b: q0, ratio: 1.663, cv: 0.089, verdict: allow}
+      - {a: full, b: q1, ratio: 1.382, cv: 0.128, verdict: allow}
+      - {a: q0, b: q1, ratio: 1.858, cv: 0.057, verdict: allow}
+      - {a: q0, b: q2, ratio: 1.533, cv: 0.129, verdict: allow}
+      - {a: q0, b: q3, ratio: 1.830, cv: 0.061, verdict: allow}
+      - {a: q1, b: q2, ratio: 1.952, cv: 0.055, verdict: allow}
+      - {a: q1, b: q3, ratio: 2.523, cv: 0.332, verdict: allow, cv_gate: FAIL}
+      - {a: q2, b: q3, ratio: 1.917, cv: 0.054, verdict: allow}
       # Structural overlaps — vision "full" is the half1 instance (q2+q3, cpus 48-95).
       # full+q2 and full+q3 cannot run concurrently because the half1 cpuset fully
       # contains both q2=48-71 and q3=72-95. Not benched.

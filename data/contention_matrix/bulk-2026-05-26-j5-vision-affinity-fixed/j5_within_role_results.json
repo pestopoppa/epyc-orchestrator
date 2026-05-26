@@ -1,0 +1,97 @@
+{
+  "task_id": "J5",
+  "topology_hash": "df373c79cc4af06f",
+  "generated_at": "2026-05-26T21:04:33.842598+00:00",
+  "same_role_instance_pairs": {
+    "vision_escalation": [
+      {
+        "a": "full",
+        "b": "q0",
+        "port_a": 8087,
+        "port_b": 8187,
+        "ratio": 1.663,
+        "cv": 0.0889,
+        "verdict": "allow",
+        "seq_aggregate_tps": 27.55,
+        "parallel_aggregate_tps": 45.47
+      },
+      {
+        "a": "full",
+        "b": "q1",
+        "port_a": 8087,
+        "port_b": 8287,
+        "ratio": 1.382,
+        "cv": 0.1284,
+        "verdict": "allow",
+        "seq_aggregate_tps": 25.63,
+        "parallel_aggregate_tps": 35.42
+      },
+      {
+        "a": "q0",
+        "b": "q1",
+        "port_a": 8187,
+        "port_b": 8287,
+        "ratio": 1.858,
+        "cv": 0.0574,
+        "verdict": "allow",
+        "seq_aggregate_tps": 22.45,
+        "parallel_aggregate_tps": 41.56
+      },
+      {
+        "a": "q0",
+        "b": "q2",
+        "port_a": 8187,
+        "port_b": 8387,
+        "ratio": 1.533,
+        "cv": 0.1289,
+        "verdict": "allow",
+        "seq_aggregate_tps": 24.18,
+        "parallel_aggregate_tps": 37.05
+      },
+      {
+        "a": "q0",
+        "b": "q3",
+        "port_a": 8187,
+        "port_b": 8487,
+        "ratio": 1.83,
+        "cv": 0.0613,
+        "verdict": "allow",
+        "seq_aggregate_tps": 24.38,
+        "parallel_aggregate_tps": 44.44
+      },
+      {
+        "a": "q1",
+        "b": "q2",
+        "port_a": 8287,
+        "port_b": 8387,
+        "ratio": 1.952,
+        "cv": 0.0549,
+        "verdict": "allow",
+        "seq_aggregate_tps": 20.37,
+        "parallel_aggregate_tps": 39.68
+      },
+      {
+        "a": "q1",
+        "b": "q3",
+        "port_a": 8287,
+        "port_b": 8487,
+        "ratio": 2.523,
+        "cv": 0.3315,
+        "verdict": "allow",
+        "seq_aggregate_tps": 18.07,
+        "parallel_aggregate_tps": 41.46
+      },
+      {
+        "a": "q2",
+        "b": "q3",
+        "port_a": 8387,
+        "port_b": 8487,
+        "ratio": 1.917,
+        "cv": 0.0535,
+        "verdict": "allow",
+        "seq_aggregate_tps": 20.9,
+        "parallel_aggregate_tps": 39.95
+      }
+    ]
+  }
+}
