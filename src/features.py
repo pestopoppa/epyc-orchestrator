@@ -176,6 +176,9 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     FeatureSpec("logit_probe", False, False, "LOGIT_PROBE", "First-token logprob capture for learned routing P1.5"),
     # NIB2-45 MindDR deep research mode (three-agent pipeline, feature-flag-gated at pipeline entry)
     FeatureSpec("deep_research_mode", False, False, "DEEP_RESEARCH_MODE", "NIB2-45 MindDR Phase 1: three-agent research pipeline"),
+    # intake-607 harness cluster (default-off; shadow/observe only)
+    FeatureSpec("ure_uncertainty_shadow_log", False, False, "URE_UNCERTAINTY_SHADOW_LOG", "URE-1: shadow-log routing decision-uncertainty (J10); changes no routing behavior"),
+    FeatureSpec("batch_edit_mode", False, False, "BATCH_EDIT_MODE", "BEP-1: coder emits one structured patch set after reasoning instead of interleaved REPL (J8)"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
 )
@@ -406,6 +409,10 @@ class Features:
     # When on, research-like queries (per classifier.is_research_like) route through the MindDR subgraph
     # instead of the direct flow. Phase 1 is prompt-level only; Phase 2 training is GPU-gated.
     deep_research_mode: bool = False
+
+    # intake-607 harness cluster (default-off; shadow/observe only)
+    ure_uncertainty_shadow_log: bool = False  # URE-1 (J10): shadow-log routing uncertainty; no behavior change
+    batch_edit_mode: bool = False  # BEP-1 (J8): coder emits one structured patch set after reasoning
 
     # Debug/Development
     mock_mode: bool = True  # Default to mock mode for safety
