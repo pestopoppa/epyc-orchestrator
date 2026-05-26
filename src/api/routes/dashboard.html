@@ -2945,12 +2945,36 @@ function startDashboard() {
                 if (wa !== wb) return wa - wb;
                 return a[0].localeCompare(b[0]);
             });
+            // Cross-role physical-core occupancy: { quarter: [{role, shape}] }.
+            // Each role has independent lock files (cpu_region.<role>.qN.lock),
+            // but the underlying 24-core regions are shared physical resources.
+            // If ANY role is holding a quarter, every other role's instance that
+            // overlaps with that quarter is blocked at the CPU level.
+            const globalHeldBy = {};   // quarter -> [{role, shape}]
+            for (const [role, info] of roleEntries) {
+                const instByIdx = new Map((info.instances || []).map(i => [i.idx, i]));
+                for (const e of (info.regions || [])) {
+                    if (!e.held) continue;
+                    for (const idx of (e.holder_instance_idxs || [])) {
+                        const inst = instByIdx.get(idx);
+                        const shape = inst ? inst.shape : '?';
+                        (globalHeldBy[e.region] ||= []).push({ role, shape });
+                    }
+                    // If holder_instance_idxs is empty (resolver couldn't match,
+                    // e.g. stale lock file), still record the region as held so
+                    // downstream blocking reflects physical-core occupancy.
+                    if (!(e.holder_instance_idxs || []).length) {
+                        (globalHeldBy[e.region] ||= []).push({ role, shape: '?' });
+                    }
+                }
+            }
+            const globalHeldRegions = new Set(Object.keys(globalHeldBy));
+
             let nRoles = 0;
             for (const [role, info] of roleEntries) {
                 nRoles++;
                 const insts = info.instances || [];
                 const activeSet = new Set(info.active_instance_idxs || []);
-                const heldRegions = new Set((info.regions || []).filter(e => e.held).map(e => e.region));
                 rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${role}</div>`);
                 for (const col of COLS) {
                     const inst = pickInstForCol(insts, col.key);
@@ -2964,12 +2988,14 @@ function startDashboard() {
                         continue;
                     }
                     const needed = inst.regions || [];
-                    const blocked = needed.some(q => heldRegions.has(q));
-                    if (blocked) {
-                        const heldOnes = needed.filter(q => heldRegions.has(q)).join(',');
-                        rows.push(`<div class="rl-cell rl-blocked" title="${role}.${col.label} BLOCKED — needs {${needed.join(',')}}; {${heldOnes}} held by another instance">🔒</div>`);
+                    const blockingQuarters = needed.filter(q => globalHeldRegions.has(q));
+                    if (blockingQuarters.length) {
+                        const blockers = blockingQuarters
+                            .map(q => `${q}←${(globalHeldBy[q] || []).map(b => `${b.role}.${b.shape}`).join(',')}`)
+                            .join(' · ');
+                        rows.push(`<div class="rl-cell rl-blocked" title="${role}.${col.label} BLOCKED — physical cores ${blockingQuarters.join(',')} occupied: ${blockers}">🔒</div>`);
                     } else {
-                        rows.push(`<div class="rl-cell rl-ready" title="${role}.${col.label} READY — could dispatch now ({${needed.join(',')}} free)">✅</div>`);
+                        rows.push(`<div class="rl-cell rl-ready" title="${role}.${col.label} READY — physical cores {${needed.join(',')}} all free">✅</div>`);
                     }
                 }
             }
