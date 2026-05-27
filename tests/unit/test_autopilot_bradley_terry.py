@@ -18,11 +18,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(AUTOPILOT_DIR))
 
-bt = importlib.import_module("bradley_terry")
+# bradley_terry lives in src/ (moved 2026-05-27 as part of DAR-6 scaffolding).
+bt = importlib.import_module("src.bradley_terry")
 
 
 # ── basic ranking ───────────────────────────────────────────────

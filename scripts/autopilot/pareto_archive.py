@@ -356,7 +356,9 @@ class ParetoArchive:
         entries — BT is undefined on a singleton.
         """
         # Local import keeps the BT module a leaf dependency.
-        from bradley_terry import bradley_terry_rank
+        # bradley_terry lives in src/ (moved 2026-05-27 as part of DAR-6
+        # scaffolding); ORCH_ROOT is on sys.path at autopilot runtime.
+        from src.bradley_terry import bradley_terry_rank
 
         if len(self._frontier) < 2:
             return {
