@@ -270,3 +270,132 @@ def test_new_retrieval_exports_match_handoff() -> None:
     assert callable(ensure_loaded)
     assert callable(is_available)
     assert callable(maxsim)
+
+
+# ─── K10: temporal recency signal ─────────────────────────────────────────────
+
+def test_recency_score_monotonic_and_bounds() -> None:
+    from src.retrieval import kb_rag
+
+    now = 1_000_000_000.0
+    fresh = kb_rag._recency_score(now, now, sigma_days=90.0)
+    week_old = kb_rag._recency_score(now - 7 * 86400, now, sigma_days=90.0)
+    year_old = kb_rag._recency_score(now - 365 * 86400, now, sigma_days=90.0)
+    assert fresh == 1.0
+    assert 0.0 < year_old < week_old < fresh <= 1.0
+    # sigma<=0 disables decay (always 1.0); future mtime clamps to age 0.
+    assert kb_rag._recency_score(now - 99 * 86400, now, sigma_days=0.0) == 1.0
+    assert kb_rag._recency_score(now + 5 * 86400, now, sigma_days=90.0) == 1.0
+
+
+def test_kb_rag_query_recency_reorders_on_tie(tmp_path: Path) -> None:
+    """With equal MaxSim, a high recency_weight ranks the newer file first;
+    recency_weight=0 (default) preserves MaxSim-only behaviour (back-compat)."""
+    import os as _os
+    import time
+
+    from src.retrieval import kb_rag
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    old_f = corpus_root / "old.md"
+    new_f = corpus_root / "new.md"
+    old_f.write_text("# topic\n\nshared body\n")
+    new_f.write_text("# topic\n\nshared body\n")
+    # old.md = 400 days old, new.md = now.
+    now = time.time()
+    _os.utime(old_f, (now - 400 * 86400, now - 400 * 86400))
+    _os.utime(new_f, (now, now))
+
+    cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
+    index_dir = tmp_path / "idx"
+
+    # Constant embedding → identical MaxSim for both files.
+    def fake_encode(text, max_tokens):
+        return np.eye(2, 4, dtype=np.float32)
+
+    with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "ensure_loaded", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "encode", side_effect=fake_encode):
+        kb_rag.build_index(cfg, index_dir=index_dir)
+        recent_first = kb_rag.query(
+            "topic", top_k=2, index_dir=index_dir,
+            recency_weight=0.9, recency_sigma_days=90.0,
+        )
+        baseline = kb_rag.query("topic", top_k=2, index_dir=index_dir, recency_weight=0.0)
+
+    assert "new.md" in recent_first[0]["file"]
+    assert recent_first[0]["recency"] > recent_first[1]["recency"]
+    # Default path adds no recency key (pure MaxSim).
+    assert "recency" not in baseline[0]
+
+
+# ─── K9: cross-encoder rerank stage ───────────────────────────────────────────
+
+def test_cross_encoder_rerank_noop_when_unavailable() -> None:
+    from src.retrieval import cross_encoder
+
+    items = [{"snippet": "a", "score": 0.9}, {"snippet": "b", "score": 0.1}]
+    with patch.object(cross_encoder, "ensure_loaded", return_value=False):
+        out = cross_encoder.rerank("q", items, weight=0.3)
+    assert out == items  # unchanged, safe to call unconditionally
+    assert cross_encoder.score_pairs("q", ["a"]) is None  # not loaded
+
+
+def test_cross_encoder_rerank_blends_and_reorders() -> None:
+    from src.retrieval import cross_encoder
+
+    # Item B has lower base score but the CE strongly prefers it → should flip.
+    items = [
+        {"snippet": "high base, low ce", "score": 0.80},
+        {"snippet": "low base, high ce", "score": 0.40},
+    ]
+    logits = np.array([-4.0, 4.0], dtype=np.float32)  # sigmoid → ~0.018, ~0.982
+    with patch.object(cross_encoder, "ensure_loaded", return_value=True), \
+         patch.object(cross_encoder, "score_pairs", return_value=logits):
+        out = cross_encoder.rerank("q", items, weight=0.6)
+    assert "high ce" in out[0]["snippet"]
+    assert out[0]["ce_score"] > out[1]["ce_score"]
+
+
+def test_cross_encoder_real_model_discriminates() -> None:
+    """End-to-end with the actual ONNX model if it is on disk (skips in CI
+    containers without it). Relevant pair must outscore an irrelevant one."""
+    from src.retrieval import cross_encoder
+
+    if not cross_encoder.is_available():
+        pytest.skip("cross-encoder ONNX model not on disk")
+    assert cross_encoder.ensure_loaded()
+    logits = cross_encoder.score_pairs(
+        "How do I reset my password?",
+        [
+            "Click 'Forgot password' on the login page to reset it.",
+            "The mitochondria is the powerhouse of the cell.",
+        ],
+    )
+    assert logits is not None and logits[0] > logits[1]
+
+
+def test_kb_rag_query_invokes_rerank_when_enabled(tmp_path: Path) -> None:
+    from src.retrieval import cross_encoder, kb_rag
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    (corpus_root / "a.md").write_text("# a\n\nalpha body\n")
+    (corpus_root / "b.md").write_text("# b\n\nbeta body\n")
+    cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
+    index_dir = tmp_path / "idx"
+
+    def fake_encode(text, max_tokens):
+        return np.eye(2, 4, dtype=np.float32)
+
+    with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "ensure_loaded", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "encode", side_effect=fake_encode):
+        kb_rag.build_index(cfg, index_dir=index_dir)
+        with patch.object(cross_encoder, "rerank", side_effect=lambda q, items, **kw: items) as rr:
+            kb_rag.query("alpha", top_k=2, index_dir=index_dir, rerank=True, rerank_weight=0.3)
+            assert rr.called
+        with patch.object(cross_encoder, "rerank", side_effect=lambda q, items, **kw: items) as rr2:
+            kb_rag.query("alpha", top_k=2, index_dir=index_dir, rerank=False)
+            assert not rr2.called

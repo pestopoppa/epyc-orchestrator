@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -24,7 +26,7 @@ from typing import Any
 
 import numpy as np
 
-from src.retrieval import colbert_encoder
+from src.retrieval import colbert_encoder, cross_encoder
 from src.retrieval.markdown_chunker import Chunk, chunk_file
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,40 @@ DEFAULT_INDEX_DIR = _REPO_ROOT / "data" / "kb_rag" / "index"
 # Encoding bounds.
 _QUERY_MAX_TOKENS = 48
 _DOC_MAX_TOKENS = 256  # higher than reranker's 64; chunks are markdown sections
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# K10 (temporal recency) + K9 (cross-encoder rerank) hybrid-signal defaults.
+# All default to a no-op so query() behaviour is unchanged until the K7 eval
+# harness tunes them; env vars let the harness sweep without code edits.
+# Source: agentmemory deep-dive, research/deep-dives/2026-05-27-agent-memory-cluster.md.
+_RECENCY_WEIGHT_DEFAULT = _env_float("KB_RAG_RECENCY_WEIGHT", 0.0)  # 0 = MaxSim-only
+_RECENCY_SIGMA_DAYS_DEFAULT = _env_float("KB_RAG_RECENCY_SIGMA_DAYS", 90.0)
+_RERANK_DEFAULT = _env_flag("KB_RAG_RERANK")
+_RERANK_WEIGHT_DEFAULT = _env_float("KB_RAG_RERANK_WEIGHT", 0.3)
+_RERANK_POOL_MULT_DEFAULT = _env_float("KB_RAG_RERANK_POOL_MULT", 4.0)
+
+
+def _recency_score(mtime: float, now: float, sigma_days: float) -> float:
+    """Gaussian recency weight in (0, 1]: 1.0 at age 0, decaying with age.
+
+    age_days = (now - mtime) / 86400; score = exp(-0.5 * (age/sigma)^2).
+    Matches agentmemory's temporal-proximity signal (intake-611).
+    """
+    if sigma_days <= 0:
+        return 1.0
+    age_days = max(0.0, (now - mtime) / 86400.0)
+    return math.exp(-0.5 * (age_days / sigma_days) ** 2)
 
 _CATALOG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunk (
@@ -294,11 +330,36 @@ def query(
     text: str,
     top_k: int = 8,
     index_dir: Path | str = DEFAULT_INDEX_DIR,
+    recency_weight: float | None = None,
+    recency_sigma_days: float | None = None,
+    rerank: bool | None = None,
+    rerank_weight: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Top-K MaxSim retrieval against the indexed corpus.
+    """Top-K hybrid retrieval against the indexed corpus.
 
-    Returns list of dicts: {file, heading_path, line_range, snippet, score}.
+    Stage 1 (always): ColBERT MaxSim over every chunk.
+    Stage 2 (K10, opt-in): blend a Gaussian temporal-recency weight in
+      `final = (1 - recency_weight) * maxsim + recency_weight * recency`.
+    Stage 3 (K9, opt-in): cross-encoder rerank of the top `top_k * pool_mult`
+      candidates, blended `(1 - rerank_weight) * score + rerank_weight * ce`.
+
+    All three stages default to a no-op (recency_weight=0, rerank off) so the
+    default result is identical to plain MaxSim; defaults come from env vars
+    (KB_RAG_RECENCY_WEIGHT / _SIGMA_DAYS, KB_RAG_RERANK / _WEIGHT /
+    _POOL_MULT) so the K7 eval harness can sweep without code edits. Tuning +
+    win-validation is gated on K7 (inference). See
+    research/deep-dives/2026-05-27-agent-memory-cluster.md.
+
+    Returns list of dicts: {file, heading_path, line_range, snippet, score}
+    (plus `recency` and `ce_score` when those stages are active).
     """
+    recency_weight = _RECENCY_WEIGHT_DEFAULT if recency_weight is None else recency_weight
+    recency_sigma_days = (
+        _RECENCY_SIGMA_DAYS_DEFAULT if recency_sigma_days is None else recency_sigma_days
+    )
+    rerank = _RERANK_DEFAULT if rerank is None else rerank
+    rerank_weight = _RERANK_WEIGHT_DEFAULT if rerank_weight is None else rerank_weight
+
     index_dir = Path(index_dir)
     catalog_path = index_dir / "catalog.sqlite"
     if not catalog_path.exists():
@@ -316,11 +377,12 @@ def query(
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT chunk_id, file_path, heading_path, line_start, line_end, "
-        "       content_hash, emb_path, text_preview FROM chunk"
+        "       content_hash, emb_path, text_preview, mtime FROM chunk"
     ).fetchall()
     conn.close()
 
-    scored: list[tuple[float, sqlite3.Row]] = []
+    now = time.time()
+    scored: list[tuple[float, float, sqlite3.Row]] = []  # (blended, recency, row)
     for r in rows:
         emb_path = index_dir / r["emb_path"]
         if not emb_path.exists():
@@ -331,23 +393,39 @@ def query(
         except Exception:  # noqa: BLE001
             continue
         s = colbert_encoder.maxsim(q_emb, d_emb)
-        scored.append((s, r))
+        rec = (
+            _recency_score(r["mtime"], now, recency_sigma_days)
+            if recency_weight > 0.0
+            else 0.0
+        )
+        blended = (1.0 - recency_weight) * s + recency_weight * rec if recency_weight > 0.0 else s
+        scored.append((blended, rec, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
+    # K9: cross-encoder rerank a wider candidate pool, then truncate to top_k.
+    pool_size = max(top_k, int(top_k * _RERANK_POOL_MULT_DEFAULT)) if rerank else top_k
+
     results = []
-    for score, r in scored[:top_k]:
-        results.append(
-            {
-                "file": r["file_path"],
-                "heading_path": json.loads(r["heading_path"]),
-                "line_range": (r["line_start"], r["line_end"]),
-                "snippet": r["text_preview"],
-                "score": round(score, 4),
-                "content_hash": r["content_hash"],
-            }
+    for blended, rec, r in scored[:pool_size]:
+        item = {
+            "file": r["file_path"],
+            "heading_path": json.loads(r["heading_path"]),
+            "line_range": (r["line_start"], r["line_end"]),
+            "snippet": r["text_preview"],
+            "score": round(blended, 4),
+            "content_hash": r["content_hash"],
+        }
+        if recency_weight > 0.0:
+            item["recency"] = round(rec, 4)
+        results.append(item)
+
+    if rerank and rerank_weight > 0.0 and results:
+        results = cross_encoder.rerank(
+            text, results, text_key="snippet", weight=rerank_weight, base_key="score"
         )
-    return results
+
+    return results[:top_k]
 
 
 def stats(index_dir: Path | str = DEFAULT_INDEX_DIR) -> dict[str, Any]:
