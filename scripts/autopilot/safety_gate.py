@@ -54,6 +54,12 @@ class EvalResult:
     routing_distribution: dict[str, float] = field(default_factory=dict)
     n_questions: int = 0
     details: dict[str, Any] = field(default_factory=dict)
+    # HLE-4 observe-only metrics. The authoritative record schema lives in
+    # src/trace/harness_schema.py; these fields only carry per-trial payloads
+    # through EvalTower -> journal before any Pareto promotion is allowed.
+    metric_schema_version: int = 1
+    harness_metrics: dict[str, Any] = field(default_factory=dict)
+    oracle_adequacy: dict[str, Any] = field(default_factory=dict)
     median_request_speed: float = 0.0  # Raw median per-request tokens/sec.
     aggregate_speed: float = 0.0  # Batch-level tokens/sec over eval wall time.
     eval_concurrency: int = 1  # Worker fan-out used by EvalTower for this batch.

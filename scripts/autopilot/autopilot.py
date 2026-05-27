@@ -1431,10 +1431,16 @@ def _run_loop_inner(
         # get audit metadata in eval_details instead.
         bug_corrupted_by = ""
         bug_corrupted_reason = ""
+        metric_schema_version = getattr(eval_result, "metric_schema_version", 1)
+        harness_metrics = getattr(eval_result, "harness_metrics", {}) or {}
+        oracle_adequacy = getattr(eval_result, "oracle_adequacy", {}) or {}
         eval_details_dict: dict[str, Any] = {
             "per_suite_quality": eval_result.per_suite_quality,
             "routing_distribution": eval_result.routing_distribution,
             "details": eval_result.details,
+            "metric_schema_version": metric_schema_version,
+            "harness_metrics": harness_metrics,
+            "oracle_adequacy": oracle_adequacy,
             "speed_metric_mode": getattr(eval_result, "speed_metric_mode", "median_request_tps"),
             "median_request_speed": getattr(eval_result, "median_request_speed", 0.0),
             "aggregate_speed": getattr(eval_result, "aggregate_speed", 0.0),
@@ -1488,6 +1494,9 @@ def _run_loop_inner(
                 active_flags=active_flags_list,
                 failure_analysis=failure_analysis,
                 eval_details=eval_details_dict,
+                metric_schema_version=metric_schema_version,
+                harness_metrics=harness_metrics,
+                oracle_adequacy=oracle_adequacy,
                 reasoning=json.dumps(action),
                 hypothesis=hypothesis,
                 expected_mechanism=expected_mechanism,

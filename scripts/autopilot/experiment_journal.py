@@ -90,6 +90,9 @@ class JournalEntry:
     memory_count: int = 0
     active_flags: list[str] = field(default_factory=list)
     eval_details: dict[str, Any] = field(default_factory=dict)
+    metric_schema_version: int = 1  # HLE-4 observe-only schema version.
+    harness_metrics: dict[str, Any] = field(default_factory=dict)
+    oracle_adequacy: dict[str, Any] = field(default_factory=dict)
     failure_analysis: str = ""
     hypothesis: str = ""
     expected_mechanism: str = ""
@@ -182,6 +185,18 @@ class ExperimentJournal:
                         memory_count=data.get("memory_count", 0),
                         active_flags=data.get("active_flags", []),
                         eval_details=data.get("eval_details", {}),
+                        metric_schema_version=data.get(
+                            "metric_schema_version",
+                            data.get("eval_details", {}).get("metric_schema_version", 1),
+                        ),
+                        harness_metrics=data.get(
+                            "harness_metrics",
+                            data.get("eval_details", {}).get("harness_metrics", {}),
+                        ),
+                        oracle_adequacy=data.get(
+                            "oracle_adequacy",
+                            data.get("eval_details", {}).get("oracle_adequacy", {}),
+                        ),
                         failure_analysis=data.get("failure_analysis", ""),
                         hypothesis=data.get("hypothesis", ""),
                         expected_mechanism=data.get("expected_mechanism", ""),
