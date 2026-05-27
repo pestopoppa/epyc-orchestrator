@@ -138,6 +138,39 @@ def _tap_write_repl_result(
     _tap_write_repl_result_impl(output, error, is_final, turn)
 
 
+def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None = None) -> None:
+    """Flag-gated per-turn observability for BEP OFF-arm (interleaved) debugging.
+
+    Captures exactly what the model emits each turn + whether it calls the file-write tool vs
+    ``open()`` vs neither — so the interleaved baseline is never debugged blind again (operator
+    directive 2026-05-27: observability-first). Gated on ORCHESTRATOR_BEP_TURN_TRACE=1; fail-silent;
+    default-off so production is unaffected. Writes JSONL to ``$tmp_dir/bep_turn_trace.jsonl``."""
+    import os
+    if os.environ.get("ORCHESTRATOR_BEP_TURN_TRACE") != "1":
+        return
+    try:
+        import json as _json
+        from datetime import datetime as _dt
+        raw = raw_output or ""
+        try:
+            from src.config import get_config
+            path = str(get_config().paths.tmp_dir / "bep_turn_trace.jsonl")
+        except Exception:
+            path = "/mnt/raid0/llm/tmp/bep_turn_trace.jsonl"
+        rec = {
+            "ts": _dt.now().isoformat(), "turn": turn, "role": str(role),
+            "calls_file_write_safe": "file_write_safe" in raw,
+            "calls_open": "open(" in raw,
+            "has_final": "FINAL(" in raw,
+            "raw_output": raw[:4000],
+            "extracted_code": (code[:2000] if code else None),
+        }
+        with open(path, "a") as f:
+            f.write(_json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
 # ── Shared helpers ─────────────────────────────────────────────────────
 
 
@@ -825,6 +858,9 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
 
     # Save raw LLM output for FINAL() rescue before code extraction
     raw_llm_output = code
+    # Observability-first (BEP OFF-arm debug): record exactly what the model emitted this turn,
+    # before any extraction/rescue can alter it. Flag-gated default-off (no-op in production).
+    _bep_turn_trace(state.turns, role, raw_llm_output)
 
     # Reasoning length alarm (short-m@k Action 9): if <think> exceeds
     # 1.5× band budget, retry once with a conciseness nudge.
