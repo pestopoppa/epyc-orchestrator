@@ -2582,8 +2582,10 @@ def _run_loop_inner(
                     trial_id=trial_counter,
                     incumbent_signature=state.get("bsv_incumbent_signature"),
                 )
-                # Incumbent = last FRONTIER-accepted signature (observe-only tracking in state).
-                if pareto_status == "frontier":
+                # Incumbent = last frontier entry that ALSO PASSED the SafetyGate (verdict truthy =
+                # SafetyVerdict.passed). archive.update runs even on gate-FAILED trials, so frontier
+                # alone could promote a failed trial's signature as the incumbent (finding #1).
+                if pareto_status == "frontier" and verdict:
                     state["bsv_incumbent_signature"] = bsv_payload.get("signature")
             except Exception as _bsv_err:  # observe-only must never disrupt the trial loop
                 log.debug("BSV observe skipped (trial %s): %s", trial_counter, _bsv_err)

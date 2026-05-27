@@ -12,7 +12,8 @@ present and tagged `signature_confidence="partial"`; `diff_signatures` then refu
 partial comparison as BENIGN (bumps to WATCH), which is the correct conservative behaviour here.
 
 What the coarse signature captures + what the diff therefore flags:
-  - route_path  = sorted(routing_distribution roles)        -> WATCH on routing change
+  - route_path  = sorted roles, each tagged with a coarse weight quartile -> WATCH on a role-set
+                  change OR a major weight shift across the same roles (finding #3)
   - sentinel_outcomes = per_suite pass/fail proxy (>=2.0/3)  -> BLOCKING on a suite pass->fail
   - token_bucket = avg_prompt_tokens                         -> WATCH/BLOCKING on cost regression
 """
@@ -38,6 +39,23 @@ def _suite_outcomes(per_suite_quality: dict[str, float] | None) -> dict[str, str
         except (TypeError, ValueError):
             continue
     return out
+
+
+def _weight_bucket(w: float) -> str:
+    """Coarse quartile of a routing-weight fraction, so a major distribution shift across the
+    SAME roles still changes the route-path hash (finding #3). q1<.25 q2<.5 q3<.75 q4>=.75."""
+    try:
+        w = float(w)
+    except (TypeError, ValueError):
+        return "q?"
+    return "q1" if w < 0.25 else "q2" if w < 0.5 else "q3" if w < 0.75 else "q4"
+
+
+def _route_path(routing_distribution: dict[str, float] | None) -> list[str] | None:
+    """Routing fingerprint = each role tagged with its coarse weight quartile (sorted), so BOTH a
+    role-set change AND a major weight shift across the same roles register in route_path_hash."""
+    items = sorted((routing_distribution or {}).items())
+    return [f"{role}:{_weight_bucket(w)}" for role, w in items] or None
 
 
 def compute_bsv_observe_payload(
@@ -67,10 +85,10 @@ def compute_bsv_observe_payload(
         archive_member_id=str(species_name or "?"),
         trial_id=trial_id,
         sentinel_outcomes=_suite_outcomes(per_suite),
-        route_path=sorted(routing.keys()) or None,
+        route_path=_route_path(routing),
         total_tokens=avg_tokens or None,
-        harness_metrics_id=int(getattr(eval_result, "metric_schema_version", 1) or 1),
-        oracle_adequacy_version=(len(oracle) or None),
+        harness_metrics_id=None,        # no real trace-store ID yet (finding #2); see diagnostics below
+        oracle_adequacy_version=None,   # len(oracle) is a count, not a version (finding #2)
         signature_confidence="partial",  # trial-level aggregate, not per-request evidence
     )
     sig_dict = _as_dict(sig)
@@ -82,6 +100,10 @@ def compute_bsv_observe_payload(
         "severity": None,
         "reasons": [],
         "compared_to_incumbent": incumbent_signature is not None,
+        # explicitly-named diagnostics — NOT signature IDs (finding #2). Journaled here, not folded
+        # into the signature hash (which strips IDs anyway).
+        "metric_schema_version": int(getattr(eval_result, "metric_schema_version", 1) or 1),
+        "oracle_adequacy_count": len(oracle),
     }
     if incumbent_signature is not None:
         severity, reasons = diff_signatures(incumbent_signature, sig_dict)

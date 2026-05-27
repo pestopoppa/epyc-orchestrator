@@ -77,3 +77,29 @@ def test_graceful_on_empty_eval_result():
     p = compute_bsv_observe_payload(SimpleNamespace(), species_name="", trial_id=0, incumbent_signature=None)
     assert p["severity"] is None
     assert "signature" in p and p["signature_confidence"] == "partial"
+
+
+def test_routing_weight_drift_flags_change():
+    # finding #3: SAME roles, but a major weight shift must change route_path_hash (it would not
+    # under name-only hashing). frontdoor 0.9->0.1 (q4->q1), worker_coder 0.1->0.9 (q1->q4).
+    inc = compute_bsv_observe_payload(
+        _er(routing_distribution={"frontdoor": 0.9, "worker_coder": 0.1}, per_suite_quality={"qa": 2.6}),
+        species_name="s", trial_id=1, incumbent_signature=None,
+    )["signature"]
+    p = compute_bsv_observe_payload(
+        _er(routing_distribution={"frontdoor": 0.1, "worker_coder": 0.9}, per_suite_quality={"qa": 2.6}),
+        species_name="s", trial_id=2, incumbent_signature=inc,
+    )
+    assert p["severity"] in ("watch", "blocking")
+    assert any("route_path_hash" in r for r in p["reasons"])
+
+
+def test_diagnostics_are_named_not_fake_signature_ids():
+    # finding #2: schema/count live under explicit diagnostic keys, NOT as fake IDs in the signature.
+    p = compute_bsv_observe_payload(
+        _er(oracle_adequacy={"a": 1, "b": 2}, metric_schema_version=3),
+        species_name="s", trial_id=1, incumbent_signature=None,
+    )
+    assert p["metric_schema_version"] == 3
+    assert p["oracle_adequacy_count"] == 2
+    assert "harness_metrics_id" not in p["signature"]  # signature is the diffable subset only
