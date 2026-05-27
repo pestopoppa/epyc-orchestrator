@@ -93,6 +93,7 @@ def _restart_api(batch_edit_mode: bool, edit_root: Path) -> bool:
         # multi-file read-loop / FINAL-truncation both arms hit. Enabled for BOTH arms so the
         # A/B measures interleaved-vs-batched on a non-looping harness, not loop-vs-loop.
         "ORCHESTRATOR_REPL_LOOP_GUARD": "1",
+        "ORCHESTRATOR_LOOPGUARD_PROBE": "1",  # live per-turn probe (enabled/count) for this A/B
     }
     r = subprocess.run(
         [sys.executable, "scripts/server/orchestrator_stack.py", "reload", "orchestrator"],

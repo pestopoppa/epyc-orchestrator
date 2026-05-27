@@ -108,3 +108,26 @@ Inspect `data/bep_sandbox/results-X/{results.jsonl,traces/*.jsonl}`.
   (proves persistence was the cause + the fix works) or still resets (fix is a no-op → mechanism elsewhere).
   Then `prompt_has_loop_halt` + `results.jsonl` show whether the intervention fires and whether read-first
   tasks pass — the binary (A) verdict (advisory-was-the-gap vs coder-capability).
+
+## VERDICT — PROVEN (results-readfix7, 2026-05-27)
+Ran the probed A/B (J6 paused, `ORCHESTRATOR_LOOPGUARD_PROBE=1`):
+- **Counter now persists on the LIVE path** — probe logged `enabled=True` with `count` climbing
+  `0,1,2,3,4,5,6,7` across turns (pre-fix it was None/0). So the cross-turn persistence gap WAS the cause
+  and the declared-field fix (`4fe681e`) resolves it. (Why the ad-hoc attr didn't persist remains formally
+  unproven, but the declared field demonstrably DOES persist — sufficient.)
+- **Hard intervention FIRES** — trace `t2_add_and_use-off`: `prompt_has_loop_halt=True` at turn 3 (count=2),
+  and the model **wrote a file in response** (`fws=1`, count reset to 0). It engages and changes behavior.
+- **Tasks STILL fail both arms** — OFF 1/5, ON 1/5 (only t1 create passes; read-first t2–t5 fail at turns=8
+  on BOTH arms).
+
+**Conclusion (evidence-backed, not a smell test):** with the harness now provably correct end-to-end —
+reads resolve to the task-root, writes anchor in the task-root, `last_output` feeds back, and the
+loop-breaker fires and forces a write — the coder STILL cannot complete read→edit→FINAL multi-file tasks.
+The wall is **coder-model capability / task difficulty, not the harness**. Track (A) (the hard intervention)
+was correctly built and proven to fire, but does not make the model complete these tasks. BEP-2's
+interleaved-vs-batched LATENCY question is unanswerable from multi-file (both arms fail; no completions to
+compare); only the no-read create task (t1) completes (ON batch 2t vs OFF interleaved 1t).
+
+**Disposition:** the loop-guard (`3e9ab5e`+`4fe681e`) stays flag-gated **default-OFF** — it fails-fast on
+loops but does not fix completion; enable only for the loop-breaking compute-saving benefit if desired.
+Multi-file coder completion is a separate model/task problem, not a harness bug.
