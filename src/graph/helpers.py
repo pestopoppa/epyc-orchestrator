@@ -138,7 +138,8 @@ def _tap_write_repl_result(
     _tap_write_repl_result_impl(output, error, is_final, turn)
 
 
-def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None = None) -> None:
+def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None = None,
+                    prompt: str | None = None) -> None:
     """Flag-gated per-turn observability for BEP OFF-arm (interleaved) debugging.
 
     Captures exactly what the model emits each turn + whether it calls the file-write tool vs
@@ -157,6 +158,7 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
             path = str(get_config().paths.tmp_dir / "bep_turn_trace.jsonl")
         except Exception:
             path = "/mnt/raid0/llm/tmp/bep_turn_trace.jsonl"
+        _p = prompt or ""
         rec = {
             "ts": _dt.now().isoformat(), "turn": turn, "role": str(role),
             "calls_file_write_safe": "file_write_safe" in raw,
@@ -164,6 +166,12 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
             "has_final": "FINAL(" in raw,
             "raw_output": raw[:4000],
             "extracted_code": (code[:2000] if code else None),
+            # Proof instrumentation: what did the model actually RECEIVE this turn?
+            "prompt_chars": (len(_p) if prompt is not None else None),
+            "prompt_has_last_output": ("## Last Output" in _p) if prompt is not None else None,
+            "prompt_has_rider": ("WRITE turns:" in _p) if prompt is not None else None,
+            "prompt_has_loop_halt": ("LOOP HALTED" in _p) if prompt is not None else None,
+            "prompt_tail": (_p[-700:] if prompt is not None else None),
         }
         with open(path, "a") as f:
             f.write(_json.dumps(rec) + "\n")
@@ -719,15 +727,24 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     if budget_warnings:
         prompt += "\n\n" + budget_warnings
 
-    # REPL loop-guard (Fix B, flag-gated default-off): if the model repeated an identical
-    # non-advancing turn, say so explicitly — silent re-prompting otherwise loops until the
-    # turn budget burns out (the "timeout" seen on BEP multi-file + unknown-tool tasks).
+    # REPL loop-guard (Fix B, flag-gated default-off): an identical non-advancing turn means the
+    # model is stuck (re-reading / re-writing) and the prior ADVISORY nudge did not break it under
+    # greedy decode (proven: BEP read-first tasks looped 8 turns with the content already in-prompt).
+    # HARD intervention: re-inject the content it already has + a forceful single-action directive,
+    # appended LAST (recency) so it dominates the next generation.
     if _repl_loop_guard_enabled() and getattr(state, "_repl_repeat_count", 0) >= 1:
-        prompt += (
-            "\n\n** LOOP DETECTED: your last turn emitted code identical to the turn before it "
-            "and the task did not advance. Do NOT repeat it. If you already read what you need, "
-            "act on it now — write the result with file_write_safe(...) — or call FINAL(...)."
+        _read = (getattr(state, "last_output", "") or "").strip()[:1500]
+        _halt = (
+            "\n\n** LOOP HALTED ** You just emitted the SAME action with no progress. STOP repeating it. "
+            "Do NOT peek/read again — you already have what you need. THIS TURN emit a single closed "
+            "```python block containing ONLY file_write_safe('<relative-path>', '''<full new file "
+            "content>''') for each file you must change (relative paths resolve to the task workspace; "
+            "do NOT use absolute paths). Do NOT call FINAL() in that block. If every required edit is "
+            "already written, instead emit a block containing ONLY FINAL('done')."
         )
+        if _read:
+            _halt += "\n\nContent you already read (use it; do not re-read):\n```\n" + _read + "\n```"
+        prompt += _halt
 
     # Graduated FINAL() nudge: midpoint soft reminder, then hard deadline.
     remaining = state.max_turns - state.turns
@@ -900,7 +917,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     raw_llm_output = code
     # Observability-first (BEP OFF-arm debug): record exactly what the model emitted this turn,
     # before any extraction/rescue can alter it. Flag-gated default-off (no-op in production).
-    _bep_turn_trace(state.turns, role, raw_llm_output)
+    _bep_turn_trace(state.turns, role, raw_llm_output, prompt=prompt)
 
     # Reasoning length alarm (short-m@k Action 9): if <think> exceeds
     # 1.5× band budget, retry once with a conciseness nudge.
