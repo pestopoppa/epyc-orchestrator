@@ -385,9 +385,11 @@ def nway_policy(
     """Admission decision for an N-way (>=2 distinct roles) cross-role active set.
 
     Pairwise `pair_policy` is necessary but NOT sufficient — an all-pairwise-allowed
-    set can be aggregate-negative. Measured proof (2026-05-26): {frontdoor, ingest,
-    vision} has all three pairs allow (1.72/1.43/1.06) yet the triple is 0.847 BLOCK.
-    This consults the measured `n_way` matrix for the EXACT active set, then applies
+    set could in principle be aggregate-negative, so this is a DEFENSIVE gate. (History:
+    {frontdoor, ingest, vision} once read 0.847 BLOCK and was cited as proof of
+    pairwise!=N-way — but that was a bad-affinity artifact; on certified disjoint quarters
+    it is 1.731 ALLOW. Per the 2026-05-26 certified re-bench there is currently NO measured
+    N-way block.) This consults the measured `n_way` matrix for the EXACT active set, then applies
     a policy for unmeasured sets:
       * measured allow      -> ALLOW
       * measured borderline -> ALLOW (foreground) / QUEUE (background)

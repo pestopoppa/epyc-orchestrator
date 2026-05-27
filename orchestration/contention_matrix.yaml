@@ -286,10 +286,12 @@ triples:
 #     class and need no separate measurement — contention is per-NUMA-node BW, ~role
 #     -identity-independent for light models.
 #   * any set containing a HEAVY instance (ingest_long_context / architect_general)
-#     MUST consult the measured entries below; do NOT infer from pairwise. PROOF that
-#     pairwise-allow != N-way-safe: {frontdoor, ingest, vision} has all three pairs
-#     allow (1.72 / 1.43 / 1.06) yet the TRIPLE is 0.847 BLOCK (ingest's half saturates
-#     BW with two co-runners). This is the exact case J4c must block at runtime.
+#     MUST consult the measured entries below; do NOT infer from pairwise. The N-way gate is
+#     a DEFENSIVE mechanism — an all-pairwise-allowed set could in principle be aggregate-negative.
+#     History: {frontdoor, ingest, vision} once read 0.847 BLOCK and was cited as the proof of
+#     pairwise!=N-way — but that was a BAD-AFFINITY ARTIFACT; on certified disjoint quarters it is
+#     1.731 ALLOW (see n_way entry below). As of the 2026-05-26 certified re-bench there is NO
+#     measured N-way block; the gate queues any future measured-block set if one is ever found.
 nway_default_floor: 0.85
 nway_light_roles: ["frontdoor", "vision_escalation", "worker_general", "worker_vision"]
 nway_heavy_roles: ["ingest_long_context", "architect_general"]
