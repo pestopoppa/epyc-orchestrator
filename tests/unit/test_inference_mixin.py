@@ -284,6 +284,118 @@ class TestCallCachingBackend:
         request = call_args[0][1]
         assert request.stop_sequences == ["END", "STOP"]
 
+    def test_call_caching_backend_locks_direct_single_instance_under_per_region(
+        self, mock_backend, monkeypatch, tmp_path
+    ):
+        """Direct single-instance roles must still hold cpu_region_lock at idx=0."""
+        monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+        monkeypatch.setenv("INFERENCE_TAP_FILE", str(tmp_path / "inference_tap.log"))
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("architect_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
+            },
+        )
+
+        lock_calls = []
+        lock_active = []
+
+        class FakeRegionLock:
+            def __enter__(self):
+                lock_active.append(True)
+                return {}
+
+            def __exit__(self, exc_type, exc, tb):
+                lock_active.pop()
+                return False
+
+        def fake_region_lock(role, instance_idx, **kwargs):
+            lock_calls.append((role, instance_idx, kwargs))
+            return FakeRegionLock()
+
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock.cpu_region_lock_for_instance",
+            fake_region_lock,
+        )
+
+        def infer_while_locked(_role_config, _request):
+            assert lock_active == [True]
+            return InferenceResult(
+                role="architect_general",
+                output="done",
+                tokens_generated=3,
+                generation_speed=10.0,
+                elapsed_time=0.3,
+                success=True,
+                prompt_eval_ms=4.0,
+                generation_ms=300.0,
+            )
+
+        mock_backend.infer.side_effect = infer_while_locked
+        prims = LLMPrimitives(
+            mock_mode=False,
+            server_urls={"architect_general": "http://localhost:8083"},
+        )
+
+        result = prims._call_caching_backend(
+            mock_backend,
+            "question",
+            "architect_general",
+            n_tokens=32,
+        )
+
+        assert result == "done"
+        assert [(role, idx) for role, idx, _kwargs in lock_calls] == [
+            ("architect_general", 0)
+        ]
+        assert lock_calls[0][2]["request_tag"] is None
+
+        events_path = tmp_path / "inference_tap_events.jsonl"
+        events = [line for line in events_path.read_text().splitlines() if line.strip()]
+        assert events, "tap events should include direct lock metadata"
+        first = __import__("json").loads(events[0])
+        assert first["event"] == "start"
+        assert first["lock_role"] == "architect_general"
+        assert first["instance_idx"] == 0
+        assert first["instance_shape"] == "full"
+        assert first["instance_regions"] == ["q0", "q1", "q2", "q3"]
+
+    def test_call_caching_backend_does_not_double_lock_concurrency_aware_backend(
+        self, monkeypatch
+    ):
+        """CAB owns per-instance locking internally; the mixin must not wrap it."""
+        monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+
+        def fail_region_lock(*_args, **_kwargs):
+            raise AssertionError("ConcurrencyAwareBackend should manage its own lock")
+
+        monkeypatch.setattr(
+            "src.runtime.cpu_region_lock.cpu_region_lock_for_instance",
+            fail_region_lock,
+        )
+
+        class FakeConcurrencyAwareBackend:
+            _dispatch = object()
+            _tap_dispatch_metadata = object()
+
+            def infer(self, _role_config, _request):
+                return InferenceResult(
+                    role="frontdoor",
+                    output="ok",
+                    tokens_generated=1,
+                    generation_speed=10.0,
+                    elapsed_time=0.1,
+                    success=True,
+                )
+
+        backend = FakeConcurrencyAwareBackend()
+        prims = LLMPrimitives(
+            mock_mode=False,
+            server_urls={"frontdoor": "full:http://localhost:8070,http://localhost:8080"},
+        )
+
+        assert prims._call_caching_backend(backend, "hi", "frontdoor") == "ok"
+
 
 class TestRealBatch:
     """Tests for _real_batch() method."""

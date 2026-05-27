@@ -58,6 +58,16 @@ def test_dashboard_html_loaded_at_module_import() -> None:
     assert len(dashboard._DASHBOARD_HTML) > 40_000
 
 
+def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
+    """The live tap can show CPU-lock wait states without counting them as holders."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "waiting_cpu_lock" in body
+    assert "tap-inferred active stream" in body
+    assert "TAP ACTIVE" in body
+
+
 # ----- dashboard_tasks: timezone-aware UTC (Tranche-8 polish) -----
 
 

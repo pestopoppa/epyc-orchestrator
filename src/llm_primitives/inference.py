@@ -6,6 +6,7 @@ import contextvars
 import logging
 import os
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -69,6 +70,133 @@ def _extract_port(url: str) -> int | None:
         return parsed.port
     except Exception:
         return None
+
+
+def _per_region_locks_enabled() -> bool:
+    return os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _backend_manages_region_locks(backend: Any) -> bool:
+    """True for backends that acquire cpu_region_lock internally."""
+    return (
+        hasattr(backend, "_dispatch")
+        and hasattr(backend, "_tap_dispatch_metadata")
+    )
+
+
+def _shape_for_regions(regions: frozenset[str] | set[str] | list[str]) -> str:
+    rs = set(regions or [])
+    if rs == {"q0", "q1", "q2", "q3"}:
+        return "full"
+    if rs == {"q0", "q1"}:
+        return "half0"
+    if rs == {"q2", "q3"}:
+        return "half1"
+    if len(rs) == 1:
+        return next(iter(rs))
+    return "+".join(sorted(rs)) if rs else "unknown"
+
+
+def _direct_region_lock_metadata(
+    role: str,
+    backend_url: str,
+    port: int | None,
+) -> dict[str, Any]:
+    """Tap metadata for direct single-instance roles locked at topology idx 0."""
+    try:
+        from src.runtime.instance_topology import get_instance_regions
+
+        instance_regions = get_instance_regions()
+    except Exception:
+        return {}
+    key = (role, 0)
+    if key not in instance_regions:
+        return {}
+    regions = instance_regions.get(key, frozenset())
+    return {
+        "topology_role": role,
+        "lock_role": role,
+        "instance_idx": 0,
+        "concurrency_idx": -1,
+        "instance_shape": _shape_for_regions(regions),
+        "instance_regions": sorted(regions),
+        "port": port,
+        "backend_url": backend_url,
+    }
+
+
+def _metadata_from_request_or_env(
+    request: Any,
+    attr_names: tuple[str, ...],
+    env_names: tuple[str, ...],
+) -> Any:
+    for name in attr_names:
+        value = getattr(request, name, None)
+        if value not in (None, ""):
+            return value
+    extra = getattr(request, "extra", None)
+    if isinstance(extra, dict):
+        for name in attr_names:
+            value = extra.get(name)
+            if value not in (None, ""):
+                return value
+    for name in env_names:
+        value = os.environ.get(name)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _build_tap_metadata(
+    request: Any,
+    *,
+    role: str,
+    backend_url: str,
+    port: int | None,
+    task_id: str | None,
+    parent_request_id: str | None = None,
+    context_trial_id: Any = None,
+    context_batch_id: Any = None,
+) -> dict[str, Any]:
+    parent_request_id = parent_request_id or _metadata_from_request_or_env(
+        request,
+        ("parent_request_id", "request_id"),
+        ("ORCHESTRATOR_REQUEST_ID", "AUTOPILOT_REQUEST_ID"),
+    )
+    request_id = _metadata_from_request_or_env(
+        request,
+        ("inference_request_id",),
+        ("ORCHESTRATOR_INFERENCE_REQUEST_ID", "AUTOPILOT_INFERENCE_REQUEST_ID"),
+    )
+    if not request_id:
+        base = parent_request_id or task_id
+        request_id = f"{base}:{uuid.uuid4().hex[:8]}" if base else None
+    trial_id = _metadata_from_request_or_env(
+        request,
+        ("trial_id", "trial", "current_trial"),
+        ("ORCHESTRATOR_TRIAL_ID", "AUTOPILOT_TRIAL_ID", "GEPA_TRIAL_ID"),
+    )
+    if trial_id in (None, ""):
+        trial_id = context_trial_id
+    batch_id = _metadata_from_request_or_env(
+        request,
+        ("batch_id", "concurrency_batch_id", "eval_batch_id"),
+        ("ORCHESTRATOR_BATCH_ID", "AUTOPILOT_BATCH_ID", "GEPA_BATCH_ID"),
+    )
+    if batch_id in (None, ""):
+        batch_id = context_batch_id
+    return {
+        "request_id": request_id,
+        "parent_request_id": parent_request_id,
+        "task_id": task_id or getattr(request, "task_id", None),
+        "trial_id": trial_id,
+        "batch_id": batch_id,
+        "role": role,
+        "backend_url": backend_url,
+        "port": port,
+    }
 
 
 class InferenceMixin:
@@ -420,27 +548,37 @@ class InferenceMixin:
             from src.inference_lock import inference_lock
             can_stream = False
             _cb_port = _extract_port(backend_url)
-            # Phase 3 of per-region-lock migration (2026-05-22): when the
-            # ORCHESTRATOR_PER_REGION_LOCKS feature flag is on, skip the
-            # legacy global heavy_model.lock here — ConcurrencyAwareBackend's
-            # `_dispatch` will take the precise per-CPU-region locks needed
-            # for the chosen instance. Holding both would deadlock or
-            # double-serialize. When the flag is off, retain legacy behavior.
-            import os as _os
-            _per_region_on = _os.environ.get(
-                "ORCHESTRATOR_PER_REGION_LOCKS", "0"
-            ).strip() in {"1", "true", "yes", "on"}
-            lock_ctx = (
-                inference_lock(
+            # Phase 3 of per-region-lock migration (2026-05-22): while the
+            # feature flag is on, ConcurrencyAwareBackend takes precise locks
+            # internally for multi-instance pools. Direct single-instance
+            # CachingBackend roles (architect_general, worker_vision) still
+            # need an external idx=0 region lock; otherwise they can stream
+            # without appearing in /proc/locks or the contention gate snapshot.
+            _per_region_on = _per_region_locks_enabled()
+            direct_region_metadata: dict[str, Any] = {}
+            if backend_url and _per_region_on and not _backend_manages_region_locks(backend):
+                from src.runtime.cpu_region_lock import cpu_region_lock_for_instance
+
+                direct_region_metadata = _direct_region_lock_metadata(role, backend_url, _cb_port)
+                lock_ctx = cpu_region_lock_for_instance(
                     role,
+                    0,
                     cancel_check=self.get_request_cancel_check(),
                     deadline_s=self.get_request_deadline_s(),
                     request_tag=self.get_request_task_id(),
-                    port=_cb_port,
                 )
-                if (backend_url and not _per_region_on)
-                else contextlib.nullcontext()
-            )
+            else:
+                lock_ctx = (
+                    inference_lock(
+                        role,
+                        cancel_check=self.get_request_cancel_check(),
+                        deadline_s=self.get_request_deadline_s(),
+                        request_tag=self.get_request_task_id(),
+                        port=_cb_port,
+                    )
+                    if (backend_url and not _per_region_on)
+                    else contextlib.nullcontext()
+                )
 
             try:
                 with lock_ctx:
@@ -458,7 +596,30 @@ class InferenceMixin:
                         and _tap_should_stream_role(role)
                     )
                     if tap_enabled:
-                        with tap_section(role, prompt) as tap:
+                        tap_metadata = _build_tap_metadata(
+                            request,
+                            role=role,
+                            backend_url=backend_url,
+                            port=_cb_port,
+                            task_id=self.get_request_task_id(),
+                            parent_request_id=(
+                                self.get_request_id()
+                                if hasattr(self, "get_request_id")
+                                else None
+                            ),
+                            context_trial_id=(
+                                self.get_request_trial_id()
+                                if hasattr(self, "get_request_trial_id")
+                                else None
+                            ),
+                            context_batch_id=(
+                                self.get_request_batch_id()
+                                if hasattr(self, "get_request_batch_id")
+                                else None
+                            ),
+                        )
+                        tap_metadata.update(direct_region_metadata)
+                        with tap_section(role, prompt, metadata=tap_metadata) as tap:
                             if can_stream:
                                 # Early-stop: if _early_stop_check is set, wrap the
                                 # tap callback to also check accumulated output and

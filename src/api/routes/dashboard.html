@@ -658,6 +658,7 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         }
         .rl-cell { border-radius:3px; padding:4px 2px; text-align:center; font-size:14px; line-height:1.1; }
         .rl-active  { background: rgba(251,191,36,0.30); color: #fbbf24; animation: regionLockActivePulse 1.4s ease-in-out infinite; }
+        .rl-inferred { outline: 1px dashed rgba(251,191,36,0.75); outline-offset: -2px; }
         .rl-blocked { background: rgba(248,113,113,0.30); color: #f87171; }
         .rl-ready   { background: rgba(52,211,153,0.18); color: var(--good, #34d399); }
         .rl-na      { background: rgba(100,100,100,0.10); color: var(--dim, #6b7280); font-style: italic; }
@@ -1350,12 +1351,13 @@ function renderAutopilotRunStrip() {
         stateCounts[a.state] = (stateCounts[a.state] || 0) + 1;
     }
     const queued = stateCounts.queued || 0;
+    const waitingCpu = stateCounts.waiting_cpu_lock || 0;
     const pending = stateCounts.prefill_decode_pending || 0;
     const stalled = stateCounts.stalled || 0;
-    const loadClass = stalled ? 'bad' : ((queued || pending) ? 'warn' : (activeReqs.length ? 'good' : 'muted'));
+    const loadClass = stalled ? 'bad' : ((waitingCpu || queued || pending) ? 'warn' : (activeReqs.length ? 'good' : 'muted'));
     const loadValue = `${activeReqs.length} active`;
     const lockSummary = _latestRegionLockSummary || {};
-    const loadSub = `queued ${queued} · pending ${pending} · stalled ${stalled}<br><strong>locks</strong> ${lockSummary.activeLockCount || 0} held across ${lockSummary.heldRegions || 0} regions`;
+    const loadSub = `waiting ${waitingCpu} · queued ${queued} · pending ${pending} · stalled ${stalled}<br><strong>locks</strong> ${lockSummary.activeLockCount || 0} held across ${lockSummary.heldRegions || 0} regions`;
 
     const failures = completed.filter(t => t.outcome && t.outcome !== 'task_completed').length;
     const lastComplete = completed.length ? completed[0] : null;
@@ -1471,6 +1473,8 @@ let _structuredTapStream = null;
 let _rawTapBuffer = "";
 let _structuredTapRequests = [];
 let _latestRegionLocksByRole = {};
+let _latestTapInferredRegionLocksByRole = {};
+let _lastRegionLockPollStarted = 0;
 let _structuredTapOpenRequestIds = new Set();
 let _rawRenderedTapOpenKeys = new Set();
 const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
@@ -1708,6 +1712,39 @@ function structuredTapCpuBlockerSummary(blockers) {
         .join(' · ');
 }
 
+function buildTapInferredRegionLocks() {
+    const inferred = {};
+    const requests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
+    for (const req of requests) {
+        const role = String(req.lock_role || req.topology_role || (req.role ? clientBaseRole(req.role) : '') || req.role || '');
+        if (!role) continue;
+        if (req.instance_idx == null) continue;
+        const idx = Number(req.instance_idx);
+        if (!Number.isFinite(idx)) continue;
+        const regions = structuredTapRequestedRegions(req);
+        if (!regions.length) continue;
+        const bucket = inferred[role] || {
+            instanceIdxs: new Set(),
+            regions: new Set(),
+            holderPids: new Set(),
+            pidsByInstanceIdx: new Map(),
+            sources: [],
+        };
+        bucket.instanceIdxs.add(idx);
+        for (const region of regions) bucket.regions.add(String(region));
+        const pid = req.pid != null ? String(req.pid) : '';
+        if (pid) {
+            bucket.holderPids.add(pid);
+            const pidsForIdx = bucket.pidsByInstanceIdx.get(idx) || new Set();
+            pidsForIdx.add(pid);
+            bucket.pidsByInstanceIdx.set(idx, pidsForIdx);
+        }
+        bucket.sources.push(req);
+        inferred[role] = bucket;
+    }
+    return inferred;
+}
+
 function structuredTapActivity(req) {
     if (!req) {
         return { state: 'unknown', label: 'unknown', color: 'var(--muted)', live: false, show: false, reason: '' };
@@ -1799,6 +1836,33 @@ function openStructuredTapRequests() {
 function liveStructuredTapRequests() {
     return (Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [])
         .filter(isLiveStructuredTapRequest);
+}
+
+function refreshLiveDotsFromStructuredTap() {
+    const liveTapCount = liveStructuredTapRequests().length;
+    if (liveTapCount <= 0) return;
+    const tapDot = document.getElementById('tap-live-dot');
+    _setDotState(tapDot, 'active', `${liveTapCount} live inference request(s) streaming`);
+
+    const proc = _latestProcessStatus || {};
+    const ap = proc.autopilot || {};
+    const phase = proc.autopilot_phase || {};
+    const phaseName = phase.phase || 'autopilot';
+    const planDot = document.getElementById('planner-live-dot');
+    const apDot = document.getElementById('autopilot-live-dot');
+    if (proc.planner_tap_age_s != null) {
+        _setDotState(planDot, 'standby', `standby — live inference is active (last planner event ${Math.round(proc.planner_tap_age_s)}s ago)`);
+    }
+    if (ap.running) {
+        _setDotState(apDot, 'standby', `standby — live inference has focus; autopilot phase ${String(phaseName)}`);
+    }
+}
+
+function scheduleRegionLocksRefresh(force = false) {
+    const now = Date.now();
+    if (!force && now - _lastRegionLockPollStarted < 700) return;
+    _lastRegionLockPollStarted = now;
+    updateRegionLocks();
 }
 
 function rememberStructuredTapAccordion(detailsEl) {
@@ -2391,6 +2455,8 @@ function startStructuredTapStream() {
             _structuredTapRequests = data.structured_requests || [];
             if (_rawTapRenderMode === 'structured') paintRawTap();
             renderAutopilotRunStrip();
+            refreshLiveDotsFromStructuredTap();
+            scheduleRegionLocksRefresh();
             refreshOpenStructuredTapDetail();
         } catch {}
     };
@@ -3733,6 +3799,33 @@ function startDashboard() {
                     instances: info.instances || [],
                 };
             }
+            _latestTapInferredRegionLocksByRole = buildTapInferredRegionLocks();
+            for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
+                const base = _latestRegionLocksByRole[role] || {
+                    instanceIdxs: new Set(),
+                    regions: new Set(),
+                    holderPids: new Set(),
+                    pidsByInstanceIdx: new Map(),
+                    instances: (byRole[role] && byRole[role].instances) || [],
+                };
+                base.tapInferredInstanceIdxs = new Set([
+                    ...((base.tapInferredInstanceIdxs && [...base.tapInferredInstanceIdxs]) || []),
+                    ...((inferred.instanceIdxs && [...inferred.instanceIdxs]) || []),
+                ]);
+                base.tapInferredRegions = new Set([
+                    ...((base.tapInferredRegions && [...base.tapInferredRegions]) || []),
+                    ...((inferred.regions && [...inferred.regions]) || []),
+                ]);
+                for (const idx of (inferred.instanceIdxs || [])) base.instanceIdxs.add(Number(idx));
+                for (const region of (inferred.regions || [])) base.regions.add(String(region));
+                for (const pid of (inferred.holderPids || [])) base.holderPids.add(String(pid));
+                for (const [idx, pids] of (inferred.pidsByInstanceIdx || new Map()).entries()) {
+                    const bucket = base.pidsByInstanceIdx.get(Number(idx)) || new Set();
+                    for (const pid of pids) bucket.add(String(pid));
+                    base.pidsByInstanceIdx.set(Number(idx), bucket);
+                }
+                _latestRegionLocksByRole[role] = base;
+            }
             if (_rawTapRenderMode === 'structured' && Array.isArray(_structuredTapRequests) && _structuredTapRequests.length) {
                 paintRawTap();
             }
@@ -3759,15 +3852,39 @@ function startDashboard() {
                     }
                 }
             }
-            const globalHeldRegions = new Set(Object.keys(globalHeldBy));
-            const activeLockCount = Object.values(byRole).reduce(
-                (acc, info) => acc + ((info.active_instance_idxs || []).length),
-                0
-            );
-            const heldBySummary = [...new Set(
+            const actualHeldBySummary = [...new Set(
                 Object.values(globalHeldBy)
                     .flat()
                     .map(b => `${b.role}.${b.shape}`)
+            )].join(', ');
+            const tapInferredMissing = [];
+            for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
+                const actualActive = new Set(((byRole[role] || {}).active_instance_idxs || []).map(Number));
+                const instByIdx = new Map((((byRole[role] || {}).instances) || []).map(i => [Number(i.idx), i]));
+                for (const idx of (inferred.instanceIdxs || [])) {
+                    const nIdx = Number(idx);
+                    if (actualActive.has(nIdx)) continue;
+                    const req = (inferred.sources || []).find(r => Number(r.instance_idx) === nIdx) || {};
+                    const inst = instByIdx.get(nIdx);
+                    const regions = ((req.instance_regions || (inst && inst.regions) || [])).map(String);
+                    if (!regions.length) continue;
+                    const shape = req.instance_shape || (inst && inst.shape) || `idx${nIdx}`;
+                    tapInferredMissing.push(`${role}.${shape}`);
+                    for (const region of regions) {
+                        (globalHeldBy[region] ||= []).push({ role, shape, inferred: true });
+                    }
+                }
+            }
+            const globalHeldRegions = new Set(Object.keys(globalHeldBy));
+            const actualActiveLockCount = Object.values(byRole).reduce(
+                (acc, info) => acc + ((info.active_instance_idxs || []).length),
+                0
+            );
+            const activeLockCount = actualActiveLockCount + tapInferredMissing.length;
+            const heldBySummary = [...new Set(
+                Object.values(globalHeldBy)
+                    .flat()
+                    .map(b => `${b.inferred ? '~' : ''}${b.role}.${b.shape}`)
             )].join(', ');
             _latestRegionLockSummary = {
                 activeLockCount,
@@ -3782,14 +3899,17 @@ function startDashboard() {
                 _setDotState(
                     regionDot,
                     'active',
-                    `${activeLockCount} instance lock(s) currently held across ${globalHeldRegions.size} CPU region(s)`
+                    `${activeLockCount} active instance(s) across ${globalHeldRegions.size} CPU region(s): ${heldBySummary || 'unknown'}`
                 );
             } else {
                 _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows dispatch readiness');
             }
             if (status && enabled) {
+                const inferredSuffix = tapInferredMissing.length
+                    ? `; +${tapInferredMissing.length} tap-inferred active stream(s): ${tapInferredMissing.join(', ')}`
+                    : '';
                 status.textContent = activeLockCount > 0
-                    ? `— ${activeLockCount} holder instance(s): ${heldBySummary}; blocked cells are wait states; per-region locks ENABLED`
+                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${inferredSuffix}; blocked cells are wait states; per-region locks ENABLED`
                     : '— no locks held; per-region locks ENABLED';
                 status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
             }
@@ -3799,6 +3919,7 @@ function startDashboard() {
                 nRoles++;
                 const insts = info.instances || [];
                 const activeSet = new Set(info.active_instance_idxs || []);
+                const inferredActiveSet = (_latestTapInferredRegionLocksByRole[role] && _latestTapInferredRegionLocksByRole[role].instanceIdxs) || new Set();
                 rows.push(`<div style="overflow:hidden;color:var(--fg);font-size:11px;line-height:1.3">${role}</div>`);
                 for (const col of COLS) {
                     const inst = pickInstForCol(insts, col.key);
@@ -3809,6 +3930,11 @@ function startDashboard() {
                     if (activeSet.has(inst.idx)) {
                         const t = `${role}.${col.label} ACTIVE — instance idx=${inst.idx} holding {${(inst.regions || []).join(',')}}`;
                         rows.push(`<div class="rl-cell rl-active" title="${t}">⚡</div>`);
+                        continue;
+                    }
+                    if (inferredActiveSet.has(Number(inst.idx))) {
+                        const t = `${role}.${col.label} TAP ACTIVE — structured tap is streaming on idx=${inst.idx}; /proc lock poll has not observed the holder in this frame`;
+                        rows.push(`<div class="rl-cell rl-active rl-inferred" title="${t}">⚡</div>`);
                         continue;
                     }
                     const needed = inst.regions || [];
