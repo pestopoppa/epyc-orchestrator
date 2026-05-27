@@ -29,6 +29,18 @@ WIRING IS DEFERRED (sidecar pattern, matching AP-29/30/31): these functions are 
   called from the live autopilot accept-path. The intended hook is
   scripts/autopilot/species/prompt_forge.py `apply_mutation_isolated` -> ctx.accept(),
   to be added at the next AR-3 restart so a running campaign is not perturbed.
+
+FLAG-ISOLATION CONTRACT (verified 2026-05-27, binding for the wiring agent):
+  EV-10a's gate and BSV-2's behavior-signature accept gate (src/behavior_signature.py)
+  are BOTH unwired accept-path changes that will land at the same next-AR-3 restart. To
+  keep their effects attributable (no co-mingling), wire each behind its OWN default-off
+  env flag, A/B-able independently:
+    - EV-10a efficacy gate  -> AUTOPILOT_SKILL_EFFICACY_GATE   (this module)
+    - BSV-2 accept gate     -> AUTOPILOT_BSV2_ACCEPT_GATE      (behavior_signature)
+  Both names were confirmed collision-free against src/ and scripts/ on 2026-05-27.
+  Do NOT enable both in the same trial window without separate flags — that reintroduces
+  the two-simultaneous-accept-path-changes confound (closure-inflation discipline).
+  Tracked: bulk-inference-campaign.md K-SKILL-1; eval-tower-verification.md EV-10.
 """
 
 from __future__ import annotations
