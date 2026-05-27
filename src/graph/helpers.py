@@ -1247,6 +1247,14 @@ MAX_CONSECUTIVE_NUDGES = 3
 """After this many nudges without progress, promote to a real error."""
 
 
+def _repeated_nudge_failure(role: Any, nudge: Any) -> str:
+    """Format a terminal failure after repeated corrective nudges."""
+    detail = " ".join(str(nudge or "").split())
+    if len(detail) > 300:
+        detail = detail[:297] + "..."
+    return f"[FAILED: repeated no-progress nudges at {role}: {detail}]"
+
+
 def _detect_role_cycle(role_history: list[str]) -> bool:
     """Compatibility wrapper for extracted role-cycle detection."""
     return _detect_role_cycle_impl(role_history)
@@ -1306,7 +1314,6 @@ def _format_validation_failure_message(
         f"Rejected value: {rejected_trunc}\n"
         "Fix the value and call FINAL again. State is preserved."
     )
-
 
 
 

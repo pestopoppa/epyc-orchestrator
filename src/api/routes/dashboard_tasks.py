@@ -15,8 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from src.api.routes.dashboard_tap import (
+    _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
     _parse_inference_sections,
+    _parse_structured_tap_requests,
     _read_tail,
 )
 
@@ -91,9 +93,16 @@ def _task_text_snapshot(
     elif tap_section:
         prompt_text = str(tap_section.get("prompt") or "")
         stream_text = str(tap_section.get("response") or "")
-        ts = tap_section.get("timestamp") or "?"
+        ts = tap_section.get("timestamp") or tap_section.get("started_at") or "?"
         role = tap_section.get("role") or "?"
-        source_note = f"(source: inference_tap.log section @ {ts} · role={role})"
+        if tap_section.get("source") == "structured_tap":
+            req = tap_section.get("request_id") or "?"
+            source_note = (
+                f"(source: inference_tap_events.jsonl request {req} @ {ts} · "
+                f"role={role})"
+            )
+        else:
+            source_note = f"(source: inference_tap.log section @ {ts} · role={role})"
     if not prompt_text:
         for ev in events:
             if ev.get("event_type") == "task_started":
@@ -134,6 +143,26 @@ def _objective_for_task(events: list[dict[str, Any]]) -> str:
         if ev.get("event_type") == "task_started":
             return str(ev.get("data", {}).get("objective", "") or "")
     return ""
+
+
+def _find_structured_request_by_id(task_id: str, max_requests: int = 400) -> dict | None:
+    """Find a structured tap request by dashboard task id.
+
+    The live dashboard exposes request rows as ``tap_<request_id>``. Those ids
+    do not exist in progress JSONL or llama-server slot state, so text/detail
+    endpoints need to resolve them directly from inference_tap_events.jsonl.
+    """
+    request_id = task_id[4:] if task_id.startswith("tap_") else task_id
+    request_id = request_id.strip()
+    if not request_id:
+        return None
+    tail_text = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    for request in _parse_structured_tap_requests(tail_text, max_requests=max_requests):
+        if str(request.get("request_id") or "") == request_id:
+            out = dict(request)
+            out["source"] = "structured_tap"
+            return out
+    return None
 
 
 def _find_section_by_objective(

@@ -214,6 +214,38 @@ class TestLlamaServerBackend:
         assert result.predicted_per_second == 33.0
         assert backend.cache_stats.cache_hits == 1  # cached_tokens > 0
 
+    def test_infer_empty_long_generation_is_failure(self, role_config):
+        """Long-running empty /completion responses should not look successful."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello", n_tokens=64)
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "content": "",
+            "tokens_predicted": 0,
+            "tokens_evaluated": 10,
+            "timings": {
+                "prompt_ms": 100.0,
+                "predicted_ms": 40_000.0,
+                "predicted_per_second": 0.0,
+            },
+            "stop": True,
+        }
+
+        with (
+            patch.object(backend.client, "post", return_value=mock_response),
+            patch("src.backends.llama_server.time.time", side_effect=[100.0, 140.0]),
+            patch("src.backends.llama_server.time.perf_counter", side_effect=[0.0, 40.0]),
+        ):
+            result = backend.infer(role_config, request)
+
+        assert result.success is False
+        assert result.degraded is True
+        assert result.failure_stage == "generation"
+        assert result.failure_reason == "empty_generation"
+        assert result.completion_reason == "empty_generation"
+
     def test_infer_timeout(self, role_config):
         """Test inference timeout handling."""
         backend = LlamaServerBackend(base_url="http://test:8080")
@@ -269,6 +301,40 @@ class TestLlamaServerBackend:
         assert result.degraded is True
         assert result.failure_reason == "read_timeout"
         assert result.completion_reason == "read_timeout_partial"
+
+    def test_infer_stream_text_empty_long_generation_is_failure(self, role_config):
+        """Long-running empty streams should be infrastructure failures."""
+        backend = LlamaServerBackend(base_url="http://test:8080")
+        request = InferenceRequest(role="test", prompt="Hello", timeout=60)
+
+        class _StreamResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield (
+                    'data: {"content":"","stop":true,"tokens_predicted":0,'
+                    '"tokens_evaluated":10,"timings":{"predicted_ms":40000.0}}'
+                )
+
+        with (
+            patch.object(backend.client, "stream", return_value=_StreamResponse()),
+            patch("src.backends.llama_server.time.time", side_effect=[100.0, 140.0]),
+            patch("src.backends.llama_server.time.perf_counter", side_effect=[0.0, 40.0]),
+        ):
+            result = backend.infer_stream_text(role_config, request)
+
+        assert result.success is False
+        assert result.degraded is True
+        assert result.failure_stage == "generation"
+        assert result.failure_reason == "empty_generation"
+        assert result.completion_reason == "empty_generation"
 
     def test_health_check_success(self):
         """Test health check with healthy server."""

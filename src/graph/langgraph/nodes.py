@@ -32,6 +32,7 @@ from src.graph.helpers import (
     _make_end_result,
     _record_failure,
     _record_mitigation,
+    _repeated_nudge_failure,
     _rescue_from_last_output,
     _resolve_answer,
     _should_escalate,
@@ -232,7 +233,13 @@ async def frontdoor_node(state: dict[str, Any], config: RunnableConfig) -> dict[
                 _log_escalation(ctx, from_role, str(Role.CODER_ESCALATION),
                                 f"Escalating after {MAX_CONSECUTIVE_NUDGES} repeated nudges")
                 return _state_update(task_state, "coder_escalation", snap)
-            return _state_update(task_state, "frontdoor", snap)
+            return _handle_end(
+                ctx,
+                _repeated_nudge_failure(task_state.current_role, nudge),
+                False,
+                task_state,
+                snap,
+            )
     else:
         task_state.consecutive_failures = 0
         task_state.consecutive_nudges = 0
@@ -313,7 +320,13 @@ async def worker_node(state: dict[str, Any], config: RunnableConfig) -> dict[str
         if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
             task_state.consecutive_failures += 1
             task_state.consecutive_nudges = 0
-            return _state_update(task_state, "worker", snap)
+            return _handle_end(
+                ctx,
+                _repeated_nudge_failure(task_state.current_role, nudge),
+                False,
+                task_state,
+                snap,
+            )
     else:
         task_state.consecutive_failures = 0
         task_state.consecutive_nudges = 0
@@ -408,7 +421,13 @@ async def coder_node(state: dict[str, Any], config: RunnableConfig) -> dict[str,
         if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
             task_state.consecutive_failures += 1
             task_state.consecutive_nudges = 0
-            return _state_update(task_state, "coder", snap)
+            return _handle_end(
+                ctx,
+                _repeated_nudge_failure(task_state.current_role, nudge),
+                False,
+                task_state,
+                snap,
+            )
     else:
         task_state.consecutive_failures = 0
         task_state.consecutive_nudges = 0
@@ -491,7 +510,13 @@ async def coder_escalation_node(state: dict[str, Any], config: RunnableConfig) -
         if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
             task_state.consecutive_failures += 1
             task_state.consecutive_nudges = 0
-            return _state_update(task_state, "coder_escalation", snap)
+            return _handle_end(
+                ctx,
+                _repeated_nudge_failure(task_state.current_role, nudge),
+                False,
+                task_state,
+                snap,
+            )
     else:
         task_state.consecutive_failures = 0
         task_state.consecutive_nudges = 0
@@ -572,7 +597,13 @@ async def ingest_node(state: dict[str, Any], config: RunnableConfig) -> dict[str
         if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
             task_state.consecutive_failures += 1
             task_state.consecutive_nudges = 0
-            return _state_update(task_state, "ingest", snap)
+            return _handle_end(
+                ctx,
+                _repeated_nudge_failure(task_state.current_role, nudge),
+                False,
+                task_state,
+                snap,
+            )
     else:
         task_state.consecutive_failures = 0
         task_state.consecutive_nudges = 0
@@ -636,7 +667,13 @@ async def architect_node(state: dict[str, Any], config: RunnableConfig) -> dict[
         if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
             task_state.consecutive_failures += 1
             task_state.consecutive_nudges = 0
-            return _state_update(task_state, "architect", snap)
+            return _handle_end(
+                ctx,
+                _repeated_nudge_failure(task_state.current_role, nudge),
+                False,
+                task_state,
+                snap,
+            )
     else:
         task_state.consecutive_failures = 0
         task_state.consecutive_nudges = 0
@@ -700,7 +737,13 @@ async def architect_coding_node(state: dict[str, Any], config: RunnableConfig) -
         if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
             task_state.consecutive_failures += 1
             task_state.consecutive_nudges = 0
-            return _state_update(task_state, "architect_coding", snap)
+            return _handle_end(
+                ctx,
+                _repeated_nudge_failure(task_state.current_role, nudge),
+                False,
+                task_state,
+                snap,
+            )
     else:
         task_state.consecutive_failures = 0
         task_state.consecutive_nudges = 0

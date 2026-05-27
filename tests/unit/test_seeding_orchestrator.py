@@ -161,29 +161,33 @@ def test_recover_heavy_ports_if_stuck_handles_disabled_fail_and_success(tmp_path
     try:
         assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [9999]) is False
 
-        with patch("subprocess.run", return_value=SimpleNamespace(returncode=2, stderr="reload failed")):
-            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8080]) is False
+        with patch("subprocess.run", return_value=SimpleNamespace(returncode=2, stderr="reload failed")) as run:
+            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8070]) is False
+            assert "frontdoor" in run.call_args.args[0]
 
         with (
-            patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stderr="")),
+            patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stderr="")) as run,
             patch.object(_MOD, "_wait_for_heavy_models_idle"),
             patch.object(_MOD, "_busy_heavy_ports", return_value=[]),
         ):
-            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8080, 8081]) is True
+            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8070, 8083]) is True
+            cmd = run.call_args.args[0]
+            assert "frontdoor" in cmd
+            assert "architect_general" in cmd
 
         with (
             patch("subprocess.run", side_effect=RuntimeError("reload boom")),
             patch.object(_MOD, "_wait_for_heavy_models_idle"),
             patch.object(_MOD, "_busy_heavy_ports", return_value=[]),
         ):
-            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8080]) is False
+            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8070]) is False
 
         with (
             patch("subprocess.run", return_value=SimpleNamespace(returncode=0, stderr="")),
             patch.object(_MOD, "_wait_for_heavy_models_idle"),
             patch.object(_MOD, "_busy_heavy_ports", return_value=[8083]),
         ):
-            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8080]) is False
+            assert _MOD._recover_heavy_ports_if_stuck("http://localhost:8000", [8070]) is False
     finally:
         os.environ.pop("SEEDING_ENABLE_TARGETED_RELOAD", None)
 
@@ -346,6 +350,78 @@ def test_call_orchestrator_with_slot_poll_timeout_erase_then_success():
             poll_port=8080,
         )
     assert resp["answer"] == "ok-after-erase"
+    assert elapsed >= 0.0
+
+
+def test_call_orchestrator_with_slot_poll_slot_stall_watchdog(monkeypatch):
+    monkeypatch.setenv("SEEDING_SLOT_STALL_WATCHDOG_S", "2")
+    fut = _Future([
+        concurrent.futures.TimeoutError(),
+        concurrent.futures.TimeoutError(),
+        concurrent.futures.TimeoutError(),
+    ])
+    with (
+        patch("seeding_orchestrator_test.concurrent.futures.ThreadPoolExecutor", return_value=_Executor(fut)),
+        patch("seeding_orchestrator_test._force_erase_and_verify") as erase,
+        patch(
+            "seeding_orchestrator_test._read_slot_progress",
+            return_value={"is_processing": True, "n_decoded": 10, "n_remain": 5, "task_id": 3},
+        ),
+        patch.object(_MOD.time, "perf_counter", side_effect=[0.0, 1.0, 4.0, 5.0]),
+    ):
+        resp, elapsed, progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=300,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=8080,
+        )
+    erase.assert_called_once()
+    assert resp["failure_reason"] == "slot_stalled_no_progress"
+    assert "slot stalled" in resp["error"]
+    assert progress["max_decoded"] == 10
+    assert elapsed >= 0.0
+
+
+def test_call_orchestrator_with_slot_poll_idle_orphan_watchdog(monkeypatch):
+    monkeypatch.setenv("SEEDING_SLOT_IDLE_ORPHAN_WATCHDOG_S", "2")
+    fut = _Future([
+        concurrent.futures.TimeoutError(),
+        concurrent.futures.TimeoutError(),
+        concurrent.futures.TimeoutError(),
+    ])
+    slot_progress = [
+        {"is_processing": True, "n_decoded": 4, "n_remain": 10, "task_id": 8},
+        {"is_processing": False, "n_decoded": 4, "n_remain": 10, "task_id": 8},
+        {"is_processing": False, "n_decoded": 4, "n_remain": 10, "task_id": 8},
+    ]
+    with (
+        patch("seeding_orchestrator_test.concurrent.futures.ThreadPoolExecutor", return_value=_Executor(fut)),
+        patch("seeding_orchestrator_test._read_slot_progress", side_effect=slot_progress),
+        patch.object(_MOD.time, "perf_counter", side_effect=[0.0, 1.0, 2.0, 5.0, 6.0]),
+    ):
+        resp, elapsed, progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=300,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=8080,
+        )
+    assert resp["failure_reason"] == "slot_idle_orphan"
+    assert "slot idle while request pending" in resp["error"]
+    assert progress["task_id"] == 8
     assert elapsed >= 0.0
 
 

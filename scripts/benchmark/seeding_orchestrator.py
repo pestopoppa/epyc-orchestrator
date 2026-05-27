@@ -45,6 +45,14 @@ logger = logging.getLogger("seed_specialist_routing")
 _SLOT_ERASE_CAPABILITY: dict[int, str | None | bool] = {}
 
 
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    """Read a non-negative float from the environment."""
+    try:
+        return max(minimum, float(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 # ── Slot management ──────────────────────────────────────────────────
 
 
@@ -293,6 +301,17 @@ def _call_orchestrator_with_slot_poll(
     last_logged_decoded = 0
     heartbeat_interval = 120.0
     last_heartbeat = t0
+    # Hardening for orphaned/stalled llama-server streams: the coarse
+    # request timeout is intentionally large for architect roles, but if the
+    # slot counters stop moving for minutes the current request is not making
+    # useful progress. Defaults are conservative and can be disabled with 0.
+    slot_stall_watchdog_s = _env_float("SEEDING_SLOT_STALL_WATCHDOG_S", 150.0)
+    slot_idle_orphan_s = _env_float("SEEDING_SLOT_IDLE_ORPHAN_WATCHDOG_S", 30.0)
+    last_progress_at = t0
+    last_progress_decoded = 0
+    last_progress_task_id = 0
+    seen_processing_slot = False
+    idle_since: float | None = None
 
     def _run() -> dict[str, Any]:
         return call_orchestrator_forced(
@@ -360,14 +379,81 @@ def _call_orchestrator_with_slot_poll(
                 if not sp:
                     continue
                 decoded = int(sp.get("n_decoded", 0) or 0)
+                is_processing = bool(sp.get("is_processing", False))
+                task_id = int(sp.get("task_id", 0) or 0)
+                now = t0 + elapsed_now
+                if is_processing:
+                    seen_processing_slot = True
+                    idle_since = None
+                elif seen_processing_slot:
+                    if idle_since is None:
+                        idle_since = now
+                    idle_for = now - idle_since
+                    if slot_idle_orphan_s > 0 and idle_for >= slot_idle_orphan_s:
+                        elapsed = time.perf_counter() - t0
+                        resp = {
+                            "answer": "",
+                            "error": (
+                                f"slot idle while request pending after {elapsed:.0f}s "
+                                f"on port {poll_port}"
+                            ),
+                            "failure_reason": "slot_idle_orphan",
+                        }
+                        logger.warning(
+                            "  [slot-idle-orphan] %s port=%d pending %.0fs "
+                            "(last task=%s decoded=%s)",
+                            log_label,
+                            poll_port,
+                            elapsed,
+                            progress["task_id"],
+                            progress["last_decoded"],
+                        )
+                        break
+
                 if decoded > progress["max_decoded"]:
                     progress["max_decoded"] = decoded
                 progress["last_decoded"] = decoded
                 progress["last_remain"] = int(sp.get("n_remain", 0) or 0)
-                progress["task_id"] = int(sp.get("task_id", 0) or 0)
+                progress["task_id"] = task_id
                 progress["source"] = "slots_poll"
 
-                now = time.perf_counter()
+                if decoded > last_progress_decoded or (
+                    task_id and task_id != last_progress_task_id
+                ):
+                    last_progress_at = now
+                    last_progress_decoded = decoded
+                    last_progress_task_id = task_id
+                elif (
+                    is_processing
+                    and slot_stall_watchdog_s > 0
+                    and decoded > 0
+                    and (now - last_progress_at) >= slot_stall_watchdog_s
+                ):
+                    stalled_for = now - last_progress_at
+                    logger.warning(
+                        "  [slot-stall] %s port=%d task=%s decoded=%d unchanged for %.0fs; erasing",
+                        log_label,
+                        poll_port,
+                        task_id,
+                        decoded,
+                        stalled_for,
+                    )
+                    _force_erase_and_verify(poll_port, max_attempts=2, verify_delay=1.0)
+                    try:
+                        resp = fut.result(timeout=12.0)
+                        elapsed = time.perf_counter() - t0
+                    except (concurrent.futures.TimeoutError, Exception):
+                        elapsed = time.perf_counter() - t0
+                        resp = {
+                            "answer": "",
+                            "error": (
+                                f"slot stalled on port {poll_port} after "
+                                f"{stalled_for:.0f}s with {decoded} tokens"
+                            ),
+                            "failure_reason": "slot_stalled_no_progress",
+                        }
+                    break
+
                 if (
                     (now - last_log_at) >= log_every_s
                     or (decoded - last_logged_decoded) >= log_delta_tokens
@@ -386,7 +472,7 @@ def _call_orchestrator_with_slot_poll(
                     last_logged_decoded = decoded
 
                 # Heartbeat every 120s so TUI left panel stays alive
-                now_hb = time.perf_counter()
+                now_hb = now
                 if (now_hb - last_heartbeat) >= heartbeat_interval:
                     elapsed_hb = now_hb - t0
                     decoded_hb = progress["max_decoded"]

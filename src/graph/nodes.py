@@ -55,6 +55,7 @@ from src.graph.helpers import (  # noqa: F401 — re-exported for backward compa
     _maybe_compact_context,
     _record_failure,
     _record_mitigation,
+    _repeated_nudge_failure,
     _rescue_from_last_output,
     _resolve_answer,
     _should_escalate,
@@ -290,10 +291,14 @@ class FrontdoorNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                     state.consecutive_failures = 0
                     from_role = str(state.current_role)
                     state.record_role(Role.CODER_ESCALATION)
-                    _log_escalation(ctx, from_role, str(Role.CODER_ESCALATION),
-                                    f"Escalating after {MAX_CONSECUTIVE_NUDGES} repeated nudges")
+                    _log_escalation(
+                        ctx, from_role, str(Role.CODER_ESCALATION),
+                        f"Escalating after {MAX_CONSECUTIVE_NUDGES} repeated nudges",
+                    )
                     return CoderEscalationNode()
-                return FrontdoorNode()
+                return _make_end_result(
+                    ctx, _repeated_nudge_failure(state.current_role, nudge), False
+                )
         else:
             state.consecutive_failures = 0
             state.consecutive_nudges = 0
@@ -392,7 +397,9 @@ class WorkerNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 log.warning("Max nudges (%d) reached at %s, promoting to error", state.consecutive_nudges, state.current_role)
                 state.consecutive_failures += 1
                 state.consecutive_nudges = 0
-                return WorkerNode()
+                return _make_end_result(
+                    ctx, _repeated_nudge_failure(state.current_role, nudge), False
+                )
         else:
             state.consecutive_failures = 0
             state.consecutive_nudges = 0
@@ -507,7 +514,9 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 log.warning("Max nudges (%d) reached at %s, promoting to error", state.consecutive_nudges, state.current_role)
                 state.consecutive_failures += 1
                 state.consecutive_nudges = 0
-                return CoderNode()
+                return _make_end_result(
+                    ctx, _repeated_nudge_failure(state.current_role, nudge), False
+                )
         else:
             state.consecutive_failures = 0
             state.consecutive_nudges = 0
@@ -608,7 +617,9 @@ class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 log.warning("Max nudges (%d) reached at %s, promoting to error", state.consecutive_nudges, state.current_role)
                 state.consecutive_failures += 1
                 state.consecutive_nudges = 0
-                return CoderEscalationNode()
+                return _make_end_result(
+                    ctx, _repeated_nudge_failure(state.current_role, nudge), False
+                )
         else:
             state.consecutive_failures = 0
             state.consecutive_nudges = 0
@@ -709,7 +720,9 @@ class IngestNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 log.warning("Max nudges (%d) reached at %s, promoting to error", state.consecutive_nudges, state.current_role)
                 state.consecutive_failures += 1
                 state.consecutive_nudges = 0
-                return IngestNode()
+                return _make_end_result(
+                    ctx, _repeated_nudge_failure(state.current_role, nudge), False
+                )
         else:
             state.consecutive_failures = 0
             state.consecutive_nudges = 0
@@ -796,7 +809,9 @@ class ArchitectNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 log.warning("Max nudges (%d) reached at %s, promoting to error", state.consecutive_nudges, state.current_role)
                 state.consecutive_failures += 1
                 state.consecutive_nudges = 0
-                return ArchitectNode()
+                return _make_end_result(
+                    ctx, _repeated_nudge_failure(state.current_role, nudge), False
+                )
         else:
             state.consecutive_failures = 0
             state.consecutive_nudges = 0
@@ -882,7 +897,9 @@ class ArchitectCodingNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 log.warning("Max nudges (%d) reached at %s, promoting to error", state.consecutive_nudges, state.current_role)
                 state.consecutive_failures += 1
                 state.consecutive_nudges = 0
-                return ArchitectCodingNode()
+                return _make_end_result(
+                    ctx, _repeated_nudge_failure(state.current_role, nudge), False
+                )
         else:
             state.consecutive_failures = 0
             state.consecutive_nudges = 0

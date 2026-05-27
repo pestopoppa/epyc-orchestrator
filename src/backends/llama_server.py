@@ -19,6 +19,7 @@ See research/radix_attention_handoff.md for implementation plan.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator
@@ -32,6 +33,19 @@ logger = logging.getLogger(__name__)
 
 # Logit probe output file (append-only JSONL)
 _LOGIT_PROBE_PATH = "/mnt/raid0/llm/epyc-orchestrator/data/logit_probe.jsonl"
+
+
+def _empty_generation_failure_after_s() -> float:
+    """Seconds after which an empty model response is treated as infrastructure failure."""
+    try:
+        return max(0.0, float(os.environ.get("LLAMA_EMPTY_GENERATION_FAILURE_AFTER_S", "30")))
+    except (TypeError, ValueError):
+        return 30.0
+
+
+def _is_empty_long_generation(output: str, elapsed_s: float) -> bool:
+    threshold = _empty_generation_failure_after_s()
+    return threshold > 0 and not (output or "").strip() and elapsed_s >= threshold
 
 
 def _write_logit_probe(prompt: str, first_token_probs: dict) -> None:
@@ -387,15 +401,32 @@ class LlamaServerBackend(ModelBackend):
                         first_token_probs=completion_probs[0] if completion_probs else {},
                     )
 
+            empty_generation = _is_empty_long_generation(output, elapsed)
+            if empty_generation:
+                logger.warning(
+                    "Empty llama response after %.1fs for %s "
+                    "(tokens=%s completion_reason=%s)",
+                    elapsed,
+                    role_config.name,
+                    tokens_generated,
+                    completion_reason or "unknown",
+                )
+
             return InferenceResult(
                 role=role_config.name,
                 output=output,
                 tokens_generated=tokens_generated,
                 generation_speed=speed,
                 elapsed_time=elapsed,
-                success=True,
+                success=not empty_generation,
+                error_message=(
+                    f"Empty generation after {elapsed:.1f}s"
+                    if empty_generation else None
+                ),
                 partial=False,
-                degraded=False,
+                degraded=empty_generation,
+                failure_stage="generation" if empty_generation else "",
+                failure_reason="empty_generation" if empty_generation else "",
                 prompt_eval_ms=prompt_eval_ms,
                 generation_ms=generation_ms,
                 predicted_per_second=predicted_per_second,
@@ -403,7 +434,9 @@ class LlamaServerBackend(ModelBackend):
                 n_tokens_drafted=n_drafted,
                 n_tokens_accepted=n_accepted,
                 acceptance_rate=accept_rate,
-                completion_reason=completion_reason,
+                completion_reason=(
+                    "empty_generation" if empty_generation else completion_reason
+                ),
             )
 
         except httpx.TimeoutException:
@@ -559,20 +592,39 @@ class LlamaServerBackend(ModelBackend):
                 else (tokens_generated / elapsed if elapsed > 0 else 0.0)
             )
 
+            empty_generation = _is_empty_long_generation(output, elapsed)
+            if empty_generation:
+                logger.warning(
+                    "Empty chat_completions response after %.1fs for %s "
+                    "(tokens=%s completion_reason=%s)",
+                    elapsed,
+                    role_config.name,
+                    tokens_generated,
+                    completion_reason or "unknown",
+                )
+
             return InferenceResult(
                 role=role_config.name,
                 output=output,
                 tokens_generated=tokens_generated,
                 generation_speed=speed,
                 elapsed_time=elapsed,
-                success=True,
+                success=not empty_generation,
+                error_message=(
+                    f"Empty generation after {elapsed:.1f}s"
+                    if empty_generation else None
+                ),
                 partial=False,
-                degraded=False,
+                degraded=empty_generation,
+                failure_stage="generation" if empty_generation else "",
+                failure_reason="empty_generation" if empty_generation else "",
                 prompt_eval_ms=prompt_eval_ms,
                 generation_ms=generation_ms,
                 predicted_per_second=predicted_per_second,
                 http_overhead_ms=http_overhead_ms,
-                completion_reason=completion_reason,
+                completion_reason=(
+                    "empty_generation" if empty_generation else completion_reason
+                ),
             )
         except httpx.HTTPStatusError as e:
             elapsed = time.time() - start_time
@@ -840,15 +892,33 @@ class LlamaServerBackend(ModelBackend):
                     n_accepted, n_drafted, accept_rate * 100, role_config.name,
                 )
 
+            output = "".join(chunks)
+            empty_generation = _is_empty_long_generation(output, elapsed)
+            if empty_generation:
+                logger.warning(
+                    "Empty llama stream after %.1fs for %s "
+                    "(tokens=%s completion_reason=%s)",
+                    elapsed,
+                    role_config.name,
+                    tokens_generated,
+                    completion_reason or "unknown",
+                )
+
             return InferenceResult(
                 role=role_config.name,
-                output="".join(chunks),
+                output=output,
                 tokens_generated=tokens_generated,
                 generation_speed=speed,
                 elapsed_time=elapsed,
-                success=True,
+                success=not empty_generation,
+                error_message=(
+                    f"Empty generation after {elapsed:.1f}s"
+                    if empty_generation else None
+                ),
                 partial=False,
-                degraded=False,
+                degraded=empty_generation,
+                failure_stage="generation" if empty_generation else "",
+                failure_reason="empty_generation" if empty_generation else "",
                 prompt_eval_ms=prompt_eval_ms,
                 generation_ms=generation_ms,
                 predicted_per_second=predicted_per_second,
@@ -858,7 +928,9 @@ class LlamaServerBackend(ModelBackend):
                 acceptance_rate=accept_rate,
                 first_token_ms=first_token_ms,
                 stream_chunks=stream_chunks,
-                completion_reason=completion_reason,
+                completion_reason=(
+                    "empty_generation" if empty_generation else completion_reason
+                ),
             )
 
         except httpx.ReadTimeout:
@@ -1188,20 +1260,43 @@ class LlamaServerBackend(ModelBackend):
             elapsed = time.time() - start_time
             tokens_generated = len(output) // 4 + len(chunks)  # rough estimate from chunks
             speed = tokens_generated / elapsed if elapsed > 0 else 0.0
+            empty_generation = (
+                completion_reason != "read_timeout"
+                and _is_empty_long_generation(output, elapsed)
+            )
+            if empty_generation:
+                logger.warning(
+                    "Empty chat_completions stream after %.1fs for %s "
+                    "(completion_reason=%s)",
+                    elapsed,
+                    role_config.name,
+                    completion_reason or "unknown",
+                )
             return InferenceResult(
                 role=role_config.name,
                 output=output,
                 tokens_generated=tokens_generated,
                 generation_speed=speed,
                 elapsed_time=elapsed,
-                success=bool(output) or completion_reason != "read_timeout",
+                success=(
+                    bool(output)
+                    or (completion_reason != "read_timeout" and not empty_generation)
+                ),
+                error_message=(
+                    f"Empty generation after {elapsed:.1f}s"
+                    if empty_generation else None
+                ),
                 partial=False,
-                degraded=False,
+                degraded=empty_generation,
+                failure_stage="generation" if empty_generation else "",
+                failure_reason="empty_generation" if empty_generation else "",
                 prompt_eval_ms=0.0,
                 generation_ms=elapsed * 1000,
                 predicted_per_second=speed,
                 http_overhead_ms=0.0,
-                completion_reason=completion_reason,
+                completion_reason=(
+                    "empty_generation" if empty_generation else completion_reason
+                ),
             )
         except Exception as e:
             elapsed = time.time() - start_time

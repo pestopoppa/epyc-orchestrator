@@ -11,6 +11,7 @@ import pytest
 
 
 from src.graph.helpers import (
+    MAX_CONSECUTIVE_NUDGES,
     _build_think_harder_config,
     _classify_error,
     _detect_role_cycle,
@@ -306,6 +307,24 @@ class TestFrontdoorNode:
         result = await orchestration_graph.run(FrontdoorNode(), state=state, deps=deps)
         assert result.output.success is False
         assert "Max turns" in result.output.answer
+
+    @pytest.mark.asyncio
+    async def test_repeated_nudges_fail_without_looping(self):
+        """Repeated corrective nudges should terminate when escalation is unavailable."""
+        state = make_state(
+            current_role=Role.FRONTDOOR,
+            consecutive_nudges=MAX_CONSECUTIVE_NUDGES - 1,
+        )
+        deps = make_deps(
+            repl_results=[MockREPLResult(output="", is_final=False)],
+            llm_responses=["x = 1"],
+            config=GraphConfig(max_retries=0, max_escalations=0, max_turns=10),
+        )
+
+        result = await orchestration_graph.run(FrontdoorNode(), state=state, deps=deps)
+
+        assert result.output.success is False
+        assert "repeated no-progress nudges" in result.output.answer
 
 
 class TestCoderNode:

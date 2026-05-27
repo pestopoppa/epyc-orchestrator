@@ -305,6 +305,23 @@ def test_task_text_snapshot_falls_back_to_objective_when_no_slot() -> None:
     assert "INFERENCE STREAM:" in out
 
 
+def test_task_text_snapshot_uses_structured_tap_section() -> None:
+    tap_section = {
+        "source": "structured_tap",
+        "request_id": "req-1",
+        "started_at": "2026-05-22T10:00:00+00:00",
+        "role": "frontdoor",
+        "prompt": "structured prompt",
+        "response": "structured response",
+    }
+    out = dashboard_tasks._task_text_snapshot(
+        "tap_req-1", [], None, tap_section=tap_section
+    )
+    assert "structured prompt" in out
+    assert "structured response" in out
+    assert "inference_tap_events.jsonl request req-1" in out
+
+
 def test_task_text_snapshot_elides_noisy_keys() -> None:
     events = [{
         "event_type": "routing_decision",
@@ -323,6 +340,38 @@ def test_task_text_snapshot_elides_noisy_keys() -> None:
 def test_find_section_by_objective_short_objective_returns_none() -> None:
     assert dashboard_tasks._find_section_by_objective("short") is None
     assert dashboard_tasks._find_section_by_objective("") is None
+
+
+def test_find_structured_request_by_id_strips_tap_prefix(monkeypatch) -> None:
+    lines = [
+        json.dumps({
+            "event": "start",
+            "request_id": "req-1",
+            "role": "frontdoor",
+            "ts": "2026-05-22T10:00:00+00:00",
+            "ts_epoch": 1.0,
+            "prompt": "hello",
+        }),
+        json.dumps({
+            "event": "response",
+            "request_id": "req-1",
+            "role": "frontdoor",
+            "ts": "2026-05-22T10:00:01+00:00",
+            "ts_epoch": 2.0,
+            "text": "world",
+        }),
+    ]
+    monkeypatch.setattr(
+        dashboard_tasks, "_read_tail", lambda *args, **kwargs: "\n".join(lines)
+    )
+
+    out = dashboard_tasks._find_structured_request_by_id("tap_req-1")
+
+    assert out is not None
+    assert out["source"] == "structured_tap"
+    assert out["request_id"] == "req-1"
+    assert out["prompt"] == "hello"
+    assert out["response"] == "world"
 
 
 def test_find_section_by_objective_matches_recent_first(monkeypatch) -> None:

@@ -53,6 +53,7 @@ from src.api.routes.dashboard_tap import (
 )
 from src.api.routes.dashboard_tasks import (
     _find_section_by_objective,
+    _find_structured_request_by_id,
     _objective_for_task,
     _task_events,
     _task_text_snapshot,
@@ -1888,6 +1889,14 @@ async def task_text(task_id: str) -> Any:
     """
     log_path = _todays_progress_log()
     events = _task_events(task_id, log_path)
+    structured_tap = _find_structured_request_by_id(task_id)
+    if structured_tap is not None and task_id.startswith("tap_"):
+        text = _task_text_snapshot(
+            task_id, events, None, tap_section=structured_tap
+        )
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(text)
+
     slots_by_port = await _poll_all_slots()
     found_slot = None
     for port, slots in slots_by_port.items():
@@ -1959,6 +1968,18 @@ async def task_detail(task_id: str) -> JSONResponse:
     """
     log_path = _todays_progress_log()
     events = _task_events(task_id, log_path)
+    structured_tap = _find_structured_request_by_id(task_id)
+    if structured_tap is not None and task_id.startswith("tap_"):
+        return JSONResponse({
+            "task_id": task_id,
+            "objective": structured_tap.get("prompt") or "",
+            "events": events,
+            "active_slot_port": None,
+            "active_slot_id": None,
+            "slot": None,
+            "tap_section": structured_tap,
+        })
+
     objective = _objective_for_task(events)
     slots_by_port = await _poll_all_slots()
     slot_port, active_slot = await _find_slot_by_objective(objective, slots_by_port)
