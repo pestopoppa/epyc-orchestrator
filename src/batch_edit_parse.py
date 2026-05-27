@@ -59,13 +59,16 @@ nothing after it."""
 # "edits vs answers-in-prose". Without it the coder tends to return the code as a FINAL() text
 # answer and never writes the file (observed 2026-05-26). Default-off; experiment-only.
 INTERLEAVED_EDIT_INSTRUCTIONS = """\
-INTERLEAVED EDIT MODE. This is a file-editing task — it is judged by the actual files in the \
-working directory, not by any prose answer. APPLY every change by calling the REPL tool \
-`file_write_safe(path, content)` (relative paths resolve inside the working directory), one file \
-per turn; read existing files first with the available read tools as needed. Do NOT use \
-`open(...)` — it is blocked by the REPL sandbox and will raise. Do NOT answer with a code block or \
-describe a change without writing it to disk. Only after every file is written and correct, call \
-FINAL("done")."""
+INTERLEAVED EDIT MODE. This is a file-editing task — judged by the actual files on disk. Do exactly \
+ONE action per turn, as a single CLOSED ```python code block the REPL will run:
+ - WRITE turns: emit a block containing only `file_write_safe(path, content)` call(s), then close \
+the ``` fence. Use file_write_safe(...), NOT open() (open is blocked). Do NOT call FINAL() in a \
+write turn — the REPL runs your writes and reports the result back to you next turn.
+ - FINISH turn: only AFTER you have written every file and seen each write succeed, emit a separate \
+block containing only `FINAL("done")`.
+Never put file_write_safe(...) and FINAL() in the same block (FINAL ends the turn before the write \
+runs). Relative paths resolve inside the working directory; you may read files first with the read \
+tools."""
 
 
 def extract_patchset_json(text: str | None) -> dict | None:
