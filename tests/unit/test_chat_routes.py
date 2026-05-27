@@ -697,3 +697,49 @@ class TestChatStreamEndpoint:
                     chunks.append(str(chunk))
             body = "".join(chunks)
             assert "[DONE]" in body
+
+
+class TestEditModeFailClosed:
+    """force_mode='edit' must FAIL CLOSED (HTTP 412) — not silently fall through to the REPL —
+    when the edit-transaction preconditions (ORCHESTRATOR_EDIT_TRANSACTION + scoped
+    ORCHESTRATOR_EDIT_ROOT) are unmet. Regression for the 2026-05-27 review finding #3; the
+    end-to-end 412 was live-probed, this locks it in CI."""
+
+    @pytest.mark.asyncio
+    async def test_force_mode_edit_412_when_flag_and_root_missing(
+        self, mock_state, mock_primitives, base_routing, monkeypatch
+    ):
+        from contextlib import nullcontext
+        from unittest.mock import AsyncMock
+
+        from fastapi import HTTPException
+
+        # preconditions deliberately unmet (prod default): no flag, no scoped edit-root.
+        monkeypatch.delenv("ORCHESTRATOR_EDIT_TRANSACTION", raising=False)
+        monkeypatch.delenv("ORCHESTRATOR_EDIT_ROOT", raising=False)
+        # request_context must not suppress the raised HTTPException (a bare MagicMock __exit__
+        # returns truthy and would swallow it).
+        mock_primitives.request_context = MagicMock(return_value=nullcontext())
+
+        req = ChatRequest(
+            prompt="add a helper to utils.py", mock_mode=False, real_mode=True,
+            force_mode="edit", force_role="coder_escalation",
+        )
+
+        # Mock the pre-dispatch pipeline stages so _handle_chat reaches the 8b2 edit branch;
+        # the 412 fires there BEFORE any model call.
+        with patch("src.api.routes.chat._route_request", return_value=base_routing), \
+             patch("src.api.routes.chat._preprocess", return_value=None), \
+             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
+             patch("src.api.routes.chat._plan_review_gate", return_value=None), \
+             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)):
+            with pytest.raises(HTTPException) as exc_info:
+                await _handle_chat(req, mock_state)
+
+        assert exc_info.value.status_code == 412
+        detail = str(exc_info.value.detail)
+        assert "ORCHESTRATOR_EDIT_TRANSACTION" in detail
+        assert "ORCHESTRATOR_EDIT_ROOT" in detail

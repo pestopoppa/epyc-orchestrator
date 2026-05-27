@@ -137,8 +137,9 @@ class EditResult:
 
 def apply_edit_transaction(root: Path | str, files: dict[str, str], deletes: list[str],
                            self_check: bool = True) -> EditResult:
-    """Transactional apply: snapshot affected paths -> write/delete -> py_compile self-check ->
-    promote (keep) or ROLLBACK (restore snapshot) on any failure. All-or-nothing."""
+    """Transactional apply: snapshot affected paths -> write/delete -> syntax self-check
+    (compile(), no __pycache__ side effects) -> promote (keep) or ROLLBACK (restore snapshot)
+    on any failure. All-or-nothing."""
     root = Path(root)
     rejected: list[str] = []
     plan_write: dict[Path, str] = {}
