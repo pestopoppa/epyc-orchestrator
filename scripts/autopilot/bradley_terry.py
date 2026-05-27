@@ -1,12 +1,17 @@
 """Bradley-Terry pairwise-ranking aggregation.
 
 Shared module consumed by:
-  - autopilot P17 (AP-37/38): tiebreak top-K Pareto candidates when
-    hypervolume slope falls below the auto-calibrated noise floor.
+  - autopilot P17.BT-1 (this module) and P17.BT-2 (axis-vote proxy in
+    pareto_archive.py): tiebreak top-K Pareto candidates when hypervolume
+    slope falls below the auto-calibrated noise floor. Note: the wired
+    call site uses axis-vote pairwise input (Borda counting over the
+    already-recorded 4D objectives), NOT independent model judgments —
+    that Fortytwo-style peer-ranked form is P17.BT-4 (INFERENCE-GATED,
+    deferred).
   - decision-aware-routing DAR-6.4: aggregate N concurrent-serve completions
-    on high-injection-risk prompts.
+    on high-injection-risk prompts (true peer-judged inputs).
   - swarm-dataset-distillation Phase 3: filter swarm-generated candidate
-    outputs by pairwise-judged BT rank.
+    outputs by pairwise-judged BT rank (true peer-judged inputs).
 
 All three call sites share this one implementation per the cross-handoff
 invariant recorded in handoffs/active/{autopilot-continuous-optimization,

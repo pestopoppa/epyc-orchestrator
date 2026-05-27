@@ -295,15 +295,20 @@ The system is STAGNATING. Run the constrained-creativity protocol:
 ### Still-open hypotheses (carry an explicit falsifier, not yet resolved)
 {unfalsified}
 
-### Bradley-Terry tiebreak on top-K Pareto candidates (AP-38 hint)
+### Axis-vote BT tiebreak on top-K Pareto candidates (P17.BT-2 hint)
 
-Hypervolume scalarization can hide candidates that *consistently* beat
+**This is a cheap axis-vote proxy, not peer-ranked consensus.**
+Hypervolume scalarization can hide candidates that consistently beat
 their peers across the 4 objectives without being individually
-hypervolume-dominant. Pairwise BT aggregation across the 4 axes
+hypervolume-dominant. Pairwise BT aggregation over the recorded 4D
+objectives (axis-vote / Borda counting — no judge-model inference)
 surfaces those candidates as alternative exploration seeds. **Treat as
 a hint, not a directive** — the BT-picked seed is only worth chasing
 when it disagrees with the hypervolume-top seed AND the BT diagnostics
-are clean (no Condorcet cycles, no extreme dominance skew).
+are clean (no Condorcet cycles, no extreme dominance skew). Top-K
+candidate selection at the entry point is scale-biased (high-magnitude
+axes like speed dominate the sum); weight that into how much trust
+the hint deserves.
 
 {bt_tiebreak_hint}
 """
@@ -391,9 +396,11 @@ def _build_exploration_block(
     else:
         unfalsified_text = "  (no recent trials with explicit falsifiers yet)"
 
-    # AP-38: Bradley-Terry tiebreak on top-K Pareto candidates. Surfaces
-    # candidates that beat peers across axes but aren't hypervolume-dominant.
-    # No new inference — uses recorded 4D objectives only.
+    # P17.BT-2: axis-vote BT tiebreak on top-K Pareto candidates. Cheap
+    # proxy — pairwise inputs come from Borda counting over the recorded
+    # 4D objectives, NOT from judge-model peer ranking (that is P17.BT-4
+    # and is INFERENCE-GATED). Surfaces candidates that beat peers across
+    # axes but aren't hypervolume-dominant.
     bt_tiebreak_text = ""
     bt_signal = ""
     try:

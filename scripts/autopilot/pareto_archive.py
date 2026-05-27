@@ -286,29 +286,53 @@ class ParetoArchive:
             )
         return list(reversed(chain))
 
-    # ── Bradley-Terry tiebreak (AP-38) ──────────────────────────
+    # ── Bradley-Terry tiebreak — cheap axis-vote proxy (P17.BT-2) ──
 
     def bt_tiebreak_topk(self, k: int = 5) -> dict[str, Any]:
-        """Bradley-Terry tiebreak over the top-K Pareto frontier entries.
+        """Axis-vote Bradley-Terry tiebreak over top-K frontier entries.
+
+        IMPORTANT — what this is, and what this is NOT:
+
+          This is a **cheap axis-vote proxy** that uses the BT engine on
+          data we already have (the recorded 4D objectives). The pairwise
+          inputs are mechanical Borda comparisons across the four
+          objective axes — they are NOT independent model judgments of
+          candidate outputs.
+
+          The Fortytwo-style peer-ranked-consensus form described in
+          intake-615 (arxiv:2510.24801) would use N judge models scoring
+          each candidate pairwise. That is INFERENCE-GATED and tracked
+          separately as P17.BT-4 in the autopilot handoff. This method
+          is P17.BT-2: a strictly cheaper and weaker signal that runs
+          purely off recorded objectives.
 
         Intended to be called when the controller detects hypervolume
-        stagnation (see `_build_exploration_block` in autopilot.py). The 4D
-        objectives of each frontier entry are used to construct pairwise
-        win-scores via axis-wise Borda counting; BT then aggregates into a
-        single ranking.
+        stagnation (see `_build_exploration_block` in autopilot.py).
 
-        Why this exists:
-          The 4D scalarization (hypervolume contribution) collapses four
-          axes into one number and can hide candidates that *consistently*
-          beat their peers across axes without being individually
-          hypervolume-dominant. Pairwise aggregation surfaces those
-          candidates as alternative exploration seeds.
+        Why this is still useful:
+          Hypervolume scalarization collapses four axes into one number
+          and can hide candidates that *consistently* beat peers across
+          axes without being individually hypervolume-dominant.
+          Axis-vote BT surfaces those candidates as alternative
+          exploration seeds — a falsifiable signal at zero inference
+          cost.
 
         Why pairwise scores come from axis comparison, not new inference:
-          By design this is a code-only tiebreak (AP-38) — it uses the
-          objectives already recorded in archive entries. No eval-tower
-          re-runs, no model calls. The accompanying falsification gate
-          (AP-39) is the only inference-dependent step.
+          By design this is a code-only tiebreak (P17.BT-2) — it uses
+          the objectives already recorded in archive entries. No
+          eval-tower re-runs, no model calls. The accompanying
+          falsification gate (P17.BT-3) is the only inference-dependent
+          step.
+
+        Known limitation — top-K selection is scale-biased:
+          The top-K candidates fed to BT are selected by a raw
+          sum-of-(objective − reference) proxy (see the `scored = sorted(...)`
+          block below). High-magnitude axes (e.g., speed in t/s, range
+          0-100+) dominate that sum vs low-magnitude axes (e.g.,
+          reliability in [0,1]). The CANDIDATE SET fed to BT is therefore
+          scale-biased even though the BT comparison itself isn't.
+          Future work: weight axes during top-K selection by their
+          reference-point-normalized range.
 
         Parameters
         ----------
