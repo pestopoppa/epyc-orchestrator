@@ -497,10 +497,17 @@ class REPLEnvironment(
         )
 
         resolved = resolve_task_path(path)
-        allowed_prefixes = list(self.ALLOWED_FILE_PATHS)
         if task_root_active():
-            tr = str(get_task_root())
-            allowed_prefixes.append(tr if tr.endswith("/") else f"{tr}/")
+            # ISOLATION (BEP/DCP A/B): the model may touch ONLY the scratch task-root. The prior
+            # code APPENDED the scratch root to the global allowed set (llm_root + /tmp), but the
+            # scratch lives under /tmp, so the global /tmp prefix let every outside path (/tmp/x,
+            # ../x, the orchestrator tree) validate — a real isolation leak (operator-found
+            # 2026-05-27). Restrict to the scratch root ONLY; realpath both sides so a symlinked
+            # /tmp (or trailing-slash differences) still match.
+            tr = os.path.realpath(str(get_task_root()))
+            allowed_prefixes = [tr if tr.endswith("/") else f"{tr}/"]
+        else:
+            allowed_prefixes = list(self.ALLOWED_FILE_PATHS)
         for allowed in allowed_prefixes:
             if resolved.startswith(allowed):
                 return True, None

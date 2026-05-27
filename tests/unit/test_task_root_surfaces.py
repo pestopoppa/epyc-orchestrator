@@ -12,6 +12,7 @@ land in the Phase 3 driver dry-run.)
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +51,45 @@ def test_validate_default_off_unchanged(tmp_path):
     ok_etc, _ = env._validate_file_path("/etc/hostname")
     assert ok_tmp is True
     assert ok_etc is False  # parity: outside allowed prefixes
+
+
+# ─── #1 task-root ISOLATION leak regression (operator-found 2026-05-27) ────────────
+# Prior bug: _validate_file_path APPENDED the scratch root to the global allowed set
+# (llm_root + /tmp). Since the scratch lives under /tmp, the global /tmp prefix made every
+# outside path validate (/tmp/x, ../x, the orchestrator tree). When a task-root is active the
+# allowed set must be the scratch root ONLY.
+
+def test_validate_rejects_outside_paths_when_task_root_active(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    env = _env()
+    # sibling of the scratch root (a /tmp path NOT under scratch), an absolute /tmp escape,
+    # the orchestrator tree, and a relative ../ escape — all must be rejected.
+    assert env._validate_file_path(str(tmp_path.parent / "outside_abs.py"))[0] is False
+    assert env._validate_file_path("/tmp/outside_abs.py")[0] is False
+    assert env._validate_file_path("/mnt/raid0/llm/epyc-orchestrator/src/x.py")[0] is False
+    assert env._validate_file_path("../outside.py")[0] is False  # relative escape collapses out
+
+
+def test_file_write_safe_lands_in_scratch_not_project(monkeypatch, tmp_path):
+    # Operator-required regression: with the task-root active, _file_write_safe("cart.py", …)
+    # writes <scratch>/cart.py, NOT cwd/project-root (validate-resolved + write-redirected).
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    env = _env()
+    cwd_leak = Path.cwd() / "cart.py"
+    pre_existed = cwd_leak.exists()
+    result = env._file_write_safe("cart.py", "X = 1\n", backup=False)
+    assert "Wrote" in result, result
+    assert (tmp_path / "cart.py").read_text() == "X = 1\n"
+    if not pre_existed:
+        assert not cwd_leak.exists(), "write leaked to cwd/project-root instead of scratch"
+
+
+def test_file_write_safe_rejects_escape_when_task_root_active(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    env = _env()
+    result = env._file_write_safe("/tmp/escape_abs_should_reject.py", "X = 1\n", backup=False)
+    assert result.startswith("[ERROR"), result
+    assert not Path("/tmp/escape_abs_should_reject.py").exists()
 
 
 # ─── #8 _batch_edit_repo_root ─────────────────────────────────────────────────────

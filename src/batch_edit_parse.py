@@ -60,11 +60,12 @@ nothing after it."""
 # answer and never writes the file (observed 2026-05-26). Default-off; experiment-only.
 INTERLEAVED_EDIT_INSTRUCTIONS = """\
 INTERLEAVED EDIT MODE. This is a file-editing task — it is judged by the actual files in the \
-working directory, not by any prose answer. APPLY every change directly in the REPL by writing \
-the file(s) with normal Python I/O (e.g. open("pkg/mod.py", "w").write("...full body...\\n")) or \
-the available edit tools, one edit per turn, reading and creating files as needed. Do NOT answer \
-with a code block or describe the change without writing it to disk. Only after all files are \
-written and correct, call FINAL("done")."""
+working directory, not by any prose answer. APPLY every change by calling the REPL tool \
+`file_write_safe(path, content)` (relative paths resolve inside the working directory), one file \
+per turn; read existing files first with the available read tools as needed. Do NOT use \
+`open(...)` — it is blocked by the REPL sandbox and will raise. Do NOT answer with a code block or \
+describe a change without writing it to disk. Only after every file is written and correct, call \
+FINAL("done")."""
 
 
 def extract_patchset_json(text: str | None) -> dict | None:

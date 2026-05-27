@@ -48,10 +48,24 @@ class _FileMutationMixin:
             Confirmation message.
         """
         self._exploration_calls += 1
+        import os as _os
         from datetime import datetime
 
         try:
-            log_path = str(_get_project_root() / "logs" / log_name)
+            # log_name must be a BARE filename (per the contract). Reject path separators / ``..``
+            # traversal — otherwise e.g. "../../etc/passwd" escapes logs/ to anywhere under the
+            # allowed prefix. (Pre-existing weakness, hardened here alongside the task-root work.)
+            if _os.path.basename(log_name) != log_name or log_name in ("", ".", ".."):
+                return f"[ERROR: log_name must be a bare filename (no path), got {log_name!r}]"
+            # Only when a BEP/DCP task-root is ACTIVE, base the log under the scratch sandbox so
+            # this model tool isn't rejected by the now scratch-only path validator. When inactive,
+            # keep the exact original base (_get_project_root()) for byte-for-byte parity — using
+            # get_task_root() unconditionally would change the traversal-resolution base.
+            from src.repl_environment.task_root import get_task_root, task_root_active
+            from pathlib import Path as _P
+
+            base = get_task_root() if task_root_active() else _get_project_root()
+            log_path = str(base / "logs" / log_name)
 
             # Validate path
             is_valid, error = self._validate_file_path(log_path)
@@ -61,6 +75,7 @@ class _FileMutationMixin:
             timestamp = datetime.now().isoformat()
             log_entry = f"[{timestamp}] {message}\n"
 
+            _P(log_path).parent.mkdir(parents=True, exist_ok=True)
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(log_entry)
 

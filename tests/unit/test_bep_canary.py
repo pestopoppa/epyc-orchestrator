@@ -1,0 +1,86 @@
+"""BEP/DCP no-inference real-path CANARY (operator-required gate, 2026-05-27).
+
+Run this BEFORE any live BEP-2/DCP-6 A/B. It exercises the REAL request-gating + REPL write
+path with NO inference, asserting the exact invariants whose violation caused the expensive
+live-run failures:
+
+  * mock_mode=False + real_mode=True is NOT routed to the mock branch
+        (caught: the all-`[MOCK] Processed prompt` run — the driver omitted the real-mode flags);
+  * force_mode="repl" is an accepted forced mode
+        (caught: the turns=1 'direct' run — the coder never entered the REPL edit loop);
+  * a model file write via the REPL lands inside the scratch task-root, NOT cwd/project-root;
+  * a model write to a path OUTSIDE the scratch root is REJECTED (isolation — the leak the
+        operator reproduced with `/tmp/outside_abs.py` / `../outside.py`);
+  * `open()` is forbidden by the REPL sandbox (which is WHY the interleaved-edit rider must
+        instruct `file_write_safe(...)`, not `open(...)` — the original rider's root-cause bug).
+
+No live stack / no inference: `_route_request` is the real routing gate and
+`REPLEnvironment.execute()` is the real sandbox. Deterministic + CI-safe.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from src.api.models import ChatRequest
+from src.api.routes.chat_pipeline.routing import _route_request
+from src.repl_environment.environment import REPLEnvironment
+
+# The exact forced-mode set gated in src/api/routes/chat.py (_handle_chat).
+_FORCED_MODES = ("direct", "react", "repl", "delegated")
+
+
+@pytest.fixture(autouse=True)
+def _clear_env(monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_EDIT_ROOT", raising=False)
+
+
+def _repl() -> REPLEnvironment:
+    return REPLEnvironment(context="canary", role="coder_escalation")
+
+
+# ── request gating: mock_mode / real_mode (caught the all-[MOCK] run) ─────────────
+
+def test_real_mode_request_not_routed_to_mock(mock_app_state):
+    r = _route_request(ChatRequest(prompt="hi", mock_mode=False, real_mode=True), mock_app_state)
+    assert r.use_mock is False, "real-mode request must NOT hit the mock branch"
+
+
+def test_default_request_is_mock(mock_app_state):
+    # Safety default: a request that does not opt into real mode IS mock — this is exactly why
+    # the driver must send mock_mode=False/real_mode=True explicitly.
+    r = _route_request(ChatRequest(prompt="hi"), mock_app_state)
+    assert r.use_mock is True
+
+
+# ── force_mode contract (caught the turns=1 'direct' run) ─────────────────────────
+
+def test_force_mode_repl_is_accepted():
+    req = ChatRequest(prompt="x", force_mode="repl")
+    assert req.force_mode == "repl"
+    assert req.force_mode in _FORCED_MODES  # else chat.py drops it → falls back to _select_mode
+
+
+# ── REPL real write path → scratch task-root (caught the no-file-written run) ──────
+
+def test_repl_write_lands_in_scratch(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    _repl().execute('file_write_safe("cart.py", "X = 1\\n")')
+    assert (tmp_path / "cart.py").read_text() == "X = 1\n"
+
+
+def test_repl_write_outside_scratch_rejected(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    escape = Path("/tmp/bep_canary_escape_should_reject.py")
+    escape.unlink(missing_ok=True)
+    _repl().execute(f'file_write_safe({str(escape)!r}, "X = 1\\n")')
+    assert not escape.exists(), "model write escaped the scratch task-root (isolation leak)"
+
+
+def test_repl_open_is_forbidden(monkeypatch, tmp_path):
+    # The REPL security layer forbids open() — this is why the interleaved rider must use
+    # file_write_safe(...). If open() ever became allowed, the rider's mechanism would be wrong.
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    _repl().execute('open("cart_via_open.py", "w").write("X")')
+    assert not (tmp_path / "cart_via_open.py").exists()
