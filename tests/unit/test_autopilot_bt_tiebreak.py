@@ -67,25 +67,59 @@ def test_two_entry_frontier_runs_and_returns_ranking():
 
 
 def test_axis_wise_disagreement_surfaced():
-    """A candidate that beats peers on more axes (but loses on the
-    high-magnitude axis sum) should be picked by BT — that disagreement
-    is the value of this method.
+    """A candidate that beats peers on more axes pairwise should be
+    picked by BT even when the *range-normalized* naive sum picks
+    differently. That disagreement is the value of this method.
 
-    Setup designed so the naive sum-of-axes prefers trial 10 (dominates
-    the speed axis whose magnitude ~80 swamps all other axes' sums) but
-    BT prefers trial 11 (wins on 3 of 4 axes pairwise).
+    Setup (post scale-bias fix 2026-05-27): each candidate specializes
+    in a different axis or pair, so no single one dominates the
+    range-normalized sum. BT must surface the candidate that wins the
+    most pairwise comparisons.
+
+      Trial 100: q-specialist          (q=4 top)
+      Trial 101: sp-specialist         (sp=80 top)
+      Trial 102: cost+rel-specialist   (cost=-0.1 top, rel=0.9 top)
+
+    Range-normalized sum: 102 > 101 > 100 → naive-top = 102.
+    Axis-wise pairwise wins: 100 (q wins broadly) > 102 > 101 → BT-top = 100.
     """
     a = _archive_with([
-        _make_entry(10, 3.0, 80.0, -0.5, 0.5),  # only wins on speed
-        _make_entry(11, 4.0, 30.0, -0.1, 0.9),  # wins on quality, cost, rel
-        _make_entry(12, 2.0, 40.0, -0.3, 0.6),  # mid everywhere
+        _make_entry(100, 4.0, 40.0, -0.3, 0.5),  # q-specialist
+        _make_entry(101, 3.0, 80.0, -0.4, 0.4),  # sp-specialist
+        _make_entry(102, 3.0, 30.0, -0.1, 0.9),  # cost+rel-specialist
     ])
     out = a.bt_tiebreak_topk(k=3)
-    # Naive scalarization (sum of axes) would put trial 10 on top
-    # because speed=80 dominates the sum. BT must instead pick trial 11.
-    assert out["top_k_trial_ids"][0] == 10, "test setup invariant: naive-top is trial 10"
-    assert out["ranking"][0] == 11, "BT should disagree and pick trial 11"
+    assert out["top_k_trial_ids"][0] == 102, "test setup invariant: range-normalized naive-top is trial 102"
+    assert out["ranking"][0] == 100, "BT must pick trial 100 (q-specialist wins the most axis-pair comparisons)"
     assert "disagrees" in out["note"] or "BT picks" in out["note"]
+
+
+def test_topk_selection_is_range_normalized_not_scale_biased():
+    """Regression for the 2026-05-27 scale-bias fix.
+
+    Before the fix, top-K candidate selection used raw sum-of-(obj − ref)
+    which let high-magnitude axes (e.g., speed in t/s, range 0-100+)
+    dominate vs low-magnitude axes (e.g., reliability in [0,1]).
+
+    Setup:
+      Trial 200: ONLY wins on speed (sp=100, very high magnitude).
+                 OLD raw-sum would pick this as naive-top.
+      Trial 201: balanced winner — wins on q, cost, rel (3 of 4 axes).
+                 NEW range-normalized sum picks this correctly.
+
+    Post-fix: naive-top must be 201 (the balanced winner), and BT
+    must agree with it because 201 wins 3 of 4 axes pairwise.
+    """
+    a = _archive_with([
+        _make_entry(200, 1.0, 100.0, -0.9, 0.1),  # speed-only
+        _make_entry(201, 4.0, 30.0, -0.1, 0.9),   # balanced 3-of-4 winner
+    ])
+    out = a.bt_tiebreak_topk(k=2)
+    assert out["top_k_trial_ids"][0] == 201, (
+        "post-fix: range-normalized top-K must put trial 201 first "
+        "(it wins 3 of 4 axes; trial 200's very-high speed must not swamp the sum)"
+    )
+    assert out["ranking"][0] == 201
 
 
 def test_k_caps_at_frontier_size():

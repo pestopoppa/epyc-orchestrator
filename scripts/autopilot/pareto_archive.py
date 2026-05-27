@@ -324,15 +324,15 @@ class ParetoArchive:
           falsification gate (P17.BT-3) is the only inference-dependent
           step.
 
-        Known limitation — top-K selection is scale-biased:
-          The top-K candidates fed to BT are selected by a raw
-          sum-of-(objective − reference) proxy (see the `scored = sorted(...)`
-          block below). High-magnitude axes (e.g., speed in t/s, range
-          0-100+) dominate that sum vs low-magnitude axes (e.g.,
-          reliability in [0,1]). The CANDIDATE SET fed to BT is therefore
-          scale-biased even though the BT comparison itself isn't.
-          Future work: weight axes during top-K selection by their
-          reference-point-normalized range.
+        Top-K selection is range-normalized (fix landed 2026-05-27):
+          The top-K candidates fed to BT are selected by a per-axis
+          range-normalized sum: each axis (obj - ref) is divided by
+          (max_e(obj) - ref) across the frontier before summing, so
+          every axis contributes on a [0, 1] scale regardless of
+          its physical magnitude. This prevents high-magnitude axes
+          (e.g., speed in t/s, range 0-100+) from swamping low-magnitude
+          axes (e.g., reliability in [0,1]) when deciding which
+          candidates even enter the BT comparison.
 
         Parameters
         ----------
@@ -373,14 +373,35 @@ class ParetoArchive:
         # current frontier as-is (no re-ranking); if K exceeds frontier
         # size, just compare the whole frontier.
         k = min(max(k, 2), len(self._frontier))
-        # Rank frontier entries by a proxy for hypervolume contribution:
-        # the sum of axis values minus the reference. Ties broken by quality.
+        # Rank frontier entries by a range-normalized sum of axis values minus
+        # the reference. Earlier version used a raw sum, which made
+        # high-magnitude axes (speed in t/s, range 0-100+) dominate vs
+        # low-magnitude axes (reliability in [0,1]). Range-normalization
+        # per axis across the frontier puts each axis on a [0, 1] scale
+        # before summing so no axis can swamp the others purely on units.
+        # Ties broken by quality.
+        n_axes = len(self._frontier[0].objectives)
+        # Per-axis frontier max; degenerate axes (max == ref) fall back to
+        # 1.0 so we don't divide by zero and the contribution becomes
+        # (obj - ref) / 1.0 = the raw delta (small for those axes).
+        per_axis_max = [
+            max(e.objectives[a] for e in self._frontier)
+            for a in range(n_axes)
+        ]
+        per_axis_range = [
+            (per_axis_max[a] - REFERENCE_POINT[a]) or 1.0
+            for a in range(n_axes)
+        ]
+
+        def _normalized_axis_sum(e: ParetoEntry) -> float:
+            return sum(
+                (e.objectives[a] - REFERENCE_POINT[a]) / per_axis_range[a]
+                for a in range(n_axes)
+            )
+
         scored = sorted(
             self._frontier,
-            key=lambda e: (
-                sum(o - r for o, r in zip(e.objectives, REFERENCE_POINT)),
-                e.objectives[0],
-            ),
+            key=lambda e: (_normalized_axis_sum(e), e.objectives[0]),
             reverse=True,
         )
         top_k = scored[:k]
