@@ -197,16 +197,14 @@ def _repair_unclosed_code_fence(text: str) -> str:
     return text
 
 
-def _loop_guard_repeat(prev_raw: str | None, cur_raw: str, has_final: bool, prev_count: int) -> int:
-    """Fix B counter (pure): the REPL silently re-prompts on a non-advancing turn, so a model
-    that re-emits the identical action (e.g. the same `peek()` read, or an unknown-tool CALL)
-    loops until the turn budget burns out. Return the updated identical-turn count — incremented
-    when this turn's raw output equals the previous turn's and no FINAL was emitted, else reset."""
-    cur = (cur_raw or "").strip()
-    prev = (prev_raw or "").strip()
-    if cur and prev and cur == prev and not has_final:
-        return prev_count + 1
-    return 0
+def _loop_guard_noprogress(made_progress: bool, prev_count: int) -> int:
+    """Fix B counter (pure): count CONSECUTIVE non-advancing turns. A turn "made progress" iff it
+    wrote a file (``file_write_safe``) or emitted ``FINAL(``. This is deliberately broader than the
+    earlier identical-output check: the BEP read-first failures show up as re-reads, EMPTY outputs,
+    and unknown-tool loops — all of which are "no progress" but not necessarily byte-identical, so
+    an identical-match trigger missed them (proven: the hard intervention never fired in
+    results-readfix3 because the model emptied out). Reset on progress; else increment."""
+    return 0 if made_progress else prev_count + 1
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────
@@ -732,7 +730,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # greedy decode (proven: BEP read-first tasks looped 8 turns with the content already in-prompt).
     # HARD intervention: re-inject the content it already has + a forceful single-action directive,
     # appended LAST (recency) so it dominates the next generation.
-    if _repl_loop_guard_enabled() and getattr(state, "_repl_repeat_count", 0) >= 1:
+    if _repl_loop_guard_enabled() and getattr(state, "_repl_repeat_count", 0) >= 2:
         _read = (getattr(state, "last_output", "") or "").strip()[:1500]
         _halt = (
             "\n\n** LOOP HALTED ** You just emitted the SAME action with no progress. STOP repeating it. "
@@ -969,11 +967,10 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # REPL loop-guard Fix B (flag-gated): track identical non-advancing turns so the next
     # prompt build can inject the loop-detected nudge above (default-off → no-op in prod).
     if _repl_loop_guard_enabled():
-        state._repl_repeat_count = _loop_guard_repeat(  # type: ignore[attr-defined]
-            getattr(state, "_repl_last_raw", None), raw_llm_output, "FINAL(" in code,
-            getattr(state, "_repl_repeat_count", 0),
+        _made_progress = ("file_write_safe" in code) or ("FINAL(" in code)
+        state._repl_repeat_count = _loop_guard_noprogress(  # type: ignore[attr-defined]
+            _made_progress, getattr(state, "_repl_repeat_count", 0),
         )
-        state._repl_last_raw = (raw_llm_output or "").strip()  # type: ignore[attr-defined]
 
     # Persist extracted code for incremental editing on error/escalation
     state.last_code = code

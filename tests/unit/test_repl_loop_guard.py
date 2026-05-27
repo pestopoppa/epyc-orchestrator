@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from src.graph.helpers import (
     _repair_unclosed_code_fence,
-    _loop_guard_repeat,
+    _loop_guard_noprogress,
     _repl_loop_guard_enabled,
 )
 
@@ -40,25 +40,18 @@ def test_repair_noop_on_fenceless_text():
 
 
 # ── Fix B: identical-turn repeat counter ──────────────────────────────
-def test_repeat_increments_on_identical_no_final():
-    # The read-loop shape (TASK #5/#6): same peek() re-emitted, never writes, no FINAL.
-    code = "```python\npeek(1000, file_path='calc.py')\n```"
-    assert _loop_guard_repeat(code, code, has_final=False, prev_count=0) == 1
-    assert _loop_guard_repeat(code, code, has_final=False, prev_count=1) == 2
+def test_noprogress_increments_when_no_write_no_final():
+    # read / empty-output / unknown-tool turns make no progress -> count climbs (catches the
+    # re-read loop AND the empty-output failure that an identical-match check missed).
+    assert _loop_guard_noprogress(made_progress=False, prev_count=0) == 1
+    assert _loop_guard_noprogress(made_progress=False, prev_count=1) == 2
+    assert _loop_guard_noprogress(made_progress=False, prev_count=2) == 3
 
 
-def test_repeat_resets_when_turn_changes():
-    assert _loop_guard_repeat("read A", "write B", has_final=False, prev_count=3) == 0
-
-
-def test_repeat_resets_on_final_even_if_identical():
-    same = "FINAL('answer')"
-    assert _loop_guard_repeat(same, same, has_final=True, prev_count=2) == 0
-
-
-def test_repeat_first_turn_is_zero():
-    assert _loop_guard_repeat(None, "first output", has_final=False, prev_count=0) == 0
-    assert _loop_guard_repeat("", "first output", has_final=False, prev_count=0) == 0
+def test_noprogress_resets_on_write_or_final():
+    # a turn that wrote a file or called FINAL is progress -> reset.
+    assert _loop_guard_noprogress(made_progress=True, prev_count=3) == 0
+    assert _loop_guard_noprogress(made_progress=True, prev_count=0) == 0
 
 
 # ── flag gating (CRITICAL path stays a prod no-op by default) ─────────
