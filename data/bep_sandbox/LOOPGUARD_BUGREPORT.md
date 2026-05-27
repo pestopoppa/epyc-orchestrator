@@ -131,3 +131,12 @@ compare); only the no-read create task (t1) completes (ON batch 2t vs OFF interl
 **Disposition:** the loop-guard (`3e9ab5e`+`4fe681e`) stays flag-gated **default-OFF** — it fails-fast on
 loops but does not fix completion; enable only for the loop-breaking compute-saving benefit if desired.
 Multi-file coder completion is a separate model/task problem, not a harness bug.
+
+**CORRECTION (operator review 2026-05-27):** the "tasks still fail → coder-capability" conclusion is
+OVERSTATED — `results-readfix7` is contaminated: t4/t5-off + t4-on hit a backend `:8070` outage
+(circuit-open / connection-refused), t2/t3 hit inference timeouts, and several turns were empty. **No
+failing task in this run is a clean model-behavior failure, so it does NOT establish a capability gap.**
+The loop-guard FIRING (count 0→7, halt injected, model wrote in response) IS proven and independent of the
+contamination. A clean confirmation (backend-health preflight + verified `enable_thinking=false` in the
+live request payload + rerun t2/t3/t5 + coding-specialist comparison) is tracked in the epyc-root handoff
+`multi-file-coding-completion-capability.md`.
