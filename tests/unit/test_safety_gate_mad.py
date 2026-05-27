@@ -59,11 +59,16 @@ def test_mad_fires_on_noise_level_improvement(tmp_path):
     assert verdict.passed, "MAD filter must never block; it only warns"
     assert "mad_noise" in verdict.categories
     assert any("within noise" in w.lower() for w in verdict.warnings)
-    # Diagnostic-only: warning text must not overclaim "do not learn"; trial
-    # is still recorded and learned from. See safety_gate.py:295 comment.
+    # Warning text must reflect autopilot-side semantics: trial is still
+    # journaled, but archive.update + AP-22 memory are skipped by the
+    # classify_learning_exclusion() helper. Must NOT say "do not learn"
+    # (over-claim) or "still recorded and learned from" (stale wording from
+    # the diagnostic-only era).
     assert not any("do not learn" in w.lower() for w in verdict.warnings), \
-        "warning text must reflect diagnostic-only semantics"
-    assert any("still recorded and learned from" in w.lower() for w in verdict.warnings)
+        "warning text must reflect new exclusion semantics, not the old over-claim"
+    assert not any("still recorded and learned from" in w.lower() for w in verdict.warnings), \
+        "stale diagnostic-only wording; should say 'excluded from archive/learning'"
+    assert any("excluded from archive/learning" in w.lower() for w in verdict.warnings)
 
 
 def test_mad_passes_significant_improvement(tmp_path):

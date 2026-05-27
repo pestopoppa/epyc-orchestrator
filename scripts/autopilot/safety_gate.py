@@ -290,18 +290,18 @@ class SafetyGate:
             else:
                 # Improvement or no change — apply MAD noise filter (intake-421).
                 # Robust against outliers; only fires once history has MAD_MIN_SAMPLES.
-                # DIAGNOSTIC ONLY: this never blocks and does not currently gate
-                # downstream learning paths (autopilot.py records the trial and
-                # runs meta-learning regardless). Wire `"mad_noise" in
-                # verdict.categories` into the meta-learning short-circuits if
-                # learning-exclusion is desired.
+                # Gate never blocks; the `mad_noise` category is consumed by
+                # autopilot's classify_learning_exclusion() helper, which
+                # journals the trial but skips archive.update + AP-22 short-term
+                # memory so noise-level improvements don't poison the Pareto
+                # frontier or strategy memory.
                 is_sig, z_mad, median_q, mad = self._mad_significance(result.quality)
                 if not is_sig and not math.isnan(z_mad):
                     warnings.append(
                         f"Improvement within noise (MAD filter): q={result.quality:.3f} "
                         f"vs history median {median_q:.3f} (MAD={mad:.4f}, z={z_mad:.2f}, "
-                        f"threshold={MAD_Z_THRESHOLD}); flag for diagnostic review — "
-                        f"trial is still recorded and learned from."
+                        f"threshold={MAD_Z_THRESHOLD}); still journaled, excluded "
+                        f"from archive/learning by autopilot."
                     )
                     categories.append("mad_noise")
 

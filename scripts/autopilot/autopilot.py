@@ -642,6 +642,54 @@ def save_state(state: dict[str, Any]) -> None:
     _save_state_impl(STATE_PATH, state)
 
 
+def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, str, str]:
+    """Decide whether this trial should be excluded from archive + AP-22 memory.
+
+    Returns ``(learning_excluded_by, learning_excluded_reason,
+    deficiency_category_override)``. An empty ``learning_excluded_by``
+    means "include normally" — keep gate-derived deficiency_category.
+
+    Two exclusion paths today, evaluated in priority order:
+
+    1. ``exogenous_operator_reload`` — trial had questions that stayed
+       unrecovered after a detected operator/service reload. Aggregate
+       numbers are based on partially-missing data, so admitting it to
+       the Pareto archive or AP-22 memory would distort learning.
+    2. ``mad_noise`` — the safety gate's MAD significance test marked an
+       improvement-direction quality delta as falling inside the recent
+       rolling-history noise band. Learning from noise inflates strategy
+       memory + Pareto archive with false positives (intake-421).
+
+    Exogenous wins on the rare path where both could fire — the exo-bypass
+    above ``gate.check()`` constructs a fresh empty SafetyVerdict, so
+    ``mad_noise`` cannot be in ``verdict.categories`` for exo trials;
+    the priority order is still encoded here defensively.
+    """
+    has_exo_unrecovered = getattr(eval_result, "n_exogenous_unrecovered", 0) > 0
+    if has_exo_unrecovered:
+        preview_ids = list(getattr(eval_result, "exogenous_question_ids", []))[:10]
+        n_q = getattr(eval_result, "n_questions", 0) or len(
+            getattr(eval_result, "exogenous_question_ids", []) or []
+        )
+        reason = (
+            f"{eval_result.n_exogenous_unrecovered}/{n_q} questions "
+            f"remained unrecovered after detected service reload "
+            f"(sample ids: {preview_ids})"
+        )
+        return "exogenous_operator_reload", reason, "exogenous_reload"
+
+    categories = getattr(verdict, "categories", None) or []
+    if "mad_noise" in categories:
+        return (
+            "mad_noise",
+            "quality improvement was within MAD noise band per safety_gate "
+            "rolling-history significance test",
+            "mad_noise",
+        )
+
+    return "", "", ""
+
+
 def load_blacklist() -> list[dict[str, Any]]:
     """Load failure blacklist from YAML."""
     return _load_blacklist_impl(BLACKLIST_PATH)
@@ -1335,17 +1383,23 @@ def _run_loop_inner(
 
         # ── 5. Record ────────────────────────────────────────────
         phase.set("record_trial", trial_id=trial_counter, species=species_name)
-        # Phase 5: skip archive.update for unrecovered exogenous trials.
-        # Quality/reliability numbers are based on partially-missing data;
-        # admitting them to the Pareto archive would distort the frontier
-        # (e.g. a perfectly-good config could be "dominated" by a
-        # corrupted (0, 0, ?, ?) point). bug_corrupted_by tagging below
-        # ensures the planner's trustworthiness gate excludes the trial.
-        if has_exo_unrecovered:
+        # Classify whether this trial should be excluded from learning
+        # surfaces (Pareto archive + AP-22 short-term memory). Two paths:
+        # exogenous reload (Phase 5, partially-missing data) and MAD-noise
+        # improvements (intake-421, noise inflates strategy memory). Both
+        # tag bug_corrupted_by so the planner's trustworthiness gate
+        # excludes the trial; both skip archive.update so the Pareto
+        # frontier isn't distorted; both still journal so the operator can
+        # audit. See classify_learning_exclusion() near the top of this
+        # module for the priority order + reason strings.
+        learning_excluded_by, learning_excluded_reason, exclusion_def_cat = (
+            classify_learning_exclusion(verdict, eval_result)
+        )
+        if learning_excluded_by:
             pareto_status = "dominated"  # placeholder for JournalEntry only
             log.info(
-                "Trial %d: archive.update SKIPPED (exogenous reload corrupted trial)",
-                trial_counter,
+                "Trial %d: archive.update SKIPPED (learning_excluded_by=%s)",
+                trial_counter, learning_excluded_by,
             )
         else:
             pareto_status = archive.update(
@@ -1447,12 +1501,13 @@ def _run_loop_inner(
         if not deficiency_category:
             deficiency_category = state.pop("_dispatch_deficiency", "")
 
-        # Phase 5 — exogenous-reload tagging.
-        # bug_corrupted_by is set ONLY when at least one question stayed
-        # unrecovered after the retry. Recovered-only trials are sound and
-        # get audit metadata in eval_details instead.
-        bug_corrupted_by = ""
-        bug_corrupted_reason = ""
+        # Apply the learning-exclusion decision computed above. Both exogenous
+        # reload and mad_noise produce a single bug_corrupted_by tag + an
+        # eval_details["learning_exclusion"] audit record. The deficiency
+        # category is overridden so the planner can distinguish exclusion
+        # reasons from genuine safety-gate failures.
+        bug_corrupted_by = learning_excluded_by
+        bug_corrupted_reason = learning_excluded_reason
         metric_schema_version = getattr(eval_result, "metric_schema_version", 1)
         harness_metrics = getattr(eval_result, "harness_metrics", {}) or {}
         oracle_adequacy = getattr(eval_result, "oracle_adequacy", {}) or {}
@@ -1474,16 +1529,12 @@ def _run_loop_inner(
             "calibration_violations": eval_result.calibration_violations,
             "gepa_ratio": state.get("gepa_ratio", 0.30),
         }
-        if has_exo_unrecovered:
-            bug_corrupted_by = "exogenous_operator_reload"
-            preview_ids = eval_result.exogenous_question_ids[:10]
-            total_q = eval_result.n_questions or len(eval_result.exogenous_question_ids)
-            bug_corrupted_reason = (
-                f"{eval_result.n_exogenous_unrecovered}/{total_q} questions "
-                f"remained unrecovered after detected service reload "
-                f"(sample ids: {preview_ids})"
-            )
-            deficiency_category = "exogenous_reload"
+        if learning_excluded_by:
+            deficiency_category = exclusion_def_cat
+            eval_details_dict["learning_exclusion"] = {
+                "by": learning_excluded_by,
+                "reason": learning_excluded_reason,
+            }
         if has_exo_unrecovered or has_exo_recovered:
             # Surface audit info regardless — recovered trials carry this
             # so the operator can see "this trial weathered a reload"
@@ -1543,21 +1594,33 @@ def _run_loop_inner(
         # AP-16: Track last instruction ratio for structural pruning comparison
         state["_last_instruction_ratio"] = eval_result.instruction_token_ratio
 
-        # AP-22: Update short-term memory with trial outcome
-        memory.update(TrialOutcome(
-            trial_id=trial_counter,
-            species=species_name,
-            action_type=action.get("type", ""),
-            quality=eval_result.quality,
-            speed=eval_result.speed,
-            passed=verdict.passed,
-            hypothesis=hypothesis,
-            failure_analysis=failure_analysis,
-            self_criticism=criticism.as_text(),
-            optimization_directions=criticism.directions_text(),
-            keep_revert=criticism.keep_or_revert,
-            per_suite_quality=eval_result.per_suite_quality or {},
-        ))
+        # AP-22: Update short-term memory with trial outcome.
+        # Skip when learning_excluded_by is set — the trial is journaled
+        # for audit, but its outcome must not feed strategy memory
+        # (exogenous reload = partially-missing data; mad_noise =
+        # noise-level improvement that would inflate the memory with
+        # false positives per intake-421). Behavior change vs pre-2026-05-27:
+        # exogenous-reload trials used to update AP-22; they no longer do.
+        if not learning_excluded_by:
+            memory.update(TrialOutcome(
+                trial_id=trial_counter,
+                species=species_name,
+                action_type=action.get("type", ""),
+                quality=eval_result.quality,
+                speed=eval_result.speed,
+                passed=verdict.passed,
+                hypothesis=hypothesis,
+                failure_analysis=failure_analysis,
+                self_criticism=criticism.as_text(),
+                optimization_directions=criticism.directions_text(),
+                keep_revert=criticism.keep_or_revert,
+                per_suite_quality=eval_result.per_suite_quality or {},
+            ))
+        else:
+            log.info(
+                "Trial %d: AP-22 short-term memory SKIPPED (learning_excluded_by=%s)",
+                trial_counter, learning_excluded_by,
+            )
 
         # ── 6. Meta-learn ───────────────────────────────────────
         if meta.should_rebalance(trial_counter):
