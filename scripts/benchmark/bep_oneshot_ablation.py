@@ -15,11 +15,25 @@ TASKS = [json.loads(l) for l in open(f"{ORCH}/data/bep_sandbox/tasks.jsonl") if 
 SCRATCH = Path("/mnt/raid0/llm/tmp/bep_oneshot/work")
 OUTDIR = Path("/mnt/raid0/llm/tmp/bep_oneshot"); OUTDIR.mkdir(parents=True, exist_ok=True)
 
+def _safe(rel: str):
+    """Resolve a model-supplied path UNDER scratch, PRESERVING nested dirs; reject escapes
+    (absolute paths or `..` traversal that leave the scratch root). Returns None if unsafe.
+    (Replaces the earlier Path(rel).name flatten, which only worked for top-level files.)"""
+    p = (SCRATCH / rel).resolve()
+    try:
+        p.relative_to(SCRATCH.resolve())
+    except ValueError:
+        return None
+    return p
+
 def reset_scratch(files):
     if SCRATCH.exists(): shutil.rmtree(SCRATCH)
     SCRATCH.mkdir(parents=True)
     for rel, content in (files or {}).items():
-        (SCRATCH/Path(rel).name).write_text(content)
+        p = _safe(rel)
+        if p is None: continue
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
 
 def build_prompt(task):
     files = task.get('files') or {}
@@ -57,10 +71,16 @@ for task in TASKS:
         print(f"{tid}: CHAT-ERROR {type(e).__name__}: {e}"); continue
     (OUTDIR/f"out_{tid}.txt").write_text(out)
     files, deletes = parse_files(out)
+    rejected = []
     for rel, content in files.items():
-        (SCRATCH/Path(rel).name).write_text(content)
+        p = _safe(rel)
+        if p is None: rejected.append(rel); continue
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
     for d in deletes:
-        (SCRATCH/Path(d).name).unlink(missing_ok=True)
+        p = _safe(d)
+        if p is not None: p.unlink(missing_ok=True)
+        else: rejected.append(d)
     try:
         res = subprocess.run(task['verifier_cmd'], shell=True, cwd=SCRATCH,
                              capture_output=True, text=True, timeout=30)
@@ -68,5 +88,6 @@ for task in TASKS:
         vnote = (res.stdout.strip() or res.stderr.strip())[:50]
     except Exception as e:
         ok = False; vnote = f"verifier-error {e}"
-    print(f"{tid}: files={list(files.keys())} del={deletes} -> {'PASS' if ok else 'FAIL'} "
+    print(f"{tid}: files={list(files.keys())} del={deletes}"
+          f"{' REJECTED='+str(rejected) if rejected else ''} -> {'PASS' if ok else 'FAIL'} "
           f"think={'<think' in out} raw_len={len(out)} :: {vnote}")
