@@ -39,6 +39,7 @@ from src.api.routes.dashboard_snapshot import (
     todays_progress_log as _todays_progress_log_impl,
 )
 from src.api.routes.dashboard_tap import (
+    _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
     _PROMPT_TAP_PATH,
     _REPL_TAP_PATH,
@@ -46,6 +47,7 @@ from src.api.routes.dashboard_tap import (
     _SUBSECTION_SEP,
     _TAP_SENTINEL_PATH,
     _parse_inference_sections,
+    _parse_structured_tap_requests,
     _parse_trial_state,
     _read_tail,
 )
@@ -72,12 +74,21 @@ router = APIRouter()
 ORCHESTRATOR_LOG_DIR = Path("/mnt/raid0/llm/epyc-orchestrator/logs")
 PROGRESS_LOG_DIR = ORCHESTRATOR_LOG_DIR / "progress"
 AUTOPILOT_LOG = ORCHESTRATOR_LOG_DIR / "autopilot.log"
+AUTOPILOT_PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")
 ORCHESTRATOR_STATE_PATH = ORCHESTRATOR_LOG_DIR / "orchestrator_state.json"
 
 
 def _load_state_services() -> list[dict[str, Any]]:
     """Wrapper supplying ORCHESTRATOR_STATE_PATH to dashboard_topology helper."""
     return _load_state_services_impl(ORCHESTRATOR_STATE_PATH)
+
+
+def _read_autopilot_phase() -> dict[str, Any]:
+    try:
+        data = json.loads(AUTOPILOT_PHASE_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +108,13 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
     tap_active = _TAP_SENTINEL_PATH.exists()
     inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=512 * 1024)
     sections = _parse_inference_sections(inference_tail, max_sections=max_sections)
+    structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    now_epoch = time.time()
+    structured_requests = _parse_structured_tap_requests(
+        structured_tail,
+        max_requests=max_sections,
+        now_epoch=now_epoch,
+    )
     current_prompt = ""
     if _PROMPT_TAP_PATH.exists():
         try:
@@ -119,10 +137,12 @@ async def inference_tap_snapshot(max_sections: int = 20) -> JSONResponse:
         "current_prompt": current_prompt,
         "current_prompt_mtime": mtime(_PROMPT_TAP_PATH),
         "inference_sections": sections,
+        "structured_requests": structured_requests,
         "inference_tap_mtime": mtime(_INFERENCE_TAP_PATH),
+        "structured_tap_mtime": mtime(_INFERENCE_TAP_EVENTS_PATH),
         "repl_tail": repl_tail,
         "repl_tap_mtime": mtime(_REPL_TAP_PATH),
-        "now": time.time(),
+        "now": now_epoch,
     })
 
 
@@ -153,7 +173,13 @@ async def contention_gate_snapshot(request: Request) -> JSONResponse:
     # which is per-request-injectable but not module-singleton.
     per_role: dict[str, Any] = {}
     try:
-        primitives = getattr(request.app.state, "llm_primitives", None)
+        # The ConcurrencyAwareBackend (which holds migration counters / placement state) lives on
+        # the REAL-inference primitives (state._real_primitives, lazily built by _init_primitives
+        # with the full:-prefixed server_urls), NOT the startup state.llm_primitives (constructed
+        # without server_urls → no backends). Prefer the real one so per_role_scheduling actually
+        # reflects live CAB placement/migrations (J2/J3 observability fix, 2026-05-27).
+        primitives = (getattr(request.app.state, "_real_primitives", None)
+                      or getattr(request.app.state, "llm_primitives", None))
         if primitives is not None:
             for role, backend in getattr(primitives, "_backends", {}).items():
                 if not hasattr(backend, "_quarter_preference_order"):
@@ -511,6 +537,56 @@ async def raw_tap_stream(request: Request, tail_bytes: int = 8192) -> StreamingR
     )
 
 
+@router.get("/dashboard/events/structured_tap")
+async def structured_tap_stream(request: Request) -> StreamingResponse:
+    """SSE stream of request-grouped structured tap snapshots."""
+
+    async def event_gen():
+        last_mtime = -1.0
+        last_emit = 0.0
+        while True:
+            if await request.is_disconnected():
+                return
+            try:
+                mtime = (
+                    _INFERENCE_TAP_EVENTS_PATH.stat().st_mtime
+                    if _INFERENCE_TAP_EVENTS_PATH.exists()
+                    else 0.0
+                )
+            except Exception:
+                mtime = 0.0
+            now_epoch = time.time()
+            # Also repaint open requests as they age into "quiet"; waiting
+            # only for mtime changes leaves a silent running request looking
+            # green forever until another tap event arrives.
+            if mtime != last_mtime or (now_epoch - last_emit) >= 2.0:
+                last_mtime = mtime
+                last_emit = now_epoch
+                tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+                payload = json.dumps({
+                    "tap_active": _TAP_SENTINEL_PATH.exists(),
+                    "structured_requests": _parse_structured_tap_requests(
+                        tail,
+                        max_requests=40,
+                        now_epoch=now_epoch,
+                    ),
+                    "structured_tap_mtime": mtime or None,
+                    "now": now_epoch,
+                })
+                yield f"data: {payload}\n\n"
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
 @router.get("/dashboard/events/autopilot_log")
 async def autopilot_log_stream(request: Request, tail_bytes: int = 16384) -> StreamingResponse:
     """Byte-level SSE tail of autopilot.log — surfaces every phase autopilot
@@ -647,26 +723,39 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
     """
 
     async def event_gen():
-        last_mtimes = {"inference": 0.0, "prompt": 0.0, "repl": 0.0}
+        last_mtimes = {"inference": 0.0, "structured": 0.0, "prompt": 0.0, "repl": 0.0}
         while True:
             if await request.is_disconnected():
                 return
             try:
                 inf_m = _INFERENCE_TAP_PATH.stat().st_mtime if _INFERENCE_TAP_PATH.exists() else 0.0
+                structured_m = (
+                    _INFERENCE_TAP_EVENTS_PATH.stat().st_mtime
+                    if _INFERENCE_TAP_EVENTS_PATH.exists()
+                    else 0.0
+                )
                 prm_m = _PROMPT_TAP_PATH.stat().st_mtime if _PROMPT_TAP_PATH.exists() else 0.0
                 rpl_m = _REPL_TAP_PATH.stat().st_mtime if _REPL_TAP_PATH.exists() else 0.0
             except Exception:
-                inf_m = prm_m = rpl_m = 0.0
+                inf_m = structured_m = prm_m = rpl_m = 0.0
             changed = (
                 inf_m > last_mtimes["inference"]
+                or structured_m > last_mtimes["structured"]
                 or prm_m > last_mtimes["prompt"]
                 or rpl_m > last_mtimes["repl"]
             )
             if changed:
-                last_mtimes = {"inference": inf_m, "prompt": prm_m, "repl": rpl_m}
+                last_mtimes = {
+                    "inference": inf_m,
+                    "structured": structured_m,
+                    "prompt": prm_m,
+                    "repl": rpl_m,
+                }
                 # Build the payload — same shape as the snapshot endpoint
                 inference_tail = _read_tail(_INFERENCE_TAP_PATH, max_bytes=256 * 1024)
                 sections = _parse_inference_sections(inference_tail, max_sections=10)
+                structured_tail = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+                now_epoch = time.time()
                 current_prompt = ""
                 if _PROMPT_TAP_PATH.exists():
                     try:
@@ -677,7 +766,13 @@ async def inference_tap_stream(request: Request) -> StreamingResponse:
                     "tap_active": _TAP_SENTINEL_PATH.exists(),
                     "current_prompt": current_prompt,
                     "inference_sections": sections,
+                    "structured_requests": _parse_structured_tap_requests(
+                        structured_tail,
+                        max_requests=10,
+                        now_epoch=now_epoch,
+                    ),
                     "inference_tap_mtime": inf_m,
+                    "structured_tap_mtime": structured_m,
                     "prompt_tap_mtime": prm_m,
                     "repl_tap_mtime": rpl_m,
                 })
@@ -728,12 +823,19 @@ async def process_status() -> JSONResponse:
             return time.time() - p.stat().st_mtime
         except Exception:
             return None
+    phase = _read_autopilot_phase()
+    phase_age_s = _age_s(AUTOPILOT_PHASE_PATH)
+    if phase and not (autopilot or {}).get("running"):
+        phase = dict(phase)
+        phase.setdefault("idle_reason", "autopilot process not running")
 
     return JSONResponse({
         "autopilot": autopilot,
         "gepa_worker_count": n_workers,
         "last_autopilot_log_age_s": last_log_age_s,
         "autopilot_recent_lines": recent_lines,
+        "autopilot_phase": phase,
+        "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
         "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
     })
@@ -1578,7 +1680,9 @@ _FRESH_INFLIGHT_S = 20.0
 
 
 def _gate_inflight_by_live_slots(
-    tasks: list[dict[str, Any]], role_busy: dict[str, int],
+    tasks: list[dict[str, Any]],
+    role_busy: dict[str, int],
+    alias_to_topology_role: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Reconcile JSONL-derived in-flight tasks with live slot occupancy.
 
@@ -1591,15 +1695,38 @@ def _gate_inflight_by_live_slots(
     slot dots agree, hides stale orphans, and keeps long-running tasks visible
     for as long as their slot stays busy.
     """
+    alias_to_topology_role = alias_to_topology_role or {}
+
+    def _role_key(role: Any) -> str:
+        return str(role or "unknown").split(":", 1)[0]
+
     by_role: dict[str, list[dict[str, Any]]] = {}
     for t in tasks:
-        by_role.setdefault(t.get("role") or "unknown", []).append(t)
+        logical_role = _role_key(t.get("role") or "unknown")
+        topology_role = alias_to_topology_role.get(logical_role, logical_role)
+        by_role.setdefault(topology_role, []).append(t)
     gated: list[dict[str, Any]] = []
     for role, group in by_role.items():
         group.sort(key=lambda x: x.get("age_s", 0.0))  # newest first
         busy = role_busy.get(role, 0)
         n_fresh = sum(1 for t in group if t.get("age_s", 0.0) <= _FRESH_INFLIGHT_S)
-        gated.extend(group[: max(busy, n_fresh)])
+        for idx, task in enumerate(group[: max(busy, n_fresh)]):
+            annotated = dict(task)
+            raw_role = annotated.get("role") or "unknown"
+            logical_role = _role_key(raw_role)
+            topology_role = alias_to_topology_role.get(logical_role, logical_role)
+            if topology_role != str(raw_role):
+                annotated["topology_role"] = topology_role
+            if idx < busy:
+                annotated["live_state"] = "decoding"
+                annotated["live_state_reason"] = "live slot busy for topology role"
+            else:
+                annotated["live_state"] = "pending"
+                annotated["live_state_reason"] = (
+                    "fresh task_started with no busy slot yet; likely queued, "
+                    "pre-inference, or local post-processing"
+                )
+            gated.append(annotated)
     gated.sort(key=lambda x: x.get("age_s", 0.0))
     return gated
 
@@ -1627,6 +1754,18 @@ async def snapshot() -> JSONResponse:
     # Derive per-node activity from slot states + live busy slots per base role.
     port_roles = _discover_llama_ports()
     role_busy: dict[str, int] = {}
+    alias_to_topology_role: dict[str, str] = {}
+    for role_label in set(port_roles.values()):
+        role = base_role(role_label)
+        if not role:
+            continue
+        try:
+            for alias in role_aliases(role):
+                alias_base = base_role(alias)
+                if alias_base:
+                    alias_to_topology_role[alias_base] = role
+        except Exception:
+            continue
     activity: dict[int, dict[str, Any]] = {}
     for port, slots in slots_by_port.items():
         n_total = len(slots)
@@ -1663,7 +1802,11 @@ async def snapshot() -> JSONResponse:
     in_flight_tasks, recent_completed_tasks = _scan_orchestrator_tasks(progress_log)
     # Gate in-flight tasks on live slot occupancy so the task list, the active
     # badge, and the slot dots can't disagree (drops restart-orphans).
-    in_flight_tasks = _gate_inflight_by_live_slots(in_flight_tasks, role_busy)
+    in_flight_tasks = _gate_inflight_by_live_slots(
+        in_flight_tasks,
+        role_busy,
+        alias_to_topology_role=alias_to_topology_role,
+    )
 
     return JSONResponse({
         "generated_at": time.time(),
