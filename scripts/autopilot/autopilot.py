@@ -2567,6 +2567,27 @@ def _run_loop_inner(
             eval_result.harness_metrics = hle_payload["harness_metrics"]
             eval_result.oracle_adequacy = hle_payload["oracle_adequacy"]
 
+        # J11/BSV-2: observe-only behavior-signature differential vs the last frontier-accepted
+        # incumbent. Flag-gated (AUTOPILOT_BSV_OBSERVE=1), default-OFF. Same observe-only zone as
+        # HLE (after SafetyGate + ParetoArchive) so it CANNOT affect trial acceptance, Pareto
+        # promotion, routing, or baseline mutation — it only journals diagnostics.
+        bsv_payload: dict = {}
+        if os.environ.get("AUTOPILOT_BSV_OBSERVE") == "1":
+            try:
+                from bsv_observe import compute_bsv_observe_payload  # type: ignore
+
+                bsv_payload = compute_bsv_observe_payload(
+                    eval_result,
+                    species_name=species_name,
+                    trial_id=trial_counter,
+                    incumbent_signature=state.get("bsv_incumbent_signature"),
+                )
+                # Incumbent = last FRONTIER-accepted signature (observe-only tracking in state).
+                if pareto_status == "frontier":
+                    state["bsv_incumbent_signature"] = bsv_payload.get("signature")
+            except Exception as _bsv_err:  # observe-only must never disrupt the trial loop
+                log.debug("BSV observe skipped (trial %s): %s", trial_counter, _bsv_err)
+
         # Git tag
         phase.set("post_trial_artifacts", trial_id=trial_counter, species=species_name)
         git_tag = ""
@@ -2632,6 +2653,7 @@ def _run_loop_inner(
             "metric_schema_version": metric_schema_version,
             "harness_metrics": harness_metrics,
             "oracle_adequacy": oracle_adequacy,
+            "bsv_observe": bsv_payload,  # J11/BSV-2 observe-only diff ({} unless AUTOPILOT_BSV_OBSERVE=1)
             "objective_policy_live": LEGACY_OBJECTIVE_POLICY,
             "objective_policy_shadow": TASK_RATE_OBJECTIVE_POLICY,
             "objectives_legacy_v1": legacy_objectives,

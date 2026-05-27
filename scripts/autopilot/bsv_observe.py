@@ -1,0 +1,90 @@
+"""J11 / BSV-2 observe-only behavior-signature diff for autopilot trials.
+
+Mirrors `hle_metrics.py`: a pure helper that computes a diagnostic payload only. It does NOT feed
+SafetyGate, ParetoArchive, routing, or baseline mutation. The autopilot's observe-only J11 run
+decides later whether the differential accept-test has enough signal to ever gate acceptance.
+
+Scope honesty (review 2026-05-27, finding #2): an autopilot trial's `EvalResult` is a *trial-level
+aggregate*. It exposes `routing_distribution`, `per_suite_quality`, cost/token stats and the HLE
+ids, but NOT per-request `tool_sequence` / `escalation_path` / true per-sentinel outcomes (those
+live in the URE trace store — a richer follow-up). So the signature is built from what is reliably
+present and tagged `signature_confidence="partial"`; `diff_signatures` then refuses to certify a
+partial comparison as BENIGN (bumps to WATCH), which is the correct conservative behaviour here.
+
+What the coarse signature captures + what the diff therefore flags:
+  - route_path  = sorted(routing_distribution roles)        -> WATCH on routing change
+  - sentinel_outcomes = per_suite pass/fail proxy (>=2.0/3)  -> BLOCKING on a suite pass->fail
+  - token_bucket = avg_prompt_tokens                         -> WATCH/BLOCKING on cost regression
+"""
+from __future__ import annotations
+
+from typing import Any
+
+BSV_METRIC_VERSION = "bsv-2-observe-v1"
+
+# per_suite_quality is on a 0-3 scale; >= this is treated as a suite-level "pass" proxy. This is a
+# coarse stand-in for true per-sentinel outcomes (which need the URE trace store) and is the reason
+# the signature is emitted at "partial" confidence.
+SUITE_PASS_QUALITY = 2.0
+
+
+def _suite_outcomes(per_suite_quality: dict[str, float] | None) -> dict[str, str]:
+    """Coarse suite-level pass/fail proxy for `sentinel_outcomes`, using the BSV vocab
+    ('pass'/'fail'). True per-sentinel outcomes are a URE-trace follow-up."""
+    out: dict[str, str] = {}
+    for suite, q in (per_suite_quality or {}).items():
+        try:
+            out[str(suite)] = "pass" if float(q) >= SUITE_PASS_QUALITY else "fail"
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def compute_bsv_observe_payload(
+    eval_result: Any,
+    *,
+    species_name: str,
+    trial_id: int,
+    incumbent_signature: dict | None,
+) -> dict[str, Any]:
+    """Build this trial's coarse behavior signature and, if an incumbent exists, its diff severity.
+
+    Pure + observe-only. Returns a JSON-serialisable dict suitable for journaling and for storing
+    back as the next incumbent. Any input gap degrades gracefully (fields default to None/{}).
+    """
+    from src.behavior_signature import (  # local import keeps this module dependency-light
+        compute_behavior_signature,
+        diff_signatures,
+        _as_dict,
+    )
+
+    routing = getattr(eval_result, "routing_distribution", {}) or {}
+    per_suite = getattr(eval_result, "per_suite_quality", {}) or {}
+    oracle = getattr(eval_result, "oracle_adequacy", {}) or {}
+    avg_tokens = float(getattr(eval_result, "avg_prompt_tokens", 0.0) or 0.0)
+
+    sig = compute_behavior_signature(
+        archive_member_id=str(species_name or "?"),
+        trial_id=trial_id,
+        sentinel_outcomes=_suite_outcomes(per_suite),
+        route_path=sorted(routing.keys()) or None,
+        total_tokens=avg_tokens or None,
+        harness_metrics_id=int(getattr(eval_result, "metric_schema_version", 1) or 1),
+        oracle_adequacy_version=(len(oracle) or None),
+        signature_confidence="partial",  # trial-level aggregate, not per-request evidence
+    )
+    sig_dict = _as_dict(sig)
+
+    payload: dict[str, Any] = {
+        "bsv_metric_version": BSV_METRIC_VERSION,
+        "signature": sig_dict,
+        "signature_confidence": "partial",
+        "severity": None,
+        "reasons": [],
+        "compared_to_incumbent": incumbent_signature is not None,
+    }
+    if incumbent_signature is not None:
+        severity, reasons = diff_signatures(incumbent_signature, sig_dict)
+        payload["severity"] = severity
+        payload["reasons"] = reasons[:8]
+    return payload
