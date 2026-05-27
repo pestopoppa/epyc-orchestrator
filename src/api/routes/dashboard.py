@@ -61,6 +61,8 @@ from src.api.routes.dashboard_topology import (
     _PORT_HINTS,
     role_aliases,
     _ROLE_COLORS,
+    _clean_model_name,
+    _discover_llama_models,
     _discover_llama_ports,
     _process_info_by_match,
     _role_color,
@@ -1550,6 +1552,7 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
 async def topology() -> JSONResponse:
     """Return the static topology: nodes with role + display color + port."""
     llama_ports = _discover_llama_ports()
+    llama_models = _discover_llama_models()
     services = _load_state_services()
     seen_ports: set[int] = set()
     nodes: list[dict[str, Any]] = []
@@ -1577,6 +1580,10 @@ async def topology() -> JSONResponse:
             "port": port,
             "color": _role_color(role),
             "kind": "llama-server",
+            # Model actually loaded by this llama-server (-m GGUF basename,
+            # vendor-prefix + shard-suffix stripped). Surfaced so the topology
+            # strip can label each role with its backing model + quant.
+            "model": llama_models.get(port, ""),
             # Alias roles served by the same process (e.g. frontdoor port 8070
             # also serves coder_escalation + worker_summarize). Surfaced so the
             # dashboard can render them under the primary role label.
@@ -1596,7 +1603,7 @@ async def topology() -> JSONResponse:
             "port": port,
             "color": _role_color(svc["role"]),
             "kind": "service",
-            "model": svc.get("model", ""),
+            "model": _clean_model_name(svc.get("model", "")),
         })
 
     return JSONResponse({"nodes": nodes, "generated_at": time.time()})

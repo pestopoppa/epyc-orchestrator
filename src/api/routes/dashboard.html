@@ -173,6 +173,16 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
 .topology-row:hover { background: rgba(255,255,255,0.04); }
 .topology-row .role-name {
     font-size: 12px; font-weight: 500;
+    display: flex; flex-direction: column; gap: 1px; min-width: 0;
+}
+.topology-row .role-line {
+    display: flex; align-items: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Backing model + quant for this role (from topology endpoint -m parse). */
+.topology-row .role-model {
+    font-family: var(--font-mono); font-size: 9px; font-weight: 400;
+    color: var(--dim); letter-spacing: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .topology-row .port {
@@ -584,6 +594,11 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         <span class="count-suffix" id="region-locks-status">— per-region cross-process lock state (Phase 5 / 2026-05-22)</span>
       </h2>
       <div id="region-locks-grid" style="display:grid;grid-template-columns:160px repeat(7,1fr);gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:center"></div>
+      <!-- Contention gate: merged in (2026-05-27) as a compact strip rather than
+           its own panel — the lock grid above already visualizes which instances
+           are active/blocked, so the gate only needs to add the admission counters
+           + blocked-pair tally. Populated by updateContentionGate(). -->
+      <div id="contention-gate-compact" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;font-family:var(--font-mono,ui-monospace,monospace);color:var(--dim);line-height:1.7"></div>
       <style>
         @keyframes regionLockActivePulse {
           0%   { opacity: 1; }
@@ -596,15 +611,6 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         .rl-ready   { background: rgba(52,211,153,0.18); color: var(--good, #34d399); }
         .rl-na      { background: rgba(100,100,100,0.10); color: var(--dim, #6b7280); font-style: italic; }
       </style>
-    </div>
-
-    <div class="panel">
-      <h2>
-        <span class="live-dot"></span>
-        contention gate
-        <span class="count-suffix" id="contention-status">— cross-role admission decisions (2026-05-24 Phase B)</span>
-      </h2>
-      <div id="contention-gate-grid" style="display:grid;grid-template-columns:200px 1fr;gap:4px;font-size:11px;font-family:var(--font-mono,ui-monospace,monospace);align-items:start"></div>
     </div>
 
     <div class="panel">
@@ -816,8 +822,16 @@ function renderTopologyStrip() {
             aliasChip = ` <span style="color:var(--dim);font-size:9px;margin-left:6px;font-style:italic"`
                       + ` title="this server also routes traffic for: ${aliasStr}">+ ${aliasStr}</span>`;
         }
-        label.innerHTML = `<span class="role-expand-chev">▸</span>${labelText}${aliasChip}` +
-            `<span class="active-badge zero" id="active_badge_${g.base}" title="active in-flight tasks for ${g.base}">0</span>`;
+        // Backing model + quant. For grouped roles every instance shares one
+        // GGUF, so take the parent's (or first instance carrying a model field).
+        const modelName = (parent.model || (g.instances.find(i => i.model) || {}).model || '').trim();
+        const modelLine = modelName
+            ? `<div class="role-model" title="${escapeHTML(modelName)}">${escapeHTML(modelName)}</div>`
+            : '';
+        label.innerHTML =
+            `<div class="role-line"><span class="role-expand-chev">▸</span>${labelText}${aliasChip}` +
+            `<span class="active-badge zero" id="active_badge_${g.base}" title="active in-flight tasks for ${g.base}">0</span></div>` +
+            modelLine;
 
         const port = document.createElement('div');
         port.className = 'port';
@@ -2026,12 +2040,24 @@ function renderInferenceTap(data) {
             <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em">current prompt</div>
             <div class="tap-content prompt-text" id="tap-current-prompt"></div>
         </div>` : '';
+    // Preserve per-section expand state across re-renders. renderInferenceTap
+    // is called on every tap-stream tick and fully rebuilds innerHTML, so
+    // without this any section the user opened/closed would snap back on the
+    // next poll. Sections default to COLLAPSED — we only re-open the ones the
+    // user explicitly opened, keyed by stable identity (not list index, which
+    // shifts as new sections arrive). New/unseen sections stay collapsed.
+    const _sectionKey = (s) => `${s.timestamp || ''}|${s.role || '?'}|${s.prompt_len}|${s.response_len}`;
+    const _openKeys = new Set(
+        [...container.querySelectorAll('details.tap-section[open]')].map(d => d.dataset.tapKey)
+    );
     const sectionsHtml = sections.map((s, i) => {
         const ts = s.timestamp || '';
         const role = s.role || '?';
         const color = roleColor(role) || 'var(--muted)';
+        const key = _sectionKey(s);
+        const openAttr = _openKeys.has(key) ? 'open' : '';
         return `
-            <details class="tap-section" ${i === 0 ? 'open' : ''}>
+            <details class="tap-section" data-tap-key="${escapeHTML(key)}" ${openAttr}>
                 <summary style="cursor:pointer;padding:4px 0;color:${color}">
                     <span style="font-weight:600">${escapeHTML(role)}</span>
                     <span style="color:var(--muted);font-size:10px;margin-left:6px">${escapeHTML(ts)} · ${s.prompt_len}c prompt · ${s.response_len}c resp</span>
@@ -3187,81 +3213,76 @@ function startDashboard() {
         }
     }
     async function updateContentionGate() {
+        // Compact strip merged into the CPU region-locks panel (2026-05-27).
+        // The lock grid above already shows which instances are active/blocked,
+        // so this only adds the bits the grid can't: matrix status, cumulative
+        // admission counters, blocked-pair tally, and any migration failures.
+        const el = document.getElementById('contention-gate-compact');
+        if (!el) return;
         try {
             const r = await fetch('/dashboard/api/contention');
             const d = await r.json();
-            const status = document.getElementById('contention-status');
-            const grid = document.getElementById('contention-gate-grid');
-            if (!grid) return;
-            const ms = d.matrix_status || 'unavailable';
-            if (status) {
-                const colors = {
-                    ok: 'var(--good, #34d399)',
-                    missing: 'var(--bad, #f87171)',
-                    stale: 'var(--warn, #fbbf24)',
-                    invalid: 'var(--bad, #f87171)',
-                    unavailable: 'var(--muted, #9ca3af)',
-                };
-                status.textContent = `— matrix: ${ms.toUpperCase()}`;
-                status.style.color = colors[ms] || 'var(--muted)';
-            }
-            const rows = [];
-            const active = d.active_decodes_by_role || {};
-            const activeInstances = d.active_instances_by_role || {};
-            const activeRoles = Object.keys(active).sort();
-            rows.push(`<div style="color:var(--muted);font-size:10px">active decodes (by region-lock)</div>`);
-            rows.push(`<div style="color:var(--fg)">${
-                activeRoles.length === 0 ? '<span style="color:var(--muted)">(none)</span>'
-                : activeRoles.map(r => {
-                    const idxs = activeInstances[r] || [];
-                    // Instance 0 = full, 1..N = quarters (so quarter q_idx = topology idx q_idx+1).
-                    // Map back to user-friendly: 0 → "full", 1 → "q0", 2 → "q1", etc.
-                    const labels = idxs.map(i => i === 0 ? 'full' : `q${i - 1}`).join(',') || '?';
-                    return `<span style="display:inline-block;margin-right:8px"><b>${r}</b> [${labels}]</span>`;
-                  }).join('')
-            }</div>`);
-            rows.push(`<div style="color:var(--muted);font-size:10px">admitted / timed out / degraded</div>`);
-            rows.push(`<div style="color:var(--fg)">${d.contention_admitted_count || 0} / ${d.contention_timeout_count || 0} / ${d.contention_degraded_allow_count || 0}</div>`);
-            rows.push(`<div style="color:var(--muted);font-size:10px">cumulative wait (s)</div>`);
-            rows.push(`<div style="color:var(--fg)">${(d.contention_wait_seconds || 0).toFixed(2)}</div>`);
-            rows.push(`<div style="color:var(--muted);font-size:10px">unknown-pair count</div>`);
-            rows.push(`<div style="color:var(--fg)">${d.contention_unknown_pair_count || 0}</div>`);
+            const ms = (d.matrix_status || 'unavailable').toUpperCase();
+            const msColor = {
+                OK: 'var(--good, #34d399)', MISSING: 'var(--bad, #f87171)',
+                STALE: 'var(--warn, #fbbf24)', INVALID: 'var(--bad, #f87171)',
+                UNAVAILABLE: 'var(--muted, #9ca3af)',
+            }[ms] || 'var(--muted)';
+            const chip = (label, val, color) =>
+                `<span style="margin-right:12px"><span style="color:var(--dim)">${label}</span> <span style="color:${color || 'var(--fg)'}">${val}</span></span>`;
+
+            const timeout = d.contention_timeout_count || 0;
+            const degraded = d.contention_degraded_allow_count || 0;
+            const unknown = d.contention_unknown_pair_count || 0;
+            const warn = 'var(--warn,#fbbf24)';
+
+            const lines = [];
+            // Title + matrix status badge.
+            lines.push(
+                `<div style="margin-bottom:3px">` +
+                `<span style="color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-size:9px">contention gate</span> ` +
+                `<span style="color:var(--dim)">· matrix</span> <span style="color:${msColor};font-weight:600">${ms}</span>` +
+                `</div>`
+            );
+            // Admission counters.
+            lines.push(
+                `<div>` +
+                chip('admit', d.contention_admitted_count || 0) +
+                chip('timeout', timeout, timeout ? warn : null) +
+                chip('degraded', degraded, degraded ? warn : null) +
+                chip('wait', (d.contention_wait_seconds || 0).toFixed(1) + 's') +
+                chip('unknown-pairs', unknown, unknown ? warn : null) +
+                `</div>`
+            );
+            // Blocked pairs — only when there are any.
             const blocked = d.contention_blocked_count || {};
-            const blockedKeys = Object.keys(blocked).sort((a, b) => blocked[b] - blocked[a]);
-            if (blockedKeys.length) {
-                rows.push(`<div style="color:var(--muted);font-size:10px">blocked pairs (top 6)</div>`);
-                rows.push(`<div style="color:var(--fg);line-height:1.6">${
-                    blockedKeys.slice(0, 6).map(k => `<span style="display:inline-block;margin-right:8px"><code>${k}</code>×${blocked[k]}</span>`).join('')
-                }</div>`);
-            } else {
-                rows.push(`<div style="color:var(--muted);font-size:10px">blocked pairs</div>`);
-                rows.push(`<div style="color:var(--muted)">(none yet)</div>`);
+            const bk = Object.keys(blocked).sort((a, b) => blocked[b] - blocked[a]);
+            if (bk.length) {
+                lines.push(
+                    `<div style="margin-top:2px"><span style="color:var(--dim)">blocked</span> ` +
+                    bk.slice(0, 4).map(k => `<code style="color:var(--bad,#f87171)">${escapeHTML(k)}</code>×${blocked[k]}`).join(' · ') +
+                    (bk.length > 4 ? ` <span style="color:var(--dim)">+${bk.length - 4} more</span>` : '') +
+                    `</div>`
+                );
             }
-            // Per-role scheduling state (quarter preference + migration status)
+            // Migration — only surface roles with KV migration enabled or any
+            // failures; quarter-preference order is implied by the lock grid.
             const perRole = d.per_role_scheduling || {};
-            const perRoleKeys = Object.keys(perRole).sort();
-            if (perRoleKeys.length) {
-                rows.push(`<div style="color:var(--muted);font-size:10px">per-role topology + migration</div>`);
-                const inner = perRoleKeys.map(role => {
-                    const r = perRole[role] || {};
-                    const order = (r.quarter_preference_order || []).map(q => `q${q}`).join('→') || '—';
-                    const km = r.kv_migration || {};
-                    const migOK = km.enabled ? 'on' : 'off';
-                    const migColor = km.enabled ? 'var(--good, #34d399)' : 'var(--muted)';
-                    const path = km.dispatch_path || '?';
-                    const mStarted = r.migrations_started || 0;
-                    const mFailed = r.migration_failures || 0;
-                    return `<div style="margin:2px 0;line-height:1.6"><b style="color:var(--accent, #60a5fa)">${role}</b>
-                        <span style="color:var(--muted);font-size:10px"> · pref ${order}</span>
-                        <span style="color:${migColor};font-size:10px"> · mig=${migOK}(${path})</span>
-                        <span style="color:var(--muted);font-size:10px"> · started=${mStarted} failed=${mFailed}</span></div>`;
-                }).join('');
-                rows.push(`<div style="color:var(--fg)">${inner}</div>`);
+            const migBits = [];
+            for (const role of Object.keys(perRole).sort()) {
+                const rr = perRole[role] || {};
+                const km = rr.kv_migration || {};
+                const failed = rr.migration_failures || 0;
+                if (!km.enabled && !failed) continue;
+                const c = failed ? warn : 'var(--good,#34d399)';
+                migBits.push(`<span style="color:${c}">${escapeHTML(role)} ${failed ? '✗' + failed : '✓'}</span>`);
             }
-            grid.innerHTML = rows.join('');
+            if (migBits.length) {
+                lines.push(`<div style="margin-top:2px"><span style="color:var(--dim)">mig</span> ${migBits.join(' · ')}</div>`);
+            }
+            el.innerHTML = lines.join('');
         } catch (e) {
-            const status = document.getElementById('contention-status');
-            if (status) status.textContent = '— fetch failed';
+            el.innerHTML = '<span style="color:var(--dim)">— contention fetch failed</span>';
         }
     }
     async function updateRegionLocks() {

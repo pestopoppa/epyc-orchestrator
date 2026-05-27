@@ -158,6 +158,55 @@ def _discover_llama_ports() -> dict[int, str]:
     return ports
 
 
+_VENDOR_PREFIX_RE = re.compile(
+    r"^(Qwen|Meta|Google|Mistral|DeepSeek|unsloth|bartowski|lmstudio[-_]community)[-_]",
+    re.IGNORECASE,
+)
+_SHARD_SUFFIX_RE = re.compile(r"-\d{5}-of-\d{5}$")
+
+
+def _clean_model_name(model_path: str) -> str:
+    """Human-friendly model label from a GGUF path.
+
+    basename → drop `.gguf` → drop multi-file shard suffix (`-00001-of-00003`)
+    → drop a redundant leading vendor prefix (`Qwen_Qwen3.6…` → `Qwen3.6…`).
+    Returns '' for empty input so callers can omit the field.
+    """
+    if not model_path:
+        return ""
+    stem = Path(model_path).name
+    stem = re.sub(r"\.gguf$", "", stem, flags=re.IGNORECASE)
+    stem = _SHARD_SUFFIX_RE.sub("", stem)
+    stem = _VENDOR_PREFIX_RE.sub("", stem)
+    return stem
+
+
+def _discover_llama_models() -> dict[int, str]:
+    """Scan /proc for running llama-server processes → {port: cleaned model name}.
+
+    Mirrors `_discover_llama_ports` but extracts the `-m <model>` GGUF path so the
+    topology endpoint can label each role with the model it is actually serving.
+    """
+    models: dict[int, str] = {}
+    try:
+        out = subprocess.run(
+            ["ps", "-eo", "pid,cmd"], capture_output=True, text=True, timeout=2,
+        ).stdout
+    except Exception:
+        out = ""
+    pid_port_re = re.compile(r"--port\s+(\d+)")
+    pid_model_re = re.compile(r"-m\s+(\S+)")
+    for line in out.splitlines():
+        if "llama-server" not in line:
+            continue
+        port_m = pid_port_re.search(line)
+        model_m = pid_model_re.search(line)
+        if not port_m or not model_m:
+            continue
+        models[int(port_m.group(1))] = _clean_model_name(model_m.group(1))
+    return models
+
+
 def _load_state_services(state_path: Path) -> list[dict[str, Any]]:
     """Load non-llama auxiliary services from orchestrator_state.json at `state_path`."""
     services: list[dict[str, Any]] = []
