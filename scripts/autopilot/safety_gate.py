@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -46,13 +47,19 @@ class EvalResult:
     """Evaluation result from EvalTower."""
     tier: int
     quality: float  # Average quality 0-3
-    speed: float  # Median tokens/sec
+    speed: float  # Objective speed t/s: median request in serial, aggregate batch in concurrent evals.
     cost: float  # Normalized cost 0-1
     reliability: float  # Fraction of non-error responses
     per_suite_quality: dict[str, float] = field(default_factory=dict)
     routing_distribution: dict[str, float] = field(default_factory=dict)
     n_questions: int = 0
     details: dict[str, Any] = field(default_factory=dict)
+    median_request_speed: float = 0.0  # Raw median per-request tokens/sec.
+    aggregate_speed: float = 0.0  # Batch-level tokens/sec over eval wall time.
+    eval_concurrency: int = 1  # Worker fan-out used by EvalTower for this batch.
+    eval_wall_s: float = 0.0  # End-to-end EvalTower batch wall time.
+    sum_request_elapsed_s: float = 0.0  # Sum of per-request elapsed times.
+    speed_metric_mode: str = "median_request_tps"  # median_request_tps or aggregate_batch_tps.
     instruction_token_count: int = 0  # AP-16: per-request instruction overhead
     instruction_token_ratio: float = 0.0  # AP-16: instruction_tokens / total_input_tokens
     partial_count: int = 0  # Inference results with partial=True (read_timeout_partial)
@@ -60,6 +67,16 @@ class EvalResult:
     # AM KV compaction telemetry (populated when compact action is used)
     avg_prompt_tokens: float = 0.0  # Average context length across results
     compaction_events: int = 0  # Number of compacted slots in this eval
+    # EV-8: Diversity metrics (NIB2-42). All default to NaN ("unavailable"),
+    # not zero, so SafetyGate NaN-guards cannot fire on missing signal.
+    # Populated by diversity_metrics.compute_diversity() after each eval batch.
+    # diversity_semantic_embedding_agreement is inference-gated: it remains
+    # NaN unless an embedder is wired in at eval time.
+    diversity_entropy: float = math.nan
+    diversity_distinct2: float = math.nan
+    diversity_self_bleu: float = math.nan
+    diversity_ttr: float = math.nan
+    diversity_semantic_embedding_agreement: float = math.nan
     # EV-2: Calibration metrics (from eval-tower-verification.md)
     ece: float = 0.0  # Expected Calibration Error (10-bin). Lower = better calibrated.
     auroc: float = 0.0  # Area Under ROC Curve. Higher = better discrimination. 0 if degenerate.
@@ -100,6 +117,11 @@ class EvalResult:
             f"METRIC tier: {self.tier}",
             f"METRIC quality: {self.quality:.4f}",
             f"METRIC speed: {self.speed:.2f}",
+            f"METRIC speed_metric_mode: {self.speed_metric_mode}",
+            f"METRIC median_request_speed: {self.median_request_speed:.2f}",
+            f"METRIC aggregate_speed: {self.aggregate_speed:.2f}",
+            f"METRIC eval_concurrency: {self.eval_concurrency}",
+            f"METRIC eval_wall_s: {self.eval_wall_s:.2f}",
             f"METRIC cost: {self.cost:.4f}",
             f"METRIC reliability: {self.reliability:.4f}",
             f"METRIC n_questions: {self.n_questions}",
@@ -130,6 +152,18 @@ class EvalResult:
             lines.append(f"METRIC avg_prompt_tokens: {self.avg_prompt_tokens:.0f}")
         if self.compaction_events > 0:
             lines.append(f"METRIC compaction_events: {self.compaction_events}")
+        # EV-8: Diversity metrics (NaN-gated — only emit when the signal was
+        # actually computed; NaN means "unavailable this trial").
+        for _div_key, _div_val in (
+            ("diversity_entropy", self.diversity_entropy),
+            ("diversity_distinct2", self.diversity_distinct2),
+            ("diversity_self_bleu", self.diversity_self_bleu),
+            ("diversity_ttr", self.diversity_ttr),
+            ("diversity_semantic_embedding_agreement",
+             self.diversity_semantic_embedding_agreement),
+        ):
+            if not math.isnan(_div_val):
+                lines.append(f"METRIC {_div_key}: {_div_val:.4f}")
         return "\n".join(lines)
 
 
@@ -357,15 +391,49 @@ class SafetyGate:
         """True if consecutive failures exceed threshold."""
         return self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES
 
+    def _baseline_eligible(self, result: EvalResult) -> tuple[bool, str, dict]:
+        """(eligible, reason, proof) for a production-baseline write. Eligible iff a recognized
+        speed_metric_mode is set AND the contention matrix is certified-fresh against the LIVE
+        topology (matrix_status==OK with the live hash). Fail-closed: if the live topology/matrix
+        cannot be determined we are NOT eligible — a baseline must never be written on unknown
+        state (operator audit #3, 2026-05-27). No env override by design (hard gate)."""
+        proof: dict[str, Any] = {"speed_metric_mode": getattr(result, "speed_metric_mode", None),
+                                 "eval_concurrency": getattr(result, "eval_concurrency", None)}
+        if proof["speed_metric_mode"] not in {"median_request_tps", "aggregate_batch_tps"}:
+            return False, f"unrecognized speed_metric_mode={proof['speed_metric_mode']!r}", proof
+        try:
+            from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+            from src.scheduling.contention import topology_fingerprint, matrix_status, MatrixStatus
+            live = topology_fingerprint(NUMA_CONFIG)
+            status = matrix_status(current_topology_hash=live)
+            proof["topology_hash"] = live
+            proof["matrix_status"] = status.value
+            if status != MatrixStatus.OK:
+                return False, f"matrix not certified-fresh (status={status.value})", proof
+        except Exception as exc:  # noqa: BLE001
+            proof["error"] = str(exc)
+            return False, f"could not verify topology/matrix: {exc}", proof
+        return True, "speed_metric_mode set + matrix OK against live topology", proof
+
     def update_baseline(self, result: EvalResult) -> None:
-        """Update baseline with new production-best metrics."""
+        """Update baseline with new production-best metrics — HARD-GATED on baseline eligibility
+        (operator audit #3): refuses to write unless a recognized speed_metric_mode is set AND the
+        contention matrix is certified-fresh against the live topology, so a measurement taken on a
+        stale/wrong stack (or with unknown concurrent-speed semantics) can never poison the baseline.
+        The baseline_eligible decision + topology/matrix proof are logged either way."""
+        eligible, reason, proof = self._baseline_eligible(result)
+        if not eligible:
+            log.warning("Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s",
+                        reason, proof)
+            return
         self.baseline.quality = result.quality
         self.baseline.speed = result.speed
         self.baseline.cost = result.cost
         self.baseline.reliability = result.reliability
         self.baseline.per_suite_quality.update(result.per_suite_quality)
         self.baseline.save()
-        log.info("Baseline updated: q=%.3f s=%.1f", result.quality, result.speed)
+        log.info("Baseline updated — baseline_eligible=true (%s) | proof=%s | q=%.3f s=%.1f",
+                 reason, proof, result.quality, result.speed)
 
     def reset_failures(self) -> None:
         self._consecutive_failures = 0

@@ -105,6 +105,7 @@ class ContentionGate:
         self._lock = threading.Lock()
         self._matrix_status_cache: MatrixStatus | None = None
         self._matrix_status_checked_at: float = 0.0
+        self._live_topo_hash_cache: str | None = None
 
     # ── matrix access (lazy load + status caching) ──────────────────
 
@@ -123,12 +124,27 @@ class ContentionGate:
         return self._matrix
 
     def matrix_health(self) -> MatrixStatus:
-        """Cheap, cached status check (refreshed every 60 s)."""
+        """Cheap, cached status check (refreshed every 60 s). Passes the LIVE topology hash so a
+        topology change (NUMA_CONFIG edit / quarter re-pin) is detected as STALE — the runtime no
+        longer trusts a matrix benched against a different stack (operator audit #2, 2026-05-27)."""
         now = time.time()
         if self._matrix_status_cache is None or (now - self._matrix_status_checked_at) > 60.0:
-            self._matrix_status_cache = matrix_status()
+            self._matrix_status_cache = matrix_status(current_topology_hash=self._live_topology_hash())
             self._matrix_status_checked_at = now
         return self._matrix_status_cache
+
+    def _live_topology_hash(self) -> str | None:
+        """Best-effort live topology fingerprint (guarded import, cached). Returns None when the
+        live config is unavailable so matrix_status falls back to the age check only (no false
+        STALE). Mirrors src/runtime/inference_tap.py's _topology_hash()."""
+        if self._live_topo_hash_cache is None:
+            try:
+                from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+                from src.scheduling.contention import topology_fingerprint
+                self._live_topo_hash_cache = topology_fingerprint(NUMA_CONFIG)
+            except Exception:  # noqa: BLE001
+                self._live_topo_hash_cache = ""
+        return self._live_topo_hash_cache or None
 
     # ── active-decode snapshot ──────────────────────────────────────
 
@@ -175,6 +191,20 @@ class ContentionGate:
         if not holders:
             return GateDecision(admitted=True, decision=PairDecision.ALLOW, reason="no active decodes")
 
+        # Topology-freshness fail-closed (#2, operator audit 2026-05-27): if the matrix is not
+        # certified-fresh against the LIVE stack (STALE/MISSING/INVALID) while concurrency is
+        # active, do NOT trust its verdicts — serialize background/bulk (QUEUE) and degraded-admit
+        # foreground (visible, not silently "healthy"). No-op when the matrix is OK (the normal case).
+        health = self.matrix_health()
+        if health != MatrixStatus.OK:
+            is_bg = traffic_class == TrafficClass.BACKGROUND
+            return GateDecision(
+                admitted=not is_bg,
+                decision=PairDecision.QUEUE if is_bg else PairDecision.DEGRADED_ALLOW,
+                blocking_roles=sorted(holders.keys()),
+                reason=f"matrix {health.value}: fail-closed (topology not certified-fresh)",
+            )
+
         # Evaluate against each active role (including same-role for multi-instance pairs).
         worst: PairDecision = PairDecision.ALLOW
         blocking: list[str] = []
@@ -193,11 +223,11 @@ class ContentionGate:
                 worst = PairDecision.QUEUE
             blocking.append(active_role)
 
-        # N-way check (J4c): pairwise-allow does NOT certify the full active set.
-        # Consult the measured n_way matrix for the EXACT active-set union so a
-        # measured-block N-way set is queued even when every constituent pair is
-        # allow. Proof this matters: {frontdoor,ingest,vision} pairs all allow
-        # (1.72/1.43/1.06) but the triple is 0.847 -> block.
+        # N-way check (J4c): pairwise-allow does NOT certify the full active set — an
+        # all-pairwise-allowed set could be aggregate-negative, so consult the measured n_way
+        # matrix for the EXACT active-set union. DEFENSIVE: as of the 2026-05-26 certified-affinity
+        # re-bench there is NO measured N-way block (the famous {frontdoor,ingest,vision} 0.847 was
+        # a bad-affinity artifact -> 1.731 allow); this queues any future measured-block set.
         active_set = sorted(set(holders.keys()) | {role})
         if len(active_set) >= 2:
             nway_decision = nway_policy(active_set, traffic_class, matrix=matrix)

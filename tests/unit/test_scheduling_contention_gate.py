@@ -291,3 +291,22 @@ def test_metrics_record_blocked_count(real_matrix_path) -> None:
     assert any("architect_general" in k and "frontdoor" in k
                for k in snap["contention_blocked_count"].keys())
     assert snap["contention_timeout_count"] == 1
+
+
+def test_gate_fails_closed_on_stale_matrix(real_matrix_path) -> None:
+    """#2 (operator audit 2026-05-27): when matrix_health is not OK (topology changed / matrix
+    stale) AND concurrency is active, evaluate() fail-closes — background SERIALIZES (QUEUE, not
+    admitted), foreground degraded-admits (visible, not silently 'healthy')."""
+    import time as _t
+    m = contention.load_contention_matrix(real_matrix_path)
+    gate = gate_mod.ContentionGate(
+        matrix=m, active_holders_fn=_fake_active_factory({"frontdoor": [0]})
+    )
+    # Simulate a topology change the matrix wasn't benched against (force cached STALE health).
+    gate._matrix_status_cache = contention.MatrixStatus.STALE
+    gate._matrix_status_checked_at = _t.time()
+    bg = gate.evaluate("frontdoor", contention.TrafficClass.BACKGROUND)
+    assert not bg.admitted and bg.decision == contention.PairDecision.QUEUE
+    assert "fail-closed" in bg.reason
+    fg = gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
+    assert fg.admitted and fg.decision == contention.PairDecision.DEGRADED_ALLOW
