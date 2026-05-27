@@ -84,3 +84,34 @@ def test_repl_open_is_forbidden(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
     _repl().execute('open("cart_via_open.py", "w").write("X")')
     assert not (tmp_path / "cart_via_open.py").exists()
+
+
+# ── REPL real READ path → must resolve to the scratch task-root (2026-05-27) ──────
+# Root cause of the BEP-2 multi-file read-loop: reads (peek/grep/file_info/peek_grep) opened
+# the RAW relative path (orchestrator cwd), while writes resolve to the task-root. So a model
+# that read an existing task file got "[ERROR: File not found]", had nothing to act on, and
+# re-emitted the identical peek every turn until timeout. Reads must mirror writes.
+
+def test_repl_peek_reads_task_root_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    (tmp_path / "calc.py").write_text("def double(x):\n    return x * 2\n")
+    out = _repl()._peek(file_path="calc.py")
+    assert "def double" in out, f"peek must read the task-root file; got: {out!r}"
+    assert "File not found" not in out
+
+
+def test_repl_grep_reads_task_root_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    (tmp_path / "calc.py").write_text("def double(x):\n    return x * 2\n")
+    hits = _repl()._grep("double", file_path="calc.py")
+    assert any("double" in h for h in hits), f"grep must read the task-root file; got: {hits!r}"
+
+
+def test_repl_peek_absolute_path_no_taskroot(monkeypatch, tmp_path):
+    # Prod no-op invariant: with no task-root active, resolve_task_path == realpath, so an
+    # absolute path still reads exactly as before (the fix must not change prod read behavior).
+    monkeypatch.delenv("ORCHESTRATOR_EDIT_ROOT", raising=False)
+    f = tmp_path / "abs_mod.py"
+    f.write_text("ABSOLUTE_OK = 1\n")
+    out = _repl()._peek(file_path=str(f))
+    assert "ABSOLUTE_OK" in out, f"absolute-path read must still work; got: {out!r}"

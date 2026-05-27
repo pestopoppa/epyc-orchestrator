@@ -72,8 +72,11 @@ class _FileExplorationMixin:
             is_valid, error = self._validate_file_path(file_path)
             if not is_valid:
                 return f"[ERROR: {error}]"
+            # Resolve to the task-root (mirror file_write_safe) so reads find files where
+            # writes + task setup put them. No-op in prod (task-root inactive → realpath).
+            from src.repl_environment.task_root import resolve_task_path
             try:
-                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                with open(resolve_task_path(file_path), "r", encoding="utf-8", errors="replace") as f:
                     result = f.read(n)
                 self._exploration_log.add_event("peek", {"n": n, "file_path": file_path}, result)
                 self._track_research("peek", f"n={n}, file={file_path}", result)
@@ -120,8 +123,10 @@ class _FileExplorationMixin:
             is_valid, error = self._validate_file_path(file_path)
             if not is_valid:
                 return [f"[ERROR: {error}]"]
+            # Resolve to task-root (mirror file_write_safe); no-op in prod.
+            from src.repl_environment.task_root import resolve_task_path
             try:
-                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                with open(resolve_task_path(file_path), "r", encoding="utf-8", errors="replace") as f:
                     source_text = f.read()
                 source_name = file_path
             except FileNotFoundError:
@@ -283,10 +288,13 @@ class _FileExplorationMixin:
         if not is_valid:
             return f"[ERROR: {error}]"
 
+        # Resolve to task-root (mirror file_write_safe); no-op in prod.
+        from src.repl_environment.task_root import resolve_task_path
+        _rp = resolve_task_path(path)
         try:
-            stat_info = os.stat(path)
-            is_dir = os.path.isdir(path)
-            is_link = os.path.islink(path)
+            stat_info = os.stat(_rp)
+            is_dir = os.path.isdir(_rp)
+            is_link = os.path.islink(_rp)
 
             result = {
                 "path": path,

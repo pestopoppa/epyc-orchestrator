@@ -245,9 +245,10 @@ class _CombinedOpsMixin:
         if not is_valid:
             return f"[ERROR: {error}]"
 
-        # Read file
+        # Read file (resolve to task-root, mirror file_write_safe; no-op in prod)
+        from src.repl_environment.task_root import resolve_task_path
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
+            with open(resolve_task_path(path), "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
         except FileNotFoundError:
             return f"[ERROR: File not found: {path}]"
