@@ -106,6 +106,43 @@ async def test_turn_counter_increments(graph_ctx):
     assert state.turns == 2
 
 
+# ── REPL loop-guard: hard intervention must fire across turns (regression, 2026-05-27) ──
+# Decisive regression for the BEP-2 loop-guard never firing (operator review). The no-progress
+# counter must persist/accumulate across turns and, at >=2, the next prompt must carry the
+# LOOP HALTED directive. Pre-fix the counter lived in an ad-hoc state attr not observable at the
+# next prompt-build boundary, so it reset every turn and the intervention never appeared.
+
+_NOPROGRESS = "```python\nfor i in range(3):\n    print(f'step {i}')\n```"  # non-final, no file write
+
+
+@pytest.mark.asyncio
+async def test_loop_guard_fires_after_repeated_no_progress(graph_ctx, monkeypatch):
+    monkeypatch.setenv("ORCHESTRATOR_REPL_LOOP_GUARD", "1")
+    state, deps = graph_ctx(responses=[_NOPROGRESS])  # clamps → same no-progress turn each call
+    ctx = _make_ctx(state, deps)
+    for _ in range(3):
+        await _execute_turn(ctx, Role.FRONTDOOR)
+    # The counter must ACCUMULATE across turns (the bug: it reset to 0/absent every turn).
+    assert state.repl_noprogress_count >= 2, f"counter did not persist: {state.repl_noprogress_count}"
+    prompts = [c.args[0] for c in deps.primitives.llm_call.call_args_list]
+    assert len(prompts) == 3
+    assert "LOOP HALTED" not in prompts[0]   # count 0 at turn 1 build
+    assert "LOOP HALTED" not in prompts[1]   # count 1 at turn 2 build
+    assert "LOOP HALTED" in prompts[2]       # count 2 at turn 3 build → fires
+
+
+@pytest.mark.asyncio
+async def test_loop_guard_inert_when_flag_off(graph_ctx, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_REPL_LOOP_GUARD", raising=False)
+    state, deps = graph_ctx(responses=[_NOPROGRESS])
+    ctx = _make_ctx(state, deps)
+    for _ in range(3):
+        await _execute_turn(ctx, Role.FRONTDOOR)
+    assert state.repl_noprogress_count == 0  # counter does not run when flag off (prod no-op)
+    prompts = [c.args[0] for c in deps.primitives.llm_call.call_args_list]
+    assert not any("LOOP HALTED" in p for p in prompts)
+
+
 # ── Error handling ────────────────────────────────────────────────────
 
 
