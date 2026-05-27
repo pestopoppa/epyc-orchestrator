@@ -139,7 +139,7 @@ def _tap_write_repl_result(
 
 
 def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None = None,
-                    prompt: str | None = None) -> None:
+                    prompt: str | None = None, repeat_count: object = None) -> None:
     """Flag-gated per-turn observability for BEP OFF-arm (interleaved) debugging.
 
     Captures exactly what the model emits each turn + whether it calls the file-write tool vs
@@ -172,6 +172,7 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
             "prompt_has_rider": ("WRITE turns:" in _p) if prompt is not None else None,
             "prompt_has_loop_halt": ("LOOP HALTED" in _p) if prompt is not None else None,
             "prompt_tail": (_p[-700:] if prompt is not None else None),
+            "repeat_count_seen": repeat_count,  # value the nudge saw this turn (proves accumulation)
         }
         with open(path, "a") as f:
             f.write(_json.dumps(rec) + "\n")
@@ -730,7 +731,7 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # greedy decode (proven: BEP read-first tasks looped 8 turns with the content already in-prompt).
     # HARD intervention: re-inject the content it already has + a forceful single-action directive,
     # appended LAST (recency) so it dominates the next generation.
-    if _repl_loop_guard_enabled() and getattr(state, "_repl_repeat_count", 0) >= 2:
+    if _repl_loop_guard_enabled() and getattr(state, "repl_noprogress_count", 0) >= 2:
         _read = (getattr(state, "last_output", "") or "").strip()[:1500]
         _halt = (
             "\n\n** LOOP HALTED ** You just emitted the SAME action with no progress. STOP repeating it. "
@@ -915,7 +916,8 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     raw_llm_output = code
     # Observability-first (BEP OFF-arm debug): record exactly what the model emitted this turn,
     # before any extraction/rescue can alter it. Flag-gated default-off (no-op in production).
-    _bep_turn_trace(state.turns, role, raw_llm_output, prompt=prompt)
+    _bep_turn_trace(state.turns, role, raw_llm_output, prompt=prompt,
+                    repeat_count=getattr(state, "repl_noprogress_count", None))
 
     # Reasoning length alarm (short-m@k Action 9): if <think> exceeds
     # 1.5× band budget, retry once with a conciseness nudge.
@@ -964,13 +966,15 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     code = extract_code_from_response(code)
     code = auto_wrap_final(code)
 
-    # REPL loop-guard Fix B (flag-gated): track identical non-advancing turns so the next
-    # prompt build can inject the loop-detected nudge above (default-off → no-op in prod).
+    # REPL loop-guard Fix B: count consecutive no-progress turns (no file write / no FINAL).
+    if __import__("os").environ.get("ORCHESTRATOR_LOOPGUARD_PROBE") == "1":  # prod-safe diagnostic
+        log.warning("LOOPGUARD-PROBE t=%s enabled=%s env=%r count=%s fws=%s final=%s",
+                    getattr(state, "turns", "?"), _repl_loop_guard_enabled(),
+                    __import__("os").environ.get("ORCHESTRATOR_REPL_LOOP_GUARD"),
+                    state.repl_noprogress_count, "file_write_safe" in code, "FINAL(" in code)
     if _repl_loop_guard_enabled():
         _made_progress = ("file_write_safe" in code) or ("FINAL(" in code)
-        state._repl_repeat_count = _loop_guard_noprogress(  # type: ignore[attr-defined]
-            _made_progress, getattr(state, "_repl_repeat_count", 0),
-        )
+        state.repl_noprogress_count = _loop_guard_noprogress(_made_progress, state.repl_noprogress_count)
 
     # Persist extracted code for incremental editing on error/escalation
     state.last_code = code

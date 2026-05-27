@@ -137,6 +137,12 @@ class TaskState:
     repl_executions: int = 0       # Total REPL execute() calls across all turns
     aggregate_tokens: int = 0      # Cumulative completion tokens across all turns
 
+    # REPL loop-guard: consecutive no-progress turns (no file write / no FINAL). MUST be a
+    # DECLARED field, not an ad-hoc `state._x` attribute — the graph snapshots/restores state
+    # between turns from declared fields only, so an ad-hoc attr resets every turn and the
+    # loop-guard intervention never fires (root cause of the BEP-2 multi-file non-firing, 2026-05-27).
+    repl_noprogress_count: int = 0
+
     # Resume token for crash recovery (Phase 3B)
     resume_token: str = ""
 
