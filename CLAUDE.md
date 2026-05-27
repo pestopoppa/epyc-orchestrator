@@ -93,4 +93,8 @@ Indexed as **epyc-orchestrator** (42625 symbols, 73341 relationships, 300 execut
 ## Skills (invoke via Skill tool)
 
 `gitnexus-exploring` · `gitnexus-impact-analysis` · `gitnexus-debugging` · `gitnexus-refactoring` · `gitnexus-guide` · `gitnexus-cli`
+
+## Additional CLI
+
+`gitnexus query <concept>` (execution flows) · `gitnexus cypher <query>` (graph) · `gitnexus wiki` (docs)
 <!-- gitnexus:end -->
