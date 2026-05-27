@@ -286,6 +286,127 @@ class ParetoArchive:
             )
         return list(reversed(chain))
 
+    # ── Bradley-Terry tiebreak (AP-38) ──────────────────────────
+
+    def bt_tiebreak_topk(self, k: int = 5) -> dict[str, Any]:
+        """Bradley-Terry tiebreak over the top-K Pareto frontier entries.
+
+        Intended to be called when the controller detects hypervolume
+        stagnation (see `_build_exploration_block` in autopilot.py). The 4D
+        objectives of each frontier entry are used to construct pairwise
+        win-scores via axis-wise Borda counting; BT then aggregates into a
+        single ranking.
+
+        Why this exists:
+          The 4D scalarization (hypervolume contribution) collapses four
+          axes into one number and can hide candidates that *consistently*
+          beat their peers across axes without being individually
+          hypervolume-dominant. Pairwise aggregation surfaces those
+          candidates as alternative exploration seeds.
+
+        Why pairwise scores come from axis comparison, not new inference:
+          By design this is a code-only tiebreak (AP-38) — it uses the
+          objectives already recorded in archive entries. No eval-tower
+          re-runs, no model calls. The accompanying falsification gate
+          (AP-39) is the only inference-dependent step.
+
+        Parameters
+        ----------
+        k:
+            Number of top frontier entries to compare. Defaults to 5;
+            capped at the frontier size.
+
+        Returns
+        -------
+        Dict with keys:
+          - `ranking` — list of trial IDs ordered by BT log-skill (high to low)
+          - `log_skills` — dict trial_id -> log-skill (lowest anchored at 0)
+          - `top_k_trial_ids` — input set, in archive order
+          - `warnings` — diagnostics from the BT fit (cycles, dominance skew, etc.)
+          - `converged` — whether the BT iteration converged
+          - `iterations` — Zermelo iteration count
+          - `note` — short status string suitable for logging into the
+            stagnation handler's signal text
+
+        Returns an empty dict (with `note` set) when the frontier has <2
+        entries — BT is undefined on a singleton.
+        """
+        # Local import keeps the BT module a leaf dependency.
+        from bradley_terry import bradley_terry_rank
+
+        if len(self._frontier) < 2:
+            return {
+                "ranking": [e.trial_id for e in self._frontier],
+                "log_skills": {e.trial_id: 0.0 for e in self._frontier},
+                "top_k_trial_ids": [e.trial_id for e in self._frontier],
+                "warnings": [],
+                "converged": True,
+                "iterations": 0,
+                "note": f"BT tiebreak skipped (frontier_size={len(self._frontier)})",
+            }
+
+        # Pick top-K frontier entries by hypervolume contribution. Use the
+        # current frontier as-is (no re-ranking); if K exceeds frontier
+        # size, just compare the whole frontier.
+        k = min(max(k, 2), len(self._frontier))
+        # Rank frontier entries by a proxy for hypervolume contribution:
+        # the sum of axis values minus the reference. Ties broken by quality.
+        scored = sorted(
+            self._frontier,
+            key=lambda e: (
+                sum(o - r for o, r in zip(e.objectives, REFERENCE_POINT)),
+                e.objectives[0],
+            ),
+            reverse=True,
+        )
+        top_k = scored[:k]
+        trial_ids = [e.trial_id for e in top_k]
+
+        # Build pairwise win-scores from axis-wise Borda counting:
+        #   pair_score[i, j] = fraction of objective axes where i > j
+        #                    (ties count as 0.5)
+        # This is symmetric: pair_score[i,j] + pair_score[j,i] = 1.0.
+        # No axis normalization is needed because we only compare relative
+        # ordering per axis, not magnitudes.
+        n_axes = len(top_k[0].objectives)
+        pairwise: dict[tuple[int, int], float] = {}
+        for i, ei in enumerate(top_k):
+            for j, ej in enumerate(top_k):
+                if i == j:
+                    continue
+                wins = 0.0
+                for a in range(n_axes):
+                    if ei.objectives[a] > ej.objectives[a]:
+                        wins += 1.0
+                    elif ei.objectives[a] == ej.objectives[a]:
+                        wins += 0.5
+                pairwise[(ei.trial_id, ej.trial_id)] = wins / n_axes
+
+        result = bradley_terry_rank(trial_ids, pairwise)
+
+        # Build a short logging note. The lead candidate may differ from the
+        # naive top-of-hypervolume entry — that disagreement is the signal
+        # the controller cares about.
+        naive_top = trial_ids[0]
+        bt_top = result.ranking[0]
+        if naive_top == bt_top:
+            disagreement = f"BT agrees with hypervolume on trial #{naive_top}"
+        else:
+            disagreement = (
+                f"BT picks trial #{bt_top} (rank-by-hv would pick #{naive_top}) "
+                f"— pairwise consensus across {n_axes} axes disagrees with scalarization"
+            )
+
+        return {
+            "ranking": result.ranking,
+            "log_skills": result.log_skills,
+            "top_k_trial_ids": trial_ids,
+            "warnings": result.warnings,
+            "converged": result.converged,
+            "iterations": result.iterations,
+            "note": disagreement,
+        }
+
     # ── summary ──────────────────────────────────────────────────
 
     def summary(self) -> dict[str, Any]:

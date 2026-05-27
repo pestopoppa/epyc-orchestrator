@@ -51,13 +51,14 @@ from safety_gate import EvalResult, SafetyGate
 from eval_tower import EvalTower
 from config_applicator import apply_params, health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
-from progress_plots import generate_all_plots
+from progress_plots import PLOTS_DIR, generate_all_plots
 import peaf
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
 from species.prompt_forge import CODE_MUTATION_ALLOWLIST
 from digest import generate_digest, should_generate_today
 from short_term_memory import ShortTermMemory, TrialOutcome
 from self_criticism import SelfCriticism, generate_self_criticism
+from phase_status import AsyncTaskRunner, PhaseTracker
 
 # 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
 from controller_io import (
@@ -106,6 +107,17 @@ TAIL_SEED_COUNT = 3         # seeds (not candidates) passed to LLM as inspiratio
 STAGNATION_HV_EPS = 1e-3    # hv_slope_10 strictly below this triggers rich prompt
 STAGNATION_STREAK = 3       # N consecutive same-action_type trials triggers rich prompt
 PLOT_INTERVAL = 10  # Generate plots every N trials
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.1) -> float:
+    try:
+        return max(minimum, float(os.environ.get(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+PAUSE_POLL_S = _env_float("AUTOPILOT_PAUSE_POLL_S", 1.0)
+HEALTH_BACKOFF_S = _env_float("AUTOPILOT_HEALTH_BACKOFF_S", 10.0)
 
 # ── Controller Prompt Template ───────────────────────────────────
 
@@ -282,6 +294,18 @@ The system is STAGNATING. Run the constrained-creativity protocol:
 
 ### Still-open hypotheses (carry an explicit falsifier, not yet resolved)
 {unfalsified}
+
+### Bradley-Terry tiebreak on top-K Pareto candidates (AP-38 hint)
+
+Hypervolume scalarization can hide candidates that *consistently* beat
+their peers across the 4 objectives without being individually
+hypervolume-dominant. Pairwise BT aggregation across the 4 axes
+surfaces those candidates as alternative exploration seeds. **Treat as
+a hint, not a directive** — the BT-picked seed is only worth chasing
+when it disagrees with the hypervolume-top seed AND the BT diagnostics
+are clean (no Condorcet cycles, no extreme dominance skew).
+
+{bt_tiebreak_hint}
 """
 
 
@@ -367,12 +391,44 @@ def _build_exploration_block(
     else:
         unfalsified_text = "  (no recent trials with explicit falsifiers yet)"
 
+    # AP-38: Bradley-Terry tiebreak on top-K Pareto candidates. Surfaces
+    # candidates that beat peers across axes but aren't hypervolume-dominant.
+    # No new inference — uses recorded 4D objectives only.
+    bt_tiebreak_text = ""
+    bt_signal = ""
+    try:
+        bt = archive.bt_tiebreak_topk(k=5)
+        if bt and bt.get("top_k_trial_ids"):
+            lines = [f"  {bt.get('note', '')}"]
+            log_skills = bt.get("log_skills", {})
+            for rank_pos, tid in enumerate(bt.get("ranking", []), start=1):
+                lines.append(
+                    f"    {rank_pos}. trial #{tid}  log-skill={log_skills.get(tid, 0.0):+.2f}"
+                )
+            if bt.get("warnings"):
+                lines.append("  diagnostics:")
+                for w in bt["warnings"]:
+                    lines.append(f"    - {w}")
+            bt_tiebreak_text = "\n".join(lines)
+            note = bt.get("note", "")
+            if "disagrees" in note:
+                bt_signal = f"BT-tiebreak disagrees with hypervolume top"
+    except Exception as exc:  # noqa: BLE001 — defensive; BT must never block exploration
+        bt_tiebreak_text = f"  (BT tiebreak unavailable: {exc!s})"
+
+    if not bt_tiebreak_text:
+        bt_tiebreak_text = "  (frontier too sparse for BT tiebreak)"
+
     block = _EXPLORATION_RICH_TEMPLATE.format(
         n=CREATIVITY_N,
         window=TAIL_WINDOW,
         tail_seeds=tail_text,
         unfalsified=unfalsified_text,
+        bt_tiebreak_hint=bt_tiebreak_text,
     )
+    # Append BT signal to the stagnation reason text for journal/digest logs.
+    if bt_signal:
+        reasons.append(bt_signal)
     return block, "; ".join(reasons)
 
 
@@ -797,10 +853,16 @@ def _run_loop_inner(
     signal.signal(signal.SIGTERM, signal_handler)
 
     log.info("AutoPilot starting (trial=%d, dry_run=%s)", trial_counter, dry_run)
+    phase = PhaseTracker()
+    async_tasks = AsyncTaskRunner()
+    phase.set("starting", trial_id=trial_counter, dry_run=dry_run)
 
     while not shutdown_requested:
+        async_tasks.reap(logger=log)
+        phase.set("loop_start", trial_id=trial_counter)
         if max_trials and trial_counter >= max_trials:
             log.info("Max trials reached (%d)", max_trials)
+            phase.set("max_trials_reached", trial_id=trial_counter, max_trials=max_trials)
             break
 
         # 2026-05-24 pause-bug fix: re-read state from disk at the top of
@@ -824,20 +886,37 @@ def _run_loop_inner(
 
         if state.get("paused"):
             log.info("AutoPilot paused, waiting...")
-            time.sleep(10)
+            phase.set(
+                "paused",
+                trial_id=trial_counter,
+                idle_reason="autopilot paused",
+                poll_s=PAUSE_POLL_S,
+            )
+            time.sleep(PAUSE_POLL_S)
             continue
 
         # Check orchestrator health
+        phase.set("health_check", trial_id=trial_counter, url=ORCHESTRATOR_URL)
         _health = health_check(ORCHESTRATOR_URL, retries=2)
         if not dry_run and not _health:
             log.error(
-                "Orchestrator unhealthy [%s]: %s — waiting 30s...",
+                "Orchestrator unhealthy [%s]: %s — waiting %.1fs...",
                 _health.failure_reason, _health.failure_detail,
+                HEALTH_BACKOFF_S,
             )
-            time.sleep(30)
+            phase.set(
+                "health_backoff",
+                trial_id=trial_counter,
+                idle_reason="orchestrator unhealthy",
+                failure_reason=_health.failure_reason,
+                failure_detail=_health.failure_detail,
+                backoff_s=HEALTH_BACKOFF_S,
+            )
+            time.sleep(HEALTH_BACKOFF_S)
             continue
 
         # Check preflight diagnostics for stack-level issues
+        phase.set("preflight", trial_id=trial_counter)
         if get_preflight_diagnostics is not None:
             try:
                 _pf = get_preflight_diagnostics()
@@ -853,6 +932,7 @@ def _run_loop_inner(
                 pass  # Preflight diagnostics are optional
 
         # ── 1. Observe ───────────────────────────────────────────
+        phase.set("observe", trial_id=trial_counter)
         memory_count = seeder.get_memory_count() if not dry_run else 0
         converged = seeder.is_converged
         hv_slope = archive.hypervolume_slope(50)
@@ -861,6 +941,11 @@ def _run_loop_inner(
         if tui is not None:
             tui.set_status("selecting next trial (controller)…")
         if use_controller:
+            phase.set(
+                "planner_prompt_build",
+                trial_id=trial_counter,
+                idle_reason="building controller prompt",
+            )
             # Load program.md (human-editable strategy file)
             try:
                 program_text = PROGRAM_PATH.read_text()
@@ -1046,8 +1131,21 @@ def _run_loop_inner(
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
             ) + peaf.peaf_prompt_addendum()
 
+            phase.set(
+                "planner_invoke",
+                trial_id=trial_counter,
+                prompt_chars=len(prompt),
+                session_id=state.get("session_id"),
+                idle_reason="planner subprocess running",
+            )
             response, session_id = invoke_controller(
                 prompt, state.get("session_id")
+            )
+            phase.set(
+                "planner_parse",
+                trial_id=trial_counter,
+                response_chars=len(response or ""),
+                session_id=session_id,
             )
             state["session_id"] = session_id
             action = extract_action(response)
@@ -1055,6 +1153,7 @@ def _run_loop_inner(
             rationale = extract_rationale(response)
         else:
             # Autonomous mode: species selection by budget
+            phase.set("autonomous_select", trial_id=trial_counter)
             species = meta.select_species()
             action = _auto_action(species, memory_count, converged, seeder)
             predicted_objectives = {}  # PEAF: autonomous mode has no controller forecast
@@ -1076,6 +1175,11 @@ def _run_loop_inner(
             action = {"type": "seed_batch", "n_questions": 10}
 
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
+        phase.set(
+            "action_selected",
+            trial_id=trial_counter,
+            action_type=action.get("type", ""),
+        )
 
         # Update TUI with trial info
         if tui is not None:
@@ -1105,15 +1209,28 @@ def _run_loop_inner(
         save_state(state)
 
         if dry_run:
+            phase.set("dispatch_dry_run", trial_id=trial_counter, action_type=action.get("type", ""))
             eval_result = EvalResult(
                 tier=0, quality=2.5, speed=15.0, cost=0.3, reliability=0.95
             )
             species_name = action.get("type", "unknown").split("_")[0]
         else:
+            phase.set(
+                "dispatch_action",
+                trial_id=trial_counter,
+                action_type=action.get("type", ""),
+                idle_reason="running selected action",
+            )
             eval_result, species_name = dispatch_action(
                 action, seeder, swarm, forge, lab, tower, gate, archive,
                 journal, state, strategy_store=strategy_store, evo=evo,
                 watcher=watcher,
+            )
+            phase.set(
+                "dispatch_complete",
+                trial_id=trial_counter,
+                action_type=action.get("type", ""),
+                species=species_name,
             )
 
         # ── 4. Evaluate ─────────────────────────────────────────
@@ -1127,6 +1244,7 @@ def _run_loop_inner(
             continue
 
         # AP-13: Emit grep-parseable metrics
+        phase.set("safety_gate", trial_id=trial_counter, species=species_name)
         log.info("\n%s", eval_result.to_grep_lines(trial_counter, species_name))
 
         # ── Pre-gate exogenous-reload classification (handoff Phase 5) ──
@@ -1184,6 +1302,7 @@ def _run_loop_inner(
                     gate.reset_failures()
 
         # ── 4b. Self-Criticism (AP-23/AP-24) ────────────────────
+        phase.set("self_criticism", trial_id=trial_counter, species=species_name)
         # Get baseline and previous per-suite for comparison
         baseline_q = gate.baseline.quality if gate.baseline else 0.0
         prev_suite = {}
@@ -1204,6 +1323,7 @@ def _run_loop_inner(
         last_criticism_text = criticism.as_text()
 
         # ── 5. Record ────────────────────────────────────────────
+        phase.set("record_trial", trial_id=trial_counter, species=species_name)
         # Phase 5: skip archive.update for unrecovered exogenous trials.
         # Quality/reliability numbers are based on partially-missing data;
         # admitting them to the Pareto archive would distort the frontier
@@ -1247,6 +1367,7 @@ def _run_loop_inner(
             state["last_traces"] = tower.capture_recent_traces(50)
 
         # Git tag
+        phase.set("post_trial_artifacts", trial_id=trial_counter, species=species_name)
         git_tag = ""
         if not dry_run:
             git_tag = f"autopilot/trial-{trial_counter}"
@@ -1305,6 +1426,12 @@ def _run_loop_inner(
             "per_suite_quality": eval_result.per_suite_quality,
             "routing_distribution": eval_result.routing_distribution,
             "details": eval_result.details,
+            "speed_metric_mode": getattr(eval_result, "speed_metric_mode", "median_request_tps"),
+            "median_request_speed": getattr(eval_result, "median_request_speed", 0.0),
+            "aggregate_speed": getattr(eval_result, "aggregate_speed", 0.0),
+            "eval_concurrency": getattr(eval_result, "eval_concurrency", 1),
+            "eval_wall_s": getattr(eval_result, "eval_wall_s", 0.0),
+            "sum_request_elapsed_s": getattr(eval_result, "sum_request_elapsed_s", 0.0),
             "ece": eval_result.ece,
             "auroc": eval_result.auroc,
             "calibration_violations": eval_result.calibration_violations,
@@ -1405,6 +1532,7 @@ def _run_loop_inner(
         # Context budget management: auto-checkpoint at intervals
         if trial_counter > 0 and trial_counter % 25 == 0 and not dry_run:
             log.info("Auto-checkpoint at trial %d", trial_counter)
+            phase.set("checkpoint", trial_id=trial_counter)
             lab.checkpoint_state(
                 trial_id=trial_counter,
                 notes=f"Auto-checkpoint at trial {trial_counter}",
@@ -1414,10 +1542,30 @@ def _run_loop_inner(
         if trial_counter % PLOT_INTERVAL == 0:
             td_errors = seeder.td_errors
             state["td_errors"] = [e for _, e in td_errors]
-            paths = generate_all_plots(archive, journal, td_errors)
-            plot_paths = [str(p) for p in paths]
+            async_tasks.submit_subprocess(
+                f"plots-trial-{trial_counter}",
+                [sys.executable, str(SCRIPT_DIR / "autopilot.py"), "plot"],
+                cwd=ORCH_ROOT,
+            )
+            plot_paths = [
+                str(PLOTS_DIR / name)
+                for name in (
+                    "hypervolume_trend.png",
+                    "pareto_frontier_2d.png",
+                    "species_effectiveness.png",
+                    "per_suite_quality.png",
+                    "memory_convergence.png",
+                    "trial_timeline.png",
+                )
+            ]
+            phase.set(
+                "async_plots_scheduled",
+                trial_id=trial_counter,
+                action_type=action.get("type", ""),
+            )
 
         # Save state
+        phase.set("save_state", trial_id=trial_counter, species=species_name)
         trial_counter += 1
         state["trial_counter"] = trial_counter
         state["consecutive_failures"] = gate.consecutive_failures
@@ -1447,17 +1595,32 @@ def _run_loop_inner(
         # touches existing handoffs — review remains a manual step.
         if should_generate_today(state):
             try:
-                digest_path = generate_digest(
-                    swarm=swarm, lab=lab, archive=archive, state=state, journal=journal,
-                )
                 state["last_digest_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 save_state(state)
-                log.info("Daily digest written: %s", digest_path)
+                async_tasks.submit_subprocess(
+                    f"digest-{state['last_digest_date']}",
+                    [
+                        sys.executable,
+                        str(SCRIPT_DIR / "autopilot.py"),
+                        "digest",
+                        "--no-state-update",
+                    ],
+                    cwd=ORCH_ROOT,
+                )
+                phase.set(
+                    "async_digest_scheduled",
+                    trial_id=trial_counter - 1,
+                    digest_date=state["last_digest_date"],
+                )
+                log.info("Daily digest scheduled asynchronously")
             except Exception as e:
                 # Digest failure must NEVER block the optimization loop.
                 log.warning("Daily digest generation failed: %s", e)
 
     # Shutdown: checkpoint + save
+    phase.set("shutting_down", trial_id=trial_counter)
+    async_tasks.reap(logger=log)
+    async_tasks.shutdown()
     log.info("AutoPilot shutting down (trial=%d)", trial_counter)
     archive.save(state)
     save_state(state)
@@ -1465,6 +1628,7 @@ def _run_loop_inner(
         strategy_store.close()
     if not dry_run:
         lab.checkpoint_state(trial_id=trial_counter, notes="Shutdown checkpoint")
+    phase.clear("autopilot process exiting")
 
 
 def _format_suite_trends(
