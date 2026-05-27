@@ -115,3 +115,24 @@ def test_repl_peek_absolute_path_no_taskroot(monkeypatch, tmp_path):
     f.write_text("ABSOLUTE_OK = 1\n")
     out = _repl()._peek(file_path=str(f))
     assert "ABSOLUTE_OK" in out, f"absolute-path read must still work; got: {out!r}"
+
+
+# ── solution_file path must anchor in the task-root (2026-05-27) ───────────────────
+# The prompt shows the model `solution_file=<path>`. The old hardcoded /mnt/raid0/llm/tmp path
+# mis-anchored the model: after reading, it wrote `/mnt/raid0/llm/tmp/calc.py` (outside the
+# task-root → rejected → a 2nd loop). The shown path must be inside the task-root.
+
+def test_solution_file_anchored_in_task_root(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from src.graph.file_artifacts import _solution_file_path
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    p = _solution_file_path(SimpleNamespace(task_id="t2_add_and_use"))
+    assert p.startswith(str(tmp_path)), f"solution file must be inside the task-root; got {p!r}"
+
+
+def test_solution_file_default_path_in_prod(monkeypatch):
+    from types import SimpleNamespace
+    from src.graph.file_artifacts import _solution_file_path
+    monkeypatch.delenv("ORCHESTRATOR_EDIT_ROOT", raising=False)
+    p = _solution_file_path(SimpleNamespace(task_id="prod_task"))
+    assert p == "/mnt/raid0/llm/tmp/prod_task_solution.py"  # prod behavior unchanged

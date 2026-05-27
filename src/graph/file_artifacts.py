@@ -12,9 +12,20 @@ log = logging.getLogger(__name__)
 
 
 def _solution_file_path(state: TaskState) -> str:
-    """Return the path for the persisted solution file."""
+    """Return the path for the persisted solution file.
+
+    When a task-root is active, anchor the solution file INSIDE it. This path is shown to the
+    model in its prompt (``solution_file=``); if it points outside the task-root (the old
+    hardcoded ``/mnt/raid0/llm/tmp``), the model copies that prefix and writes its task edits
+    there too — which file_write_safe rejects (outside the task-root) → silent no-op → the
+    model re-emits the same write every turn until timeout. Keeping it task-root-relative makes
+    the model's anchor match where its writes must land. (No-op in prod: task-root inactive.)
+    """
     task_id = state.task_id or "scratch"
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in task_id)[:80]
+    from src.repl_environment.task_root import get_task_root, task_root_active
+    if task_root_active():
+        return str(get_task_root() / f"{safe_id}_solution.py")
     return f"/mnt/raid0/llm/tmp/{safe_id}_solution.py"
 
 
