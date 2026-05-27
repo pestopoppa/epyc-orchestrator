@@ -22,6 +22,38 @@ def test_read_registry_timeout_returns_fallback_when_registry_unreadable():
         assert _MOD._read_registry_timeout("benchmark", "seeding_default", 600) == 600
 
 
+def test_discover_active_roles_includes_registry_role_timeouts(tmp_path: Path):
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(
+        """
+runtime_defaults:
+  timeouts:
+    default: 600
+    roles:
+      frontdoor: 180
+      worker: 240
+server_mode:
+  frontdoor:
+    model: frontdoor.gguf
+    port: 8070
+  worker:
+    model: worker.gguf
+    port: 8072
+  voice_server:
+    model_type: whisper
+    port: 8099
+""",
+        encoding="utf-8",
+    )
+
+    roles = _MOD.discover_active_roles(registry_path=registry_path)
+
+    by_name = {role["name"]: role for role in roles}
+    assert by_name["frontdoor"]["timeout_s"] == 180
+    assert by_name["worker_general"]["timeout_s"] == 240
+    assert "voice_server" not in by_name
+
+
 def test_state_get_poll_client_lazily_creates_and_reuses_httpx_client():
     created = []
     fake_client = object()

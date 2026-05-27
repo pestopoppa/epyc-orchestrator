@@ -8,10 +8,8 @@ Tracks recent outcomes per combo so the seeding loop can:
   120s on it).
 - Bail out of a question early when accumulated wall-clock exceeds a
   budget (adaptive batch-size at the question level).
-
-Stored entirely in-process; no on-disk persistence (seeder is restarted
-between trials, fresh stats per trial is appropriate). If cross-trial
-persistence is later wanted, swap the deque-of-tuples for a JSONL log.
+- Persist completed batch durations across autopilot restarts so the next
+  seed wave can start with the previous batch-size signal.
 
 Thresholds are read once at import-time from env vars so operators can
 tune without code changes:
@@ -24,12 +22,14 @@ tune without code changes:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import statistics
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,13 @@ _P95_MULT = _env_float("SEEDING_TELEMETRY_P95_MULT", 1.30)
 _TIMEOUT_RATIO_SKIP = _env_float("SEEDING_TELEMETRY_TIMEOUT_RATIO", 0.50)
 _TIMEOUT_MIN_N = _env_int("SEEDING_TELEMETRY_TIMEOUT_MIN_N", 4)
 _MAX_RECOMMEND_TIMEOUT_S = _env_int("SEEDING_TELEMETRY_MAX_TIMEOUT_S", 600)
+_PERSIST_BATCH_HISTORY = os.environ.get(
+    "SEEDING_BATCH_TELEMETRY_PERSIST", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+_BATCH_HISTORY_PATH = os.environ.get(
+    "SEEDING_BATCH_TELEMETRY_PATH",
+    "/mnt/raid0/llm/tmp/seeding_batch_telemetry.jsonl",
+)
 
 
 @dataclass
@@ -175,10 +182,19 @@ def get_stats(role: str | None = None, mode: str | None = None) -> dict:
     return out
 
 
-def reset() -> None:
+def reset(clear_persisted: bool = False) -> None:
     """Clear all stats. Useful in tests; not used in production."""
+    global _loaded_persisted_batches
     _stats.clear()
     _recent_batches.clear()
+    _loaded_persisted_batches = True
+    if clear_persisted:
+        try:
+            _batch_history_path().unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
 
 
 # ── Lock-pressure heuristic ─────────────────────────────────────────────
@@ -201,18 +217,71 @@ _HEAVY_LOCK_PATH = "/mnt/raid0/llm/tmp/heavy_model.lock"
 # 40 minutes per trial.
 
 _recent_batches: deque = deque(maxlen=20)  # [(n_questions, duration_s, ts), ...]
+_loaded_persisted_batches = False
+
+
+def _batch_history_path() -> Path:
+    return Path(_BATCH_HISTORY_PATH)
+
+
+def _load_persisted_batches_once() -> None:
+    global _loaded_persisted_batches
+    if _loaded_persisted_batches or not _PERSIST_BATCH_HISTORY:
+        return
+    _loaded_persisted_batches = True
+    path = _batch_history_path()
+    if not path.exists():
+        return
+    try:
+        for line in path.read_text().splitlines()[-_recent_batches.maxlen:]:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            n = int(rec.get("n_questions", 0))
+            d = float(rec.get("duration_s", 0.0))
+            ts = float(rec.get("ts", 0.0) or 0.0)
+            if n > 0 and d > 0:
+                _recent_batches.append((n, d, ts))
+    except Exception as exc:
+        logger.debug("could not load persisted seed batch telemetry: %s", exc)
+
+
+def _append_persisted_batch(n_questions: int, duration_s: float, ts: float) -> None:
+    if not _PERSIST_BATCH_HISTORY:
+        return
+    path = _batch_history_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "ts": ts,
+                        "n_questions": int(n_questions),
+                        "duration_s": float(duration_s),
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+    except Exception as exc:
+        logger.debug("could not persist seed batch telemetry: %s", exc)
 
 
 def record_batch_duration(n_questions: int, duration_s: float) -> None:
     """Record a completed seed_batch's question count + wall-clock duration."""
     if n_questions <= 0 or duration_s <= 0:
         return
-    _recent_batches.append((int(n_questions), float(duration_s), time.time()))
+    _load_persisted_batches_once()
+    ts = time.time()
+    _recent_batches.append((int(n_questions), float(duration_s), ts))
+    _append_persisted_batch(n_questions, duration_s, ts)
 
 
 def median_seconds_per_question() -> Optional[float]:
     """Median (duration_s / n_questions) across recent batches, or None
     if no batches recorded yet."""
+    _load_persisted_batches_once()
     if not _recent_batches:
         return None
     rates = [d / n for n, d, _ in _recent_batches if n > 0]
@@ -271,6 +340,7 @@ def adaptive_batch_size(
 
 def batch_summary() -> dict:
     """Snapshot of recent batches for diagnostics."""
+    _load_persisted_batches_once()
     return {
         "n_recent": len(_recent_batches),
         "median_s_per_q": median_seconds_per_question(),

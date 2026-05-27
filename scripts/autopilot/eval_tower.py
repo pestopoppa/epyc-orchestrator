@@ -24,7 +24,35 @@ log = logging.getLogger("autopilot.eval")
 
 SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
-DEFAULT_TIMEOUT = 120
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
+    registry_path = (
+        Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
+    )
+    try:
+        data = yaml.safe_load(registry_path.read_text()) or {}
+        timeouts = data.get("runtime_defaults", {}).get("timeouts", {})
+        cat_data = timeouts.get(category, {})
+        return int(cat_data.get(key, timeouts.get("default", fallback)))
+    except Exception:
+        return fallback
+
+
+def _default_eval_timeout() -> int:
+    role_timeout = _read_registry_timeout("roles", "frontdoor", 180)
+    queue_allowance = _env_int("AUTOPILOT_EVAL_QUEUE_ALLOWANCE_S", 90)
+    return min(600, max(role_timeout, role_timeout + max(0, queue_allowance)))
+
+
+DEFAULT_TIMEOUT = _default_eval_timeout()
 
 # Concurrent fan-out for sentinel/pool evaluations.
 #

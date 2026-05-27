@@ -173,6 +173,100 @@ def test_compute_3way_metadata_includes_cost_web_and_scratchpad_sections():
     assert _MOD.ACTION_ARCHITECT in md["cost_metrics"]
 
 
+def test_seed_role_waves_group_matrix_safe_light_with_one_heavy(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_SEED_ROLE_CONCURRENCY", raising=False)
+    roles = [
+        {"name": "frontdoor"},
+        {"name": "worker_general"},
+        {"name": "ingest_long_context"},
+        {"name": "architect_general"},
+    ]
+
+    waves = _MOD._seed_role_waves(roles)
+    names = [[r["name"] for r in wave] for wave in waves]
+
+    assert names[0] == ["frontdoor", "worker_general"]
+    assert names[1] == ["ingest_long_context"]
+    assert names[2] == ["architect_general"]
+
+
+def test_seed_role_waves_can_be_forced_serial(monkeypatch):
+    monkeypatch.setenv("AUTOPILOT_SEED_ROLE_CONCURRENCY", "1")
+    roles = [{"name": "frontdoor"}, {"name": "worker_general"}]
+
+    waves = _MOD._seed_role_waves(roles)
+
+    assert [[r["name"] for r in wave] for wave in waves] == [
+        ["frontdoor"],
+        ["worker_general"],
+    ]
+
+
+def test_seed_timeout_helpers_use_role_timeout_and_queue_allowance(monkeypatch):
+    monkeypatch.setenv("AUTOPILOT_SEED_QUEUE_ALLOWANCE_S", "30")
+
+    assert _MOD._role_base_timeout_s({"name": "frontdoor", "timeout_s": 180}, 120) == 180
+    assert _MOD._role_base_timeout_s({"name": "frontdoor", "timeout_s": "bad"}, 120) == 120
+    assert _MOD._seed_request_timeout_s(180) == 210
+    assert _MOD._seed_request_timeout_s(590) == 600
+
+    monkeypatch.setenv("AUTOPILOT_SEED_QUEUE_ALLOWANCE_S", "bad")
+    assert _MOD._seed_request_timeout_s(180) == 270
+
+
+def test_evaluate_question_per_role_skips_hot_roles_and_records_timeouts(monkeypatch):
+    monkeypatch.setenv("AUTOPILOT_SEED_QUEUE_ALLOWANCE_S", "90")
+    monkeypatch.setenv("SEEDING_PER_QUESTION_BUDGET_S", "600")
+
+    active_roles = [
+        {"name": "frontdoor", "is_heavy": False, "timeout_s": 180},
+        {"name": "architect_general", "is_heavy": False, "timeout_s": 600},
+    ]
+    rr_frontdoor = _rr(
+        role="frontdoor",
+        mode="",
+        passed=True,
+        error_type="none",
+        elapsed_seconds=2.0,
+    )
+
+    def _skip(role: str, mode: str):  # noqa: ARG001
+        if role == "architect_general":
+            return True, "timeout rate 75% over last 4 attempts"
+        return False, ""
+
+    with (
+        patch.object(_MOD, "_seed_role_waves", return_value=[[active_roles[0]], [active_roles[1]]]),
+        patch.object(_MOD, "_telemetry_should_skip", side_effect=_skip),
+        patch.object(_MOD, "_telemetry_timeout", side_effect=lambda _r, _m, base: base + 20),
+        patch.object(_MOD, "_adaptive_timeout_s", side_effect=lambda **kw: kw["hard_timeout_s"]),
+        patch.object(_MOD, "_telemetry_record") as record_mock,
+        patch.object(_MOD, "_eval_single_config", return_value=(rr_frontdoor, {})) as eval_mock,
+        patch.object(_MOD.logger, "info"),
+    ):
+        role_results, rewards, metadata = _MOD.evaluate_question_per_role(
+            prompt_info={
+                "prompt": "What is 2+2?",
+                "expected": "4",
+                "suite": "debug",
+            },
+            active_roles=active_roles,
+            url="http://localhost:8000",
+            timeout=120,
+            client=object(),
+        )
+
+    assert list(role_results) == ["frontdoor"]
+    assert rewards == {"frontdoor": 1.0}
+    assert metadata["roles_skipped"] == {
+        "architect_general": "timeout rate 75% over last 4 attempts"
+    }
+    assert metadata["cost_metrics"]["frontdoor"]["inference_timeout_s"] == 200
+    assert metadata["cost_metrics"]["frontdoor"]["request_timeout_s"] == 290
+    assert eval_mock.call_args.kwargs["timeout"] == 290
+    record_mock.assert_called_once_with("frontdoor", "natural", 2.0, False)
+
+
 def test_eval_single_config_merges_slot_progress_and_emits_format_lines():
     rr = _rr(role="frontdoor", mode="direct", passed=True, error_type="none")
     format_lines = []

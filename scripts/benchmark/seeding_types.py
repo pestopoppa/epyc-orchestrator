@@ -238,6 +238,14 @@ def discover_active_roles(
         if port == 0:
             continue  # No port → can't evaluate
 
+        timeouts = data.get("runtime_defaults", {}).get("timeouts", {})
+        role_timeouts = timeouts.get("roles", {})
+        default_timeout = timeouts.get("default", DEFAULT_TIMEOUT)
+        timeout_s = role_timeouts.get(
+            role_name,
+            role_timeouts.get(role_key, default_timeout),
+        )
+
         active.append({
             "name": role_name,       # Use for force_role
             "registry_key": role_key,  # Original key in model_registry.yaml
@@ -245,6 +253,7 @@ def discover_active_roles(
             "port": port,
             "is_heavy": port in HEAVY_PORTS,
             "cost_tier": ROLE_COST_TIER.get(role_name, ROLE_COST_TIER.get(role_key, 3)),
+            "timeout_s": int(timeout_s),
         })
 
     # Sort by cost tier (cheapest first) for interleaving

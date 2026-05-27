@@ -24,13 +24,12 @@ sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
 
 from seeding_eval import evaluate_question_per_role  # noqa: E402
 from seeding_injection import _inject_per_role_rewards_http  # noqa: E402
-from seeding_types import discover_active_roles  # noqa: E402
+from seeding_types import DEFAULT_TIMEOUT, discover_active_roles  # noqa: E402
 
 # Import sample_unseen_questions from the main seeding script
 from seed_specialist_routing import sample_unseen_questions  # noqa: E402
 
 DEFAULT_URL = "http://localhost:8000"
-DEFAULT_TIMEOUT = 120
 
 # Convergence thresholds
 TD_ERROR_EPSILON = 0.05  # Below this, Q-values are "converged"

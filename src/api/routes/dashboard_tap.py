@@ -18,6 +18,7 @@ from typing import Any
 
 # Tap-file paths (autopilot/seeding writes; dashboard reads).
 _INFERENCE_TAP_PATH = Path("/mnt/raid0/llm/tmp/inference_tap.log")
+_INFERENCE_TAP_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/inference_tap_events.jsonl")
 _REPL_TAP_PATH = Path("/mnt/raid0/llm/tmp/repl_tap.log")
 _PROMPT_TAP_PATH = Path("/mnt/raid0/llm/tmp/autopilot_prompt_tap.txt")
 _TAP_SENTINEL_PATH = Path("/mnt/raid0/llm/tmp/.inference_tap_active")
@@ -95,6 +96,170 @@ def _parse_inference_sections(tail_text: str, max_sections: int = 20) -> list[di
         })
     # Most recent first
     return list(reversed(sections))
+
+
+def _fmt_structured_timings(event: dict[str, Any]) -> str:
+    try:
+        tokens = int(event.get("tokens") or 0)
+        total_s = float(event.get("total_s") or 0.0)
+        prompt_ms = float(event.get("prompt_ms") or 0.0)
+        gen_ms = float(event.get("gen_ms") or 0.0)
+        tps = float(event.get("tps") or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    return (
+        f"{tokens} tokens in {total_s:.2f}s "
+        f"(prompt={prompt_ms:.0f}ms, gen={gen_ms:.0f}ms, {tps:.1f} t/s)"
+    )
+
+
+def _parse_structured_tap_requests(
+    tail_text: str,
+    max_requests: int = 20,
+    now_epoch: float | None = None,
+    quiet_after_s: float = 15.0,
+) -> list[dict[str, Any]]:
+    """Parse structured JSONL tap events into request-grouped records.
+
+    Unlike the legacy plaintext parser, this stream is safe under concurrent
+    inference because every event carries request_id + instance metadata.
+    """
+    if not tail_text:
+        return []
+    requests: dict[str, dict[str, Any]] = {}
+    order = 0
+
+    for line in tail_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        request_id = str(event.get("request_id") or "").strip()
+        if not request_id:
+            continue
+        order += 1
+        rec = requests.get(request_id)
+        if rec is None:
+            rec = {
+                "request_id": request_id,
+                "parent_request_id": event.get("parent_request_id"),
+                "role": event.get("role"),
+                "task_id": event.get("task_id"),
+                "trial_id": event.get("trial_id"),
+                "batch_id": event.get("batch_id"),
+                "instance_idx": event.get("instance_idx"),
+                "concurrency_idx": event.get("concurrency_idx"),
+                "instance_shape": event.get("instance_shape"),
+                "instance_regions": event.get("instance_regions") or [],
+                "topology_role": event.get("topology_role"),
+                "lock_role": event.get("lock_role"),
+                "port": event.get("port"),
+                "pid": event.get("pid"),
+                "topology_hash": event.get("topology_hash"),
+                "backend_url": event.get("backend_url"),
+                "started_at": event.get("ts"),
+                "started_at_epoch": event.get("ts_epoch") or 0,
+                "updated_at": event.get("ts"),
+                "updated_at_epoch": event.get("ts_epoch") or 0,
+                "status": "running",
+                "prompt": "",
+                "response": "",
+                "timings": "",
+                "timings_raw": None,
+                "event_count": 0,
+                "chunk_count": 0,
+                "_order": order,
+            }
+            requests[request_id] = rec
+
+        rec["event_count"] += 1
+        rec["_order"] = order
+        rec["updated_at"] = event.get("ts") or rec.get("updated_at")
+        rec["updated_at_epoch"] = event.get("ts_epoch") or rec.get("updated_at_epoch") or 0
+        for key in (
+            "role",
+            "parent_request_id",
+            "task_id",
+            "trial_id",
+            "batch_id",
+            "instance_idx",
+            "concurrency_idx",
+            "instance_shape",
+            "instance_regions",
+            "topology_role",
+            "lock_role",
+            "port",
+            "pid",
+            "topology_hash",
+            "backend_url",
+        ):
+            value = event.get(key)
+            if value not in (None, ""):
+                rec[key] = value
+
+        event_type = str(event.get("event") or "").lower()
+        if event_type == "start":
+            rec["prompt"] = str(event.get("prompt") or "")
+            rec["started_at"] = event.get("ts") or rec.get("started_at")
+            rec["started_at_epoch"] = event.get("ts_epoch") or rec.get("started_at_epoch") or 0
+        elif event_type == "chunk":
+            rec["response"] += str(event.get("text") or "")
+            rec["chunk_count"] += 1
+        elif event_type == "response":
+            rec["response"] += str(event.get("text") or "")
+        elif event_type == "timings":
+            rec["timings_raw"] = event
+            rec["timings"] = _fmt_structured_timings(event)
+            rec["status"] = "complete"
+        elif event_type == "end":
+            rec["status"] = "complete"
+            rec["ended_at"] = event.get("ts")
+            rec["ended_at_epoch"] = event.get("ts_epoch") or 0
+
+    out = []
+    for rec in requests.values():
+        public = {k: v for k, v in rec.items() if not k.startswith("_")}
+        public["prompt_len"] = len(public.get("prompt") or "")
+        public["response_len"] = len(public.get("response") or "")
+        if now_epoch is not None:
+            try:
+                started = float(public.get("started_at_epoch") or 0)
+            except (TypeError, ValueError):
+                started = 0.0
+            try:
+                updated = float(public.get("updated_at_epoch") or 0)
+            except (TypeError, ValueError):
+                updated = 0.0
+            public["age_s"] = max(0.0, now_epoch - started) if started else None
+            public["quiet_s"] = max(0.0, now_epoch - updated) if updated else None
+            if (
+                public.get("status") == "running"
+                and public["quiet_s"] is not None
+                and public["quiet_s"] >= quiet_after_s
+            ):
+                public["status"] = "quiet"
+                if public.get("response"):
+                    public["status_reason"] = "tap stream quiet after response update"
+                else:
+                    public["status_reason"] = (
+                        "no tap output captured since start; request may be queued, "
+                        "pre/post-model, non-streaming, or orphaned"
+                    )
+        public["is_live"] = public.get("status") != "complete"
+        out.append(public)
+    out.sort(
+        key=lambda r: (
+            float(r.get("updated_at_epoch") or 0),
+            int(requests[str(r["request_id"])].get("_order") or 0),
+        ),
+        reverse=True,
+    )
+    return out[:max_requests]
 
 
 def _parse_trial_state(tail: str) -> dict[str, Any]:

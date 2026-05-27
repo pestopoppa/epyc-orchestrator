@@ -622,6 +622,10 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
         autopilot activity
         <span class="count-suffix" id="autopilot-status">— real-time tail (eval / seed_batch / meta-planning / rollback / safety)</span>
       </h2>
+      <div id="autopilot-phase"
+           style="margin:0 0 10px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,0.22);font-family:var(--font-mono);font-size:11px;color:var(--muted)">
+        phase: —
+      </div>
       <!-- Current-trial progress bar.
            Distribution modes (action_p50 / aggregate_p50): bar fills to p90
            with p25/p50/p75 ticks. Slow tail (elapsed > p90) shifts color.
@@ -713,6 +717,7 @@ const NODE_RADIUS = 18;
 let topology = null;
 let activeStream = null;
 let detailStream = null;
+let _roleAliasToBase = {};
 
 async function loadTopology() {
     const r = await fetch('/dashboard/api/topology');
@@ -771,6 +776,14 @@ function renderTopologyStrip() {
         if (ka !== kb) return ka - kb;
         return (a.base || '').localeCompare(b.base || '');
     });
+
+    _roleAliasToBase = {};
+    for (const g of groupList) {
+        for (const alias of g.aliases || []) {
+            const aliasBase = String(alias || '').split('.')[0].replace(/_\d+$/, '');
+            if (aliasBase) _roleAliasToBase[aliasBase] = g.base;
+        }
+    }
 
     for (const g of groupList) {
         const parent = g.parent || g.instances[0];
@@ -907,8 +920,9 @@ function updateTopologyInflight(inflight) {
     const byRole = {};
     for (const t of inflight || []) {
         const role = t.role || t.chosen_action || t.final_role || 'unknown';
-        if (!byRole[role]) byRole[role] = [];
-        byRole[role].push(t);
+        const base = clientBaseRole(t.topology_role || role);
+        if (!byRole[base]) byRole[base] = [];
+        byRole[base].push(t);
     }
     // Tap-derived activity fallback: when a role has no chat-XXX in-flight task
     // but the live tap shows recent activity for it (seeding / eval / probes),
@@ -925,13 +939,39 @@ function updateTopologyInflight(inflight) {
     // verbosity); cap per-role bounds the accordion size.
     const MAX_TAP_PER_ROLE = 8;
     const tapByBase = {};
-    const tapSrc = (typeof _rawTapBuffer === 'string' && typeof parseRawTapSections === 'function')
-        ? parseRawTapSections(_rawTapBuffer) : [];
+    const structuredSrc = (Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [])
+        .filter(isLiveStructuredTapRequest)
+        .map(req => ({
+        structured: true,
+        request_id: req.request_id || '',
+        role: req.role || '',
+        timestamp: req.updated_at || req.started_at || '',
+        prompt: req.prompt || '',
+        response: req.response || '',
+        prompt_len: req.prompt_len || 0,
+        response_len: req.response_len || 0,
+        timings: req.timings || '',
+        status: req.status || 'running',
+        status_reason: req.status_reason || '',
+        topology_role: req.topology_role || '',
+        lock_role: req.lock_role || '',
+        age_s: req.age_s,
+        quiet_s: req.quiet_s,
+    }));
+    const tapSrc = structuredSrc.length
+        ? structuredSrc
+        : ((typeof _rawTapBuffer === 'string' && typeof parseRawTapSections === 'function')
+            ? parseRawTapSections(_rawTapBuffer) : []);
     // Cache for openTapSectionDetail() — keyed by index, see openTapByKey.
     if (tapSrc.length) _lastRawTapSections = tapSrc;
     tapSrc.forEach((s) => {
         if (!s.role) return;
-        const base = clientBaseRole(s.role);
+        if (s.structured) {
+            if (!isLiveStructuredTapRequest(s)) return;
+        } else if (s.timings) {
+            return;
+        }
+        const base = clientBaseRole(s.topology_role || s.role);
         if (!base) return;
         if (!tapByBase[base]) tapByBase[base] = [];
         tapByBase[base].push(s);
@@ -958,11 +998,25 @@ function updateTopologyInflight(inflight) {
             badge.style.removeProperty('color');
             badge.style.removeProperty('border-color');
         } else if (tasks.length > 0) {
-            badge.textContent = `${tasks.length} active`;
+            const decoding = tasks.filter(t => (t.live_state || 'decoding') === 'decoding').length;
+            const pending = tasks.length - decoding;
+            if (decoding > 0 && pending > 0) {
+                badge.textContent = `${decoding} active · ${pending} pending`;
+            } else if (decoding > 0) {
+                badge.textContent = `${decoding} active`;
+            } else {
+                badge.textContent = `${pending} pending`;
+            }
             badge.classList.remove('zero');
-            badge.style.removeProperty('background');
-            badge.style.removeProperty('color');
-            badge.style.removeProperty('border-color');
+            if (decoding > 0) {
+                badge.style.removeProperty('background');
+                badge.style.removeProperty('color');
+                badge.style.removeProperty('border-color');
+            } else {
+                badge.style.background = 'rgba(245,158,11,0.15)';
+                badge.style.color = '#fbbf24';
+                badge.style.borderColor = 'rgba(245,158,11,0.3)';
+            }
         } else {
             // Tap-only activity — distinguish visually from chat-XXX with a
             // violet pill so the operator knows it's seeding/eval, not a
@@ -1014,6 +1068,7 @@ function hideNodeTooltip() {
 }
 
 async function openNodeDetail(port, label) {
+    _openStructuredTapRequestId = null;
     const panel = document.getElementById('detail-panel');
     const content = document.getElementById('detail-content');
     document.getElementById('detail-title').textContent = `node ${label} (port ${port})`;
@@ -1170,7 +1225,11 @@ function updateCounters(snap) {
 
 function roleColor(role) {
     if (!topology) return '#64748b';
-    const n = topology.nodes.find(n => n.role === role || n.label === role);
+    const base = clientBaseRole(role);
+    const n = topology.nodes.find(n =>
+        n.role === role || n.label === role ||
+        clientBaseRole(n.role) === base || clientBaseRole(n.label) === base
+    );
     return n ? n.color : '#64748b';
 }
 
@@ -1184,17 +1243,27 @@ function renderTaskCard(t, kind) {
     if (t.verifier_p_success != null) {
         verifier = ` · <span class="tag ${t.verifier_verdict||''}">v=${t.verifier_p_success.toFixed(2)} ${t.verifier_verdict||''}</span>`;
     }
+    const physical = (t.topology_role && t.topology_role !== role)
+        ? ` · <span class="tag" style="background:rgba(96,165,250,0.12);color:#93c5fd">via ${escapeHTML(t.topology_role)}</span>`
+        : '';
+    const liveHint = (kind !== 'completed' && t.live_state_reason)
+        ? ` · <span class="tag" style="background:rgba(245,158,11,0.10);color:#fbbf24">${escapeHTML(t.live_state_reason)}</span>`
+        : '';
     let outcome = '';
     if (kind === 'completed') {
         const okIcon = t.outcome === 'task_completed' ? '✅' : t.outcome === 'task_failed' ? '❌' : '↗';
         outcome = `<span style="float:right;color:var(--muted);font-size:10px">${okIcon} ${t.duration_s}s</span>`;
     } else {
-        outcome = `<span style="float:right;color:var(--good);font-size:10px">running ${t.age_s.toFixed(0)}s</span>`;
+        const liveState = t.live_state || 'decoding';
+        const stateColor = liveState === 'decoding' ? 'var(--good)' : '#fbbf24';
+        const stateLabel = liveState === 'decoding' ? 'decoding' : liveState;
+        const age = Number(t.age_s || 0);
+        outcome = `<span style="float:right;color:${stateColor};font-size:10px">${stateLabel} ${age.toFixed(0)}s</span>`;
     }
     return `
         <div class="task-card" onclick="openDetail('${t.task_id}', null, null)">
             <div class="role" style="color:${color}">${role}${outcome}</div>
-            <div class="meta">${t.task_id}${conf}${src}${verifier}</div>
+            <div class="meta">${t.task_id}${conf}${src}${verifier}${physical}${liveHint}</div>
             <div class="prompt">${escapeHTML(t.objective || '')}</div>
         </div>
     `;
@@ -1239,9 +1308,13 @@ function updateTasks(snap) {
 // ---- Inference tap panel — uses RAW byte-streaming SSE (mirrors TUI behavior) ----
 let _tapStream = null;
 let _rawTapStream = null;
+let _structuredTapStream = null;
 let _rawTapBuffer = "";
+let _structuredTapRequests = [];
 const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
 // (b) Render mode for the live raw tap.
+//   'structured': request-grouped JSONL events with request/instance metadata,
+//                 safe to read during concurrent inference.
 //   'raw'      : legacy styled <pre> via styleRawTap() — header coloring only,
 //                literal bytes preserved (per-token live updates).
 //   'rendered' : structured per-section render via parseRawTapSections() +
@@ -1249,11 +1322,13 @@ const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
 //                PROMPT/RESPONSE bodies through marked + KaTeX. Preserves
 //                section structure (fixes the prior flat-buffer regression).
 //
-// Default is 'rendered' because that delivers the original intent
-// (LaTeX + syntax-highlighted code in the live tap). A debounced timer
-// (~600ms of stream idle) defers the rendered redraw so partial fenced
-// code blocks complete before the per-section parse runs.
-let _rawTapRenderMode = (localStorage.getItem('rawTapRenderMode') || 'rendered');  // 'raw' | 'rendered'
+// Default is 'structured' because concurrent inference can interleave the
+// legacy plaintext tap. A debounced timer (~600ms of stream idle) still
+// applies when the operator switches to legacy rendered mode.
+let _rawTapRenderMode = (localStorage.getItem('rawTapRenderMode') || 'structured');  // 'structured' | 'raw' | 'rendered'
+if (!['structured', 'raw', 'rendered'].includes(_rawTapRenderMode)) {
+    _rawTapRenderMode = 'structured';
+}
 let _rawTapRenderTimer = null;
 const _RAW_TAP_RENDER_IDLE_MS = 600;
 
@@ -1294,7 +1369,10 @@ function styleRawTap(text) {
 }
 
 function toggleRawTapRenderMode() {
-    _rawTapRenderMode = (_rawTapRenderMode === 'rendered' ? 'raw' : 'rendered');
+    _rawTapRenderMode = (
+        _rawTapRenderMode === 'structured' ? 'rendered'
+        : (_rawTapRenderMode === 'rendered' ? 'raw' : 'structured')
+    );
     localStorage.setItem('rawTapRenderMode', _rawTapRenderMode);
     paintRawTap();  // immediate redraw with the new mode
 }
@@ -1317,19 +1395,22 @@ function toggleRawTapRenderMode() {
     // Users who deliberately want raw can toggle after seeing the new behavior.
     if (localStorage.getItem('rawTapRenderMode') === 'raw') {
         localStorage.removeItem('rawTapRenderMode');
-        _rawTapRenderMode = 'rendered';
+        _rawTapRenderMode = 'structured';
     }
 })();
 
 function buildRawTapStatusBar() {
     // Sticky header above the live tap. Pin indicator + render-mode toggle.
-    const isRendered = (_rawTapRenderMode === 'rendered');
-    const toggleLabel = isRendered ? '📄 markdown' : '⌨️ raw';
-    const toggleHint = isRendered
-        ? 'structured render: each section parsed + body run through marked + KaTeX. click for raw bytes.'
-        : 'raw structured bytes (section markers + PROMPT/RESPONSE preserved). click to render markdown + LaTeX per section.';
+    const mode = _rawTapRenderMode;
+    const toggleLabel = mode === 'structured' ? 'structured'
+        : (mode === 'rendered' ? 'markdown' : 'raw');
+    const toggleHint = mode === 'structured'
+        ? 'request-grouped JSONL events with request/instance metadata. click for legacy markdown sections.'
+        : (mode === 'rendered'
+            ? 'legacy section render: prompt/response through marked + KaTeX. click for raw bytes.'
+            : 'raw legacy bytes. click for request-grouped structured events.');
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
-        <span style="color:var(--muted);font-size:10px">live tap (per-token from /mnt/raid0/llm/tmp/inference_tap.log)</span>
+        <span style="color:var(--muted);font-size:10px">live tap (${mode} · inference_tap_events.jsonl + inference_tap.log)</span>
         <span style="display:flex;gap:8px;align-items:center">
             <button onclick="toggleRawTapRenderMode()" style="background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit"
                 title="${toggleHint}">${toggleLabel}</button>
@@ -1346,13 +1427,14 @@ function paintRawTap() {
     if (!container) return;
     const statusBar = buildRawTapStatusBar();
     let inner = document.getElementById('raw-tap-pre');
+    const isStructured = (_rawTapRenderMode === 'structured');
     const isRendered = (_rawTapRenderMode === 'rendered');
     // If the inner element exists but its tag doesn't match the desired mode
     // (rendered → <div>, raw → <pre>), recreate it. Otherwise just update content.
-    const expectedTag = isRendered ? 'DIV' : 'PRE';
+    const expectedTag = (isStructured || isRendered) ? 'DIV' : 'PRE';
     if (!inner || inner.tagName !== expectedTag) {
         const tag = expectedTag.toLowerCase();
-        const style = isRendered
+        const style = (isStructured || isRendered)
             ? 'background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;max-height:480px;overflow-y:auto;font-size:11px;line-height:1.45;margin:0'
             : 'background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;max-height:480px;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;font-size:11px;line-height:1.4;font-family:ui-monospace,monospace;margin:0';
         container.innerHTML = statusBar + `<${tag} id="raw-tap-pre" style="${style}"></${tag}>`;
@@ -1364,7 +1446,9 @@ function paintRawTap() {
             existingBar.outerHTML = statusBar;
         }
     }
-    if (isRendered) {
+    if (isStructured) {
+        paintStructuredTap(inner);
+    } else if (isRendered) {
         // Structured per-section render: parse the buffer into the same
         // (timestamp, role, prompt, response) records the server's parsed
         // sections view uses, then render metadata as styled headers and
@@ -1375,6 +1459,157 @@ function paintRawTap() {
         inner.innerHTML = styleRawTap(_rawTapBuffer);
     }
     autoscrollRawPanel(inner);
+}
+
+let _lastStructuredTapRequests = [];
+let _openStructuredTapRequestId = null;
+
+function isLiveStructuredTapRequest(req) {
+    if (!req) return false;
+    if (req.is_live === true) return true;
+    if (req.is_live === false) return false;
+    return (req.status || 'running') !== 'complete';
+}
+
+function liveStructuredTapRequests() {
+    return (Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [])
+        .filter(isLiveStructuredTapRequest);
+}
+
+function structuredTapMeta(req) {
+    const bits = [];
+    if (req.request_id) bits.push(`request ${String(req.request_id).slice(0, 18)}`);
+    if (req.parent_request_id) bits.push(`parent ${String(req.parent_request_id).slice(0, 18)}`);
+    if (req.task_id) bits.push(`task ${req.task_id}`);
+    if (req.trial_id != null) bits.push(`trial ${req.trial_id}`);
+    if (req.batch_id != null) bits.push(`batch ${req.batch_id}`);
+    if (req.topology_role && req.topology_role !== req.role) bits.push(`via ${req.topology_role}`);
+    if (req.instance_shape) bits.push(`shape ${req.instance_shape}`);
+    if (req.instance_idx != null) bits.push(`idx ${req.instance_idx}`);
+    if (req.port) bits.push(`port ${req.port}`);
+    if (req.pid) bits.push(`pid ${req.pid}`);
+    if (req.topology_hash) bits.push(`topo ${String(req.topology_hash).slice(0, 8)}`);
+    return bits.join(' · ');
+}
+
+function paintStructuredTap(container) {
+    const allRequests = Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [];
+    const requests = liveStructuredTapRequests();
+    _lastStructuredTapRequests = requests;
+    if (!requests.length) {
+        const msg = allRequests.length
+            ? 'no live inference requests right now'
+            : 'no structured tap events yet';
+        container.innerHTML = `<div style="color:var(--muted);font-size:11px;padding:6px">${msg}</div>`;
+        return;
+    }
+    const html = requests.map((req, i) => {
+        const role = req.role || '?';
+        const color = (typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--muted)';
+        const status = req.status === 'complete' ? 'complete' : (req.status === 'quiet' ? 'quiet' : 'running');
+        const statusColor = status === 'running'
+            ? 'var(--good,#34d399)'
+            : (status === 'quiet' ? '#fbbf24' : 'var(--muted)');
+        const quietHint = req.status_reason
+            ? `<div style="color:#fbbf24;font-size:10px;margin-top:4px">${escapeHTML(req.status_reason)}</div>`
+            : '';
+        const timing = req.timings
+            ? `<div style="color:var(--muted);font-size:10px;margin-top:6px;font-family:var(--font-mono)">${escapeHTML(req.timings)}</div>`
+            : '';
+        const meta = structuredTapMeta(req);
+        return `<details class="tap-section" ${i === 0 ? 'open' : ''} data-structured-idx="${i}">
+            <summary>
+                <span style="font-weight:600;color:${color}">${escapeHTML(role)}</span>
+                <span style="color:${statusColor};font-size:10px;margin-left:6px">${status}</span>
+                <span style="color:var(--muted);font-size:10px;font-family:var(--font-mono);margin-left:6px">${escapeHTML(req.updated_at || req.started_at || '')}</span>
+                <span style="color:var(--dim);font-size:10px">· ${req.prompt_len || 0}c prompt · ${req.response_len || 0}c resp · ${req.chunk_count || 0} chunks</span>
+                <span class="tap-detail-link" onclick="event.preventDefault();event.stopPropagation();openStructuredTapDetail(${i})" title="Open live output stream in detail panel">detail</span>
+            </summary>
+            <div class="section-body">
+                <div style="color:var(--muted);font-size:10px;margin-bottom:6px;font-family:var(--font-mono)">${escapeHTML(meta)}</div>
+                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">prompt</div>
+                <div class="tap-content prompt-text" data-structured-prompt="${i}"></div>
+                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:8px 0 4px 0">response</div>
+                <div class="tap-content stream-text" data-structured-response="${i}"></div>
+                ${quietHint}
+                ${timing}
+            </div>
+        </details>`;
+    }).join('');
+    container.innerHTML = html;
+    requests.forEach((req, i) => {
+        const pEl = container.querySelector(`[data-structured-prompt="${i}"]`);
+        const rEl = container.querySelector(`[data-structured-response="${i}"]`);
+        if (pEl) renderMarkdownInto(pEl, req.prompt || '');
+        if (rEl) renderMarkdownInto(rEl, req.response || '');
+    });
+}
+
+function openStructuredTapDetail(idx) {
+    const req = _lastStructuredTapRequests[idx];
+    if (!req) return;
+    openStructuredTapRequest(req);
+}
+
+function openStructuredTapRequest(req) {
+    if (!req) return;
+    _openStructuredTapRequestId = req.request_id || null;
+    const panel = document.getElementById('detail-panel');
+    const content = document.getElementById('detail-content');
+    document.getElementById('detail-title').textContent =
+        `tap request · ${req.role || '?'} · ${req.request_id || ''}`;
+    _currentTaskRawText = {
+        taskId: `tap_${req.request_id || Date.now()}`,
+        prompt: req.prompt || '',
+        stream: req.response || '',
+        repl: [],
+    };
+    content.innerHTML = `
+        <div class="detail-actions">
+            <button onclick="copySnapshotToClipboard()">copy snapshot</button>
+            <button class="secondary" onclick="downloadSnapshot()">download .txt</button>
+            <span id="copy-feedback" class="copy-feedback"></span>
+        </div>
+        <div id="structured-tap-detail-meta" style="color:var(--muted);font-size:11px;margin-bottom:4px;font-family:var(--font-mono)">
+            ${escapeHTML(structuredTapMeta(req))}
+            ${req.timings ? ' · ' + escapeHTML(req.timings) : ''}
+        </div>
+        <h3>prompt</h3>
+        <div class="prompt-text" id="prompt-text"></div>
+        <h3>response</h3>
+        <div class="stream-text" id="stream-text"></div>`;
+    renderMarkdownInto(document.getElementById('prompt-text'), req.prompt || '*(no prompt captured)*');
+    renderMarkdownInto(document.getElementById('stream-text'), req.response || '*(no response captured)*');
+    panel.classList.add('open');
+    refreshOpenStructuredTapDetail();
+}
+
+function refreshOpenStructuredTapDetail() {
+    if (!_openStructuredTapRequestId) return;
+    const panel = document.getElementById('detail-panel');
+    if (!panel || !panel.classList.contains('open')) return;
+    const req = (Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [])
+        .find(r => (r.request_id || '') === _openStructuredTapRequestId);
+    if (!req) return;
+    const title = document.getElementById('detail-title');
+    if (title) {
+        const state = isLiveStructuredTapRequest(req) ? (req.status || 'running') : 'complete';
+        title.textContent = `tap request · ${req.role || '?'} · ${state} · ${req.request_id || ''}`;
+    }
+    const meta = document.getElementById('structured-tap-detail-meta');
+    if (meta) {
+        meta.innerHTML = `${escapeHTML(structuredTapMeta(req))}${req.timings ? ' · ' + escapeHTML(req.timings) : ''}`;
+    }
+    _currentTaskRawText = {
+        taskId: `tap_${req.request_id || ''}`,
+        prompt: req.prompt || '',
+        stream: req.response || '',
+        repl: [],
+    };
+    const promptEl = document.getElementById('prompt-text');
+    const responseEl = document.getElementById('stream-text');
+    if (promptEl) renderMarkdownInto(promptEl, req.prompt || '*(no prompt captured)*');
+    if (responseEl) renderMarkdownInto(responseEl, req.response || '*(no response captured)*');
 }
 
 // Section separator that the autopilot/seeding harness writes between
@@ -1437,8 +1672,9 @@ function clientBaseRole(role) {
     // "frontdoor.q2" → "frontdoor", "embedder_3" → "embedder", leaves
     // multi-word roles like "ingest_long_context" untouched.
     if (!role) return '';
-    const base = role.split('.')[0];
-    return base.replace(/_\d+$/, '');
+    const normalized = String(role).split(':')[0];
+    const base = normalized.split('.')[0].replace(/_\d+$/, '');
+    return _roleAliasToBase[base] || base;
 }
 
 function _isRecentTapTs(tsStr, maxAgeSec) {
@@ -1456,27 +1692,30 @@ function renderTapActivityCard(s) {
     // rendered-mode parser reverses _lastRawTapSections and would otherwise
     // collide with our chronological-order cache.
     //
-    // A section is "in-flight" iff it has no TIMINGS line yet (the tap writer
-    // appends TIMINGS once generation completes). In-flight sections get a
-    // pulsing dot + green text so the operator distinguishes them at a glance
-    // from recently-completed sections still in the rolling buffer.
+    // Only live/open tap sections reach this helper. They get a pulsing dot
+    // + green/amber text so the operator can distinguish active decoding from
+    // queued or stalled tap records.
     const role = s.role || '?';
     const color = roleColor(role);
     const ts = s.timestamp || '';
     const ageSec = ts ? Math.max(0, (Date.now() - Date.parse(ts.replace(' ', 'T'))) / 1000) : 0;
-    const inFlight = !s.timings;
+    const inFlight = s.structured ? s.status !== 'complete' : !s.timings;
+    const isQuiet = s.structured && s.status === 'quiet';
     const ageLabel = inFlight
-        ? (ageSec < 2 ? 'live' : `running ${ageSec.toFixed(0)}s`)
+        ? (isQuiet ? `quiet ${ageSec.toFixed(0)}s` : (ageSec < 2 ? 'live' : `running ${ageSec.toFixed(0)}s`))
         : `done ${ageSec < 5 ? 'just now' : ageSec.toFixed(0) + 's ago'}`;
-    const ageColor = inFlight ? 'var(--good, #34d399)' : 'var(--muted)';
+    const ageColor = inFlight ? (isQuiet ? '#fbbf24' : 'var(--good, #34d399)') : 'var(--muted)';
     const promptPreview = (s.prompt || '').slice(0, 160).replace(/\s+/g, ' ');
     const flightDot = inFlight
-        ? '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--good,#34d399);margin-right:4px;animation:pulse 1.5s infinite"></span>'
+        ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isQuiet ? '#fbbf24' : 'var(--good,#34d399)'};margin-right:4px;animation:pulse 1.5s infinite"></span>`
         : '';
+    const requestAttr = s.structured ? ` data-tap-request-id="${escapeHTML(s.request_id || '')}"` : '';
+    const routeMeta = s.topology_role && s.topology_role !== role ? ` · via ${escapeHTML(s.topology_role)}` : '';
+    const quietMeta = s.status_reason ? ` · ${escapeHTML(s.status_reason)}` : '';
     return `
-        <div class="task-card tap-derived${inFlight ? ' tap-inflight' : ''}" data-tap-ts="${escapeHTML(ts)}" data-tap-role="${escapeHTML(role)}" title="tap-derived activity (no chat-XXX id) · click for prompt+response snapshot">
+        <div class="task-card tap-derived${inFlight ? ' tap-inflight' : ''}" data-tap-ts="${escapeHTML(ts)}" data-tap-role="${escapeHTML(role)}"${requestAttr} title="tap-derived activity (no chat-XXX id) · click for prompt+response snapshot">
             <div class="role" style="color:${color}">${flightDot}${escapeHTML(role)}<span style="float:right;color:${ageColor};font-size:10px">${inFlight ? '⟳' : '✓'} ${ageLabel}</span></div>
-            <div class="meta">tap section · ${s.prompt_len}c prompt · ${s.response_len}c resp${s.timings ? ' · ' + escapeHTML(s.timings) : ''}</div>
+            <div class="meta">tap section${routeMeta} · ${s.prompt_len}c prompt · ${s.response_len}c resp${s.timings ? ' · ' + escapeHTML(s.timings) : ''}${quietMeta}</div>
             <div class="prompt">${escapeHTML(promptPreview)}</div>
         </div>
     `;
@@ -1493,8 +1732,20 @@ function _installTapCardClickDelegate() {
         if (!card) return;
         const ts = card.getAttribute('data-tap-ts') || '';
         const role = card.getAttribute('data-tap-role') || '';
+        const requestId = card.getAttribute('data-tap-request-id') || '';
+        if (requestId) {
+            openStructuredTapByRequestId(requestId);
+            return;
+        }
         openTapByKey(ts, role);
     });
+}
+
+function openStructuredTapByRequestId(requestId) {
+    const requests = Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [];
+    const req = requests.find(req => (req.request_id || '') === requestId);
+    if (!req) return;
+    openStructuredTapRequest(req);
 }
 
 function openTapByKey(ts, role) {
@@ -1578,6 +1829,7 @@ function openTapSectionDetail(sectionIdx) {
     // get the full task_events history.
     const s = _lastRawTapSections[sectionIdx];
     if (!s) return;
+    _openStructuredTapRequestId = null;
     const panel = document.getElementById('detail-panel');
     const content = document.getElementById('detail-content');
     document.getElementById('detail-title').textContent =
@@ -1706,7 +1958,9 @@ function startRawTapStream() {
                     _rawTapBuffer = _rawTapBuffer.slice(-_RAW_TAP_MAX_CHARS);
                 }
             }
-            if (_rawTapRenderMode === 'raw') {
+            if (_rawTapRenderMode === 'structured') {
+                paintRawTap();
+            } else if (_rawTapRenderMode === 'raw') {
                 // Raw mode: paint immediately on each chunk (cheap, no parsing).
                 paintRawTap();
             } else {
@@ -1729,6 +1983,23 @@ function startRawTapStream() {
     };
     _rawTapStream.onerror = () => {
         setTimeout(startRawTapStream, 2000);
+    };
+}
+
+function startStructuredTapStream() {
+    if (_structuredTapStream) _structuredTapStream.close();
+    _structuredTapRequests = [];
+    _structuredTapStream = new EventSource('/dashboard/events/structured_tap');
+    _structuredTapStream.onmessage = (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            _structuredTapRequests = data.structured_requests || [];
+            if (_rawTapRenderMode === 'structured') paintRawTap();
+            refreshOpenStructuredTapDetail();
+        } catch {}
+    };
+    _structuredTapStream.onerror = () => {
+        setTimeout(startStructuredTapStream, 2000);
     };
 }
 
@@ -1858,6 +2129,7 @@ function startTapStream() {
     // Replaced the parsed-sections stream with the raw byte-level stream
     // (mirrors how autopilot's TUI displays inference — incremental tokens
     // as they're written, not waiting for section close).
+    startStructuredTapStream();
     startRawTapStream();
     // Also start the autopilot.log stream so every phase autopilot is in
     // (eval / seed_batch / claude -p meta-planning / rollback / safety
@@ -2376,6 +2648,7 @@ async function openDetail(taskId, port, slotId) {
     if (taskId === null || taskId === 'null' || taskId === undefined) {
         return;
     }
+    _openStructuredTapRequestId = null;
     const panel = document.getElementById('detail-panel');
     const content = document.getElementById('detail-content');
     document.getElementById('detail-title').textContent = `task ${taskId}`;
@@ -2395,6 +2668,7 @@ async function openDetail(taskId, port, slotId) {
         let promptText = '';
         let initialContent = '';
         let dataSource = '';
+        let emptyOutputHint = '';
         if (d.slot) {
             promptText = (d.slot.prompt || '').toString();
             initialContent = (d.slot.content || '').toString();
@@ -2412,6 +2686,9 @@ async function openDetail(taskId, port, slotId) {
             dataSource = events.length
                 ? 'task_started.objective (no slot or tap match)'
                 : 'no events, no slot, no tap match — task may have been pruned';
+            emptyOutputHint = events.length
+                ? 'No model output captured yet. The task is likely queued, in pre-inference/local work, or its live tap section has not matched this task.'
+                : 'No task events or model output are available for this task id.';
         }
         _currentTaskRawText = {
             taskId,
@@ -2435,7 +2712,10 @@ async function openDetail(taskId, port, slotId) {
             <div id="repl-history"></div>
         `;
         renderMarkdownInto(document.getElementById('prompt-text'), promptText || '*(prompt not available)*');
-        renderMarkdownInto(document.getElementById('stream-text'), initialContent);
+        renderMarkdownInto(
+            document.getElementById('stream-text'),
+            initialContent || (emptyOutputHint ? `*${emptyOutputHint}*` : '')
+        );
         const replEl = document.getElementById('repl-history');
         replEl.innerHTML = events.map(ev => `
             <div class="repl-event">
@@ -2484,6 +2764,7 @@ async function openDetail(taskId, port, slotId) {
 }
 
 function closeDetail() {
+    _openStructuredTapRequestId = null;
     document.getElementById('detail-panel').classList.remove('open');
     if (detailStream) { detailStream.close(); detailStream = null; }
 }
@@ -2531,12 +2812,58 @@ function _setDotState(el, state, tooltip) {
     if (tooltip) el.title = tooltip;
 }
 
+function _autopilotPhaseAgeS(phase) {
+    if (!phase) return null;
+    const started = Number(phase.phase_started_at || 0);
+    if (started > 0) return Math.max(0, (Date.now() / 1000) - started);
+    if (phase.phase_age_s != null) return Number(phase.phase_age_s);
+    return null;
+}
+
+function _phaseFocus(d, ap) {
+    if (!ap || !ap.running) return 'none';
+    const phase = d.autopilot_phase || {};
+    const name = String(phase.phase || '');
+    const reason = String(phase.idle_reason || '');
+    if (!name || ['paused', 'stopped', 'shutting_down'].includes(name)) return 'none';
+    if (/planner|controller/i.test(name) || /planner|controller/i.test(reason)) {
+        return 'planner';
+    }
+    return 'autopilot';
+}
+
+function _renderAutopilotPhase(d, ap) {
+    const el = document.getElementById('autopilot-phase');
+    if (!el) return;
+    const phase = d.autopilot_phase || {};
+    if (!phase.phase) {
+        el.innerHTML = `<span style="color:var(--dim)">phase: unavailable</span>`;
+        return;
+    }
+    const age = d.autopilot_phase_age_s != null ? `${Math.round(d.autopilot_phase_age_s)}s ago` : 'mtime unknown';
+    const phaseAgeS = _autopilotPhaseAgeS(phase);
+    const phaseAge = phaseAgeS != null ? `${Math.round(phaseAgeS)}s in phase` : '';
+    const bits = [];
+    if (phase.trial_id != null) bits.push(`trial ${escapeHTML(String(phase.trial_id))}`);
+    if (phase.action_type) bits.push(escapeHTML(String(phase.action_type)));
+    if (phase.species) bits.push(escapeHTML(String(phase.species)));
+    if (phase.prompt_chars != null) bits.push(`${Number(phase.prompt_chars).toLocaleString()} prompt chars`);
+    if (phase.idle_reason) bits.push(escapeHTML(String(phase.idle_reason)));
+    if (!ap.running) bits.push('process down');
+    el.innerHTML = `
+        <span style="color:${ap.running ? 'var(--fg)' : 'var(--bad)'}">phase: ${escapeHTML(String(phase.phase))}</span>
+        <span style="color:var(--dim)"> · ${escapeHTML(age)}${phaseAge ? ` · ${escapeHTML(phaseAge)}` : ''}</span>
+        ${bits.length ? `<div style="margin-top:3px;color:var(--muted)">${bits.join(' · ')}</div>` : ''}
+    `;
+}
+
 async function updateProcessStatus() {
     try {
         const r = await fetch('/dashboard/api/process_status');
         const d = await r.json();
         const ap = d.autopilot || {};
         const el = document.getElementById('process-status');
+        _renderAutopilotPhase(d, ap);
         if (ap.running) {
             const workers = d.gepa_worker_count ? ` · ${d.gepa_worker_count} gepa workers` : '';
             const ageLabel = d.last_autopilot_log_age_s != null
@@ -2549,15 +2876,29 @@ async function updateProcessStatus() {
                 <span style="color:var(--muted)">no process matching "autopilot.py start"</span>`;
         }
 
-        // Live-dot states. Mutually-exclusive logic between live-tap + planner:
-        // when one is actively streaming, the other gets a 'standby' badge
-        // (warm amber, no pulse) to signal "ready but gated by the other".
+        // Live-dot states are a focus indicator, not just a last-write meter:
+        // live model output owns focus first, then planner/controller work,
+        // then autopilot management phases. This prevents "everything looks
+        // idle" when inference locks are free but autopilot is busy in Python.
         const tapAge = d.inference_tap_age_s;
         const planAge = d.planner_tap_age_s;
         const apAge = d.last_autopilot_log_age_s;
-        const tapActive  = tapAge  != null && tapAge  < _LIVE_TAP_ACTIVE_S;
-        const planActive = planAge != null && planAge < _PLANNER_ACTIVE_S;
-        const apActive   = apAge   != null && apAge   < _AUTOPILOT_ACTIVE_S;
+        const liveTapCount = typeof liveStructuredTapRequests === 'function'
+            ? liveStructuredTapRequests().length
+            : 0;
+        const tapActive = liveTapCount > 0;
+        const phaseFocus = _phaseFocus(d, ap);
+        const planStreaming = planAge != null && planAge < _PLANNER_ACTIVE_S;
+        const apLogging = apAge != null && apAge < _AUTOPILOT_ACTIVE_S;
+        const focus = tapActive
+            ? 'tap'
+            : ((phaseFocus === 'planner' || planStreaming)
+                ? 'planner'
+                : ((phaseFocus === 'autopilot' || apLogging) ? 'autopilot' : 'none'));
+        const phase = d.autopilot_phase || {};
+        const phaseName = phase.phase || 'autopilot';
+        const phaseAgeS = _autopilotPhaseAgeS(phase);
+        const phaseAgeLabel = phaseAgeS != null ? `${Math.round(phaseAgeS)}s` : 'unknown age';
 
         const tapDot  = document.getElementById('tap-live-dot');
         const planDot = document.getElementById('planner-live-dot');
@@ -2566,22 +2907,31 @@ async function updateProcessStatus() {
         // Live tap dot
         if (tapAge == null) {
             _setDotState(tapDot, 'down', 'inference_tap.log not found');
-        } else if (tapActive) {
-            _setDotState(tapDot, 'active', `inference tap streaming — ${tapAge.toFixed(1)}s since last write`);
-        } else if (planActive) {
-            _setDotState(tapDot, 'standby', `standby — planner is active (last tap write ${Math.round(tapAge)}s ago)`);
+        } else if (focus === 'tap') {
+            _setDotState(tapDot, 'active', `${liveTapCount} live inference request(s) streaming`);
+        } else if (focus === 'planner') {
+            _setDotState(tapDot, 'idle', `no live inference; planner has focus (last tap write ${Math.round(tapAge)}s ago)`);
+        } else if (focus === 'autopilot') {
+            _setDotState(tapDot, 'idle', `no live inference; autopilot has focus (last tap write ${Math.round(tapAge)}s ago)`);
         } else if (tapAge < _LIVE_TAP_IDLE_S) {
-            _setDotState(tapDot, 'active', `recent tap activity — ${tapAge.toFixed(1)}s ago`);
+            _setDotState(tapDot, 'idle', `no live inference; last completed tap write ${tapAge.toFixed(1)}s ago`);
         } else {
             _setDotState(tapDot, 'idle', `idle — last tap write ${Math.round(tapAge)}s ago`);
         }
 
         // Planner dot
         if (planAge == null) {
-            _setDotState(planDot, 'idle', 'no planner session yet this run');
-        } else if (planActive) {
-            _setDotState(planDot, 'active', `planner streaming — ${planAge.toFixed(1)}s since last event`);
-        } else if (tapActive) {
+            if (focus === 'planner') {
+                _setDotState(planDot, 'active', `planner/controller phase active — ${String(phaseName)} (${phaseAgeLabel})`);
+            } else {
+                _setDotState(planDot, 'idle', 'no planner session yet this run');
+            }
+        } else if (focus === 'planner') {
+            const msg = planStreaming
+                ? `planner streaming — ${planAge.toFixed(1)}s since last event`
+                : `planner/controller phase active — ${String(phaseName)} (${phaseAgeLabel})`;
+            _setDotState(planDot, 'active', msg);
+        } else if (focus === 'tap') {
             _setDotState(planDot, 'standby', `standby — live inference is active (last planner event ${Math.round(planAge)}s ago)`);
         } else if (planAge < _PLANNER_IDLE_S) {
             _setDotState(planDot, 'active', `recent planner activity — ${planAge.toFixed(1)}s ago`);
@@ -2594,9 +2944,15 @@ async function updateProcessStatus() {
         // .down regardless of how recent the log was.
         if (!ap.running) {
             _setDotState(apDot, 'down', 'autopilot.py is not running');
+        } else if (focus === 'autopilot') {
+            _setDotState(apDot, 'active', `autopilot focus: ${String(phaseName)} (${phaseAgeLabel})`);
+        } else if (focus === 'tap') {
+            _setDotState(apDot, 'standby', `standby — live inference has focus; autopilot phase ${String(phaseName)}`);
+        } else if (focus === 'planner') {
+            _setDotState(apDot, 'standby', `standby — planner/controller has focus; autopilot phase ${String(phaseName)}`);
         } else if (apAge == null) {
             _setDotState(apDot, 'idle', 'autopilot.log not found yet');
-        } else if (apActive) {
+        } else if (apLogging) {
             _setDotState(apDot, 'active', `autopilot looping — last log ${apAge.toFixed(1)}s ago`);
         } else if (apAge < _AUTOPILOT_IDLE_S) {
             _setDotState(apDot, 'active', `autopilot recent activity — ${Math.round(apAge)}s ago`);
@@ -3066,4 +3422,3 @@ if (document.readyState === 'loading') {
 }
 </script>
 </body></html>
-

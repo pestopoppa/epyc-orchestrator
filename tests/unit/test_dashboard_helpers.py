@@ -146,6 +146,74 @@ def test_parse_inference_sections_skips_timings_probes() -> None:
     assert dashboard_tap._parse_inference_sections(tap) == []
 
 
+def test_parse_structured_tap_requests_groups_events_by_request() -> None:
+    def event(kind: str, request_id: str, **fields):
+        payload = {
+            "event": kind,
+            "request_id": request_id,
+            "role": "frontdoor",
+            "ts": f"2026-05-22T10:00:0{len(lines)}+00:00",
+            "ts_epoch": float(len(lines)),
+            **fields,
+        }
+        lines.append(json.dumps(payload))
+
+    lines: list[str] = []
+    event("start", "req-1", prompt="hello", task_id="task-1", trial_id=3, batch_id="b1")
+    event("metadata", "req-1", instance_idx=2, instance_shape="q1", port=8082, topology_hash="abc123")
+    event("chunk", "req-1", text="hi ")
+    event("chunk", "req-1", text="there")
+    event("timings", "req-1", tokens=2, prompt_ms=10.0, gen_ms=20.0, tps=100.0, total_s=0.03)
+    event("end", "req-1")
+
+    parsed = dashboard_tap._parse_structured_tap_requests("\n".join(lines))
+
+    assert len(parsed) == 1
+    req = parsed[0]
+    assert req["request_id"] == "req-1"
+    assert req["task_id"] == "task-1"
+    assert req["trial_id"] == 3
+    assert req["batch_id"] == "b1"
+    assert req["instance_idx"] == 2
+    assert req["instance_shape"] == "q1"
+    assert req["port"] == 8082
+    assert req["topology_hash"] == "abc123"
+    assert req["prompt"] == "hello"
+    assert req["response"] == "hi there"
+    assert req["status"] == "complete"
+    assert req["is_live"] is False
+    assert req["chunk_count"] == 2
+    assert "2 tokens" in req["timings"]
+
+
+def test_parse_structured_tap_requests_marks_quiet_open_request() -> None:
+    line = json.dumps({
+        "event": "start",
+        "request_id": "req-quiet",
+        "role": "coder_escalation",
+        "topology_role": "frontdoor",
+        "lock_role": "frontdoor",
+        "ts": "2026-05-22T10:00:00+00:00",
+        "ts_epoch": 100.0,
+        "prompt": "hello",
+    })
+
+    parsed = dashboard_tap._parse_structured_tap_requests(
+        line,
+        now_epoch=130.0,
+        quiet_after_s=10.0,
+    )
+
+    assert len(parsed) == 1
+    req = parsed[0]
+    assert req["status"] == "quiet"
+    assert req["is_live"] is True
+    assert req["age_s"] == 30.0
+    assert req["quiet_s"] == 30.0
+    assert req["topology_role"] == "frontdoor"
+    assert "no tap output" in req["status_reason"]
+
+
 def test_parse_trial_state_parses_baseline_then_score() -> None:
     tail = (
         "2026-05-22 10:00 GEPA: evaluating baseline for some_file.md (12 sentinels)\n"
@@ -158,6 +226,25 @@ def test_parse_trial_state_parses_baseline_then_score() -> None:
     assert state["baseline_score"] == 0.85
     assert state["last_event"] == "baseline_done"
     assert state["current_action"] == "mutate_prompt"
+
+
+def test_read_autopilot_phase_returns_dict(tmp_path, monkeypatch) -> None:
+    phase_path = tmp_path / "phase.json"
+    phase_path.write_text(json.dumps({"phase": "dispatch_action", "trial_id": 12}))
+    monkeypatch.setattr(dashboard, "AUTOPILOT_PHASE_PATH", phase_path)
+
+    phase = dashboard._read_autopilot_phase()
+
+    assert phase["phase"] == "dispatch_action"
+    assert phase["trial_id"] == 12
+
+
+def test_read_autopilot_phase_invalid_returns_empty(tmp_path, monkeypatch) -> None:
+    phase_path = tmp_path / "phase.json"
+    phase_path.write_text("not json")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_PHASE_PATH", phase_path)
+
+    assert dashboard._read_autopilot_phase() == {}
 
 
 # ----- dashboard_tasks -----
@@ -281,8 +368,8 @@ def test_scan_recent_decisions_counts_cumulative_vs_rolling(tmp_path) -> None:
     decisions, rolling, cumulative = dashboard_snapshot.scan_recent_decisions(log, window_s=600)
     # All 3 go in cumulative; only 2 (new) in rolling
     assert cumulative == {"classifier": 2, "rules": 1}
-    rolling.pop("_verifier_verdicts", None)
-    assert rolling == {"classifier": 1, "rules": 1}
+    rolling_public = {k: v for k, v in rolling.items() if not k.startswith("_")}
+    assert rolling_public == {"classifier": 1, "rules": 1}
 
 
 def test_scan_orchestrator_tasks_separates_in_flight_from_completed(tmp_path) -> None:
@@ -371,13 +458,40 @@ def test_gate_inflight_drops_idle_orphans() -> None:
 def test_gate_inflight_keeps_fresh_without_busy_slot() -> None:
     """A just-started task is kept even before its slot flips to processing."""
     fresh = [{"task_id": "chat-y", "age_s": 3.0, "role": "frontdoor"}]
-    assert len(dashboard._gate_inflight_by_live_slots(fresh, {})) == 1
+    gated = dashboard._gate_inflight_by_live_slots(fresh, {})
+    assert len(gated) == 1
+    assert gated[0]["live_state"] == "pending"
 
 
 def test_gate_inflight_keeps_live_long_task() -> None:
     """An old task is kept while its role's server reports a busy slot."""
     long_task = [{"task_id": "chat-z", "age_s": 500.0, "role": "ingest_long_context"}]
-    assert len(dashboard._gate_inflight_by_live_slots(long_task, {"ingest_long_context": 1})) == 1
+    gated = dashboard._gate_inflight_by_live_slots(long_task, {"ingest_long_context": 1})
+    assert len(gated) == 1
+    assert gated[0]["live_state"] == "decoding"
+
+
+def test_gate_inflight_maps_alias_roles_to_topology_busy_slots() -> None:
+    """Logical aliases sharing a physical pool should track that pool's live slots."""
+    task = [{"task_id": "chat-coder", "age_s": 45.0, "role": "coder_escalation"}]
+    gated = dashboard._gate_inflight_by_live_slots(
+        task,
+        {"frontdoor": 1},
+        alias_to_topology_role={"coder_escalation": "frontdoor"},
+    )
+
+    assert len(gated) == 1
+    assert gated[0]["topology_role"] == "frontdoor"
+    assert gated[0]["live_state"] == "decoding"
+
+
+def test_gate_inflight_strips_route_modifier_before_slot_match() -> None:
+    task = [{"task_id": "chat-frontdoor", "age_s": 45.0, "role": "frontdoor:direct"}]
+    gated = dashboard._gate_inflight_by_live_slots(task, {"frontdoor": 1})
+
+    assert len(gated) == 1
+    assert gated[0]["topology_role"] == "frontdoor"
+    assert gated[0]["live_state"] == "decoding"
 
 
 def test_gate_inflight_caps_to_busy_slots() -> None:

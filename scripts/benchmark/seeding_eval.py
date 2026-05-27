@@ -7,6 +7,7 @@ that replaces the previously copy-pasted RoleResult construction in
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
 import time
@@ -17,6 +18,7 @@ from seeding_types import (
     ACTION_ARCHITECT,
     ACTION_SELF_DIRECT,
     ACTION_SELF_REPL,
+    DEFAULT_TIMEOUT,
     HEAVY_PORTS,
     ROLE_PORT,
     RoleResult,
@@ -48,6 +50,12 @@ from seeding_rewards import (
     score_query_strategy,
     success_reward,
 )
+from seeding_telemetry import (
+    lock_pressure_too_high as _telemetry_lock_pressure,
+    recommended_timeout as _telemetry_timeout,
+    record_outcome as _telemetry_record,
+    should_skip as _telemetry_should_skip,
+)
 
 __all__ = [
     "ThreeWayResult",
@@ -63,6 +71,120 @@ logger = logging.getLogger("seed_specialist_routing")
 
 _TAP_PATH = "/mnt/raid0/llm/tmp/inference_tap.log"
 _REPL_TAP_PATH = "/mnt/raid0/llm/tmp/repl_tap.log"
+
+
+def _seed_role_concurrency_limit(n_roles: int) -> int:
+    raw = os.environ.get("AUTOPILOT_SEED_ROLE_CONCURRENCY", "auto").strip().lower()
+    if raw in {"", "auto", "0"}:
+        return max(1, n_roles)
+    try:
+        return max(1, min(n_roles, int(raw)))
+    except ValueError:
+        logger.warning("invalid AUTOPILOT_SEED_ROLE_CONCURRENCY=%r; using auto", raw)
+        return max(1, n_roles)
+
+
+def _can_add_role_to_seed_wave(role_name: str, wave_roles: list[str]) -> bool:
+    if not wave_roles:
+        return True
+
+    role_port = ROLE_PORT.get(role_name, 0)
+    if role_port and any(ROLE_PORT.get(r, 0) == role_port for r in wave_roles):
+        return False
+
+    # _eval_single_config still contains a legacy all-heavy-port idle barrier.
+    # Keep at most one heavy-port role per wave so the new fan-out does not
+    # race that preflight or erase another heavy request's slots.
+    if role_port in HEAVY_PORTS and any(ROLE_PORT.get(r, 0) in HEAVY_PORTS for r in wave_roles):
+        return False
+
+    try:
+        from src.scheduling.contention import PairDecision, TrafficClass, nway_policy, pair_policy
+        for active_role in wave_roles:
+            if pair_policy(role_name, active_role, TrafficClass.BACKGROUND) != PairDecision.ALLOW:
+                return False
+        if nway_policy([*wave_roles, role_name], TrafficClass.BACKGROUND) != PairDecision.ALLOW:
+            return False
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "seed concurrency matrix check failed for %s+%s: %s",
+            role_name,
+            wave_roles,
+            exc,
+        )
+        return False
+
+    return True
+
+
+def _seed_role_waves(eval_roles: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    limit = _seed_role_concurrency_limit(len(eval_roles))
+    if limit <= 1:
+        return [[r] for r in eval_roles]
+
+    waves: list[list[dict[str, Any]]] = []
+    wave_names: list[list[str]] = []
+    for role_info in eval_roles:
+        role_name = role_info["name"]
+        placed = False
+        for idx, names in enumerate(wave_names):
+            if len(names) >= limit:
+                continue
+            if _can_add_role_to_seed_wave(role_name, names):
+                waves[idx].append(role_info)
+                names.append(role_name)
+                placed = True
+                break
+        if not placed:
+            waves.append([role_info])
+            wave_names.append([role_name])
+    return waves
+
+
+def _seed_queue_allowance_s() -> int:
+    try:
+        return max(0, int(os.environ.get("AUTOPILOT_SEED_QUEUE_ALLOWANCE_S", "90")))
+    except (TypeError, ValueError):
+        return 90
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _seed_request_timeout_s(inference_timeout_s: int) -> int:
+    """Total client wait budget for a background seed request.
+
+    The shared /chat contract clamps actual role execution to registry role
+    timeout, so adding queue allowance here gives background requests room to
+    sit at admission gates without changing API behavior.
+    """
+    return min(600, max(1, int(inference_timeout_s) + _seed_queue_allowance_s()))
+
+
+def _role_base_timeout_s(role_info: dict[str, Any], fallback_timeout_s: int) -> int:
+    raw = role_info.get("timeout_s") or fallback_timeout_s or DEFAULT_TIMEOUT
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return max(1, int(fallback_timeout_s or DEFAULT_TIMEOUT))
+
+
+def _seed_telemetry_mode(mode: str) -> str:
+    return mode or "natural"
+
+
+def _is_timeout_result(rr: RoleResult, request_timeout_s: int) -> bool:
+    err = (rr.error or "").lower()
+    if "timeout" in err or "timed out" in err or "readtimeout" in err:
+        return True
+    return bool(
+        rr.error_type == "infrastructure"
+        and rr.elapsed_seconds >= max(request_timeout_s - 15, 5)
+    )
 
 
 def _log_delegation_diag(log_label: str, diag: dict[str, Any]) -> None:
@@ -837,6 +959,7 @@ def evaluate_question_per_role(
     role_results: dict[str, RoleResult] = {}
     rewards: dict[str, float] = {}
     cost_metrics: dict[str, dict] = {}
+    skipped_roles: dict[str, str] = {}
 
     # Filter roles for VL capability
     if is_vl:
@@ -857,20 +980,43 @@ def evaluate_question_per_role(
         ", ".join(r["name"] for r in eval_roles),
     )
 
-    for role_info in eval_roles:
-        if state.shutdown:
-            break
+    waves = _seed_role_waves(eval_roles)
+    if len(waves) > 1 or any(len(w) > 1 for w in waves):
+        logger.info(
+            "  Seed role waves: %s",
+            " | ".join("+".join(r["name"] for r in wave) for wave in waves),
+        )
 
+    question_start = time.perf_counter()
+    per_question_budget_s = _env_float("SEEDING_PER_QUESTION_BUDGET_S", 600.0)
+    roles_started = 0
+
+    def _run_role(
+        role_info: dict[str, Any],
+        role_client: "httpx.Client",
+    ) -> tuple[str, RoleResult, dict, int, int, str]:
         role_name = role_info["name"]
+        telemetry_mode = _seed_telemetry_mode("")
 
-        # Adaptive timeout per role
+        base_timeout = _role_base_timeout_s(role_info, timeout)
+        # Adaptive timeout per role. Base comes from model_registry.yaml;
+        # telemetry may raise it if observed P95 needs more headroom.
+        role_timeout = _telemetry_timeout(role_name, telemetry_mode, base_timeout)
         role_timeout = _adaptive_timeout_s(
             role=role_name,
             mode="repl",  # Conservative default for timeout estimation
             prompt=prompt,
             is_vl=is_vl,
-            hard_timeout_s=timeout,
+            hard_timeout_s=role_timeout,
         )
+        request_timeout = _seed_request_timeout_s(role_timeout)
+        if request_timeout != role_timeout:
+            logger.info(
+                "  → %s timeout budget: inference=%ss total_with_queue=%ss",
+                role_name,
+                role_timeout,
+                request_timeout,
+            )
 
         rr, resp = _eval_single_config(
             prompt=prompt,
@@ -880,31 +1026,133 @@ def evaluate_question_per_role(
             role=role_name,
             mode="",                  # Natural mode — orchestrator decides
             url=url,
-            timeout=role_timeout,
-            client=client,
+            timeout=request_timeout,
+            client=role_client,
             allow_delegation=True,    # All roles can delegate/escalate
             image_path=image_path,
             log_label=role_name,
             watcher=watcher,
         )
 
-        role_results[role_name] = rr
+        return role_name, rr, resp, role_timeout, request_timeout, telemetry_mode
 
-        # Cost metrics for this role
-        cost_metrics[role_name] = {
-            "elapsed_seconds": rr.elapsed_seconds,
-            "tokens_generated": rr.tokens_generated,
-            "predicted_tps": rr.predicted_tps,
-            "prompt_eval_ms": rr.prompt_eval_ms,
-            "generation_ms": rr.generation_ms,
-            "tools_used": rr.tools_used,
-        }
+    for wave in waves:
+        if state.shutdown:
+            break
 
-        # Binary reward (skip infrastructure errors)
-        if rr.error_type == "infrastructure":
-            logger.info("    [INFRA_SKIP] %s", role_name)
+        if roles_started > 0 and per_question_budget_s > 0:
+            spent = time.perf_counter() - question_start
+            if spent >= per_question_budget_s:
+                for role_info in wave:
+                    skipped_roles[role_info["name"]] = (
+                        f"question budget exhausted ({spent:.0f}s >= {per_question_budget_s:.0f}s)"
+                    )
+                logger.info(
+                    "  → remaining seed roles SKIPPED — question budget exhausted "
+                    "(%.0fs >= %.0fs)",
+                    spent,
+                    per_question_budget_s,
+                )
+                continue
+
+        runnable_wave: list[dict[str, Any]] = []
+        for role_info in wave:
+            role_name = role_info["name"]
+            telemetry_mode = _seed_telemetry_mode("")
+            skip, reason = _telemetry_should_skip(role_name, telemetry_mode)
+            if skip:
+                skipped_roles[role_name] = reason
+                logger.info("  → %s SKIPPED — %s", role_name, reason)
+                continue
+
+            port = ROLE_PORT.get(role_name, 0)
+            if port in HEAVY_PORTS and roles_started > 0:
+                pressure, why = _telemetry_lock_pressure(min_holder_age_s=60.0)
+                if pressure:
+                    skipped_roles[role_name] = f"heavy lock pressure: {why}"
+                    logger.info(
+                        "  → %s SKIPPED — heavy lock under pressure (%s)",
+                        role_name,
+                        why,
+                    )
+                    continue
+
+            runnable_wave.append(role_info)
+
+        if not runnable_wave:
+            continue
+
+        wave_outputs: dict[str, tuple[RoleResult, dict, int, int, str]] = {}
+        if len(runnable_wave) <= 1:
+            role_name, rr, resp, role_timeout, request_timeout, telemetry_mode = _run_role(
+                runnable_wave[0],
+                client,
+            )
+            wave_outputs[role_name] = (rr, resp, role_timeout, request_timeout, telemetry_mode)
+            roles_started += 1
         else:
-            rewards[role_name] = success_reward(rr.passed)
+            max_workers = min(len(runnable_wave), _seed_role_concurrency_limit(len(eval_roles)))
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="seed-role",
+            ) as ex:
+                futs: dict[
+                    concurrent.futures.Future[tuple[str, RoleResult, dict, int, int, str]],
+                    str,
+                ] = {}
+                for role_info in runnable_wave:
+                    role_name = role_info["name"]
+
+                    def _worker(
+                        ri: dict[str, Any],
+                    ) -> tuple[str, RoleResult, dict, int, int, str]:
+                        import httpx
+
+                        with httpx.Client(timeout=max(timeout, DEFAULT_TIMEOUT)) as role_client:
+                            return _run_role(ri, role_client)
+
+                    futs[ex.submit(_worker, role_info)] = role_name
+                for fut in concurrent.futures.as_completed(futs):
+                    role_name, rr, resp, role_timeout, request_timeout, telemetry_mode = (
+                        fut.result()
+                    )
+                    wave_outputs[role_name] = (
+                        rr,
+                        resp,
+                        role_timeout,
+                        request_timeout,
+                        telemetry_mode,
+                    )
+                    roles_started += 1
+
+        for role_info in runnable_wave:
+            role_name = role_info["name"]
+            rr, resp, role_timeout, request_timeout, telemetry_mode = wave_outputs[role_name]
+            role_results[role_name] = rr
+            _telemetry_record(
+                role_name,
+                telemetry_mode,
+                rr.elapsed_seconds,
+                _is_timeout_result(rr, request_timeout),
+            )
+
+            # Cost metrics for this role
+            cost_metrics[role_name] = {
+                "elapsed_seconds": rr.elapsed_seconds,
+                "tokens_generated": rr.tokens_generated,
+                "predicted_tps": rr.predicted_tps,
+                "prompt_eval_ms": rr.prompt_eval_ms,
+                "generation_ms": rr.generation_ms,
+                "tools_used": rr.tools_used,
+                "inference_timeout_s": role_timeout,
+                "request_timeout_s": request_timeout,
+            }
+
+            # Binary reward (skip infrastructure errors)
+            if rr.error_type == "infrastructure":
+                logger.info("    [INFRA_SKIP] %s", role_name)
+            else:
+                rewards[role_name] = success_reward(rr.passed)
 
     # Metadata
     metadata: dict[str, Any] = {
@@ -914,6 +1162,7 @@ def evaluate_question_per_role(
             rr.error_type == "infrastructure" for rr in role_results.values()
         ),
         "roles_tested": list(role_results.keys()),
+        "roles_skipped": skipped_roles,
     }
 
     # 2026-05-23 Phase 4 — surface aggregated exogenous-restart info so
