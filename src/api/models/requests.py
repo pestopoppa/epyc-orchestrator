@@ -27,9 +27,11 @@ class ChatRequest(BaseModel):
     )
     force_mode: str | None = Field(
         default=None,
-        description="Force execution mode ('direct', 'react', 'repl', or 'delegated'), "
+        description="Force execution mode ('direct', 'react', 'repl', 'delegated', or 'edit'), "
         "bypassing _select_mode heuristics. 'delegated' enables architect delegation "
-        "where the architect formulates investigation briefs for faster specialists.",
+        "where the architect formulates investigation briefs for faster specialists. "
+        "'edit' runs a one-shot transactional file edit (flag-gated ORCHESTRATOR_EDIT_TRANSACTION=1 "
+        "+ scoped ORCHESTRATOR_EDIT_ROOT; bypasses the multi-turn REPL loop for routine file edits).",
     )
     allow_delegation: bool | None = Field(
         default=None,

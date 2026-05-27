@@ -17,10 +17,20 @@ from __future__ import annotations
 
 import os
 import re
-import py_compile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+# Safety caps on how much the model is shown / can rewrite in ONE transaction when target_files is
+# not explicitly scoped (review finding 2026-05-27). Generous but bounded — prevents an unscoped
+# whole-repo root from silently producing a giant prompt + wide rewrite surface. Callers can pass
+# explicit target_files or raise the caps for larger scopes.
+DEFAULT_MAX_FILES = 50
+DEFAULT_MAX_BYTES = 400_000
+
+
+class EditScopeError(Exception):
+    """Assembled edit context exceeds the file/byte caps — fail-closed (no model call, no writes)."""
 
 # Full-file replacement is the proven-easy shape (ablation 5/5). The fenced-block form is a fallback
 # in case the model emits markdown despite the instructions.
@@ -62,9 +72,13 @@ def parse_edit_response(text: str | None) -> tuple[dict[str, str], list[str]]:
     return files, deletes
 
 
-def assemble_context(root: Path | str, target_files: list[str] | None = None) -> dict[str, str]:
+def assemble_context(root: Path | str, target_files: list[str] | None = None, *,
+                     max_files: int = DEFAULT_MAX_FILES, max_bytes: int = DEFAULT_MAX_BYTES
+                     ) -> dict[str, str]:
     """Gather current file contents to give the model. Explicit target_files if known, else all
-    non-.git files under root."""
+    non-.git files under root. Fail-closed (raise EditScopeError) if the result exceeds the
+    file/byte caps, so an unscoped whole-repo root can't silently produce a giant prompt / wide
+    rewrite surface."""
     root = Path(root)
     if target_files:
         names = list(target_files)
@@ -72,13 +86,21 @@ def assemble_context(root: Path | str, target_files: list[str] | None = None) ->
         names = [str(p.relative_to(root)) for p in sorted(root.rglob("*"))
                  if p.is_file() and ".git" not in p.parts]
     out: dict[str, str] = {}
+    total = 0
     for rel in names:
         p = _safe_join(root, rel)
         if p and p.is_file():
             try:
-                out[rel] = p.read_text()
+                content = p.read_text()
             except Exception:
-                pass
+                continue
+            out[rel] = content
+            total += len(content.encode("utf-8", "ignore"))
+    if len(out) > max_files or total > max_bytes:
+        raise EditScopeError(
+            f"edit scope too large: {len(out)} file(s) / {total} bytes exceeds caps "
+            f"({max_files} files / {max_bytes} bytes) — pass explicit target_files or raise the caps."
+        )
     return out
 
 
@@ -116,6 +138,11 @@ def apply_edit_transaction(root: Path | str, files: dict[str, str], deletes: lis
     for d in deletes:
         p = _safe_join(root, d)
         (plan_del.append(p) if p is not None else rejected.append(d))
+    if rejected:
+        # Any unsafe (escape/absolute) path aborts the WHOLE transaction — fail-closed, nothing
+        # written. Preserves the all-or-nothing safety claim for an agent-facing edit surface.
+        return EditResult(ok=False, rejected=rejected,
+                          error=f"unsafe path(s) rejected — transaction aborted: {rejected}")
     if not plan_write and not plan_del:
         return EditResult(ok=False, rejected=rejected, error="no valid file blocks parsed from model output")
 
@@ -141,7 +168,9 @@ def apply_edit_transaction(root: Path | str, files: dict[str, str], deletes: lis
         if self_check:
             for p in plan_write:
                 if p.suffix == ".py":
-                    py_compile.compile(str(p), doraise=True)
+                    # syntax-only check WITHOUT __pycache__/*.pyc side effects (snapshot/rollback
+                    # only tracks planned paths). compile() raises SyntaxError on bad input.
+                    compile(plan_write[p], str(p), "exec")
     except Exception as e:  # syntax error, IO error, etc. -> atomic rollback
         rollback()
         return EditResult(ok=False, rejected=rejected, error=f"{type(e).__name__}: {e}")
@@ -161,7 +190,10 @@ def run_edit_transaction(llm_call: Callable[[str], str], task_prompt: str, root:
     """End-to-end: assemble -> one-shot prompt -> single model call -> parse -> transactional apply.
     `llm_call` is any prompt->text callable (orchestrator primitives, or a direct chat client).
     Returns (EditResult, raw_model_output). The caller auto-finalizes (FINAL) on result.ok."""
-    files_ctx = assemble_context(root, target_files)
+    try:
+        files_ctx = assemble_context(root, target_files)
+    except EditScopeError as e:
+        return EditResult(ok=False, error=str(e)), ""  # fail-closed: no model call, no writes
     raw = llm_call(build_edit_prompt(task_prompt, files_ctx)) or ""
     new_files, deletes = parse_edit_response(raw)
     return apply_edit_transaction(root, new_files, deletes, self_check=self_check), raw

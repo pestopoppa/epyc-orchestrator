@@ -5,9 +5,12 @@ path-safety, and the end-to-end run() with a stub LLM. No inference.
 """
 from __future__ import annotations
 
+import pytest
+
 from src.edit_transaction import (
     parse_edit_response, apply_edit_transaction, assemble_context, build_edit_prompt,
     run_edit_transaction, edit_transaction_enabled, _safe_join,
+    EditScopeError, DEFAULT_MAX_BYTES,
 )
 
 
@@ -66,11 +69,15 @@ def test_apply_nothing_parsed(tmp_path):
 
 
 # ── path safety ────────────────────────────────────────────────────────
-def test_path_escape_rejected(tmp_path):
+def test_path_escape_aborts_whole_transaction(tmp_path):
+    # FAIL-CLOSED (review #4): any unsafe path aborts the ENTIRE transaction — even the safe edit is
+    # not applied, preserving the all-or-nothing safety claim for an agent-facing edit surface.
     res = apply_edit_transaction(tmp_path, {"../escape.py": "X=1\n", "/abs_escape.py": "Y=1\n",
                                             "ok.py": "Z=1\n"}, [])
+    assert not res.ok
     assert "../escape.py" in res.rejected and "/abs_escape.py" in res.rejected
-    assert res.ok and res.written == ["ok.py"]            # the safe one applied
+    assert res.written == []                              # nothing applied
+    assert not (tmp_path / "ok.py").exists()              # the safe one was NOT written either
     assert not (tmp_path.parent / "escape.py").exists()   # escape did not write outside
 
 
@@ -110,3 +117,43 @@ def test_flag_default_off(monkeypatch):
     assert edit_transaction_enabled() is False
     monkeypatch.setenv("ORCHESTRATOR_EDIT_TRANSACTION", "1")
     assert edit_transaction_enabled() is True
+
+
+# ── review-hardening 2026-05-27: scope caps (#1) + no-__pycache__ self-check (#3) ──────
+def test_assemble_caps_filecount(tmp_path):
+    for i in range(5):
+        (tmp_path / f"f{i}.py").write_text("X=1\n")
+    assert len(assemble_context(tmp_path, max_files=10)) == 5     # within cap
+    with pytest.raises(EditScopeError):
+        assemble_context(tmp_path, max_files=3)                   # exceeds file cap -> fail-closed
+
+
+def test_assemble_caps_bytes(tmp_path):
+    (tmp_path / "big.py").write_text("X" * 1000)
+    with pytest.raises(EditScopeError):
+        assemble_context(tmp_path, max_bytes=100)                 # exceeds byte cap -> fail-closed
+
+
+def test_run_edit_transaction_failclosed_on_oversized_scope(tmp_path):
+    # Unscoped whole-root assembly over caps must fail-closed BEFORE calling the model or writing.
+    (tmp_path / "big.py").write_text("X" * (DEFAULT_MAX_BYTES + 1))
+    called = {"n": 0}
+
+    def stub(prompt):
+        called["n"] += 1
+        return "<<<FILE: big.py>>>\nY = 2\n<<<END>>>"
+
+    res, _raw = run_edit_transaction(stub, "edit", tmp_path, target_files=None)
+    assert not res.ok and "scope too large" in res.error
+    assert called["n"] == 0                                       # model NOT called
+    assert (tmp_path / "big.py").read_text().startswith("XXXX")   # original untouched
+
+
+def test_self_check_no_pycache_side_effect(tmp_path):
+    # compile(source, path, "exec") validates syntax WITHOUT writing __pycache__/*.pyc that the
+    # snapshot/rollback wouldn't track.
+    (tmp_path / "m.py").write_text("OLD = 1\n")
+    res = apply_edit_transaction(tmp_path, {"m.py": "NEW = 2\n"}, [])
+    assert res.ok
+    assert not (tmp_path / "__pycache__").exists()
+    assert list(tmp_path.rglob("*.pyc")) == []

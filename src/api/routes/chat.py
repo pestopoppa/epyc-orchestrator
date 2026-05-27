@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, AsyncGenerator
 
 log = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from src.api.dependencies import dep_app_state
@@ -287,13 +287,8 @@ async def _try_cheap_first(
 
         # 2026-05-23: skip template wrap when cheap_role routes through
         # /v1/chat/completions (server-side jinja handles templating).
-        import os as _os_cc
-        _cc_roles = {
-            r.strip() for r in _os_cc.environ.get(
-                "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES",
-                "worker_general,worker_explore,worker_math,worker_summarize,worker_coder",
-            ).split(",") if r.strip()
-        }
+        from src.chat_completions_roles import chat_completions_roles
+        _cc_roles = chat_completions_roles()  # shared SoT (was a divergent inline default)
         if cheap_role in _cc_roles:
             templated_prompt = prompt
         else:
@@ -457,7 +452,7 @@ async def _handle_chat(
         initial_role = routing.routing_decision[0] if routing.routing_decision else Role.FRONTDOOR
 
         vision_roles = {"worker_vision", "vision_escalation"}
-        forced_mode = request.force_mode if request.force_mode in ("direct", "react", "repl", "delegated") else None
+        forced_mode = request.force_mode if request.force_mode in ("direct", "react", "repl", "delegated", "edit") else None
 
         # Vision-preprocessed requests need REPL document context unless an explicit
         # forced mode is set. For multi-file/document workflows we keep synthesis on
@@ -541,6 +536,69 @@ async def _handle_chat(
             if result is not None:
                 return _finalize(result)
 
+        # 8b2: Edit-transaction mode — one-shot full-file edit for ROUTINE file edits.
+        # Diagnosis 2026-05-27 (handoffs/active/multi-file-coding-completion-capability.md):
+        # the coding role solves these edits in ONE shot (one-shot ablation 5/5 on the same
+        # tasks+verifiers) but cannot reliably navigate the multi-turn REPL read->edit->FINAL
+        # loop. This bypasses that loop: assemble the workspace files -> ask the model ONCE for
+        # the complete new files -> apply transactionally (snapshot/write/compile-check/rollback)
+        # -> auto-finalize. The REPL stays for exploratory computation.
+        #   SAFETY: requires BOTH the flag (ORCHESTRATOR_EDIT_TRANSACTION=1) AND a scoped
+        #   task-root (ORCHESTRATOR_EDIT_ROOT pointing at the workspace) — without the scoped
+        #   root, assemble_context would read/rewrite the whole orchestrator repo. An EXPLICIT
+        #   force_mode="edit" with either precondition missing FAILS CLOSED (412) rather than
+        #   silently using the REPL path this work exists to avoid. Default-off => no prod change.
+        if execution_mode == "edit" and request.real_mode:
+            from src.edit_transaction import run_edit_transaction, edit_transaction_enabled
+            from src.repl_environment.task_root import task_root_active, get_task_root
+            from src.chat_completions_roles import chat_completions_roles
+
+            if not edit_transaction_enabled() or not task_root_active():
+                missing = []
+                if not edit_transaction_enabled():
+                    missing.append("ORCHESTRATOR_EDIT_TRANSACTION=1")
+                if not task_root_active():
+                    missing.append("a scoped ORCHESTRATOR_EDIT_ROOT directory")
+                raise HTTPException(
+                    status_code=412,
+                    detail="force_mode='edit' precondition not met: requires " + " and ".join(missing),
+                )
+
+            _et_cc_roles = chat_completions_roles()
+            _captured: dict = {}
+
+            def _edit_llm_call(edit_prompt: str) -> str:
+                # Same contract as the direct branch: template orchestrator-side unless the role
+                # routes through /v1/chat/completions (then llama-server --jinja applies it).
+                p = edit_prompt
+                if str(initial_role) not in _et_cc_roles:
+                    from src.api.routes.chat_utils import apply_chat_template_for_role
+                    p = apply_chat_template_for_role(
+                        str(initial_role), p, registry=getattr(state, "registry", None),
+                    )
+                req2 = (request.model_copy(update={"prompt": p})
+                        if hasattr(request, "model_copy") else request.copy(update={"prompt": p}))
+                resp = _execute_direct(req2, routing, primitives, state, start_time, initial_role)
+                _captured["resp"] = resp
+                return resp.answer or ""
+
+            edit_res, _raw = await asyncio.to_thread(
+                run_edit_transaction, _edit_llm_call, request.prompt, get_task_root(), None,
+            )
+            answer = (
+                edit_res.summary + (": " + ", ".join(edit_res.written) if edit_res.written else "")
+                if edit_res.ok else f"[edit-transaction failed] {edit_res.error}"
+            ) + (f"  (rejected unsafe paths: {edit_res.rejected})" if edit_res.rejected else "")
+            base = _captured.get("resp")
+            if base is not None:
+                upd = {"answer": answer, "mode": "edit"}
+                base = (base.model_copy(update=upd)
+                        if hasattr(base, "model_copy") else base.copy(update=upd))
+                return _finalize(base)
+            # The model was never called (e.g., scope exceeded caps -> fail-closed); surface the
+            # error instead of silently falling through to the REPL path.
+            raise HTTPException(status_code=422, detail=answer)
+
         # 8c: Direct LLM call mode
         if execution_mode == "direct" and request.real_mode:
             # Per-role chat-template application (replaces the prior hardcoded
@@ -558,13 +616,8 @@ async def _handle_chat(
             # --jinja flag will apply the GGUF's chat template server-side.
             # Pre-templating would inject our template markers as literal
             # user content, confusing the model.
-            import os as _os_cc
-            _cc_roles = {
-                r.strip() for r in _os_cc.environ.get(
-                    "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES",
-                    "worker_general,worker_explore,worker_math,worker_summarize,worker_coder",
-                ).split(",") if r.strip()
-            }
+            from src.chat_completions_roles import chat_completions_roles
+            _cc_roles = chat_completions_roles()  # shared SoT (was a divergent inline default)
             if str(initial_role) not in _cc_roles:
                 from src.api.routes.chat_utils import apply_chat_template_for_role
                 request.prompt = apply_chat_template_for_role(

@@ -39,14 +39,8 @@ class BackendMixin:
             # 2643 tokens / 4 turns thinking-on — ~10x fewer tokens, single turn. (An earlier
             # "0 tokens" reading was a max_turns=1 probe artifact, not a backend bug.)
             # ingest_long_context is EXCLUDED — thinking-on is load-bearing for Qwen3-Next-80B.
-            _ccl_raw = _os.environ.get(
-                "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES",
-                "worker_general,worker_explore,worker_math,worker_summarize,worker_coder,"
-                "frontdoor,coder_escalation,architect_general",
-            )
-            _chat_completion_roles = {
-                r.strip() for r in _ccl_raw.split(",") if r.strip()
-            }
+            from src.chat_completions_roles import chat_completions_roles
+            _chat_completion_roles = chat_completions_roles()  # shared SoT (was a divergent inline default)
             if _chat_completion_roles:
                 _log.info(
                     "Roles using /v1/chat/completions backend: %s",
