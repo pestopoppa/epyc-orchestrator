@@ -85,22 +85,33 @@ def assemble_context(root: Path | str, target_files: list[str] | None = None, *,
     else:
         names = [str(p.relative_to(root)) for p in sorted(root.rglob("*"))
                  if p.is_file() and ".git" not in p.parts]
-    out: dict[str, str] = {}
-    total = 0
-    for rel in names:
-        p = _safe_join(root, rel)
-        if p and p.is_file():
-            try:
-                content = p.read_text()
-            except Exception:
-                continue
-            out[rel] = content
-            total += len(content.encode("utf-8", "ignore"))
-    if len(out) > max_files or total > max_bytes:
+    # Bound the scope BEFORE reading any content (review #2): resolve + count candidates, then
+    # sum stat().st_size, failing closed early so a huge scoped root never loads oversized content
+    # into memory. Only after the caps pass do we read file bodies.
+    safe = [(rel, p) for rel in names
+            if (p := _safe_join(root, rel)) is not None and p.is_file()]
+    if len(safe) > max_files:
         raise EditScopeError(
-            f"edit scope too large: {len(out)} file(s) / {total} bytes exceeds caps "
-            f"({max_files} files / {max_bytes} bytes) — pass explicit target_files or raise the caps."
+            f"edit scope too large: {len(safe)} file(s) exceeds cap ({max_files}) "
+            f"— pass explicit target_files or raise the cap."
         )
+    total = 0
+    for _rel, p in safe:
+        try:
+            total += p.stat().st_size
+        except OSError:
+            continue
+        if total > max_bytes:
+            raise EditScopeError(
+                f"edit scope too large: >{max_bytes} bytes (by stat) "
+                f"— pass explicit target_files or raise the cap."
+            )
+    out: dict[str, str] = {}
+    for rel, p in safe:
+        try:
+            out[rel] = p.read_text()
+        except Exception:
+            continue
     return out
 
 

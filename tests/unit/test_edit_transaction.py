@@ -134,6 +134,16 @@ def test_assemble_caps_bytes(tmp_path):
         assemble_context(tmp_path, max_bytes=100)                 # exceeds byte cap -> fail-closed
 
 
+def test_caps_bound_via_stat_without_reading(tmp_path, monkeypatch):
+    # #2: oversized scope is rejected via stat().st_size, WITHOUT loading file content into memory.
+    import pathlib
+    (tmp_path / "big.py").write_text("X" * 1000)
+    monkeypatch.setattr(pathlib.Path, "read_text",
+                        lambda self, *a, **k: pytest.fail("read_text called despite oversized scope"))
+    with pytest.raises(EditScopeError):
+        assemble_context(tmp_path, max_bytes=100)
+
+
 def test_run_edit_transaction_failclosed_on_oversized_scope(tmp_path):
     # Unscoped whole-root assembly over caps must fail-closed BEFORE calling the model or writing.
     (tmp_path / "big.py").write_text("X" * (DEFAULT_MAX_BYTES + 1))
