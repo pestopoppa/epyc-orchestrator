@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import statistics
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,11 @@ REGRESSION_THRESHOLD = -0.05  # Max quality drop vs baseline (fraction of baseli
 PER_SUITE_REGRESSION = -0.1  # Max per-suite quality drop
 ARCHITECT_ROUTING_CAP = 0.80  # Max fraction routed to architect-tier
 MAX_CONSECUTIVE_FAILURES = 3  # Auto-rollback after this many failures
+# MAD noise filter (intake-421 pi-autoresearch). Quality history depth + significance threshold.
+MAD_HISTORY_DEPTH = 10
+MAD_MIN_SAMPLES = 3  # Below this, skip MAD check (insufficient data → accept)
+MAD_Z_THRESHOLD = 2.0  # Improvement counts as real only if > this many MADs from history median
+MAD_CONSISTENCY = 1.4826  # Scaling so MAD ≈ σ under normal distribution
 
 
 @dataclass
@@ -219,13 +226,37 @@ class SafetyGate:
         self,
         baseline_path: Path | None = None,
         consecutive_failures: int = 0,
+        quality_history: list[float] | None = None,
     ):
         self.baseline = Baseline.load(baseline_path)
         self._consecutive_failures = consecutive_failures
+        self._quality_history: deque[float] = deque(
+            quality_history or [], maxlen=MAD_HISTORY_DEPTH
+        )
 
     @property
     def consecutive_failures(self) -> int:
         return self._consecutive_failures
+
+    @property
+    def quality_history(self) -> list[float]:
+        """Return current rolling quality window (for state persistence)."""
+        return list(self._quality_history)
+
+    def _mad_significance(self, new_quality: float) -> tuple[bool, float, float, float]:
+        """Decide whether ``new_quality`` is statistically significant vs history.
+
+        Returns (is_significant, z_mad, median, mad). When history < MAD_MIN_SAMPLES,
+        returns (True, NaN, NaN, NaN) — insufficient data to filter, accept at face value.
+        """
+        if len(self._quality_history) < MAD_MIN_SAMPLES:
+            return True, math.nan, math.nan, math.nan
+        median_q = statistics.median(self._quality_history)
+        mad = statistics.median(abs(x - median_q) for x in self._quality_history)
+        if mad == 0:
+            return (new_quality != median_q), math.nan, median_q, 0.0
+        z_mad = abs(new_quality - median_q) / (mad * MAD_CONSISTENCY)
+        return z_mad > MAD_Z_THRESHOLD, z_mad, median_q, mad
 
     def check(self, result: EvalResult) -> SafetyVerdict:
         """Run all safety checks on an eval result."""
@@ -256,6 +287,23 @@ class SafetyGate:
                     f"Slight quality drop: {result.quality:.3f} vs baseline {baseline_q:.3f} "
                     f"({relative_delta:+.1%})"
                 )
+            else:
+                # Improvement or no change — apply MAD noise filter (intake-421).
+                # Robust against outliers; only fires once history has MAD_MIN_SAMPLES.
+                # DIAGNOSTIC ONLY: this never blocks and does not currently gate
+                # downstream learning paths (autopilot.py records the trial and
+                # runs meta-learning regardless). Wire `"mad_noise" in
+                # verdict.categories` into the meta-learning short-circuits if
+                # learning-exclusion is desired.
+                is_sig, z_mad, median_q, mad = self._mad_significance(result.quality)
+                if not is_sig and not math.isnan(z_mad):
+                    warnings.append(
+                        f"Improvement within noise (MAD filter): q={result.quality:.3f} "
+                        f"vs history median {median_q:.3f} (MAD={mad:.4f}, z={z_mad:.2f}, "
+                        f"threshold={MAD_Z_THRESHOLD}); flag for diagnostic review — "
+                        f"trial is still recorded and learned from."
+                    )
+                    categories.append("mad_noise")
 
         # 3. Per-suite regression
         for suite, quality in result.per_suite_quality.items():
@@ -357,6 +405,13 @@ class SafetyGate:
             self._consecutive_failures += 1
         else:
             self._consecutive_failures = 0
+
+        # Record this trial's quality in the rolling window (after the verdict
+        # so the current measurement doesn't bias its own significance test).
+        # Skip if quality is nonsensical (NaN / negative) to keep the noise
+        # estimate clean.
+        if not math.isnan(result.quality) and result.quality >= 0:
+            self._quality_history.append(result.quality)
 
         return verdict
 

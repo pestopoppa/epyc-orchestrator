@@ -768,6 +768,7 @@ def _run_loop_inner(
     archive = ParetoArchive()
     gate = SafetyGate(
         consecutive_failures=state.get("consecutive_failures", 0),
+        quality_history=state.get("quality_history", []),
     )
     tower = EvalTower(
         url=ORCHESTRATOR_URL,
@@ -1608,6 +1609,7 @@ def _run_loop_inner(
         trial_counter += 1
         state["trial_counter"] = trial_counter
         state["consecutive_failures"] = gate.consecutive_failures
+        state["quality_history"] = gate.quality_history
         archive.save(state)
         save_state(state)
 
