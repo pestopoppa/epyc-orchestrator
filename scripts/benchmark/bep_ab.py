@@ -89,6 +89,10 @@ def _restart_api(batch_edit_mode: bool, edit_root: Path) -> bool:
         "ORCHESTRATOR_INTERLEAVED_EDIT_RIDER": "0" if batch_edit_mode else "1",
         "ORCHESTRATOR_EDIT_ROOT": str(edit_root),
         "ORCHESTRATOR_BEP_TURN_TRACE": "1",  # (c) capture per-turn model output as artifacts
+        # REPL loop-guard (2026-05-27): fence-repair + identical-turn breaker that fix the
+        # multi-file read-loop / FINAL-truncation both arms hit. Enabled for BOTH arms so the
+        # A/B measures interleaved-vs-batched on a non-looping harness, not loop-vs-loop.
+        "ORCHESTRATOR_REPL_LOOP_GUARD": "1",
     }
     r = subprocess.run(
         [sys.executable, "scripts/server/orchestrator_stack.py", "reload", "orchestrator"],

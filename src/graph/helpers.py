@@ -171,6 +171,36 @@ def _bep_turn_trace(turn: int, role: object, raw_output: str, code: str | None =
         pass
 
 
+def _repl_loop_guard_enabled() -> bool:
+    """REPL loop-guard (default-off): fence-repair for FINAL/CALL-truncated code blocks +
+    identical-non-advancing-turn breaker. Gated on ORCHESTRATOR_REPL_LOOP_GUARD=1 so the
+    CRITICAL `_execute_turn` path is a true no-op in production until the BEP A/B validates it."""
+    import os
+    return os.environ.get("ORCHESTRATOR_REPL_LOOP_GUARD") == "1"
+
+
+def _repair_unclosed_code_fence(text: str) -> str:
+    """Fix A: the FINAL(/CALL( early-stop aborts streaming the instant it fires — which can
+    happen *inside* an open ```fence, before the model emits the closing ```. That leaves an
+    unclosed block, the extractor returns nothing, and the model re-emits the identical turn
+    until timeout. An odd count of ``` markers means the last fence is unclosed → append one."""
+    if text and text.count("```") % 2 == 1:
+        return text.rstrip() + "\n```\n"
+    return text
+
+
+def _loop_guard_repeat(prev_raw: str | None, cur_raw: str, has_final: bool, prev_count: int) -> int:
+    """Fix B counter (pure): the REPL silently re-prompts on a non-advancing turn, so a model
+    that re-emits the identical action (e.g. the same `peek()` read, or an unknown-tool CALL)
+    loops until the turn budget burns out. Return the updated identical-turn count — incremented
+    when this turn's raw output equals the previous turn's and no FINAL was emitted, else reset."""
+    cur = (cur_raw or "").strip()
+    prev = (prev_raw or "").strip()
+    if cur and prev and cur == prev and not has_final:
+        return prev_count + 1
+    return 0
+
+
 # ── Shared helpers ─────────────────────────────────────────────────────
 
 
@@ -689,6 +719,16 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     if budget_warnings:
         prompt += "\n\n" + budget_warnings
 
+    # REPL loop-guard (Fix B, flag-gated default-off): if the model repeated an identical
+    # non-advancing turn, say so explicitly — silent re-prompting otherwise loops until the
+    # turn budget burns out (the "timeout" seen on BEP multi-file + unknown-tool tasks).
+    if _repl_loop_guard_enabled() and getattr(state, "_repl_repeat_count", 0) >= 1:
+        prompt += (
+            "\n\n** LOOP DETECTED: your last turn emitted code identical to the turn before it "
+            "and the task did not advance. Do NOT repeat it. If you already read what you need, "
+            "act on it now — write the result with file_write_safe(...) — or call FINAL(...)."
+        )
+
     # Graduated FINAL() nudge: midpoint soft reminder, then hard deadline.
     remaining = state.max_turns - state.turns
     if remaining <= 3:
@@ -901,8 +941,22 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
     # Extract and wrap code
     from src.prompt_builders import extract_code_from_response, auto_wrap_final
 
+    # REPL loop-guard Fix A (flag-gated): close an unclosed ``` fence left by the FINAL/CALL
+    # early-stop so the extractor can recover the block instead of returning nothing.
+    if _repl_loop_guard_enabled():
+        code = _repair_unclosed_code_fence(code)
+
     code = extract_code_from_response(code)
     code = auto_wrap_final(code)
+
+    # REPL loop-guard Fix B (flag-gated): track identical non-advancing turns so the next
+    # prompt build can inject the loop-detected nudge above (default-off → no-op in prod).
+    if _repl_loop_guard_enabled():
+        state._repl_repeat_count = _loop_guard_repeat(  # type: ignore[attr-defined]
+            getattr(state, "_repl_last_raw", None), raw_llm_output, "FINAL(" in code,
+            getattr(state, "_repl_repeat_count", 0),
+        )
+        state._repl_last_raw = (raw_llm_output or "").strip()  # type: ignore[attr-defined]
 
     # Persist extracted code for incremental editing on error/escalation
     state.last_code = code
