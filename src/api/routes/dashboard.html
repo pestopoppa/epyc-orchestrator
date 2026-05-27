@@ -129,7 +129,7 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     backdrop-filter: blur(8px);
 }
 
-/* Counters */
+/* Autopilot run strip */
 .counters {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -142,6 +142,7 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     border-radius: var(--radius);
     padding: 12px 16px;
     transition: border-color .15s, transform .15s;
+    min-width: 0;
 }
 .counter:hover { border-color: var(--border-strong); }
 .counter .label {
@@ -154,6 +155,15 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
     letter-spacing: -0.02em;
 }
 .counter .sub { color: var(--dim); font-size: 11px; margin-top: 2px; }
+.counter .sub strong { color: var(--muted); font-weight: 600; }
+.counter .value.small {
+    font-size: 19px;
+    letter-spacing: 0;
+}
+.counter .value.good { color: var(--good); }
+.counter .value.warn { color: var(--warn); }
+.counter .value.bad { color: var(--bad); }
+.counter .value.muted { color: var(--muted); }
 
 /* Compact topology strip — each role on its own row.
    Grid: role-name | port | activity-stats | slot-dots
@@ -275,6 +285,12 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
 }
 .task-card.tap-derived:hover {
     background: rgba(168,85,247,0.08);
+}
+.task-card .live-tap-state {
+    float: right;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    font-weight: 500;
 }
 
 /* Tags */
@@ -402,7 +418,21 @@ details.tap-section .tap-detail-link {
     cursor: pointer;
 }
 details.tap-section:hover .tap-detail-link { opacity: 1; }
-details.tap-section .section-body { padding: 0 14px 12px 14px; }
+details.tap-section .section-body {
+    padding: 0 14px 12px 14px;
+    max-height: min(70vh, 680px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+details.tap-section .tap-box-label {
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 4px;
+}
+details.tap-section .tap-box-label.response-label { margin-top: 10px; }
 
 /* Content blocks */
 .prompt-text, .stream-text, .tap-content {
@@ -438,6 +468,12 @@ details.tap-section .section-body { padding: 0 14px 12px 14px; }
     font-size: 12px;
 }
 .prompt-text p, .stream-text p, .tap-content p { margin: 6px 0; }
+details.tap-section .tap-content.prompt-text {
+    max-height: min(34vh, 280px);
+}
+details.tap-section .tap-content.stream-text {
+    max-height: min(42vh, 360px);
+}
 
 /* Detail panel */
 #detail-panel {
@@ -474,6 +510,21 @@ details.tap-section .section-body { padding: 0 14px 12px 14px; }
 }
 #detail-content .stream-text.live::after {
     content: "▌"; animation: blink 1s infinite; color: var(--accent);
+}
+#detail-content .detail-box-label {
+    margin: 16px 0 8px 0;
+    color: var(--accent);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+}
+#detail-content .detail-box-label.response-label { margin-top: 18px; }
+#detail-content .prompt-text {
+    max-height: min(34vh, 300px);
+}
+#detail-content .stream-text {
+    max-height: min(48vh, 420px);
 }
 
 /* Detail actions */
@@ -589,7 +640,7 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
 
     <div class="panel">
       <h2>
-        <span class="live-dot"></span>
+        <span class="live-dot idle" id="region-locks-dot"></span>
         cpu region locks
         <span class="count-suffix" id="region-locks-status">— per-region cross-process lock state (Phase 5 / 2026-05-22)</span>
       </h2>
@@ -954,7 +1005,7 @@ function updateTopologyInflight(inflight) {
     const MAX_TAP_PER_ROLE = 8;
     const tapByBase = {};
     const structuredSrc = (Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [])
-        .filter(isLiveStructuredTapRequest)
+        .filter(isOpenStructuredTapRequest)
         .map(req => ({
         structured: true,
         request_id: req.request_id || '',
@@ -981,7 +1032,7 @@ function updateTopologyInflight(inflight) {
     tapSrc.forEach((s) => {
         if (!s.role) return;
         if (s.structured) {
-            if (!isLiveStructuredTapRequest(s)) return;
+            if (!isOpenStructuredTapRequest(s)) return;
         } else if (s.timings) {
             return;
         }
@@ -1212,29 +1263,123 @@ function updateTopology(activity, inflight) {
     }
 }
 
-function updateCounters(snap) {
+let _latestSnapshot = null;
+let _latestProcessStatus = null;
+let _latestAutopilotProgress = null;
+let _latestRegionLockSummary = { activeLockCount: 0, heldRegions: 0, enabled: null };
+
+function formatShortDuration(s) {
+    if (s == null || Number.isNaN(Number(s))) return '?';
+    const n = Math.max(0, Number(s));
+    if (n < 60) return `${Math.round(n)}s`;
+    if (n < 3600) return `${(n / 60).toFixed(n < 600 ? 1 : 0)}m`;
+    return `${(n / 3600).toFixed(n < 10 * 3600 ? 1 : 0)}h`;
+}
+
+function topStripCard(label, value, sub, valueClass = '') {
+    return `<div class="counter">
+        <div class="label">${escapeHTML(label)}</div>
+        <div class="value ${valueClass}">${value}</div>
+        <div class="sub">${sub}</div>
+    </div>`;
+}
+
+function renderAutopilotRunStrip() {
     const c = document.getElementById('counters');
+    if (!c) return;
+    const snap = _latestSnapshot || {};
+    const proc = _latestProcessStatus || {};
+    const ap = proc.autopilot || {};
+    const phase = proc.autopilot_phase || {};
+    const prog = _latestAutopilotProgress || {};
     const rolling = snap.source_counts_rolling || {};
     const cumulative = snap.source_counts_cumulative || {};
     const logCounts = snap.log_counts || {};
     const verdicts = rolling._verifier_verdicts || {};
-    const rollingTotal = Object.entries(rolling).filter(([k]) => !k.startsWith('_')).reduce((s, [_, v]) => s + (typeof v === 'number' ? v : 0), 0);
-    const cumTotal = Object.values(cumulative).reduce((a, b) => a + b, 0);
-    const classifierShare = rolling.classifier || 0;
-    c.innerHTML = `
-        <div class="counter"><div class="label">decisions (10m / today)</div>
-            <div class="value">${rollingTotal} <span class="sub">/ ${cumTotal}</span></div>
-            <div class="sub">cls:${rolling.classifier||0} learn:${rolling.learned||0} rules:${rolling.rules||0}</div></div>
-        <div class="counter"><div class="label">classifier share (rolling)</div>
-            <div class="value">${rollingTotal>0 ? Math.round(100*classifierShare/rollingTotal) : 0}%</div>
-            <div class="sub">${classifierShare} of ${rollingTotal}</div></div>
-        <div class="counter"><div class="label">verifier verdicts (rolling)</div>
-            <div class="value">${(verdicts.accept||0)}/${(verdicts.reject||0)}</div>
-            <div class="sub">accept / reject</div></div>
-        <div class="counter"><div class="label">lock events (today)</div>
-            <div class="value">${logCounts.inference_aborted||0}</div>
-            <div class="sub">aborts · ${logCounts.slot_erase||0} slot-erases</div></div>
-    `;
+    const completed = snap.recent_completed_tasks || [];
+
+    const lastLogAge = proc.last_autopilot_log_age_s;
+    let runState = 'waiting';
+    let runClass = 'muted';
+    if (!ap.running) {
+        runState = 'down';
+        runClass = 'bad';
+    } else if (lastLogAge != null && lastLogAge >= _AUTOPILOT_IDLE_S) {
+        runState = 'quiet';
+        runClass = 'warn';
+    } else {
+        runState = 'running';
+        runClass = 'good';
+    }
+    const workers = proc.gepa_worker_count || 0;
+    const phaseName = phase.phase || (ap.running ? 'phase unknown' : 'process down');
+    const runSub = ap.running
+        ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type ? ` · ${escapeHTML(String(phase.action_type))}` : ''}`
+        : `no process matching autopilot.py start`;
+
+    let trialValue = 'no trial';
+    let trialClass = 'muted small';
+    let trialSub = 'autopilot_progress has no in-flight trial';
+    if (prog.in_flight) {
+        trialValue = `#${escapeHTML(String(prog.trial_id ?? '?'))}`;
+        trialClass = prog.slow_tail ? 'warn' : 'small';
+        const action = prog.action_type || phase.action_type || '?';
+        const bits = [`${escapeHTML(String(action))}`, `elapsed ${formatShortDuration(prog.elapsed_s)}`];
+        if (prog.percent_source === 'log_tail' && prog.log_tail_progress) {
+            bits.push(`tower ${prog.log_tail_progress.completed}/${prog.log_tail_progress.total}`);
+            if (prog.expected_s != null) bits.push(`projected ${formatShortDuration(prog.expected_s)}`);
+        } else if ((prog.percent_source === 'action_p50' || prog.percent_source === 'aggregate_p50') && prog.now_percentile != null) {
+            bits.push(`p${Math.round(prog.now_percentile * 100)}${prog.slow_tail ? '+' : ''}`);
+            if (prog.recent_p50 != null) bits.push(`p50 ${formatShortDuration(prog.recent_p50)}`);
+            if (prog.recent_p90 != null) bits.push(`p90 ${formatShortDuration(prog.recent_p90)}`);
+        } else if (prog.percent != null) {
+            bits.push(`${Math.round(prog.percent)}%`);
+        }
+        trialSub = bits.join(' · ');
+    } else if (phase.trial_id != null) {
+        trialValue = `#${escapeHTML(String(phase.trial_id))}`;
+        trialClass = 'small';
+        trialSub = `${escapeHTML(String(phase.action_type || 'action unknown'))} · phase ${escapeHTML(String(phaseName))}`;
+    }
+
+    const openReqs = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
+    const activeReqs = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
+    const stateCounts = {};
+    for (const req of openReqs) {
+        const a = structuredTapActivity(req);
+        stateCounts[a.state] = (stateCounts[a.state] || 0) + 1;
+    }
+    const queued = stateCounts.queued || 0;
+    const pending = stateCounts.prefill_decode_pending || 0;
+    const stalled = stateCounts.stalled || 0;
+    const loadClass = stalled ? 'bad' : ((queued || pending) ? 'warn' : (activeReqs.length ? 'good' : 'muted'));
+    const loadValue = `${activeReqs.length} active`;
+    const lockSummary = _latestRegionLockSummary || {};
+    const loadSub = `queued ${queued} · pending ${pending} · stalled ${stalled}<br><strong>locks</strong> ${lockSummary.activeLockCount || 0} held across ${lockSummary.heldRegions || 0} regions`;
+
+    const failures = completed.filter(t => t.outcome && t.outcome !== 'task_completed').length;
+    const lastComplete = completed.length ? completed[0] : null;
+    const rollingTotal = Object.entries(rolling)
+        .filter(([k]) => !k.startsWith('_'))
+        .reduce((s, [_, v]) => s + (typeof v === 'number' ? v : 0), 0);
+    const cumTotal = Object.values(cumulative).reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0);
+    const outcomeClass = failures ? 'warn' : (completed.length ? 'good' : 'muted');
+    const verifierText = (verdicts.accept || verdicts.reject)
+        ? `verifier ${verdicts.accept || 0}/${verdicts.reject || 0}`
+        : 'no verifier verdicts';
+    const outcomeSub = `failures ${failures} · last ${lastComplete ? formatShortDuration(lastComplete.end_age_s) + ' ago' : 'none'}<br><strong>routing</strong> ${rollingTotal}/10m · ${cumTotal} today · ${verifierText} · aborts ${logCounts.inference_aborted || 0}`;
+
+    c.innerHTML = [
+        topStripCard('run state', escapeHTML(runState), runSub, runClass),
+        topStripCard('current trial', trialValue, trialSub, trialClass),
+        topStripCard('inference load', escapeHTML(loadValue), loadSub, loadClass),
+        topStripCard('recent outcomes', `${completed.length} done`, outcomeSub, outcomeClass),
+    ].join('');
+}
+
+function updateCounters(snap) {
+    _latestSnapshot = snap || {};
+    renderAutopilotRunStrip();
 }
 
 function roleColor(role) {
@@ -1325,7 +1470,11 @@ let _rawTapStream = null;
 let _structuredTapStream = null;
 let _rawTapBuffer = "";
 let _structuredTapRequests = [];
+let _latestRegionLocksByRole = {};
+let _structuredTapOpenRequestIds = new Set();
+let _rawRenderedTapOpenKeys = new Set();
 const _RAW_TAP_MAX_CHARS = 50000;  // 50KB rolling buffer client-side
+const _STRUCTURED_TAP_STALLED_S = 60;
 // (b) Render mode for the live raw tap.
 //   'structured': request-grouped JSONL events with request/instance metadata,
 //                 safe to read during concurrent inference.
@@ -1365,6 +1514,9 @@ function attachScrollTracker(el) {
 }
 function autoscrollRawPanel(el) {
     attachScrollTracker(el);
+    if (el.querySelector('details.tap-section[open]')) {
+        return;
+    }
     if (_rawTapPinned) {
         el.scrollTop = el.scrollHeight;
     }
@@ -1478,16 +1630,170 @@ function paintRawTap() {
 let _lastStructuredTapRequests = [];
 let _openStructuredTapRequestId = null;
 
+function structuredTapHasActiveCpuLock(req) {
+    if (!req || !_latestRegionLocksByRole) return false;
+    const roleKeys = [
+        req.lock_role,
+        req.topology_role,
+        req.role,
+    ].filter(Boolean).map(String);
+    const idx = req.instance_idx;
+    const pid = req.pid != null ? String(req.pid) : '';
+    for (const role of roleKeys) {
+        const active = _latestRegionLocksByRole[role];
+        if (!active) continue;
+        if (pid) {
+            if (idx != null) {
+                const pidsForIdx = active.pidsByInstanceIdx && active.pidsByInstanceIdx.get(Number(idx));
+                if (pidsForIdx && pidsForIdx.has(pid)) return true;
+            }
+            if (active.holderPids && active.holderPids.has(pid)) return true;
+            continue;
+        }
+        if (idx != null && active.instanceIdxs && active.instanceIdxs.has(Number(idx))) return true;
+    }
+    return false;
+}
+
+function structuredTapActivity(req) {
+    if (!req) {
+        return { state: 'unknown', label: 'unknown', color: 'var(--muted)', live: false, show: false, reason: '' };
+    }
+    const tokens = Number((req.timings_raw && req.timings_raw.tokens) || 0);
+    const status = String(req.status || 'running');
+    const hasOutput = Number(req.chunk_count || 0) > 0 || Number(req.response_len || 0) > 0 || !!req.response;
+    const quietS = Number(req.quiet_s != null ? req.quiet_s : 0);
+    const lockActive = structuredTapHasActiveCpuLock(req);
+    if (status === 'complete') {
+        if (tokens === 0) {
+            return {
+                state: 'empty_complete',
+                label: 'empty complete',
+                color: '#f87171',
+                live: false,
+                show: false,
+                reason: 'request ended with timings but generated 0 tokens',
+            };
+        }
+        return { state: 'complete', label: 'complete', color: 'var(--muted)', live: false, show: false, reason: '' };
+    }
+    if (quietS >= _STRUCTURED_TAP_STALLED_S) {
+        return {
+            state: 'stalled',
+            label: hasOutput ? 'stalled after output' : 'stalled',
+            color: '#f87171',
+            live: false,
+            show: true,
+            reason: lockActive
+                ? 'CPU lock still appears held, but no tap output has arrived past the stall threshold'
+                : 'no CPU lock observed and no tap output has arrived past the stall threshold',
+        };
+    }
+    if (!hasOutput) {
+        if (lockActive) {
+            return {
+                state: 'prefill_decode_pending',
+                label: 'prefill/decode pending',
+                color: 'var(--good,#34d399)',
+                live: true,
+                show: true,
+                reason: 'CPU lock is held for this request; model may be evaluating prompt or decoding before first token',
+            };
+        }
+        return {
+            state: 'queued',
+            label: 'queued',
+            color: '#fbbf24',
+            live: false,
+            show: true,
+            reason: 'no CPU lock observed for this request yet; likely queued or pre-backend',
+        };
+    }
+    return {
+        state: 'streaming',
+        label: 'streaming',
+        color: 'var(--good,#34d399)',
+        live: true,
+        show: true,
+        reason: '',
+    };
+}
+
 function isLiveStructuredTapRequest(req) {
-    if (!req) return false;
-    if (req.is_live === true) return true;
-    if (req.is_live === false) return false;
-    return (req.status || 'running') !== 'complete';
+    return structuredTapActivity(req).live;
+}
+
+function isOpenStructuredTapRequest(req) {
+    return structuredTapActivity(req).show;
+}
+
+function openStructuredTapRequests() {
+    return (Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [])
+        .filter(isOpenStructuredTapRequest);
 }
 
 function liveStructuredTapRequests() {
     return (Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [])
         .filter(isLiveStructuredTapRequest);
+}
+
+function rememberStructuredTapAccordion(detailsEl) {
+    const requestId = detailsEl && detailsEl.dataset ? detailsEl.dataset.structuredRequestId : '';
+    if (!requestId) return;
+    if (detailsEl.open) _structuredTapOpenRequestIds.add(requestId);
+    else _structuredTapOpenRequestIds.delete(requestId);
+}
+
+function rememberRawRenderedTapAccordion(detailsEl) {
+    const key = detailsEl && detailsEl.dataset ? detailsEl.dataset.rawSectionKey : '';
+    if (!key) return;
+    if (detailsEl.open) _rawRenderedTapOpenKeys.add(key);
+    else _rawRenderedTapOpenKeys.delete(key);
+}
+
+function tapScrollPinned(el) {
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+}
+
+function captureTapAccordionScrolls(container, datasetKey) {
+    const state = new Map();
+    if (!container) return state;
+    container.querySelectorAll('details.tap-section').forEach(details => {
+        const key = details.dataset ? details.dataset[datasetKey] : '';
+        if (!key) return;
+        const body = details.querySelector('[data-tap-scroll="body"]');
+        const prompt = details.querySelector('[data-tap-scroll="prompt"]');
+        const response = details.querySelector('[data-tap-scroll="response"]');
+        state.set(key, {
+            bodyTop: body ? body.scrollTop : 0,
+            promptTop: prompt ? prompt.scrollTop : 0,
+            responseTop: response ? response.scrollTop : 0,
+            responsePinned: tapScrollPinned(response),
+        });
+    });
+    return state;
+}
+
+function restoreTapAccordionScrolls(container, datasetKey, state) {
+    if (!container) return;
+    container.querySelectorAll('details.tap-section').forEach(details => {
+        const key = details.dataset ? details.dataset[datasetKey] : '';
+        if (!key) return;
+        const saved = state ? state.get(key) : null;
+        const body = details.querySelector('[data-tap-scroll="body"]');
+        const prompt = details.querySelector('[data-tap-scroll="prompt"]');
+        const response = details.querySelector('[data-tap-scroll="response"]');
+        if (body && saved) body.scrollTop = saved.bodyTop || 0;
+        if (prompt && saved) prompt.scrollTop = saved.promptTop || 0;
+        if (response) {
+            if (!saved || saved.responsePinned) {
+                response.scrollTop = response.scrollHeight;
+            } else {
+                response.scrollTop = Math.min(saved.responseTop || 0, response.scrollHeight);
+            }
+        }
+    });
 }
 
 function structuredTapMeta(req) {
@@ -1508,7 +1814,7 @@ function structuredTapMeta(req) {
 
 function paintStructuredTap(container) {
     const allRequests = Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [];
-    const requests = liveStructuredTapRequests();
+    const requests = openStructuredTapRequests();
     _lastStructuredTapRequests = requests;
     if (!requests.length) {
         const msg = allRequests.length
@@ -1520,43 +1826,33 @@ function paintStructuredTap(container) {
     const html = requests.map((req, i) => {
         const role = req.role || '?';
         const color = (typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--muted)';
-        const status = req.status === 'complete' ? 'complete' : (req.status === 'quiet' ? 'quiet' : 'running');
-        const statusColor = status === 'running'
-            ? 'var(--good,#34d399)'
-            : (status === 'quiet' ? '#fbbf24' : 'var(--muted)');
-        const quietHint = req.status_reason
-            ? `<div style="color:#fbbf24;font-size:10px;margin-top:4px">${escapeHTML(req.status_reason)}</div>`
+        const activity = structuredTapActivity(req);
+        const status = activity.label;
+        const statusHint = activity.reason || req.status_reason
+            ? `<div class="meta" style="color:${activity.color}">${escapeHTML(activity.reason || req.status_reason || '')}</div>`
             : '';
         const timing = req.timings
-            ? `<div style="color:var(--muted);font-size:10px;margin-top:6px;font-family:var(--font-mono)">${escapeHTML(req.timings)}</div>`
+            ? `<div class="meta">${escapeHTML(req.timings)}</div>`
             : '';
         const meta = structuredTapMeta(req);
-        return `<details class="tap-section" ${i === 0 ? 'open' : ''} data-structured-idx="${i}">
-            <summary>
-                <span style="font-weight:600;color:${color}">${escapeHTML(role)}</span>
-                <span style="color:${statusColor};font-size:10px;margin-left:6px">${status}</span>
-                <span style="color:var(--muted);font-size:10px;font-family:var(--font-mono);margin-left:6px">${escapeHTML(req.updated_at || req.started_at || '')}</span>
-                <span style="color:var(--dim);font-size:10px">· ${req.prompt_len || 0}c prompt · ${req.response_len || 0}c resp · ${req.chunk_count || 0} chunks</span>
-                <span class="tap-detail-link" onclick="event.preventDefault();event.stopPropagation();openStructuredTapDetail(${i})" title="Open live output stream in detail panel">detail</span>
-            </summary>
-            <div class="section-body">
-                <div style="color:var(--muted);font-size:10px;margin-bottom:6px;font-family:var(--font-mono)">${escapeHTML(meta)}</div>
-                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">prompt</div>
-                <div class="tap-content prompt-text" data-structured-prompt="${i}"></div>
-                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:8px 0 4px 0">response</div>
-                <div class="tap-content stream-text" data-structured-response="${i}"></div>
-                ${quietHint}
-                ${timing}
+        const promptPreview = (req.prompt || '').slice(0, 180).replace(/\s+/g, ' ');
+        const updated = req.updated_at || req.started_at || '';
+        return `<div class="task-card tap-derived live-tap-row" data-structured-idx="${i}" onclick="openStructuredTapDetail(${i})" title="open live prompt and response popup">
+            <div class="role" style="color:${color}">
+                ${escapeHTML(role)}
+                <span class="live-tap-state" style="color:${activity.color}">${escapeHTML(status)}</span>
             </div>
-        </details>`;
+            <div class="meta">
+                ${escapeHTML(updated)}
+                <span style="color:var(--dim)"> · ${req.prompt_len || 0}c prompt · ${req.response_len || 0}c resp · ${req.chunk_count || 0} chunks</span>
+            </div>
+            ${meta ? `<div class="meta">${escapeHTML(meta)}</div>` : ''}
+            ${statusHint}
+            ${timing}
+            <div class="prompt">${escapeHTML(promptPreview || '(prompt not captured yet)')}</div>
+        </div>`;
     }).join('');
     container.innerHTML = html;
-    requests.forEach((req, i) => {
-        const pEl = container.querySelector(`[data-structured-prompt="${i}"]`);
-        const rEl = container.querySelector(`[data-structured-response="${i}"]`);
-        if (pEl) renderMarkdownInto(pEl, req.prompt || '');
-        if (rEl) renderMarkdownInto(rEl, req.response || '');
-    });
 }
 
 function openStructuredTapDetail(idx) {
@@ -1588,12 +1884,14 @@ function openStructuredTapRequest(req) {
             ${escapeHTML(structuredTapMeta(req))}
             ${req.timings ? ' · ' + escapeHTML(req.timings) : ''}
         </div>
-        <h3>prompt</h3>
+        <div class="detail-box-label">prompt</div>
         <div class="prompt-text" id="prompt-text"></div>
-        <h3>response</h3>
+        <div class="detail-box-label response-label">response</div>
         <div class="stream-text" id="stream-text"></div>`;
     renderMarkdownInto(document.getElementById('prompt-text'), req.prompt || '*(no prompt captured)*');
-    renderMarkdownInto(document.getElementById('stream-text'), req.response || '*(no response captured)*');
+    const responseEl = document.getElementById('stream-text');
+    renderMarkdownInto(responseEl, req.response || '*(no response captured)*');
+    if (responseEl) responseEl.scrollTop = responseEl.scrollHeight;
     panel.classList.add('open');
     refreshOpenStructuredTapDetail();
 }
@@ -1607,8 +1905,8 @@ function refreshOpenStructuredTapDetail() {
     if (!req) return;
     const title = document.getElementById('detail-title');
     if (title) {
-        const state = isLiveStructuredTapRequest(req) ? (req.status || 'running') : 'complete';
-        title.textContent = `tap request · ${req.role || '?'} · ${state} · ${req.request_id || ''}`;
+        const activity = structuredTapActivity(req);
+        title.textContent = `tap request · ${req.role || '?'} · ${activity.label} · ${req.request_id || ''}`;
     }
     const meta = document.getElementById('structured-tap-detail-meta');
     if (meta) {
@@ -1622,8 +1920,17 @@ function refreshOpenStructuredTapDetail() {
     };
     const promptEl = document.getElementById('prompt-text');
     const responseEl = document.getElementById('stream-text');
-    if (promptEl) renderMarkdownInto(promptEl, req.prompt || '*(no prompt captured)*');
-    if (responseEl) renderMarkdownInto(responseEl, req.response || '*(no response captured)*');
+    const promptTop = promptEl ? promptEl.scrollTop : 0;
+    const responsePinned = responseEl ? tapScrollPinned(responseEl) : true;
+    const responseTop = responseEl ? responseEl.scrollTop : 0;
+    if (promptEl) {
+        renderMarkdownInto(promptEl, req.prompt || '*(no prompt captured)*');
+        promptEl.scrollTop = promptTop;
+    }
+    if (responseEl) {
+        renderMarkdownInto(responseEl, req.response || '*(no response captured)*');
+        responseEl.scrollTop = responsePinned ? responseEl.scrollHeight : responseTop;
+    }
 }
 
 // Section separator that the autopilot/seeding harness writes between
@@ -1713,15 +2020,17 @@ function renderTapActivityCard(s) {
     const color = roleColor(role);
     const ts = s.timestamp || '';
     const ageSec = ts ? Math.max(0, (Date.now() - Date.parse(ts.replace(' ', 'T'))) / 1000) : 0;
-    const inFlight = s.structured ? s.status !== 'complete' : !s.timings;
-    const isQuiet = s.structured && s.status === 'quiet';
+    const activity = s.structured ? structuredTapActivity(s) : null;
+    const inFlight = s.structured ? activity.show && activity.state !== 'empty_complete' : !s.timings;
     const ageLabel = inFlight
-        ? (isQuiet ? `quiet ${ageSec.toFixed(0)}s` : (ageSec < 2 ? 'live' : `running ${ageSec.toFixed(0)}s`))
-        : `done ${ageSec < 5 ? 'just now' : ageSec.toFixed(0) + 's ago'}`;
-    const ageColor = inFlight ? (isQuiet ? '#fbbf24' : 'var(--good, #34d399)') : 'var(--muted)';
+        ? `${activity.label} ${ageSec.toFixed(0)}s`
+        : (s.structured && activity.state === 'empty_complete'
+            ? `empty ${ageSec < 5 ? 'just now' : ageSec.toFixed(0) + 's ago'}`
+            : `done ${ageSec < 5 ? 'just now' : ageSec.toFixed(0) + 's ago'}`);
+    const ageColor = s.structured ? activity.color : (inFlight ? 'var(--good, #34d399)' : 'var(--muted)');
     const promptPreview = (s.prompt || '').slice(0, 160).replace(/\s+/g, ' ');
     const flightDot = inFlight
-        ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${isQuiet ? '#fbbf24' : 'var(--good,#34d399)'};margin-right:4px;animation:pulse 1.5s infinite"></span>`
+        ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${ageColor};margin-right:4px;animation:${activity && activity.live ? 'pulse 1.5s infinite' : 'none'}"></span>`
         : '';
     const requestAttr = s.structured ? ` data-tap-request-id="${escapeHTML(s.request_id || '')}"` : '';
     const routeMeta = s.topology_role && s.topology_role !== role ? ` · via ${escapeHTML(s.topology_role)}` : '';
@@ -1744,6 +2053,7 @@ function _installTapCardClickDelegate() {
     document.addEventListener('click', (ev) => {
         const card = ev.target.closest && ev.target.closest('.task-card.tap-derived');
         if (!card) return;
+        if (card.classList.contains('live-tap-row')) return;
         const ts = card.getAttribute('data-tap-ts') || '';
         const role = card.getAttribute('data-tap-role') || '';
         const requestId = card.getAttribute('data-tap-request-id') || '';
@@ -1786,12 +2096,14 @@ function openTapByKey(ts, role) {
 
 function paintRawTapRendered(container) {
     // Replace container content with one styled block per section. Newest
-    // section shown first + auto-expanded; older sections collapsed
-    // <details>. Each section's PROMPT/RESPONSE body runs through
+    // section shown first, but all sections default collapsed. Manual
+    // expand/collapse state is preserved across polling re-renders by stable
+    // section key. Each section's PROMPT/RESPONSE body runs through
     // renderMarkdownInto so marked + KaTeX apply.
-    const sections = parseRawTapSections(_rawTapBuffer);
+    const scrollState = captureTapAccordionScrolls(container, 'rawSectionKey');
+    const sections = parseRawTapSections(_rawTapBuffer).filter(s => !s.timings);
     if (!sections.length) {
-        container.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:6px">no parseable sections in buffer yet — tap may be warming up</div>';
+        container.innerHTML = '<div style="color:var(--muted);font-size:11px;padding:6px">no active legacy tap sections right now</div>';
         return;
     }
     // Newest first for visual scanning
@@ -1806,18 +2118,20 @@ function paintRawTapRendered(container) {
         const timingsLine = s.timings
             ? `<div style="color:var(--muted);font-size:10px;margin-top:6px;font-family:var(--font-mono)">${escapeHTML(s.timings)}</div>`
             : '';
-        return `<details class="tap-section" ${i === 0 ? 'open' : ''} data-section-idx="${i}">
+        const key = `${ts}|${role}|${s.prompt_len}|${s.response_len}`;
+        const openAttr = _rawRenderedTapOpenKeys.has(key) ? 'open' : '';
+        return `<details class="tap-section" ${openAttr} data-section-idx="${i}" data-raw-section-key="${escapeHTML(key)}" ontoggle="rememberRawRenderedTapAccordion(this)">
             <summary>
                 <span style="font-weight:600;color:${color}">${escapedRole}</span>
                 <span style="color:var(--muted);font-size:10px;font-family:var(--font-mono)">${escapedTs}</span>
                 <span style="color:var(--dim);font-size:10px">· ${s.prompt_len}c prompt · ${s.response_len}c resp</span>
                 <span class="tap-detail-link" onclick="event.preventDefault();event.stopPropagation();openTapSectionDetail(${i})" title="Open in detail panel (more space, copy/download buttons)">↗ detail</span>
             </summary>
-            <div class="section-body">
-                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">prompt</div>
-                <div class="tap-content prompt-text" data-raw-tap-prompt="${i}"></div>
-                <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;margin:8px 0 4px 0">response</div>
-                <div class="tap-content stream-text" data-raw-tap-response="${i}"></div>
+            <div class="section-body" data-tap-scroll="body">
+                <div class="tap-box-label">prompt</div>
+                <div class="tap-content prompt-text" data-tap-scroll="prompt" data-raw-tap-prompt="${i}"></div>
+                <div class="tap-box-label response-label">response</div>
+                <div class="tap-content stream-text" data-tap-scroll="response" data-raw-tap-response="${i}"></div>
                 ${timingsLine}
             </div>
         </details>`;
@@ -1831,6 +2145,7 @@ function paintRawTapRendered(container) {
         if (pEl) renderMarkdownInto(pEl, s.prompt);
         if (rEl) renderMarkdownInto(rEl, s.response);
     });
+    restoreTapAccordionScrolls(container, 'rawSectionKey', scrollState);
 }
 
 function openTapSectionDetail(sectionIdx) {
@@ -1864,12 +2179,14 @@ function openTapSectionDetail(sectionIdx) {
             source: inference_tap.log section · role=${escapeHTML(s.role || '?')} · ${escapeHTML(s.timestamp || '')}
             ${s.timings ? ' · ' + escapeHTML(s.timings) : ''}
         </div>
-        <h3>prompt</h3>
+        <div class="detail-box-label">prompt</div>
         <div class="prompt-text" id="prompt-text"></div>
-        <h3>response</h3>
+        <div class="detail-box-label response-label">response</div>
         <div class="stream-text" id="stream-text"></div>`;
     renderMarkdownInto(document.getElementById('prompt-text'), s.prompt || '*(no prompt captured)*');
-    renderMarkdownInto(document.getElementById('stream-text'), s.response || '*(no response captured)*');
+    const responseEl = document.getElementById('stream-text');
+    renderMarkdownInto(responseEl, s.response || '*(no response captured)*');
+    if (responseEl) responseEl.scrollTop = 0;
     panel.classList.add('open');
 }
 
@@ -2009,6 +2326,7 @@ function startStructuredTapStream() {
             const data = JSON.parse(e.data);
             _structuredTapRequests = data.structured_requests || [];
             if (_rawTapRenderMode === 'structured') paintRawTap();
+            renderAutopilotRunStrip();
             refreshOpenStructuredTapDetail();
         } catch {}
     };
@@ -2730,18 +3048,20 @@ async function openDetail(taskId, port, slotId) {
                 <span id="copy-feedback" class="copy-feedback"></span>
             </div>
             <div style="color:var(--muted);font-size:10px;margin-bottom:6px">source: ${escapeHTML(dataSource)}</div>
-            <h3>prompt</h3>
+            <div class="detail-box-label">prompt</div>
             <div class="prompt-text" id="prompt-text"></div>
-            <h3>${d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference')}</h3>
+            <div class="detail-box-label response-label">${d.slot ? 'live inference' : (d.tap_section ? 'inference (from tap)' : 'inference')}</div>
             <div class="stream-text ${d.slot ? 'live' : ''}" id="stream-text"></div>
             <h3>task events (${events.length}) <span style="font-weight:normal;color:var(--muted);font-size:10px">orchestrator-side; not REPL turns</span></h3>
             <div id="repl-history"></div>
         `;
         renderMarkdownInto(document.getElementById('prompt-text'), promptText || '*(prompt not available)*');
+        const streamEl = document.getElementById('stream-text');
         renderMarkdownInto(
-            document.getElementById('stream-text'),
+            streamEl,
             initialContent || (emptyOutputHint ? `*${emptyOutputHint}*` : '')
         );
+        if (streamEl) streamEl.scrollTop = d.slot ? streamEl.scrollHeight : 0;
         const replEl = document.getElementById('repl-history');
         replEl.innerHTML = events.map(ev => `
             <div class="repl-event">
@@ -2773,7 +3093,7 @@ async function openDetail(taskId, port, slotId) {
                 // Strategy: capture at-bottom state BEFORE re-render. After
                 // re-render, restore scrollTop (or snap to bottom if user was
                 // following). Same pattern as the raw-tap autoscroll tracker.
-                const atBottom = (sel.scrollHeight - sel.scrollTop - sel.clientHeight) < 24;
+                const atBottom = tapScrollPinned(sel);
                 const savedTop = sel.scrollTop;
                 renderMarkdownInto(sel, _currentTaskRawText.stream);
                 sel.classList.add('live');
@@ -2887,6 +3207,8 @@ async function updateProcessStatus() {
     try {
         const r = await fetch('/dashboard/api/process_status');
         const d = await r.json();
+        _latestProcessStatus = d;
+        renderAutopilotRunStrip();
         const ap = d.autopilot || {};
         const el = document.getElementById('process-status');
         _renderAutopilotPhase(d, ap);
@@ -3110,6 +3432,8 @@ function startDashboard() {
         try {
             const r = await fetch('/dashboard/api/autopilot_progress');
             const d = await r.json();
+            _latestAutopilotProgress = d;
+            renderAutopilotRunStrip();
             const wrap = document.getElementById('autopilot-trial-progress');
             const label = document.getElementById('autopilot-trial-label');
             const pct = document.getElementById('autopilot-trial-pct');
@@ -3295,9 +3619,9 @@ function startDashboard() {
             const enabled = d.per_region_locks_enabled;
             if (status) {
                 status.textContent = enabled
-                    ? '— per-region cross-process locks ACTIVE'
+                    ? '— per-region cross-process locks ENABLED'
                     : '— DISABLED (legacy global lock; set ORCHESTRATOR_PER_REGION_LOCKS=1)';
-                status.style.color = enabled ? 'var(--good, #34d399)' : 'var(--warn, #fbbf24)';
+                status.style.color = enabled ? 'var(--muted)' : 'var(--warn, #fbbf24)';
             }
             // Column schema: each column corresponds to one canonical instance
             // SHAPE in NUMA_CONFIG. The backend tags each instance with a
@@ -3322,6 +3646,31 @@ function startDashboard() {
                 if (wa !== wb) return wa - wb;
                 return a[0].localeCompare(b[0]);
             });
+            _latestRegionLocksByRole = {};
+            for (const [role, info] of roleEntries) {
+                const holderPids = new Set();
+                const pidsByInstanceIdx = new Map();
+                for (const e of (info.regions || [])) {
+                    if (!e.held) continue;
+                    const pids = (e.holder_pids || []).map(String);
+                    for (const pid of pids) holderPids.add(pid);
+                    for (const idx of (e.holder_instance_idxs || [])) {
+                        const nIdx = Number(idx);
+                        const bucket = pidsByInstanceIdx.get(nIdx) || new Set();
+                        for (const pid of pids) bucket.add(pid);
+                        pidsByInstanceIdx.set(nIdx, bucket);
+                    }
+                }
+                _latestRegionLocksByRole[role] = {
+                    instanceIdxs: new Set((info.active_instance_idxs || []).map(Number)),
+                    regions: new Set((info.regions || []).filter(e => e.held).map(e => String(e.region))),
+                    holderPids,
+                    pidsByInstanceIdx,
+                };
+            }
+            if (_rawTapRenderMode === 'structured' && Array.isArray(_structuredTapRequests) && _structuredTapRequests.length) {
+                paintRawTap();
+            }
             // Cross-role physical-core occupancy: { quarter: [{role, shape}] }.
             // Each role has independent lock files (cpu_region.<role>.qN.lock),
             // but the underlying 24-core regions are shared physical resources.
@@ -3346,6 +3695,34 @@ function startDashboard() {
                 }
             }
             const globalHeldRegions = new Set(Object.keys(globalHeldBy));
+            const activeLockCount = Object.values(byRole).reduce(
+                (acc, info) => acc + ((info.active_instance_idxs || []).length),
+                0
+            );
+            _latestRegionLockSummary = {
+                activeLockCount,
+                heldRegions: globalHeldRegions.size,
+                enabled,
+            };
+            renderAutopilotRunStrip();
+            const regionDot = document.getElementById('region-locks-dot');
+            if (!enabled) {
+                _setDotState(regionDot, 'down', 'per-region CPU locks disabled');
+            } else if (activeLockCount > 0) {
+                _setDotState(
+                    regionDot,
+                    'active',
+                    `${activeLockCount} instance lock(s) currently held across ${globalHeldRegions.size} CPU region(s)`
+                );
+            } else {
+                _setDotState(regionDot, 'idle', 'no CPU region locks currently held; grid shows dispatch readiness');
+            }
+            if (status && enabled) {
+                status.textContent = activeLockCount > 0
+                    ? `— ${activeLockCount} instance lock(s) held; per-region locks ENABLED`
+                    : '— no locks held; per-region locks ENABLED';
+                status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
+            }
 
             let nRoles = 0;
             for (const [role, info] of roleEntries) {
