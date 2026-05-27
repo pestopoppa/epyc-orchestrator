@@ -1321,6 +1321,7 @@ def _run_loop_inner(
             if isinstance(prev_details, dict):
                 prev_suite = prev_details.get("per_suite_quality", {})
 
+        prior_criticism_text = last_criticism_text
         criticism = generate_self_criticism(
             action=action,
             eval_result=eval_result,
@@ -1372,8 +1373,28 @@ def _run_loop_inner(
                 log.warning("Strategy store write failed: %s", e)
 
         # B3: Capture execution traces for next PromptForge iteration
+        recent_trace_text = state.get("last_traces", "")
         if not dry_run:
-            state["last_traces"] = tower.capture_recent_traces(50)
+            recent_trace_text = tower.capture_recent_traces(50)
+            state["last_traces"] = recent_trace_text
+
+        # J9/HLE-4: observe-only harness metrics. Compute after SafetyGate and
+        # ParetoArchive decisions so these diagnostics cannot affect current
+        # trial acceptance or baseline mutation.
+        if not getattr(eval_result, "harness_metrics", None):
+            from hle_metrics import compute_hle_observe_payload  # type: ignore
+
+            hle_payload = compute_hle_observe_payload(
+                eval_result,
+                action=action,
+                verdict=verdict,
+                failure_analysis=failure_analysis,
+                prior_criticism=prior_criticism_text,
+                recent_traces=recent_trace_text,
+            )
+            eval_result.metric_schema_version = hle_payload["metric_schema_version"]
+            eval_result.harness_metrics = hle_payload["harness_metrics"]
+            eval_result.oracle_adequacy = hle_payload["oracle_adequacy"]
 
         # Git tag
         phase.set("post_trial_artifacts", trial_id=trial_counter, species=species_name)
