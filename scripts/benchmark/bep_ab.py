@@ -76,6 +76,9 @@ def _restart_api(batch_edit_mode: bool, edit_root: Path) -> bool:
     env = {
         **os.environ,
         "ORCHESTRATOR_BATCH_EDIT_MODE": "1" if batch_edit_mode else "0",
+        # OFF arm gets the symmetric interleaved-edit rider so both arms actually edit files —
+        # the A/B then measures interleaved-vs-batched EDIT latency, not edits-vs-prose.
+        "ORCHESTRATOR_INTERLEAVED_EDIT_RIDER": "0" if batch_edit_mode else "1",
         "ORCHESTRATOR_EDIT_ROOT": str(edit_root),
     }
     r = subprocess.run(

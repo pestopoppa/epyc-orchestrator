@@ -635,6 +635,15 @@ async def _execute_turn(ctx: Ctx, role: Role | str) -> tuple[str, str | None, bo
             from src.batch_edit_parse import build_batch_edit_instructions
 
             prompt += "\n\n" + build_batch_edit_instructions()
+        # BEP-2 baseline (J8): symmetric interleaved-edit rider — flag-gated (default off).
+        # Makes the OFF arm actually apply edits turn-by-turn so the A/B measures interleaved-vs-
+        # batched edit latency, not "edits vs prose". Mutually exclusive with batch_edit_mode.
+        elif _get_features().interleaved_edit_rider and any(
+            k in str(role).lower() for k in ("coder", "architect")
+        ):
+            from src.batch_edit_parse import build_interleaved_edit_instructions
+
+            prompt += "\n\n" + build_interleaved_edit_instructions()
 
     # Inject session log summary (processing history across turns)
     await _maybe_refresh_session_summary(state, deps)

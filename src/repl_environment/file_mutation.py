@@ -99,6 +99,16 @@ class _FileMutationMixin:
             if not is_valid:
                 return f"[ERROR: {error}]"
 
+            # BEP harness (Phase 1 fix, 2026-05-27): redirect the WRITE TARGET to the scratch
+            # task-root. _validate_file_path only validated the resolved path; the write itself
+            # used the raw `path` (relative to the process cwd), so model edits never landed in
+            # the scratch repo (BEP-2 baseline could not edit files). Default-off parity: when no
+            # task-root is active, task_root_active() is False and `path` is unchanged.
+            from src.repl_environment.task_root import resolve_task_path, task_root_active
+
+            if task_root_active():
+                path = resolve_task_path(path)
+
             # Create backup if file exists and backup requested
             if backup and os.path.exists(path):
                 backup_path = f"{path}.bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}"

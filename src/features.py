@@ -179,6 +179,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # intake-607 harness cluster (default-off; shadow/observe only)
     FeatureSpec("ure_uncertainty_shadow_log", False, False, "URE_UNCERTAINTY_SHADOW_LOG", "URE-1: shadow-log routing decision-uncertainty (J10); changes no routing behavior"),
     FeatureSpec("batch_edit_mode", False, False, "BATCH_EDIT_MODE", "BEP-1: coder emits one structured patch set after reasoning instead of interleaved REPL (J8)"),
+    FeatureSpec("interleaved_edit_rider", False, False, "INTERLEAVED_EDIT_RIDER", "BEP-2 baseline: per-turn rider instructing coder/architect to apply interleaved file edits (vs answering in prose); experiment-only, default-off"),
     FeatureSpec("dcp_pre_assembly", False, False, "DCP_PRE_ASSEMBLY", "DCP-4 (J7): advisory delegation context pre-assembly — seed the specialist with a budget-bounded code bundle; reactive discovery stays on; default-off"),
     # Debug/Development
     FeatureSpec("mock_mode", True, False, "MOCK_MODE", "Mock mode for safety"),
@@ -414,6 +415,7 @@ class Features:
     # intake-607 harness cluster (default-off; shadow/observe only)
     ure_uncertainty_shadow_log: bool = False  # URE-1 (J10): shadow-log routing uncertainty; no behavior change
     batch_edit_mode: bool = False  # BEP-1 (J8): coder emits one structured patch set after reasoning
+    interleaved_edit_rider: bool = False  # BEP-2 baseline: per-turn interleaved-edit rider (experiment-only)
     dcp_pre_assembly: bool = False  # DCP-4 (J7): advisory delegation context pre-assembly (seed bundle)
 
     # Debug/Development

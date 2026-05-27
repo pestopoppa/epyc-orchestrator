@@ -54,6 +54,19 @@ use start_line=N, end_line=N-1; declare cross-file ordering in `depends_on`. Emi
 nothing after it."""
 
 
+# BEP-2 baseline rider (symmetric to BATCH_EDIT_INSTRUCTIONS): puts the coder into the
+# INTERLEAVED editing mechanism so the A/B compares interleaved-vs-batched EDIT latency, not
+# "edits vs answers-in-prose". Without it the coder tends to return the code as a FINAL() text
+# answer and never writes the file (observed 2026-05-26). Default-off; experiment-only.
+INTERLEAVED_EDIT_INSTRUCTIONS = """\
+INTERLEAVED EDIT MODE. This is a file-editing task — it is judged by the actual files in the \
+working directory, not by any prose answer. APPLY every change directly in the REPL by writing \
+the file(s) with normal Python I/O (e.g. open("pkg/mod.py", "w").write("...full body...\\n")) or \
+the available edit tools, one edit per turn, reading and creating files as needed. Do NOT answer \
+with a code block or describe the change without writing it to disk. Only after all files are \
+written and correct, call FINAL("done")."""
+
+
 def extract_patchset_json(text: str | None) -> dict | None:
     """Return the parsed JSON from the first ```patchset block, or None if absent/unparseable."""
     if not text:
@@ -117,3 +130,9 @@ def parse_patchset_from_model_output(text: str | None, *, validate: bool = True)
 def build_batch_edit_instructions() -> str:
     """The system-prompt rider that puts a coder/architect into batch-edit mode."""
     return BATCH_EDIT_INSTRUCTIONS
+
+
+def build_interleaved_edit_instructions() -> str:
+    """The system-prompt rider that makes a coder/architect do interleaved file edits (BEP-2
+    baseline arm). Symmetric counterpart to build_batch_edit_instructions()."""
+    return INTERLEAVED_EDIT_INSTRUCTIONS
