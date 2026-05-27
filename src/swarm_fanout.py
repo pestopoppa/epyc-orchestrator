@@ -47,7 +47,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Sequence
 
@@ -175,9 +175,16 @@ def dispatch_swarm_fanout(
         ThreadPoolExecutor worker cap. Defaults to ``len(targets)`` so
         every backend dispatches in parallel.
     per_role_timeout_seconds:
-        If set, individual backend calls past this wall-clock are
-        marked failed with an error. None disables per-call timeout;
-        the slowest backend governs total latency.
+        Per-backend wall-clock budget starting at dispatch. Backends
+        that exceed it are recorded as ``SwarmCompletion(success=False,
+        error="TimeoutError: per-role timeout (X.XXXs) exceeded")``
+        — the dispatch never raises on timeout. Background threads for
+        timed-out backends keep running until their HTTP call naturally
+        completes (Python's concurrent.futures has no preemption), but
+        the dispatcher returns in bounded wall-clock time (~deadline +
+        executor-shutdown overhead) and the caller sees the timeout in
+        the result, not as an exception. None disables the deadline;
+        the slowest backend then governs total latency.
 
     Returns
     -------
@@ -236,26 +243,84 @@ def dispatch_swarm_fanout(
                 error=f"{type(exc).__name__}: {exc!s}",
             )
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    # Per-role timeout semantics: each backend has `per_role_timeout_seconds`
+    # of wall-clock starting at dispatch. All backends are submitted in the
+    # same tight loop (within microseconds), so a single shared deadline at
+    # `start + per_role_timeout_seconds` is functionally identical to a
+    # per-backend budget.
+    #
+    # Once the deadline fires, any backend still pending is marked failed
+    # AND the executor is shut down with wait=False so the dispatch call
+    # returns in bounded wall-clock time. Python's concurrent.futures API
+    # has no preemption — orphan threads keep running until their HTTP
+    # calls naturally complete — but the dispatcher's result is no longer
+    # blocked on them. This is the right tradeoff for a routing primitive
+    # used in latency-sensitive contexts (a 30s budget shouldn't be
+    # blocked by one 600s straggler).
+    #
+    # The `with ThreadPoolExecutor` form is deliberately NOT used because
+    # its __exit__ calls shutdown(wait=True) unconditionally; we manage the
+    # executor explicitly in try/finally so the wait policy can depend on
+    # whether the deadline fired.
+    deadline: float | None = (
+        start + per_role_timeout_seconds if per_role_timeout_seconds is not None else None
+    )
+    timeout_fired = False
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         futures = {
-            pool.submit(_call, idx, role_name, role_config, backend): idx
+            pool.submit(_call, idx, role_name, role_config, backend): (idx, role_name)
             for idx, (role_name, role_config, backend) in enumerate(targets)
         }
-        for future in as_completed(futures, timeout=per_role_timeout_seconds):
-            try:
-                idx, completion = future.result(timeout=per_role_timeout_seconds)
-            except Exception as exc:  # noqa: BLE001
-                # Timeout or unexpected error finalizing the future itself.
-                idx = futures[future]
-                role_name = targets[idx][0]
-                completion = SwarmCompletion(
-                    role=role_name,
-                    text="",
-                    success=False,
-                    error=f"{type(exc).__name__}: {exc!s}",
-                )
-            results[idx] = completion
-            per_role_elapsed[completion.role] = completion.elapsed_seconds
+        pending = set(futures.keys())
+        while pending:
+            if deadline is None:
+                wait_for: float | None = None
+            else:
+                wait_for = max(0.0, deadline - time.monotonic())
+            done, pending = wait(pending, timeout=wait_for, return_when=FIRST_COMPLETED)
+            if not done:
+                # Deadline fired with no progress — every remaining backend is
+                # over budget. Mark each as failed without further waiting.
+                now = time.monotonic()
+                for fut in list(pending):
+                    idx, role_name = futures[fut]
+                    elapsed = now - start
+                    results[idx] = SwarmCompletion(
+                        role=role_name,
+                        text="",
+                        elapsed_seconds=elapsed,
+                        success=False,
+                        error=(
+                            f"TimeoutError: per-role timeout "
+                            f"({per_role_timeout_seconds:.3f}s) exceeded"
+                        ),
+                    )
+                    per_role_elapsed[role_name] = elapsed
+                pending = set()
+                timeout_fired = True
+                break
+            for fut in done:
+                idx, role_name = futures[fut]
+                try:
+                    # Future is already done; .result() with timeout=0 just unwraps.
+                    _idx, completion = fut.result(timeout=0)
+                except Exception as exc:  # noqa: BLE001
+                    # _call already catches per-backend exceptions, so this path
+                    # is reached only if the worker itself raised before yielding
+                    # a SwarmCompletion (essentially: never under normal use).
+                    completion = SwarmCompletion(
+                        role=role_name,
+                        text="",
+                        success=False,
+                        error=f"{type(exc).__name__}: {exc!s}",
+                    )
+                results[idx] = completion
+                per_role_elapsed[completion.role] = completion.elapsed_seconds
+    finally:
+        # If the deadline fired, return immediately without waiting on slow
+        # backends. Otherwise wait normally (no-op since all futures are done).
+        pool.shutdown(wait=not timeout_fired)
 
     total_elapsed = time.monotonic() - start
     completions: list[SwarmCompletion] = [c for c in results if c is not None]

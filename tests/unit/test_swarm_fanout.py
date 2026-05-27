@@ -166,6 +166,85 @@ def test_dispatch_rejects_single_target():
         dispatch_swarm_fanout(req, [("only", None, _MockBackend("x"))])
 
 
+def test_dispatch_does_not_raise_on_per_role_timeout():
+    """Reproducer for the as_completed(timeout=) bug fixed 2026-05-27.
+
+    Earlier code passed the timeout to ``as_completed`` which is an
+    iterator-wide timer that *raises* TimeoutError instead of marking
+    individual backends as failed. With per_role_timeout=0.05s and a
+    0.2s backend, the dispatcher used to raise after ~0.2s. Post-fix:
+    it must NOT raise, and the slow backends must be recorded as
+    SwarmCompletion(success=False, error="TimeoutError: ...").
+    """
+    req = _MockRequest(prompt="x")
+    targets = [
+        ("slow1", None, _MockBackend("never returned", delay_seconds=0.2)),
+        ("slow2", None, _MockBackend("never returned", delay_seconds=0.2)),
+    ]
+    # Should not raise.
+    out = dispatch_swarm_fanout(req, targets, per_role_timeout_seconds=0.05)
+    assert isinstance(out, SwarmFanoutResult)
+    assert len(out.completions) == 2
+    assert out.all_failed
+    for c in out.completions:
+        assert not c.success
+        assert c.error is not None
+        assert "TimeoutError" in c.error
+        assert "per-role timeout" in c.error
+
+
+def test_dispatch_returns_promptly_after_per_role_timeout():
+    """The dispatcher must return in bounded wall-clock after the
+    deadline fires — not wait for slow backends to finish naturally.
+    This proves the executor-shutdown(wait=False) on timeout works."""
+    req = _MockRequest(prompt="x")
+    targets = [
+        # 2-second delay, 0.05-second budget — should return ~immediately
+        ("slow", None, _MockBackend("never returned", delay_seconds=2.0)),
+        ("slow2", None, _MockBackend("never returned", delay_seconds=2.0)),
+    ]
+    t0 = time.monotonic()
+    out = dispatch_swarm_fanout(req, targets, per_role_timeout_seconds=0.05)
+    wall = time.monotonic() - t0
+    # Generous bound — must be much less than the 2.0s backend delay.
+    # Allow ~0.5s for executor shutdown overhead on slow CI hosts.
+    assert wall < 0.5, (
+        f"dispatcher returned in {wall:.3f}s; expected <0.5s "
+        "(executor shutdown(wait=False) did not work)"
+    )
+    assert out.all_failed
+
+
+def test_dispatch_fast_backend_succeeds_within_timeout():
+    """Fast backends still complete normally under per-role timeout —
+    only the SLOW ones get marked failed. Verifies per-call (not whole-
+    dispatch) timeout semantics."""
+    req = _MockRequest(prompt="x")
+    targets = [
+        ("fast", None, _MockBackend("fast-done", delay_seconds=0.02)),
+        ("slow", None, _MockBackend("never", delay_seconds=2.0)),
+    ]
+    out = dispatch_swarm_fanout(req, targets, per_role_timeout_seconds=0.15)
+    # Fast one must succeed; slow one must be timed out.
+    by_role = {c.role: c for c in out.completions}
+    assert by_role["fast"].success
+    assert by_role["fast"].text == "fast-done"
+    assert not by_role["slow"].success
+    assert "TimeoutError" in (by_role["slow"].error or "")
+
+
+def test_dispatch_no_timeout_means_wait_for_slowest():
+    """per_role_timeout_seconds=None preserves the original semantic:
+    dispatcher waits for every backend to finish (no premature failure)."""
+    req = _MockRequest(prompt="x")
+    targets = [
+        ("a", None, _MockBackend("a-text", delay_seconds=0.05)),
+        ("b", None, _MockBackend("b-text", delay_seconds=0.05)),
+    ]
+    out = dispatch_swarm_fanout(req, targets, per_role_timeout_seconds=None)
+    assert out.n_successful == 2
+
+
 def test_dispatch_records_per_role_elapsed():
     req = _MockRequest(prompt="x")
     targets = [

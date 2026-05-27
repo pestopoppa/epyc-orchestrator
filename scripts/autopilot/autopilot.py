@@ -306,9 +306,11 @@ surfaces those candidates as alternative exploration seeds. **Treat as
 a hint, not a directive** — the BT-picked seed is only worth chasing
 when it disagrees with the hypervolume-top seed AND the BT diagnostics
 are clean (no Condorcet cycles, no extreme dominance skew). Top-K
-candidate selection at the entry point is scale-biased (high-magnitude
-axes like speed dominate the sum); weight that into how much trust
-the hint deserves.
+candidate selection is per-axis range-normalized so the candidate set
+fed to BT is not biased by axis magnitude (speed in t/s vs reliability
+in [0,1]); the remaining caveat is that the proxy is still axis-vote,
+not peer-judged, so the hint reflects per-axis dominance patterns and
+nothing more.
 
 {bt_tiebreak_hint}
 """
