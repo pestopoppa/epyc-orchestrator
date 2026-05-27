@@ -380,10 +380,13 @@ async def region_locks_snapshot() -> JSONResponse:
         ]
 
     # Per-role: held-region-set → instance idx, used to attribute lock holders
-    # to a specific instance after we scan /proc/locks.
+    # to a specific instance after we scan /proc/locks. Resolve against the
+    # full NUMA topology, not only matrix-visible panel shapes: a runtime holder
+    # can be on a shape the matrix omits for idle display, and unresolved holders
+    # make the panel report "no locks held" while regions are visibly occupied.
     role_instances_by_regions: dict[str, dict[frozenset[str], int]] = {
-        role: {frozenset(inst["regions"]): inst["idx"] for inst in insts}
-        for role, insts in instance_topology.items()
+        role: {frozenset(inst["regions"]): inst["idx"] for inst in (instance_topology_all.get(role) or [])}
+        for role in panel_roles
     }
 
     # Pass 1a: collect raw lock-holder PIDs per (role, region) for matrix-included
@@ -428,6 +431,22 @@ async def region_locks_snapshot() -> JSONResponse:
                 if (entry["role"], pid) in pid_to_instance}
         entry["holder_instance_idxs"] = sorted(idxs)
 
+    visible_instances: dict[str, list[dict[str, Any]]] = {
+        role: list(insts) for role, insts in instance_topology.items()
+    }
+    for (role, _pid), idx in pid_to_instance.items():
+        insts = visible_instances.setdefault(role, [])
+        if any(inst["idx"] == idx for inst in insts):
+            continue
+        runtime_inst = next(
+            (inst for inst in (instance_topology_all.get(role) or []) if inst["idx"] == idx),
+            None,
+        )
+        if runtime_inst is not None:
+            insts.append({**runtime_inst, "runtime_only": True})
+    for insts in visible_instances.values():
+        insts.sort(key=lambda x: (-x["span"], x["regions"]))
+
     # Pass 2: ensure every panel role has a row even when no lock file exists
     # yet on disk (a wired-but-never-dispatched role like vision_escalation
     # before its first request). Synthesize empty (free) region entries for
@@ -453,7 +472,7 @@ async def region_locks_snapshot() -> JSONResponse:
         bucket = by_role.setdefault(entry["role"], {
             "wired": True,
             "regions": [],
-            "instances": instance_topology.get(entry["role"], []),
+            "instances": visible_instances.get(entry["role"], []),
             "active_instance_idxs": set(),
         })
         bucket["regions"].append({

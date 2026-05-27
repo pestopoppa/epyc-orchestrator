@@ -12,9 +12,12 @@ Covers the three pure functions that drive the new CPU REGION LOCKS panel:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.api.routes.dashboard import (
+    region_locks_snapshot,
     _shape_for_regions,
     _resolve_pid_to_instance_idx,
     _panel_shapes_from_matrix,
@@ -259,3 +262,49 @@ class TestPanelShapesFromMatrix:
         assert _panel_shapes_from_matrix(sr, primary_shape="full") == {"full", "q0"}
         assert _panel_shapes_from_matrix(sr, primary_shape="half0") == {"half0", "q0"}
         assert _panel_shapes_from_matrix(sr, primary_shape="half1") == {"half1", "q0"}
+
+
+class TestRegionLocksSnapshot:
+    @pytest.mark.asyncio
+    async def test_runtime_holder_outside_matrix_visible_shapes_resolves(self, tmp_path, monkeypatch) -> None:
+        """Runtime locks resolve against full topology, not just panel-visible shapes."""
+        lock = tmp_path / "cpu_region.ingest_long_context.q2.lock"
+        lock.write_text("")
+
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["2928025"])
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("ingest_long_context", 0): {"q0", "q1"},
+                ("ingest_long_context", 3): {"q2"},
+            },
+        )
+        monkeypatch.setattr(
+            "src.scheduling.contention.load_contention_matrix",
+            lambda: type("Matrix", (), {
+                "same_role": {
+                    "ingest_long_context": SameRole(
+                        role="ingest_long_context",
+                        verdict="allow",
+                    ),
+                },
+            })(),
+        )
+
+        response = await region_locks_snapshot()
+        payload = json.loads(response.body)
+
+        ingest = payload["by_role"]["ingest_long_context"]
+        assert ingest["active_instance_idxs"] == [3]
+        assert any(
+            inst["idx"] == 3 and inst["shape"] == "q2" and inst["runtime_only"]
+            for inst in ingest["instances"]
+        )
+        held = [r for r in ingest["regions"] if r["held"]]
+        assert held == [{
+            "region": "q2",
+            "held": True,
+            "holder_pids": ["2928025"],
+            "holder_instance_idxs": [3],
+        }]

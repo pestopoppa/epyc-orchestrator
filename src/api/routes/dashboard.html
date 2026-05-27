@@ -1655,6 +1655,59 @@ function structuredTapHasActiveCpuLock(req) {
     return false;
 }
 
+function structuredTapRequestedRegions(req) {
+    const explicit = (req && req.instance_regions || []).map(String).filter(Boolean);
+    if (explicit.length) return explicit;
+    const roleKeys = [
+        req && req.lock_role,
+        req && req.topology_role,
+        req && req.role,
+        req && req.role ? clientBaseRole(req.role) : '',
+    ].filter(Boolean).map(String);
+    const idx = req && req.instance_idx != null ? Number(req.instance_idx) : null;
+    for (const role of roleKeys) {
+        const active = _latestRegionLocksByRole && _latestRegionLocksByRole[role];
+        const insts = active && active.instances ? active.instances : [];
+        if (!insts.length) continue;
+        const inst = idx != null
+            ? (insts.find(i => Number(i.idx) === idx) || insts[0])
+            : insts[0];
+        if (inst && Array.isArray(inst.regions) && inst.regions.length) {
+            return inst.regions.map(String);
+        }
+    }
+    return [];
+}
+
+function structuredTapCpuBlockers(req) {
+    if (!req || !_latestRegionLocksByRole) return [];
+    const needed = new Set(structuredTapRequestedRegions(req));
+    if (!needed.size) return [];
+    const ownPid = req.pid != null ? String(req.pid) : '';
+    const ownRoles = new Set([
+        req.lock_role,
+        req.topology_role,
+        req.role,
+        req.role ? clientBaseRole(req.role) : '',
+    ].filter(Boolean).map(String));
+    const blockers = [];
+    for (const [role, active] of Object.entries(_latestRegionLocksByRole || {})) {
+        if (!active || !active.regions) continue;
+        if (ownPid && ownRoles.has(role) && active.holderPids && active.holderPids.has(ownPid)) {
+            continue;
+        }
+        const overlap = [...needed].filter(q => active.regions.has(q));
+        if (overlap.length) blockers.push({ role, regions: overlap });
+    }
+    return blockers;
+}
+
+function structuredTapCpuBlockerSummary(blockers) {
+    return blockers
+        .map(b => `${b.role} on ${b.regions.join(',')}`)
+        .join(' · ');
+}
+
 function structuredTapActivity(req) {
     if (!req) {
         return { state: 'unknown', label: 'unknown', color: 'var(--muted)', live: false, show: false, reason: '' };
@@ -1664,6 +1717,7 @@ function structuredTapActivity(req) {
     const hasOutput = Number(req.chunk_count || 0) > 0 || Number(req.response_len || 0) > 0 || !!req.response;
     const quietS = Number(req.quiet_s != null ? req.quiet_s : 0);
     const lockActive = structuredTapHasActiveCpuLock(req);
+    const cpuBlockers = !lockActive && !hasOutput ? structuredTapCpuBlockers(req) : [];
     if (status === 'complete') {
         if (tokens === 0) {
             return {
@@ -1676,6 +1730,16 @@ function structuredTapActivity(req) {
             };
         }
         return { state: 'complete', label: 'complete', color: 'var(--muted)', live: false, show: false, reason: '' };
+    }
+    if (cpuBlockers.length) {
+        return {
+            state: 'waiting_cpu_lock',
+            label: 'waiting for CPU lock',
+            color: '#fbbf24',
+            live: false,
+            show: true,
+            reason: `required CPU regions occupied by ${structuredTapCpuBlockerSummary(cpuBlockers)}`,
+        };
     }
     if (quietS >= _STRUCTURED_TAP_STALLED_S) {
         return {
@@ -3666,6 +3730,7 @@ function startDashboard() {
                     regions: new Set((info.regions || []).filter(e => e.held).map(e => String(e.region))),
                     holderPids,
                     pidsByInstanceIdx,
+                    instances: info.instances || [],
                 };
             }
             if (_rawTapRenderMode === 'structured' && Array.isArray(_structuredTapRequests) && _structuredTapRequests.length) {
@@ -3699,6 +3764,11 @@ function startDashboard() {
                 (acc, info) => acc + ((info.active_instance_idxs || []).length),
                 0
             );
+            const heldBySummary = [...new Set(
+                Object.values(globalHeldBy)
+                    .flat()
+                    .map(b => `${b.role}.${b.shape}`)
+            )].join(', ');
             _latestRegionLockSummary = {
                 activeLockCount,
                 heldRegions: globalHeldRegions.size,
@@ -3719,7 +3789,7 @@ function startDashboard() {
             }
             if (status && enabled) {
                 status.textContent = activeLockCount > 0
-                    ? `— ${activeLockCount} instance lock(s) held; per-region locks ENABLED`
+                    ? `— ${activeLockCount} holder instance(s): ${heldBySummary}; blocked cells are wait states; per-region locks ENABLED`
                     : '— no locks held; per-region locks ENABLED';
                 status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
             }
@@ -3747,7 +3817,7 @@ function startDashboard() {
                         const blockers = blockingQuarters
                             .map(q => `${q}←${(globalHeldBy[q] || []).map(b => `${b.role}.${b.shape}`).join(',')}`)
                             .join(' · ');
-                        rows.push(`<div class="rl-cell rl-blocked" title="${role}.${col.label} BLOCKED — physical cores ${blockingQuarters.join(',')} occupied: ${blockers}">🔒</div>`);
+                        rows.push(`<div class="rl-cell rl-blocked" title="${role}.${col.label} WAITING — physical cores ${blockingQuarters.join(',')} occupied by ${blockers}; not the active holder">×</div>`);
                     } else {
                         rows.push(`<div class="rl-cell rl-ready" title="${role}.${col.label} READY — physical cores {${needed.join(',')}} all free">✅</div>`);
                     }
@@ -3763,7 +3833,7 @@ function startDashboard() {
                 const footer = document.createElement('div');
                 footer.style.cssText = 'grid-column:1/-1;color:var(--dim);font-size:10px;font-family:var(--font-ui);margin-top:6px;line-height:1.5';
                 let footMsg = `${nRoles} role(s) from <code style="font-size:10px;color:var(--muted)">contention_matrix.yaml</code> · `;
-                footMsg += `Legend: <span style="color:#fbbf24">⚡ active</span> · <span style="color:#f87171">🔒 blocked by concurrency matrix</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not in this role's same_role matrix</span>.`;
+                footMsg += `Legend: <span style="color:#fbbf24">⚡ active holder</span> · <span style="color:#f87171">× waiting on occupied CPU regions</span> · <span style="color:var(--good,#34d399)">✅ ready to dispatch</span> · <span style="color:var(--dim)">— shape not in this role's same_role matrix</span>.`;
                 footer.innerHTML = footMsg;
                 grid.appendChild(footer);
             }
