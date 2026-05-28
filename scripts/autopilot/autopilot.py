@@ -68,6 +68,7 @@ from controller_io import (
     validate_single_variable as _validate_single_variable,
     _unwrap_action,
 )
+from planner_coordinator import plan_with_providers
 from state_store import (
     append_blacklist as _append_blacklist_impl,
     check_blacklist,
@@ -1196,19 +1197,45 @@ def _run_loop_inner(
                 session_id=state.get("session_id"),
                 idle_reason="planner subprocess running",
             )
-            response, session_id = invoke_controller(
-                prompt, state.get("session_id")
+            planner_provider_state = state.setdefault("planner_providers", {})
+            if not isinstance(planner_provider_state, dict):
+                planner_provider_state = {}
+                state["planner_providers"] = planner_provider_state
+            planner_decision = plan_with_providers(
+                prompt,
+                session_id=state.get("session_id"),
+                cwd=ORCH_ROOT,
+                planner_state=planner_provider_state,
+                stagnation_signal=stagnation_signal,
             )
             phase.set(
                 "planner_parse",
                 trial_id=trial_counter,
-                response_chars=len(response or ""),
-                session_id=session_id,
+                response_chars=len(planner_decision.canonical_text or ""),
+                session_id=planner_decision.session_id,
+                draft_provider=planner_decision.draft_provider,
+                critic_provider=planner_decision.critic_provider,
+                planner_mode=planner_decision.mode,
+                degraded=planner_decision.degraded,
+                fallback_reason=planner_decision.fallback_reason,
             )
-            state["session_id"] = session_id
-            action = extract_action(response)
-            predicted_objectives = peaf.extract_predicted_objectives(response)
-            rationale = extract_rationale(response)
+            if planner_decision.fallback_reason:
+                log.warning(
+                    "Planner fallback/degraded mode: %s",
+                    planner_decision.fallback_reason,
+                )
+            if planner_decision.critique is not None:
+                log.info(
+                    "Planner critique by %s: %s confidence=%.2f issues=%s",
+                    planner_decision.critique.provider or "(none)",
+                    planner_decision.critique.decision,
+                    planner_decision.critique.confidence,
+                    planner_decision.critique.issues,
+                )
+            state["session_id"] = planner_decision.session_id
+            action = planner_decision.action
+            predicted_objectives = planner_decision.predicted_objectives
+            rationale = planner_decision.rationale
         else:
             # Autonomous mode: species selection by budget
             phase.set("autonomous_select", trial_id=trial_counter)
