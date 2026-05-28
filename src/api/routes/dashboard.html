@@ -1116,37 +1116,44 @@ function updateTopologyInflight(inflight) {
             // Sort newest first
             const sorted = [...tasks].sort((a, b) => (a.age_s || 0) - (b.age_s || 0));
             container.innerHTML = sorted.map(t => renderTaskCard(t, 'in_flight')).join('');
-        } else if (tapEntries.length > 0) {
-            // Newest first by timestamp.
-            const sorted = [...tapEntries].sort((a, b) => {
-                const ta = Date.parse((a.timestamp || '').replace(' ', 'T')) || 0;
-                const tb = Date.parse((b.timestamp || '').replace(' ', 'T')) || 0;
-                return tb - ta;
-            });
-            container.innerHTML = sorted.map(s => renderTapActivityCard(s)).join('');
-        } else if (activeInstanceCount > 0 && lockInfo) {
-            // Lock-only activity: the badge says "N active" from _latestRegionLocksByRole
-            // (incl. tap-inferred fallback when polling lags), but no chat-XXX or live
-            // tap card is in scope — typically internal seed/eval probes that don't emit
-            // tap events. Surface which instances are holding so the expanded row agrees
-            // with the badge above AND the CPU region-locks grid below.
-            const instMap = new Map((lockInfo.instances || []).map(i => [Number(i.idx), i]));
-            const items = [...lockInfo.instanceIdxs].sort((a, b) => Number(a) - Number(b)).map(idx => {
-                const inst = instMap.get(Number(idx));
-                const shape = inst ? inst.shape : `idx${idx}`;
-                const regions = inst && Array.isArray(inst.regions) ? inst.regions.join(', ') : '';
-                return regions
-                    ? `<li><strong>${base}.${shape}</strong> <span style="color:var(--dim)">— regions ${regions}</span></li>`
-                    : `<li><strong>${base}.${shape}</strong></li>`;
-            }).join('');
-            container.innerHTML =
-                `<div style="padding:6px 8px;font-size:11px;background:rgba(168,85,247,0.08);border-left:2px solid rgba(168,85,247,0.5);border-radius:3px">`
-                + `<div style="margin-bottom:4px"><strong>${activeInstanceCount} CPU region holder(s) — no chat or tap card</strong></div>`
-                + `<ul style="margin:0;padding-left:18px">${items}</ul>`
-                + `<div style="color:var(--dim);font-size:10px;margin-top:6px">Lock-derived activity (internal seed/eval probe or tap-inferred when /proc/locks polling lags). Cross-check the CPU region-locks grid for matching shapes.</div>`
-                + `</div>`;
         } else {
-            container.innerHTML = '<div style="color:var(--dim);font-size:10px;padding:4px 6px">no live activity · headline counts the last 10 min of completed tap traffic</div>';
+            // Tap + lock both contribute when present. Tap cards carry rich detail
+            // (prompt/response, chunks) for in-flight inference; the lock summary
+            // lists every instance the region-locks cache reports as holding —
+            // including ones with no captured tap event AND ones a tap event covers
+            // (no dedup; the lock list is what the badge's "N active" counts so the
+            // expanded row sums to the same N). Fixes the case where the badge said
+            // "N active" from lock count but the expansion only showed a single tap
+            // card and hid the other holders.
+            const parts = [];
+            if (tapEntries.length > 0) {
+                const sorted = [...tapEntries].sort((a, b) => {
+                    const ta = Date.parse((a.timestamp || '').replace(' ', 'T')) || 0;
+                    const tb = Date.parse((b.timestamp || '').replace(' ', 'T')) || 0;
+                    return tb - ta;
+                });
+                parts.push(sorted.map(s => renderTapActivityCard(s)).join(''));
+            }
+            if (activeInstanceCount > 0 && lockInfo) {
+                const instMap = new Map((lockInfo.instances || []).map(i => [Number(i.idx), i]));
+                const items = [...lockInfo.instanceIdxs].sort((a, b) => Number(a) - Number(b)).map(idx => {
+                    const inst = instMap.get(Number(idx));
+                    const shape = inst ? inst.shape : `idx${idx}`;
+                    const regions = inst && Array.isArray(inst.regions) ? inst.regions.join(', ') : '';
+                    return regions
+                        ? `<li><strong>${base}.${shape}</strong> <span style="color:var(--dim)">— regions ${regions}</span></li>`
+                        : `<li><strong>${base}.${shape}</strong></li>`;
+                }).join('');
+                parts.push(
+                    `<div style="padding:6px 8px;font-size:11px;background:rgba(168,85,247,0.08);border-left:2px solid rgba(168,85,247,0.5);border-radius:3px">`
+                    + `<div style="margin-bottom:4px"><strong>${activeInstanceCount} CPU region holder(s)</strong> <span style="color:var(--dim)">— lock cache, incl. tap-inferred when /proc/locks polling lags</span></div>`
+                    + `<ul style="margin:0;padding-left:18px">${items}</ul>`
+                    + `</div>`
+                );
+            }
+            container.innerHTML = parts.length > 0
+                ? parts.join('')
+                : '<div style="color:var(--dim);font-size:10px;padding:4px 6px">no live activity · headline counts the last 10 min of completed tap traffic</div>';
         }
     });
 }
