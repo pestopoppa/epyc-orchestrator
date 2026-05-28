@@ -1057,7 +1057,16 @@ function updateTopologyInflight(inflight) {
         const base = badge.id.substring('active_badge_'.length);
         const tasks = byRole[base] || [];
         const tapEntries = tapByBase[base] || [];
-        if (tasks.length === 0 && tapEntries.length === 0) {
+        // Per-instance active count from the region-locks cache. The cache (built in
+        // updateRegionLocks → _latestRegionLocksByRole) already merges /proc/locks
+        // holders with the tap-inferred fallback used when polling lags — same source
+        // the CPU region-locks grid consumes. Without this, the badge undercounts
+        // whenever an instance is held without emitting a tap event (e.g. internal
+        // seeding probes) and the topology row disagrees with the locks panel.
+        const lockInfo = (typeof _latestRegionLocksByRole === 'object' && _latestRegionLocksByRole)
+            ? _latestRegionLocksByRole[base] : null;
+        const activeInstanceCount = (lockInfo && lockInfo.instanceIdxs) ? lockInfo.instanceIdxs.size : 0;
+        if (tasks.length === 0 && tapEntries.length === 0 && activeInstanceCount === 0) {
             badge.textContent = '0';
             badge.classList.add('zero');
             badge.style.removeProperty('background');
@@ -1083,10 +1092,19 @@ function updateTopologyInflight(inflight) {
                 badge.style.color = '#fbbf24';
                 badge.style.borderColor = 'rgba(245,158,11,0.3)';
             }
+        } else if (activeInstanceCount > 0) {
+            // No chat-XXX in-flight, but the region-locks cache reports per-instance
+            // holders for this role (seeding / eval / internal probes — possibly
+            // tap-inferred if polling lags). Match the locks panel by reporting the
+            // per-instance active count instead of just the tap-event count.
+            badge.textContent = `${activeInstanceCount} active`;
+            badge.classList.remove('zero');
+            badge.style.background = 'rgba(168,85,247,0.15)';
+            badge.style.color = '#c084fc';
+            badge.style.borderColor = 'rgba(168,85,247,0.3)';
         } else {
-            // Tap-only activity — distinguish visually from chat-XXX with a
-            // violet pill so the operator knows it's seeding/eval, not a
-            // user-driven chat request.
+            // Tap entries exist with no per-instance binding (legacy fallback —
+            // happens when a tap event lacks lock_role/instance_idx metadata).
             badge.textContent = `${tapEntries.length} tap`;
             badge.classList.remove('zero');
             badge.style.background = 'rgba(168,85,247,0.15)';
@@ -1299,12 +1317,32 @@ function renderAutopilotRunStrip() {
     const verdicts = rolling._verifier_verdicts || {};
     const completed = snap.recent_completed_tasks || [];
 
+    const openReqs = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
+    const activeReqs = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
+    const stateCounts = {};
+    for (const req of openReqs) {
+        const a = structuredTapActivity(req);
+        stateCounts[a.state] = (stateCounts[a.state] || 0) + 1;
+    }
+    const queued = stateCounts.queued || 0;
+    const waitingCpu = stateCounts.waiting_cpu_lock || 0;
+    const pending = stateCounts.prefill_decode_pending || 0;
+    const stalled = stateCounts.stalled || 0;
+    const lockSummary = _latestRegionLockSummary || {};
+    const activeInferenceCount = activeReqs.length;
+    const activeLockCount = Number(lockSummary.activeLockCount || 0);
+    const heldRegionCount = Number(lockSummary.heldRegions || 0);
+    const hasActiveInference = activeInferenceCount > 0 || activeLockCount > 0;
+
     const lastLogAge = proc.last_autopilot_log_age_s;
     let runState = 'waiting';
     let runClass = 'muted';
     if (!ap.running) {
-        runState = 'down';
-        runClass = 'bad';
+        runState = hasActiveInference ? 'orphan inference' : 'down';
+        runClass = hasActiveInference ? 'warn' : 'bad';
+    } else if (hasActiveInference) {
+        runState = 'inference active';
+        runClass = 'good';
     } else if (lastLogAge != null && lastLogAge >= _AUTOPILOT_IDLE_S) {
         runState = 'quiet';
         runClass = 'warn';
@@ -1343,21 +1381,9 @@ function renderAutopilotRunStrip() {
         trialSub = `${escapeHTML(String(phase.action_type || 'action unknown'))} · phase ${escapeHTML(String(phaseName))}`;
     }
 
-    const openReqs = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
-    const activeReqs = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
-    const stateCounts = {};
-    for (const req of openReqs) {
-        const a = structuredTapActivity(req);
-        stateCounts[a.state] = (stateCounts[a.state] || 0) + 1;
-    }
-    const queued = stateCounts.queued || 0;
-    const waitingCpu = stateCounts.waiting_cpu_lock || 0;
-    const pending = stateCounts.prefill_decode_pending || 0;
-    const stalled = stateCounts.stalled || 0;
     const loadClass = stalled ? 'bad' : ((waitingCpu || queued || pending) ? 'warn' : (activeReqs.length ? 'good' : 'muted'));
     const loadValue = `${activeReqs.length} active`;
-    const lockSummary = _latestRegionLockSummary || {};
-    const loadSub = `waiting ${waitingCpu} · queued ${queued} · pending ${pending} · stalled ${stalled}<br><strong>locks</strong> ${lockSummary.activeLockCount || 0} held across ${lockSummary.heldRegions || 0} regions`;
+    const loadSub = `waiting ${waitingCpu} · queued ${queued} · pending ${pending} · stalled ${stalled}<br><strong>locks</strong> ${activeLockCount} held across ${heldRegionCount} regions`;
 
     const failures = completed.filter(t => t.outcome && t.outcome !== 'task_completed').length;
     const lastComplete = completed.length ? completed[0] : null;
@@ -2838,7 +2864,7 @@ async function updatePareto() {
         const sumEl = document.getElementById('pareto-summary');
         if (sumEl) {
             if (d.available) {
-                const source = d.source === 'journal_current_session' ? 'journal' : 'state';
+                const source = String(d.source || '').startsWith('journal_') ? 'journal' : 'state';
                 sumEl.textContent =
                     `${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials · ${source}`;
             } else {
@@ -2881,8 +2907,8 @@ function renderParetoScatter(d) {
     const yRange = (yMax - yMin) || 1;
     const xPad = xRange * 0.08;
     const yPad = yRange * 0.08;
-    const xLo = xMin - xPad, xHi = xMax + xPad;
-    const yLo = yMin - yPad, yHi = yMax + yPad;
+    const xLo = Math.max(0, xMin - xPad), xHi = xMax + xPad;
+    const yLo = Math.max(0, yMin - yPad), yHi = yMax + yPad;
 
     const sx = v => PAD.l + ((v - xLo) / (xHi - xLo)) * plotW;
     const sy = v => PAD.t + plotH - ((v - yLo) / (yHi - yLo)) * plotH;
