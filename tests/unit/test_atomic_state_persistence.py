@@ -140,6 +140,27 @@ def test_pareto_save_atomic_round_trip(tmp_path: Path) -> None:
     assert leftover == []
 
 
+def test_pareto_save_updates_caller_state_for_followup_save(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    archive = ParetoArchive(state_path=state_path)
+    state = {
+        "trial_counter": 1,
+        "pareto_archive": {
+            "frontier": [],
+            "all_entries": [],
+            "hypervolume_history": [],
+        },
+    }
+    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0)))
+
+    archive.save(state)
+    state_store.save_state(state_path, state)
+
+    loaded = json.loads(state_path.read_text())
+    assert loaded["pareto_archive"]["all_entries"][0]["trial_id"] == 1
+    assert ParetoArchive(state_path=state_path).frontier_size() == 1
+
+
 def test_pareto_save_crash_during_replace_preserves_original(
     tmp_path: Path, monkeypatch
 ) -> None:

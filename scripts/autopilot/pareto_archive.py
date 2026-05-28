@@ -117,11 +117,12 @@ class ParetoArchive:
             existing = {}
         if state:
             existing.update(state)
-        existing["pareto_archive"] = {
+        archive_payload = {
             "frontier": [e.to_dict() for e in self._frontier],
             "all_entries": [e.to_dict() for e in self._all_entries],
             "hypervolume_history": list(self._hypervolume_history),
         }
+        existing["pareto_archive"] = archive_payload
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         import os as _os
         tmp = self.state_path.with_suffix(self.state_path.suffix + f".tmp.{_os.getpid()}")
@@ -131,6 +132,8 @@ class ParetoArchive:
             fh.flush()
             _os.fsync(fh.fileno())
         _os.replace(tmp, self.state_path)
+        if state is not None:
+            state["pareto_archive"] = archive_payload
 
     # ── core operations ─────────────────────────────────────────
 
