@@ -1142,14 +1142,46 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _pareto_from_journal(session_start_ts: float | None) -> dict[str, Any] | None:
-    """Reconstruct current-session Pareto data from the append-only journal.
+def _latest_journal_run_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return the latest contiguous journal segment after a trial-id reset.
 
-    The dashboard should keep working when autopilot is down, and it should not
-    depend on the cached `pareto_archive` subdocument being fresh. The active
-    autopilot process records completed trials to the journal first, then state;
-    using journal entries at or after `autopilot_fleet_started_at` matches the
-    current run's in-memory archive and avoids stale all-time archive geometry.
+    `autopilot_journal.jsonl` is append-only across stack/campaign restarts.
+    The current run is identifiable by the last point where trial_id decreases
+    (for example old trial 569 followed by new trial 0). This keeps dashboard
+    progress plots scoped to the current orchestration stack/run while still
+    surviving API/autopilot reloads inside that run.
+    """
+    start_idx = 0
+    prev_trial_id: int | None = None
+    for i, row in enumerate(rows):
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        if prev_trial_id is not None and trial_id < prev_trial_id:
+            start_idx = i
+        prev_trial_id = trial_id
+
+    selected = rows[start_idx:]
+    meta = {
+        "journal_run_start_index": start_idx,
+        "journal_run_start_trial_id": selected[0].get("trial_id") if selected else None,
+        "journal_run_start_ts": selected[0].get("timestamp") if selected else None,
+    }
+    return selected, meta
+
+
+def _pareto_from_journal(
+    session_start_ts: float | None,
+    *,
+    current_run_only: bool = False,
+    max_trial_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Reconstruct Pareto data from the append-only journal.
+
+    By default this can reconstruct any timestamp-filtered slice. For the
+    dashboard's main plots, use `current_run_only=True` so old incompatible
+    stack/campaign rows do not pollute the current frontier.
     """
     if not _AUTOPILOT_JOURNAL_PATH.exists():
         return None
@@ -1157,6 +1189,7 @@ def _pareto_from_journal(session_start_ts: float | None) -> dict[str, Any] | Non
     all_entries: list[dict[str, Any]] = []
     frontier: list[dict[str, Any]] = []
     hv_history: list[list[float]] = []
+    run_meta: dict[str, Any] = {}
     try:
         with open(_AUTOPILOT_JOURNAL_PATH) as f:
             rows = []
@@ -1170,11 +1203,20 @@ def _pareto_from_journal(session_start_ts: float | None) -> dict[str, Any] | Non
     except Exception:
         return None
 
+    if current_run_only:
+        rows, run_meta = _latest_journal_run_rows(rows)
+
     for row in rows:
         if row.get("bug_corrupted_by"):
             continue
         ts = _parse_journal_ts(row.get("timestamp"))
         if session_start_ts is not None and (ts is None or ts < session_start_ts):
+            continue
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        if max_trial_id is not None and trial_id > max_trial_id:
             continue
         objectives = _pareto_objectives_from_journal(row)
         if objectives is None:
@@ -1195,23 +1237,24 @@ def _pareto_from_journal(session_start_ts: float | None) -> dict[str, Any] | Non
                 if not _pareto_dominates(objectives, f["objectives"])
             ]
             frontier.append(shaped)
-        try:
-            trial_id = int(row.get("trial_id"))
-        except (TypeError, ValueError):
-            continue
+        hv = round(_pareto_hypervolume([f["objectives"] for f in frontier]), 4)
+        if hv_history:
+            hv = max(hv_history[-1][1], hv)
         hv_history.append([
             trial_id,
-            round(_pareto_hypervolume([f["objectives"] for f in frontier]), 4),
+            hv,
         ])
 
     if not all_entries:
         return None
-    return {
+    archive = {
         "frontier": frontier,
         "all_entries": all_entries,
         "hypervolume_history": hv_history,
         "session_start_ts": session_start_ts,
     }
+    archive.update(run_meta)
+    return archive
 
 
 def _newest_autopilot_log() -> Path | None:
@@ -1478,7 +1521,7 @@ async def autopilot_progress() -> JSONResponse:
 async def pareto(max_dominated: int = 600) -> JSONResponse:
     """Return the autopilot's Pareto archive for visualization.
 
-    Prefer reconstructing the current run from the append-only journal. This
+    Prefer reconstructing all trusted progress from the append-only journal. This
     keeps the dashboard useful when autopilot is down and protects the panel
     from a stale `pareto_archive` cache inside autopilot_state.json.
 
@@ -1501,15 +1544,30 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
     except (TypeError, ValueError):
         session_start_ts = None
 
-    journal_archive = _pareto_from_journal(session_start_ts)
+    state_trial_counter = None
+    try:
+        state_trial_counter = int(data.get("trial_counter"))
+    except (TypeError, ValueError):
+        state_trial_counter = None
+
+    # The operator-facing Pareto/GEPA plots are current-run progress charts,
+    # not "this API process since reload" and not all historical campaigns.
+    # Use the latest journal segment after a trial-id reset so restarts inside
+    # the current run survive while pre-current-stack rows stay out.
+    journal_archive = _pareto_from_journal(
+        None,
+        current_run_only=True,
+        max_trial_id=state_trial_counter,
+    )
+    source = "journal_current_run"
+    source_reason = "reconstructed from latest trial-id reset segment in autopilot_journal.jsonl"
+
     if journal_archive:
         archive = journal_archive
-        source = "journal_current_session"
-        source_reason = "reconstructed from autopilot_journal.jsonl"
     elif data:
         archive = data.get("pareto_archive", {}) or {}
         source = "state_archive"
-        source_reason = "journal unavailable or no current-session entries"
+        source_reason = "journal unavailable or no trusted current-run entries"
     else:
         return JSONResponse({
             "available": False,
@@ -1551,6 +1609,9 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
             "hv_points": len(hv_shaped),
         },
         "session_start_ts": archive.get("session_start_ts"),
+        "journal_run_start_index": archive.get("journal_run_start_index"),
+        "journal_run_start_trial_id": archive.get("journal_run_start_trial_id"),
+        "journal_run_start_ts": archive.get("journal_run_start_ts"),
         "objective_axes": [
             {"key": "quality", "index": 0, "direction": "max", "label": "quality"},
             {"key": "speed", "index": 1, "direction": "max", "label": "speed (t/s)"},

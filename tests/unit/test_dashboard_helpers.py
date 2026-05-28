@@ -587,15 +587,16 @@ def test_dashboard_module_html_loads_from_file() -> None:
     assert "</body></html>" in dashboard._DASHBOARD_HTML
 
 
-def test_pareto_endpoint_prefers_current_session_journal(
+def test_pareto_endpoint_prefers_current_journal_run_over_old_rows_and_state(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A stale state archive should not freeze the dashboard plots."""
+    """Stale pre-reset journal rows and stale state should not pollute plots."""
     state_path = tmp_path / "autopilot_state.json"
     journal_path = tmp_path / "autopilot_journal.jsonl"
     session_start = datetime(2026, 5, 28, 9, 0, tzinfo=timezone.utc)
     state_path.write_text(json.dumps({
         "autopilot_fleet_started_at": session_start.timestamp(),
+        "trial_counter": 12,
         "pareto_archive": {
             "frontier": [{"trial_id": 99, "objectives": [9.0, 9.0, 0.0, 0.0]}],
             "all_entries": [{"trial_id": 99, "objectives": [9.0, 9.0, 0.0, 0.0]}],
@@ -604,13 +605,22 @@ def test_pareto_endpoint_prefers_current_session_journal(
     }))
     rows = [
         {
-            "trial_id": 5,
+            "trial_id": 568,
             "timestamp": "2026-05-28T08:59:00+00:00",
             "species": "old",
             "quality": 10.0,
             "speed": 100.0,
             "cost": 0.5,
             "reliability": 1.0,
+        },
+        {
+            "trial_id": 0,
+            "timestamp": "2026-05-28T09:00:00+00:00",
+            "species": "reset",
+            "quality": 0.8,
+            "speed": 7.0,
+            "cost": 0.5,
+            "reliability": 0.7,
         },
         {
             "trial_id": 10,
@@ -657,12 +667,67 @@ def test_pareto_endpoint_prefers_current_session_journal(
     response = asyncio.run(dashboard.pareto())
     payload = json.loads(response.body)
 
-    assert payload["source"] == "journal_current_session"
+    assert payload["source"] == "journal_current_run"
     assert payload["totals"] == {
         "frontier_size": 2,
-        "all_entries": 3,
-        "hv_points": 3,
+        "all_entries": 4,
+        "hv_points": 4,
     }
     assert {point["trial_id"] for point in payload["frontier"]} == {10, 12}
-    assert [point["trial_id"] for point in payload["dominated"]] == [11]
+    assert [point["trial_id"] for point in payload["dominated"]] == [11, 0]
     assert payload["hypervolume_history"][-1][0] == 12
+    assert payload["journal_run_start_trial_id"] == 0
+
+
+def test_pareto_endpoint_uses_current_run_when_restart_marker_is_newer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A new run marker just after the last row must not collapse the plots."""
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    session_start = datetime(2026, 5, 28, 9, 43, 33, 596323, tzinfo=timezone.utc)
+    state_path.write_text(json.dumps({
+        "autopilot_fleet_started_at": session_start.timestamp(),
+        "trial_counter": 73,
+        "pareto_archive": {
+            "frontier": [{"trial_id": 99, "objectives": [9.0, 9.0, 0.0, 0.0]}],
+            "all_entries": [{"trial_id": 99, "objectives": [9.0, 9.0, 0.0, 0.0]}],
+            "hypervolume_history": [[99, 999.0]],
+        },
+    }))
+    rows = [
+        {
+            "trial_id": 72,
+            "timestamp": "2026-05-28T09:05:40.024205+00:00",
+            "species": "seeder",
+            "quality": 1.2,
+            "speed": 28.0,
+            "cost": 0.5,
+            "reliability": 0.8,
+        },
+        {
+            "trial_id": 73,
+            "timestamp": "2026-05-28T09:43:33.596165+00:00",
+            "species": "(killed)",
+            "quality": 0.0,
+            "speed": 0.0,
+            "cost": 0.0,
+            "reliability": 0.0,
+            "bug_corrupted_by": "autopilot_killed_mid_trial",
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.pareto())
+    payload = json.loads(response.body)
+
+    assert payload["source"] == "journal_current_run"
+    assert payload["totals"] == {
+        "frontier_size": 1,
+        "all_entries": 1,
+        "hv_points": 1,
+    }
+    assert payload["frontier"][0]["trial_id"] == 72
+    assert payload["hypervolume_history"][-1][0] == 72
