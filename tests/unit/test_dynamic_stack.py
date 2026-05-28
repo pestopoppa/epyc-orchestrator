@@ -327,7 +327,7 @@ class TestStackTemplates:
         )
         result = validate_template(template)
         assert not result.valid
-        assert any("Memory budget" in e for e in result.errors)
+        assert any("budget exceeded" in e for e in result.errors)
 
     def test_validate_catches_missing_frontdoor(self):
         from src.config.stack_templates import (

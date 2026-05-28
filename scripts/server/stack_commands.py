@@ -102,8 +102,34 @@ def _find_pids_on_port(port: int) -> list[int]:
 
 def _scan_known_ports() -> dict[int, list[int]]:
     """Scan all known orchestrator ports for running processes."""
-    known_ports = sorted({s["port"] for s in HOT_SERVERS} | NUMA_REPLICA_PORTS | {8000})
+    managed_server_ports = {s["port"] for s in HOT_SERVERS + WARM_SERVERS}
+    docker_ports = {int(svc["port"]) for svc in DOCKER_SERVICES if "port" in svc}
+    native_aux_ports = {8190, 9000, 9001}
+    known_ports = sorted(
+        managed_server_ports | NUMA_REPLICA_PORTS | docker_ports | native_aux_ports | {8000}
+    )
     return _stack_processes.scan_known_ports(known_ports)
+
+
+def _preserved_process_info(
+    role: str,
+    port: int,
+    model_path: str,
+    log_file: str = "",
+) -> ProcessInfo | None:
+    """Build a durable state record for an already-healthy listener."""
+    pids = _pids_on_port(port)
+    if not pids:
+        print(f"  [WARN] {role} on port {port} is healthy but listener PID was not found")
+        return None
+    return ProcessInfo(
+        role=role,
+        pid=pids[0],
+        port=port,
+        started_at=datetime.now().isoformat(),
+        model_path=model_path,
+        log_file=log_file,
+    )
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -410,17 +436,9 @@ def cmd_start(args: argparse.Namespace) -> int:
                 already_healthy_ports.add(port)
                 continue
             print(f"  Port {port} in use but unhealthy, cleaning up...")
-            # Find PID from lsof
             try:
-                result = subprocess.run(
-                    ["lsof", "-t", f"-i:{port}"],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.stdout.strip():
-                    for pid_str in result.stdout.strip().split("\n"):
-                        pid = int(pid_str)
-                        kill_process(pid)
+                for pid in _pids_on_port(port):
+                    kill_process(pid)
             except Exception as e:
                 print(f"  [!] Error cleaning port {port}: {e}")
     if already_healthy_ports:
@@ -438,10 +456,17 @@ def cmd_start(args: argparse.Namespace) -> int:
             role_label = roles[0] if roles else str(port)
             print(f"  Skipping port {port}: {role_label} (already healthy)")
             # Record existing server in state so status reporting works
-            state[f"server_{port}"] = {"port": port, "roles": roles, "status": "preserved"}
-            for role in roles:
-                if role not in state:
-                    state[role] = {"port": port, "roles": roles, "status": "preserved"}
+            preserved = _preserved_process_info(
+                role_label,
+                port,
+                f"preserved:{role_label}",
+                str(LOG_DIR / f"llama-server-{port}.log"),
+            )
+            if preserved:
+                state[f"server_{port}"] = preserved
+                for role in roles:
+                    if role not in state:
+                        state[role] = preserved
             continue
 
         embedding_mode = server.get("embedding", False)
@@ -490,13 +515,21 @@ def cmd_start(args: argparse.Namespace) -> int:
         print("[4] Skipping orchestrator API (--only mode)")
         if wait_for_health(8000, timeout=2):
             print("  Orchestrator already healthy")
-            state["orchestrator"] = {"port": 8000, "status": "preserved"}
+            preserved = _preserved_process_info(
+                "orchestrator", 8000, "uvicorn", str(LOG_DIR / "orchestrator.log")
+            )
+            if preserved:
+                state["orchestrator"] = preserved
         else:
             print("  [i] Orchestrator not running — start separately if needed")
     elif 8000 in already_healthy_ports:
         print("[4] Starting orchestrator API...")
         print("  Orchestrator already healthy, skipping")
-        state["orchestrator"] = {"port": 8000, "status": "preserved"}
+        preserved = _preserved_process_info(
+            "orchestrator", 8000, "uvicorn", str(LOG_DIR / "orchestrator.log")
+        )
+        if preserved:
+            state["orchestrator"] = preserved
     else:
         info = start_orchestrator(getattr(args, "profile", None))
         if info:
@@ -510,7 +543,17 @@ def cmd_start(args: argparse.Namespace) -> int:
     # Start document formalizer (optional, non-fatal)
     if not args.dev and not args.only:
         print("[5] Starting document formalizer (LightOnOCR-2)...")
-        info = start_document_formalizer()
+        info = None
+        if is_port_in_use(9001) and wait_for_health(9001, timeout=3):
+            print("  Already healthy, skipping")
+            info = _preserved_process_info(
+                "document_formalizer",
+                9001,
+                "LightOnOCR-2",
+                str(LOG_DIR / "document_formalizer.log"),
+            )
+        else:
+            info = start_document_formalizer()
         if info:
             state["document_formalizer"] = info
         else:
@@ -521,10 +564,17 @@ def cmd_start(args: argparse.Namespace) -> int:
         # Start sd-server diffusion service (optional, non-fatal)
         # ERNIE-Image-Turbo Q8 GGUF + Mistral3 + flux2 VAE via stable-diffusion.cpp.
         # Replaced ComfyUI 2026-05-07 — see start_sd_server() for context.
-        if 8190 in already_healthy_ports:
+        if is_port_in_use(8190) and wait_for_health(8190, timeout=3, path="/sdapi/v1/samplers"):
             print("[5a] Starting sd-server (ggml native diffusion)...")
             print("  Already healthy, skipping")
-            state["sd_server"] = {"port": 8190, "status": "preserved"}
+            preserved = _preserved_process_info(
+                "sd_server",
+                8190,
+                "ernie-image-turbo-Q8_0.gguf + ministral-3-3b + flux2-vae",
+                str(LOG_DIR / "sd_server.log"),
+            )
+            if preserved:
+                state["sd_server"] = preserved
         else:
             print("[5a] Starting sd-server (ggml native diffusion)...")
             info = start_sd_server()
@@ -537,10 +587,17 @@ def cmd_start(args: argparse.Namespace) -> int:
 
         # Start Whisper STT service (optional, non-fatal)
         # Promoted from sidecar 2026-05-06.
-        if 9000 in already_healthy_ports:
+        if is_port_in_use(9000) and wait_for_health(9000, timeout=3, path="/health"):
             print("[5b] Starting Whisper STT server...")
             print("  Already healthy, skipping")
-            state["whisper"] = {"port": 9000, "status": "preserved"}
+            preserved = _preserved_process_info(
+                "whisper",
+                9000,
+                "faster-whisper-large-v3-turbo-int8",
+                str(LOG_DIR / "whisper.log"),
+            )
+            if preserved:
+                state["whisper"] = preserved
         else:
             print("[5b] Starting Whisper STT server...")
             info = start_whisper()
@@ -1003,4 +1060,3 @@ __checkpoint_hooks__ = {
     "list": checkpoint_list,
     "delete": checkpoint_delete,
 }
-

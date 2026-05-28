@@ -11,6 +11,13 @@ import pytest
 from scripts.server import orchestrator_stack as oss
 
 
+def _assert_detached_popen(popen) -> None:
+    kwargs = popen.call_args.kwargs
+    assert kwargs["stdin"] is oss.subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+    assert kwargs["close_fds"] is True
+
+
 # -----------------------------------------------------------------------------
 # Vision / embedding / dev / worker-mode shape regressions
 # -----------------------------------------------------------------------------
@@ -298,3 +305,41 @@ def test_dispatcher_routes_default_to_role_builder() -> None:
     assert out == ["ROLE"]
     # numa_instance (default 0) forwarded post-da1aed6.
     m.assert_called_once_with(fake_role, 8070, 0)
+
+
+def test_start_server_default_detaches_child_stdio(tmp_path, monkeypatch) -> None:
+    """Stack-managed llama-server children must outlive non-interactive launchers."""
+    fake_proc = SimpleNamespace(pid=4444)
+    fake_role = SimpleNamespace(
+        model=SimpleNamespace(name="frontdoor-model", full_path="/m/frontdoor.gguf"),
+    )
+    registry = SimpleNamespace(get_role=lambda _role: fake_role)
+    monkeypatch.setattr(oss, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(oss, "_write_llama_marker", lambda *a, **kw: None)
+    monkeypatch.setattr(oss, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(oss, "build_launch_env", lambda *a, **kw: {})
+    with (
+        patch.object(oss, "_numa_prefix", return_value=["taskset", "-c", "frontdoor:0"]),
+        patch.object(oss, "build_server_command", return_value=["llama-server"]),
+        patch.object(oss.subprocess, "Popen", return_value=fake_proc) as popen,
+    ):
+        info = oss.start_server(
+            port=8070,
+            roles=["frontdoor"],
+            registry=registry,
+        )
+
+    assert info is not None
+    assert popen.call_args.args[0][:3] == ["taskset", "-c", "frontdoor:0"]
+    _assert_detached_popen(popen)
+
+
+def test_start_document_formalizer_detaches_child_stdio(tmp_path, monkeypatch) -> None:
+    fake_proc = SimpleNamespace(pid=4545)
+    monkeypatch.setattr(oss, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(oss, "wait_for_health", lambda *a, **kw: True)
+    with patch.object(oss.subprocess, "Popen", return_value=fake_proc) as popen:
+        info = oss.start_document_formalizer()
+
+    assert info is not None
+    _assert_detached_popen(popen)

@@ -647,6 +647,12 @@ def start_server(
     numa_instance: int = 0,
 ) -> ProcessInfo | None:
     """Start a llama-server for the given roles."""
+    detached_stdio = {
+        "stdin": subprocess.DEVNULL,
+        "start_new_session": True,
+        "close_fds": True,
+    }
+
     # Vision mode - VL models with multimodal projector
     if vision_mode:
         log_file = LOG_DIR / f"vision-{vision_type or 'worker'}-{port}.log"
@@ -682,6 +688,7 @@ def start_server(
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
+                **detached_stdio,
             )
 
         print(f"    PID: {proc.pid}")
@@ -733,6 +740,7 @@ def start_server(
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
+                **detached_stdio,
             )
 
         print(f"    PID: {proc.pid}")
@@ -848,6 +856,7 @@ def start_server(
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
+                **detached_stdio,
             )
 
         print(f"    PID: {proc.pid}")
@@ -924,6 +933,7 @@ def start_server(
             stdout=log,
             stderr=subprocess.STDOUT,
             env=env,
+            **detached_stdio,
         )
 
     print(f"    PID: {proc.pid}")
@@ -1151,6 +1161,9 @@ def start_document_formalizer() -> ProcessInfo | None:
             stdout=log,
             stderr=subprocess.STDOUT,
             env=env,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
         )
 
     print(f"    PID: {proc.pid}")

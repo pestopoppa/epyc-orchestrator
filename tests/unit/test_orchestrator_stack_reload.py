@@ -5,6 +5,7 @@ from __future__ import annotations
 from argparse import Namespace
 
 from scripts.server import orchestrator_stack as stack
+from scripts.server import stack_commands
 
 
 def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
@@ -55,3 +56,42 @@ def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
     assert pid_helper_calls == [8090]
     assert saved[-1]["server_8090"] == replacement_info
     assert saved[-1]["embedder"] == replacement_info
+
+
+def test_preserved_process_info_records_listener_pid(monkeypatch) -> None:
+    monkeypatch.setattr(stack_commands, "_pids_on_port", lambda port: [777])
+
+    info = stack_commands._preserved_process_info(
+        "frontdoor",
+        8070,
+        "preserved:frontdoor",
+        "llama-server-8070.log",
+    )
+
+    assert info is not None
+    assert info == stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=777,
+        port=8070,
+        started_at=info.started_at,
+        model_path="preserved:frontdoor",
+        log_file="llama-server-8070.log",
+    )
+
+
+def test_scan_known_ports_includes_warm_aux_and_docker(monkeypatch) -> None:
+    captured: list[list[int]] = []
+
+    monkeypatch.setattr(stack_commands, "HOT_SERVERS", [{"port": 8070}])
+    monkeypatch.setattr(stack_commands, "WARM_SERVERS", [{"port": 8085}])
+    monkeypatch.setattr(stack_commands, "NUMA_REPLICA_PORTS", {8180})
+    monkeypatch.setattr(stack_commands, "DOCKER_SERVICES", [{"port": 8088}])
+
+    def fake_scan(ports):
+        captured.append(list(ports))
+        return {}
+
+    monkeypatch.setattr(stack_commands._stack_processes, "scan_known_ports", fake_scan)
+
+    assert stack_commands._scan_known_ports() == {}
+    assert captured == [[8000, 8070, 8085, 8088, 8180, 8190, 9000, 9001]]

@@ -336,6 +336,47 @@ class TestLlamaServerBackend:
         assert result.failure_reason == "empty_generation"
         assert result.completion_reason == "empty_generation"
 
+    def test_chat_completions_stream_forwards_registry_chat_template_kwargs(self, role_config):
+        """Streaming chat-completions should preserve per-role template kwargs."""
+        config = ServerConfig(base_url="http://test:8080", use_chat_completions=True)
+        backend = LlamaServerBackend(config=config)
+        role_config.name = "frontdoor"
+        request = InferenceRequest(role="frontdoor", prompt="Hello", n_tokens=64)
+        captured_payload = {}
+
+        class _StreamResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_lines(self):
+                yield 'data: {"choices":[{"delta":{"content":"OK"}}]}'
+                yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}'
+                yield "data: [DONE]"
+
+        def _stream(_method, _path, json, timeout):
+            captured_payload.update(json)
+            return _StreamResponse()
+
+        with (
+            patch.object(backend.client, "stream", side_effect=_stream),
+            patch(
+                "src.registry.registry_loader.chat_template_kwargs_for_role",
+                return_value={"enable_thinking": False},
+            ),
+        ):
+            result = backend.infer_stream_text(role_config, request)
+
+        assert result.success is True
+        assert result.output == "OK"
+        assert captured_payload["stream"] is True
+        assert captured_payload["chat_template_kwargs"] == {"enable_thinking": False}
+
     def test_health_check_success(self):
         """Test health check with healthy server."""
         backend = LlamaServerBackend(base_url="http://test:8080")

@@ -1198,6 +1198,16 @@ class LlamaServerBackend(ModelBackend):
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
 
+        ctk = request.extra.get("chat_template_kwargs") if getattr(request, "extra", None) else None
+        if not ctk:
+            try:
+                from src.registry.registry_loader import chat_template_kwargs_for_role
+                ctk = chat_template_kwargs_for_role(getattr(request, "role", None) or role_config.name)
+            except Exception:
+                ctk = None
+        if ctk:
+            payload["chat_template_kwargs"] = ctk
+
         chunks: list[str] = []
         completion_reason = "stop"
 
