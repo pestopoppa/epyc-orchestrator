@@ -294,7 +294,11 @@ DOCKER_SERVICES = [
     },
     {
         "name": "searxng",
-        "port": 8090,
+        # 8888 (not 8090): the embedder pool occupies 8090-8095, so leaving
+        # searxng on 8090 collides with embedder_0 and the container fails
+        # docker-run networking. 8888 sits outside both the llama-server
+        # 80xx range and the reembed_episodic_store.py probe range.
+        "port": 8888,
         "image": "docker.io/searxng/searxng:latest",
         "description": "Metasearch aggregator (JSON API for web_search)",
         "volumes": [
