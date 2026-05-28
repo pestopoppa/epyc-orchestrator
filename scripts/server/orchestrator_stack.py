@@ -46,6 +46,19 @@ from typing import Any
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+# Re-exec under the project venv so heavy deps (yaml, faiss, numpy, ...)
+# resolve regardless of the caller's PATH or active interpreter. System
+# Python in a fresh devcontainer typically lacks PyYAML — this guard
+# means `python3 scripts/server/orchestrator_stack.py ...` always works.
+_PROJECT_VENV_PY = Path(__file__).resolve().parents[2] / ".venv/bin/python"
+if (
+    _PROJECT_VENV_PY.exists()
+    and Path(sys.executable).resolve() != _PROJECT_VENV_PY.resolve()
+    and os.environ.get("ORCHESTRATOR_STACK_REEXEC") != "1"
+):
+    os.environ["ORCHESTRATOR_STACK_REEXEC"] = "1"
+    os.execv(str(_PROJECT_VENV_PY), [str(_PROJECT_VENV_PY), __file__, *sys.argv[1:]])
+
 from scripts.server import stack_checkpoint as _stack_checkpoint
 from scripts.server import stack_processes as _stack_processes
 from scripts.server.stack_env import (
