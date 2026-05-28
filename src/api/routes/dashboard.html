@@ -737,13 +737,12 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
       <h2>topology <span class="count-suffix" id="inflight-count"></span></h2>
       <div class="topology-strip" id="topology-strip"></div>
       <div id="inflight-explainer" style="color:var(--dim);font-size:10px;margin-top:10px;line-height:1.5;display:none">
-        Each role row's ▸ expands to show its live activity. Orchestrator-tracked
-        chat-XXX tasks render as <span class="tag" style="background:rgba(56,189,248,0.15);color:var(--accent);border:1px solid rgba(56,189,248,0.3)">N active</span>
-        and click through to the full event stream. Tap-only activity (seeding,
-        eval, internal probes — no chat-XXX id) renders as
-        <span class="tag" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">N tap</span>
-        and click-through opens the captured prompt+response snapshot from
-        <code>inference_tap.log</code>. Recent window: 60s.
+        Each role row's ▸ expands to show its live activity. Three signals in priority order:
+        <ol style="margin:4px 0;padding-left:18px">
+          <li>Orchestrator-tracked chat-XXX tasks → <span class="tag" style="background:rgba(56,189,248,0.15);color:var(--accent);border:1px solid rgba(56,189,248,0.3)">N active</span> (cyan). Click-through opens the full event stream.</li>
+          <li>CPU region-lock holders (incl. tap-inferred when <code>/proc/locks</code> polling lags) → <span class="tag" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">N active</span> (violet). Sourced from the same cache the CPU region-locks grid renders from, so the row and grid stay consistent.</li>
+          <li>Tap-only fallback (events without <code>instance_idx</code> binding) → <span class="tag" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">N tap</span>. Click-through opens the captured prompt+response from <code>inference_tap.log</code>.</li>
+        </ol>
       </div>
     </div>
 
@@ -882,7 +881,7 @@ function renderTopologyStrip() {
             : '';
         label.innerHTML =
             `<div class="role-line"><span class="role-expand-chev">▸</span>${labelText}${aliasChip}` +
-            `<span class="active-badge zero" id="active_badge_${g.base}" title="active in-flight tasks for ${g.base}">0</span></div>` +
+            `<span class="active-badge zero" id="active_badge_${g.base}" title="${g.base}: priority chat-XXX tasks (cyan) > CPU region-lock holders incl. tap-inferred (violet 'N active') > tap-only fallback (violet 'N tap')">0</span></div>` +
             modelLine;
 
         const port = document.createElement('div');
@@ -1125,6 +1124,27 @@ function updateTopologyInflight(inflight) {
                 return tb - ta;
             });
             container.innerHTML = sorted.map(s => renderTapActivityCard(s)).join('');
+        } else if (activeInstanceCount > 0 && lockInfo) {
+            // Lock-only activity: the badge says "N active" from _latestRegionLocksByRole
+            // (incl. tap-inferred fallback when polling lags), but no chat-XXX or live
+            // tap card is in scope — typically internal seed/eval probes that don't emit
+            // tap events. Surface which instances are holding so the expanded row agrees
+            // with the badge above AND the CPU region-locks grid below.
+            const instMap = new Map((lockInfo.instances || []).map(i => [Number(i.idx), i]));
+            const items = [...lockInfo.instanceIdxs].sort((a, b) => Number(a) - Number(b)).map(idx => {
+                const inst = instMap.get(Number(idx));
+                const shape = inst ? inst.shape : `idx${idx}`;
+                const regions = inst && Array.isArray(inst.regions) ? inst.regions.join(', ') : '';
+                return regions
+                    ? `<li><strong>${base}.${shape}</strong> <span style="color:var(--dim)">— regions ${regions}</span></li>`
+                    : `<li><strong>${base}.${shape}</strong></li>`;
+            }).join('');
+            container.innerHTML =
+                `<div style="padding:6px 8px;font-size:11px;background:rgba(168,85,247,0.08);border-left:2px solid rgba(168,85,247,0.5);border-radius:3px">`
+                + `<div style="margin-bottom:4px"><strong>${activeInstanceCount} CPU region holder(s) — no chat or tap card</strong></div>`
+                + `<ul style="margin:0;padding-left:18px">${items}</ul>`
+                + `<div style="color:var(--dim);font-size:10px;margin-top:6px">Lock-derived activity (internal seed/eval probe or tap-inferred when /proc/locks polling lags). Cross-check the CPU region-locks grid for matching shapes.</div>`
+                + `</div>`;
         } else {
             container.innerHTML = '<div style="color:var(--dim);font-size:10px;padding:4px 6px">no live activity · headline counts the last 10 min of completed tap traffic</div>';
         }
