@@ -24,6 +24,7 @@ import re
 import time
 from collections import deque
 from datetime import datetime, date
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -1040,6 +1041,7 @@ def _read_git_short_sha() -> str | None:
 _AUTOPILOT_STATE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
 _AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_journal.jsonl"
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
+_PARETO_REFERENCE_POINT = (0.0, 0.0, -1.0, 0.0)
 
 
 def _parse_journal_ts(value: Any) -> float | None:
@@ -1055,6 +1057,161 @@ def _parse_journal_ts(value: Any) -> float | None:
         except Exception:
             return None
     return None
+
+
+def _pareto_objectives_from_journal(entry: dict[str, Any]) -> list[float] | None:
+    try:
+        quality = float(entry.get("quality") or 0.0)
+        speed = float(entry.get("speed") or 0.0)
+        cost = float(entry.get("cost") or 0.0)
+        reliability = float(entry.get("reliability") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return [quality, speed, -cost, reliability]
+
+
+def _pareto_dominates(a: list[float], b: list[float]) -> bool:
+    return all(x >= y for x, y in zip(a, b)) and any(x > y for x, y in zip(a, b))
+
+
+def _pareto_hypervolume(points: list[list[float]]) -> float:
+    """Compute the same 4D max-objective hypervolume used by autopilot.
+
+    Dashboard sessions normally have a small frontier. If it grows beyond the
+    exact inclusion-exclusion range, return a deterministic coarse estimate so
+    the trend still moves without making the dashboard endpoint expensive.
+    """
+    valid = [
+        p for p in points
+        if len(p) >= 4 and all(pi > ri for pi, ri in zip(p[:4], _PARETO_REFERENCE_POINT))
+    ]
+    if not valid:
+        return 0.0
+    if len(valid) > 100:
+        # Deterministic approximation over a small lattice. This branch should
+        # be rare for a current autopilot session, but prevents pathological
+        # request latency if the frontier becomes very large.
+        maxes = [max(p[d] for p in valid) for d in range(4)]
+        spans = [max(0.0, maxes[d] - _PARETO_REFERENCE_POINT[d]) for d in range(4)]
+        total_box = 1.0
+        for span in spans:
+            total_box *= span
+        if total_box <= 0.0:
+            return 0.0
+        dominated = 0
+        samples = 4096
+        for i in range(samples):
+            coords = []
+            n = i
+            for d in range(4):
+                n = (1103515245 * n + 12345 + d) & 0x7fffffff
+                frac = (n % 1024) / 1023.0
+                coords.append(_PARETO_REFERENCE_POINT[d] + frac * spans[d])
+            if any(all(p[d] >= coords[d] for d in range(4)) for p in valid):
+                dominated += 1
+        return total_box * (dominated / samples)
+
+    total = 0.0
+    for size in range(1, len(valid) + 1):
+        sign = (-1) ** (size + 1)
+        for subset in combinations(valid, size):
+            volume = 1.0
+            for dim in range(4):
+                volume *= max(
+                    0.0,
+                    min(point[dim] for point in subset) - _PARETO_REFERENCE_POINT[dim],
+                )
+            total += sign * volume
+    return total
+
+
+def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    # Strip heavy config_snapshot for transport — plotted points only need
+    # objectives + identity metadata. Caller can drill via trial_id if needed.
+    obj = entry.get("objectives") or [0.0, 0.0, 0.0, 0.0]
+    if len(obj) < 4:
+        obj = list(obj) + [0.0] * (4 - len(obj))
+    return {
+        "trial_id": entry.get("trial_id"),
+        "objectives": list(obj[:4]),
+        "git_tag": entry.get("git_tag", ""),
+        "species": entry.get("species", ""),
+        "is_production_best": bool(entry.get("is_production_best", False)),
+        "timestamp": entry.get("timestamp", ""),
+        "reasoning": (entry.get("reasoning") or "")[:200],
+    }
+
+
+def _pareto_from_journal(session_start_ts: float | None) -> dict[str, Any] | None:
+    """Reconstruct current-session Pareto data from the append-only journal.
+
+    The dashboard should keep working when autopilot is down, and it should not
+    depend on the cached `pareto_archive` subdocument being fresh. The active
+    autopilot process records completed trials to the journal first, then state;
+    using journal entries at or after `autopilot_fleet_started_at` matches the
+    current run's in-memory archive and avoids stale all-time archive geometry.
+    """
+    if not _AUTOPILOT_JOURNAL_PATH.exists():
+        return None
+
+    all_entries: list[dict[str, Any]] = []
+    frontier: list[dict[str, Any]] = []
+    hv_history: list[list[float]] = []
+    try:
+        with open(_AUTOPILOT_JOURNAL_PATH) as f:
+            rows = []
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return None
+
+    for row in rows:
+        if row.get("bug_corrupted_by"):
+            continue
+        ts = _parse_journal_ts(row.get("timestamp"))
+        if session_start_ts is not None and (ts is None or ts < session_start_ts):
+            continue
+        objectives = _pareto_objectives_from_journal(row)
+        if objectives is None:
+            continue
+        shaped = {
+            "trial_id": row.get("trial_id"),
+            "objectives": objectives,
+            "git_tag": row.get("git_tag", ""),
+            "species": row.get("species", ""),
+            "is_production_best": False,
+            "timestamp": row.get("timestamp", ""),
+            "reasoning": row.get("reasoning", ""),
+        }
+        all_entries.append(shaped)
+        if not any(_pareto_dominates(f["objectives"], objectives) for f in frontier):
+            frontier = [
+                f for f in frontier
+                if not _pareto_dominates(objectives, f["objectives"])
+            ]
+            frontier.append(shaped)
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        hv_history.append([
+            trial_id,
+            round(_pareto_hypervolume([f["objectives"] for f in frontier]), 4),
+        ])
+
+    if not all_entries:
+        return None
+    return {
+        "frontier": frontier,
+        "all_entries": all_entries,
+        "hypervolume_history": hv_history,
+        "session_start_ts": session_start_ts,
+    }
 
 
 def _newest_autopilot_log() -> Path | None:
@@ -1321,63 +1478,57 @@ async def autopilot_progress() -> JSONResponse:
 async def pareto(max_dominated: int = 600) -> JSONResponse:
     """Return the autopilot's Pareto archive for visualization.
 
-    Reads orchestration/autopilot_state.json on each call (file is small,
-    a few hundred KB; mtime-based caching unnecessary at this scale).
-    Returns enough data to draw a scatter of (quality, speed) with the
-    frontier highlighted + the hypervolume timeline.
+    Prefer reconstructing the current run from the append-only journal. This
+    keeps the dashboard useful when autopilot is down and protects the panel
+    from a stale `pareto_archive` cache inside autopilot_state.json.
 
     Objectives in the archive are (quality, speed, -cost, reliability).
     The dashboard plots the first two by default since they're the most
     operationally meaningful; -cost and reliability ride along as
     per-point fields the client can surface in tooltips.
     """
-    if not _AUTOPILOT_STATE_PATH.exists():
-        return JSONResponse({
-            "available": False,
-            "reason": "autopilot_state.json not found",
-            "frontier": [],
-            "dominated": [],
-            "hypervolume_history": [],
-        })
+    data: dict[str, Any] = {}
+    state_error: str | None = None
+    if _AUTOPILOT_STATE_PATH.exists():
+        try:
+            data = json.loads(_AUTOPILOT_STATE_PATH.read_text())
+        except Exception as exc:
+            state_error = f"failed to parse autopilot_state.json: {exc}"
+
+    session_start_ts = None
     try:
-        data = json.loads(_AUTOPILOT_STATE_PATH.read_text())
-    except Exception as exc:
+        session_start_ts = float(data.get("autopilot_fleet_started_at") or 0.0) or None
+    except (TypeError, ValueError):
+        session_start_ts = None
+
+    journal_archive = _pareto_from_journal(session_start_ts)
+    if journal_archive:
+        archive = journal_archive
+        source = "journal_current_session"
+        source_reason = "reconstructed from autopilot_journal.jsonl"
+    elif data:
+        archive = data.get("pareto_archive", {}) or {}
+        source = "state_archive"
+        source_reason = "journal unavailable or no current-session entries"
+    else:
         return JSONResponse({
             "available": False,
-            "reason": f"failed to parse autopilot_state.json: {exc}",
+            "reason": state_error or "autopilot_state.json and autopilot_journal.jsonl not found",
             "frontier": [],
             "dominated": [],
             "hypervolume_history": [],
         })
 
-    archive = data.get("pareto_archive", {}) or {}
     frontier_raw = archive.get("frontier", []) or []
     all_raw = archive.get("all_entries", []) or []
     hv_history = archive.get("hypervolume_history", []) or []
-
-    def _shape(entry: dict) -> dict:
-        # Strip heavy config_snapshot for transport — plotted points only need
-        # objectives + identity metadata. Caller can drill via trial_id if needed.
-        obj = entry.get("objectives") or [0.0, 0.0, 0.0, 0.0]
-        if len(obj) < 4:
-            obj = list(obj) + [0.0] * (4 - len(obj))
-        return {
-            "trial_id": entry.get("trial_id"),
-            "objectives": list(obj[:4]),
-            "git_tag": entry.get("git_tag", ""),
-            "species": entry.get("species", ""),
-            "is_production_best": bool(entry.get("is_production_best", False)),
-            "timestamp": entry.get("timestamp", ""),
-            "reasoning": (entry.get("reasoning") or "")[:200],
-        }
-
-    frontier = [_shape(e) for e in frontier_raw]
+    frontier = [_shape_pareto_entry(e) for e in frontier_raw]
     frontier_ids = {f["trial_id"] for f in frontier if f["trial_id"] is not None}
 
     # Dominated entries: newest first, trimmed to max_dominated to bound payload.
     dominated_only = [e for e in all_raw if e.get("trial_id") not in frontier_ids]
     dominated_only.sort(key=lambda e: (e.get("trial_id") or 0), reverse=True)
-    dominated_shaped = [_shape(e) for e in dominated_only[:max_dominated]]
+    dominated_shaped = [_shape_pareto_entry(e) for e in dominated_only[:max_dominated]]
 
     hv_shaped: list[list[float]] = []
     for h in hv_history:
@@ -1389,6 +1540,8 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
 
     return JSONResponse({
         "available": True,
+        "source": source,
+        "source_reason": source_reason,
         "frontier": frontier,
         "dominated": dominated_shaped,
         "hypervolume_history": hv_shaped,
@@ -1397,6 +1550,7 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
             "all_entries": len(all_raw),
             "hv_points": len(hv_shaped),
         },
+        "session_start_ts": archive.get("session_start_ts"),
         "objective_axes": [
             {"key": "quality", "index": 0, "direction": "max", "label": "quality"},
             {"key": "speed", "index": 1, "direction": "max", "label": "speed (t/s)"},

@@ -2838,8 +2838,9 @@ async function updatePareto() {
         const sumEl = document.getElementById('pareto-summary');
         if (sumEl) {
             if (d.available) {
+                const source = d.source === 'journal_current_session' ? 'journal' : 'state';
                 sumEl.textContent =
-                    `${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials`;
+                    `${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials · ${source}`;
             } else {
                 sumEl.textContent = '(no autopilot_state.json yet)';
             }

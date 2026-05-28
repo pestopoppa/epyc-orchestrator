@@ -6,6 +6,7 @@ Route handlers themselves are unchanged (smoke-tested only via module import).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -584,3 +585,84 @@ def test_dashboard_module_html_loads_from_file() -> None:
     assert len(dashboard._DASHBOARD_HTML) > 40_000
     assert "<!doctype html>" in dashboard._DASHBOARD_HTML
     assert "</body></html>" in dashboard._DASHBOARD_HTML
+
+
+def test_pareto_endpoint_prefers_current_session_journal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A stale state archive should not freeze the dashboard plots."""
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    session_start = datetime(2026, 5, 28, 9, 0, tzinfo=timezone.utc)
+    state_path.write_text(json.dumps({
+        "autopilot_fleet_started_at": session_start.timestamp(),
+        "pareto_archive": {
+            "frontier": [{"trial_id": 99, "objectives": [9.0, 9.0, 0.0, 0.0]}],
+            "all_entries": [{"trial_id": 99, "objectives": [9.0, 9.0, 0.0, 0.0]}],
+            "hypervolume_history": [[99, 999.0]],
+        },
+    }))
+    rows = [
+        {
+            "trial_id": 5,
+            "timestamp": "2026-05-28T08:59:00+00:00",
+            "species": "old",
+            "quality": 10.0,
+            "speed": 100.0,
+            "cost": 0.5,
+            "reliability": 1.0,
+        },
+        {
+            "trial_id": 10,
+            "timestamp": "2026-05-28T09:01:00+00:00",
+            "species": "seeder",
+            "quality": 1.0,
+            "speed": 10.0,
+            "cost": 0.5,
+            "reliability": 0.8,
+        },
+        {
+            "trial_id": 11,
+            "timestamp": "2026-05-28T09:02:00+00:00",
+            "species": "seeder",
+            "quality": 0.5,
+            "speed": 5.0,
+            "cost": 0.5,
+            "reliability": 0.7,
+        },
+        {
+            "trial_id": 12,
+            "timestamp": "2026-05-28T09:03:00+00:00",
+            "species": "numeric_swarm",
+            "quality": 1.2,
+            "speed": 9.0,
+            "cost": 0.5,
+            "reliability": 0.9,
+        },
+        {
+            "trial_id": 13,
+            "timestamp": "2026-05-28T09:04:00+00:00",
+            "species": "corrupt",
+            "quality": 20.0,
+            "speed": 200.0,
+            "cost": 0.5,
+            "reliability": 1.0,
+            "bug_corrupted_by": "test",
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.pareto())
+    payload = json.loads(response.body)
+
+    assert payload["source"] == "journal_current_session"
+    assert payload["totals"] == {
+        "frontier_size": 2,
+        "all_entries": 3,
+        "hv_points": 3,
+    }
+    assert {point["trial_id"] for point in payload["frontier"]} == {10, 12}
+    assert [point["trial_id"] for point in payload["dominated"]] == [11]
+    assert payload["hypervolume_history"][-1][0] == 12
