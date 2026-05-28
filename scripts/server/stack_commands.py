@@ -52,6 +52,7 @@ from scripts.server.stack_paths import (
     _HEALTH_SERVER_STARTUP,
     _HEALTH_VISION_SERVER,
     _HEALTH_WORKER_SERVER,
+    LLAMA_MATH_TOOLS,
     _PATHS,
     LLAMA_SERVER,
     LOG_DIR,
@@ -62,7 +63,9 @@ from scripts.server.stack_state import ProcessInfo
 from src.registry_loader import RegistryLoader
 
 
-def wait_for_health(port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str = "/health") -> bool:
+def wait_for_health(
+    port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str = "/health"
+) -> bool:
     """Preserve orchestrator_stack.wait_for_health default-timeout semantics."""
     return _wait_for_health(port, timeout, path)
 
@@ -74,25 +77,69 @@ def _orchestrator_stack():
     lazily inside main() so no module-load cycle exists.
     """
     from scripts.server import orchestrator_stack
+
     return orchestrator_stack
 
 
 # Convenience accessors via the lazy proxy — keep cmd_* bodies readable.
-def start_server(*a, **kw): return _orchestrator_stack().start_server(*a, **kw)
-def start_orchestrator(*a, **kw): return _orchestrator_stack().start_orchestrator(*a, **kw)
-def start_document_formalizer(*a, **kw): return _orchestrator_stack().start_document_formalizer(*a, **kw)
-def start_sd_server(*a, **kw): return _orchestrator_stack().start_sd_server(*a, **kw)
-def start_whisper(*a, **kw): return _orchestrator_stack().start_whisper(*a, **kw)
-def init_memrl_and_tools(*a, **kw): return _orchestrator_stack().init_memrl_and_tools(*a, **kw)
-def load_state(*a, **kw): return _orchestrator_stack().load_state(*a, **kw)
-def save_state(*a, **kw): return _orchestrator_stack().save_state(*a, **kw)
-def kill_process(*a, **kw): return _orchestrator_stack().kill_process(*a, **kw)
-def is_port_in_use(*a, **kw): return _orchestrator_stack().is_port_in_use(*a, **kw)
-def _pids_on_port(*a, **kw): return _orchestrator_stack()._pids_on_port(*a, **kw)
-def _collect_descendants(*a, **kw): return _orchestrator_stack()._collect_descendants(*a, **kw)
-def _renice_all_threads(*a, **kw): return _orchestrator_stack()._renice_all_threads(*a, **kw)
-def check_free_memory(*a, **kw): return _orchestrator_stack().check_free_memory(*a, **kw)
-def _apply_orchestrator_profile(*a, **kw): return _orchestrator_stack()._apply_orchestrator_profile(*a, **kw)
+def start_server(*a, **kw):
+    return _orchestrator_stack().start_server(*a, **kw)
+
+
+def start_orchestrator(*a, **kw):
+    return _orchestrator_stack().start_orchestrator(*a, **kw)
+
+
+def start_document_formalizer(*a, **kw):
+    return _orchestrator_stack().start_document_formalizer(*a, **kw)
+
+
+def start_sd_server(*a, **kw):
+    return _orchestrator_stack().start_sd_server(*a, **kw)
+
+
+def start_whisper(*a, **kw):
+    return _orchestrator_stack().start_whisper(*a, **kw)
+
+
+def init_memrl_and_tools(*a, **kw):
+    return _orchestrator_stack().init_memrl_and_tools(*a, **kw)
+
+
+def load_state(*a, **kw):
+    return _orchestrator_stack().load_state(*a, **kw)
+
+
+def save_state(*a, **kw):
+    return _orchestrator_stack().save_state(*a, **kw)
+
+
+def kill_process(*a, **kw):
+    return _orchestrator_stack().kill_process(*a, **kw)
+
+
+def is_port_in_use(*a, **kw):
+    return _orchestrator_stack().is_port_in_use(*a, **kw)
+
+
+def _pids_on_port(*a, **kw):
+    return _orchestrator_stack()._pids_on_port(*a, **kw)
+
+
+def _collect_descendants(*a, **kw):
+    return _orchestrator_stack()._collect_descendants(*a, **kw)
+
+
+def _renice_all_threads(*a, **kw):
+    return _orchestrator_stack()._renice_all_threads(*a, **kw)
+
+
+def check_free_memory(*a, **kw):
+    return _orchestrator_stack().check_free_memory(*a, **kw)
+
+
+def _apply_orchestrator_profile(*a, **kw):
+    return _orchestrator_stack()._apply_orchestrator_profile(*a, **kw)
 
 
 def _find_pids_on_port(port: int) -> list[int]:
@@ -157,6 +204,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     if getattr(args, "compile_registry", False):
         try:
             from src.registry.registry_compiler import load_or_compile
+
             active_roles = set(ROLE_LAUNCH_META.keys())
             print(f"[registry-compile] master={_master_registry}")
             print(f"[registry-compile] active_roles={sorted(active_roles)}")
@@ -177,6 +225,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     # 2026-05-09 (server_mode.X.acceleration silently overridden by roles.X.acceleration).
     try:
         from src.registry.registry_validator import validate_or_raise, RegistryValidationError
+
         try:
             validate_or_raise(_registry_yaml)
         except RegistryValidationError as exc:
@@ -198,11 +247,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"[DS-7] Migration module unavailable: {exc}")
             return 1
-        print(f"[DS-7] Migrating stack → template '{migrate_to}' "
-              f"({'DRY-RUN' if dry_run else 'LIVE'})")
+        print(
+            f"[DS-7] Migrating stack → template '{migrate_to}' ({'DRY-RUN' if dry_run else 'LIVE'})"
+        )
         registry_path = (
-            Path(_PATHS.get("model_registry", ""))
-            if _PATHS.get("model_registry") else None
+            Path(_PATHS.get("model_registry", "")) if _PATHS.get("model_registry") else None
         )
         result = migrate_to_template(migrate_to, dry_run=dry_run, registry_path=registry_path)
         print(result.summary())
@@ -214,8 +263,11 @@ def cmd_start(args: argparse.Namespace) -> int:
     if stack_profile:
         try:
             from src.config.stack_templates import (
-                load_template, validate_template, _TEMPLATES_DIR,
+                load_template,
+                validate_template,
+                _TEMPLATES_DIR,
             )
+
             print(f"[DS-7] Loading stack template: {stack_profile}")
             template = load_template(stack_profile)
             print(f"  Name: {template.name}")
@@ -225,7 +277,9 @@ def cmd_start(args: argparse.Namespace) -> int:
             print(f"  RAM: {template.total_ram_gb:.0f} GB")
             print()
 
-            registry_path = Path(_PATHS.get("model_registry", "")) if _PATHS.get("model_registry") else None
+            registry_path = (
+                Path(_PATHS.get("model_registry", "")) if _PATHS.get("model_registry") else None
+            )
             result = validate_template(template, registry_path)
             if result.errors:
                 print(f"  [FAIL] {len(result.errors)} validation errors:")
@@ -244,8 +298,10 @@ def cmd_start(args: argparse.Namespace) -> int:
                 print("\n--validate-only: exiting after validation.")
                 return 0
 
-            print(f"  (Template loaded but not yet used for server launch — "
-                  f"integration pending DS-7 Phase 2)")
+            print(
+                f"  (Template loaded but not yet used for server launch — "
+                f"integration pending DS-7 Phase 2)"
+            )
             print()
         except FileNotFoundError as exc:
             print(f"[DS-7] ERROR: {exc}")
@@ -330,12 +386,17 @@ def cmd_start(args: argparse.Namespace) -> int:
                 diagnose as _diagnose_embeddings,
                 print_report as _print_embedding_report,
                 run_repair as _run_embedding_repair,
-                DEFAULT_DB_PATH, DEFAULT_FAISS_PATH, DEFAULT_ID_MAP_PATH,
+                DEFAULT_DB_PATH,
+                DEFAULT_FAISS_PATH,
+                DEFAULT_ID_MAP_PATH,
                 DEFAULT_REEMBEDDED_PATH,
             )
+
             print("[0.7] Episodic embedding health check...")
             _report = _diagnose_embeddings(
-                DEFAULT_DB_PATH, DEFAULT_FAISS_PATH, DEFAULT_REEMBEDDED_PATH,
+                DEFAULT_DB_PATH,
+                DEFAULT_FAISS_PATH,
+                DEFAULT_REEMBEDDED_PATH,
             )
             _print_embedding_report(_report)
             if not _report.healthy:
@@ -350,14 +411,20 @@ def cmd_start(args: argparse.Namespace) -> int:
                     )
                     print("[0.7] Re-running diagnostic post-repair:")
                     _report2 = _diagnose_embeddings(
-                        DEFAULT_DB_PATH, DEFAULT_FAISS_PATH, DEFAULT_REEMBEDDED_PATH,
+                        DEFAULT_DB_PATH,
+                        DEFAULT_FAISS_PATH,
+                        DEFAULT_REEMBEDDED_PATH,
                     )
                     _print_embedding_report(_report2)
                     if not _report2.healthy:
                         print("[!] WARNING: repair did not restore health — proceeding anyway.")
                 else:
-                    print("[!] Episodic store is ORPHANED. KNN fallback path will silently degrade.")
-                    print("    Repair: python3 scripts/maintenance/repair_episodic_embeddings.py --repair")
+                    print(
+                        "[!] Episodic store is ORPHANED. KNN fallback path will silently degrade."
+                    )
+                    print(
+                        "    Repair: python3 scripts/maintenance/repair_episodic_embeddings.py --repair"
+                    )
                     print("    Or re-run with --repair-embeddings to auto-repair.")
             print()
         except ImportError as exc:
@@ -385,7 +452,9 @@ def cmd_start(args: argparse.Namespace) -> int:
                 print(f"  Including: port {server['port']} ({', '.join(server['roles'])})")
         if not servers_to_start:
             print(f"  [!] No servers matched roles: {', '.join(sorted(requested))}")
-            print(f"  Available roles: {', '.join(sorted({r for s in HOT_SERVERS + WARM_SERVERS for r in s['roles']}))}")
+            print(
+                f"  Available roles: {', '.join(sorted({r for s in HOT_SERVERS + WARM_SERVERS for r in s['roles']}))}"
+            )
             return 1
     else:
         print("[1] Starting HOT servers...")
@@ -411,16 +480,20 @@ def cmd_start(args: argparse.Namespace) -> int:
         # gemma4-MTP exception is the one that needs --numa-mode full per role. We don't
         # spam at every start since most roles are fine.
         if any("worker_general" in s.get("roles", []) for s in servers_to_start):
-            print(f"  [advisory] worker_general (gemma4-MTP) runs at -t 96; if its full + 4 quarters "
-                  f"are all kept (default 'both'), expect 1.5× CPU oversubscription. "
-                  f"Use '--numa-mode full' (single instance) or '--numa-mode quarter' (4 concurrent) "
-                  f"for that role specifically. See launcher-numa-mode-gating.md.")
+            print(
+                f"  [advisory] worker_general (gemma4-MTP) runs at -t 96; if its full + 4 quarters "
+                f"are all kept (default 'both'), expect 1.5× CPU oversubscription. "
+                f"Use '--numa-mode full' (single instance) or '--numa-mode quarter' (4 concurrent) "
+                f"for that role specifically. See launcher-numa-mode-gating.md."
+            )
     pre_filter_count = len(servers_to_start)
     servers_to_start = _filter_by_numa_mode(servers_to_start, numa_mode)
     if numa_mode != "both" and len(servers_to_start) != pre_filter_count:
         dropped = pre_filter_count - len(servers_to_start)
-        print(f"  [--numa-mode={numa_mode}] dropped {dropped} overlapping instance(s); "
-              f"{len(servers_to_start)} server(s) to start")
+        print(
+            f"  [--numa-mode={numa_mode}] dropped {dropped} overlapping instance(s); "
+            f"{len(servers_to_start)} server(s) to start"
+        )
 
     print()
 
@@ -477,7 +550,10 @@ def cmd_start(args: argparse.Namespace) -> int:
         numa_instance = server.get("numa_instance", 0)
 
         info = start_server(
-            port, roles, registry, args.dev,
+            port,
+            roles,
+            registry,
+            args.dev,
             embedding_mode=embedding_mode,
             worker_pool_mode=worker_pool_mode,
             worker_type=worker_type,
@@ -501,7 +577,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         # Sequential loading: wait for this server to be healthy before launching
         # the next one. Concurrent mlock on large models causes crashes even when
         # total RAM is sufficient (race condition during page fault + lock).
-        is_small_model = embedding_mode or (worker_pool_mode and worker_type == "fast") or (vision_mode and vision_type != "escalation")
+        is_small_model = (
+            embedding_mode
+            or (worker_pool_mode and worker_type == "fast")
+            or (vision_mode and vision_type != "escalation")
+        )
         if i < len(servers_to_start) - 1 and not args.dev and not is_small_model:
             if not wait_for_health(port, timeout=300):
                 print(f"  [!] Server on port {port} did not become healthy within 300s")
@@ -618,9 +698,13 @@ def cmd_start(args: argparse.Namespace) -> int:
                 else:
                     svc_name = service["name"]
                     if svc_name == "searxng":
-                        print(f"  [!] {svc_name} failed (non-fatal, web_search falls back to DDG HTML scraping)")
+                        print(
+                            f"  [!] {svc_name} failed (non-fatal, web_search falls back to DDG HTML scraping)"
+                        )
                     else:
-                        print(f"  [!] {svc_name} failed (non-fatal, code_search degrades gracefully)")
+                        print(
+                            f"  [!] {svc_name} failed (non-fatal, code_search degrades gracefully)"
+                        )
             print()
         else:
             print("[5.5] Docker not available, skipping Docker containers")
@@ -712,7 +796,9 @@ def cmd_stop(args: argparse.Namespace) -> int:
     if args.all:
         orphans = _scan_known_ports()
         if orphans:
-            print(f"\nFound {sum(len(p) for p in orphans.values())} orphaned processes on {len(orphans)} ports")
+            print(
+                f"\nFound {sum(len(p) for p in orphans.values())} orphaned processes on {len(orphans)} ports"
+            )
             for port, pids in sorted(orphans.items()):
                 for pid in pids:
                     print(f"  Stopping orphan PID {pid} on port {port}...")
@@ -763,7 +849,10 @@ def cmd_reload(args: argparse.Namespace) -> int:
             for port in EMBEDDER_PORTS:
                 role = "embedder" if port == 8090 else f"embedder_{port - 8090}"
                 info = start_server(
-                    port, [role], registry, dev_mode=False,
+                    port,
+                    [role],
+                    registry,
+                    dev_mode=False,
                     embedding_mode=True,
                 )
                 if info:
@@ -812,7 +901,9 @@ def cmd_reload(args: argparse.Namespace) -> int:
                     embedding_mode = server.get("embedding", False)
                     vision_mode = server.get("vision", False)
                     vision_type = server.get("vision_type")
-                    numa_instance = server.get("numa_instance", 0)  # fix: reload must preserve per-quarter -t
+                    numa_instance = server.get(
+                        "numa_instance", 0
+                    )  # fix: reload must preserve per-quarter -t
                     break
 
             # Stop existing
@@ -824,7 +915,10 @@ def cmd_reload(args: argparse.Namespace) -> int:
 
             # Start new
             info = start_server(
-                port, roles, registry, dev_mode=False,
+                port,
+                roles,
+                registry,
+                dev_mode=False,
                 embedding_mode=embedding_mode,
                 worker_pool_mode=worker_pool_mode,
                 worker_type=worker_type,
@@ -954,7 +1048,9 @@ def init_memrl_and_tools() -> bool:
         if result.returncode == 0:
             print("  [OK] REPL seed examples loaded")
         else:
-            print(f"  [WARN] Seed loader failed: {result.stderr[:100] if result.stderr else 'no output'}")
+            print(
+                f"  [WARN] Seed loader failed: {result.stderr[:100] if result.stderr else 'no output'}"
+            )
 
     # Warm up all embedding servers with test query
     try:
@@ -992,8 +1088,10 @@ def init_memrl_and_tools() -> bool:
         try:
             # Add src to path for imports
             import sys as _sys
+
             _sys.path.insert(0, str(_PATHS["project_root"]))
             from orchestration.tools.executor import get_executor
+
             executor = get_executor()
             tools = executor.list_tools()
             print(f"  [OK] Tool registry loaded: {len(tools)} tools")
@@ -1009,12 +1107,15 @@ def init_memrl_and_tools() -> bool:
             print(f"  [WARN] Tool executor init failed: {e}")
 
     # Verify C++ math tools binary
-    cpp_binary = _PATHS["llama_cpp_bin"] / "llama-math-tools"
+    cpp_binary = LLAMA_MATH_TOOLS
     if cpp_binary.exists():
-        print("  [OK] C++ math tools binary found")
+        print(f"  [OK] C++ math tools binary found: {cpp_binary}")
     else:
         print(f"  [WARN] C++ math tools not built: {cpp_binary}")
-        print(f"        Run: cd {_PATHS['llm_root']}/llama.cpp && make llama-math-tools")
+        print(
+            f"        Run: cd {_PATHS['llm_root']}/llama.cpp/tools/math-tools "
+            "&& cmake -B build && cmake --build build"
+        )
 
     return success
 

@@ -77,7 +77,9 @@ from scripts.server.fleet_markers import (
     write_llama_marker as _write_llama_marker,
     write_orchestrator_marker as _write_orchestrator_marker,
 )
-from scripts.server.stack_runtime import runtime_requirements_for_role as _runtime_requirements_for_role_impl
+from scripts.server.stack_runtime import (
+    runtime_requirements_for_role as _runtime_requirements_for_role_impl,
+)
 from scripts.server.stack_manifest import (
     DEV_MODEL,
     DEV_MODEL_PATH,
@@ -110,6 +112,7 @@ from scripts.server.stack_paths import (
     _HEALTH_WORKER_SERVER,
     _PATHS,
     _V2_ROLES,
+    LLAMA_MATH_TOOLS,
     LLAMA_SERVER,
     LLAMA_SERVER_V2,
     LOG_DIR,
@@ -144,8 +147,15 @@ from src.registry_loader import RegistryLoader
 # scripts/server/stack_manifest.py. All names are re-exported via the imports
 # at the top of this file so `from orchestrator_stack import X` works for the
 # registry compiler fallback path (src/registry/registry_compiler.py:266).
+#
+# Port topology note: this launcher intentionally no longer owns the static
+# port tables. Full/primary role ports live in stack_manifest.PORT_MAP; NUMA
+# quarter/replica ports and their CPU pinning live in stack_numa.NUMA_CONFIG.
+# Avoid documenting fixed 808x/818x ranges here because the current topology is
+# role-specific (for example 8070 full + 8080/8180/8280/8380 quarters for
+# frontdoor, 8072 full + 8082/8182/8282/8382 quarters for worker_general, and
+# no 8084 architect_coding server).
 # =============================================================================
-
 
 
 # =============================================================================
@@ -239,7 +249,9 @@ def kill_process(pid: int, timeout: int = 5) -> bool:
 # =============================================================================
 
 
-def wait_for_health(port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str = "/health") -> bool:
+def wait_for_health(
+    port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str = "/health"
+) -> bool:
     """Wait for server health endpoint (delegates to stack_health.wait_for_health).
 
     Wrapper preserves the registry-driven _HEALTH_SERVER_STARTUP default for
@@ -275,28 +287,45 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
         thread_count = _resolve_thread_count("vision_escalation", numa_instance)
         return [
             str(LLAMA_SERVER),
-            "-m", VISION_ESCALATION_MODEL,
-            "--mmproj", VISION_ESCALATION_MMPROJ,
-            "--override-kv", "qwen3vlmoe.expert_used_count=int:4",
-            "--host", "127.0.0.1",
-            "--port", str(port),
-            "-np", "1",
-            "-c", "16384",
-            "-t", thread_count,
-            "--flash-attn", "on",
+            "-m",
+            VISION_ESCALATION_MODEL,
+            "--mmproj",
+            VISION_ESCALATION_MMPROJ,
+            "--override-kv",
+            "qwen3vlmoe.expert_used_count=int:4",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "-np",
+            "1",
+            "-c",
+            "16384",
+            "-t",
+            thread_count,
+            "--flash-attn",
+            "on",
         ]
     # Qwen2.5-VL-7B - smaller worker model
     thread_count = _resolve_thread_count("worker_vision", numa_instance)
     return [
         str(LLAMA_SERVER),
-        "-m", VISION_WORKER_MODEL,
-        "--mmproj", VISION_WORKER_MMPROJ,
-        "--host", "127.0.0.1",
-        "--port", str(port),
-        "-np", "2",
-        "-c", "8192",
-        "-t", thread_count,
-        "--flash-attn", "on",
+        "-m",
+        VISION_WORKER_MODEL,
+        "--mmproj",
+        VISION_WORKER_MMPROJ,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-np",
+        "2",
+        "-c",
+        "8192",
+        "-t",
+        thread_count,
+        "--flash-attn",
+        "on",
     ]
 
 
@@ -304,15 +333,23 @@ def _build_embedding_command(port: int) -> list[str]:
     """BGE-large embedding server with CLS pooling (6 parallel instances in prod)."""
     return [
         str(LLAMA_SERVER),
-        "-m", EMBEDDING_MODEL_PATH,
-        "--host", "127.0.0.1",
-        "--port", str(port),
-        "-np", "4",  # 4 parallel slots for embedding requests
-        "-c", "512",  # BGE works with short contexts
-        "-t", "4",  # 4 threads per instance (6 instances = 24 threads total)
+        "-m",
+        EMBEDDING_MODEL_PATH,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-np",
+        "4",  # 4 parallel slots for embedding requests
+        "-c",
+        "512",  # BGE works with short contexts
+        "-t",
+        "4",  # 4 threads per instance (6 instances = 24 threads total)
         "--embeddings",  # Enable embedding endpoint
-        "--pooling", "cls",  # BGE uses CLS token pooling (standard BERT)
-        "--flash-attn", "on",
+        "--pooling",
+        "cls",  # BGE uses CLS token pooling (standard BERT)
+        "--flash-attn",
+        "on",
     ]
 
 
@@ -320,13 +357,20 @@ def _build_worker_fast_command(port: int, model_path: str) -> list[str]:
     """Fast worker: 1.5B model, 4 slots for parallel burst capacity."""
     return [
         str(LLAMA_SERVER),
-        "-m", model_path,
-        "--host", "127.0.0.1",
-        "--port", str(port),
-        "-np", "4",  # 4 parallel slots (consolidated from 2×2)
-        "-c", "16384",  # 4K per slot
-        "-t", "16",  # 16 threads for small model
-        "--flash-attn", "on",
+        "-m",
+        model_path,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-np",
+        "4",  # 4 parallel slots (consolidated from 2×2)
+        "-c",
+        "16384",  # 4K per slot
+        "-t",
+        "16",  # 16 threads for small model
+        "--flash-attn",
+        "on",
     ]
 
 
@@ -348,42 +392,58 @@ def _build_worker_explore_command(
     numa_thread_count = int(_resolve_thread_count("worker_general", numa_instance))
     return [
         binary,
-        "-m", model_path,
-        "-md", EXPLORE_DRAFT_MODEL,  # MTP draft (gemma4 assistant Q8)
-        "--spec-type", "mtp",        # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
-                                     # Without this, -md is treated as standard spec decode and
-                                     # MTP-arch draft tensors are loaded but never assigned to a
-                                     # backend buffer → "tensor buffer not set" assertion.
-        "--draft-max", "2",          # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
-        "--draft-p-min", "0.0",      # greedy: accept top-1 drafts, verifier rejects mismatches
-        "--threads-draft", "16",     # dedicate 16 threads to small 4-layer drafter
-        "-ub", "512",                # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
-        "--no-mmap",                 # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
-        "--reasoning", "off",        # disable gemma4 thinking-channel (output otherwise lands in
-                                     # reasoning_content not content; registry: gemma4_26b reasoning=off)
-        "--jinja",                   # gemma4 ships a custom chat template embedded in the gguf;
-                                     # without --jinja, llama.cpp rejects /v1/chat/completions
-                                     # with "this custom template is not supported"
-        "--host", "127.0.0.1",
-        "--port", str(port),
+        "-m",
+        model_path,
+        "-md",
+        EXPLORE_DRAFT_MODEL,  # MTP draft (gemma4 assistant Q8)
+        "--spec-type",
+        "mtp",  # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
+        # Without this, -md is treated as standard spec decode and
+        # MTP-arch draft tensors are loaded but never assigned to a
+        # backend buffer → "tensor buffer not set" assertion.
+        "--draft-max",
+        "2",  # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
+        "--draft-p-min",
+        "0.0",  # greedy: accept top-1 drafts, verifier rejects mismatches
+        "--threads-draft",
+        "16",  # dedicate 16 threads to small 4-layer drafter
+        "-ub",
+        "512",  # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
+        "--no-mmap",  # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
+        "--reasoning",
+        "off",  # disable gemma4 thinking-channel (output otherwise lands in
+        # reasoning_content not content; registry: gemma4_26b reasoning=off)
+        "--jinja",  # gemma4 ships a custom chat template embedded in the gguf;
+        # without --jinja, llama.cpp rejects /v1/chat/completions
+        # with "this custom template is not supported"
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
         # -np 1 (single slot): MTP shares state with the target across slots in a
         # way that the ik_llama.cpp PR #1744 build asserts on with -np 2 ("tensor
         # buffer not set" at ggml-backend.cpp:236 during inference). Single slot
         # matches the working benchmark recipe. Pre-gemma4 worker_general used
         # -np 2 because external-draft spec decode (Qwen3-Coder + 0.75B draft)
         # had per-slot draft state; MTP fuses draft + target, hence -np 1.
-        "-np", "1",
-        "-c", "16384",  # match research-registry max_context; 8192 causes MTP buffer mismatches
+        "-np",
+        "1",
+        "-c",
+        "16384",  # match research-registry max_context; 8192 causes MTP buffer mismatches
         # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
         # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
         # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
         # "tensor buffer not set" MTP assertion.
-        "-t", str(numa_thread_count),
+        "-t",
+        str(numa_thread_count),
         # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
         # allocation. f16 default left some MTP tensor buffers uninitialized.
-        "-ctk", "q8_0",
-        "-ctv", "q8_0",
-        "--flash-attn", "on",
+        "-ctk",
+        "q8_0",
+        "-ctv",
+        "q8_0",
+        "--flash-attn",
+        "on",
     ]
 
 
@@ -391,13 +451,20 @@ def _build_dev_command(port: int) -> list[str]:
     """Dev mode: single 0.5B Qwen2.5-Coder model for fast iteration."""
     return [
         str(LLAMA_SERVER),
-        "-m", DEV_MODEL_PATH,
-        "--host", "127.0.0.1",
-        "--port", str(port),
-        "-np", "4",
-        "-c", "4096",
-        "-t", "16",
-        "--flash-attn", "on",
+        "-m",
+        DEV_MODEL_PATH,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-np",
+        "4",
+        "-c",
+        "4096",
+        "-t",
+        "16",
+        "--flash-attn",
+        "on",
     ]
 
 
@@ -417,16 +484,16 @@ _NO_SPEC_DECODE = {"architect_general"}
 # q4_0 / q4_0 = 71% KV savings but 71% prefill regression on pure-attn. OK for hybrid (SSM amortizes).
 # --kv-hadamard: production binary rebuilt with Hadamard support (commit b51c905ec, 2026-03-28).
 _KV_CONTEXT_SIZES = {
-    "architect_general": "16384",   # 122B MoE hybrid → ~16GB KV
-    "ingest_long_context": "32768", # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
+    "architect_general": "16384",  # 122B MoE hybrid → ~16GB KV
+    "ingest_long_context": "32768",  # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
 }
 _KV_QUANT_CONFIGS = {
     # 2026-05-06: frontdoor + coder_escalation now share Qwen3.6-35B-A3B Q8 GGUF
     # (qwen35moe MoE-attention, NOT SSM hybrid). Per registry kv_quant {q8_0/q8_0}.
-    "frontdoor":            ("q8_0", "q8_0"),   # Qwen3.6-35B-A3B Q8: q8_0 K/V (Qwen trained bf16)
-    "coder_escalation":     ("q8_0", "q8_0"),   # same model as frontdoor
-    "architect_general":    ("q4_0", "f16"),    # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
-    "ingest_long_context":  ("q4_0", "q4_0"),   # SSM-hybrid, long context, max compression
+    "frontdoor": ("q8_0", "q8_0"),  # Qwen3.6-35B-A3B Q8: q8_0 K/V (Qwen trained bf16)
+    "coder_escalation": ("q8_0", "q8_0"),  # same model as frontdoor
+    "architect_general": ("q4_0", "f16"),  # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
+    "ingest_long_context": ("q4_0", "q4_0"),  # SSM-hybrid, long context, max compression
 }
 
 
@@ -479,43 +546,67 @@ def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_
     """
     if accel.type == "moe_expert_reduction" and accel.experts:
         cmd.extend(["--override-kv", f"{accel.override_key}=int:{accel.experts}"])
-    elif (accel.type == "speculative_decoding" and accel.draft_role
-          and role_name not in _NO_SPEC_DECODE):
+    elif (
+        accel.type == "speculative_decoding"
+        and accel.draft_role
+        and role_name not in _NO_SPEC_DECODE
+    ):
         registry = RegistryLoader()
         draft_config = registry.get_role(accel.draft_role)
         if draft_config:
-            cmd.extend([
-                "-md", draft_config.model.full_path,
-                "--draft-max", str(accel.k or 16),
-            ])
+            cmd.extend(
+                [
+                    "-md",
+                    draft_config.model.full_path,
+                    "--draft-max",
+                    str(accel.k or 16),
+                ]
+            )
 
     # MoE + spec decode combo (e.g., 480B with jukofyork draft + expert reduction)
-    if (accel.type == "moe_expert_reduction" and accel.draft_role
-            and role_name not in _NO_SPEC_DECODE):
+    if (
+        accel.type == "moe_expert_reduction"
+        and accel.draft_role
+        and role_name not in _NO_SPEC_DECODE
+    ):
         registry = RegistryLoader()
         draft_config = registry.get_role(accel.draft_role)
         if draft_config:
-            cmd.extend([
-                "-md", draft_config.model.full_path,
-                "--draft-max", str(accel.k or 16),
-            ])
+            cmd.extend(
+                [
+                    "-md",
+                    draft_config.model.full_path,
+                    "--draft-max",
+                    str(accel.k or 16),
+                ]
+            )
 
     # Self-speculation: same model as target and draft, draft exits early
     elif accel.type == "self_speculation" and accel.n_layer_exit_draft:
-        cmd.extend([
-            "-md", model_path,
-            "--n-layer-exit-draft", str(accel.n_layer_exit_draft),
-            "--draft-max", str(accel.k or 16),
-        ])
+        cmd.extend(
+            [
+                "-md",
+                model_path,
+                "--n-layer-exit-draft",
+                str(accel.n_layer_exit_draft),
+                "--draft-max",
+                str(accel.k or 16),
+            ]
+        )
 
     # Hierarchical speculation: self-spec with intermediate verification
     elif accel.type == "hierarchical_speculation":
-        cmd.extend([
-            "-md", model_path,
-            "--n-layer-exit-draft", str(accel.n_layer_exit_draft or 0),
-            "--hierarchical-spec",
-            "--draft-max", str(accel.k or 16),
-        ])
+        cmd.extend(
+            [
+                "-md",
+                model_path,
+                "--n-layer-exit-draft",
+                str(accel.n_layer_exit_draft or 0),
+                "--hierarchical-spec",
+                "--draft-max",
+                str(accel.k or 16),
+            ]
+        )
         if accel.n_layer_exit_intermediate:
             cmd.extend(["--n-layer-exit-intermediate", str(accel.n_layer_exit_intermediate)])
 
@@ -559,14 +650,22 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
     # Without this, frontdoor's decode throughput was 12.66 t/s vs 25-27 t/s in the bench CSV.
     cmd = [
         str(binary),
-        "-m", model_path,
-        "--host", "127.0.0.1",
-        "--port", str(port),
-        "-np", parallel_slots,
-        "-c", context_size,
-        "-t", thread_count,
-        "-ub", "8192",
-        "--flash-attn", "on",
+        "-m",
+        model_path,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "-np",
+        parallel_slots,
+        "-c",
+        context_size,
+        "-t",
+        thread_count,
+        "-ub",
+        "8192",
+        "--flash-attn",
+        "on",
     ]
 
     # --jinja: model's native chat template (enables thinking on Qwen3/3.5).
@@ -666,7 +765,10 @@ def start_server(
             model_name = "Qwen2.5-VL-7B (vision worker)"
 
         cmd = build_server_command(
-            None, port, vision_mode=True, vision_type=vision_type,
+            None,
+            port,
+            vision_mode=True,
+            vision_type=vision_type,
             numa_instance=numa_instance,  # fix: forward so quarters get NUMA_CONFIG -t (was always -t 96)
         )
 
@@ -684,7 +786,7 @@ def start_server(
         with open(log_file, "w") as log:
             env = build_launch_env(roles[0], os.environ.copy())
             proc = subprocess.Popen(
-                _numa_prefix(roles[0]) + cmd,
+                _numa_prefix(roles[0], numa_instance) + cmd,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -736,7 +838,7 @@ def start_server(
             env = build_launch_env(roles[0], os.environ.copy())
             # NOTE: Do NOT set OMP_NUM_THREADS=1 - it disables parallel tensor repack (2.2x slower loading)
             proc = subprocess.Popen(
-                _numa_prefix(roles[0]) + cmd,
+                _numa_prefix(roles[0], numa_instance) + cmd,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -776,12 +878,13 @@ def start_server(
         # MTP) needs ik_llama.cpp PR #1744 binary; other workers fall back to default.
         # Lookup keyed on the primary role (e.g. "worker_general"), not worker_type.
         binary_dir, ld_paths = _runtime_requirements_for_role(registry, roles[0])
-        binary_override = (
-            str(Path(binary_dir) / "llama-server") if binary_dir else None
-        )
+        binary_override = str(Path(binary_dir) / "llama-server") if binary_dir else None
 
         cmd = build_server_command(
-            None, port, worker_pool_mode=True, worker_type=worker_type,
+            None,
+            port,
+            worker_pool_mode=True,
+            worker_type=worker_type,
             binary_override=binary_override,
             numa_instance=numa_instance,  # fix: forward so gemma4 quarters get NUMA_CONFIG -t 48 (was always -t 96)
         )
@@ -852,7 +955,7 @@ def start_server(
             except Exception as exc:
                 print(f"    [WARN] Failed to write llama fleet marker for port {port}: {exc}")
             proc = subprocess.Popen(
-                _numa_prefix(roles[0]) + cmd,
+                _numa_prefix(roles[0], numa_instance) + cmd,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -863,7 +966,11 @@ def start_server(
         print(f"    Waiting for health...")
 
         # Faster timeout for smaller models (quick_check for fast workers)
-        timeout = int(_registry_timeout("health", "quick_check", 10)) * 6 if worker_type == "fast" else _HEALTH_WORKER_SERVER
+        timeout = (
+            int(_registry_timeout("health", "quick_check", 10)) * 6
+            if worker_type == "fast"
+            else _HEALTH_WORKER_SERVER
+        )
         if wait_for_health(port, timeout=timeout):
             print(f"    [OK] Worker {worker_type} ready")
             # 2026-05-09: per-thread renice to nice=19 for binary_override roles
@@ -1085,12 +1192,18 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
         concurrency = int(env.get("ORCHESTRATOR_UVICORN_LIMIT_CONCURRENCY", "16"))
         proc = subprocess.Popen(
             [
-                sys.executable, "-m", "uvicorn",
+                sys.executable,
+                "-m",
+                "uvicorn",
                 "src.api:app",
-                "--host", "127.0.0.1",
-                "--port", "8000",
-                "--workers", str(workers),
-                "--limit-concurrency", str(concurrency),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000",
+                "--workers",
+                str(workers),
+                "--limit-concurrency",
+                str(concurrency),
             ],
             cwd=str(_PATHS["project_root"]),
             stdout=log,
@@ -1155,7 +1268,8 @@ def start_document_formalizer() -> ProcessInfo | None:
             [
                 sys.executable,
                 str(_PATHS["project_root"] / "src/services/lightonocr_llama_server.py"),
-                "--port", str(port),
+                "--port",
+                str(port),
             ],
             cwd=str(_PATHS["project_root"]),
             stdout=log,
@@ -1314,11 +1428,9 @@ def start_whisper() -> ProcessInfo | None:
 def __getattr__(name: str):
     if name in ("cmd_start", "cmd_stop", "cmd_reload", "cmd_status"):
         from scripts.server import stack_commands
-        return getattr(stack_commands, name)
-    raise AttributeError(
-        f"module 'scripts.server.orchestrator_stack' has no attribute {name!r}"
-    )
 
+        return getattr(stack_commands, name)
+    raise AttributeError(f"module 'scripts.server.orchestrator_stack' has no attribute {name!r}")
 
 
 def main() -> int:
@@ -1328,10 +1440,16 @@ def main() -> int:
     # Start command
     start_parser = subparsers.add_parser("start", help="Start the stack")
     start_parser.add_argument("--hot-only", action="store_true", help="Start HOT models only")
-    start_parser.add_argument("--include-warm", nargs="+", metavar="ROLE", help="Include WARM models")
-    start_parser.add_argument("--only", nargs="+", metavar="ROLE",
-                              help="Start ONLY these roles (skip everything else). "
-                                   "Searches both HOT and WARM server lists.")
+    start_parser.add_argument(
+        "--include-warm", nargs="+", metavar="ROLE", help="Include WARM models"
+    )
+    start_parser.add_argument(
+        "--only",
+        nargs="+",
+        metavar="ROLE",
+        help="Start ONLY these roles (skip everything else). "
+        "Searches both HOT and WARM server lists.",
+    )
     start_parser.add_argument("--dev", action="store_true", help="Dev mode (single 0.5B model)")
     start_parser.add_argument(
         "--numa-mode",
@@ -1360,9 +1478,9 @@ def main() -> int:
         "--repair-embeddings",
         action="store_true",
         help="If [0.7] embedding health check finds orphans, run repair before launch "
-             "(re-embeds via 8 parallel BGE servers, rebuilds FAISS index, ~5-15 min). "
-             "Default behavior is read-only — just print warning and continue. "
-             "See scripts/maintenance/repair_episodic_embeddings.py for the manual workflow.",
+        "(re-embeds via 8 parallel BGE servers, rebuilds FAISS index, ~5-15 min). "
+        "Default behavior is read-only — just print warning and continue. "
+        "See scripts/maintenance/repair_episodic_embeddings.py for the manual workflow.",
     )
     start_parser.add_argument(
         "--profile",
@@ -1373,7 +1491,7 @@ def main() -> int:
         "--stack-profile",
         metavar="NAME",
         help="Load stack template from stack_templates/<NAME>.yaml (DS-7). "
-             "Use --validate-only to check without launching.",
+        "Use --validate-only to check without launching.",
     )
     start_parser.add_argument(
         "--validate-only",
@@ -1384,7 +1502,7 @@ def main() -> int:
         "--migrate-to",
         metavar="NAME",
         help="Migrate running stack to stack_templates/<NAME>.yaml via full "
-             "restart (DS-7 / NIB2-19). Use with --dry-run to plan only.",
+        "restart (DS-7 / NIB2-19). Use with --dry-run to plan only.",
     )
     start_parser.add_argument(
         "--dry-run",
@@ -1395,11 +1513,11 @@ def main() -> int:
         "--compile-registry",
         action="store_true",
         help="Recompile orchestration/model_registry.yaml from the master "
-             "registry at epyc-inference-research before starting. Cache-aware "
-             "(no-op if neither master nor active role set has changed). "
-             "See src/registry/registry_compiler.py for details. Set "
-             "ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to disable when this flag "
-             "is on.",
+        "registry at epyc-inference-research before starting. Cache-aware "
+        "(no-op if neither master nor active role set has changed). "
+        "See src/registry/registry_compiler.py for details. Set "
+        "ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to disable when this flag "
+        "is on.",
     )
 
     # Stop command
@@ -1425,7 +1543,10 @@ def main() -> int:
     # (start_server, init_memrl_and_tools, the thin process/state wrappers).
     # Loading it only inside main() avoids the circular-import problem.
     from scripts.server.stack_commands import (
-        cmd_start, cmd_stop, cmd_reload, cmd_status,
+        cmd_start,
+        cmd_stop,
+        cmd_reload,
+        cmd_status,
     )
 
     if args.command == "start":

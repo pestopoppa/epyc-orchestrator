@@ -76,6 +76,7 @@ ACTION_NORMALIZATION: dict[str, str] = {
     "coder": "architect_coding",
     # Escalation → destination
     "escalate:frontdoor->coder_escalation": "coder_escalation",
+    "escalate:worker_general->coder_escalation": "coder_escalation",
     "escalate:coder_escalation->architect_coding": "architect_coding",
     # Seeding labels (SELF = frontdoor handles it)
     "SELF": "frontdoor",

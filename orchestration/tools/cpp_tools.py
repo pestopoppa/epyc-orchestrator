@@ -31,14 +31,42 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_math_tools_binary() -> Path:
+    """Find llama-math-tools across the main and standalone build layouts."""
+    explicit = os.environ.get("LLAMA_MATH_TOOLS") or os.environ.get(
+        "ORCHESTRATOR_PATHS_LLAMA_MATH_TOOLS"
+    )
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit))
+
+    llm_root = Path(os.environ.get("ORCHESTRATOR_PATHS_LLM_ROOT", "/mnt/raid0/llm"))
+    llama_cpp_bin = Path(
+        os.environ.get("ORCHESTRATOR_PATHS_LLAMA_CPP_BIN", llm_root / "llama.cpp/build/bin")
+    )
+    candidates.extend(
+        [
+            llama_cpp_bin / "llama-math-tools",
+            llm_root / "llama.cpp/tools/math-tools/build/llama-math-tools",
+        ]
+    )
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 # Path to the compiled C++ binary
-MATH_TOOLS_BINARY = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-math-tools")
+MATH_TOOLS_BINARY = _resolve_math_tools_binary()
 
 
 class MathToolsError(Exception):
@@ -63,8 +91,8 @@ class MathTools:
         """Initialize the math tools wrapper.
 
         Args:
-            binary_path: Path to llama-math-tools binary.
-                        Defaults to /mnt/raid0/llm/llama.cpp/build/bin/llama-math-tools
+            binary_path: Path to llama-math-tools binary. Defaults to the first
+                        known build layout containing the executable.
             timeout: Default timeout in seconds.
         """
         self.binary_path = Path(binary_path) if binary_path else MATH_TOOLS_BINARY
@@ -75,7 +103,7 @@ class MathTools:
                 "Math tools binary not found at %s. "
                 "Build with: cd /mnt/raid0/llm/llama.cpp/tools/math-tools && "
                 "cmake -B build && cmake --build build",
-                self.binary_path
+                self.binary_path,
             )
 
     def _call(self, command: str, **params: Any) -> dict[str, Any]:
@@ -113,8 +141,7 @@ class MathTools:
 
             if result.returncode != 0 and not result.stdout:
                 raise MathToolsError(
-                    f"Tool failed with return code {result.returncode}: "
-                    f"{result.stderr}"
+                    f"Tool failed with return code {result.returncode}: {result.stderr}"
                 )
 
             response = json.loads(result.stdout)
@@ -752,6 +779,7 @@ class MathTools:
 # Tool Registry Integration
 # =============================================================================
 
+
 def register_math_tools(registry) -> int:
     """Register C++ math tools with the tool registry.
 
@@ -772,128 +800,195 @@ def register_math_tools(registry) -> int:
     count = 0
 
     # Matrix operations
-    registry.register_tool(Tool(
-        name="matrix_solve",
-        description="Solve linear system Ax=b using QR decomposition",
-        category=ToolCategory.MATH,
-        parameters={
-            "A": {"type": "array", "required": True, "description": "Coefficient matrix"},
-            "b": {"type": "array", "required": True, "description": "Right-hand side vector"},
-        },
-        handler=lambda A, b: tools.matrix_solve(A, b),
-    ), update=True)
+    registry.register_tool(
+        Tool(
+            name="matrix_solve",
+            description="Solve linear system Ax=b using QR decomposition",
+            category=ToolCategory.MATH,
+            parameters={
+                "A": {"type": "array", "required": True, "description": "Coefficient matrix"},
+                "b": {"type": "array", "required": True, "description": "Right-hand side vector"},
+            },
+            handler=lambda A, b: tools.matrix_solve(A, b),
+        ),
+        update=True,
+    )
     count += 1
 
-    registry.register_tool(Tool(
-        name="matrix_eigenvalues",
-        description="Compute eigenvalues of a square matrix",
-        category=ToolCategory.MATH,
-        parameters={
-            "A": {"type": "array", "required": True, "description": "Square matrix"},
-            "vectors": {"type": "boolean", "required": False, "description": "Also compute eigenvectors"},
-        },
-        handler=lambda A, vectors=False: tools.matrix_eigenvalues(A, vectors),
-    ), update=True)
+    registry.register_tool(
+        Tool(
+            name="matrix_eigenvalues",
+            description="Compute eigenvalues of a square matrix",
+            category=ToolCategory.MATH,
+            parameters={
+                "A": {"type": "array", "required": True, "description": "Square matrix"},
+                "vectors": {
+                    "type": "boolean",
+                    "required": False,
+                    "description": "Also compute eigenvectors",
+                },
+            },
+            handler=lambda A, vectors=False: tools.matrix_eigenvalues(A, vectors),
+        ),
+        update=True,
+    )
     count += 1
 
     # ODE solver
-    registry.register_tool(Tool(
-        name="solve_ode",
-        description="Solve ODE dy/dt=f(t,y) with adaptive RK45",
-        category=ToolCategory.MATH,
-        parameters={
-            "y0": {"type": "array", "required": True, "description": "Initial conditions"},
-            "t_span": {"type": "array", "required": True, "description": "[t_start, t_end]"},
-            "coefficients": {"type": "object", "required": False, "description": "Linear system {A, b}"},
-        },
-        handler=lambda y0, t_span, coefficients=None: tools.solve_ode(y0, t_span, coefficients),
-    ), update=True)
+    registry.register_tool(
+        Tool(
+            name="solve_ode",
+            description="Solve ODE dy/dt=f(t,y) with adaptive RK45",
+            category=ToolCategory.MATH,
+            parameters={
+                "y0": {"type": "array", "required": True, "description": "Initial conditions"},
+                "t_span": {"type": "array", "required": True, "description": "[t_start, t_end]"},
+                "coefficients": {
+                    "type": "object",
+                    "required": False,
+                    "description": "Linear system {A, b}",
+                },
+            },
+            handler=lambda y0, t_span, coefficients=None: tools.solve_ode(y0, t_span, coefficients),
+        ),
+        update=True,
+    )
     count += 1
 
     # Monte Carlo
-    registry.register_tool(Tool(
-        name="monte_carlo_integrate",
-        description="Monte Carlo numerical integration",
-        category=ToolCategory.MATH,
-        parameters={
-            "bounds": {"type": "array", "required": True, "description": "Integration bounds"},
-            "function": {"type": "string", "required": False, "description": "Function type"},
-            "n_samples": {"type": "integer", "required": False, "description": "Number of samples"},
-        },
-        handler=lambda bounds, function="constant", n_samples=10000: tools.monte_carlo_integrate(bounds, function, n_samples),
-    ), update=True)
+    registry.register_tool(
+        Tool(
+            name="monte_carlo_integrate",
+            description="Monte Carlo numerical integration",
+            category=ToolCategory.MATH,
+            parameters={
+                "bounds": {"type": "array", "required": True, "description": "Integration bounds"},
+                "function": {"type": "string", "required": False, "description": "Function type"},
+                "n_samples": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "Number of samples",
+                },
+            },
+            handler=lambda bounds, function="constant", n_samples=10000: (
+                tools.monte_carlo_integrate(bounds, function, n_samples)
+            ),
+        ),
+        update=True,
+    )
     count += 1
 
     # Plotting
-    registry.register_tool(Tool(
-        name="plot_data",
-        description="Create braille character plot from x,y data",
-        category=ToolCategory.DATA,
-        parameters={
-            "x": {"type": "array", "required": True, "description": "X coordinates"},
-            "y": {"type": "array", "required": True, "description": "Y coordinates"},
-            "plot_type": {"type": "string", "required": False, "description": "scatter or line"},
-        },
-        handler=lambda x, y, plot_type="line": tools.plot(x, y, plot_type),
-    ), update=True)
+    registry.register_tool(
+        Tool(
+            name="plot_data",
+            description="Create braille character plot from x,y data",
+            category=ToolCategory.DATA,
+            parameters={
+                "x": {"type": "array", "required": True, "description": "X coordinates"},
+                "y": {"type": "array", "required": True, "description": "Y coordinates"},
+                "plot_type": {
+                    "type": "string",
+                    "required": False,
+                    "description": "scatter or line",
+                },
+            },
+            handler=lambda x, y, plot_type="line": tools.plot(x, y, plot_type),
+        ),
+        update=True,
+    )
     count += 1
 
     # MCMC
-    registry.register_tool(Tool(
-        name="mcmc",
-        description="Metropolis-Hastings MCMC sampler",
-        category=ToolCategory.MATH,
-        parameters={
-            "log_density": {"type": "string", "required": True, "description": "Log density expression"},
-            "x0": {"type": "array", "required": True, "description": "Initial state"},
-            "n_samples": {"type": "integer", "required": False, "description": "Number of samples"},
-            "proposal_std": {"type": "number", "required": False, "description": "Proposal std dev"},
-        },
-        handler=lambda log_density, x0, n_samples=10000, proposal_std=1.0: tools.mcmc(
-            log_density, x0, n_samples, proposal_std
+    registry.register_tool(
+        Tool(
+            name="mcmc",
+            description="Metropolis-Hastings MCMC sampler",
+            category=ToolCategory.MATH,
+            parameters={
+                "log_density": {
+                    "type": "string",
+                    "required": True,
+                    "description": "Log density expression",
+                },
+                "x0": {"type": "array", "required": True, "description": "Initial state"},
+                "n_samples": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "Number of samples",
+                },
+                "proposal_std": {
+                    "type": "number",
+                    "required": False,
+                    "description": "Proposal std dev",
+                },
+            },
+            handler=lambda log_density, x0, n_samples=10000, proposal_std=1.0: tools.mcmc(
+                log_density, x0, n_samples, proposal_std
+            ),
         ),
-    ), update=True)
+        update=True,
+    )
     count += 1
 
     # Bayesian Optimization
-    registry.register_tool(Tool(
-        name="bayesopt",
-        description="Bayesian optimization with Gaussian process",
-        category=ToolCategory.MATH,
-        parameters={
-            "bounds": {"type": "array", "required": True, "description": "Parameter bounds"},
-            "objective": {"type": "string", "required": True, "description": "Objective expression"},
-            "n_iter": {"type": "integer", "required": False, "description": "Optimization iterations"},
-        },
-        handler=lambda bounds, objective, n_iter=25: tools.bayesopt(bounds, objective, n_iter=n_iter),
-    ), update=True)
+    registry.register_tool(
+        Tool(
+            name="bayesopt",
+            description="Bayesian optimization with Gaussian process",
+            category=ToolCategory.MATH,
+            parameters={
+                "bounds": {"type": "array", "required": True, "description": "Parameter bounds"},
+                "objective": {
+                    "type": "string",
+                    "required": True,
+                    "description": "Objective expression",
+                },
+                "n_iter": {
+                    "type": "integer",
+                    "required": False,
+                    "description": "Optimization iterations",
+                },
+            },
+            handler=lambda bounds, objective, n_iter=25: tools.bayesopt(
+                bounds, objective, n_iter=n_iter
+            ),
+        ),
+        update=True,
+    )
     count += 1
 
     # Sixel Plotting
-    registry.register_tool(Tool(
-        name="plot_sixel",
-        description="Create high-resolution sixel graphics plot",
-        category=ToolCategory.DATA,
-        parameters={
-            "x": {"type": "array", "required": True, "description": "X coordinates"},
-            "y": {"type": "array", "required": True, "description": "Y coordinates"},
-            "title": {"type": "string", "required": False, "description": "Plot title"},
-        },
-        handler=lambda x, y, title="": tools.plot_sixel(x, y, title=title),
-    ), update=True)
+    registry.register_tool(
+        Tool(
+            name="plot_sixel",
+            description="Create high-resolution sixel graphics plot",
+            category=ToolCategory.DATA,
+            parameters={
+                "x": {"type": "array", "required": True, "description": "X coordinates"},
+                "y": {"type": "array", "required": True, "description": "Y coordinates"},
+                "title": {"type": "string", "required": False, "description": "Plot title"},
+            },
+            handler=lambda x, y, title="": tools.plot_sixel(x, y, title=title),
+        ),
+        update=True,
+    )
     count += 1
 
     # Math Rendering
-    registry.register_tool(Tool(
-        name="render_math",
-        description="Render LaTeX to Unicode/ASCII",
-        category=ToolCategory.DATA,
-        parameters={
-            "latex": {"type": "string", "required": True, "description": "LaTeX expression"},
-            "format": {"type": "string", "required": False, "description": "unicode or ascii"},
-        },
-        handler=lambda latex, format="unicode": tools.render_math(latex, format),
-    ), update=True)
+    registry.register_tool(
+        Tool(
+            name="render_math",
+            description="Render LaTeX to Unicode/ASCII",
+            category=ToolCategory.DATA,
+            parameters={
+                "latex": {"type": "string", "required": True, "description": "LaTeX expression"},
+                "format": {"type": "string", "required": False, "description": "unicode or ascii"},
+            },
+            handler=lambda latex, format="unicode": tools.render_math(latex, format),
+        ),
+        update=True,
+    )
     count += 1
 
     logger.info("Registered %d C++ math tools", count)

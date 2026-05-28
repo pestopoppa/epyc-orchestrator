@@ -48,6 +48,18 @@ LLAMA_SERVER = Path("/mnt/raid0/llm/llama.cpp/build/bin/llama-server")
 from scripts.graph_router.extract_training_data import normalize_action
 
 
+def probe_existing_server(port: int, timeout: float = 1.0) -> bool:
+    """Return True if a healthy embedding server is already running on `port`.
+
+    Used to skip-and-reuse stack-owned embedders rather than colliding with them.
+    """
+    try:
+        r = requests.get(f"http://127.0.0.1:{port}/health", timeout=timeout)
+        return r.status_code == 200
+    except requests.RequestException:
+        return False
+
+
 def start_embedding_server(model_path: Path, port: int, threads: int) -> subprocess.Popen:
     """Launch temporary llama-server for embedding."""
     cmd = [
@@ -111,7 +123,7 @@ def main():
     parser.add_argument("--db", type=str, default=str(DEFAULT_DB))
     parser.add_argument("--model", type=str, default=str(DEFAULT_MODEL))
     parser.add_argument("--output", type=str, default=str(DEFAULT_OUTPUT))
-    parser.add_argument("--base-port", type=int, default=8091)
+    parser.add_argument("--base-port", type=int, default=8090)
     parser.add_argument("--servers", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--threads-per-server", type=int, default=24)
@@ -160,13 +172,26 @@ def main():
         logger.error("No valid rows to embed")
         sys.exit(1)
 
-    # ── Launch N parallel BGE servers ──
-    logger.info("Launching %d BGE servers on ports %s", args.servers, ports)
-    server_procs = []
-    # Launch sequentially to avoid concurrent mlock
+    # ── Probe existing servers; launch only the missing ones ──
+    # Stack-owned embedders (orchestrator_stack.py runs 6 on 8090-8095) are
+    # reused in place. We only own & later kill the ones we spawned ourselves.
+    reused_ports: list[int] = []
+    spawned_ports: list[int] = []
+    server_procs: list[subprocess.Popen] = []
     for port in ports:
-        proc = start_embedding_server(Path(args.model), port, args.threads_per_server)
-        server_procs.append(proc)
+        if probe_existing_server(port):
+            reused_ports.append(port)
+            logger.info("Reusing existing healthy embedding server on port %d", port)
+            continue
+        spawned_ports.append(port)
+    if reused_ports:
+        logger.info("Reusing %d stack-owned server(s): %s", len(reused_ports), reused_ports)
+    if spawned_ports:
+        logger.info("Launching %d new BGE server(s) on ports %s", len(spawned_ports), spawned_ports)
+        # Launch sequentially to avoid concurrent mlock
+        for port in spawned_ports:
+            proc = start_embedding_server(Path(args.model), port, args.threads_per_server)
+            server_procs.append(proc)
 
     try:
         # ── Build batches ──

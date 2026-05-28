@@ -46,17 +46,35 @@ def test_top_level_and_package_path_return_same_role_launch_meta() -> None:
 # ----- core manifest constants are re-exported from orchestrator_stack -----
 
 
-@pytest.mark.parametrize("name", [
-    "PORT_MAP", "ROLE_LAUNCH_META", "HOT_ROLES", "SERIAL_ROLES",
-    "NUMA_REPLICA_PORTS", "HOT_SERVERS", "WARM_SERVERS",
-    "EMBEDDING_MODEL_PATH", "EMBEDDER_PORTS", "WORKER_POOL_MODELS",
-    "EXPLORE_DRAFT_MODEL", "VISION_WORKER_MODEL", "VISION_WORKER_MMPROJ",
-    "VISION_ESCALATION_MODEL", "VISION_ESCALATION_MMPROJ",
-    "DEV_MODEL", "DEV_MODEL_PATH", "ORCHESTRATOR_PROFILES", "DOCKER_SERVICES",
-    "validate_model_paths", "validate_against_registry",
-    "_build_servers_from_classification", "_validate_role_classification",
-    "_filter_by_numa_mode",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PORT_MAP",
+        "ROLE_LAUNCH_META",
+        "HOT_ROLES",
+        "SERIAL_ROLES",
+        "NUMA_REPLICA_PORTS",
+        "HOT_SERVERS",
+        "WARM_SERVERS",
+        "EMBEDDING_MODEL_PATH",
+        "EMBEDDER_PORTS",
+        "WORKER_POOL_MODELS",
+        "EXPLORE_DRAFT_MODEL",
+        "VISION_WORKER_MODEL",
+        "VISION_WORKER_MMPROJ",
+        "VISION_ESCALATION_MODEL",
+        "VISION_ESCALATION_MMPROJ",
+        "DEV_MODEL",
+        "DEV_MODEL_PATH",
+        "ORCHESTRATOR_PROFILES",
+        "DOCKER_SERVICES",
+        "validate_model_paths",
+        "validate_against_registry",
+        "_build_servers_from_classification",
+        "_validate_role_classification",
+        "_filter_by_numa_mode",
+    ],
+)
 def test_manifest_name_reexported(name: str) -> None:
     stack = importlib.import_module("scripts.server.orchestrator_stack")
     assert hasattr(stack, name), f"{name} not re-exported from orchestrator_stack"
@@ -65,11 +83,23 @@ def test_manifest_name_reexported(name: str) -> None:
 # ----- path/binary constants re-exported from stack_paths via orchestrator_stack -----
 
 
-@pytest.mark.parametrize("name", [
-    "_PATHS", "STATE_FILE", "LLAMA_SERVER", "LLAMA_SERVER_V2",
-    "_V2_ROLES", "LOG_DIR", "SLOT_SAVE_DIR", "_get_paths",
-    "_HEALTH_SERVER_STARTUP", "_HEALTH_VISION_SERVER", "_HEALTH_WORKER_SERVER",
-])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "_PATHS",
+        "STATE_FILE",
+        "LLAMA_SERVER",
+        "LLAMA_MATH_TOOLS",
+        "LLAMA_SERVER_V2",
+        "_V2_ROLES",
+        "LOG_DIR",
+        "SLOT_SAVE_DIR",
+        "_get_paths",
+        "_HEALTH_SERVER_STARTUP",
+        "_HEALTH_VISION_SERVER",
+        "_HEALTH_WORKER_SERVER",
+    ],
+)
 def test_path_name_reexported(name: str) -> None:
     stack = importlib.import_module("scripts.server.orchestrator_stack")
     assert hasattr(stack, name), f"{name} not re-exported from orchestrator_stack"
@@ -99,7 +129,8 @@ def test_orchestrator_stack_unknown_attr_raises() -> None:
 def test_hot_servers_computed_at_module_load() -> None:
     """_build_servers_from_classification is run at stack_manifest module load.
     HOT_SERVERS should be a non-empty list of server dicts."""
-    from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+    from scripts.server.stack_manifest import HOT_SERVERS
+
     assert isinstance(HOT_SERVERS, list)
     assert len(HOT_SERVERS) > 0
     for srv in HOT_SERVERS:
@@ -109,6 +140,7 @@ def test_hot_servers_computed_at_module_load() -> None:
 
 def test_hot_servers_includes_frontdoor() -> None:
     from scripts.server.stack_manifest import HOT_SERVERS
+
     ports = {s["port"] for s in HOT_SERVERS}
     # frontdoor primary on 8070
     assert 8070 in ports
@@ -119,6 +151,7 @@ def test_hot_servers_includes_frontdoor() -> None:
 
 def test_validate_model_paths_returns_list() -> None:
     from scripts.server.stack_manifest import validate_model_paths
+
     errors = validate_model_paths()
     assert isinstance(errors, list)
     # all entries should be strings (file paths formatted into error labels)
@@ -131,12 +164,14 @@ def test_validate_model_paths_returns_list() -> None:
 
 def test_filter_by_numa_mode_both_returns_input_unchanged() -> None:
     from scripts.server.stack_manifest import HOT_SERVERS, _filter_by_numa_mode
+
     assert _filter_by_numa_mode(HOT_SERVERS, "both") == HOT_SERVERS
 
 
 def test_filter_by_numa_mode_full_strips_quarters() -> None:
     """For roles with full_instance_idx, mode=full keeps only the full one."""
     from scripts.server.stack_manifest import HOT_SERVERS, _filter_by_numa_mode
+
     full_only = _filter_by_numa_mode(HOT_SERVERS, "full")
     # frontdoor has 5 instances in NUMA_CONFIG (0=full, 1-4=quarters). With
     # mode=full we keep only the full one — count of frontdoor servers should drop.
@@ -157,3 +192,12 @@ def test_stack_paths_imports_cleanly() -> None:
             del sys.modules[k]
     import scripts.server.stack_paths as sp  # noqa: F401
     # No assertion needed — import success is the test
+
+
+def test_math_tools_path_supports_subproject_build() -> None:
+    from scripts.server.stack_paths import LLAMA_MATH_TOOLS
+
+    assert LLAMA_MATH_TOOLS.name == "llama-math-tools"
+    assert "build/bin/llama-math-tools" in str(
+        LLAMA_MATH_TOOLS
+    ) or "tools/math-tools/build/llama-math-tools" in str(LLAMA_MATH_TOOLS)

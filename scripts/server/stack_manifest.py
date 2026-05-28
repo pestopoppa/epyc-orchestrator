@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts.server.stack_numa import NUMA_CONFIG
-from scripts.server.stack_paths import _PATHS
+from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _PATHS
 
 
 # =============================================================================
@@ -25,15 +25,15 @@ from scripts.server.stack_paths import _PATHS
 # =============================================================================
 
 PORT_MAP = {
-    "frontdoor": 8070,           # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
-    "coder_escalation": 8071,    # Full-speed 1×96t (quarters: 8081, 8181, 8281, 8381)
-    "worker_general": 8072,      # Full-speed 1×96t (quarters: 8082, 8182, 8282, 8382)
-    "worker_explore": 8072,      # Alias -> worker_general (legacy name; pre-2026-03-19)
-    "worker_math": 8072,         # Shares with worker_general
-    "worker_vision": 8086,       # Dedicated VL server
-    "vision_escalation": 8087,   # VL escalation (Qwen3-VL-30B MoE)
-    "worker_coder": 8102,        # Fast coding worker semantic role (1.5B backend) — DEPRECATED (worker_pool)
-    "worker_fast": 8102,         # Fast worker (1.5B, WARM, 4 slots) — DEPRECATED (worker_pool)
+    "frontdoor": 8070,  # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
+    "coder_escalation": 8071,  # Full-speed 1×96t (quarters: 8081, 8181, 8281, 8381)
+    "worker_general": 8072,  # Full-speed 1×96t (quarters: 8082, 8182, 8282, 8382)
+    "worker_explore": 8072,  # Alias -> worker_general (legacy name; pre-2026-03-19)
+    "worker_math": 8072,  # Shares with worker_general
+    "worker_vision": 8086,  # Dedicated VL server
+    "vision_escalation": 8087,  # VL escalation (Qwen3-VL-30B MoE)
+    "worker_coder": 8102,  # Fast coding worker semantic role (1.5B backend) — DEPRECATED (worker_pool)
+    "worker_fast": 8102,  # Fast worker (1.5B, WARM, 4 slots) — DEPRECATED (worker_pool)
     # Specialists (no pre-warm — already multi-instance or too large for quarters)
     "architect_general": 8083,
     # architect_coding REMOVED 2026-05-06 — REAP-246B 70% coder < frontdoor 97%; role eliminated. 139 GB freed.
@@ -47,16 +47,21 @@ PORT_MAP = {
     "embedder_5": 8095,
     "orchestrator": 8000,
     "document_formalizer": 9001,
-    "sd_server": 8190,         # ERNIE-Image-Turbo via stable-diffusion.cpp native (replaced ComfyUI 2026-05-07; ~1.7-3.4× CPU speedup)
-    "whisper": 9000,           # faster-whisper STT (transcription service, not llama-server)
+    "sd_server": 8190,  # ERNIE-Image-Turbo via stable-diffusion.cpp native (replaced ComfyUI 2026-05-07; ~1.7-3.4× CPU speedup)
+    "whisper": 9000,  # faster-whisper STT (transcription service, not llama-server)
 }
 
 # HOT roles (always started) - NUMA-optimized
 # 2026-05-06: architect_coding removed, ingest_long_context promoted (see registry).
 HOT_ROLES = {
-    "frontdoor", "coder_escalation", "worker_general", "embedder",
-    "architect_general", "ingest_long_context",
-    "worker_vision", "vision_escalation",
+    "frontdoor",
+    "coder_escalation",
+    "worker_general",
+    "embedder",
+    "architect_general",
+    "ingest_long_context",
+    "worker_vision",
+    "vision_escalation",
 }
 
 # All NUMA replica ports (for port scanning and cleanup) — derived from
@@ -129,33 +134,44 @@ ROLE_LAUNCH_META: dict[str, dict] = {
     # throughput on the cohabiting roles per 2026-05-09 measurements). The
     # orchestrator API routes by role name → registry's url field (all three
     # roles point at port 8070 in the registry).
-    "frontdoor":            {"tier": "hot",  "mode": "default",
-                             "shared_with_first_n": ["coder_escalation", "worker_summarize"]},
+    "frontdoor": {
+        "tier": "hot",
+        "mode": "default",
+        "shared_with_first_n": ["coder_escalation", "worker_summarize"],
+    },
     # coder_escalation entry REMOVED 2026-05-09 — consolidated into frontdoor above.
     # NUMA_CONFIG['coder_escalation'] left in place as dead key for git-history
     # blame purposes; not referenced by build_servers_from_classification anymore.
-    "worker_general":       {"tier": "hot",  "mode": "worker_pool",
-                             "worker_type": "explore",
-                             # Aliases that share the worker_general process: worker_explore is the
-                             # legacy name (pre-2026-03-19 worker pool design); worker_math + toolrunner
-                             # share the GGUF mmap and process for routing fan-out.
-                             "shared_with_first_n": ["worker_explore", "worker_math", "toolrunner"],
-                             "shared_with_first_n_count": 2},  # aliases on full + first quarter
-    "architect_general":    {"tier": "hot",  "mode": "default"},
-    "ingest_long_context":  {"tier": "hot",  "mode": "default"},
-    "worker_vision":        {"tier": "hot",  "mode": "vision", "vision_type": "worker"},
-    "vision_escalation":    {"tier": "hot",  "mode": "vision", "vision_type": "escalation"},
+    "worker_general": {
+        "tier": "hot",
+        "mode": "worker_pool",
+        "worker_type": "explore",
+        # Aliases that share the worker_general process: worker_explore is the
+        # legacy name (pre-2026-03-19 worker pool design); worker_math + toolrunner
+        # share the GGUF mmap and process for routing fan-out.
+        "shared_with_first_n": ["worker_explore", "worker_math", "toolrunner"],
+        "shared_with_first_n_count": 2,
+    },  # aliases on full + first quarter
+    "architect_general": {"tier": "hot", "mode": "default"},
+    "ingest_long_context": {"tier": "hot", "mode": "default"},
+    "worker_vision": {"tier": "hot", "mode": "vision", "vision_type": "worker"},
+    "vision_escalation": {"tier": "hot", "mode": "vision", "vision_type": "escalation"},
     # Embedders — no NUMA pinning, fixed single port each
-    "embedder":             {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8090},
-    "embedder_1":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8091},
-    "embedder_2":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8092},
-    "embedder_3":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8093},
-    "embedder_4":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8094},
-    "embedder_5":           {"tier": "hot",  "mode": "embedding", "no_numa": True, "port": 8095},
+    "embedder": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8090},
+    "embedder_1": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8091},
+    "embedder_2": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8092},
+    "embedder_3": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8093},
+    "embedder_4": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8094},
+    "embedder_5": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8095},
     # ---- WARM tier (optional, --include-warm) ----
     # 2026-05-06: worker_pool deprecated in registry; warm 1.5B worker retained as inert.
-    "worker_fast":          {"tier": "warm", "mode": "worker_pool", "worker_type": "fast",
-                             "no_numa": True, "port": 8102},
+    "worker_fast": {
+        "tier": "warm",
+        "mode": "worker_pool",
+        "worker_type": "fast",
+        "no_numa": True,
+        "port": 8102,
+    },
     # architect_coding REMOVED 2026-05-06 (REAP-246B role eliminated; 139 GB freed)
     # ingest_long_context PROMOTED to HOT 2026-05-06 (Stage 1 of three_stage_summarization)
     # thinking_reasoning REMOVED 2026-05-06 (GGUF deleted from disk 2026-03-06)
@@ -181,7 +197,9 @@ WORKER_POOL_MODELS = {
     # through the launcher; until then this path is informational only — production
     # launcher still uses default LLAMA_SERVER and will fail on gemma4 arch).
     "explore": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
-    "fast": str(_PATHS["model_base"] / "QuantFactory/Qwen2.5-Coder-1.5B-GGUF/Qwen2.5-Coder-1.5B.Q4_K_M.gguf"),
+    "fast": str(
+        _PATHS["model_base"] / "QuantFactory/Qwen2.5-Coder-1.5B-GGUF/Qwen2.5-Coder-1.5B.Q4_K_M.gguf"
+    ),
 }
 
 # Draft model for MTP speculative decoding on explore worker.
@@ -190,10 +208,21 @@ WORKER_POOL_MODELS = {
 EXPLORE_DRAFT_MODEL = "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf"
 
 # Vision models (VL) with multimodal projector
-VISION_WORKER_MODEL = str(_PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf")
-VISION_WORKER_MMPROJ = str(_PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf")
-VISION_ESCALATION_MODEL = str(_PATHS["model_base"] / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf")
-VISION_ESCALATION_MMPROJ = str(_PATHS["model_base"] / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf")
+VISION_WORKER_MODEL = str(
+    _PATHS["model_base"]
+    / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+)
+VISION_WORKER_MMPROJ = str(
+    _PATHS["model_base"] / "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf"
+)
+VISION_ESCALATION_MODEL = str(
+    _PATHS["model_base"]
+    / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf"
+)
+VISION_ESCALATION_MMPROJ = str(
+    _PATHS["model_base"]
+    / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf"
+)
 
 DEV_MODEL = "Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf"
 DEV_MODEL_PATH = str(_PATHS["models_dir"] / DEV_MODEL)
@@ -228,8 +257,17 @@ DOCKER_SERVICES = [
             f"{_PATHS['project_root']}/cache/next-plaid/code-indices:/data/indices",
             f"{_PATHS['cache_dir']}/huggingface:/root/.cache/huggingface",
         ],
-        "args": ["--host", "0.0.0.0", "--port", "8080", "--index-dir", "/data/indices",
-                 "--model", "lightonai/LateOn-Code", "--int8"],
+        "args": [
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--index-dir",
+            "/data/indices",
+            "--model",
+            "lightonai/LateOn-Code",
+            "--int8",
+        ],
     },
     {
         "name": "nextplaid-docs",
@@ -242,8 +280,17 @@ DOCKER_SERVICES = [
             f"{_PATHS['cache_dir']}/huggingface:/root/.cache/huggingface",
             "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx:/models/gte-moderncolbert-v1-onnx:ro",
         ],
-        "args": ["--host", "0.0.0.0", "--port", "8080", "--index-dir", "/data/indices",
-                 "--model", "/models/gte-moderncolbert-v1-onnx", "--int8"],
+        "args": [
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--index-dir",
+            "/data/indices",
+            "--model",
+            "/models/gte-moderncolbert-v1-onnx",
+            "--int8",
+        ],
     },
     {
         "name": "searxng",
@@ -318,7 +365,9 @@ def _build_servers_from_classification() -> tuple[list[dict], list[dict]]:
         target = hot if meta["tier"] == "hot" else warm
         mode = meta.get("mode", "default")
         aliases = meta.get("shared_with_first_n", [])
-        alias_count = meta.get("shared_with_first_n_count", 1)  # default: aliases on first instance only
+        alias_count = meta.get(
+            "shared_with_first_n_count", 1
+        )  # default: aliases on first instance only
 
         # Mode-specific flag dict applied to every entry for this role
         mode_flags: dict = {}
@@ -401,9 +450,7 @@ def _validate_role_classification() -> None:
             ports = [inst[1] for inst in cfg.get("instances", [])]
         for port in ports:
             if port in primary_ports and primary_ports[port] != role:
-                errors.append(
-                    f"Port {port} assigned to both '{primary_ports[port]}' and '{role}'"
-                )
+                errors.append(f"Port {port} assigned to both '{primary_ports[port]}' and '{role}'")
             primary_ports[port] = role
 
     if errors:
@@ -434,6 +481,7 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
     warnings: list[str] = []
     try:
         import yaml
+
         with open(registry_yaml_path) as f:
             registry = yaml.safe_load(f)
     except Exception as e:
@@ -531,7 +579,10 @@ def validate_model_paths() -> list[str]:
     # 2026-05-06: architect_coding REMOVED (REAP-246B role eliminated; 139 GB freed).
     architect_models = [
         ("architect_general", str(_PATHS["model_base"] / "unsloth/Qwen3.5-122B-A10B-GGUF/")),
-        ("ingest_long_context", str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/")),
+        (
+            "ingest_long_context",
+            str(_PATHS["model_base"] / "lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/"),
+        ),
     ]
     for role, path in architect_models:
         if not Path(path).exists():
@@ -558,7 +609,7 @@ def validate_model_paths() -> list[str]:
         errors.append(f"[TOOL] tool_registry.yaml: {tool_registry}")
 
     # C++ math tools (optional - warn but don't fail)
-    cpp_math_tools = _PATHS["llama_cpp_bin"] / "llama-math-tools"
+    cpp_math_tools = LLAMA_MATH_TOOLS
     if not cpp_math_tools.exists():
         # This is a warning, not an error - append with different prefix
         pass  # Will be checked separately in init_memrl_and_tools

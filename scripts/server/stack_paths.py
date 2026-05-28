@@ -53,8 +53,22 @@ def _get_paths() -> dict[str, Path]:
 
 _PATHS = _get_paths()
 
+
+def _resolve_llama_cpp_binary(name: str, extra_candidates: tuple[Path, ...] = ()) -> Path:
+    """Return the first known on-disk path for a llama.cpp helper binary."""
+    primary = _PATHS["llama_cpp_bin"] / name
+    for candidate in (primary, *extra_candidates):
+        if candidate.exists():
+            return candidate
+    return primary
+
+
 STATE_FILE = _PATHS["log_dir"] / "orchestrator_state.json"
-LLAMA_SERVER = _PATHS["llama_cpp_bin"] / "llama-server"
+LLAMA_SERVER = _resolve_llama_cpp_binary("llama-server")
+LLAMA_MATH_TOOLS = _resolve_llama_cpp_binary(
+    "llama-math-tools",
+    (_PATHS["llm_root"] / "llama.cpp/tools/math-tools/build/llama-math-tools",),
+)
 # v2 binary retained for emergency fallback only. As of 2026-05-06 stack-swap,
 # all hot-tier roles use the v5 binary (production-consolidated-v5). Previously
 # coder_escalation needed v2 due to a Qwen2.5 spec-decode bug, but
