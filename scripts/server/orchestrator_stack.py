@@ -1488,6 +1488,15 @@ def main() -> int:
         help="Skip host_prereq audit/apply (numa_balancing, THP, governor). NOT recommended for benchmarks.",
     )
     start_parser.add_argument(
+        "--skip-page-cache-prewarm",
+        action="store_true",
+        help="Skip the [1.5] numactl --interleave=all GGUF prewarm step. "
+        "NOT recommended after a cold cache / container rebuild — sequential "
+        "mlock will pin all shared-GGUF pages to one NUMA node and quarters "
+        "will fetch cross-socket. See handoffs/active/numa-page-cache-prewarm.md. "
+        "Equivalent: set ORCHESTRATOR_SKIP_PAGE_CACHE_PREWARM=1.",
+    )
+    start_parser.add_argument(
         "--repair-embeddings",
         action="store_true",
         help="If [0.7] embedding health check finds orphans, run repair before launch "

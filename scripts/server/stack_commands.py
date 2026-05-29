@@ -59,6 +59,7 @@ from scripts.server.stack_paths import (
     SLOT_SAVE_DIR,
     STATE_FILE,
 )
+from scripts.server.stack_prewarm import prewarm_all as _prewarm_all
 from scripts.server.stack_state import ProcessInfo
 from src.registry_loader import RegistryLoader
 
@@ -495,6 +496,21 @@ def cmd_start(args: argparse.Namespace) -> int:
             f"{len(servers_to_start)} server(s) to start"
         )
 
+    print()
+
+    # [1.5] Page-cache prewarm — distribute shared-GGUF pages across NUMA nodes
+    # under `numactl --interleave=all` BEFORE the per-instance launches mlock
+    # them. Otherwise sequential mlock pins every page of a shared model onto
+    # whichever node the first launcher's --membind targeted, and remote-node
+    # quarters cross-socket-fetch for the whole stack lifetime (~50-65% t/s drop
+    # observed 2026-05-28 after a container rebuild evicted the page cache).
+    # See handoffs/active/numa-page-cache-prewarm.md.
+    _prewarm_all(
+        servers_to_start,
+        _orchestrator_stack().build_server_command,
+        registry,
+        args=args,
+    )
     print()
 
     # Check target ports — skip healthy, clean up unhealthy
