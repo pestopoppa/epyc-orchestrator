@@ -69,6 +69,9 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     assert "structuredTapPrimaryRole" in body
     assert "status === 'quiet'" in body
     assert "blocked_by_roles" in body
+    assert "lockOnlyStructuredTapHolders" in body
+    assert "chat.* tap absent" in body
+    assert "holders · ${tapped} tapped · ${offTap} off-tap" in body
 
 
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
@@ -79,6 +82,22 @@ def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
     assert "activeInferenceCount > 0 || activeLockCount > 0" in body
     assert "runState = 'inference active'" in body
     assert "runState = hasActiveInference ? 'orphan inference' : 'down'" in body
+
+
+def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
+    """Topology activity text should not lag behind lock/tap freshness signals."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "TOPOLOGY_ACTIVITY_WINDOW_S = 60" in body
+    assert "TOPOLOGY_ACTIVITY_POLL_MS = 1500" in body
+    assert "TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000" in body
+    assert "topologyActivityAgeS" in body
+    assert "renderTopologyActivity" in body
+    assert "topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}" in body
+    assert "setInterval(updateTopologyActivity, TOPOLOGY_ACTIVITY_POLL_MS)" in body
+    assert "setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS)" in body
+    assert "lockActivitySignature" in body
 
 
 def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> None:

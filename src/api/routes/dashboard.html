@@ -168,7 +168,7 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
 /* Compact topology strip — each role on its own row.
    Grid: role-name | port | activity-stats | slot-dots
    Activity-stats column shows recent req count + t/s + last-active age
-   pulled from /dashboard/api/topology_activity (5s poll). */
+   pulled from /dashboard/api/topology_activity (1.5s poll + 1s age tick). */
 .topology-strip { display: flex; flex-direction: column; gap: 4px; }
 .topology-row {
     display: grid;
@@ -1313,6 +1313,7 @@ let _latestSnapshot = null;
 let _latestProcessStatus = null;
 let _latestAutopilotProgress = null;
 let _latestRegionLockSummary = { activeLockCount: 0, heldRegions: 0, enabled: null };
+let _latestRegionLockActivitySignature = null;
 
 function formatShortDuration(s) {
     if (s == null || Number.isNaN(Number(s))) return '?';
@@ -1626,6 +1627,7 @@ function toggleRawTapRenderMode() {
 function buildRawTapStatusBar() {
     // Sticky header above the live tap. Pin indicator + render-mode toggle.
     const mode = _rawTapRenderMode;
+    const holderCounts = mode === 'structured' ? structuredTapHolderCountLabel() : '';
     const toggleLabel = mode === 'structured' ? 'structured'
         : (mode === 'rendered' ? 'markdown' : 'raw');
     const toggleHint = mode === 'structured'
@@ -1634,7 +1636,7 @@ function buildRawTapStatusBar() {
             ? 'legacy section render: prompt/response through marked + KaTeX. click for raw bytes.'
             : 'raw legacy bytes. click for request-grouped structured events.');
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;gap:8px">
-        <span style="color:var(--muted);font-size:10px">live tap (${mode} · inference_tap_events.jsonl + inference_tap.log)</span>
+        <span style="color:var(--muted);font-size:10px">live tap (${mode} · inference_tap_events.jsonl + inference_tap.log${holderCounts ? ` · ${escapeHTML(holderCounts)}` : ''})</span>
         <span style="display:flex;gap:8px;align-items:center">
             <button onclick="toggleRawTapRenderMode()" style="background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;font-family:inherit"
                 title="${toggleHint}">${toggleLabel}</button>
@@ -1686,6 +1688,7 @@ function paintRawTap() {
 }
 
 let _lastStructuredTapRequests = [];
+let _lastLockOnlyTapHolders = [];
 let _openStructuredTapRequestId = null;
 
 function structuredTapHasActiveCpuLock(req) {
@@ -1769,6 +1772,21 @@ function structuredTapCpuBlockerSummary(blockers) {
 function structuredTapPrimaryRole(req) {
     if (!req) return '?';
     return String(req.lock_role || req.topology_role || req.role || '?');
+}
+
+function currentAutopilotActionSource() {
+    const proc = _latestProcessStatus || {};
+    const phase = proc.autopilot_phase || {};
+    const action = phase.action_type ? String(phase.action_type) : '';
+    return action ? `autopilot:${action}` : '';
+}
+
+function currentOffTapTrafficLabel() {
+    const proc = _latestProcessStatus || {};
+    const phase = proc.autopilot_phase || {};
+    const action = phase.action_type ? String(phase.action_type) : '';
+    if (action === 'seed_batch') return 'internal/seeding';
+    return action ? `internal/${action}` : 'internal/off-tap';
 }
 
 function buildTapInferredRegionLocks() {
@@ -1910,6 +1928,91 @@ function liveStructuredTapRequests() {
         .filter(isLiveStructuredTapRequest);
 }
 
+function structuredTapMatchesLockHolder(req, holder) {
+    if (!req || !holder) return false;
+    const holderRole = String(holder.role || '');
+    const roleKeys = [
+        req.lock_role,
+        req.topology_role,
+        req.role,
+        req.role ? clientBaseRole(req.role) : '',
+    ].filter(Boolean).map(String);
+    if (!roleKeys.includes(holderRole)) return false;
+    const reqIdx = req.instance_idx != null ? Number(req.instance_idx) : null;
+    if (reqIdx != null && holder.idx != null && reqIdx === Number(holder.idx)) return true;
+    const reqPid = req.pid != null ? String(req.pid) : '';
+    return !!(reqPid && Array.isArray(holder.pids) && holder.pids.includes(reqPid));
+}
+
+function procRegionLockHolders() {
+    const holders = [];
+    for (const [role, active] of Object.entries(_latestRegionLocksByRole || {})) {
+        if (!active) continue;
+        const procIdxs = active.procInstanceIdxs || new Set();
+        const instMap = new Map((active.instances || []).map(i => [Number(i.idx), i]));
+        for (const rawIdx of procIdxs) {
+            const idx = Number(rawIdx);
+            if (!Number.isFinite(idx)) continue;
+            const inst = instMap.get(idx);
+            const pids = active.pidsByInstanceIdx && active.pidsByInstanceIdx.get(idx)
+                ? [...active.pidsByInstanceIdx.get(idx)]
+                : [];
+            holders.push({
+                role,
+                idx,
+                shape: inst && inst.shape ? String(inst.shape) : `idx${idx}`,
+                regions: inst && Array.isArray(inst.regions)
+                    ? inst.regions.map(String)
+                    : [...(active.regions || [])].map(String),
+                pids,
+            });
+        }
+    }
+    return holders.sort((a, b) => {
+        const byRole = String(a.role).localeCompare(String(b.role));
+        return byRole || Number(a.idx) - Number(b.idx);
+    });
+}
+
+function lockOnlyStructuredTapHolders() {
+    const requests = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
+    return procRegionLockHolders().filter(holder =>
+        !requests.some(req => structuredTapMatchesLockHolder(req, holder))
+    );
+}
+
+function lockHolderLabel(holder) {
+    if (!holder) return '?';
+    return `${holder.role || '?'}${holder.shape ? `.${holder.shape}` : ''}`;
+}
+
+function lockHolderConcurrentSummary(holder) {
+    const others = procRegionLockHolders()
+        .filter(h => !(h.role === holder.role && Number(h.idx) === Number(holder.idx)))
+        .map(lockHolderLabel);
+    return others.length ? `admit-allowed concurrent with ${others.join(', ')}` : '';
+}
+
+function structuredTapHolderCountLabel() {
+    const holders = procRegionLockHolders();
+    if (!holders.length) return '';
+    const requests = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
+    const tapped = holders.filter(holder =>
+        requests.some(req => structuredTapMatchesLockHolder(req, holder))
+    ).length;
+    const offTap = holders.length - tapped;
+    return offTap > 0 ? `${holders.length} holders · ${tapped} tapped · ${offTap} off-tap` : '';
+}
+
+function formatRegionLockHolderSummary() {
+    const actionSource = currentAutopilotActionSource();
+    return procRegionLockHolders().map(holder => {
+        const tapped = openStructuredTapRequests().some(req => structuredTapMatchesLockHolder(req, holder));
+        const source = (!tapped && actionSource) ? ` (${actionSource})` : '';
+        return `${lockHolderLabel(holder)}${source}`;
+    }).join(', ');
+}
+
 function refreshLiveDotsFromStructuredTap() {
     const liveTapCount = liveStructuredTapRequests().length;
     if (liveTapCount <= 0) return;
@@ -2015,11 +2118,33 @@ function structuredTapMeta(req) {
     return bits.join(' · ');
 }
 
+function renderLockOnlyTapHolderCard(holder, i) {
+    const role = String(holder.role || '?');
+    const color = (typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--muted)';
+    const pids = holder.pids && holder.pids.length ? holder.pids.join(',') : '?';
+    const regions = holder.regions && holder.regions.length ? holder.regions.join(',') : '?';
+    const concurrent = lockHolderConcurrentSummary(holder);
+    return `<div class="task-card tap-derived live-tap-row" data-lock-only-idx="${i}" onclick="openLockOnlyTapDetail(${i})" title="open off-tap holder explanation">
+        <div class="role" style="color:${color}">
+            ${escapeHTML(role)}
+            <span class="live-tap-state" style="color:#c084fc">${escapeHTML(currentOffTapTrafficLabel())}</span>
+        </div>
+        <div class="meta">
+            chat.* tap absent
+            <span style="color:var(--dim)"> · holder pid=${escapeHTML(pids)} · ${escapeHTML(holder.shape || '?')} · regions ${escapeHTML(regions)}</span>
+        </div>
+        ${concurrent ? `<div class="meta" style="color:#c084fc">${escapeHTML(concurrent)}</div>` : ''}
+        <div class="prompt">/proc shows this CPU-region holder, but no matching structured /chat tap request is open.</div>
+    </div>`;
+}
+
 function paintStructuredTap(container) {
     const allRequests = Array.isArray(_structuredTapRequests) ? _structuredTapRequests : [];
     const requests = openStructuredTapRequests();
+    const lockOnlyHolders = lockOnlyStructuredTapHolders();
     _lastStructuredTapRequests = requests;
-    if (!requests.length) {
+    _lastLockOnlyTapHolders = lockOnlyHolders;
+    if (!requests.length && !lockOnlyHolders.length) {
         const msg = allRequests.length
             ? 'no live inference requests right now'
             : 'no structured tap events yet';
@@ -2055,13 +2180,58 @@ function paintStructuredTap(container) {
             <div class="prompt">${escapeHTML(promptPreview || '(prompt not captured yet)')}</div>
         </div>`;
     }).join('');
-    container.innerHTML = html;
+    const lockOnlyHtml = lockOnlyHolders.map(renderLockOnlyTapHolderCard).join('');
+    container.innerHTML = html + lockOnlyHtml;
 }
 
 function openStructuredTapDetail(idx) {
     const req = _lastStructuredTapRequests[idx];
     if (!req) return;
     openStructuredTapRequest(req);
+}
+
+function openLockOnlyTapDetail(idx) {
+    const holder = _lastLockOnlyTapHolders[idx];
+    if (!holder) return;
+    _openStructuredTapRequestId = null;
+    const panel = document.getElementById('detail-panel');
+    const content = document.getElementById('detail-content');
+    const title = document.getElementById('detail-title');
+    const actionSource = currentAutopilotActionSource() || 'unknown internal source';
+    const progressPath = `logs/progress/${new Date().toISOString().slice(0, 10)}.jsonl`;
+    const pids = holder.pids && holder.pids.length ? holder.pids.join(', ') : '?';
+    const regions = holder.regions && holder.regions.length ? holder.regions.join(', ') : '?';
+    const concurrent = lockHolderConcurrentSummary(holder);
+    const body = [
+        `**${lockHolderLabel(holder)}** is holding CPU regions from /proc, but no matching structured /chat tap request is open.`,
+        `This usually means off-tap-route traffic such as seed_batch, probe, eval, or other internal dispatch is running through the seeding/autopilot harness rather than the /chat tap path.`,
+        `Holder pid: ${pids}`,
+        `Instance shape: ${holder.shape || '?'}`,
+        `Regions: ${regions}`,
+        `Action source: ${actionSource}`,
+        concurrent || '',
+        `For the autopilot action record, check ${progressPath} and the autopilot activity panel.`,
+    ].filter(Boolean).join('\n\n');
+    if (title) title.textContent = `off-tap holder · ${lockHolderLabel(holder)}`;
+    _currentTaskRawText = {
+        taskId: `lock_${holder.role || 'role'}_${holder.idx != null ? holder.idx : Date.now()}`,
+        prompt: '',
+        stream: body,
+        repl: [],
+    };
+    content.innerHTML = `
+        <div class="detail-actions">
+            <button onclick="copySnapshotToClipboard()">copy snapshot</button>
+            <button class="secondary" onclick="downloadSnapshot()">download .txt</button>
+            <span id="copy-feedback" class="copy-feedback"></span>
+        </div>
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px;font-family:var(--font-mono)">
+            source: /proc CPU-region lock cache · ${escapeHTML(actionSource)}
+        </div>
+        <div class="detail-box-label">holder explanation</div>
+        <div class="stream-text" id="stream-text"></div>`;
+    renderMarkdownInto(document.getElementById('stream-text'), body);
+    panel.classList.add('open');
 }
 
 function openStructuredTapRequest(req) {
@@ -3417,6 +3587,7 @@ async function updateProcessStatus() {
         const r = await fetch('/dashboard/api/process_status');
         const d = await r.json();
         _latestProcessStatus = d;
+        if (_rawTapRenderMode === 'structured') paintRawTap();
         renderAutopilotRunStrip();
         const ap = d.autopilot || {};
         const el = document.getElementById('process-status');
@@ -3526,6 +3697,67 @@ async function updateProcessStatus() {
 // (a) /version is cheap (file mtime + .git/HEAD read), and (b) cadence is
 // different — we don't need second-by-second granularity for build drift.
 let _buildRevLoaded = null;  // {git_sha, dashboard_html_mtime, dashboard_py_mtime, server_started_at}
+const TOPOLOGY_ACTIVITY_WINDOW_S = 60;
+const TOPOLOGY_ACTIVITY_POLL_MS = 1500;
+const TOPOLOGY_ACTIVITY_AGE_TICK_MS = 1000;
+let _latestTopologyActivity = null;  // {perRole, window_s, now, fetchedAtMs}
+let _topologyActivityFetchInFlight = false;
+let _topologyActivityRefreshQueued = false;
+
+function topologyActivityAgeS(stats) {
+    if (!stats || stats.last_activity_age_s == null) return null;
+    const baseAge = Number(stats.last_activity_age_s);
+    if (!Number.isFinite(baseAge)) return null;
+    const fetchedAtMs = (_latestTopologyActivity && _latestTopologyActivity.fetchedAtMs) || Date.now();
+    return Math.max(0, baseAge + ((Date.now() - fetchedAtMs) / 1000));
+}
+
+function formatTopologyActivityAge(age) {
+    if (age == null) return '';
+    if (age < 60) return `${Math.round(age)}s`;
+    if (age < 3600) return `${Math.round(age / 60)}m`;
+    return `${(age / 3600).toFixed(1)}h`;
+}
+
+function renderTopologyActivity() {
+    const d = _latestTopologyActivity;
+    if (!d) return;
+    const perRole = d.perRole || {};
+    const windowS = Number(d.window_s || TOPOLOGY_ACTIVITY_WINDOW_S);
+    // Iterate every .activity-stats element by id pattern. Each row was
+    // created with id="activity_<base>" by renderTopologyStrip.
+    document.querySelectorAll('[id^="activity_"]').forEach(el => {
+        const base = el.id.substring('activity_'.length);
+        const stats = perRole[base];
+        const age = topologyActivityAgeS(stats);
+        const nReq = stats ? (stats.n_recent || stats.n_completed || 0) : 0;
+        const stillInsideWindow = age == null || age <= windowS;
+        if (!stats || !nReq || !stillInsideWindow) {
+            el.innerHTML = '<span class="stat-stale">—</span>';
+            el.title = `no recent activity for ${base} in last ${Math.round(windowS)}s`;
+            return;
+        }
+        const parts = [];
+        parts.push(`<span class="stat-fresh">${nReq}</span> req`);
+        if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
+            parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
+        } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
+            parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
+        }
+        if (age != null) {
+            const ageClass = age < 60 ? 'stat-fresh' : 'stat-stale';
+            parts.push(`<span class="${ageClass}">${formatTopologyActivityAge(age)} ago</span>`);
+        }
+        el.innerHTML = parts.join('<span class="stat-sep">·</span>');
+        const tooltipBits = [
+            `${nReq} req in last ${Math.round(windowS)}s`,
+            stats.avg_tps_recent != null ? `avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
+            stats.avg_duration_s != null ? `avg ${stats.avg_duration_s.toFixed(2)}s/task` : null,
+            age != null ? `last activity ${age.toFixed(1)}s ago` : null,
+        ].filter(Boolean);
+        el.title = tooltipBits.join(' · ');
+    });
+}
 
 async function updateTopologyActivity() {
     // Per-role recent activity stats from /dashboard/api/topology_activity.
@@ -3533,46 +3765,29 @@ async function updateTopologyActivity() {
     //   "12 req · 31 t/s · 3s ago"
     // Color cues: fresh (<60s ago) in green, stale (>=60s) in dim.
     // Falls back to "—" when the role has no data in the window.
+    if (_topologyActivityFetchInFlight) {
+        _topologyActivityRefreshQueued = true;
+        return;
+    }
+    _topologyActivityFetchInFlight = true;
     try {
-        const r = await fetch('/dashboard/api/topology_activity');
+        const r = await fetch(`/dashboard/api/topology_activity?window_s=${TOPOLOGY_ACTIVITY_WINDOW_S}`);
         const d = await r.json();
-        const perRole = d.per_role || {};
-        // Iterate every .activity-stats element by id pattern. Each row was
-        // created with id="activity_<base>" by renderTopologyStrip.
-        document.querySelectorAll('[id^="activity_"]').forEach(el => {
-            const base = el.id.substring('activity_'.length);
-            const stats = perRole[base];
-            if (!stats || (!stats.n_recent && !stats.n_completed)) {
-                el.innerHTML = '<span class="stat-stale">—</span>';
-                el.title = `no recent activity for ${base} in last ${Math.round(d.window_s)}s`;
-                return;
-            }
-            const parts = [];
-            const nReq = stats.n_recent || stats.n_completed || 0;
-            if (nReq > 0) parts.push(`<span class="stat-fresh">${nReq}</span> req`);
-            if (stats.avg_tps_recent != null && stats.avg_tps_recent > 0) {
-                parts.push(`<span class="stat-fresh">${stats.avg_tps_recent.toFixed(1)}</span> t/s`);
-            } else if (stats.avg_duration_s != null && stats.avg_duration_s > 0) {
-                parts.push(`<span class="stat-fresh">${stats.avg_duration_s.toFixed(1)}</span>s avg`);
-            }
-            const age = stats.last_activity_age_s;
-            if (age != null) {
-                const ageClass = age < 60 ? 'stat-fresh' : 'stat-stale';
-                const ageStr = age < 60
-                    ? `${Math.round(age)}s`
-                    : (age < 3600 ? `${Math.round(age/60)}m` : `${(age/3600).toFixed(1)}h`);
-                parts.push(`<span class="${ageClass}">${ageStr} ago</span>`);
-            }
-            el.innerHTML = parts.join('<span class="stat-sep">·</span>');
-            const tooltipBits = [
-                `${nReq} req in last ${Math.round(d.window_s)}s`,
-                stats.avg_tps_recent != null ? `avg ${stats.avg_tps_recent.toFixed(2)} t/s` : null,
-                stats.avg_duration_s != null ? `avg ${stats.avg_duration_s.toFixed(2)}s/task` : null,
-                age != null ? `last activity ${age.toFixed(1)}s ago` : null,
-            ].filter(Boolean);
-            el.title = tooltipBits.join(' · ');
-        });
-    } catch (e) {}
+        _latestTopologyActivity = {
+            perRole: d.per_role || {},
+            window_s: Number(d.window_s || TOPOLOGY_ACTIVITY_WINDOW_S),
+            now: Number(d.now || 0),
+            fetchedAtMs: Date.now(),
+        };
+        renderTopologyActivity();
+    } catch (e) {
+    } finally {
+        _topologyActivityFetchInFlight = false;
+        if (_topologyActivityRefreshQueued) {
+            _topologyActivityRefreshQueued = false;
+            setTimeout(updateTopologyActivity, 0);
+        }
+    }
 }
 
 async function updateBuildRev() {
@@ -3870,8 +4085,10 @@ function startDashboard() {
                         pidsByInstanceIdx.set(nIdx, bucket);
                     }
                 }
+                const procInstanceIdxs = new Set((info.active_instance_idxs || []).map(Number));
                 _latestRegionLocksByRole[role] = {
-                    instanceIdxs: new Set((info.active_instance_idxs || []).map(Number)),
+                    instanceIdxs: new Set(procInstanceIdxs),
+                    procInstanceIdxs,
                     regions: new Set((info.regions || []).filter(e => e.held).map(e => String(e.region))),
                     holderPids,
                     pidsByInstanceIdx,
@@ -3882,6 +4099,7 @@ function startDashboard() {
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
                 const base = _latestRegionLocksByRole[role] || {
                     instanceIdxs: new Set(),
+                    procInstanceIdxs: new Set(),
                     regions: new Set(),
                     holderPids: new Set(),
                     pidsByInstanceIdx: new Map(),
@@ -3905,14 +4123,24 @@ function startDashboard() {
                 }
                 _latestRegionLocksByRole[role] = base;
             }
-            if (_rawTapRenderMode === 'structured' && Array.isArray(_structuredTapRequests) && _structuredTapRequests.length) {
+            if (_rawTapRenderMode === 'structured') {
                 paintRawTap();
             }
+            const lockActivitySignature = Object.entries(_latestRegionLocksByRole)
+                .sort((a, b) => a[0].localeCompare(b[0]))
+                .map(([role, lock]) => {
+                    const insts = [...(lock.instanceIdxs || [])].map(Number).sort((a, b) => a - b).join(',');
+                    const regions = [...(lock.regions || [])].sort().join(',');
+                    return `${role}:${insts}:${regions}`;
+                })
+                .join('|');
+            const lockActivityChanged = _latestRegionLockActivitySignature !== null
+                && lockActivitySignature !== _latestRegionLockActivitySignature;
+            _latestRegionLockActivitySignature = lockActivitySignature;
+
             // Cross-role physical-core occupancy: { quarter: [{role, shape}] }.
-            // Each role has independent lock files (cpu_region.<role>.qN.lock),
-            // but the underlying 24-core regions are shared physical resources.
-            // If ANY role is holding a quarter, every other role's instance that
-            // overlaps with that quarter is blocked at the CPU level.
+            // The grid combines this with blocked_by_roles, so matrix-allowed
+            // overlaps stay ready while same-role or matrix-blocked overlaps wait.
             const globalHeldBy = {};   // quarter -> [{role, shape}]
             for (const [role, info] of roleEntries) {
                 const instByIdx = new Map((info.instances || []).map(i => [i.idx, i]));
@@ -3931,11 +4159,7 @@ function startDashboard() {
                     }
                 }
             }
-            const actualHeldBySummary = [...new Set(
-                Object.values(globalHeldBy)
-                    .flat()
-                    .map(b => `${b.role}.${b.shape}`)
-            )].join(', ');
+            const actualHeldBySummary = formatRegionLockHolderSummary();
             const tapInferredMissing = [];
             for (const [role, inferred] of Object.entries(_latestTapInferredRegionLocksByRole || {})) {
                 const actualActive = new Set(((byRole[role] || {}).active_instance_idxs || []).map(Number));
@@ -4044,6 +4268,9 @@ function startDashboard() {
                 footer.innerHTML = footMsg;
                 grid.appendChild(footer);
             }
+            if (lockActivityChanged) {
+                updateTopologyActivity();
+            }
         } catch {}
     }
 
@@ -4066,7 +4293,8 @@ function startDashboard() {
         setInterval(updateContentionGate, 2000);  // 2s poll — gate metrics are cumulative counters; cheap
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
         updateTopologyActivity();
-        setInterval(updateTopologyActivity, 5000);  // topology row activity stats
+        setInterval(updateTopologyActivity, TOPOLOGY_ACTIVITY_POLL_MS);  // topology row activity stats
+        setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS);  // local "Ns ago" tick between polls
         // Pareto poll: only fetch when the GEPA accordion is open. Cheap when
         // closed (no fetch, just summary text from the last successful call).
         setInterval(() => {
