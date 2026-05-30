@@ -283,6 +283,45 @@ def _resolve_pid_to_instance_idx(
     return out
 
 
+def _region_lock_blocked_by_roles(
+    row_role: str,
+    active_roles: set[str],
+    matrix: Any | None,
+) -> list[str]:
+    """Roles whose active locks should render as wait/blocking for row_role.
+
+    Same-role overlaps are always real lock waits because the lock files are
+    keyed by (role, region). Cross-role overlaps follow the contention matrix:
+    allow means concurrent dispatch is expected, queue/block means the row role
+    would wait behind that holder for background/autopilot traffic.
+    """
+    blocked: set[str] = set()
+    for holder_role in active_roles:
+        if not holder_role:
+            continue
+        if holder_role == row_role:
+            blocked.add(holder_role)
+            continue
+        if matrix is None:
+            blocked.add(holder_role)
+            continue
+        try:
+            from src.scheduling.contention import PairDecision, TrafficClass, pair_policy
+
+            decision = pair_policy(
+                row_role,
+                holder_role,
+                TrafficClass.BACKGROUND,
+                matrix=matrix,
+            )
+        except Exception:
+            blocked.add(holder_role)
+            continue
+        if decision != PairDecision.ALLOW:
+            blocked.add(holder_role)
+    return sorted(blocked)
+
+
 @router.get("/dashboard/api/region_locks")
 async def region_locks_snapshot() -> JSONResponse:
     """Per-CPU-region lock state — which (role, region) lock files are
@@ -476,6 +515,7 @@ async def region_locks_snapshot() -> JSONResponse:
             "regions": [],
             "instances": visible_instances.get(entry["role"], []),
             "active_instance_idxs": set(),
+            "blocked_by_roles": [],
         })
         bucket["regions"].append({
             "region": entry["region"],
@@ -485,8 +525,20 @@ async def region_locks_snapshot() -> JSONResponse:
         })
         for idx in entry["holder_instance_idxs"]:
             bucket["active_instance_idxs"].add(idx)
+
+    active_lock_roles = {
+        role
+        for role, bucket in by_role.items()
+        if bucket["active_instance_idxs"]
+        or any(region.get("held") for region in bucket.get("regions", []))
+    }
     for role, bucket in by_role.items():
         bucket["active_instance_idxs"] = sorted(bucket["active_instance_idxs"])
+        bucket["blocked_by_roles"] = _region_lock_blocked_by_roles(
+            role,
+            active_lock_roles,
+            matrix,
+        )
 
     feature_flag = os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip()
     return JSONResponse({

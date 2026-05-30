@@ -1354,6 +1354,7 @@ function renderAutopilotRunStrip() {
     const queued = stateCounts.queued || 0;
     const waitingCpu = stateCounts.waiting_cpu_lock || 0;
     const pending = stateCounts.prefill_decode_pending || 0;
+    const quiet = stateCounts.quiet || 0;
     const stalled = stateCounts.stalled || 0;
     const lockSummary = _latestRegionLockSummary || {};
     const activeInferenceCount = activeReqs.length;
@@ -1408,9 +1409,9 @@ function renderAutopilotRunStrip() {
         trialSub = `${escapeHTML(String(phase.action_type || 'action unknown'))} · phase ${escapeHTML(String(phaseName))}`;
     }
 
-    const loadClass = stalled ? 'bad' : ((waitingCpu || queued || pending) ? 'warn' : (activeReqs.length ? 'good' : 'muted'));
+    const loadClass = stalled ? 'bad' : ((waitingCpu || queued || pending || quiet) ? 'warn' : (activeReqs.length ? 'good' : 'muted'));
     const loadValue = `${activeReqs.length} active`;
-    const loadSub = `waiting ${waitingCpu} · queued ${queued} · pending ${pending} · stalled ${stalled}<br><strong>locks</strong> ${activeLockCount} held across ${heldRegionCount} regions`;
+    const loadSub = `waiting ${waitingCpu} · queued ${queued} · pending ${pending} · quiet ${quiet} · stalled ${stalled}<br><strong>locks</strong> ${activeLockCount} held across ${heldRegionCount} regions`;
 
     const failures = completed.filter(t => t.outcome && t.outcome !== 'task_completed').length;
     const lastComplete = completed.length ? completed[0] : null;
@@ -1765,6 +1766,11 @@ function structuredTapCpuBlockerSummary(blockers) {
         .join(' · ');
 }
 
+function structuredTapPrimaryRole(req) {
+    if (!req) return '?';
+    return String(req.lock_role || req.topology_role || req.role || '?');
+}
+
 function buildTapInferredRegionLocks() {
     const inferred = {};
     const requests = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
@@ -1805,7 +1811,10 @@ function structuredTapActivity(req) {
     const tokens = Number((req.timings_raw && req.timings_raw.tokens) || 0);
     const status = String(req.status || 'running');
     const hasOutput = Number(req.chunk_count || 0) > 0 || Number(req.response_len || 0) > 0 || !!req.response;
-    const quietS = Number(req.quiet_s != null ? req.quiet_s : 0);
+    const serverQuietS = Number(req.quiet_s != null ? req.quiet_s : 0);
+    const updatedEpoch = Number(req.updated_at_epoch || 0);
+    const clientQuietS = updatedEpoch > 0 ? Math.max(0, (Date.now() / 1000) - updatedEpoch) : 0;
+    const quietS = Math.max(serverQuietS, clientQuietS);
     const lockActive = structuredTapHasActiveCpuLock(req);
     const cpuBlockers = !lockActive && !hasOutput ? structuredTapCpuBlockers(req) : [];
     if (status === 'complete') {
@@ -1841,6 +1850,16 @@ function structuredTapActivity(req) {
             reason: lockActive
                 ? 'CPU lock still appears held, but no tap output has arrived past the stall threshold'
                 : 'no CPU lock observed and no tap output has arrived past the stall threshold',
+        };
+    }
+    if (status === 'quiet') {
+        return {
+            state: 'quiet',
+            label: hasOutput ? 'quiet after output' : 'quiet',
+            color: '#fbbf24',
+            live: false,
+            show: true,
+            reason: req.status_reason || 'tap stream is open but no event has arrived recently',
         };
     }
     if (!hasOutput) {
@@ -1979,12 +1998,15 @@ function restoreTapAccordionScrolls(container, datasetKey, state) {
 
 function structuredTapMeta(req) {
     const bits = [];
+    const primaryRole = structuredTapPrimaryRole(req);
     if (req.request_id) bits.push(`request ${String(req.request_id).slice(0, 18)}`);
     if (req.parent_request_id) bits.push(`parent ${String(req.parent_request_id).slice(0, 18)}`);
     if (req.task_id) bits.push(`task ${req.task_id}`);
     if (req.trial_id != null) bits.push(`trial ${req.trial_id}`);
     if (req.batch_id != null) bits.push(`batch ${req.batch_id}`);
-    if (req.topology_role && req.topology_role !== req.role) bits.push(`via ${req.topology_role}`);
+    if (req.role && req.role !== primaryRole) bits.push(`logical ${req.role}`);
+    if (req.lock_role && req.lock_role !== primaryRole) bits.push(`lock ${req.lock_role}`);
+    else if (req.topology_role && req.topology_role !== primaryRole) bits.push(`via ${req.topology_role}`);
     if (req.instance_shape) bits.push(`shape ${req.instance_shape}`);
     if (req.instance_idx != null) bits.push(`idx ${req.instance_idx}`);
     if (req.port) bits.push(`port ${req.port}`);
@@ -2005,7 +2027,7 @@ function paintStructuredTap(container) {
         return;
     }
     const html = requests.map((req, i) => {
-        const role = req.role || '?';
+        const role = structuredTapPrimaryRole(req);
         const color = (typeof roleColor === 'function' ? roleColor(role) : null) || 'var(--muted)';
         const activity = structuredTapActivity(req);
         const status = activity.label;
@@ -2045,10 +2067,11 @@ function openStructuredTapDetail(idx) {
 function openStructuredTapRequest(req) {
     if (!req) return;
     _openStructuredTapRequestId = req.request_id || null;
+    const role = structuredTapPrimaryRole(req);
     const panel = document.getElementById('detail-panel');
     const content = document.getElementById('detail-content');
     document.getElementById('detail-title').textContent =
-        `tap request · ${req.role || '?'} · ${req.request_id || ''}`;
+        `tap request · ${role} · ${req.request_id || ''}`;
     _currentTaskRawText = {
         taskId: `tap_${req.request_id || Date.now()}`,
         prompt: req.prompt || '',
@@ -2087,7 +2110,7 @@ function refreshOpenStructuredTapDetail() {
     const title = document.getElementById('detail-title');
     if (title) {
         const activity = structuredTapActivity(req);
-        title.textContent = `tap request · ${req.role || '?'} · ${activity.label} · ${req.request_id || ''}`;
+        title.textContent = `tap request · ${structuredTapPrimaryRole(req)} · ${activity.label} · ${req.request_id || ''}`;
     }
     const meta = document.getElementById('structured-tap-detail-meta');
     if (meta) {
@@ -2197,7 +2220,7 @@ function renderTapActivityCard(s) {
     // Only live/open tap sections reach this helper. They get a pulsing dot
     // + green/amber text so the operator can distinguish active decoding from
     // queued or stalled tap records.
-    const role = s.role || '?';
+    const role = s.structured ? structuredTapPrimaryRole(s) : (s.role || '?');
     const color = roleColor(role);
     const ts = s.timestamp || '';
     const ageSec = ts ? Math.max(0, (Date.now() - Date.parse(ts.replace(' ', 'T'))) / 1000) : 0;
@@ -2214,7 +2237,9 @@ function renderTapActivityCard(s) {
         ? `<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${ageColor};margin-right:4px;animation:${activity && activity.live ? 'pulse 1.5s infinite' : 'none'}"></span>`
         : '';
     const requestAttr = s.structured ? ` data-tap-request-id="${escapeHTML(s.request_id || '')}"` : '';
-    const routeMeta = s.topology_role && s.topology_role !== role ? ` · via ${escapeHTML(s.topology_role)}` : '';
+    const routeMeta = s.structured && s.role && s.role !== role
+        ? ` · logical ${escapeHTML(s.role)}`
+        : (s.topology_role && s.topology_role !== role ? ` · via ${escapeHTML(s.topology_role)}` : '');
     const quietMeta = s.status_reason ? ` · ${escapeHTML(s.status_reason)}` : '';
     return `
         <div class="task-card tap-derived${inFlight ? ' tap-inflight' : ''}" data-tap-ts="${escapeHTML(ts)}" data-tap-role="${escapeHTML(role)}"${requestAttr} title="tap-derived activity (no chat-XXX id) · click for prompt+response snapshot">
@@ -3963,7 +3988,7 @@ function startDashboard() {
                     ? `; +${tapInferredMissing.length} tap-inferred active stream(s): ${tapInferredMissing.join(', ')}`
                     : '';
                 status.textContent = activeLockCount > 0
-                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${inferredSuffix}; blocked cells are wait states; per-region locks ENABLED`
+                    ? `— ${actualActiveLockCount} /proc holder instance(s): ${actualHeldBySummary || 'none'}${inferredSuffix}; × cells are same-role or matrix-blocked waits; per-region locks ENABLED`
                     : '— no locks held; per-region locks ENABLED';
                 status.style.color = activeLockCount > 0 ? '#fbbf24' : 'var(--muted)';
             }
@@ -3992,14 +4017,16 @@ function startDashboard() {
                         continue;
                     }
                     const needed = inst.regions || [];
-                    const blockingQuarters = needed.filter(q => globalHeldRegions.has(q));
+                    const blockedByRoles = new Set((info.blocked_by_roles || []).map(String));
+                    const isBlockingHolder = (b) => b.role === role || blockedByRoles.has(String(b.role));
+                    const blockingQuarters = needed.filter(q => (globalHeldBy[q] || []).some(isBlockingHolder));
                     if (blockingQuarters.length) {
                         const blockers = blockingQuarters
-                            .map(q => `${q}←${(globalHeldBy[q] || []).map(b => `${b.role}.${b.shape}`).join(',')}`)
+                            .map(q => `${q}←${(globalHeldBy[q] || []).filter(isBlockingHolder).map(b => `${b.role}.${b.shape}`).join(',')}`)
                             .join(' · ');
                         rows.push(`<div class="rl-cell rl-blocked" title="${role}.${col.label} WAITING — physical cores ${blockingQuarters.join(',')} occupied by ${blockers}; not the active holder">×</div>`);
                     } else {
-                        rows.push(`<div class="rl-cell rl-ready" title="${role}.${col.label} READY — physical cores {${needed.join(',')}} all free">✅</div>`);
+                        rows.push(`<div class="rl-cell rl-ready" title="${role}.${col.label} READY — regions {${needed.join(',')}} are free or occupied only by matrix-allowed concurrent roles">✅</div>`);
                     }
                 }
             }
