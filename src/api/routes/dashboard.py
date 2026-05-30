@@ -55,6 +55,7 @@ from src.api.routes.dashboard_tap import (
 from src.api.routes.dashboard_tasks import (
     _find_section_by_objective,
     _find_structured_request_by_id,
+    _find_structured_request_by_task_id,
     _objective_for_task,
     _task_events,
     _task_text_snapshot,
@@ -2174,22 +2175,30 @@ async def task_text(task_id: str) -> Any:
         if found_slot:
             break
 
-    # Tap-section fallback when no live slot — same matcher the JSON
-    # endpoint uses, including the role-filtered pass for higher precision.
+    # Tap-section fallback when no live slot. Prefer the structured event
+    # stream by task_id (deterministic mapping) over the plaintext substring
+    # matcher (vulnerable to interleaved per-append writes producing
+    # syntactically-valid but cross-contaminated records — see 2026-05-30
+    # chat-83123001/chat-c7bf9580 incident).
     tap_section = None
     if found_slot is None:
-        objective = _objective_for_task(events)
-        producer_role = None
-        for ev in reversed(events):
-            if ev.get("event_type") == "task_completed":
-                producer_role = (ev.get("data") or {}).get("producer_role")
-                break
-        if not producer_role:
-            for ev in events:
-                if ev.get("event_type") == "routing_decision":
-                    producer_role = (ev.get("data") or {}).get("chosen_action")
+        if not task_id.startswith("tap_"):
+            tap_section = _find_structured_request_by_task_id(task_id)
+        if tap_section is None:
+            objective = _objective_for_task(events)
+            producer_role = None
+            for ev in reversed(events):
+                if ev.get("event_type") == "task_completed":
+                    producer_role = (ev.get("data") or {}).get("producer_role")
                     break
-        tap_section = _find_section_by_objective(objective, expected_role=producer_role)
+            if not producer_role:
+                for ev in events:
+                    if ev.get("event_type") == "routing_decision":
+                        producer_role = (ev.get("data") or {}).get("chosen_action")
+                        break
+            tap_section = _find_section_by_objective(
+                objective, expected_role=producer_role
+            )
 
     text = _task_text_snapshot(task_id, events, found_slot, tap_section=tap_section)
     from fastapi.responses import PlainTextResponse
@@ -2251,24 +2260,31 @@ async def task_detail(task_id: str) -> JSONResponse:
     slots_by_port = await _poll_all_slots()
     slot_port, active_slot = await _find_slot_by_objective(objective, slots_by_port)
 
-    # Fallback: if no live slot but the task completed, mine inference_tap.log.
-    # Pass the role the task actually completed under (task_completed.producer_role)
-    # — when present, the matcher uses role-filtered passes first for higher
-    # precision when multiple roles processed the same prompt (architect →
-    # specialist, forced-route handoffs, etc.).
+    # Fallback when no live slot. Prefer the structured event stream by
+    # task_id (deterministic mapping by request metadata) over the plaintext
+    # substring matcher, which is vulnerable to interleaved per-append writes
+    # (chat-83123001/chat-c7bf9580 cross-contamination, 2026-05-30). If the
+    # structured stream has nothing for this task id, fall back to plaintext;
+    # producer_role from task_completed constrains the role-filtered pass and
+    # also blocks the unsafe global fallback in _find_section_by_objective.
     tap_section = None
     if active_slot is None:
-        producer_role = None
-        for ev in reversed(events):  # task_completed is usually near the end
-            if ev.get("event_type") == "task_completed":
-                producer_role = (ev.get("data") or {}).get("producer_role")
-                break
-        if not producer_role:
-            for ev in events:
-                if ev.get("event_type") == "routing_decision":
-                    producer_role = (ev.get("data") or {}).get("chosen_action")
+        if not task_id.startswith("tap_"):
+            tap_section = _find_structured_request_by_task_id(task_id)
+        if tap_section is None:
+            producer_role = None
+            for ev in reversed(events):  # task_completed is usually near the end
+                if ev.get("event_type") == "task_completed":
+                    producer_role = (ev.get("data") or {}).get("producer_role")
                     break
-        tap_section = _find_section_by_objective(objective, expected_role=producer_role)
+            if not producer_role:
+                for ev in events:
+                    if ev.get("event_type") == "routing_decision":
+                        producer_role = (ev.get("data") or {}).get("chosen_action")
+                        break
+            tap_section = _find_section_by_objective(
+                objective, expected_role=producer_role
+            )
 
     return JSONResponse({
         "task_id": task_id,

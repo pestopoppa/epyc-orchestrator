@@ -165,6 +165,33 @@ def _find_structured_request_by_id(task_id: str, max_requests: int = 400) -> dic
     return None
 
 
+def _find_structured_request_by_task_id(
+    task_id: str, max_requests: int = 400
+) -> dict | None:
+    """Find the most-recent structured tap request whose ``task_id`` matches.
+
+    Orchestrator chat task ids (e.g. ``chat-83123001``) appear in the structured
+    event stream under the ``task_id`` field, while each inference call has its
+    own derived ``request_id`` (e.g. ``chat-83123001:b763498c``). The dashboard's
+    chat-* task-detail path used to skip the structured tap entirely and fall
+    back to plaintext substring matching, which conflates concurrent sections
+    when interleaved per-append writes produce syntactically-valid but
+    cross-contaminated records. Resolving by ``task_id`` instead gives a
+    deterministic mapping for any chat-* task that produced a streamed section.
+    """
+    task_id = (task_id or "").strip()
+    if not task_id:
+        return None
+    tail_text = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
+    # _parse_structured_tap_requests returns most-recent-updated first.
+    for request in _parse_structured_tap_requests(tail_text, max_requests=max_requests):
+        if str(request.get("task_id") or "") == task_id:
+            out = dict(request)
+            out["source"] = "structured_tap"
+            return out
+    return None
+
+
 def _find_section_by_objective(
     objective: str,
     expected_role: str | None = None,
@@ -228,12 +255,21 @@ def _find_section_by_objective(
         return None
 
     # Pass 1 — role-filtered (if known). Higher precision; prefer over global.
+    # When the caller knows the producer role, we deliberately do NOT fall back
+    # to a global plaintext pass: under concurrent interleaved tap writes, a
+    # syntactically-valid section from a different role can still contain the
+    # objective substring while pairing it with the wrong response (observed
+    # 2026-05-30: chat-83123001 routed to frontdoor but the global pass matched
+    # a worker_explore record with an unrelated response). For chat-* tasks the
+    # structured-event lookup is the deterministic path; this fallback is for
+    # legacy callers that lack producer-role telemetry.
     if expected_role:
         role_sections = [s for s in sections if (s.get("role") or "") == expected_role]
         for n in needles:
             hit = _match(role_sections, n)
             if hit is not None:
                 return hit
+        return None
 
     # Pass 2 — global. Each needle in turn.
     for n in needles:

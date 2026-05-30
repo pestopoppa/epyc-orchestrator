@@ -387,6 +387,85 @@ def test_find_section_by_objective_matches_recent_first(monkeypatch) -> None:
     assert out["prompt"].startswith("recent:")
 
 
+def test_find_section_by_objective_role_filtered_no_global_fallback(monkeypatch) -> None:
+    # Caller knows the task ran under frontdoor; the global pass would
+    # otherwise return a syntactically-valid but cross-contaminated section
+    # written by worker_explore (regression guard for the 2026-05-30
+    # chat-83123001/chat-c7bf9580 interleaved-write incident).
+    fake_sections = [
+        {"role": "worker_explore", "prompt": "solve fizzbuzz now", "response": "wrong"},
+    ]
+    monkeypatch.setattr(dashboard_tasks, "_read_tail", lambda *a, **kw: "irrelevant")
+    monkeypatch.setattr(dashboard_tasks, "_parse_inference_sections", lambda *a, **kw: fake_sections)
+    out = dashboard_tasks._find_section_by_objective(
+        "solve fizzbuzz", expected_role="frontdoor"
+    )
+    assert out is None
+
+
+def test_find_structured_request_by_task_id_matches_chat_id(monkeypatch) -> None:
+    # Each chat task has its own derived request_id; resolving by task_id
+    # gives a deterministic mapping for chat-* dashboard task ids.
+    lines = [
+        json.dumps({
+            "event": "start",
+            "request_id": "chat-83123001:b763498c",
+            "task_id": "chat-83123001",
+            "role": "frontdoor",
+            "ts": "2026-05-30T22:16:24+00:00",
+            "ts_epoch": 1.0,
+            "prompt": "count monkey collisions",
+        }),
+        json.dumps({
+            "event": "response",
+            "request_id": "chat-83123001:b763498c",
+            "task_id": "chat-83123001",
+            "role": "frontdoor",
+            "ts": "2026-05-30T22:16:53+00:00",
+            "ts_epoch": 2.0,
+            "text": "the actual frontdoor answer",
+        }),
+        # Interleaved worker_explore request that previously confused the
+        # plaintext fallback — verify the task_id lookup does not return it.
+        json.dumps({
+            "event": "start",
+            "request_id": "chat-c7bf9580:aaaa1111",
+            "task_id": "chat-c7bf9580",
+            "role": "worker_explore",
+            "ts": "2026-05-30T22:16:25+00:00",
+            "ts_epoch": 1.5,
+            "prompt": "count spaces in pirate's speak",
+        }),
+        json.dumps({
+            "event": "response",
+            "request_id": "chat-c7bf9580:aaaa1111",
+            "task_id": "chat-c7bf9580",
+            "role": "worker_explore",
+            "ts": "2026-05-30T22:16:28+00:00",
+            "ts_epoch": 1.6,
+            "text": "5",
+        }),
+    ]
+    monkeypatch.setattr(
+        dashboard_tasks, "_read_tail", lambda *args, **kwargs: "\n".join(lines)
+    )
+
+    out = dashboard_tasks._find_structured_request_by_task_id("chat-83123001")
+
+    assert out is not None
+    assert out["source"] == "structured_tap"
+    assert out["task_id"] == "chat-83123001"
+    assert out["role"] == "frontdoor"
+    assert out["prompt"] == "count monkey collisions"
+    assert out["response"] == "the actual frontdoor answer"
+
+
+def test_find_structured_request_by_task_id_missing_returns_none(monkeypatch) -> None:
+    monkeypatch.setattr(dashboard_tasks, "_read_tail", lambda *a, **kw: "")
+    assert dashboard_tasks._find_structured_request_by_task_id("chat-83123001") is None
+    assert dashboard_tasks._find_structured_request_by_task_id("") is None
+
+
 # ----- dashboard_snapshot -----
 
 
