@@ -99,6 +99,7 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
     # Phase 3: Specialist routing
     FeatureSpec("specialist_routing", False, True, "SPECIALIST_ROUTING", "Q-value specialist routing", ("memrl",)),
     FeatureSpec("graph_router", False, False, "GRAPH_ROUTER", "GNN-based parallel routing", ("specialist_routing",)),
+    FeatureSpec("ingest_triviality_guard", False, False, "INGEST_TRIVIALITY_GUARD", "Demote trivially-easy short prompts off ingest_long_context", ("specialist_routing",)),
     FeatureSpec("plan_review", False, True, "PLAN_REVIEW", "Architect plan review", ("memrl",)),
     FeatureSpec("architect_delegation", False, True, "ARCHITECT_DELEGATION", "Architect delegation", ("memrl",)),
     FeatureSpec("parallel_execution", False, True, "PARALLEL_EXECUTION", "Wave-based step execution", ("architect_delegation",)),
@@ -291,6 +292,10 @@ class Features:
 
     # Phase 3+: GraphRouter (GNN-based parallel routing signal for cold-start optimization)
     graph_router: bool = False  # Enable bipartite GAT routing predictor
+
+    # Ingest-triviality guard: keep trivially-easy short prompts off the 80B
+    # accuracy/long-context specialist (opt-in; requires specialist_routing)
+    ingest_triviality_guard: bool = False  # Demote easy short prompts off ingest_long_context
 
     # Phase 3: Architect plan review (pre-execution plan vetting)
     plan_review: bool = False  # Enable architect review of frontdoor plans before execution

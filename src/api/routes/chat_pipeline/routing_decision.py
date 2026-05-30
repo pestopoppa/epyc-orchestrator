@@ -123,6 +123,76 @@ def apply_failure_veto(
     return routing_decision, routing_strategy
 
 
+# Ingest-triviality guard thresholds (chars; ~4 chars/token).
+# Long-context payloads (big context) and genuinely hard prompts are never
+# demoted — the guard only catches trivially-easy short prompts that the
+# learned router (MemRL) leaks onto the 80B accuracy/long-context specialist.
+_INGEST_GUARD_MAX_CONTEXT_CHARS = 2000   # above this we assume a real long-context task
+_INGEST_GUARD_EASY_MAX_PROMPT_CHARS = 4000      # difficulty band == "easy"
+_INGEST_GUARD_UNKNOWN_MAX_PROMPT_CHARS = 400    # difficulty signal off/unavailable: be strict
+
+
+def apply_ingest_triviality_guard(
+    request: ChatRequest,
+    routing_decision: list,
+    routing_strategy: str,
+    difficulty_band: str,
+    task_id: str,
+) -> tuple[list, str]:
+    """Demote trivially-easy short prompts off ``ingest_long_context``.
+
+    ``ingest_long_context`` (Qwen3-Next-80B @ ~6.4 t/s) is a router-target
+    accuracy/long-context specialist, but the learned MemRL router leaks some
+    trivial short prompts (e.g. one-line arithmetic) onto it — paying a ~19×
+    latency tax for work a cheap role answers identically. This guard redirects
+    only *positively trivial* requests to ``worker_general``; it never touches
+    long-context payloads or prompts the difficulty signal calls medium/hard,
+    so short-but-hard reasoning (which ingest legitimately wins) is preserved.
+
+    Opt-in: no-op unless the ``ingest_triviality_guard`` feature flag is on.
+    Reuses the already-computed ``difficulty_band`` (no extra classifier call).
+    """
+    if not features().ingest_triviality_guard:
+        return routing_decision, routing_strategy
+    if not routing_decision or str(routing_decision[0]) != str(Role.INGEST_LONG_CONTEXT):
+        return routing_decision, routing_strategy
+
+    band = (difficulty_band or "").strip().lower()
+    # Positive hard/medium evidence wins — never demote possibly-hard reasoning.
+    if band in ("medium", "hard"):
+        return routing_decision, routing_strategy
+
+    context_chars = len(request.context or "")
+    if context_chars > _INGEST_GUARD_MAX_CONTEXT_CHARS:
+        return routing_decision, routing_strategy  # genuine long-context work
+
+    prompt_chars = len(request.prompt or "")
+    prompt_limit = (
+        _INGEST_GUARD_EASY_MAX_PROMPT_CHARS
+        if band == "easy"
+        else _INGEST_GUARD_UNKNOWN_MAX_PROMPT_CHARS
+    )
+    if prompt_chars > prompt_limit:
+        return routing_decision, routing_strategy
+
+    target = str(Role.WORKER_GENERAL)
+    log.info(
+        "Ingest-triviality guard: ingest_long_context → %s "
+        "(prompt_chars=%d, context_chars=%d, band=%s)",
+        target,
+        prompt_chars,
+        context_chars,
+        band or "none",
+        extra=task_extra(
+            task_id=task_id,
+            role=target,
+            stage="routing",
+            strategy="ingest_triviality_guard",
+        ),
+    )
+    return [target], f"{routing_strategy}:ingest_triviality_guard"
+
+
 def assess_difficulty(prompt: str, role: str, task_id: str) -> tuple[float, str]:
     """Return difficulty score and band, falling back to no signal on failure."""
     try:

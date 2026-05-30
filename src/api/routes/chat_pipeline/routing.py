@@ -17,6 +17,7 @@ from src.task_ir import canonicalize_task_ir
 
 from src.api.routes.chat_pipeline.routing_decision import (
     apply_failure_veto,
+    apply_ingest_triviality_guard,
     assess_difficulty,
     assess_factual_risk,
     classify_trinity_role,
@@ -102,6 +103,18 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
     _difficulty_score, _difficulty_band = assess_difficulty(
         request.prompt,
         role_for_signals,
+        task_id,
+    )
+
+    # Ingest-triviality guard (opt-in): keep trivially-easy short prompts off the
+    # ingest_long_context 80B specialist. Reuses _difficulty_band; no-op when the
+    # ingest_triviality_guard feature flag is off. Placed after the failure veto
+    # and difficulty scoring so it sees the final pre-execution route.
+    routing_decision, routing_strategy = apply_ingest_triviality_guard(
+        request,
+        routing_decision,
+        routing_strategy,
+        _difficulty_band,
         task_id,
     )
 
