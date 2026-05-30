@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Tests for the streaming inference tap."""
 
+import json
 import threading
 from unittest.mock import MagicMock
 
 from src.inference_tap import (
     TapWriter,
     _NullWriter,
+    annotate_current_tap,
     _read_sentinel,
     is_active,
     should_stream_role,
@@ -189,6 +191,47 @@ class TestTapSection:
         assert "prompt text" in content
         assert "hello" in content
         assert "TIMINGS:" in content
+
+    def test_structured_events_include_request_and_instance_metadata(self, tmp_path, monkeypatch):
+        path = str(tmp_path / "tap.log")
+        events_path = tmp_path / "events.jsonl"
+        monkeypatch.setenv("INFERENCE_TAP_FILE", path)
+        monkeypatch.setenv("INFERENCE_TAP_EVENTS_FILE", str(events_path))
+
+        with tap_section(
+            "frontdoor",
+            "prompt text",
+            metadata={
+                "request_id": "req-1",
+                "task_id": "task-1",
+                "trial_id": 7,
+                "batch_id": "batch-a",
+            },
+        ) as w:
+            assert annotate_current_tap(
+                instance_idx=2,
+                instance_shape="q1",
+                port=8082,
+                topology_hash="topo1234",
+            ) is True
+            w.write_chunk("hel")
+            w.write_chunk("lo")
+            w.write_timings(5, 50.0, 200.0, 25.0)
+
+        events = [json.loads(line) for line in events_path.read_text().splitlines()]
+        assert [event["event"] for event in events] == [
+            "start",
+            "metadata",
+            "chunk",
+            "chunk",
+            "timings",
+            "end",
+        ]
+        assert all(event["request_id"] == "req-1" for event in events)
+        assert events[1]["instance_idx"] == 2
+        assert events[1]["instance_shape"] == "q1"
+        assert events[1]["port"] == 8082
+        assert events[2]["text"] == "hel"
 
 
 class TestCachingBackendIntegration:

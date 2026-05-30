@@ -98,6 +98,13 @@ def _can_add_role_to_seed_wave(role_name: str, wave_roles: list[str]) -> bool:
     if role_port in HEAVY_PORTS and any(ROLE_PORT.get(r, 0) in HEAVY_PORTS for r in wave_roles):
         return False
 
+    # B wiring note (shape-keyed-contention-gating): this stays on the legacy
+    # role-keyed pair_policy/nway_policy path DELIBERATELY. The placement-aware
+    # seam (`seam_admit`) needs a CANDIDATE INSTANCE/placement, but wave packing
+    # happens before any instance is chosen for these roles — there is no
+    # placement to key on here. Shape-aware admission belongs at dispatch time
+    # (the gate's `evaluate(..., candidate_topology_idx=...)` path), not at
+    # wave-pack time. Do not call seam_admit here with a fabricated placement.
     try:
         from src.scheduling.contention import PairDecision, TrafficClass, nway_policy, pair_policy
         for active_role in wave_roles:

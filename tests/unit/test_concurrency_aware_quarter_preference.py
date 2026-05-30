@@ -99,6 +99,32 @@ def test_quarter_preference_fallback_when_numa_config_missing() -> None:
     assert cab._quarter_preference_order == [0, 1, 2]
 
 
+def test_alias_topology_role_drives_preference_and_tap_metadata() -> None:
+    """Logical aliases share the parent role's physical locks/topology."""
+    instances = stack_numa.NUMA_CONFIG["frontdoor"]["instances"]
+    full = _StubBackend(f"http://localhost:{instances[0][1]}")
+    quarters = [_StubBackend(f"http://localhost:{inst[1]}") for inst in instances[1:]]
+    cab = ca_mod.ConcurrencyAwareBackend(
+        full_backend=full,
+        quarter_backends=quarters,
+        role="coder_escalation",
+        full_port=instances[0][1],
+        topology_role="frontdoor",
+    )
+
+    assert cab._quarter_preference_order == _make_concurrency_aware("frontdoor")._quarter_preference_order
+
+    from src.runtime.instance_topology import get_instance_regions
+
+    expected_regions = sorted(get_instance_regions().get(("frontdoor", 0), frozenset()))
+    meta = cab._tap_dispatch_metadata(-1, full)
+    assert meta["role"] == "coder_escalation"
+    assert meta["topology_role"] == "frontdoor"
+    assert meta["lock_role"] == "frontdoor"
+    assert meta["instance_regions"] == expected_regions
+    assert meta["instance_shape"] != "unknown"
+
+
 def test_quarter_preference_disjoint_quarters_in_numerical_order() -> None:
     """Within the disjoint bucket, original numerical order is preserved.
     For frontdoor: disjoint = [q2, q3] — they should appear in that order."""

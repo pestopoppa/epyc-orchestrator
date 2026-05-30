@@ -523,21 +523,26 @@ server_mode:
     port: 8085
     slots: 1  # Serial — admission=1, no wasted KV
     model_role: ingest_long_context
-    # 2026-05-20: deliberately leave thinking ON for this role. Empirical:
-    # disabling thinking dropped Qwen3-Next-80B from 13/15 (87%) to 11/15 (73%)
-    # on the cheap-kill task set. The thinking-mode budget is load-bearing for
-    # this model's quality. Trade-off: per-task wall time stays high (~50-150s
-    # vs ~5s without thinking) — only route accuracy-critical work here.
-    # See handoffs/active/x-mas-text-routing.md § "Stack-simplification probe".
-    # No chat_template_kwargs override → llama-server uses the model's default.
-    description: Long document ingestion + Stage 1 of three_stage_summarization - SSM+MoE hybrid linear attention (NO speculation!)
+    # 2026-05-30: router-target accuracy/long-context specialist, not the
+    # two-stage summarization pipeline worker. The summarization path chunks
+    # with worker_fast/worker_explore and synthesizes with frontdoor; telemetry
+    # must not attribute those calls to this role.
+    #
+    # Thinking note: Qwen3-Next-80B's current GGUF template ignores
+    # chat_template_kwargs.enable_thinking, so the lack of an override preserves
+    # native model/template behavior rather than toggling a known switch. Earlier
+    # cheap-kill A/Bs showed ingest quality sensitivity under changed prompting /
+    # budgets, but should be treated as directional rather than a clean
+    # thinking-off ablation. Trade-off: per-task wall time can stay high
+    # (~50-150s), so route only accuracy-critical or genuinely long-context work.
+    description: Accuracy-critical + long-context router specialist - SSM+MoE hybrid linear attention (NO speculation!)
     # Phase 3 compliance gate (2026-05-07): medium passes; aggressive fails procedure (89% baseline).
     # Compliance pinned at 0.933 across all 4 levels, recall 0.93-1.00. Source:
     # data/compliance/2026-05-07-ingest_long_context-curve/SUMMARY.md.
     agent_file_compression_operating_point: medium
     model: Qwen3-Next-80B-A3B-Q4_K_M.gguf
     memory_gb: 46
-    tier: hot  # promoted from warm 2026-05-06 — now Stage 1 of three_stage_summarization (was Stage 2). Full-context fast draft on hot path.
+    tier: hot  # promoted from warm 2026-05-06 for router-target accuracy/long-context traffic.
     acceleration:
       type: moe_expert_reduction
       experts: 4  # MoE4 for quality (MoE2 degrades output)

@@ -409,6 +409,23 @@ async def _execute_repl(
 
             elapsed = time.perf_counter() - start_time
             state.increment_request(mock_mode=False, turns=2)
+            actual_role_history = [
+                str(role_name)
+                for role_name in two_stage_stats.get("role_history", [])
+                if role_name
+            ]
+            producer_role = str(
+                two_stage_stats.get("producer_role")
+                or (
+                    actual_role_history[-1]
+                    if actual_role_history
+                    else TWO_STAGE_CONFIG["stage1_role"]
+                )
+            )
+            reported_role_history = []
+            for role_name in [str(initial_role), *actual_role_history]:
+                if not reported_role_history or reported_role_history[-1] != role_name:
+                    reported_role_history.append(role_name)
 
             if state.progress_logger:
                 cache_info = "cache hit" if two_stage_stats.get("cache_hit") else "cache miss"
@@ -417,9 +434,9 @@ async def _execute_repl(
                     success=True,
                     details=f"Two-stage summarization ({cache_info}), {elapsed:.3f}s",
                     completion_meta={
-                        "producer_role": str(TWO_STAGE_CONFIG["stage2_role"]),
-                        "delegation_lineage": [str(initial_role), str(TWO_STAGE_CONFIG["stage2_role"])],
-                        "final_answer_role": str(TWO_STAGE_CONFIG["stage2_role"]),
+                        "producer_role": producer_role,
+                        "delegation_lineage": reported_role_history,
+                        "final_answer_role": producer_role,
                     },
                 )
                 score_completed_task(
@@ -440,7 +457,7 @@ async def _execute_repl(
                 real_mode=True,
                 cache_stats=cache_stats,
                 routed_to=str(initial_role),
-                role_history=[str(initial_role), str(TWO_STAGE_CONFIG["stage2_role"])],
+                role_history=reported_role_history,
                 routing_strategy=routing_strategy,
                 mode="repl",
                 tokens_generated=primitives.total_tokens_generated,

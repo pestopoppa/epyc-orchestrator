@@ -46,6 +46,8 @@ from src.scheduling.contention import (
     matrix_status,
     pair_policy,
     nway_policy,
+    seam_admit,
+    shape_aware_contention_enabled,
 )
 
 log = logging.getLogger("scheduling.contention_gate")
@@ -169,11 +171,27 @@ class ContentionGate:
         self,
         role: str,
         traffic_class: TrafficClass | str = TrafficClass.FOREGROUND_INTERACTIVE,
+        candidate_topology_idx: int | None = None,
     ) -> GateDecision:
         """One-shot evaluation: would role be admitted right now?
 
         Does NOT wait; just returns the decision based on a current snapshot.
         Useful for testing + when the caller has its own queue/retry logic.
+
+        `candidate_topology_idx` (B wiring, default None) — the topology index of
+        the instance the caller intends to dispatch to. When supplied AND
+        `shape_aware_contention_enabled()` (BOTH dual flags on) AND `seam_admit`
+        returns a non-None verdict, that placement-aware verdict is
+        AUTHORITATIVE: it REPLACES the legacy role-keyed result (both ways — it
+        can admit a disjoint placement the stale role-keyed pair layer would
+        falsely QUEUE, and can queue an overlap the pair layer would allow).
+        This is safe because `seam_admit` is itself fail-closed (overlap →
+        QUEUE, unknown placement → background QUEUE) and its disjoint branch
+        re-checks the SAME `nway_policy` the legacy path used, so it only ever
+        overrides the STALE role-keyed PAIR layer, never a measured N-way block
+        (and matrix-health fail-closed already returned earlier). Default None /
+        either flag off / seam None → byte-identical legacy role-keyed behavior;
+        the legacy pairwise loop is untouched.
         """
         if isinstance(traffic_class, str):
             try:
@@ -244,6 +262,41 @@ class ContentionGate:
                     blocking = [r for r in active_set if r != role]
                 with self._lock:
                     self._metrics.contention_nway_restricted_count += 1
+
+        # B wiring (shape-keyed-contention-gating): placement-aware admission.
+        # ONLY when the caller supplied a candidate instance AND both dual flags
+        # are on. When consulted and it returns a verdict, the seam is
+        # AUTHORITATIVE — it REPLACES the legacy role-keyed `worst`, not merely
+        # tightens it. This is the whole point of B: the legacy `pair_policy`
+        # layer is role-keyed and reads a STALE primary-overlap ratio (e.g.
+        # frontdoor+ingest=0.37 → QUEUE) even when the candidate placement is
+        # physically DISJOINT and measured-good (frontdoor.q2 beside ingest's
+        # node0-half → 1.716 ALLOW). Tightening-only could never admit that, so
+        # it would defeat B. The override is SAFE because seam_admit is itself
+        # fail-closed: physical overlap → QUEUE, unknown placement → background
+        # QUEUE, and the disjoint branch re-checks the SAME `nway_policy` the
+        # legacy path used — so the seam can only "loosen" the stale role-keyed
+        # PAIR layer, never an actual measured N-way block. Matrix-health
+        # fail-closed already returned above, so a stale matrix never reaches
+        # here. seam_admit returns None (→ keep legacy `worst`) when disabled,
+        # on unknown-placement foreground, or on snapshot failure foreground.
+        # Default (no idx / flags off) → seam not consulted → legacy behavior.
+        if candidate_topology_idx is not None and shape_aware_contention_enabled():
+            try:
+                seam_decision = seam_admit(
+                    role,
+                    candidate_topology_idx,
+                    traffic_class=traffic_class,
+                    matrix=matrix,
+                )
+            except Exception as exc:  # noqa: BLE001 — never let the seam crash admission
+                log.warning("seam_admit failed in gate (using legacy verdict): %s", exc)
+                seam_decision = None
+            if seam_decision is not None:
+                # Authoritative replace. blocking is informational for non-ALLOW.
+                worst = seam_decision
+                if worst != PairDecision.ALLOW and not blocking:
+                    blocking = [r for r in active_set if r != role]
 
         if worst == PairDecision.ALLOW:
             return GateDecision(admitted=True, decision=PairDecision.ALLOW, reason="all pairs + n-way allow")

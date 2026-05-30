@@ -434,6 +434,319 @@ def nway_policy(
     return PairDecision.QUEUE if is_background else PairDecision.ALLOW
 
 
+# ────────────────────────────────────────────────────────────────────
+# Part B (shape-keyed-contention-gating): placement-aware admission.
+#
+# SCAFFOLDING ONLY — `admit_set` is intentionally UNUSED by runtime. The
+# gate (`contention_gate.py`) and seeder (`seeding_eval.py`) are NOT yet
+# rewired to call it; that is a separate, explicitly-gated step. This block
+# adds the pure decision function + its value types so the logic can be
+# unit-proven against the existing matrix without touching live dispatch.
+#
+# Why this exists: `pair_policy`/`nway_policy` key on bare ROLE names, but the
+# physics is per-instance-SHAPE. The same role pair has two true, opposite
+# matrix entries — `frontdoor+ingest` overlapping node0-half primaries = 0.37
+# block, the SAME pair on disjoint quarters = 1.716 allow. A role-keyed lookup
+# cannot tell them apart. `admit_set` disambiguates by computing overlap from
+# canonical CPU-region SETS (never a shape label), then delegating certified
+# smallest-disjoint placements to the role-set `nway_policy`.
+# ────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Placement:
+    """A proposed or in-flight role instance, keyed by the CANONICAL CPU
+    regions it occupies — not by a human shape label like "full"/"q0".
+
+    `regions` is a frozenset of atomic-region ids (e.g. {"q0","q1"} for a
+    node0-half, {"q0","q1","q2","q3"} for a whole-machine full). Source of
+    truth is `src.runtime.instance_topology.get_instance_regions()`. An EMPTY
+    region set means "placement unknown" — admit_set fails closed for background
+    and falls back to the legacy role-keyed `pair_policy` for foreground.
+    """
+
+    role: str
+    regions: frozenset[str] = frozenset()
+
+
+def placements_overlap(a: Placement, b: Placement) -> bool:
+    """True iff two placements share any physical region. Overlap is a set
+    intersection over canonical regions — the shape's NAME is irrelevant
+    (frontdoor "full" = {q0,q1} is disjoint from vision "full" = {q2,q3})."""
+    return bool(a.regions & b.regions)
+
+
+def placement_for_instance(
+    role: str,
+    topology_idx: int,
+    instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
+) -> Placement:
+    """Build a `Placement` for (role, topology_idx) from the canonical
+    instance→regions map. If `instance_regions` is None it is loaded live
+    from `instance_topology.get_instance_regions()`. Unknown (role, idx)
+    yields an empty-region Placement (→ admit_set treats it as unknown)."""
+    if instance_regions is None:
+        try:
+            from src.runtime.instance_topology import get_instance_regions
+
+            instance_regions = get_instance_regions()
+        except Exception:  # noqa: BLE001 — keep pure/import-safe for tests
+            instance_regions = {}
+    return Placement(
+        role=role,
+        regions=instance_regions.get((role, topology_idx), frozenset()),
+    )
+
+
+def admit_set(
+    active_placements,
+    candidate_placement: Placement,
+    traffic_class: TrafficClass | str = TrafficClass.FOREGROUND_INTERACTIVE,
+    matrix: ContentionMatrix | None = None,
+    floor: float | None = None,
+) -> PairDecision:
+    """Placement-aware admission: may `candidate_placement` join the set of
+    currently-active `active_placements`?
+
+    SCAFFOLDING — not yet called by the gate or seeder.
+
+    Decision (shape-keyed):
+      1. **Physical overlap** — if the candidate's regions intersect ANY active
+         placement's regions, the two cannot co-run on the same cores. Return
+         QUEUE (serialize; the holder must release first). This is the case a
+         role-keyed gate gets wrong by reading a stale primary-overlap ratio.
+      2. **Disjoint** — delegate the role-set verdict to the authoritative
+         `nway_policy` over the union of roles. This path assumes the caller has
+         supplied A's certified smallest-disjoint placements (quarters where
+         supported, otherwise the smallest disjoint shape); `nway_policy` is
+         called UNCHANGED.
+      3. **Unknown placement** — if the candidate (or any active placement) has
+         no region info, overlap is undecidable; background fails closed
+         immediately, while foreground uses the legacy role-keyed `pair_policy`
+         fallback against each active role.
+
+    Returns a `PairDecision`; callers map QUEUE→wait/serialize as today.
+    """
+    if isinstance(traffic_class, str):
+        try:
+            traffic_class = TrafficClass(traffic_class)
+        except ValueError:
+            traffic_class = TrafficClass.BACKGROUND
+    is_background = traffic_class == TrafficClass.BACKGROUND
+
+    active = tuple(active_placements)
+    if not active:
+        return PairDecision.ALLOW
+
+    # (3) Unknown placement → fail closed for background. Undecidable overlap
+    # means we cannot trust the shape-keyed path; foreground keeps the legacy
+    # role-keyed fallback for compatibility.
+    if not candidate_placement.regions or any(not p.regions for p in active):
+        if is_background:
+            return PairDecision.QUEUE
+        if matrix is None:
+            try:
+                matrix = load_contention_matrix()
+            except FileNotFoundError:
+                return PairDecision.ALLOW
+        worst = PairDecision.ALLOW
+        for ap in active:
+            d = pair_policy(
+                candidate_placement.role, ap.role, traffic_class, matrix=matrix, floor=floor
+            )
+            if d != PairDecision.ALLOW:
+                worst = d
+        return worst
+
+    # (1) Physical overlap on canonical regions → serialize. A shape's label is
+    # never consulted; only the region sets. This is the disambiguation the
+    # role-keyed gate cannot make.
+    for ap in active:
+        if placements_overlap(ap, candidate_placement):
+            return PairDecision.QUEUE
+
+    # (2) Disjoint → role-set N-way verdict over the role union. This branch is
+    # valid for A's certified smallest-disjoint placements; nway_policy is
+    # invoked unchanged (it handles measured allow/borderline/block + the
+    # all-light / heavy-fail-closed fallbacks).
+    roles = [p.role for p in active] + [candidate_placement.role]
+    return nway_policy(roles, traffic_class, matrix=matrix, floor=floor)
+
+
+_DECISION_PRECEDENCE = {
+    PairDecision.ALLOW: 0,
+    PairDecision.DEGRADED_ALLOW: 1,
+    PairDecision.QUEUE: 2,
+    PairDecision.BLOCK: 3,
+}
+
+
+def _worse_decision(a: PairDecision, b: PairDecision) -> PairDecision:
+    """Return the more-restrictive of two decisions (ALLOW < DEGRADED_ALLOW <
+    QUEUE < BLOCK), mirroring the gate's worst-of accumulation."""
+    return a if _DECISION_PRECEDENCE[a] >= _DECISION_PRECEDENCE[b] else b
+
+
+def _env_on(name: str) -> bool:
+    return os.environ.get(name, "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def shape_aware_contention_enabled() -> bool:
+    """B wiring seam gate (audit #1 — DUAL flag). Shape-aware admission requires
+    BOTH `ORCHESTRATOR_SHAPE_AWARE_CONTENTION=1` AND
+    `ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT=1` — the contention verdict is
+    only trustworthy when the placement layer is also realizing disjoint
+    placements (and the cross-role region mutex is active). Either flag alone →
+    disabled → `seam_admit` returns None → callers keep their legacy
+    pair_policy/nway_policy path. Default OFF; no live behavior change until an
+    operator flips BOTH."""
+    return (
+        _env_on("ORCHESTRATOR_SHAPE_AWARE_CONTENTION")
+        and _env_on("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT")
+    )
+
+
+def seam_admit(
+    candidate_role: str,
+    candidate_topology_idx: int,
+    active_holders: dict[str, frozenset[str]] | None = None,
+    *,
+    traffic_class: TrafficClass | str = TrafficClass.FOREGROUND_INTERACTIVE,
+    instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
+    matrix: ContentionMatrix | None = None,
+    floor: float | None = None,
+) -> PairDecision | None:
+    """B WIRING SEAM — placement-aware admission with same-role preservation.
+
+    SCAFFOLDING: not yet called by the gate/seeder. Returns None when
+    shape-aware contention is disabled (the default) so callers keep the legacy
+    path unchanged — no live behavior change, no J6 taint.
+
+    The on/off decision is made ONLY by `shape_aware_contention_enabled()` (the
+    dual-flag gate). There is deliberately NO `enabled` override parameter
+    (audit): a runtime caller must not be able to bypass the dual-flag safety
+    contract. Tests enable the seam by setting both env flags (see the
+    `shape_aware_on` fixture), exercising the exact runtime gate.
+
+    When enabled:
+      - **Same-role** contention (candidate's role already holds a region) is
+        routed through `pair_policy(role, role)` so the `same_role` matrix
+        verdict is honored. admit_set's disjoint branch delegates to
+        `nway_policy`, which dedupes roles — a same-role pair collapses to one
+        role (len < 2 -> ALLOW), bypassing `same_role`. The seam prevents that.
+      - **Cross-role** contention delegates to `admit_set` (overlap -> QUEUE,
+        disjoint -> nway_policy).
+      - The worse of the same-role and cross-role verdicts is returned.
+
+    `active_holders` is the EXACT {role: held-regions} view from
+    `held_regions_by_role` (not the over-reporting `active_region_holders`);
+    when None it is read live.
+    """
+    if not shape_aware_contention_enabled():
+        return None
+
+    if isinstance(traffic_class, str):
+        try:
+            traffic_class = TrafficClass(traffic_class)
+        except ValueError:
+            traffic_class = TrafficClass.BACKGROUND
+    is_background = traffic_class == TrafficClass.BACKGROUND
+
+    if active_holders is None:
+        try:
+            from src.runtime.cpu_region_lock import held_regions_by_role
+            active_holders = held_regions_by_role(instance_regions)
+        except Exception:
+            # Audit #2: snapshot failure → occupancy UNKNOWN. Never silently
+            # ALLOW under unknown occupancy. Background fails closed (QUEUE);
+            # foreground returns None so the caller uses its legacy path rather
+            # than a fabricated verdict. (Distinct from a successful empty
+            # snapshot below, which legitimately means "no holders → ALLOW".)
+            log.warning("seam_admit: held_regions_by_role failed — unknown occupancy")
+            return PairDecision.QUEUE if is_background else None
+
+    if not active_holders:
+        return PairDecision.ALLOW
+
+    if matrix is None:
+        try:
+            matrix = load_contention_matrix()
+        except FileNotFoundError:
+            return PairDecision.QUEUE if is_background else PairDecision.ALLOW
+
+    candidate = placement_for_instance(
+        candidate_role, candidate_topology_idx, instance_regions
+    )
+    all_active = [Placement(role, regions) for role, regions in active_holders.items()]
+
+    # Unknown candidate placement -> defer to admit_set's unknown handling (bg
+    # fail-closed; fg per-pair, which already routes same-role via pair_policy).
+    if not candidate.regions:
+        return admit_set(all_active, candidate, traffic_class, matrix=matrix, floor=floor)
+
+    same_role_active = [p for p in all_active if p.role == candidate_role]
+    cross_role_active = [p for p in all_active if p.role != candidate_role]
+
+    worst = PairDecision.ALLOW
+
+    if same_role_active:
+        for p in same_role_active:
+            if placements_overlap(p, candidate):
+                return PairDecision.QUEUE
+        worst = _worse_decision(
+            worst,
+            pair_policy(candidate_role, candidate_role, traffic_class, matrix=matrix, floor=floor),
+        )
+
+    if cross_role_active:
+        worst = _worse_decision(
+            worst,
+            admit_set(cross_role_active, candidate, traffic_class, matrix=matrix, floor=floor),
+        )
+
+    return worst
+
+
+def select_backfill_candidate(
+    candidates,
+    active_holders: dict[str, frozenset[str]],
+    traffic_class: TrafficClass | str = TrafficClass.BACKGROUND,
+    *,
+    instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
+    matrix: ContentionMatrix | None = None,
+    floor: float | None = None,
+):
+    """C PREP (work-conserving backfill selection) — PURE, NOT yet called by
+    runtime. Given dispatcher-priority `candidates` (list of (role,
+    topology_idx)) and the EXACT `active_holders` ({role: held-regions}), return
+    the FIRST candidate that is BOTH physically disjoint from all held regions
+    AND admitted (ALLOW) by the shape-aware `admit_set`. Returns None if none
+    qualify.
+
+    This is the selection a future C backfill path will use to fill idle
+    quarters beside a heavy node-half holder, instead of leaving them idle
+    (the seeder's current non-work-conserving gap). It does NOT remove or alter
+    the heavy-port veto, the all-heavy idle barrier, or the dispatch pressure
+    skip — those stay until C is explicitly authorized; this only provides the
+    pure "what could fill the gap" computation for tests + future wiring.
+
+    `admit_set` enforces: overlap → QUEUE (skip), disjoint → nway verdict,
+    unknown placement → bg fail-closed (skip). So a candidate is selected only
+    when admit_set returns ALLOW for it against the active set.
+    """
+    active_placements = [
+        Placement(role, regions) for role, regions in active_holders.items()
+    ]
+    for role, topology_idx in candidates:
+        cand = placement_for_instance(role, topology_idx, instance_regions)
+        decision = admit_set(
+            active_placements, cand, traffic_class, matrix=matrix, floor=floor
+        )
+        if decision == PairDecision.ALLOW:
+            return (role, topology_idx)
+    return None
+
+
 def topology_fingerprint(numa_config: dict[str, Any]) -> str:
     """Deterministic sha256 of role topology — used to detect stale matrices.
 

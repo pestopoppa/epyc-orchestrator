@@ -17,14 +17,25 @@ env-var check with no I/O.
 
 from __future__ import annotations
 
+import contextvars
+import json
 import os
 import threading
 import time as _time
+import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+try:
+    import fcntl
+except Exception:  # pragma: no cover - non-POSIX fallback
+    fcntl = None  # type: ignore[assignment]
 
 
 _ENV_KEY = "INFERENCE_TAP_FILE"
+_ENV_EVENTS_KEY = "INFERENCE_TAP_EVENTS_FILE"
 _ENV_STREAM_MODE = "INFERENCE_TAP_STREAM_MODE"
 
 # Sentinel file written by the TUI so that API workers (separate processes)
@@ -44,6 +55,15 @@ def _get_sentinel() -> str:
 
 # Module-level lock for serialising writes across threads
 _write_lock = threading.Lock()
+
+# Current tap section for the active inference call. Concurrency-aware
+# backends use this to attach the selected instance after dispatch.
+_current_writer: contextvars.ContextVar["TapWriter | None"] = contextvars.ContextVar(
+    "inference_tap_current_writer",
+    default=None,
+)
+
+_TOPOLOGY_HASH_CACHE: str | None = None
 
 # Cache sentinel reads — the file only changes when the TUI starts/stops,
 # so 5-second staleness is fine and avoids per-request I/O.
@@ -81,6 +101,26 @@ def _tap_path() -> str:
     return os.environ.get(_ENV_KEY, "") or _read_sentinel()
 
 
+def _structured_event_path(tap_path: str | None = None) -> str:
+    """Return the JSONL event stream path for structured tap metadata."""
+    override = os.environ.get(_ENV_EVENTS_KEY, "").strip()
+    if override:
+        return override
+    path = (tap_path or _tap_path() or "").strip()
+    if not path or path == os.devnull:
+        return ""
+    try:
+        p = Path(path)
+        if str(p) == "/dev/null":
+            return ""
+        if p.name == "inference_tap.log":
+            return str(p.with_name("inference_tap_events.jsonl"))
+        suffix = p.suffix or ".log"
+        return str(p.with_suffix(f"{suffix}.events.jsonl"))
+    except Exception:
+        return ""
+
+
 def stream_mode() -> str:
     """Return normalized tap stream mode: safe|force|off."""
     mode = (os.environ.get(_ENV_STREAM_MODE, "safe") or "safe").strip().lower()
@@ -99,6 +139,73 @@ def should_stream_role(role: str) -> bool:
     return role not in _HEAVY_STREAM_ROLES
 
 
+def _topology_hash() -> str:
+    """Best-effort live topology hash used to join tap events to matrix data."""
+    global _TOPOLOGY_HASH_CACHE
+    if _TOPOLOGY_HASH_CACHE is not None:
+        return _TOPOLOGY_HASH_CACHE
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+        from src.scheduling.contention import topology_fingerprint
+
+        _TOPOLOGY_HASH_CACHE = topology_fingerprint(NUMA_CONFIG)
+    except Exception:
+        _TOPOLOGY_HASH_CACHE = ""
+    return _TOPOLOGY_HASH_CACHE
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    return str(value)
+
+
+def _write_structured_event(path: str, event: dict[str, Any]) -> None:
+    """Append one JSONL event under a cross-process file lock.
+
+    The legacy plaintext tap is intentionally unchanged. This structured
+    stream is the concurrency-safe attribution source for dashboards and
+    post-hoc analysis.
+    """
+    if not path:
+        return
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = p.with_suffix(p.suffix + ".lock")
+        line = json.dumps(
+            {str(k): _json_safe(v) for k, v in event.items()},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ) + "\n"
+        with open(lock_path, "a") as lock_fh:
+            if fcntl is not None:
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            try:
+                with open(p, "a") as event_fh:
+                    event_fh.write(line)
+                    event_fh.flush()
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        # The tap must never affect inference behavior.
+        return
+
+
+def annotate_current_tap(**metadata: Any) -> bool:
+    """Attach metadata to the active tap section, if one exists."""
+    writer = _current_writer.get()
+    if writer is None:
+        return False
+    writer.set_metadata(**metadata)
+    return True
+
+
 class TapWriter:
     """Thread-safe writer that appends tap output to a file.
 
@@ -106,9 +213,41 @@ class TapWriter:
     This avoids open/close on every streamed chunk.
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, metadata: dict[str, Any] | None = None) -> None:
         self._path = path
+        self._event_path = _structured_event_path(path)
         self._fh = None
+        self._role = ""
+        self._start_emitted = False
+        self._end_emitted = False
+        self._metadata: dict[str, Any] = dict(metadata or {})
+        request_id = str(self._metadata.get("request_id") or "").strip()
+        if not request_id:
+            request_id = uuid.uuid4().hex
+        self._metadata.update(
+            {
+                "request_id": request_id,
+                "pid": os.getpid(),
+                "topology_hash": self._metadata.get("topology_hash") or _topology_hash(),
+            }
+        )
+
+    @property
+    def request_id(self) -> str:
+        return str(self._metadata.get("request_id") or "")
+
+    def _emit_event(self, event_type: str, **fields: Any) -> None:
+        if not self._event_path:
+            return
+        now = _time.time()
+        event = {
+            "event": event_type,
+            "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+            "ts_epoch": now,
+            **self._metadata,
+            **fields,
+        }
+        _write_structured_event(self._event_path, event)
 
     def _append(self, text: str) -> None:
         with _write_lock:
@@ -118,10 +257,12 @@ class TapWriter:
             self._fh.flush()
 
     def write_header(self, role: str) -> None:
+        self._role = role
+        self._metadata["role"] = role
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._append(
             f"{'=' * 72}\n"
-            f"[{ts}] ROLE={role}\n"
+            f"[{ts}] ROLE={role} REQUEST={self.request_id} PID={os.getpid()}\n"
             f"{'-' * 72}\n"
             f"PROMPT:\n"
         )
@@ -138,15 +279,21 @@ class TapWriter:
         else:
             text = prompt
         self._append(text + "\n" + "-" * 72 + "\nRESPONSE:\n")
+        if not self._start_emitted:
+            self._start_emitted = True
+            self._emit_event("start", prompt=text, prompt_len=len(text))
 
     def write_chunk(self, chunk: str) -> None:
         """Write a single streaming chunk (called per SSE event)."""
         self._append(chunk)
+        if chunk:
+            self._emit_event("chunk", text=chunk, text_len=len(chunk))
 
     def write_response(self, text: str) -> None:
         """Write a complete response when non-stream path is used."""
         if text:
             self._append(text)
+            self._emit_event("response", text=text, text_len=len(text))
 
     def write_timings(
         self,
@@ -162,8 +309,26 @@ class TapWriter:
             f"(prompt={prompt_ms:.0f}ms, gen={gen_ms:.0f}ms, {tps:.1f} t/s)\n"
             f"{'=' * 72}\n\n"
         )
+        self._emit_event(
+            "timings",
+            tokens=tokens,
+            prompt_ms=prompt_ms,
+            gen_ms=gen_ms,
+            tps=tps,
+            total_s=total_s,
+        )
+
+    def set_metadata(self, **metadata: Any) -> None:
+        clean = {k: v for k, v in metadata.items() if v is not None}
+        if not clean:
+            return
+        self._metadata.update(clean)
+        self._emit_event("metadata", **clean)
 
     def close(self) -> None:
+        if not self._end_emitted:
+            self._end_emitted = True
+            self._emit_event("end")
         with _write_lock:
             if self._fh is not None:
                 try:
@@ -199,9 +364,12 @@ class _NullWriter:
     def close(self) -> None:
         pass
 
+    def set_metadata(self, **metadata: Any) -> None:
+        pass
+
 
 @contextmanager
-def tap_section(role: str, prompt: str):
+def tap_section(role: str, prompt: str, metadata: dict[str, Any] | None = None):
     """Context manager that yields a TapWriter (or _NullWriter if inactive).
 
     Usage::
@@ -216,10 +384,14 @@ def tap_section(role: str, prompt: str):
         return
 
     path = _tap_path()
-    writer = TapWriter(path)
-    writer.write_header(role)
-    writer.write_prompt(prompt)
+    writer = TapWriter(path, metadata=metadata)
+    token = _current_writer.set(writer)
     try:
+        writer.write_header(role)
+        writer.write_prompt(prompt)
         yield writer
     finally:
-        writer.close()
+        try:
+            writer.close()
+        finally:
+            _current_writer.reset(token)

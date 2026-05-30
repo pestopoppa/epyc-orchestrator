@@ -14,6 +14,7 @@
 # load-bearing for correctness.
 
 from src.runtime.inference_tap import (  # noqa: F401  (re-export)
+    annotate_current_tap,
     is_active,
     stream_mode,
     should_stream_role,

@@ -1,9 +1,43 @@
 """Backend management for LLM primitives."""
 
 import logging
-from typing import Any
+from typing import Any, Mapping
 
 _log = logging.getLogger(__name__)
+
+
+def _normalise_role_urls(url_str: str) -> tuple[str, ...]:
+    """Return comparable server URLs with the `full:` marker stripped."""
+    urls = [u.strip() for u in url_str.split(",") if u.strip()]
+    if urls and urls[0].startswith("full:"):
+        urls[0] = urls[0][len("full:"):]
+    return tuple(urls)
+
+
+def _infer_topology_role_for_urls(
+    role: str,
+    role_urls: Mapping[str, tuple[str, ...]],
+    topology_roles: set[str],
+) -> str:
+    """Resolve logical alias roles to the physical topology role they share.
+
+    Some config roles are logical aliases over the same llama-server pool
+    (for example coder_escalation shares frontdoor ports). The region-lock
+    topology is keyed by the physical pool role, so those aliases must dispatch
+    under the canonical topology role while keeping their logical role for
+    routing/tap metadata.
+    """
+    if role in topology_roles:
+        return role
+    urls = role_urls.get(role, ())
+    if not urls:
+        return role
+    for candidate, candidate_urls in role_urls.items():
+        if candidate == role:
+            continue
+        if candidate in topology_roles and candidate_urls == urls:
+            return candidate
+    return role
 
 
 class BackendMixin:
@@ -47,8 +81,27 @@ class BackendMixin:
                     sorted(_chat_completion_roles),
                 )
 
+            normalized_role_urls = {
+                role: _normalise_role_urls(url_str)
+                for role, url_str in server_urls.items()
+            }
+            try:
+                from src.runtime.instance_topology import get_instance_regions
+
+                topology_roles = {
+                    role
+                    for role, _idx in get_instance_regions().keys()
+                }
+            except Exception:
+                topology_roles = set()
+
             for role, url_str in server_urls.items():
                 urls = [u.strip() for u in url_str.split(",") if u.strip()]
+                topology_role = _infer_topology_role_for_urls(
+                    role,
+                    normalized_role_urls,
+                    topology_roles,
+                )
 
                 # Pre-warm convention: first URL prefixed with "full:" denotes
                 # the full-speed (1×96t) instance for ConcurrencyAwareBackend.
@@ -90,8 +143,15 @@ class BackendMixin:
 
                     self._backends[role] = ConcurrencyAwareBackend(
                         full_backend, quarter_backends,
-                        role=role, full_port=full_port,
+                        role=role,
+                        full_port=full_port,
+                        topology_role=topology_role,
                     )
+                    if topology_role != role:
+                        _log.info(
+                            "Concurrency-aware backend for %s uses topology/lock role %s",
+                            role, topology_role,
+                        )
                     _log.info(
                         "Concurrency-aware backend for %s: 1 full + %d quarters",
                         role, len(quarter_backends),

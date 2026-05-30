@@ -114,6 +114,10 @@ async def _run_two_stage_summarization(
         "context_tokens": _estimate_tokens(context),
         "chunks": 0,
         "cache_hit": False,
+        "worker_role": None,
+        "synthesis_role": str(TWO_STAGE_CONFIG["stage1_role"]),
+        "producer_role": None,
+        "role_history": [],
     }
 
     # Determine chunking — sized for 1.5B fast workers (4K context window)
@@ -158,6 +162,7 @@ async def _run_two_stage_summarization(
     except Exception as exc:
         log.debug("worker_fast health check failed, using worker_explore: %s", exc)
         worker_role = "worker_explore"
+    stats["worker_role"] = worker_role
 
     try:
         digests = primitives.llm_batch(worker_prompts, role=worker_role, n_tokens=500)
@@ -166,10 +171,12 @@ async def _run_two_stage_summarization(
             "llm_batch failed for role=%s, falling back to sequential: %s", worker_role, exc
         )
         # Fallback: sequential calls with worker_explore (always HOT)
+        worker_role = "worker_explore"
+        stats["worker_role"] = worker_role
         digests = []
         for wp in worker_prompts:
             try:
-                d = primitives.llm_call(wp, role="worker_explore", n_tokens=500)
+                d = primitives.llm_call(wp, role=worker_role, n_tokens=500)
                 digests.append(d)
             except Exception as inner_exc:
                 log.debug("Worker sequential call failed: %s", inner_exc)
@@ -207,15 +214,20 @@ async def _run_two_stage_summarization(
     )
 
     # Use frontdoor for synthesis (18 t/s) — much faster than architect
+    synthesis_role = str(TWO_STAGE_CONFIG["stage1_role"])
     try:
         answer = primitives.llm_call(
             synthesis_prompt,
-            role=TWO_STAGE_CONFIG["stage1_role"],  # frontdoor
+            role=synthesis_role,
             n_tokens=4096,
         )
+        stats["producer_role"] = synthesis_role
+        stats["role_history"] = [worker_role, synthesis_role]
     except Exception:
         # Use digest text directly as fallback
         answer = f"Worker findings:\n{digest_text}"
+        stats["producer_role"] = worker_role
+        stats["role_history"] = [worker_role]
 
     stage2_time = time.perf_counter() - stage2_start
     stats["stage2_time_ms"] = int(stage2_time * 1000)

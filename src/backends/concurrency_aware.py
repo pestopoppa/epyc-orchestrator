@@ -66,6 +66,30 @@ def _get_base_url(backend: Any) -> str | None:
     return None
 
 
+def _extract_port(url: str | None) -> int | None:
+    if not url:
+        return None
+    try:
+        from urllib.parse import urlparse
+
+        return urlparse(url).port
+    except Exception:
+        return None
+
+
+def _shape_for_regions(regions: frozenset[str] | set[str] | list[str]) -> str:
+    rs = set(regions or [])
+    if rs == {"q0", "q1", "q2", "q3"}:
+        return "full"
+    if rs == {"q0", "q1"}:
+        return "half0"
+    if rs == {"q2", "q3"}:
+        return "half1"
+    if len(rs) == 1:
+        return next(iter(rs))
+    return "+".join(sorted(rs)) if rs else "unknown"
+
+
 def _slot_save(base_url: str, slot_id: int = 0) -> bool:
     """Save KV state from a llama-server slot. Returns True on success."""
     if not _HTTPX_AVAILABLE:
@@ -138,12 +162,14 @@ class ConcurrencyAwareBackend:
         quarter_backends: list[Any],
         role: str = "",
         full_port: int = 0,
+        topology_role: str | None = None,
     ):
         if not quarter_backends:
             raise ValueError("ConcurrencyAwareBackend requires at least one quarter backend")
         self._full = full_backend
         self._quarters = quarter_backends
         self._role = role
+        self._topology_role = topology_role or role
         self._full_port = full_port
         self._lock = threading.Lock()
 
@@ -196,9 +222,14 @@ class ConcurrencyAwareBackend:
         self._kv_migration_enabled = _HTTPX_AVAILABLE
 
         logger.info(
-            "ConcurrencyAwareBackend[%s]: 1 full (%s) + %d quarters, "
+            "ConcurrencyAwareBackend[%s%s]: 1 full (%s) + %d quarters, "
             "quarter preference=%s, KV migration %s (per_region_locks=%s)",
             role or "unknown",
+            (
+                f" topology={self._topology_role}"
+                if self._topology_role != self._role
+                else ""
+            ),
             self._full_url or "?",
             len(quarter_backends),
             self._quarter_preference_order,
@@ -249,7 +280,7 @@ class ConcurrencyAwareBackend:
         except Exception:
             return list(range(len(self._quarters)))
 
-        cfg = NUMA_CONFIG.get(self._role)
+        cfg = NUMA_CONFIG.get(self._topology_role) or NUMA_CONFIG.get(self._role)
         if not cfg or not cfg.get("instances"):
             return list(range(len(self._quarters)))
 
@@ -757,6 +788,18 @@ class ConcurrencyAwareBackend:
             "1", "true", "yes", "on",
         }
 
+    @staticmethod
+    def _cross_role_disjoint_placement_enabled() -> bool:
+        """Part A (shape-keyed-contention-gating): when on, placement excludes
+        regions held by OTHER roles too, so a light role can backfill the free
+        quarters beside a heavy role's node-half. Default off — flips behavior
+        only after the live region-lock observation gate is met. Effective only
+        when ORCHESTRATOR_PLACEMENT_STATE_MACHINE=1 (which gates the call site)."""
+        import os as _os
+        return _os.environ.get("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "0").strip() in {
+            "1", "true", "yes", "on",
+        }
+
     def _extract_migration_budget_ms(self, request: Any) -> Optional[int]:
         """Best-effort read of ChatRequest.migration_budget_ms for the WP-3
         load-transition trigger. Returns None if not present."""
@@ -770,6 +813,40 @@ class ConcurrencyAwareBackend:
             return iv if iv > 0 else None
         except (TypeError, ValueError):
             return None
+
+    def _tap_dispatch_metadata(self, idx: int, backend: Any) -> dict[str, Any]:
+        """Return structured tap metadata for the selected runtime instance."""
+        topology_idx = 0 if idx == -1 else idx + 1
+        url = self._full_url if idx == -1 else (
+            self._quarter_urls[idx] if 0 <= idx < len(self._quarter_urls) else None
+        )
+        port = _extract_port(url) or (self._full_port if idx == -1 else None)
+        regions: frozenset[str] = frozenset()
+        try:
+            from src.runtime.instance_topology import get_instance_regions
+
+            regions = get_instance_regions().get((self._topology_role, topology_idx), frozenset())
+        except Exception:
+            regions = frozenset()
+        return {
+            "role": self._role,
+            "topology_role": self._topology_role,
+            "lock_role": self._topology_role,
+            "instance_idx": topology_idx,
+            "concurrency_idx": idx,
+            "instance_shape": _shape_for_regions(regions),
+            "instance_regions": sorted(regions),
+            "port": port,
+            "backend_url": url or _get_base_url(backend),
+        }
+
+    def _annotate_current_tap_dispatch(self, idx: int, backend: Any) -> None:
+        try:
+            from src.inference_tap import annotate_current_tap
+
+            annotate_current_tap(**self._tap_dispatch_metadata(idx, backend))
+        except Exception:
+            return
 
     @contextmanager
     def _dispatch(self, session_id: str = "", migration_budget_ms: Optional[int] = None):
@@ -880,18 +957,21 @@ class ConcurrencyAwareBackend:
             poll_deadline = time.perf_counter() + 60.0
             poll_interval_s = 0.150  # matches contention_gate._GATE_POLL_S
             queue_log_emitted = False
+            cross_role_enabled = self._cross_role_disjoint_placement_enabled()
             while True:
-                holders_for_role = active_region_holders().get(self._role, [])
+                all_holders = active_region_holders()
+                holders_for_role = all_holders.get(self._topology_role, [])
                 placement = evaluate_placement(
-                    role=self._role,
+                    role=self._topology_role,
                     candidates=candidates,
                     holder_idxs=holders_for_role,
                     instance_regions=instance_regions,
+                    cross_role_holders=all_holders if cross_role_enabled else None,
                 )
                 if not placement.is_queue:
                     # At least one safe candidate — try them in priority order.
                     for place in placement.places:
-                        attempt = _try_instance(self._role, place.topology_idx)
+                        attempt = _try_instance(self._topology_role, place.topology_idx)
                         if attempt is not None:
                             chosen_ctx, _paths = attempt
                             chosen_idx = place.internal_idx
@@ -917,7 +997,7 @@ class ConcurrencyAwareBackend:
         else:
             # Legacy path: greedy try-loop + blocking-on-full fallback.
             for ca_idx, topo_idx in candidates:
-                attempt = _try_instance(self._role, topo_idx)
+                attempt = _try_instance(self._topology_role, topo_idx)
                 if attempt is not None:
                     chosen_ctx, _paths = attempt
                     chosen_idx = ca_idx
@@ -929,7 +1009,7 @@ class ConcurrencyAwareBackend:
                 # (full's lock takes all of full's regions), but this can
                 # wait on full even when a quarter would have been safe sooner.
                 blocking_ctx = cpu_region_lock_for_instance(
-                    self._role, 0,
+                    self._topology_role, 0,
                     timeout_s=60.0, deadline_s=deadline_s,
                 )
                 chosen_ctx = blocking_ctx
@@ -952,7 +1032,7 @@ class ConcurrencyAwareBackend:
             RolePlacementPolicy,
             get_placement_policy,
         )
-        _policy = get_placement_policy(self._role)
+        _policy = get_placement_policy(self._topology_role)
         _migration_allowed_by_policy = _policy in (
             RolePlacementPolicy.SOLO_PREFER_FULL,
             RolePlacementPolicy.BURST_PREFER_QUARTERS,
@@ -1055,18 +1135,21 @@ class ConcurrencyAwareBackend:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
         with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
+            self._annotate_current_tap_dispatch(_idx, backend)
             return backend.infer(role_config, request)
 
     def infer_streaming(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
         with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
+            self._annotate_current_tap_dispatch(_idx, backend)
             return backend.infer_streaming(role_config, request)
 
     def infer_stream_text(self, role_config: Any, request: Any, on_chunk: Any = None) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
         with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
+            self._annotate_current_tap_dispatch(_idx, backend)
             return backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
 
     def health_check(self, pid: int = 0) -> bool:
@@ -1088,6 +1171,7 @@ class ConcurrencyAwareBackend:
 
         return {
             "role": self._role,
+            "topology_role": self._topology_role,
             "backend_type": "concurrency_aware",
             "full_instance": {
                 "port": self._full_port,

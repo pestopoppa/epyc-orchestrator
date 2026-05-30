@@ -108,6 +108,36 @@ def region_lock_path(role: str, region: str) -> Path:
     return _tmp_dir() / f"cpu_region.{safe_role}.{safe_region}.lock"
 
 
+# Reserved pseudo-role for the cross-role global region mutex (A-1). Never a
+# real role, so `active_region_holders` (which iterates the topology table)
+# never surfaces it as a holder — attribution stays role-only.
+_GLOBAL_MUTEX_ROLE = "GLOBAL"
+
+
+def global_region_lock_path(region: str) -> Path:
+    """Lock-file path for the role-AGNOSTIC global mutex on one atomic region.
+
+    Path format: {tmp_dir}/cpu_region.GLOBAL.{region}.lock
+
+    Acquired (when ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT is enabled)
+    before the per-role region lock, so two DIFFERENT roles cannot hold the
+    same physical region concurrently. The per-role locks remain the
+    attribution layer (`active_region_holders`); this is a separate exclusion
+    layer that does not affect attribution.
+    """
+    safe_region = region.replace("/", "_").replace("\\", "_")
+    return _tmp_dir() / f"cpu_region.{_GLOBAL_MUTEX_ROLE}.{safe_region}.lock"
+
+
+def _cross_role_mutex_enabled() -> bool:
+    """A-1: gate the global cross-role region mutex behind the same flag as the
+    placement-side change. Off by default → byte-identical legacy behavior
+    (per-role locks only; cross-role same-region overlap remains possible)."""
+    return os.environ.get(
+        "ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "0"
+    ).strip() in {"1", "true", "yes", "on"}
+
+
 class CpuRegionLockTimeout(RuntimeError):
     """Raised when one of the region locks could not be acquired within
     the time budget. All locks acquired before the timeout are released
@@ -266,6 +296,54 @@ def active_region_holders(
     return out
 
 
+def held_regions_by_role(
+    instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
+) -> dict[str, frozenset[str]]:
+    """EXACT cross-role region view: {role: frozenset(regions with a held lock)}.
+
+    Unlike `active_region_holders` (an ATTRIBUTION view that marks an *instance*
+    active when ANY of its regions is held — and therefore over-reports, since a
+    held quarter q0 also flags the role's `full` instance that contains q0),
+    this reports ONLY the physical regions whose per-role lock file is actually
+    held. It is the correct input for shape-aware contention/placement decisions
+    (audit P1) — placement disjointness must be computed from the precise held
+    region set, not from over-reported instance membership.
+
+    `instance_regions` defaults to the live topology map; pass an override for
+    tests. Roles with no held region are omitted (no empty entries). Reuses the
+    same `/proc/locks` detection as `active_region_holders`; that function is
+    UNCHANGED — this is a separate, additive helper.
+    """
+    if instance_regions is None:
+        try:
+            from src.runtime.instance_topology import get_instance_regions
+            instance_regions = get_instance_regions()
+        except Exception:
+            return {}
+
+    if not instance_regions:
+        return {}
+
+    # The atomic regions any role could occupy, keyed by role → set(regions),
+    # so we probe each (role, region) lock file exactly once.
+    role_regions: dict[str, set[str]] = {}
+    for (role, _idx), regions in instance_regions.items():
+        if regions:
+            role_regions.setdefault(role, set()).update(regions)
+
+    out: dict[str, frozenset[str]] = {}
+    for role, regions in role_regions.items():
+        held = {
+            region
+            for region in regions
+            if (lp := region_lock_path(role, region)).exists()
+            and _current_lock_owner_pids(lp)
+        }
+        if held:
+            out[role] = frozenset(held)
+    return out
+
+
 @contextmanager
 def cpu_region_lock(
     role: str,
@@ -325,27 +403,41 @@ def cpu_region_lock(
     handles: list[tuple[str, Path, IO[bytes]]] = []
     acquired_paths: dict[str, Path] = {}
 
+    def _acquire(lock_role: str, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Open in 'a+b' so the file is created if missing and we have a
+        # binary fd suitable for fcntl.flock.
+        fh = open(path, "a+b")
+        try:
+            _acquire_one_with_timeout(
+                fh,
+                region=region,
+                role=lock_role,
+                timeout_s=timeout_s,
+                deadline_s=deadline_s,
+                cancel_check=cancel_check,
+                request_tag=request_tag,
+            )
+        except BaseException:
+            fh.close()
+            raise
+        handles.append((region, path, fh))
+
+    cross_role_mutex = _cross_role_mutex_enabled()
+
     try:
+        # A-1: when enabled, acquire the role-AGNOSTIC global region mutex for
+        # ALL regions first (sorted) — true cross-role exclusion — then the
+        # per-role attribution locks (also sorted). Consistent global ordering
+        # (GLOBAL-all-then-role-all, each region-sorted) across every caller
+        # prevents deadlock. Flag off → skip the GLOBAL layer entirely →
+        # legacy behavior unchanged.
+        if cross_role_mutex:
+            for region in sorted_regions:
+                _acquire(_GLOBAL_MUTEX_ROLE, global_region_lock_path(region))
         for region in sorted_regions:
             path = region_lock_path(role, region)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            # Open in 'a+b' so the file is created if missing and we have a
-            # binary fd suitable for fcntl.flock.
-            fh = open(path, "a+b")
-            try:
-                _acquire_one_with_timeout(
-                    fh,
-                    region=region,
-                    role=role,
-                    timeout_s=timeout_s,
-                    deadline_s=deadline_s,
-                    cancel_check=cancel_check,
-                    request_tag=request_tag,
-                )
-            except BaseException:
-                fh.close()
-                raise
-            handles.append((region, path, fh))
+            _acquire(role, path)
             acquired_paths[region] = path
         yield acquired_paths
     finally:

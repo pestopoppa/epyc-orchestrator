@@ -89,11 +89,36 @@ def _holder_regions_union(
     return frozenset(accum)
 
 
+def _cross_role_regions_union(
+    self_role: str,
+    cross_role_holders: dict[str, Iterable[int]] | None,
+    instance_regions: dict[tuple[str, int], frozenset[str]],
+) -> frozenset[str]:
+    """Union of CPU regions held by in-flight instances of OTHER roles.
+
+    `cross_role_holders` is the full {role: [topology_idx, …]} map from
+    `cpu_region_lock.active_region_holders()`. The dispatching role's own
+    entry is skipped (its holders are handled by `holder_idxs`). When the map
+    is None the result is empty — preserving the legacy same-role-only filter.
+    Overlap is by canonical region set; a role's "full" label is irrelevant.
+    """
+    if not cross_role_holders:
+        return frozenset()
+    accum: set[str] = set()
+    for other_role, idxs in cross_role_holders.items():
+        if other_role == self_role:
+            continue
+        for idx in idxs:
+            accum |= instance_regions.get((other_role, idx), frozenset())
+    return frozenset(accum)
+
+
 def evaluate_placement(
     role: str,
     candidates: list[tuple[int, int]],
     holder_idxs: Iterable[int],
     instance_regions: dict[tuple[str, int], frozenset[str]],
+    cross_role_holders: dict[str, Iterable[int]] | None = None,
 ) -> PlacementResult:
     """Filter dispatcher-priority `candidates` to those whose cpuset is
     disjoint from the union of regions held by current `holder_idxs`.
@@ -116,23 +141,45 @@ def evaluate_placement(
       an in-flight holder.
     """
     holders_union = _holder_regions_union(role, holder_idxs, instance_regions)
+    # Part A: also exclude regions held by OTHER roles, so a light role can
+    # backfill the free quarters while a heavy role's node-half is in flight.
+    # cross_role_holders=None → empty union → legacy same-role-only behavior.
+    # NB: this union excludes the dispatching role's own entry, so a map that
+    # contains ONLY self-role holders yields an empty cross-role union (and must
+    # NOT trigger the size-reorder below — audit P1).
+    cross_role_union = _cross_role_regions_union(
+        role, cross_role_holders, instance_regions
+    )
+    holders_union |= cross_role_union
 
-    safe: list[Place] = []
+    safe: list[tuple[Place, int]] = []  # (place, region_count) for size-ordering
     blocking: list[int] = []
     for internal_idx, topology_idx in candidates:
         cand_regions = instance_regions.get((role, topology_idx), frozenset())
+        place = Place(internal_idx=internal_idx, topology_idx=topology_idx)
         if not cand_regions:
             # No region info for candidate (e.g. embedder on HT-only cores) →
             # treat as overlap-free; caller falls through to lock acquisition.
-            safe.append(Place(internal_idx=internal_idx, topology_idx=topology_idx))
+            # Size 0 keeps it ahead of shaped candidates under size-ordering.
+            safe.append((place, 0))
             continue
         if cand_regions & holders_union:
             blocking.append(topology_idx)
             continue
-        safe.append(Place(internal_idx=internal_idx, topology_idx=topology_idx))
+        safe.append((place, len(cand_regions)))
 
     if safe:
-        return PlacementResult(places=tuple(safe))
+        # Invariant (shape-keyed-contention-gating, Part A): when OTHER roles
+        # hold regions, prefer the SMALLEST disjoint candidate so the machine
+        # stays maximally subdividable for further co-residents — a stable sort
+        # by region-set size, preserving dispatcher priority within each size.
+        # Gate on the OTHER-role occupied regions actually being non-empty
+        # (audit P1) — NOT merely on a holder map being passed, which would
+        # reorder same-role-only dispatches. No other-role pressure → ordering
+        # is byte-identical to legacy (candidate/priority order preserved).
+        if cross_role_union:
+            safe.sort(key=lambda pc: pc[1])  # stable → ties keep priority order
+        return PlacementResult(places=tuple(p for p, _ in safe))
 
     return PlacementResult(
         queue=Queue(

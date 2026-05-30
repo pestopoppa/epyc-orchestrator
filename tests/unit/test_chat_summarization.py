@@ -196,6 +196,10 @@ class TestTwoStagePipelineExecution:
             assert stats["chunks"] >= 2
             assert "stage1_time_ms" in stats
             assert "stage2_time_ms" in stats
+            assert stats["worker_role"] == "worker_explore"
+            assert stats["synthesis_role"] == "frontdoor"
+            assert stats["producer_role"] == "frontdoor"
+            assert stats["role_history"] == ["worker_explore", "frontdoor"]
             mock_primitives.llm_batch.assert_called_once()
             mock_primitives.llm_call.assert_called_once()
 
@@ -248,7 +252,7 @@ class TestTwoStagePipelineExecution:
             mock_client.get.return_value = mock_response
             mock_client_class.return_value = mock_client
 
-            await _run_two_stage_summarization(
+            _answer, stats = await _run_two_stage_summarization(
                 prompt="Test",
                 context="C" * 10000,
                 primitives=mock_primitives,
@@ -259,6 +263,8 @@ class TestTwoStagePipelineExecution:
             # Verify worker_fast was used
             call_args = mock_primitives.llm_batch.call_args
             assert call_args[1]["role"] == "worker_fast"
+            assert stats["worker_role"] == "worker_fast"
+            assert stats["role_history"] == ["worker_fast", "frontdoor"]
 
     @pytest.mark.asyncio
     async def test_run_two_stage_worker_fallback(self):
@@ -277,7 +283,7 @@ class TestTwoStagePipelineExecution:
             mock_client.get.side_effect = Exception("Connection refused")
             mock_client_class.return_value = mock_client
 
-            await _run_two_stage_summarization(
+            _answer, stats = await _run_two_stage_summarization(
                 prompt="Test",
                 context="D" * 10000,
                 primitives=mock_primitives,
@@ -288,6 +294,8 @@ class TestTwoStagePipelineExecution:
             # Verify fallback to worker_explore
             call_args = mock_primitives.llm_batch.call_args
             assert call_args[1]["role"] == "worker_explore"
+            assert stats["worker_role"] == "worker_explore"
+            assert stats["role_history"] == ["worker_explore", "frontdoor"]
 
     @pytest.mark.asyncio
     async def test_run_two_stage_batch_failure_fallback(self):
@@ -323,6 +331,9 @@ class TestTwoStagePipelineExecution:
             # Should have called llm_call 3 times (2 workers + 1 synthesis)
             assert mock_primitives.llm_call.call_count == 3
             assert answer == "Final synthesis"
+            assert stats["worker_role"] == "worker_explore"
+            assert stats["producer_role"] == "frontdoor"
+            assert stats["role_history"] == ["worker_explore", "frontdoor"]
 
     @pytest.mark.asyncio
     async def test_run_two_stage_sequential_worker_failure(self):
@@ -486,6 +497,8 @@ class TestTwoStagePipelineExecution:
             assert "Digest 1" in answer
             assert "Digest 2" in answer
             assert "Worker findings:" in answer
+            assert stats["producer_role"] == "worker_fast"
+            assert stats["role_history"] == ["worker_fast"]
 
     @pytest.mark.asyncio
     async def test_run_two_stage_progress_logging(self):

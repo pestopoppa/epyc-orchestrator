@@ -471,7 +471,14 @@ class TestTwoStageSummarization:
             with patch(
                 "src.api.routes.chat_pipeline.repl_executor._run_two_stage_summarization"
             ) as mock_two_stage:
-                mock_two_stage.return_value = ("Summary result", {"cache_hit": False})
+                mock_two_stage.return_value = (
+                    "Summary result",
+                    {
+                        "cache_hit": False,
+                        "producer_role": "frontdoor",
+                        "role_history": ["worker_fast", "frontdoor"],
+                    },
+                )
 
                 response = await _execute_repl(
                     request=request,
@@ -484,6 +491,23 @@ class TestTwoStageSummarization:
 
                 assert response.answer == "Summary result"
                 assert response.turns == 2
+                assert response.role_history == [
+                    "worker_general",
+                    "worker_fast",
+                    "frontdoor",
+                ]
+                completion_meta = (
+                    mock_state.progress_logger.log_task_completed.call_args.kwargs[
+                        "completion_meta"
+                    ]
+                )
+                assert completion_meta["producer_role"] == "frontdoor"
+                assert completion_meta["final_answer_role"] == "frontdoor"
+                assert completion_meta["delegation_lineage"] == [
+                    "worker_general",
+                    "worker_fast",
+                    "frontdoor",
+                ]
                 mock_two_stage.assert_called_once()
 
     @pytest.mark.asyncio
