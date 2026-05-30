@@ -22,7 +22,7 @@ from src.api.routes.dashboard import (
     _resolve_pid_to_instance_idx,
     _panel_shapes_from_matrix,
 )
-from src.scheduling.contention import SameRole, InstancePair
+from src.scheduling.contention import ContentionMatrix, InstancePair, Pair, SameRole
 
 
 class TestShapeForRegions:
@@ -308,3 +308,53 @@ class TestRegionLocksSnapshot:
             "holder_pids": ["2928025"],
             "holder_instance_idxs": [3],
         }]
+
+    @pytest.mark.asyncio
+    async def test_blocked_by_roles_uses_contention_matrix_not_raw_overlap(self, tmp_path, monkeypatch) -> None:
+        """Cross-role occupied quarters should only render as waits when the matrix queues."""
+        for region in ("q0", "q1", "q2", "q3"):
+            (tmp_path / f"cpu_region.worker_general.{region}.lock").write_text("")
+
+        monkeypatch.setattr("src.runtime.cpu_region_lock._tmp_dir", lambda: tmp_path)
+        monkeypatch.setattr("src.runtime.cpu_region_lock._current_lock_owner_pids", lambda _path: ["wg-pid"])
+        monkeypatch.setattr(
+            "src.runtime.instance_topology.get_instance_regions",
+            lambda: {
+                ("worker_general", 0): {"q0", "q1", "q2", "q3"},
+                ("worker_general", 1): {"q0"},
+                ("ingest_long_context", 0): {"q0", "q1"},
+                ("architect_general", 0): {"q0", "q1", "q2", "q3"},
+            },
+        )
+        matrix = ContentionMatrix(
+            version=1,
+            measured_at="test",
+            host="test",
+            topology_hash="test",
+            default_floor=0.85,
+            same_role={
+                "worker_general": SameRole(role="worker_general", verdict="allow"),
+                "ingest_long_context": SameRole(role="ingest_long_context", verdict="allow"),
+                "architect_general": SameRole(role="architect_general", verdict="n/a"),
+            },
+            pairs={
+                tuple(sorted(("ingest_long_context", "worker_general"))): Pair(
+                    roles=tuple(sorted(("ingest_long_context", "worker_general"))),
+                    ratio=1.087,
+                    verdict="allow",
+                ),
+                tuple(sorted(("architect_general", "worker_general"))): Pair(
+                    roles=tuple(sorted(("architect_general", "worker_general"))),
+                    ratio=0.50,
+                    verdict="block",
+                ),
+            },
+        )
+        monkeypatch.setattr("src.scheduling.contention.load_contention_matrix", lambda: matrix)
+
+        response = await region_locks_snapshot()
+        payload = json.loads(response.body)
+
+        assert payload["by_role"]["worker_general"]["blocked_by_roles"] == ["worker_general"]
+        assert payload["by_role"]["ingest_long_context"]["blocked_by_roles"] == []
+        assert payload["by_role"]["architect_general"]["blocked_by_roles"] == ["worker_general"]

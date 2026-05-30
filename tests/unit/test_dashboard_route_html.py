@@ -66,6 +66,9 @@ def test_dashboard_html_distinguishes_waiting_tap_from_active_locks() -> None:
     assert "waiting_cpu_lock" in body
     assert "tap-inferred active stream" in body
     assert "TAP ACTIVE" in body
+    assert "structuredTapPrimaryRole" in body
+    assert "status === 'quiet'" in body
+    assert "blocked_by_roles" in body
 
 
 def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
