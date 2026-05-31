@@ -5,7 +5,6 @@ Loads frozen baseline from autopilot_baseline.yaml and enforces constraints.
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import statistics
@@ -15,6 +14,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from src.autopilot_core.tier_specs import (
+    DEFAULT_FRONTIER_TIER,
+    MIN_FRONTIER_EVAL_TIER,
+)
 
 log = logging.getLogger("autopilot.safety")
 
@@ -54,13 +58,13 @@ BASELINE_ARCHIVE_TOLERANCE = 1e-6  # float-compare slack for the archive-max gua
 DEFAULT_BASELINE_QUALITY = 1.16  # Documented 2026-04-04 T2 calibration fallback
 
 
-def _pareto_frontier_context() -> tuple[float, frozenset[int]] | None:
-    """(best_quality, frozenset of frontier trial_ids) for the live Pareto archive, or None
+def _pareto_frontier_context(tier: int | None = None) -> tuple[float, frozenset[int]] | None:
+    """(best_quality, frozenset of same-tier frontier trial_ids) for the live Pareto archive, or None
     if it is empty/unreadable. Lazy import + fail-soft so a missing archive (fresh bootstrap)
     never blocks a baseline load or write; the caller treats None as "cannot verify → skip"."""
     try:
         from scripts.autopilot.pareto_archive import ParetoArchive
-        frontier = ParetoArchive().frontier()
+        frontier = ParetoArchive().frontier(tier=tier)
     except Exception as exc:  # noqa: BLE001
         log.warning("Archive-max guard: could not read Pareto frontier (%s)", exc)
         return None
@@ -71,10 +75,41 @@ def _pareto_frontier_context() -> tuple[float, frozenset[int]] | None:
     return best_q, ids
 
 
-def _pareto_frontier_best_quality() -> float | None:
-    """Max quality on the live Pareto frontier, or None if empty/unreadable."""
-    ctx = _pareto_frontier_context()
+def _pareto_frontier_best_quality(tier: int | None = None) -> float | None:
+    """Max quality on the live same-tier Pareto frontier, or None if empty/unreadable."""
+    ctx = _pareto_frontier_context(tier=tier)
     return ctx[0] if ctx is not None else None
+
+
+def _normalize_float_by_tier(raw: Any, path: Path) -> dict[int, float]:
+    """Normalize JSON/YAML tier keys to int and reject impossible quality values."""
+    normalized: dict[int, float] = {}
+    for tier, value in (raw or {}).items():
+        try:
+            t = int(tier)
+        except (TypeError, ValueError):
+            log.error("Ignoring baseline tier key %r in %s; expected integer tier", tier, path)
+            continue
+        q = Baseline._validate_quality(value, None, f"baselines_by_tier[{t}]", path)
+        if q is not None:
+            normalized[t] = q
+    return normalized
+
+
+def _normalize_suite_by_tier(raw: Any, path: Path) -> dict[int, dict[str, float | None]]:
+    """Normalize nested per-suite baselines keyed by eval tier."""
+    normalized: dict[int, dict[str, float | None]] = {}
+    for tier, suites in (raw or {}).items():
+        try:
+            t = int(tier)
+        except (TypeError, ValueError):
+            log.error("Ignoring per-suite baseline tier key %r in %s; expected integer tier", tier, path)
+            continue
+        normalized[t] = {
+            suite: Baseline._validate_quality(q, None, f"per_suite_quality_by_tier[{t}][{suite}]", path)
+            for suite, q in (suites or {}).items()
+        }
+    return normalized
 
 
 @dataclass
@@ -226,6 +261,8 @@ class Baseline:
     cost: float = 0.5
     reliability: float = 0.9
     per_suite_quality: dict[str, float] = field(default_factory=dict)
+    baselines_by_tier: dict[int, float] = field(default_factory=dict)
+    per_suite_quality_by_tier: dict[int, dict[str, float | None]] = field(default_factory=dict)
     frontdoor_speed: float = 10.0
     # Path this baseline was loaded from. save() writes back here by default so a
     # gate constructed with a custom baseline_path (e.g. a tmp file in tests) can
@@ -236,11 +273,14 @@ class Baseline:
     source_path: Path | None = field(default=None, compare=False, repr=False)
 
     @classmethod
-    def load(cls, path: Path | None = None) -> Baseline:
+    def load(cls, path: Path | None = None, state: dict[str, Any] | None = None) -> Baseline:
         path = path or DEFAULT_BASELINE_PATH
         if not path.exists():
             log.warning("No baseline file at %s, using defaults", path)
-            return cls(source_path=path)
+            baseline = cls(source_path=path)
+            if state:
+                baseline.apply_state(state, path)
+            return baseline
         data = yaml.safe_load(path.read_text())
         defaults = cls()
         quality = cls._validate_quality(
@@ -254,7 +294,7 @@ class Baseline:
         # update_baseline() guard cannot help here because a corrupt file is loaded directly.
         # Fall back to the default floor and log loudly; the operator must recompute. Skipped
         # when the archive is empty/unreadable (fresh start) so bootstrap is never blocked.
-        archive_max = _pareto_frontier_best_quality()
+        archive_max = _pareto_frontier_best_quality(DEFAULT_FRONTIER_TIER)
         if (quality is not None and archive_max is not None
                 and quality > archive_max + BASELINE_ARCHIVE_TOLERANCE):
             log.error(
@@ -268,6 +308,21 @@ class Baseline:
             suite: cls._validate_quality(q, None, f"per_suite[{suite}]", path)
             for suite, q in (data.get("per_suite_quality", {}) or {}).items()
         }
+        baselines_by_tier = _normalize_float_by_tier(data.get("baselines_by_tier", {}), path)
+        for tier, tier_quality in list(baselines_by_tier.items()):
+            tier_archive_max = _pareto_frontier_best_quality(tier)
+            if tier_archive_max is None:
+                continue
+            if tier_quality > tier_archive_max + BASELINE_ARCHIVE_TOLERANCE:
+                log.error(
+                    "Persisted T%d baseline quality %.3f in %s exceeds same-tier Pareto "
+                    "archive max %.3f — unachievable/corrupt; dropping tier baseline.",
+                    tier, tier_quality, path, tier_archive_max,
+                )
+                del baselines_by_tier[tier]
+        per_suite_by_tier = _normalize_suite_by_tier(
+            data.get("per_suite_quality_by_tier", {}), path
+        )
         reliability = data.get("reliability", defaults.reliability)
         if reliability is not None and not 0.0 <= reliability <= RELIABILITY_MAX:
             log.error(
@@ -275,15 +330,20 @@ class Baseline:
                 reliability, path, RELIABILITY_MAX, defaults.reliability,
             )
             reliability = defaults.reliability
-        return cls(
+        baseline = cls(
             quality=quality,
             speed=data.get("speed", 10.0),
             cost=data.get("cost", 0.5),
             reliability=reliability,
             per_suite_quality=per_suite,
+            baselines_by_tier=baselines_by_tier,
+            per_suite_quality_by_tier=per_suite_by_tier,
             frontdoor_speed=data.get("frontdoor_speed", 10.0),
             source_path=path,
         )
+        if state:
+            baseline.apply_state(state, path)
+        return baseline
 
     @staticmethod
     def _validate_quality(
@@ -316,9 +376,72 @@ class Baseline:
             "cost": self.cost,
             "reliability": self.reliability,
             "per_suite_quality": self.per_suite_quality,
+            "baselines_by_tier": self.baselines_by_tier,
+            "per_suite_quality_by_tier": self.per_suite_quality_by_tier,
             "frontdoor_speed": self.frontdoor_speed,
         }
         path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
+
+    def apply_state(self, state: dict[str, Any], path: Path | None = None) -> None:
+        state_path = path or self.source_path or DEFAULT_BASELINE_PATH
+        self.baselines_by_tier.update(
+            _normalize_float_by_tier(state.get("baselines_by_tier", {}), state_path)
+        )
+        self.per_suite_quality_by_tier.update(
+            _normalize_suite_by_tier(state.get("per_suite_quality_by_tier", {}), state_path)
+        )
+
+    def quality_for_tier(self, tier: int, *, strict: bool = False) -> float | None:
+        """Return same-tier quality baseline; lenient mode falls back to legacy `quality`."""
+        tier_quality = self.baselines_by_tier.get(int(tier))
+        if tier_quality is not None:
+            return tier_quality
+        return None if strict else self.quality
+
+    def per_suite_for_tier(self, tier: int, *, strict: bool = False) -> dict[str, float | None]:
+        """Return same-tier per-suite baselines; lenient mode falls back to legacy suite values."""
+        tier_suites = self.per_suite_quality_by_tier.get(int(tier))
+        if tier_suites is not None:
+            return tier_suites
+        return {} if strict else self.per_suite_quality
+
+    def update_tier(self, result: EvalResult) -> None:
+        tier = int(result.tier)
+        self.baselines_by_tier[tier] = result.quality
+        self.per_suite_quality_by_tier.setdefault(tier, {}).update(result.per_suite_quality)
+        if tier == DEFAULT_FRONTIER_TIER:
+            self.quality = result.quality
+            self.per_suite_quality.update(result.per_suite_quality)
+        self.speed = result.speed
+        self.cost = result.cost
+        self.reliability = result.reliability
+
+    def to_state_dict(self) -> dict[str, Any]:
+        """State payload for in-memory baseline promotions; YAML remains the seed config."""
+        return {
+            "quality": self.quality,
+            "speed": self.speed,
+            "cost": self.cost,
+            "reliability": self.reliability,
+            "per_suite_quality": self.per_suite_quality,
+            "baselines_by_tier": {
+                str(tier): quality for tier, quality in sorted(self.baselines_by_tier.items())
+            },
+            "per_suite_quality_by_tier": {
+                str(tier): suites for tier, suites in sorted(self.per_suite_quality_by_tier.items())
+            },
+            "frontdoor_speed": self.frontdoor_speed,
+        }
+
+
+@dataclass(frozen=True)
+class BaselineUpdateResult:
+    updated: bool
+    reason: str
+    tier: int
+    previous_quality: float | None
+    new_quality: float
+    proof: dict[str, Any] = field(default_factory=dict)
 
 
 class SafetyGate:
@@ -329,12 +452,26 @@ class SafetyGate:
         baseline_path: Path | None = None,
         consecutive_failures: int = 0,
         quality_history: list[float] | None = None,
+        quality_history_by_tier: dict[str | int, list[float]] | None = None,
+        baseline_state: dict[str, Any] | None = None,
     ):
-        self.baseline = Baseline.load(baseline_path)
+        self.baseline = Baseline.load(baseline_path, state=baseline_state)
         self._consecutive_failures = consecutive_failures
-        self._quality_history: deque[float] = deque(
-            quality_history or [], maxlen=MAD_HISTORY_DEPTH
-        )
+        self._quality_history_by_tier: dict[int, deque[float]] = {}
+        if quality_history_by_tier:
+            for tier, history in quality_history_by_tier.items():
+                self._quality_history_by_tier[int(tier)] = deque(
+                    history or [], maxlen=MAD_HISTORY_DEPTH
+                )
+        if quality_history:
+            # Legacy flat state had no tier label. Seed all current tiers so resumes and
+            # older unit fixtures preserve their pre-migration behavior until enough
+            # same-tier samples replace the migrated window.
+            for tier in (0, DEFAULT_FRONTIER_TIER, 2):
+                self._quality_history_by_tier.setdefault(
+                    tier, deque(quality_history, maxlen=MAD_HISTORY_DEPTH)
+                )
+        self._last_history_tier = DEFAULT_FRONTIER_TIER
 
     @property
     def consecutive_failures(self) -> int:
@@ -342,19 +479,36 @@ class SafetyGate:
 
     @property
     def quality_history(self) -> list[float]:
-        """Return current rolling quality window (for state persistence)."""
-        return list(self._quality_history)
+        """Return the latest tier's rolling quality window (legacy state persistence)."""
+        return self.quality_history_for_tier(self._last_history_tier)
 
-    def _mad_significance(self, new_quality: float) -> tuple[bool, float, float, float]:
+    @property
+    def quality_history_by_tier(self) -> dict[str, list[float]]:
+        """Return rolling quality windows keyed by eval tier for state persistence."""
+        return {
+            str(tier): list(history)
+            for tier, history in sorted(self._quality_history_by_tier.items())
+        }
+
+    def quality_history_for_tier(self, tier: int) -> list[float]:
+        return list(self._quality_history_by_tier.get(int(tier), deque()))
+
+    def _history_for_tier(self, tier: int) -> deque[float]:
+        return self._quality_history_by_tier.setdefault(
+            int(tier), deque(maxlen=MAD_HISTORY_DEPTH)
+        )
+
+    def _mad_significance(self, new_quality: float, tier: int) -> tuple[bool, float, float, float]:
         """Decide whether ``new_quality`` is statistically significant vs history.
 
         Returns (is_significant, z_mad, median, mad). When history < MAD_MIN_SAMPLES,
         returns (True, NaN, NaN, NaN) — insufficient data to filter, accept at face value.
         """
-        if len(self._quality_history) < MAD_MIN_SAMPLES:
+        history = self._history_for_tier(tier)
+        if len(history) < MAD_MIN_SAMPLES:
             return True, math.nan, math.nan, math.nan
-        median_q = statistics.median(self._quality_history)
-        mad = statistics.median(abs(x - median_q) for x in self._quality_history)
+        median_q = statistics.median(history)
+        mad = statistics.median(abs(x - median_q) for x in history)
         if mad == 0:
             return (new_quality != median_q), math.nan, median_q, 0.0
         z_mad = abs(new_quality - median_q) / (mad * MAD_CONSISTENCY)
@@ -375,8 +529,8 @@ class SafetyGate:
             categories.append("quality_floor")
 
         # 2. Regression vs baseline (relative: allow 5% drop from baseline)
-        baseline_q = self.baseline.quality
-        if baseline_q > 0:
+        baseline_q = self.baseline.quality_for_tier(result.tier)
+        if baseline_q is not None and baseline_q > 0:
             relative_delta = (result.quality - baseline_q) / baseline_q
             if relative_delta < REGRESSION_THRESHOLD:
                 violations.append(
@@ -397,7 +551,9 @@ class SafetyGate:
                 # journals the trial but skips archive.update + AP-22 short-term
                 # memory so noise-level improvements don't poison the Pareto
                 # frontier or strategy memory.
-                is_sig, z_mad, median_q, mad = self._mad_significance(result.quality)
+                is_sig, z_mad, median_q, mad = self._mad_significance(
+                    result.quality, result.tier
+                )
                 if not is_sig and not math.isnan(z_mad):
                     categories.append("mad_noise")
                     # Convergence-vs-corruption disambiguation (2026-05-31).
@@ -413,9 +569,10 @@ class SafetyGate:
                     # "noisy/untrustworthy instrument" summary never lumps
                     # reproductions in with kills / exogenous reloads /
                     # bug-corruptions. The MAD statistic is NOT re-anchored.
-                    base_q = self.baseline.quality
+                    base_q = self.baseline.quality_for_tier(result.tier)
                     reproduction_confirmed = (
-                        base_q > 0
+                        base_q is not None
+                        and base_q > 0
                         and not math.isnan(median_q)
                         and mad > 0
                         and (median_q - base_q)
@@ -441,8 +598,9 @@ class SafetyGate:
                     )
 
         # 3. Per-suite regression
+        baseline_suites = self.baseline.per_suite_for_tier(result.tier)
         for suite, quality in result.per_suite_quality.items():
-            baseline_q = self.baseline.per_suite_quality.get(suite)
+            baseline_q = baseline_suites.get(suite)
             if baseline_q is not None:
                 suite_delta = quality - baseline_q
                 if suite_delta < PER_SUITE_REGRESSION:
@@ -552,7 +710,8 @@ class SafetyGate:
         # bug-corrupted / killed trials never reach here with a clean
         # EvalResult, so they are already excluded from the window.
         if passed and not math.isnan(result.quality) and result.quality >= 0:
-            self._quality_history.append(result.quality)
+            self._history_for_tier(result.tier).append(result.quality)
+            self._last_history_tier = int(result.tier)
 
         return verdict
 
@@ -618,22 +777,24 @@ class SafetyGate:
         return True, "speed_metric_mode set + matrix OK against live topology", proof
 
     @staticmethod
-    def _archive_best_quality() -> float | None:
-        """Max quality on the live Pareto frontier, or None if it cannot be read.
+    def _archive_best_quality(tier: int | None = None) -> float | None:
+        """Max quality on the live same-tier Pareto frontier, or None if it cannot be read.
 
         Fail-soft: a missing/unreadable archive returns None (the caller skips the archive-max
         guard but the scale + eligibility gates still apply), so this can never block a
         legitimate bootstrap write on a fresh state."""
-        return _pareto_frontier_best_quality()
+        return _pareto_frontier_best_quality(tier=tier)
 
     @staticmethod
-    def _archive_frontier_trial_ids() -> frozenset[int]:
-        """Trial ids currently on the Pareto frontier (empty set if empty/unreadable)."""
-        ctx = _pareto_frontier_context()
+    def _archive_frontier_trial_ids(tier: int | None = None) -> frozenset[int]:
+        """Trial ids currently on the same-tier Pareto frontier (empty set if empty/unreadable)."""
+        ctx = _pareto_frontier_context(tier=tier)
         return ctx[1] if ctx is not None else frozenset()
 
-    def update_baseline(self, result: EvalResult, source_trial_id: int | None = None) -> None:
-        """Update baseline with new production-best metrics — HARD-GATED on baseline eligibility
+    def update_baseline(
+        self, result: EvalResult, source_trial_id: int | None = None
+    ) -> BaselineUpdateResult:
+        """Update same-tier baseline state with new production-best metrics — HARD-GATED on baseline eligibility
         (operator audit #3): refuses to write unless a recognized speed_metric_mode is set AND the
         contention matrix is certified-fresh against the live topology, so a measurement taken on a
         stale/wrong stack (or with unknown concurrent-speed semantics) can never poison the baseline.
@@ -644,41 +805,62 @@ class SafetyGate:
         archive-max guard refuses any quality above the frontier max unless the source trial is
         actually on the frontier — this catches both phantom/contaminated measurements (never
         archived) and a caller that promotes a genuine new-best before archiving it. Promote in
-        the order: archive.update(entry) → update_baseline(result, source_trial_id=entry.trial_id)."""
+        the order: archive.update(entry) → update_baseline(result, source_trial_id=entry.trial_id).
+
+        The update is state-only: the YAML baseline remains a seed config; promotions live in
+        autopilot_state.json via Baseline.to_state_dict().
+        """
+        tier = int(result.tier)
+        previous_quality = self.baseline.quality_for_tier(tier)
         eligible, reason, proof = self._baseline_eligible(result)
         if not eligible:
             log.warning("Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s",
                         reason, proof)
-            return
+            return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
+        if tier < MIN_FRONTIER_EVAL_TIER:
+            reason = f"tier {tier} is audit-only and cannot update production baselines"
+            log.warning("Baseline update REFUSED — %s", reason)
+            return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
         if not 0.0 <= result.quality <= QUALITY_MAX:
             log.error("Baseline update REFUSED — result.quality %.3f outside valid scale "
                       "[0, %.1f]; refusing to persist a corrupt/wrong-scale baseline",
                       result.quality, QUALITY_MAX)
-            return
-        archive_max = self._archive_best_quality()
+            return BaselineUpdateResult(
+                False, "quality outside valid scale", tier, previous_quality, result.quality, proof
+            )
+        if previous_quality is not None and result.quality <= previous_quality:
+            reason = (
+                f"not a monotonic same-tier improvement: T{tier} q={result.quality:.3f} "
+                f"<= baseline {previous_quality:.3f}"
+            )
+            log.info("Baseline update skipped — %s", reason)
+            return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
+        archive_max = self._archive_best_quality(tier)
         if archive_max is not None and result.quality > archive_max + BASELINE_ARCHIVE_TOLERANCE:
             # Above the frontier max. A genuine new-best must be archived FIRST (archive-first
             # precondition), so its source trial would already be on the frontier; if it is not,
             # this is either a phantom/contaminated measurement or a caller that skipped
             # archive.update(). Refuse either way — accepting it would force-revert every honest
             # trial and gate-lock the loop.
-            on_frontier = source_trial_id is not None and source_trial_id in self._archive_frontier_trial_ids()
+            on_frontier = (
+                source_trial_id is not None
+                and source_trial_id in self._archive_frontier_trial_ids(tier)
+            )
             if not on_frontier:
                 log.error("Baseline update REFUSED — result.quality %.3f exceeds Pareto archive "
-                          "max %.3f and source_trial_id=%s is not on the frontier. Promote only "
+                          "max %.3f for T%d and source_trial_id=%s is not on the frontier. Promote only "
                           "AFTER archive.update() admits the trial; an above-max value with no "
                           "archived source is a phantom/contaminated measurement that would "
                           "force-revert every honest trial and gate-lock the loop.",
-                          result.quality, archive_max, source_trial_id)
-                return
-        self.baseline.quality = result.quality
-        self.baseline.speed = result.speed
-        self.baseline.cost = result.cost
-        self.baseline.reliability = result.reliability
-        self.baseline.per_suite_quality.update(result.per_suite_quality)
-        self.baseline.save()
-        log.info("Baseline updated — baseline_eligible=true (%s) | proof=%s | q=%.3f s=%.1f",
-                 reason, proof, result.quality, result.speed)
+                          result.quality, archive_max, tier, source_trial_id)
+                return BaselineUpdateResult(
+                    False, "quality exceeds same-tier archive max", tier,
+                    previous_quality, result.quality, proof,
+                )
+        self.baseline.update_tier(result)
+        log.info("Baseline state updated — baseline_eligible=true (%s) | proof=%s | T%d q=%.3f s=%.1f",
+                 reason, proof, tier, result.quality, result.speed)
+        return BaselineUpdateResult(True, reason, tier, previous_quality, result.quality, proof)
 
     def reset_failures(self) -> None:
         self._consecutive_failures = 0

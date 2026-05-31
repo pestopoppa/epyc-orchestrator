@@ -36,9 +36,13 @@ def test_baseline_written_when_eligible(tmp_path, monkeypatch):
     g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
     monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
     # Isolate from the live Pareto archive — bootstrap case where the archive-max guard is skipped.
-    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda: None))
-    g.update_baseline(_result())
-    assert g.baseline.quality == pytest.approx(2.9), "eligible result must write the baseline"
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: None))
+    result = g.update_baseline(_result())
+    assert result.updated
+    assert g.baseline.quality_for_tier(2, strict=True) == pytest.approx(2.9), (
+        "eligible result must write the same-tier baseline"
+    )
+    assert not (tmp_path / "absent.yaml").exists(), "baseline promotion is state-only, not YAML"
 
 
 def test_baseline_refused_when_quality_exceeds_archive_max(tmp_path, monkeypatch):
@@ -48,7 +52,7 @@ def test_baseline_refused_when_quality_exceeds_archive_max(tmp_path, monkeypatch
     before = g.baseline.quality
     monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
     # Archive max 2.400; the result claims 2.9 — never achieved, must be refused.
-    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda: 2.4))
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.4))
     g.update_baseline(_result())  # quality=2.9
     assert g.baseline.quality == before, "baseline must NOT update above the archive max"
 
@@ -57,9 +61,56 @@ def test_baseline_written_when_quality_within_archive_max(tmp_path, monkeypatch)
     """A promotion at/under the frontier max is a real achieved measurement — allowed."""
     g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
     monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
-    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda: 2.9))
-    g.update_baseline(_result())  # quality=2.9, archive max 2.9 → within tolerance
-    assert g.baseline.quality == pytest.approx(2.9), "result at the archive max must write"
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.9))
+    result = g.update_baseline(_result())  # quality=2.9, archive max 2.9 → within tolerance
+    assert result.updated
+    assert g.baseline.quality_for_tier(2, strict=True) == pytest.approx(2.9), (
+        "result at the same-tier archive max must write"
+    )
+
+
+def test_baseline_update_is_monotonic_within_tier(tmp_path, monkeypatch):
+    """A lower/equal same-tier quality must not replace the current state baseline."""
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
+    g.baseline.baselines_by_tier[2] = 2.4
+    monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.9))
+    lower = _result()
+    lower.quality = 2.3
+    result = g.update_baseline(lower)
+    assert not result.updated
+    assert "monotonic" in result.reason
+    assert g.baseline.quality_for_tier(2, strict=True) == pytest.approx(2.4)
+
+
+def test_archive_guard_is_same_tier(tmp_path, monkeypatch):
+    """A T2 promotion checks the T2 frontier max, not an easier tier's max."""
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
+    monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
+    monkeypatch.setattr(
+        SafetyGate,
+        "_archive_best_quality",
+        staticmethod(lambda tier=None: 1.8 if tier == 2 else 2.9),
+    )
+    result = g.update_baseline(_result())
+    assert not result.updated
+    assert "same-tier archive max" in result.reason
+    assert g.baseline.quality_for_tier(2, strict=True) is None
+
+
+def test_baseline_state_round_trips_per_tier(tmp_path, monkeypatch):
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
+    monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.9))
+    result = g.update_baseline(_result())
+    assert result.updated
+
+    restored = SafetyGate(
+        baseline_path=tmp_path / "absent.yaml",
+        baseline_state=g.baseline.to_state_dict(),
+    )
+    assert restored.baseline.quality_for_tier(2, strict=True) == pytest.approx(2.9)
+    assert restored.baseline.per_suite_for_tier(2, strict=True)["coder"] == pytest.approx(2.9)
 
 
 def test_baseline_refused_above_max_when_source_not_on_frontier(tmp_path, monkeypatch):
@@ -68,8 +119,10 @@ def test_baseline_refused_above_max_when_source_not_on_frontier(tmp_path, monkey
     g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
     before = g.baseline.quality
     monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
-    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda: 2.4))
-    monkeypatch.setattr(SafetyGate, "_archive_frontier_trial_ids", staticmethod(frozenset))
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.4))
+    monkeypatch.setattr(
+        SafetyGate, "_archive_frontier_trial_ids", staticmethod(lambda tier=None: frozenset())
+    )
     g.update_baseline(_result(), source_trial_id=999)  # quality 2.9, trial 999 not archived
     assert g.baseline.quality == before, "above-max promotion with unarchived source must be refused"
 
@@ -80,7 +133,7 @@ def test_loader_rejects_above_archive_baseline(tmp_path, monkeypatch):
     import safety_gate as sg  # type: ignore[import-not-found]
     p = tmp_path / "baseline.yaml"
     p.write_text("quality: 2.9\nspeed: 99.0\ncost: 0.1\nreliability: 0.99\n")
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda: 2.4)
+    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
     b = sg.Baseline.load(p)
     assert b.quality == pytest.approx(sg.Baseline().quality), "above-archive baseline must fall back"
 
@@ -90,7 +143,7 @@ def test_loader_accepts_within_archive_baseline(tmp_path, monkeypatch):
     import safety_gate as sg  # type: ignore[import-not-found]
     p = tmp_path / "baseline.yaml"
     p.write_text("quality: 1.16\nspeed: 18.0\ncost: 0.5\nreliability: 0.86\n")
-    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda: 2.4)
+    monkeypatch.setattr(sg, "_pareto_frontier_best_quality", lambda tier=None: 2.4)
     b = sg.Baseline.load(p)
     assert b.quality == pytest.approx(1.16), "within-archive baseline must load unchanged"
 

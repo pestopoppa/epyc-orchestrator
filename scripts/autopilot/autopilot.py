@@ -922,6 +922,8 @@ def _run_loop_inner(
     gate = SafetyGate(
         consecutive_failures=state.get("consecutive_failures", 0),
         quality_history=state.get("quality_history", []),
+        quality_history_by_tier=state.get("quality_history_by_tier", {}),
+        baseline_state=state.get("baseline_state", {}),
     )
     tower = EvalTower(
         url=ORCHESTRATOR_URL,
@@ -1946,6 +1948,8 @@ def _run_loop_inner(
         state["consecutive_meta_actions"] = 0  # a real metric-collecting trial ran
         state["consecutive_failures"] = gate.consecutive_failures
         state["quality_history"] = gate.quality_history
+        state["quality_history_by_tier"] = gate.quality_history_by_tier
+        state["baseline_state"] = gate.baseline.to_state_dict()
         archive.save(state)
         save_state(state)
 

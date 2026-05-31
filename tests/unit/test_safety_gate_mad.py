@@ -23,10 +23,10 @@ from safety_gate import (  # type: ignore[import-not-found]
 )
 
 
-def _result(quality: float, speed: float = 99.0) -> EvalResult:
+def _result(quality: float, speed: float = 99.0, tier: int = 2) -> EvalResult:
     """Build an otherwise-clean trial result at a given quality."""
     return EvalResult(
-        tier=2,
+        tier=tier,
         quality=quality,
         speed=speed,
         cost=0.1,
@@ -80,6 +80,21 @@ def test_mad_passes_significant_improvement(tmp_path):
     assert "mad_noise" not in verdict.categories
 
 
+def test_mad_history_is_per_tier(tmp_path):
+    """A noisy T1 plateau must not suppress a T2 measurement."""
+    g = SafetyGate(
+        baseline_path=tmp_path / "absent.yaml",
+        quality_history_by_tier={"1": [2.00, 2.02, 1.98, 2.01, 1.99]},
+    )
+    g.baseline.frontdoor_speed = 1.0
+    g.baseline.baselines_by_tier = {1: 1.16, 2: 1.16}
+    verdict = g.check(_result(2.01, tier=2))
+    assert verdict.passed
+    assert "mad_noise" not in verdict.categories
+    assert g.quality_history_for_tier(1) == [2.00, 2.02, 1.98, 2.01, 1.99]
+    assert g.quality_history_for_tier(2) == [2.01]
+
+
 def test_mad_only_fires_on_improvement_branch(tmp_path):
     """A measurement below baseline takes the regression/warning branch,
     not the MAD branch."""
@@ -88,6 +103,33 @@ def test_mad_only_fires_on_improvement_branch(tmp_path):
     g.baseline.quality = 3.0  # so result.quality < baseline → not the "improvement" branch
     verdict = g.check(_result(2.01))
     assert "mad_noise" not in verdict.categories
+
+
+def test_regression_gate_uses_same_tier_baseline(tmp_path):
+    g = _gate(tmp_path)
+    g.baseline.baselines_by_tier = {1: 2.4, 2: 1.16}
+    t2_verdict = g.check(_result(1.20, tier=2))
+    assert t2_verdict.passed
+    assert "regression" not in t2_verdict.categories
+
+    t1_verdict = g.check(_result(1.20, tier=1))
+    assert not t1_verdict.passed
+    assert "regression" in t1_verdict.categories
+
+
+def test_per_suite_regression_uses_same_tier_baseline(tmp_path):
+    g = _gate(tmp_path)
+    g.baseline.per_suite_quality_by_tier = {
+        1: {"coder": 2.4},
+        2: {"coder": 1.16},
+    }
+    t2_verdict = g.check(_result(1.20, tier=2))
+    assert t2_verdict.passed
+    assert "per_suite_regression" not in t2_verdict.categories
+
+    t1_verdict = g.check(_result(1.20, tier=1))
+    assert not t1_verdict.passed
+    assert "per_suite_regression" in t1_verdict.categories
 
 
 def test_mad_zero_mad_flags_any_change_as_significant(tmp_path):
