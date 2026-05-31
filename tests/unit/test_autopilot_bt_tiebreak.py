@@ -35,8 +35,8 @@ def _make_entry(trial_id: int, q: float, sp: float, neg_cost: float, rel: float)
 
 def _archive_with(entries: list[ParetoEntry]) -> ParetoArchive:
     a = ParetoArchive(state_path=Path("/tmp/_test_archive_does_not_exist.json"))
-    # Bypass file IO; just inject the frontier directly.
-    a._frontier = list(entries)
+    # Bypass file IO; inject directly into the canonical-tier (T1) frontier (per-tier schema).
+    a._frontiers = {1: list(entries)}
     a._all_entries = list(entries)
     return a
 

@@ -18,10 +18,15 @@ DEFAULT_STATE_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_state.json"
 )
 
-# Reference point for hypervolume (worst acceptable values)
-# Quality: 0, Speed: 0 t/s, Cost: -1.0 (high), Reliability: 0
-REFERENCE_POINT = (0.0, 0.0, -1.0, 0.0)
-MIN_FRONTIER_EVAL_TIER = 1
+# Per-tier scoring lives in the shared TierSpec module (single source of truth, imported the
+# same way by scripts/autopilot and src/api). REFERENCE_POINT / MIN_FRONTIER_EVAL_TIER kept as
+# back-compat aliases for any importer.
+from src.autopilot_core.tier_specs import (  # noqa: E402
+    DEFAULT_FRONTIER_TIER,
+    DEFAULT_REFERENCE_POINT as REFERENCE_POINT,
+    MIN_FRONTIER_EVAL_TIER,
+    spec_for,
+)
 PARETO_STATUS_TIER_EXCLUDED = "fast_reject"
 
 
@@ -67,10 +72,29 @@ class ParetoArchive:
 
     def __init__(self, state_path: Path | None = None):
         self.state_path = state_path or DEFAULT_STATE_PATH
-        self._frontier: list[ParetoEntry] = []
+        # Tier-segregated: each eval tier >= MIN_FRONTIER_EVAL_TIER keeps its OWN frontier +
+        # hypervolume history. Quality is never compared across tiers. T0 stays audit-only
+        # (in _all_entries, never on any frontier).
+        self._frontiers: dict[int, list[ParetoEntry]] = {}
         self._all_entries: list[ParetoEntry] = []
-        self._hypervolume_history: list[tuple[int, float]] = []  # (trial_id, hv)
+        self._hv_history_by_tier: dict[int, list[tuple[int, float]]] = {}
         self._load()
+
+    # ── per-tier access helpers ──────────────────────────────────
+    @staticmethod
+    def _tier(tier: int | None) -> int:
+        return DEFAULT_FRONTIER_TIER if tier is None else int(tier)
+
+    def _front(self, tier: int | None = None) -> list[ParetoEntry]:
+        """Live (mutable) frontier list for a tier — created empty on first access."""
+        return self._frontiers.setdefault(self._tier(tier), [])
+
+    def _hv_hist(self, tier: int | None = None) -> list[tuple[int, float]]:
+        return self._hv_history_by_tier.setdefault(self._tier(tier), [])
+
+    def tiers(self) -> list[int]:
+        """Eval tiers that currently have a frontier, ascending."""
+        return sorted(self._frontiers)
 
     # ── persistence ──────────────────────────────────────────────
 
@@ -79,20 +103,28 @@ class ParetoArchive:
             return
         data = json.loads(self.state_path.read_text())
         archive_data = data.get("pareto_archive", {})
-        self._frontier = [
-            ParetoEntry.from_dict(e) for e in archive_data.get("frontier", [])
-        ]
         self._all_entries = [
             ParetoEntry.from_dict(e) for e in archive_data.get("all_entries", [])
         ]
-        self._hypervolume_history = [
-            tuple(h) for h in archive_data.get("hypervolume_history", [])
-        ]
+        # Hypervolume history: prefer the new per-tier field; else migrate the legacy flat list
+        # to the canonical tier. JSON keys round-trip as strings → normalize to int.
+        hv_by_tier = archive_data.get("hv_history_by_tier")
+        if hv_by_tier is not None:
+            self._hv_history_by_tier = {
+                int(t): [tuple(h) for h in hist] for t, hist in hv_by_tier.items()
+            }
+        else:
+            legacy_hv = [tuple(h) for h in archive_data.get("hypervolume_history", [])]
+            self._hv_history_by_tier = (
+                {DEFAULT_FRONTIER_TIER: legacy_hv} if legacy_hv else {}
+            )
+        # Frontiers are always REBUILT per-tier from all_entries (ignores any legacy `frontier`
+        # field + scrubs T0 pollution + auto-migrates old single-frontier state).
         self._rebuild_frontier()
 
         # Integrity check: detect lost frontier
         trial_counter = data.get("trial_counter", 0)
-        if trial_counter > 10 and not self._frontier and not self._all_entries:
+        if trial_counter > 10 and not any(self._frontiers.values()) and not self._all_entries:
             log.error(
                 "PARETO FRONTIER LOST: trial_counter=%d but frontier is empty. "
                 "This means autopilot_state.json was not checkpointed or was "
@@ -120,10 +152,22 @@ class ParetoArchive:
             existing = {}
         if state:
             existing.update(state)
+        canonical_front = self._frontiers.get(DEFAULT_FRONTIER_TIER, [])
+        canonical_hv = self._hv_history_by_tier.get(DEFAULT_FRONTIER_TIER, [])
         archive_payload = {
-            "frontier": [e.to_dict() for e in self._frontier],
+            # New tier-segregated schema (JSON keys are strings; normalized to int on load).
+            "frontiers_by_tier": {
+                str(t): [e.to_dict() for e in front]
+                for t, front in self._frontiers.items()
+            },
+            "hv_history_by_tier": {
+                str(t): list(hist) for t, hist in self._hv_history_by_tier.items()
+            },
             "all_entries": [e.to_dict() for e in self._all_entries],
-            "hypervolume_history": list(self._hypervolume_history),
+            # Legacy fields = canonical-tier (T1) projection, so direct state-JSON readers
+            # (e.g. the dashboard fallback) keep working.
+            "frontier": [e.to_dict() for e in canonical_front],
+            "hypervolume_history": list(canonical_hv),
         }
         existing["pareto_archive"] = archive_payload
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,93 +196,107 @@ class ParetoArchive:
         return entry.eval_tier >= MIN_FRONTIER_EVAL_TIER
 
     def _rebuild_frontier(self) -> None:
-        """Recompute frontier from eligible entries, scrubbing legacy T0 pollution."""
-        rebuilt: list[ParetoEntry] = []
+        """Recompute PER-TIER frontiers from all_entries (groups by eval_tier; dominance only
+        within a tier; scrubs T0 + legacy single-frontier pollution)."""
+        by_tier: dict[int, list[ParetoEntry]] = {}
         for entry in self._all_entries:
             if not self.is_frontier_eligible(entry):
                 entry.is_production_best = False
                 continue
+            t = int(entry.eval_tier)
+            rebuilt = by_tier.setdefault(t, [])
             if any(existing.dominates(entry) for existing in rebuilt):
                 entry.is_production_best = False
                 continue
-            rebuilt = [existing for existing in rebuilt if not entry.dominates(existing)]
-            rebuilt.append(entry)
-        self._frontier = rebuilt
+            by_tier[t] = [existing for existing in rebuilt if not entry.dominates(existing)]
+            by_tier[t].append(entry)
+        self._frontiers = by_tier
 
-    def is_pareto_candidate(self, objectives: tuple[float, ...]) -> bool:
-        """Check if objectives would be non-dominated by current frontier."""
+    def is_pareto_candidate(self, objectives: tuple[float, ...], tier: int | None = None) -> bool:
+        """Check if objectives would be non-dominated by the SAME-TIER frontier."""
         entry = ParetoEntry(
             trial_id=-1,
             objectives=objectives,
-            eval_tier=MIN_FRONTIER_EVAL_TIER,
+            eval_tier=self._tier(tier),
         )
-        for f in self._frontier:
+        for f in self._front(tier):
             if f.dominates(entry):
                 return False
         return True
 
     def update(self, entry: ParetoEntry) -> str:
-        """Add entry to archive. Returns 'frontier', 'candidate', or 'dominated'."""
+        """Add entry to archive, routed to ITS tier's frontier. Returns 'frontier'/'dominated'/
+        fast_reject. Dominance + hypervolume are strictly within `entry.eval_tier`."""
         self._all_entries.append(entry)
         if not self.is_frontier_eligible(entry):
             entry.is_production_best = False
             return PARETO_STATUS_TIER_EXCLUDED
 
-        # Check if dominated by any frontier entry
-        if not self.is_pareto_candidate(entry.objectives):
+        tier = int(entry.eval_tier)
+        front = self._front(tier)
+        if not self.is_pareto_candidate(entry.objectives, tier):
             status = "dominated"
         else:
-            # Remove entries dominated by the new one
-            self._frontier = [
-                f for f in self._frontier if not entry.dominates(f)
-            ]
-            self._frontier.append(entry)
+            self._frontiers[tier] = [f for f in front if not entry.dominates(f)]
+            self._frontiers[tier].append(entry)
             status = "frontier"
 
-        # Update hypervolume
-        hv = self.hypervolume()
-        self._hypervolume_history.append((entry.trial_id, hv))
+        # Update hypervolume (same tier)
+        hv = self.hypervolume(tier=tier)
+        self._hv_hist(tier).append((entry.trial_id, hv))
         return status
 
-    def frontier(self) -> list[ParetoEntry]:
-        return list(self._frontier)
+    def frontier(self, tier: int | None = None) -> list[ParetoEntry]:
+        return list(self._front(tier))
 
-    def frontier_size(self) -> int:
-        return len(self._frontier)
+    def frontier_size(self, tier: int | None = None) -> int:
+        return len(self._front(tier))
 
     def production_best(self) -> ParetoEntry | None:
-        for e in self._frontier:
-            if e.is_production_best:
-                return e
+        """The single GLOBAL deployed-production config (across all tiers; only one is marked)."""
+        for front in self._frontiers.values():
+            for e in front:
+                if e.is_production_best:
+                    return e
         return None
 
-    def mark_production_best(self, trial_id: int) -> None:
-        for e in self._frontier:
-            e.is_production_best = e.trial_id == trial_id
+    def mark_production_best(self, trial_id: int) -> bool:
+        """Mark the single global production-best. R8 guard: refuse unless `trial_id` is on the
+        CANONICAL (T1) frontier — a T2 validation entry must never become the deployed config.
+        Returns True if marked, False if refused."""
+        canonical = self._front(DEFAULT_FRONTIER_TIER)
+        if not any(e.trial_id == trial_id for e in canonical):
+            return False
+        for front in self._frontiers.values():
+            for e in front:
+                e.is_production_best = e.trial_id == trial_id
+        return True
 
     # ── hypervolume ──────────────────────────────────────────────
 
-    def hypervolume(self, ref: tuple[float, ...] | None = None) -> float:
-        """Compute hypervolume indicator for current frontier.
+    def hypervolume(self, ref: tuple[float, ...] | None = None, tier: int | None = None) -> float:
+        """Hypervolume indicator for one tier's frontier (its TierSpec reference point).
 
         Uses inclusion-exclusion for 4D (exact, fast enough for <1000 entries).
         """
-        if not self._frontier:
+        front = self._front(tier)
+        if not front:
             return 0.0
-        ref = ref or REFERENCE_POINT
-        return _hypervolume_4d(
-            [e.objectives for e in self._frontier], ref
-        )
+        ref = ref or spec_for(self._tier(tier)).reference_point
+        return _hypervolume_4d([e.objectives for e in front], ref)
 
-    def hypervolume_trend(self, window: int | None = None) -> list[tuple[int, float]]:
-        """Return (trial_id, hypervolume) history."""
+    def hypervolume_trend(
+        self, window: int | None = None, tier: int | None = None
+    ) -> list[tuple[int, float]]:
+        """Return (trial_id, hypervolume) history for a tier."""
+        hist = self._hv_hist(tier)
         if window:
-            return list(self._hypervolume_history[-window:])
-        return list(self._hypervolume_history)
+            return list(hist[-window:])
+        return list(hist)
 
-    def hypervolume_slope(self, window: int = 50) -> float:
-        """Linear regression slope of hypervolume over last `window` entries."""
-        hist = self._hypervolume_history[-window:]
+    def hypervolume_slope(self, window: int = 50, tier: int | None = None) -> float:
+        """Linear regression slope of a tier's hypervolume over the last `window` entries."""
+        hist = self._hv_hist(tier)[-window:]
         if len(hist) < 2:
             return 0.0
         n = len(hist)
@@ -258,6 +316,7 @@ class ParetoArchive:
         floor_default: float = 1e-3,
         floor_min: float = 1e-5,
         k: float = 0.5,
+        tier: int | None = None,
     ) -> float:
         """Estimate the noise floor of hv_slope_<slope_window> from recent history.
 
@@ -275,7 +334,7 @@ class ParetoArchive:
         running the expensive rich prompt during a healthy exploit phase are
         not. The clip enforces the safer direction.
         """
-        hist = self._hypervolume_history
+        hist = self._hv_hist(tier)
         if len(hist) < max(slope_window + 5, 20):
             return floor_default
         # Compute rolling slope ending at each position from slope_window onward.
@@ -326,8 +385,8 @@ class ParetoArchive:
 
     # ── Bradley-Terry tiebreak — cheap axis-vote proxy (P17.BT-2) ──
 
-    def bt_tiebreak_topk(self, k: int = 5) -> dict[str, Any]:
-        """Axis-vote Bradley-Terry tiebreak over top-K frontier entries.
+    def bt_tiebreak_topk(self, k: int = 5, tier: int | None = None) -> dict[str, Any]:
+        """Axis-vote Bradley-Terry tiebreak over top-K frontier entries (within ONE tier).
 
         IMPORTANT — what this is, and what this is NOT:
 
@@ -398,21 +457,24 @@ class ParetoArchive:
         # scaffolding); ORCH_ROOT is on sys.path at autopilot runtime.
         from src.bradley_terry import bradley_terry_rank
 
-        if len(self._frontier) < 2:
+        front = self._front(tier)
+        ref = spec_for(self._tier(tier)).reference_point
+
+        if len(front) < 2:
             return {
-                "ranking": [e.trial_id for e in self._frontier],
-                "log_skills": {e.trial_id: 0.0 for e in self._frontier},
-                "top_k_trial_ids": [e.trial_id for e in self._frontier],
+                "ranking": [e.trial_id for e in front],
+                "log_skills": {e.trial_id: 0.0 for e in front},
+                "top_k_trial_ids": [e.trial_id for e in front],
                 "warnings": [],
                 "converged": True,
                 "iterations": 0,
-                "note": f"BT tiebreak skipped (frontier_size={len(self._frontier)})",
+                "note": f"BT tiebreak skipped (frontier_size={len(front)})",
             }
 
         # Pick top-K frontier entries by hypervolume contribution. Use the
         # current frontier as-is (no re-ranking); if K exceeds frontier
         # size, just compare the whole frontier.
-        k = min(max(k, 2), len(self._frontier))
+        k = min(max(k, 2), len(front))
         # Rank frontier entries by a range-normalized sum of axis values minus
         # the reference. Earlier version used a raw sum, which made
         # high-magnitude axes (speed in t/s, range 0-100+) dominate vs
@@ -420,27 +482,27 @@ class ParetoArchive:
         # per axis across the frontier puts each axis on a [0, 1] scale
         # before summing so no axis can swamp the others purely on units.
         # Ties broken by quality.
-        n_axes = len(self._frontier[0].objectives)
+        n_axes = len(front[0].objectives)
         # Per-axis frontier max; degenerate axes (max == ref) fall back to
         # 1.0 so we don't divide by zero and the contribution becomes
         # (obj - ref) / 1.0 = the raw delta (small for those axes).
         per_axis_max = [
-            max(e.objectives[a] for e in self._frontier)
+            max(e.objectives[a] for e in front)
             for a in range(n_axes)
         ]
         per_axis_range = [
-            (per_axis_max[a] - REFERENCE_POINT[a]) or 1.0
+            (per_axis_max[a] - ref[a]) or 1.0
             for a in range(n_axes)
         ]
 
         def _normalized_axis_sum(e: ParetoEntry) -> float:
             return sum(
-                (e.objectives[a] - REFERENCE_POINT[a]) / per_axis_range[a]
+                (e.objectives[a] - ref[a]) / per_axis_range[a]
                 for a in range(n_axes)
             )
 
         scored = sorted(
-            self._frontier,
+            front,
             key=lambda e: (_normalized_axis_sum(e), e.objectives[0]),
             reverse=True,
         )
@@ -494,35 +556,55 @@ class ParetoArchive:
 
     # ── summary ──────────────────────────────────────────────────
 
-    def summary(self) -> dict[str, Any]:
-        if not self._frontier:
-            return {"frontier_size": 0, "hypervolume": 0.0}
-        best_quality = max(e.objectives[0] for e in self._frontier)
-        best_speed = max(e.objectives[1] for e in self._frontier)
-        best_cost = max(e.objectives[2] for e in self._frontier)  # -cost, higher is better
+    def summary(self, tier: int | None = None) -> dict[str, Any]:
+        front = self._front(tier)
+        if not front:
+            return {"frontier_size": 0, "hypervolume": 0.0, "tier": self._tier(tier)}
+        best_quality = max(e.objectives[0] for e in front)
+        best_speed = max(e.objectives[1] for e in front)
+        best_cost = max(e.objectives[2] for e in front)  # -cost, higher is better
         return {
-            "frontier_size": len(self._frontier),
+            "tier": self._tier(tier),
+            "frontier_size": len(front),
             "total_entries": len(self._all_entries),
-            "hypervolume": self.hypervolume(),
+            "hypervolume": self.hypervolume(tier=tier),
             "best_quality": best_quality,
             "best_speed": best_speed,
             "best_neg_cost": best_cost,
-            "hv_slope_50": self.hypervolume_slope(50),
+            "hv_slope_50": self.hypervolume_slope(50, tier=tier),
         }
 
-    def summary_text(self) -> str:
-        s = self.summary()
+    def tier_overview(self) -> str:
+        """One compact line per tier (frontier size + best quality) for the planner — so it sees
+        T2/harder-tier validation status without any cross-tier quality comparison."""
+        if not self._frontiers:
+            return "(no tier frontiers yet)"
+        parts = []
+        for t in self.tiers():
+            front = self._frontiers[t]
+            if not front:
+                continue
+            bq = max(e.objectives[0] for e in front)
+            parts.append(f"T{t}: {len(front)} pts, best_q={bq:.3f}")
+        return "Per-tier frontiers — " + "; ".join(parts) if parts else "(no tier frontiers yet)"
+
+    def summary_text(self, tier: int | None = None) -> str:
+        """Render ONE tier's frontier (default = canonical T1) + a per-tier overview line."""
+        front = self._front(tier)
+        t = self._tier(tier)
+        s = self.summary(tier=tier)
         lines = [
-            f"Pareto frontier: {s['frontier_size']} entries "
+            self.tier_overview(),
+            f"\n[T{t}] Pareto frontier: {s['frontier_size']} entries "
             f"(of {s.get('total_entries', 0)} total)",
             f"Hypervolume: {s['hypervolume']:.4f}",
             f"HV slope (last 50): {s.get('hv_slope_50', 0):.6f}",
             f"Best quality: {s.get('best_quality', 0):.3f}",
             f"Best speed: {s.get('best_speed', 0):.1f} t/s",
         ]
-        if self._frontier:
+        if front:
             lines.append("\nFrontier entries:")
-            for e in sorted(self._frontier, key=lambda x: -x.objectives[0]):
+            for e in sorted(front, key=lambda x: -x.objectives[0]):
                 lines.append(
                     f"  #{e.trial_id} [{e.species}] "
                     f"q={e.objectives[0]:.3f} s={e.objectives[1]:.1f} "
@@ -552,26 +634,27 @@ class ParetoArchive:
     # Output is a structured dict (for programmatic use) + a text rendering
     # helper for the controller prompt.
 
-    def geometry(self) -> dict[str, Any]:
-        """Compute structural info about the current frontier.
+    def geometry(self, tier: int | None = None) -> dict[str, Any]:
+        """Compute structural info about ONE tier's frontier (default = canonical T1).
 
         Returns dict with keys: shape, blocking_quality, blocking_speed,
         gaps, hv_slope_10, suggested_attack.
         """
+        front = self._front(tier)
         out: dict[str, Any] = {
             "shape": "empty",
             "blocking_quality": None,
             "blocking_speed": None,
             "gaps": [],
-            "hv_slope_10": self.hypervolume_slope(10),
+            "hv_slope_10": self.hypervolume_slope(10, tier=tier),
             "suggested_attack": "no data — seed more trials first",
-            "frontier_count": len(self._frontier),
+            "frontier_count": len(front),
         }
-        if not self._frontier:
+        if not front:
             return out
-        if len(self._frontier) == 1:
+        if len(front) == 1:
             out["shape"] = "single"
-            e = self._frontier[0]
+            e = front[0]
             out["suggested_attack"] = (
                 f"single frontier point trial #{e.trial_id} q={e.objectives[0]:.2f} "
                 f"sp={e.objectives[1]:.1f} — propose explore actions to add "
@@ -581,7 +664,7 @@ class ParetoArchive:
 
         # Project to (quality, speed). Sort by quality ascending.
         pts = sorted(
-            self._frontier, key=lambda x: (x.objectives[0], -x.objectives[1])
+            front, key=lambda x: (x.objectives[0], -x.objectives[1])
         )
         q_vals = [e.objectives[0] for e in pts]
         s_vals = [e.objectives[1] for e in pts]
@@ -612,8 +695,8 @@ class ParetoArchive:
                 out["shape"] = "linear" if n >= 3 else "scattered"
 
         # Blocking points per axis.
-        blocking_q = max(self._frontier, key=lambda e: e.objectives[0])
-        blocking_s = max(self._frontier, key=lambda e: e.objectives[1])
+        blocking_q = max(front, key=lambda e: e.objectives[0])
+        blocking_s = max(front, key=lambda e: e.objectives[1])
         out["blocking_quality"] = {
             "trial_id": blocking_q.trial_id,
             "objectives": list(blocking_q.objectives),
@@ -683,9 +766,9 @@ class ParetoArchive:
             )
         return out
 
-    def geometry_text(self) -> str:
-        """Render geometry() for inclusion in the controller prompt."""
-        g = self.geometry()
+    def geometry_text(self, tier: int | None = None) -> str:
+        """Render geometry() for inclusion in the controller prompt (one tier)."""
+        g = self.geometry(tier=tier)
         if g["frontier_count"] == 0:
             return "(frontier empty — no geometry to analyse)"
         lines = [
