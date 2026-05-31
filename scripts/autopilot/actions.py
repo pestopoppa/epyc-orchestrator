@@ -14,6 +14,7 @@ handler signatures pack the autopilot's many species/state objects into an
 from __future__ import annotations
 
 import logging
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -651,6 +652,82 @@ _ACTION_HANDLERS = {
 }
 
 
+# -----------------------------------------------------------------------------
+# Dirty-tree fence — never let a file-mutating action commit (or even write on
+# top of) pre-existing uncommitted work in its commit target.
+#
+# The forge stages differently per path, so the guard scope differs:
+#   * code_mutation -> `git add <single file>`  => check that one file
+#   * prompt_mutation / gepa_optimize
+#                   -> `git add <prompts dir>`  => check the WHOLE prompts dir
+#     (a dirty *sibling* prompt would otherwise be swept into the commit).
+#   * structural_prune -> direct write to one prompt file => check that file
+# Fires regardless of auto_commit (a mutation must not write over unrelated
+# uncommitted work either) and fails CLOSED: any git error => treat as dirty
+# and skip the mutation rather than risk committing someone else's work.
+# -----------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_PROMPTS_DIR = _REPO_ROOT / "orchestration" / "prompts"
+_CODE_FILE_MUTATORS = {"code_mutation"}
+_PROMPT_DIR_MUTATORS = {"prompt_mutation", "gepa_optimize"}
+_PROMPT_FILE_MUTATORS = {"structural_prune"}
+
+
+def _pathspec_has_pending_changes(pathspec: Path) -> bool:
+    """True if ``git status --porcelain`` reports any change (modified, staged,
+    or untracked) under ``pathspec``. Fail-closed: returns True on git error."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", str(pathspec)],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:  # noqa: BLE001 — fail closed on any git/subprocess error
+        return True
+    if result.returncode != 0:
+        return True
+    return bool(result.stdout.strip())
+
+
+def _mutation_dirty_target_reason(action: dict[str, Any]) -> str | None:
+    """Return a skip reason if a file-mutating action would commit pre-existing
+    uncommitted changes in its commit target; ``None`` if the action is
+    non-mutating or its target is clean."""
+    action_type = action.get("type", "")
+    if action_type in _CODE_FILE_MUTATORS:
+        target = action.get("file", "")
+        if not target:
+            return None  # missing-file is handled by the scope validator
+        path = (_REPO_ROOT / target).resolve()
+        if _pathspec_has_pending_changes(path):
+            return (
+                f"{action_type} target '{target}' has pre-existing uncommitted "
+                "changes; skipping to avoid committing unrelated work"
+            )
+    elif action_type in _PROMPT_DIR_MUTATORS:
+        # The prompt commit path stages the whole prompts dir, so any dirty
+        # sibling prompt would be swept in — check the entire directory.
+        if _pathspec_has_pending_changes(_PROMPTS_DIR):
+            return (
+                f"{action_type} would stage the whole prompts dir, which has "
+                "pre-existing uncommitted changes; skipping to avoid committing "
+                "unrelated work"
+            )
+    elif action_type in _PROMPT_FILE_MUTATORS:
+        target = action.get("file", "")
+        if not target:
+            return None  # missing-file is handled by the scope validator
+        path = (_PROMPTS_DIR / target).resolve()
+        if _pathspec_has_pending_changes(path):
+            return (
+                f"{action_type} target '{target}' has pre-existing uncommitted "
+                "changes; skipping to avoid overwriting unrelated work"
+            )
+    return None
+
+
 def dispatch_action(
     action: dict[str, Any],
     seeder: "Seeder",
@@ -680,6 +757,13 @@ def dispatch_action(
     if scope_err:
         log.warning("AP-9 scope violation: %s — skipping trial", scope_err)
         return None, action_type
+    # Dirty-tree fence (see _mutation_dirty_target_reason): a file-mutating
+    # action must never commit — or write over — pre-existing uncommitted work.
+    dirty_reason = _mutation_dirty_target_reason(action)
+    if dirty_reason:
+        log.warning("Dirty-tree fence: %s — skipping trial", dirty_reason)
+        return None, action_type
+
     log.info("Dispatching action: %s", action_type)
 
     handler = _ACTION_HANDLERS.get(action_type)
