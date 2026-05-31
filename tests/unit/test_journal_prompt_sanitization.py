@@ -36,7 +36,7 @@ def _entry(**overrides) -> JournalEntry:
 
 def test_summary_text_sanitizes_legacy_scale_failure_analysis(tmp_path: Path) -> None:
     journal = ExperimentJournal(journal_dir=tmp_path)
-    journal.record(_entry())
+    journal.record(_entry(tier=1))
 
     summary = journal.summary_text()
 
@@ -44,6 +44,36 @@ def test_summary_text_sanitizes_legacy_scale_failure_analysis(tmp_path: Path) ->
     assert "Suite 'coder' regression: -6.900" not in summary
     assert "legacy-scale failure_analysis omitted" in summary
     assert "q=2.400" in summary
+
+
+def test_summary_text_downclasses_tier0_quality(tmp_path: Path) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(tier=0, quality=2.4))
+
+    summary = journal.summary_text()
+
+    assert "T0 audit-only sentinel" in summary
+    assert "quality hidden" in summary
+    assert "q=2.400" not in summary
+
+
+def test_summary_text_hides_bug_corrupted_metrics(tmp_path: Path) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(
+        _entry(
+            tier=1,
+            quality=2.4,
+            bug_corrupted_by="ec9622d",
+            bug_corrupted_reason="pre-tier-filter planner telemetry",
+        )
+    )
+
+    summary = journal.summary_text()
+
+    assert "CORRUPTED_BY=ec9622d" in summary
+    assert "metrics/reason hidden" in summary
+    assert "pre-tier-filter planner telemetry" not in summary
+    assert "q=2.400" not in summary
 
 
 def test_insight_renderers_sanitize_legacy_scale_failure_analysis(tmp_path: Path) -> None:

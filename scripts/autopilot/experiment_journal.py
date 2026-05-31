@@ -335,21 +335,44 @@ class ExperimentJournal:
     def summary_text(self, last_n: int = 20) -> str:
         """Human-readable summary for LLM controller prompt."""
         s = self.summary()
+        eligible_pareto_count = sum(
+            1
+            for e in self._entries
+            if e.pareto_status == "frontier" and e.tier > 0 and not e.bug_corrupted_by
+        )
         lines = [
             f"Total trials: {s['total_trials']}",
-            f"Pareto frontier size: {s['pareto_size']}",
+            f"Eligible Pareto frontier size (T1/T2, trustworthy): {eligible_pareto_count}",
             f"Species counts: {s.get('species_counts', {})}",
         ]
         recent = self.recent(last_n)
         if recent:
             lines.append(f"\nLast {len(recent)} trials:")
             for e in recent:
-                line = (
-                    f"  #{e.trial_id} [{e.species}/{e.action_type}] "
-                    f"T{e.tier} q={e.quality:.3f} s={e.speed:.1f} "
-                    f"c={e.cost:.3f} r={e.reliability:.2f} "
-                    f"→ {e.pareto_status}"
-                )
+                prefix = f"  #{e.trial_id} [{e.species}/{e.action_type}] "
+                if e.bug_corrupted_by:
+                    line = (
+                        prefix
+                        + f"CORRUPTED_BY={e.bug_corrupted_by} "
+                        + "(metrics/reason hidden; excluded from planner trust)"
+                    )
+                    lines.append(line)
+                    continue
+                if e.tier == 0:
+                    line = (
+                        prefix
+                        + "T0 audit-only sentinel "
+                        + "(quality hidden; excluded from production frontier/baseline guards) "
+                        + f"s={e.speed:.1f} c={e.cost:.3f} r={e.reliability:.2f} "
+                        + f"→ {e.pareto_status}"
+                    )
+                else:
+                    line = (
+                        prefix
+                        + f"T{e.tier} q={e.quality:.3f} s={e.speed:.1f} "
+                        + f"c={e.cost:.3f} r={e.reliability:.2f} "
+                        + f"→ {e.pareto_status}"
+                    )
                 if e.failure_analysis:
                     # Compact single-line failure summary for controller visibility
                     fa_oneline = failure_analysis_for_prompt(e, limit=200)

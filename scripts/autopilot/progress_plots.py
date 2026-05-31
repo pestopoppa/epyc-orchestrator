@@ -267,6 +267,11 @@ def generate_all_plots(
     paths = []
 
     try:
+        trustworthy_tiered_entries = [
+            e for e in journal.all_entries()
+            if e.tier > 0 and not getattr(e, "bug_corrupted_by", "")
+        ]
+
         # 1. Hypervolume trend
         paths.append(plot_hypervolume_trend(archive.hypervolume_trend(), output_dir))
 
@@ -275,7 +280,7 @@ def generate_all_plots(
         dominated = [
             e.to_dict()
             for e in archive._all_entries
-            if e not in archive._frontier
+            if archive.is_frontier_eligible(e) and e not in archive._frontier
         ]
         paths.append(plot_pareto_frontier_2d(frontier, dominated, output_dir))
 
@@ -285,7 +290,7 @@ def generate_all_plots(
 
         # 4. Per-suite quality
         suite_data = []
-        for e in journal.all_entries():
+        for e in trustworthy_tiered_entries:
             if e.eval_details.get("per_suite_quality"):
                 suite_data.append({
                     "trial_id": e.trial_id,
@@ -297,7 +302,7 @@ def generate_all_plots(
         paths.append(plot_memory_convergence(td_errors or [], output_dir))
 
         # 6. Trial timeline
-        entries = journal.all_entries()
+        entries = trustworthy_tiered_entries
         baseline_q = entries[0].quality if entries else 0
         timeline_data = [
             {
