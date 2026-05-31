@@ -17,6 +17,7 @@ from typing import Any
 from src.api.routes.dashboard_tap import (
     _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
+    _grep_lines_reverse,
     _parse_inference_sections,
     _parse_structured_tap_requests,
     _read_tail,
@@ -156,12 +157,17 @@ def _find_structured_request_by_id(task_id: str, max_requests: int = 400) -> dic
     request_id = request_id.strip()
     if not request_id:
         return None
-    tail_text = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
-    for request in _parse_structured_tap_requests(tail_text, max_requests=max_requests):
-        if str(request.get("request_id") or "") == request_id:
-            out = dict(request)
-            out["source"] = "structured_tap"
-            return out
+    # Targeted reverse-grep first: recovers the request at any age from a multi-GB
+    # tap without reading the whole file (a fixed tail covers only seconds under load).
+    grepped = _grep_lines_reverse(_INFERENCE_TAP_EVENTS_PATH, request_id)
+    for source_text in (grepped, _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)):
+        if not source_text:
+            continue
+        for request in _parse_structured_tap_requests(source_text, max_requests=max_requests):
+            if str(request.get("request_id") or "") == request_id:
+                out = dict(request)
+                out["source"] = "structured_tap"
+                return out
     return None
 
 
@@ -182,13 +188,18 @@ def _find_structured_request_by_task_id(
     task_id = (task_id or "").strip()
     if not task_id:
         return None
-    tail_text = _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)
-    # _parse_structured_tap_requests returns most-recent-updated first.
-    for request in _parse_structured_tap_requests(tail_text, max_requests=max_requests):
-        if str(request.get("task_id") or "") == task_id:
-            out = dict(request)
-            out["source"] = "structured_tap"
-            return out
+    # Targeted reverse-grep first (recovers a request of any age from a multi-GB tap),
+    # then the small live tail as a cheap fallback. _parse_structured_tap_requests
+    # returns most-recent-updated first.
+    grepped = _grep_lines_reverse(_INFERENCE_TAP_EVENTS_PATH, task_id)
+    for source_text in (grepped, _read_tail(_INFERENCE_TAP_EVENTS_PATH, max_bytes=1024 * 1024)):
+        if not source_text:
+            continue
+        for request in _parse_structured_tap_requests(source_text, max_requests=max_requests):
+            if str(request.get("task_id") or "") == task_id:
+                out = dict(request)
+                out["source"] = "structured_tap"
+                return out
     return None
 
 

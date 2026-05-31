@@ -422,3 +422,29 @@ class TestSentinelFallback:
 
         assert is_active() is False
         assert _read_sentinel() == ""
+
+
+def test_grep_lines_reverse_finds_old_request_past_tail(tmp_path):
+    """Reverse-grep must recover a request's lines even when buried under MBs of
+    newer events (the fixed-tail window misses anything older than seconds on a
+    multi-GB tap). Regression for the 2026-05-31 empty-completed-panel bug."""
+    from src.api.routes.dashboard_tap import _grep_lines_reverse, _read_tail
+    p = tmp_path / "tap.jsonl"
+    target = '{"event":"start","request_id":"chat-OLD:1","task_id":"chat-OLD","text":"x"}'
+    filler = "\n".join(f'{{"event":"chunk","request_id":"chat-NEW:{i}","text":"y"}}'
+                        for i in range(50000))  # ~3 MB of newer noise
+    p.write_text(target + "\n" + filler + "\n")
+    # Fixed 64 KB tail cannot see the old request...
+    assert "chat-OLD" not in _read_tail(p, max_bytes=64 * 1024)
+    # ...but the reverse-grep recovers exactly its line.
+    got = _grep_lines_reverse(p, "chat-OLD")
+    assert "chat-OLD:1" in got
+    assert got.count("\n") == 0  # only the matching line, not the 50k filler
+
+
+def test_grep_lines_reverse_missing_needle_returns_empty(tmp_path):
+    from src.api.routes.dashboard_tap import _grep_lines_reverse
+    p = tmp_path / "tap.jsonl"
+    p.write_text('{"event":"start","request_id":"a:1"}\n')
+    assert _grep_lines_reverse(p, "nonexistent") == ""
+    assert _grep_lines_reverse(tmp_path / "absent.jsonl", "x") == ""

@@ -363,6 +363,9 @@ def test_find_structured_request_by_id_strips_tap_prefix(monkeypatch) -> None:
         }),
     ]
     monkeypatch.setattr(
+        dashboard_tasks, "_grep_lines_reverse", lambda *a, **kw: "\n".join(lines)
+    )
+    monkeypatch.setattr(
         dashboard_tasks, "_read_tail", lambda *args, **kwargs: "\n".join(lines)
     )
 
@@ -446,6 +449,12 @@ def test_find_structured_request_by_task_id_matches_chat_id(monkeypatch) -> None
             "text": "5",
         }),
     ]
+    # The resolver reverse-greps the tap file first (recovers a request of any age
+    # from a multi-GB tap), then falls back to the small live tail. Stub both seams
+    # so the matching logic is exercised against the fixture, not the real file.
+    monkeypatch.setattr(
+        dashboard_tasks, "_grep_lines_reverse", lambda *a, **kw: "\n".join(lines)
+    )
     monkeypatch.setattr(
         dashboard_tasks, "_read_tail", lambda *args, **kwargs: "\n".join(lines)
     )
@@ -461,6 +470,7 @@ def test_find_structured_request_by_task_id_matches_chat_id(monkeypatch) -> None
 
 
 def test_find_structured_request_by_task_id_missing_returns_none(monkeypatch) -> None:
+    monkeypatch.setattr(dashboard_tasks, "_grep_lines_reverse", lambda *a, **kw: "")
     monkeypatch.setattr(dashboard_tasks, "_read_tail", lambda *a, **kw: "")
     assert dashboard_tasks._find_structured_request_by_task_id("chat-83123001") is None
     assert dashboard_tasks._find_structured_request_by_task_id("") is None

@@ -43,6 +43,70 @@ def _read_tail(path: Path, max_bytes: int = 256 * 1024) -> str:
         return ""
 
 
+def _grep_lines_reverse(
+    path: Path,
+    needle: str,
+    *,
+    max_scan_bytes: int = 512 * 1024 * 1024,
+    chunk_bytes: int = 8 * 1024 * 1024,
+) -> str:
+    """Scan `path` backward and return the lines containing `needle`, oldest-first.
+
+    A fixed tail window is useless on the inference tap once it grows to multi-GB
+    under autopilot-eval load: at ~1 MB / 6 s, a 1 MB tail covers only seconds, so
+    any task older than that renders "(empty)" in the dashboard even though its full
+    stream is on disk (observed 2026-05-31: a 2.3 GB tap, chat task 10 min old,
+    unrecoverable from the tail). This reads the file in reverse chunks, keeps only
+    matching lines, and early-exits once it has passed the matched block (an older
+    chunk with no matches), so a single request is recovered without loading the
+    whole file. `max_scan_bytes` bounds the worst case for a never-matching needle.
+
+    Chunk boundaries are stitched: the partial line at a chunk's low-offset edge is
+    carried into the next (older) read so no event line is split across the seam.
+    """
+    if not path.exists() or not needle:
+        return ""
+    needle_b = needle.encode("utf-8")
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return ""
+    pos = size
+    scanned = 0
+    found_any = False
+    carry = b""  # tail fragment whose line-head lives in older (not-yet-read) bytes
+    collected: list[bytes] = []  # matching-line blocks, newest-first
+    try:
+        with open(path, "rb") as f:
+            while pos > 0 and scanned < max_scan_bytes:
+                read = min(chunk_bytes, pos)
+                pos -= read
+                f.seek(pos)
+                buf = f.read(read) + carry
+                scanned += read
+                if pos > 0:
+                    nl = buf.find(b"\n")
+                    if nl == -1:
+                        carry = buf  # whole chunk is one partial line; keep going older
+                        continue
+                    carry = buf[:nl]  # fragment of an even-older line
+                    body = buf[nl + 1:]
+                else:
+                    carry = b""
+                    body = buf
+                matches = [ln for ln in body.split(b"\n") if needle_b in ln]
+                if matches:
+                    found_any = True
+                    collected.append(b"\n".join(matches))
+                elif found_any:
+                    # Already captured the request; this older chunk has none → done.
+                    break
+    except Exception:
+        return ""
+    collected.reverse()  # oldest-first, so the request's start event comes first
+    return b"\n".join(collected).decode("utf-8", errors="ignore")
+
+
 def _parse_inference_sections(tail_text: str, max_sections: int = 20) -> list[dict[str, Any]]:
     """Parse the last N (ROLE, PROMPT, RESPONSE) sections from inference_tap.log.
 
