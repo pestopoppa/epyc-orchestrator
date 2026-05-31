@@ -296,6 +296,61 @@ def active_region_holders(
     return out
 
 
+def active_region_holder_instances(
+    instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
+) -> dict[str, list[int]]:
+    """Return exact active holder instances by grouping held regions per PID.
+
+    This is the display/metrics counterpart to `active_region_holders`.
+    `active_region_holders` is an attribution view: if q0 is held it reports
+    every configured instance that contains q0, which is useful for overlap
+    checks but over-counts activity on the dashboard. This helper first groups
+    held region locks by (role, lock-owner PID), then resolves each exact held
+    region set back to the configured instance shape.
+
+    Example: one single-slot MTP worker holding q0+q1+q2+q3 resolves to
+    `worker_general: [0]`, not `[0, 1, 2, 3, 4]`.
+    """
+    if instance_regions is None:
+        try:
+            from src.runtime.instance_topology import get_instance_regions
+            instance_regions = get_instance_regions()
+        except Exception:
+            return {}
+
+    if not instance_regions:
+        return {}
+
+    role_regions: dict[str, set[str]] = {}
+    regions_to_idx_by_role: dict[str, dict[frozenset[str], int]] = {}
+    for (role, idx), regions in instance_regions.items():
+        if not regions:
+            continue
+        role_regions.setdefault(role, set()).update(regions)
+        # If duplicate shapes ever exist, prefer the lowest topology index for
+        # stable display; the region set is the physical truth for this view.
+        regions_to_idx_by_role.setdefault(role, {}).setdefault(frozenset(regions), idx)
+
+    role_pid_regions: dict[str, dict[str, set[str]]] = {}
+    for role, regions in role_regions.items():
+        for region in regions:
+            lock_path = region_lock_path(role, region)
+            if not lock_path.exists():
+                continue
+            for pid in _current_lock_owner_pids(lock_path):
+                role_pid_regions.setdefault(role, {}).setdefault(pid, set()).add(region)
+
+    out: dict[str, set[int]] = {}
+    for role, pid_regions in role_pid_regions.items():
+        shapes = regions_to_idx_by_role.get(role, {})
+        for regions in pid_regions.values():
+            idx = shapes.get(frozenset(regions))
+            if idx is not None:
+                out.setdefault(role, set()).add(idx)
+
+    return {role: sorted(idxs) for role, idxs in out.items()}
+
+
 def held_regions_by_role(
     instance_regions: dict[tuple[str, int], frozenset[str]] | None = None,
 ) -> dict[str, frozenset[str]]:

@@ -19,7 +19,10 @@ Key design points (per handoff):
   Foreground traffic queues on hard `block`, may DEGRADED_ALLOW on
   borderline-below-floor when SLO is tight.
 - Metrics: `contention_blocked_count`, `contention_wait_seconds`,
-  `active_decodes_by_role`, `contention_unknown_pair_count`.
+  `active_decodes_by_role`, `contention_unknown_pair_count`. The admission
+  snapshot still uses the attribution view, but display counts use exact
+  holder-instance accounting so one full-shape decode is not shown as every
+  overlapping quarter instance.
 
 Threading model: gate decisions are inexpensive (one /proc/locks scan +
 matrix lookup) — single global lock is fine. Queue management uses a
@@ -165,6 +168,25 @@ class ContentionGate:
             log.warning("active_region_holders failed: %s", exc)
             return {}
 
+    def _active_metric_holders(self, fallback: dict[str, list[int]]) -> dict[str, list[int]]:
+        """Exact holder-instance snapshot for metrics/dashboard display.
+
+        Tests that inject `_active_holders_fn` expect the injected snapshot to
+        drive both admission and metrics. Production uses the exact per-PID view
+        so attribution over-reporting does not surface as bogus activity counts.
+        """
+        if self._active_holders_fn is not None:
+            return {role: sorted(set(idxs)) for role, idxs in fallback.items()}
+        if os.environ.get("ORCHESTRATOR_PER_REGION_LOCKS", "0").strip() not in {"1", "true", "yes", "on"}:
+            return {}
+        try:
+            from src.runtime.cpu_region_lock import active_region_holder_instances
+            exact = active_region_holder_instances()
+            return exact if exact or not fallback else fallback
+        except Exception as exc:  # noqa: BLE001
+            log.warning("active_region_holder_instances failed: %s", exc)
+            return fallback
+
     # ── admission core ──────────────────────────────────────────────
 
     def evaluate(
@@ -201,10 +223,12 @@ class ContentionGate:
         matrix = self._get_matrix()
         holders = self._active_holders()
 
-        # Update active-by-role snapshot for metrics (both shapes)
+        # Update active-by-role snapshot for metrics. Admission uses the
+        # attribution view above; metrics use the exact holder-instance view.
+        metric_holders = self._active_metric_holders(holders)
         with self._lock:
-            self._metrics.active_decodes_by_role = {r: len(idxs) for r, idxs in holders.items()}
-            self._metrics.active_instances_by_role = {r: list(idxs) for r, idxs in holders.items()}
+            self._metrics.active_decodes_by_role = {r: len(idxs) for r, idxs in metric_holders.items()}
+            self._metrics.active_instances_by_role = {r: list(idxs) for r, idxs in metric_holders.items()}
 
         if not holders:
             return GateDecision(admitted=True, decision=PairDecision.ALLOW, reason="no active decodes")

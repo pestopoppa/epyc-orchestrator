@@ -293,6 +293,33 @@ def test_metrics_record_blocked_count(real_matrix_path) -> None:
     assert snap["contention_timeout_count"] == 1
 
 
+def test_metrics_use_exact_holder_instances_not_attribution_overcount(
+    real_matrix_path,
+    monkeypatch,
+) -> None:
+    m = contention.load_contention_matrix(real_matrix_path)
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    monkeypatch.setattr(
+        cpu_region_lock,
+        "active_region_holders",
+        lambda: {"worker_general": [0, 1, 2, 3, 4]},
+    )
+    monkeypatch.setattr(
+        cpu_region_lock,
+        "active_region_holder_instances",
+        lambda: {"worker_general": [0]},
+    )
+    gate = gate_mod.ContentionGate(matrix=m)
+    gate._matrix_status_cache = contention.MatrixStatus.OK
+    gate._matrix_status_checked_at = time.time()
+
+    gate.evaluate("frontdoor", contention.TrafficClass.FOREGROUND_INTERACTIVE)
+    snap = gate.metrics_snapshot()
+
+    assert snap["active_decodes_by_role"] == {"worker_general": 1}
+    assert snap["active_instances_by_role"] == {"worker_general": [0]}
+
+
 def test_gate_fails_closed_on_stale_matrix(real_matrix_path) -> None:
     """#2 (operator audit 2026-05-27): when matrix_health is not OK (topology changed / matrix
     stale) AND concurrency is active, evaluate() fail-closes — background SERIALIZES (QUEUE, not

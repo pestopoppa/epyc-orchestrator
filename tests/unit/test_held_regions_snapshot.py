@@ -19,6 +19,7 @@ import fcntl
 from pathlib import Path
 
 from src.runtime.cpu_region_lock import (
+    active_region_holder_instances,
     active_region_holders,
     held_regions_by_role,
     region_lock_path,
@@ -75,6 +76,38 @@ def test_active_region_holders_overreports_same_scenario(tmp_path, monkeypatch) 
         assert attribution == {"frontdoor": [0, 1]}
     finally:
         fh.close()
+
+
+def test_active_holder_instances_reports_exact_single_quarter(tmp_path, monkeypatch) -> None:
+    """Exact holder-instance view resolves the owning PID's shape, not every
+    overlapping configured shape."""
+    monkeypatch.setenv("ORCHESTRATOR_TMP_DIR", str(tmp_path))
+    fh = _hold(tmp_path, "frontdoor", "q0")
+    try:
+        assert active_region_holder_instances(instance_regions=_FRONTDOOR_REGIONS) == {"frontdoor": [1]}
+    finally:
+        fh.close()
+
+
+def test_active_holder_instances_collapses_full_shape_mtp_holder(tmp_path, monkeypatch) -> None:
+    """A single full-shape worker holding all four regions is one active
+    holder instance. The legacy attribution view still reports all overlapping
+    shapes, which is exactly what dashboard metrics must avoid."""
+    monkeypatch.setenv("ORCHESTRATOR_TMP_DIR", str(tmp_path))
+    regions = {
+        ("worker_general", 0): frozenset({"q0", "q1", "q2", "q3"}),
+        ("worker_general", 1): frozenset({"q0"}),
+        ("worker_general", 2): frozenset({"q1"}),
+        ("worker_general", 3): frozenset({"q2"}),
+        ("worker_general", 4): frozenset({"q3"}),
+    }
+    fhs = [_hold(tmp_path, "worker_general", region) for region in ("q0", "q1", "q2", "q3")]
+    try:
+        assert active_region_holders(instance_regions=regions) == {"worker_general": [0, 1, 2, 3, 4]}
+        assert active_region_holder_instances(instance_regions=regions) == {"worker_general": [0]}
+    finally:
+        for fh in fhs:
+            fh.close()
 
 
 def test_exact_vs_attribution_diverge(tmp_path, monkeypatch) -> None:
