@@ -45,4 +45,3 @@ def detect_role_cycle(role_history: list[str]) -> bool:
         ):
             return True
     return False
-
