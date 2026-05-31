@@ -49,8 +49,10 @@ def _grep_lines_reverse(
     *,
     max_scan_bytes: int = 512 * 1024 * 1024,
     chunk_bytes: int = 8 * 1024 * 1024,
+    rotated_depth: int = 1,
 ) -> str:
-    """Scan `path` backward and return the lines containing `needle`, oldest-first.
+    """Scan `path` (and recent rotated siblings) backward, returning the lines
+    containing `needle`, oldest-first.
 
     A fixed tail window is useless on the inference tap once it grows to multi-GB
     under autopilot-eval load: at ~1 MB / 6 s, a 1 MB tail covers only seconds, so
@@ -63,11 +65,40 @@ def _grep_lines_reverse(
 
     Chunk boundaries are stitched: the partial line at a chunk's low-offset edge is
     carried into the next (older) read so no event line is split across the seam.
+
+    If the current file yields no match, the search falls through to the newest
+    `rotated_depth` rotated siblings (`<name>.1`, `<name>.2`, …) so a request that
+    landed just before a size rotation is still recoverable.
     """
-    if not path.exists() or not needle:
+    if not needle:
         return ""
+    hit = _grep_one_file_reverse(
+        path, needle, max_scan_bytes=max_scan_bytes, chunk_bytes=chunk_bytes
+    )
+    if hit:
+        return hit
+    for i in range(1, max(0, rotated_depth) + 1):
+        sibling = path.with_name(f"{path.name}.{i}")
+        hit = _grep_one_file_reverse(
+            sibling, needle, max_scan_bytes=max_scan_bytes, chunk_bytes=chunk_bytes
+        )
+        if hit:
+            return hit
+    return ""
+
+
+def _grep_one_file_reverse(
+    path: Path,
+    needle: str,
+    *,
+    max_scan_bytes: int,
+    chunk_bytes: int,
+) -> str:
+    """Reverse-scan a single file for `needle` (see _grep_lines_reverse)."""
     needle_b = needle.encode("utf-8")
     try:
+        if not path.exists():
+            return ""
         size = path.stat().st_size
     except OSError:
         return ""

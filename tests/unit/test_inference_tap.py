@@ -448,3 +448,40 @@ def test_grep_lines_reverse_missing_needle_returns_empty(tmp_path):
     p.write_text('{"event":"start","request_id":"a:1"}\n')
     assert _grep_lines_reverse(p, "nonexistent") == ""
     assert _grep_lines_reverse(tmp_path / "absent.jsonl", "x") == ""
+
+
+def test_events_rotation_shifts_and_caps(tmp_path, monkeypatch):
+    """Events JSONL rotates at the size cap: current → .1 → .2, oldest dropped."""
+    import src.runtime.inference_tap as tap
+    events = tmp_path / "inference_tap_events.jsonl"
+    monkeypatch.setenv("INFERENCE_TAP_EVENTS_MAX_MB", "0")  # bytes-based via patch below
+    # Use a tiny cap by patching the config helper directly (env is MB-granular).
+    monkeypatch.setattr(tap, "_events_rotation_config", lambda: (200, 2))
+    # Write enough events to exceed 200 bytes several times.
+    for i in range(40):
+        tap._write_structured_event(str(events), {"event": "chunk", "request_id": f"r{i}", "text": "x" * 20})
+    # Current file exists and is under/around the cap; rotations produced siblings.
+    assert events.exists()
+    assert (events.with_name("inference_tap_events.jsonl.1")).exists()
+    # keep=2 → .3 must never appear.
+    assert not (events.with_name("inference_tap_events.jsonl.3")).exists()
+
+
+def test_events_no_rotation_under_cap(tmp_path, monkeypatch):
+    import src.runtime.inference_tap as tap
+    events = tmp_path / "ev.jsonl"
+    monkeypatch.setattr(tap, "_events_rotation_config", lambda: (10 * 1024 * 1024, 3))
+    for i in range(5):
+        tap._write_structured_event(str(events), {"event": "chunk", "request_id": f"r{i}"})
+    assert events.exists()
+    assert not (events.with_name("ev.jsonl.1")).exists()
+
+
+def test_grep_falls_through_to_rotated_sibling(tmp_path):
+    """A request that landed in .1 (just before rotation) is still recoverable."""
+    from src.api.routes.dashboard_tap import _grep_lines_reverse
+    cur = tmp_path / "ev.jsonl"
+    cur.write_text('{"request_id":"NEW:1","text":"a"}\n')
+    (tmp_path / "ev.jsonl.1").write_text('{"request_id":"OLD:1","text":"b"}\n')
+    assert "OLD:1" in _grep_lines_reverse(cur, "OLD")
+    assert "NEW:1" in _grep_lines_reverse(cur, "NEW")

@@ -37,6 +37,16 @@ except Exception:  # pragma: no cover - non-POSIX fallback
 _ENV_KEY = "INFERENCE_TAP_FILE"
 _ENV_EVENTS_KEY = "INFERENCE_TAP_EVENTS_FILE"
 _ENV_STREAM_MODE = "INFERENCE_TAP_STREAM_MODE"
+# Size-based rotation for the structured events JSONL. Without it the file grows
+# unbounded under autopilot-eval load (observed 2.3 GB on 2026-05-31), which both
+# wastes disk and slows every dashboard reverse-grep lookup. Rotation happens under
+# the same cross-process flock as the append, by rename — safe because writers open
+# the events file fresh per event (no long-lived fd), so the next append after a
+# rotate transparently creates a new file.
+_ENV_EVENTS_MAX_MB = "INFERENCE_TAP_EVENTS_MAX_MB"
+_ENV_EVENTS_KEEP = "INFERENCE_TAP_EVENTS_KEEP"
+_DEFAULT_EVENTS_MAX_MB = 512
+_DEFAULT_EVENTS_KEEP = 3
 
 # Sentinel file written by the TUI so that API workers (separate processes)
 # can discover the tap path without needing the env var.
@@ -164,6 +174,48 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _events_rotation_config() -> tuple[int, int]:
+    """(max_bytes, keep) for the events JSONL, env-overridable. max_bytes<=0 disables."""
+    try:
+        max_mb = int(os.environ.get(_ENV_EVENTS_MAX_MB, str(_DEFAULT_EVENTS_MAX_MB)))
+    except ValueError:
+        max_mb = _DEFAULT_EVENTS_MAX_MB
+    try:
+        keep = int(os.environ.get(_ENV_EVENTS_KEEP, str(_DEFAULT_EVENTS_KEEP)))
+    except ValueError:
+        keep = _DEFAULT_EVENTS_KEEP
+    return max_mb * 1024 * 1024, max(1, keep)
+
+
+def _maybe_rotate_events(p: Path) -> None:
+    """Rotate the events file when it exceeds the size cap. Caller MUST hold the
+    cross-process flock. Shifts `<f> -> <f>.1 -> <f>.2 ... -> <f>.keep` (oldest
+    dropped). Best-effort: any failure leaves the current file in place so a write
+    can still proceed."""
+    max_bytes, keep = _events_rotation_config()
+    if max_bytes <= 0:
+        return
+    try:
+        if p.stat().st_size < max_bytes:
+            return
+    except OSError:
+        return
+    # Shift oldest-first so no slot is clobbered before it is moved.
+    for i in range(keep, 0, -1):
+        src = p if i == 1 else p.with_name(f"{p.name}.{i - 1}")
+        dst = p.with_name(f"{p.name}.{i}")
+        if i == keep:
+            try:
+                dst.unlink()
+            except OSError:
+                pass
+        try:
+            if src.exists():
+                src.rename(dst)
+        except OSError:
+            pass
+
+
 def _write_structured_event(path: str, event: dict[str, Any]) -> None:
     """Append one JSONL event under a cross-process file lock.
 
@@ -186,6 +238,9 @@ def _write_structured_event(path: str, event: dict[str, Any]) -> None:
             if fcntl is not None:
                 fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
             try:
+                # Rotate while the lock is held (writers open the events file fresh
+                # per append, so a rename here is picked up transparently below).
+                _maybe_rotate_events(p)
                 with open(p, "a") as event_fh:
                     event_fh.write(line)
                     event_fh.flush()
