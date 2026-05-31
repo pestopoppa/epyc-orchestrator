@@ -399,13 +399,46 @@ class SafetyGate:
                 # frontier or strategy memory.
                 is_sig, z_mad, median_q, mad = self._mad_significance(result.quality)
                 if not is_sig and not math.isnan(z_mad):
+                    categories.append("mad_noise")
+                    # Convergence-vs-corruption disambiguation (2026-05-31).
+                    # `mad_noise` is correct and unchanged: this is not a NEW
+                    # statistically significant improvement, so it earns no
+                    # Pareto point. But "within noise" conflates two very
+                    # different situations. If the established recent level
+                    # (history median) is ITSELF significantly above baseline,
+                    # then this result REPRODUCES an already-demonstrated
+                    # above-baseline gain — a convergence/confidence signal, not
+                    # corrupted or untrustworthy data. Tag it separately
+                    # (`reproduction_confirmed`) so the planner's
+                    # "noisy/untrustworthy instrument" summary never lumps
+                    # reproductions in with kills / exogenous reloads /
+                    # bug-corruptions. The MAD statistic is NOT re-anchored.
+                    base_q = self.baseline.quality
+                    reproduction_confirmed = (
+                        base_q > 0
+                        and not math.isnan(median_q)
+                        and mad > 0
+                        and (median_q - base_q)
+                        > MAD_Z_THRESHOLD * mad * MAD_CONSISTENCY
+                    )
+                    if reproduction_confirmed:
+                        categories.append("reproduction_confirmed")
+                    convergence_note = (
+                        " Reproduces an established above-baseline level "
+                        "(history median {:.3f} >> baseline {:.3f}): this is a "
+                        "convergence/confirmation of an existing gain, NOT "
+                        "instrument noise or a corrupted trial.".format(
+                            median_q, base_q
+                        )
+                        if reproduction_confirmed
+                        else ""
+                    )
                     warnings.append(
                         f"Improvement within noise (MAD filter): q={result.quality:.3f} "
                         f"vs history median {median_q:.3f} (MAD={mad:.4f}, z={z_mad:.2f}, "
                         f"threshold={MAD_Z_THRESHOLD}); still journaled, excluded "
-                        f"from archive/learning by autopilot."
+                        f"from archive/learning by autopilot." + convergence_note
                     )
-                    categories.append("mad_noise")
 
         # 3. Per-suite regression
         for suite, quality in result.per_suite_quality.items():
@@ -510,9 +543,15 @@ class SafetyGate:
 
         # Record this trial's quality in the rolling window (after the verdict
         # so the current measurement doesn't bias its own significance test).
-        # Skip if quality is nonsensical (NaN / negative) to keep the noise
-        # estimate clean.
-        if not math.isnan(result.quality) and result.quality >= 0:
+        # Skip if quality is nonsensical (NaN / negative). Also skip trials that
+        # FAILED the gate (regression / quality-floor / throughput violations):
+        # those configs are reverted, so they are NOT part of the operating-
+        # quality distribution and must not inflate the MAD noise band
+        # (2026-05-31: a reverted −66% prompt-mutation regression widened the
+        # band and helped mask a real reproduced gain). Narrow, deliberate:
+        # bug-corrupted / killed trials never reach here with a clean
+        # EvalResult, so they are already excluded from the window.
+        if passed and not math.isnan(result.quality) and result.quality >= 0:
             self._quality_history.append(result.quality)
 
         return verdict

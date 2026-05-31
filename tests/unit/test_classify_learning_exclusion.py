@@ -63,6 +63,30 @@ def test_learning_exclusion_criticism_blocks_keep_signal():
     assert "continue exploring this surface" not in text
 
 
+def test_reproduction_confirmed_is_distinct_benign_exclusion():
+    """mad_noise + reproduction_confirmed → benign convergence reason, NOT mad_noise."""
+    v = _FakeVerdict(categories=["mad_noise", "reproduction_confirmed"])
+    by, reason, def_cat = classify_learning_exclusion(v, _FakeEvalResult())
+    assert by == "reproduction_confirmed"
+    assert def_cat == "reproduction_confirmed"
+    assert "convergence" in reason.lower()
+    assert "not corrupted" in reason.lower()
+
+
+def test_reproduction_confirmed_criticism_signals_convergence_not_failure():
+    """Criticism for a reproduction must NOT demand another trial or imply noise."""
+    criticism = learning_exclusion_criticism(
+        "reproduction_confirmed",
+        "within-noise reproduction of an already-established above-baseline config",
+    )
+    text = criticism.as_text().lower()
+    assert criticism.what_went_wrong == "", "a confirmation is not a failure"
+    assert "confirmed" in text or "converged" in text
+    assert "explore a different surface or idle" in text
+    # Must not tell the planner to re-run / treat as noisy.
+    assert "require a clean, non-excluded metric trial" not in text
+
+
 def test_exogenous_unrecovered_marks_exo():
     r = _FakeEvalResult(
         n_exogenous_unrecovered=2,

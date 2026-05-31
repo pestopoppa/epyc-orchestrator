@@ -116,6 +116,40 @@ def test_negative_quality_not_recorded(tmp_path):
     assert g.quality_history == [2.0, 2.0, 2.0]
 
 
+def test_reproduction_confirmed_on_above_baseline_level(tmp_path):
+    """A within-noise reproduction of an established ABOVE-baseline level must
+    tag `reproduction_confirmed` (convergence) ALONGSIDE `mad_noise` — and the
+    MAD invariant is preserved (still mad_noise, no new Pareto point)."""
+    # History clustered ~1.8, baseline 1.16 (default) → established gain.
+    history = [1.74, 1.58, 1.66, 1.82, 1.80]
+    g = _gate(tmp_path, history=history)
+    verdict = g.check(_result(1.816))  # reproduces the established level
+    assert verdict.passed
+    assert "mad_noise" in verdict.categories, "MAD invariant must be preserved"
+    assert "reproduction_confirmed" in verdict.categories
+    assert any("convergence" in w.lower() for w in verdict.warnings)
+
+
+def test_reproduction_not_confirmed_near_baseline(tmp_path):
+    """A within-noise tiny gain over a level that sits AT baseline is NOT a
+    reproduction-confirmation — just mad_noise (genuinely inconclusive)."""
+    # Non-zero spread centered on baseline (avoid the zero-MAD edge case).
+    g = _gate(tmp_path, history=[1.16, 1.20, 1.12, 1.18, 1.14])
+    g.baseline.quality = 1.16
+    verdict = g.check(_result(1.17))  # within noise, but median ≈ baseline
+    assert "mad_noise" in verdict.categories
+    assert "reproduction_confirmed" not in verdict.categories
+
+
+def test_reverted_trial_excluded_from_noise_window(tmp_path):
+    """A gate-FAILING (reverted) trial must not shape the MAD noise band."""
+    g = _gate(tmp_path, history=[1.8, 1.8, 1.8])
+    g.baseline.quality = 1.16
+    verdict = g.check(_result(0.40))  # −66% vs baseline → regression violation
+    assert not verdict.passed
+    assert g.quality_history == [1.8, 1.8, 1.8], "reverted trial must not enter window"
+
+
 def test_mad_constants_sane():
     """Guard against silent threshold changes."""
     assert MAD_MIN_SAMPLES >= 3, "below 3 samples the median is meaningless"

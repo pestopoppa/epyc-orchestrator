@@ -118,6 +118,13 @@ PLOT_INTERVAL = 10  # Generate plots every N trials
 META_NOOP_ACTIONS = {"distill_knowledge", "reset_memories"}
 MAX_CONSECUTIVE_META = 5
 
+# Learning-exclusion reasons that are BENIGN — the trial is excluded from the
+# Pareto archive (no NEW frontier point) but its data is VALID and must NOT be
+# marked bug_corrupted_by (which would lump it with kills / exogenous reloads /
+# commit-invalidations in the planner's trustworthiness score and manufacture a
+# "noisy/untrustworthy instrument" narrative → meta-action loop). 2026-05-31.
+BENIGN_LEARNING_EXCLUSIONS = {"reproduction_confirmed"}
+
 
 def _env_float(name: str, default: float, *, minimum: float = 0.1) -> float:
     try:
@@ -691,6 +698,22 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
 
     categories = getattr(verdict, "categories", None) or []
     if "mad_noise" in categories:
+        if "reproduction_confirmed" in categories:
+            # Benign convergence: a within-noise REPRODUCTION of an already-
+            # established above-baseline gain. Excluded from the Pareto archive
+            # (no NEW point) like any mad_noise trial, but the measurement is
+            # VALID. _finalize leaves bug_corrupted_by EMPTY for this reason so
+            # the trustworthiness score never lumps repeated confirmations in
+            # with kills / reloads / commit-invalidations (2026-05-31 incident:
+            # that conflation drove a meta-action loop / "noisy instrument"
+            # narrative). The criticism conveys convergence, not failure.
+            return (
+                "reproduction_confirmed",
+                "within-noise reproduction of an already-established above-"
+                "baseline config: convergence/confirmation of an existing gain, "
+                "not a new improvement and not corrupted data",
+                "reproduction_confirmed",
+            )
         return (
             "mad_noise",
             "quality improvement was within MAD noise band per safety_gate "
@@ -712,8 +735,28 @@ def learning_exclusion_criticism(
     criticism must not say "keep" or "continue this surface"; that text is fed
     back into the planner and can create meta-action loops.
     """
-    label = learning_excluded_by.replace("_", " ")
     reason = learning_excluded_reason or "outcome was excluded from learning"
+    if learning_excluded_by == "reproduction_confirmed":
+        # Convergence, NOT a failure. The planner must read this as "the current
+        # config is confirmed/converged on this surface" and move on — not as a
+        # wasted/noisy trial demanding another attempt (which fuels the loop).
+        return SelfCriticism(
+            what_went_wrong="",
+            why_it_happened=reason,
+            what_should_change=(
+                "Treat the current config as CONFIRMED / converged on this surface. "
+                "Do NOT re-run this surface expecting a fresh win, and do NOT read "
+                "repeated confirmations as a noisy or broken instrument — explore a "
+                "different surface or idle cleanly until new signal is available."
+            ),
+            optimization_directions=[],
+            keep_or_revert="excluded",
+            keep_revert_reasoning=(
+                "reproduction confirms the existing kept gain (convergence); no NEW "
+                "Pareto point, but the config remains validated and trustworthy"
+            ),
+        )
+    label = learning_excluded_by.replace("_", " ")
     return SelfCriticism(
         what_went_wrong=f"Trial excluded from learning: {label}",
         why_it_happened=reason,
@@ -727,6 +770,29 @@ def learning_exclusion_criticism(
             f"{reason}; archive/AP-22 learning skipped and planner trust excludes this trial"
         ),
     )
+
+
+def _classify_meta_halt(journal: Any) -> str:
+    """Classify a meta-action-loop halt as 'converged' vs 'stuck'.
+
+    Convergence: the planner ran out of config moves because the recent metric
+    trials REPRODUCED an already-established above-baseline config
+    (``reproduction_confirmed``) rather than failing or corrupting. That is a
+    benign terminal state — the planner should be pointed at a NEW surface, not
+    treated as a malfunction or an instrument-noise problem (2026-05-31). Any
+    other shape (bug-corruptions, kills, regressions, genuine gate-lock) is
+    ``stuck`` and warrants operator review.
+    """
+    try:
+        recent = journal.recent_hypotheses(n=5, exclude_bug_corrupted=False)
+    except Exception:  # noqa: BLE001 — never let classification crash the halt
+        return "stuck"
+    repro = sum(
+        1 for e in recent
+        if getattr(e, "deficiency_category", "") == "reproduction_confirmed"
+    )
+    corrupt = sum(1 for e in recent if getattr(e, "bug_corrupted_by", ""))
+    return "converged" if (repro >= 1 and corrupt == 0) else "stuck"
 
 
 def load_blacklist() -> list[dict[str, Any]]:
@@ -973,6 +1039,7 @@ def _run_loop_inner(
         # Re-loading here is cheap (one small JSON file) and merges any
         # externally-set fields (paused, _in_cache_flush) without losing the
         # in-memory trial counters that get written back at end of iteration.
+        was_paused = bool(state.get("paused"))
         try:
             disk_state = load_state()
             for key in ("paused", "_in_cache_flush"):
@@ -980,6 +1047,23 @@ def _run_loop_inner(
                     state[key] = disk_state[key]
         except Exception as _exc:
             log.warning("Failed to reload state at iteration top: %s", _exc)
+
+        # Operator resumed (paused True→False): clear the meta-action-loop latch
+        # so the planner starts fresh instead of re-tripping the guard on meta
+        # action #1. Pre-fix, consecutive_meta_actions persisted across the halt
+        # and a resume re-halted immediately (2026-05-31).
+        if was_paused and not state.get("paused"):
+            if state.get("consecutive_meta_actions") or state.get("_meta_halt_reason"):
+                log.info(
+                    "Resume after pause: clearing meta-loop latch "
+                    "(consecutive_meta_actions %s→0, reason=%s)",
+                    state.get("consecutive_meta_actions", 0),
+                    state.get("_meta_halt_reason", ""),
+                )
+            state["consecutive_meta_actions"] = 0
+            state.pop("_dispatch_deficiency", None)
+            state.pop("_meta_halt_reason", None)
+            save_state(state)
 
         if state.get("paused"):
             log.info("AutoPilot paused, waiting...")
@@ -1140,6 +1224,59 @@ def _run_loop_inner(
                         "signal. Prefer EXPLORE actions (seed_batch, structural_experiment, "
                         "tail-sampled creative actions) over EXPLOIT (rollback, "
                         "small numeric perturbations) until trustworthiness exceeds 5."
+                    )
+                # Convergence vs corruption (2026-05-31). reproduction_confirmed
+                # trials REPRODUCE an already-kept above-baseline gain: they are
+                # measurement-VALID confirmations (the planner has converged on a
+                # surface), deliberately NOT counted in `corrupted` above. Surface
+                # the count so the planner reads convergence, not "wasted trials".
+                try:
+                    _recent = journal.recent(10)
+                    _repro = sum(
+                        1 for e in _recent
+                        if getattr(e, "deficiency_category", "") == "reproduction_confirmed"
+                    )
+                except Exception:
+                    _repro = 0
+                if _repro:
+                    trust_lines.append(
+                        f"reproduction_confirmed (convergence, last 10): {_repro} — these "
+                        "reproduce an established above-baseline gain and are TRUSTWORTHY "
+                        "confirmations (config converged on this surface), NOT noise or "
+                        "corruption. Do not 'wait out a noise window' or re-run for a fresh "
+                        "win; explore a NEW surface or idle cleanly."
+                    )
+                # Attribution guard (C, 2026-05-31): every exclusion above is a
+                # measurement-VALID classification, NOT evidence of host noise or a
+                # broken eval tower. The planner must not invent an "exogenous
+                # host-load noise window" from exclusions alone (the 2026-05-31
+                # meta-action loop did exactly that).
+                trust_lines.append(
+                    "ATTRIBUTION GUARD: corrupted-by tags are classifications "
+                    "(mad_noise=within-noise improvement; reproduction_confirmed="
+                    "convergence; a commit SHA=operator code-fix invalidation; "
+                    "exogenous_operator_reload=service restart). NONE of these are "
+                    "evidence of host/exogenous eval-noise or a broken instrument. Do "
+                    "NOT claim a host-load 'noise window' or escalate 'eval tower stuck' "
+                    "unless the host-health line below shows an actual throttle/cache/load "
+                    "signal; absent that, treat repeated reproduction_confirmed as "
+                    "CONVERGENCE and move to a new surface."
+                )
+                try:
+                    from host_health import HostHealthState  # type: ignore
+                    _hh = HostHealthState.snapshot()
+                    _throttled, _trig = _hh.is_throttled()
+                    trust_lines.append(
+                        "host-health: "
+                        + ("THROTTLED — " + "; ".join(_trig)
+                           if _throttled else
+                           "nominal (no CPU-throttle / page-cache / load signal "
+                           "→ a host-noise narrative is UNSUPPORTED)")
+                    )
+                except Exception:
+                    trust_lines.append(
+                        "host-health: not collected this turn — no positive evidence of "
+                        "host noise; do not assume a noise window exists."
                     )
                 journal_trustworthiness_text = "\n".join(trust_lines)
             except Exception as _exc:
@@ -1375,15 +1512,43 @@ def _run_loop_inner(
                     action_type, meta_streak, trial_counter,
                 )
                 if meta_streak >= MAX_CONSECUTIVE_META:
+                    # Durable, terminal-until-operator-resume halt. Previously
+                    # this only `break`-ed the inner loop; an external supervisor
+                    # then restarted the process straight back into the same
+                    # gate-locked state (consecutive_meta_actions persisted on
+                    # disk), so it re-halted on meta action #1 (2026-05-31).
+                    # Setting paused=True LATCHES the halt: the iteration-top
+                    # paused gate idles this process AND any restart until the
+                    # operator explicitly resumes (clearing paused resets the
+                    # counter — see top of loop), so a supervisor cannot re-enter
+                    # the no-op loop.
+                    halt_reason = _classify_meta_halt(journal)
+                    state["paused"] = True
                     state["_dispatch_deficiency"] = "meta_action_loop"
+                    state["_meta_halt_reason"] = halt_reason
                     save_state(state)
-                    log.error(
-                        "Planner emitted %d consecutive metric-free meta actions "
-                        "without running a single trial — halting for operator review "
-                        "(likely a gate-lock or stuck planner).",
-                        meta_streak,
+                    if halt_reason == "converged":
+                        log.warning(
+                            "Planner emitted %d consecutive metric-free meta actions; "
+                            "recent metric trials are reproduction-confirmed — the planner "
+                            "has CONVERGED on the current surface (benign, not a malfunction "
+                            "and not instrument noise). Pausing cleanly; resume after "
+                            "pointing it at a NEW surface.",
+                            meta_streak,
+                        )
+                    else:
+                        log.error(
+                            "Planner emitted %d consecutive metric-free meta actions "
+                            "without running a single trial — pausing for operator review "
+                            "(likely a gate-lock or stuck planner).",
+                            meta_streak,
+                        )
+                    phase.set(
+                        "meta_loop_halt",
+                        trial_id=trial_counter,
+                        meta_streak=meta_streak,
+                        halt_reason=halt_reason,
                     )
-                    phase.set("meta_loop_halt", trial_id=trial_counter, meta_streak=meta_streak)
                     break
                 continue
             # Genuine skip (AP-9 scope violation / dirty-tree fence / blacklist /
@@ -1603,8 +1768,18 @@ def _run_loop_inner(
         # eval_details["learning_exclusion"] audit record. The deficiency
         # category is overridden so the planner can distinguish exclusion
         # reasons from genuine safety-gate failures.
-        bug_corrupted_by = learning_excluded_by
-        bug_corrupted_reason = learning_excluded_reason
+        # Benign convergence exclusions (reproduction_confirmed) skip the Pareto
+        # archive (via learning_excluded_by above) but must NOT populate
+        # bug_corrupted_by — otherwise trustworthiness_score() and the journal
+        # trust render would treat a valid confirmation like a kill / reload /
+        # commit-invalidation, and the planner would narrate a "noisy instrument"
+        # (2026-05-31 incident → meta-action loop).
+        if learning_excluded_by and learning_excluded_by not in BENIGN_LEARNING_EXCLUSIONS:
+            bug_corrupted_by = learning_excluded_by
+            bug_corrupted_reason = learning_excluded_reason
+        else:
+            bug_corrupted_by = ""
+            bug_corrupted_reason = ""
         metric_schema_version = getattr(eval_result, "metric_schema_version", 1)
         harness_metrics = getattr(eval_result, "harness_metrics", {}) or {}
         oracle_adequacy = getattr(eval_result, "oracle_adequacy", {}) or {}
