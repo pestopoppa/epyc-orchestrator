@@ -18,6 +18,7 @@ def _baseline_yaml(path: Path) -> None:
     path.write_text(
         "\n".join(
             [
+                "# keep this operator note",
                 "quality: 1.16",
                 "speed: 18.0",
                 "cost: 0.5",
@@ -87,6 +88,7 @@ def test_calibrate_baseline_migrates_t2_and_persists_t1(tmp_path, monkeypatch):
     }
 
     written = yaml.safe_load(path.read_text())
+    assert "# keep this operator note" in path.read_text()
     assert written["baselines_by_tier"] == {1: 1.82, 2: 1.16}
     assert written["per_suite_quality_by_tier"][1] == {"coder": 1.7, "math": 1.9}
     assert written["per_suite_quality_by_tier"][2] == {"coder": None, "math": 1.1}

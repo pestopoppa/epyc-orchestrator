@@ -1,20 +1,20 @@
 # AutoPilot frozen baseline metrics.
-# Update via: python autopilot.py checkpoint --production-best
+# Update via: python autopilot.py calibrate-baseline
 #
-# Recalibrated 2026-04-04 for hybrid eval (T1 scale).
+# Recalibrated 2026-04-04 for hybrid eval.
 # Previous T0-only baseline was misleading — T0 saturated at 3.0 after trial 15.
-# T1 (50 questions) and T2 (480 questions) give honest signal.
-# Using T2 trial-45 as reference (most recent honest measurement).
+# T1 (50-100 questions) and T2 (480 questions) give honest signal.
+# Using T2 trial-45 as the legacy flat reference; per-tier baselines below are
+# the SafetyGate source of truth.
 
-quality: 1.16             # T2 quality from trial 45 (480q, ~39% correct on 0-3 scale)
+quality: 1.16             # Legacy T2 quality from trial 45 (480q, ~39% correct on 0-3 scale)
 speed: 18.0               # Median t/s from T2 eval
 cost: 0.5                 # Normalized cost estimate
 reliability: 0.86         # 86% non-error from trial 45
 frontdoor_speed: 12.7     # Frontdoor-only throughput baseline
 
-# Per-suite quality — populated after Package B Arm B completes.
-# Schema mirrors sentinel_questions.yaml suite coverage (expanded 2026-04-09).
-# AR-3 per_suite_regression gate uses these: Δq < -0.1 any suite → reject.
+# Per-suite quality — legacy flat seed. New gate paths use
+# per_suite_quality_by_tier below.
 per_suite_quality:
   general: null       # frontdoor direct (4 sentinels)
   math: null          # worker math (6 sentinels incl. olympiad)
@@ -86,3 +86,44 @@ diversity_baseline_meta:
   temperature_ladder_point: 1.0
   vs_prompt_version: "v1 (intake-441 Tier 2b 2026-04-22)"
   ceiling_distinct2: 1.0   # uncalibrated upper bound — replace with base-model measurement when available
+
+# Per-tier SafetyGate baselines. Seeded by `autopilot.py calibrate-baseline`
+# on 2026-05-31 while autopilot was paused at trial 188:
+# - T2 preserves the documented legacy flat baseline q=1.16.
+# - T1 is the live production-config calibration (95 questions, seed=42).
+baselines_by_tier:
+  1: 1.4842105263157894
+  2: 1.16
+per_suite_quality_by_tier:
+  1:
+    math: 1.7999999999999998
+    livecodebench: 3.0
+    bigcodebench: 0.6000000000000001
+    general: 3.0
+    skill_transfer: 0.0
+    cruxeval: 2.4000000000000004
+    long_context: 1.7999999999999998
+    vl: 0.0
+    hotpotqa: 1.7999999999999998
+    thinking: 3.0
+    debugbench: 2.4000000000000004
+    instruction_precision: 0.0
+    gpqa: 1.2000000000000002
+    coder: 1.7999999999999998
+    simpleqa: 0.0
+    mode_advantage: 1.2000000000000002
+    usaco: 0.0
+    agentic: 2.4000000000000004
+    mode_advantage_hard: 1.7999999999999998
+  2:
+    general: null
+    math: null
+    coder: null
+    thinking: null
+    instruction_precision: null
+    agentic: null
+    hotpotqa: null
+    simpleqa: null
+    mode_advantage_hard: null
+    gpqa: null
+    long_context: null

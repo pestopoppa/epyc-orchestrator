@@ -30,6 +30,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -2255,23 +2256,44 @@ def _read_baseline_yaml(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _drop_top_level_yaml_block(text: str, key: str) -> str:
+    pattern = rf"(?ms)^({re.escape(key)}:\n(?:^[ \t]+.*\n?|^\n)*)"
+    return re.sub(pattern, "", text).rstrip() + "\n"
+
+
+def _format_baseline_tier_yaml(baseline: Baseline) -> str:
+    data = {
+        "baselines_by_tier": {
+            int(tier): quality for tier, quality in sorted(baseline.baselines_by_tier.items())
+        },
+        "per_suite_quality_by_tier": {
+            int(tier): suites
+            for tier, suites in sorted(baseline.per_suite_quality_by_tier.items())
+        },
+    }
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip()
+
+
 def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
     """Update YAML seed tier fields without dropping unrelated calibration tables."""
-    data = _read_baseline_yaml(path)
-    data.setdefault("quality", baseline.quality)
-    data.setdefault("speed", baseline.speed)
-    data.setdefault("cost", baseline.cost)
-    data.setdefault("reliability", baseline.reliability)
-    data.setdefault("frontdoor_speed", baseline.frontdoor_speed)
-    data.setdefault("per_suite_quality", baseline.per_suite_quality)
-    data["baselines_by_tier"] = {
-        int(tier): quality for tier, quality in sorted(baseline.baselines_by_tier.items())
-    }
-    data["per_suite_quality_by_tier"] = {
-        int(tier): suites
-        for tier, suites in sorted(baseline.per_suite_quality_by_tier.items())
-    }
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        text = path.read_text()
+        text = _drop_top_level_yaml_block(text, "baselines_by_tier")
+        text = _drop_top_level_yaml_block(text, "per_suite_quality_by_tier")
+        path.write_text(text.rstrip() + "\n\n" + _format_baseline_tier_yaml(baseline) + "\n")
+        return
+
+    data = {
+        "quality": baseline.quality,
+        "speed": baseline.speed,
+        "cost": baseline.cost,
+        "reliability": baseline.reliability,
+        "frontdoor_speed": baseline.frontdoor_speed,
+        "per_suite_quality": baseline.per_suite_quality,
+        "baselines_by_tier": baseline.baselines_by_tier,
+        "per_suite_quality_by_tier": baseline.per_suite_quality_by_tier,
+    }
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
 
