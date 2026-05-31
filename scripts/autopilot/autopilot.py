@@ -47,7 +47,7 @@ import yaml
 
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import ParetoArchive, ParetoEntry
-from safety_gate import EvalResult, SafetyGate
+from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
 from eval_tower import EvalTower
 from config_applicator import apply_params, health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
@@ -2248,6 +2248,129 @@ def cmd_peaf(args: argparse.Namespace) -> None:
         print("  → keep collecting.")
 
 
+def _read_baseline_yaml(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text())
+    return data if isinstance(data, dict) else {}
+
+
+def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
+    """Update YAML seed tier fields without dropping unrelated calibration tables."""
+    data = _read_baseline_yaml(path)
+    data.setdefault("quality", baseline.quality)
+    data.setdefault("speed", baseline.speed)
+    data.setdefault("cost", baseline.cost)
+    data.setdefault("reliability", baseline.reliability)
+    data.setdefault("frontdoor_speed", baseline.frontdoor_speed)
+    data.setdefault("per_suite_quality", baseline.per_suite_quality)
+    data["baselines_by_tier"] = {
+        int(tier): quality for tier, quality in sorted(baseline.baselines_by_tier.items())
+    }
+    data["per_suite_quality_by_tier"] = {
+        int(tier): suites
+        for tier, suites in sorted(baseline.per_suite_quality_by_tier.items())
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+
+
+def _migrate_flat_baseline_to_tier(
+    baseline: Baseline,
+    *,
+    target_tier: int = 2,
+) -> bool:
+    """Move the historical flat quality seed into its documented eval tier."""
+    if target_tier in baseline.baselines_by_tier:
+        return False
+    tier_quality = Baseline._validate_quality(
+        baseline.quality,
+        None,
+        f"baseline migration T{target_tier}",
+        baseline.source_path or DEFAULT_BASELINE_PATH,
+    )
+    if tier_quality is None:
+        return False
+    baseline.baselines_by_tier[target_tier] = tier_quality
+    if target_tier not in baseline.per_suite_quality_by_tier:
+        baseline.per_suite_quality_by_tier[target_tier] = dict(baseline.per_suite_quality)
+    return True
+
+
+def _apply_calibrated_baseline_result(baseline: Baseline, result: EvalResult) -> None:
+    tier = int(result.tier)
+    quality = Baseline._validate_quality(
+        result.quality,
+        None,
+        f"T{tier} calibration result",
+        baseline.source_path or DEFAULT_BASELINE_PATH,
+    )
+    if quality is None:
+        raise ValueError(f"T{tier} calibration produced invalid quality: {result.quality!r}")
+    if result.n_questions <= 0:
+        raise ValueError("Baseline calibration requires a non-empty evaluation result")
+    if result.reliability <= 0:
+        raise ValueError(
+            f"T{tier} calibration produced zero reliability; refusing to persist baseline"
+        )
+    baseline.baselines_by_tier[tier] = quality
+    baseline.per_suite_quality_by_tier[tier] = dict(result.per_suite_quality)
+
+
+def calibrate_baseline(
+    *,
+    tier: int = DEFAULT_FRONTIER_TIER,
+    n: int | None = None,
+    seed: int = 42,
+    baseline_path: Path | None = None,
+    migrate_only: bool = False,
+    write: bool = True,
+) -> tuple[Baseline, EvalResult | None, bool]:
+    """Migrate flat baseline state and optionally seed a calibrated tier baseline."""
+    path = baseline_path or DEFAULT_BASELINE_PATH
+    state = load_state()
+    baseline = Baseline.load(path, state=state.get("baseline_state") or {})
+    migrated_t2 = _migrate_flat_baseline_to_tier(baseline, target_tier=2)
+
+    result: EvalResult | None = None
+    if not migrate_only:
+        tower = EvalTower(url=ORCHESTRATOR_URL)
+        result = tower.evaluate(tier=tier, n=n, seed=seed)
+        _apply_calibrated_baseline_result(baseline, result)
+
+    state["baseline_state"] = baseline.to_state_dict()
+    if write:
+        _write_baseline_yaml_tiers(path, baseline)
+        save_state(state)
+    return baseline, result, migrated_t2
+
+
+def cmd_calibrate_baseline(args: argparse.Namespace) -> None:
+    baseline, result, migrated_t2 = calibrate_baseline(
+        tier=args.tier,
+        n=args.n,
+        seed=args.seed,
+        baseline_path=Path(args.baseline_path) if args.baseline_path else None,
+        migrate_only=args.migrate_only,
+        write=not args.dry_run,
+    )
+    write_label = "dry-run" if args.dry_run else "persisted"
+    print(f"Baseline calibration {write_label}")
+    print(f"  T2 flat migration: {'applied' if migrated_t2 else 'already present'}")
+    if result is not None:
+        print(
+            f"  T{result.tier} calibrated: q={result.quality:.3f} "
+            f"r={result.reliability:.3f} n={result.n_questions}"
+        )
+    print(
+        "  baselines_by_tier: "
+        + ", ".join(
+            f"T{tier}={quality:.3f}"
+            for tier, quality in sorted(baseline.baselines_by_tier.items())
+        )
+    )
+
+
 # ── Entry Point ──────────────────────────────────────────────────
 
 
@@ -2347,6 +2470,42 @@ def main() -> None:
         help="Minimum predicted-trials sample size before computing r² (default: 200, per intake-571 cheap-kill criterion).",
     )
     p_peaf.set_defaults(func=cmd_peaf)
+
+    # calibrate-baseline — one-shot YAML/state seed migration + tier calibration
+    p_calibrate = subparsers.add_parser(
+        "calibrate-baseline",
+        help="Migrate flat baseline into T2 and optionally run a one-shot tier calibration.",
+    )
+    p_calibrate.add_argument(
+        "--tier",
+        type=int,
+        default=DEFAULT_FRONTIER_TIER,
+        help="Eval tier to calibrate (default: canonical T1).",
+    )
+    p_calibrate.add_argument(
+        "--n",
+        type=int,
+        default=None,
+        help="Question count override for the calibration eval.",
+    )
+    p_calibrate.add_argument("--seed", type=int, default=42)
+    p_calibrate.add_argument(
+        "--baseline-path",
+        type=str,
+        default=None,
+        help="Baseline YAML path (defaults to orchestration/autopilot_baseline.yaml).",
+    )
+    p_calibrate.add_argument(
+        "--migrate-only",
+        action="store_true",
+        help="Only migrate the flat baseline into T2; do not run EvalTower.",
+    )
+    p_calibrate.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run calibration logic without writing YAML or state.",
+    )
+    p_calibrate.set_defaults(func=cmd_calibrate_baseline)
 
     args = parser.parse_args()
     args.func(args)
