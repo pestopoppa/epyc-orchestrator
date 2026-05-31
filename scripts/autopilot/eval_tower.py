@@ -141,6 +141,8 @@ class QuestionResult:
     degraded: bool = False  # Inference completed in degraded mode
     confidence: float = 0.0  # EV-1: Model confidence proxy (0-1). Initially float(correct); upgraded to logprobs when available.
     branching_density: float = 0.0  # Fraction of <think> steps with branching keywords (intake-378)
+    eval_concurrency: int = 1  # Worker fan-out used for this eval batch.
+    eval_wall_s: float = 0.0  # End-to-end wall time for the containing eval batch.
     # 2026-05-23 exogenous-restart resilience (handoff Phase 4).
     # Populated by reading the resilient_post `_meta` dict from the /chat response.
     # exogenous_recovered: a service reload was detected and a retry inside
@@ -344,6 +346,7 @@ class EvalTower:
             return []
         workers = min(n, _eval_concurrency())
         results: list[QuestionResult | None] = [None] * n
+        batch_start = time.time()
         if workers <= 1:
             for i, q in enumerate(questions):
                 results[i] = self._eval_question(q, client)
@@ -353,7 +356,12 @@ class EvalTower:
                         "%s progress: %d/%d (%.0f%% correct)",
                         label, i + 1, n, 100 * correct_so_far / (i + 1),
                     )
-            return [r for r in results if r is not None]
+            batch_wall_s = time.time() - batch_start
+            out = [r for r in results if r is not None]
+            for r in out:
+                r.eval_concurrency = workers
+                r.eval_wall_s = batch_wall_s
+            return out
 
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=f"eval-{label}") as ex:
             future_to_idx = {
@@ -371,7 +379,12 @@ class EvalTower:
                         "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
                         label, done, n, 100 * correct_so_far / done, workers,
                     )
-        return [r for r in results if r is not None]
+        batch_wall_s = time.time() - batch_start
+        out = [r for r in results if r is not None]
+        for r in out:
+            r.eval_concurrency = workers
+            r.eval_wall_s = batch_wall_s
+        return out
 
     # ── aggregate results ────────────────────────────────────────
 
@@ -384,12 +397,28 @@ class EvalTower:
         correct_count = sum(1 for r in results if r.correct)
         quality = (correct_count / len(results)) * 3.0
 
-        # Speed: median tokens/sec for non-error results
+        # Speed: median per-request tokens/sec for non-error results. This is
+        # intentionally kept stable for Pareto/backward compatibility. Concurrent
+        # eval fan-out has a separate aggregate throughput metric below.
         speeds = []
         for r in results:
             if r.tokens_generated > 0 and r.elapsed_s > 0 and not r.error:
                 speeds.append(r.tokens_generated / r.elapsed_s)
-        speed = sorted(speeds)[len(speeds) // 2] if speeds else 0.0
+        median_request_speed = sorted(speeds)[len(speeds) // 2] if speeds else 0.0
+        total_tokens_generated = sum(r.tokens_generated for r in results if not r.error)
+        eval_wall_s = max((r.eval_wall_s for r in results), default=0.0)
+        sum_request_elapsed_s = sum(r.elapsed_s for r in results if r.elapsed_s > 0)
+        aggregate_speed = (
+            total_tokens_generated / eval_wall_s
+            if total_tokens_generated > 0 and eval_wall_s > 0
+            else 0.0
+        )
+        eval_concurrency = max((r.eval_concurrency for r in results), default=1)
+        concurrent_eval = eval_concurrency > 1 and aggregate_speed > 0
+        speed_metric_mode = (
+            "aggregate_batch_tps" if concurrent_eval else "median_request_tps"
+        )
+        speed = aggregate_speed if concurrent_eval else median_request_speed
 
         # Cost: average cost tier normalized to 0-1 (tier 4 = 1.0)
         cost_tiers = [r.cost_tier for r in results if r.cost_tier > 0]
@@ -484,7 +513,22 @@ class EvalTower:
                 "correct": correct_count,
                 "total": len(results),
                 "errors": sum(1 for r in results if r.error),
+                "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",
+                "speed_metric_mode": speed_metric_mode,
+                "objective_speed_tps": speed,
+                "median_request_tps": median_request_speed,
+                "aggregate_tps": aggregate_speed,
+                "eval_concurrency": eval_concurrency,
+                "eval_wall_s": eval_wall_s,
+                "sum_request_elapsed_s": sum_request_elapsed_s,
+                "tokens_generated": total_tokens_generated,
             },
+            median_request_speed=median_request_speed,
+            aggregate_speed=aggregate_speed,
+            eval_concurrency=eval_concurrency,
+            eval_wall_s=eval_wall_s,
+            sum_request_elapsed_s=sum_request_elapsed_s,
+            speed_metric_mode=speed_metric_mode,
             instruction_token_count=instruction_tokens,
             instruction_token_ratio=instruction_ratio,
             partial_count=sum(1 for r in results if r.partial),
