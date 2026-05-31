@@ -396,6 +396,42 @@ class TestCallCachingBackend:
 
         assert prims._call_caching_backend(backend, "hi", "frontdoor") == "ok"
 
+    def test_shape_aware_concurrency_backend_defers_contention_gate_to_dispatch(
+        self, monkeypatch
+    ):
+        """When B is armed, the pre-dispatch role-keyed gate must not mask the
+        candidate-aware gate inside ConcurrencyAwareBackend._dispatch."""
+        monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+        monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+        monkeypatch.setenv("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", "1")
+
+        class FailGate:
+            def admit(self, *_args, **_kwargs):
+                raise AssertionError("coarse pre-dispatch gate should be deferred")
+
+        monkeypatch.setattr("src.scheduling.contention_gate.get_gate", lambda: FailGate())
+
+        class FakeConcurrencyAwareBackend:
+            _dispatch = object()
+            _tap_dispatch_metadata = object()
+
+            def infer(self, _role_config, request):
+                assert getattr(request, "request_priority") == "background"
+                assert getattr(request, "max_queue_wait_ms") == 123
+                return InferenceResult(
+                    role="frontdoor",
+                    output="ok",
+                    tokens_generated=1,
+                    generation_speed=10.0,
+                    elapsed_time=0.1,
+                    success=True,
+                )
+
+        prims = LLMPrimitives(mock_mode=False)
+        prims._backends["frontdoor"] = FakeConcurrencyAwareBackend()
+        with prims.request_context(priority="background", max_queue_wait_ms=123):
+            assert prims._real_call("hi", "frontdoor") == "ok"
+
 
 class TestRealBatch:
     """Tests for _real_batch() method."""

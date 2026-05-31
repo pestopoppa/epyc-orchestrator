@@ -800,6 +800,36 @@ class ConcurrencyAwareBackend:
             "1", "true", "yes", "on",
         }
 
+    @staticmethod
+    def _shape_aware_contention_enabled() -> bool:
+        """True when the B seam should evaluate real dispatch candidates."""
+        try:
+            from src.scheduling.contention import shape_aware_contention_enabled
+
+            return shape_aware_contention_enabled()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _traffic_class_for_request(request: Any):
+        from src.scheduling.contention import TrafficClass
+
+        priority = getattr(request, "request_priority", "interactive")
+        if str(priority).strip().lower() == "background":
+            return TrafficClass.BACKGROUND
+        return TrafficClass.FOREGROUND_INTERACTIVE
+
+    @staticmethod
+    def _max_queue_wait_ms_for_request(request: Any) -> int | None:
+        raw = getattr(request, "max_queue_wait_ms", None)
+        if raw is None:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value >= 0 else None
+
     def _extract_migration_budget_ms(self, request: Any) -> Optional[int]:
         """Best-effort read of ChatRequest.migration_budget_ms for the WP-3
         load-transition trigger. Returns None if not present."""
@@ -849,7 +879,12 @@ class ConcurrencyAwareBackend:
             return
 
     @contextmanager
-    def _dispatch(self, session_id: str = "", migration_budget_ms: Optional[int] = None):
+    def _dispatch(
+        self,
+        session_id: str = "",
+        migration_budget_ms: Optional[int] = None,
+        request: Any = None,
+    ):
         """Yield (backend, idx, is_full) with the right lock held.
 
         Two paths:
@@ -951,13 +986,18 @@ class ConcurrencyAwareBackend:
             from src.scheduling.placement import evaluate_placement
             from src.runtime.cpu_region_lock import active_region_holders
             from src.runtime.instance_topology import get_instance_regions
-            from src.scheduling.contention_gate import ContentionDenied
+            from src.scheduling.contention_gate import ContentionDenied, get_gate
 
             instance_regions = get_instance_regions()
-            poll_deadline = time.perf_counter() + 60.0
+            queue_wait_ms = self._max_queue_wait_ms_for_request(request)
+            poll_budget_s = 60.0 if queue_wait_ms is None else max(0.0, queue_wait_ms / 1000.0)
+            poll_deadline = time.perf_counter() + poll_budget_s
             poll_interval_s = 0.150  # matches contention_gate._GATE_POLL_S
             queue_log_emitted = False
             cross_role_enabled = self._cross_role_disjoint_placement_enabled()
+            shape_gate_enabled = self._shape_aware_contention_enabled()
+            gate = get_gate() if shape_gate_enabled else None
+            traffic_class = self._traffic_class_for_request(request)
             while True:
                 all_holders = active_region_holders()
                 holders_for_role = all_holders.get(self._topology_role, [])
@@ -971,6 +1011,24 @@ class ConcurrencyAwareBackend:
                 if not placement.is_queue:
                     # At least one safe candidate — try them in priority order.
                     for place in placement.places:
+                        if gate is not None:
+                            decision = gate.evaluate(
+                                self._topology_role,
+                                traffic_class,
+                                candidate_topology_idx=place.topology_idx,
+                            )
+                            if not decision.admitted:
+                                if not queue_log_emitted:
+                                    logger.info(
+                                        "placement-aware contention queued role=%s "
+                                        "topology_idx=%d decision=%s reason=%s",
+                                        self._role,
+                                        place.topology_idx,
+                                        decision.decision.value,
+                                        decision.reason,
+                                    )
+                                    queue_log_emitted = True
+                                continue
                         attempt = _try_instance(self._topology_role, place.topology_idx)
                         if attempt is not None:
                             chosen_ctx, _paths = attempt
@@ -978,8 +1036,10 @@ class ConcurrencyAwareBackend:
                             break
                     if chosen_ctx is not None:
                         break  # acquired; exit poll loop
-                    # Race: every safe candidate's lock was stolen between
-                    # the holder snapshot and the try-acquire. Re-poll.
+                    # Either every physically safe candidate was rejected by
+                    # the placement-aware seam, or every safe candidate's lock
+                    # was stolen between the holder snapshot and try-acquire.
+                    # Re-poll until holders change or the budget expires.
                 else:
                     if not queue_log_emitted:
                         logger.info(
@@ -991,7 +1051,7 @@ class ConcurrencyAwareBackend:
                     raise ContentionDenied(
                         f"placement timeout role={self._role} "
                         f"reason={placement.queue.reason.value if placement.queue else 'race_lost'} "
-                        f"holders={holders_for_role} after 60.0s"
+                        f"holders={holders_for_role} after {poll_budget_s:.1f}s"
                     )
                 time.sleep(poll_interval_s)
         else:
@@ -1134,21 +1194,21 @@ class ConcurrencyAwareBackend:
     def infer(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
-        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
+        with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
             self._annotate_current_tap_dispatch(_idx, backend)
             return backend.infer(role_config, request)
 
     def infer_streaming(self, role_config: Any, request: Any) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
-        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
+        with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
             self._annotate_current_tap_dispatch(_idx, backend)
             return backend.infer_streaming(role_config, request)
 
     def infer_stream_text(self, role_config: Any, request: Any, on_chunk: Any = None) -> Any:
         sid = self._extract_session_id(request)
         mb = self._extract_migration_budget_ms(request)
-        with self._dispatch(session_id=sid, migration_budget_ms=mb) as (backend, _idx, _is_full):
+        with self._dispatch(session_id=sid, migration_budget_ms=mb, request=request) as (backend, _idx, _is_full):
             self._annotate_current_tap_dispatch(_idx, backend)
             return backend.infer_stream_text(role_config, request, on_chunk=on_chunk)
 

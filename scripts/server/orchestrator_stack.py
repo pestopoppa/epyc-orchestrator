@@ -1118,6 +1118,12 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     # ORCHESTRATOR_PER_REGION_LOCKS=0 to fall back to the legacy global
     # heavy lock if a regression surfaces.
     env.setdefault("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    # 2026-05-31: default-on cross-role physical exclusion. Adds a
+    # role-agnostic cpu_region.GLOBAL.{qN}.lock layer so different roles cannot
+    # decode on the same atomic CPU region. This intentionally leaves
+    # ORCHESTRATOR_SHAPE_AWARE_CONTENTION off until dispatch threads a real
+    # candidate_topology_idx through the admission gate.
+    env.setdefault("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
     # WP-7/J6 (2026-05-26): within-role placement rollout. These were previously
     # shell-env-only, so ANY API restart (autopilot config-apply, watcher relaunch,
     # manual) silently reverted the placement state machine to OFF — J6 ran without it

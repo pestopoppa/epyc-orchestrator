@@ -348,12 +348,15 @@ class ContentionGate:
         role: str,
         traffic_class: TrafficClass | str = TrafficClass.FOREGROUND_INTERACTIVE,
         max_queue_wait_ms: int | None = None,
+        candidate_topology_idx: int | None = None,
     ) -> GateDecision:
         """Wait-with-budget version of `evaluate`. Polls every ~150 ms.
 
         Returns a `GateDecision` with `admitted=True` and `waited_s` set
         on success, or `admitted=False` with `reason="timeout"` on budget
-        exhaustion.
+        exhaustion. When `candidate_topology_idx` is supplied and the
+        shape-aware dual flag is enabled, each poll uses the placement-aware
+        seam in `evaluate()`.
         """
         if isinstance(traffic_class, str):
             try:
@@ -370,7 +373,11 @@ class ContentionGate:
         wait_start = time.monotonic()
         first_decision: GateDecision | None = None
         while True:
-            decision = self.evaluate(role, traffic_class)
+            decision = self.evaluate(
+                role,
+                traffic_class,
+                candidate_topology_idx=candidate_topology_idx,
+            )
             if decision.admitted:
                 decision.waited_s = time.monotonic() - wait_start
                 with self._lock:

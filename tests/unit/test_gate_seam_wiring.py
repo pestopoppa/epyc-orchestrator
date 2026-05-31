@@ -236,3 +236,26 @@ def test_gate_no_active_decodes_short_circuits_before_seam(real_matrix, dual_fla
     d = gate.evaluate("frontdoor", TrafficClass.BACKGROUND, candidate_topology_idx=3)
     assert called["n"] == 0
     assert d.admitted and d.decision == PairDecision.ALLOW
+
+
+def test_admit_threads_candidate_topology_idx_to_evaluate(real_matrix, dual_flags_on, monkeypatch) -> None:
+    """`admit()` is the production wait wrapper, so it must preserve the real
+    dispatch candidate index when B is armed."""
+    seen: list[int | None] = []
+    original = gate_mod.ContentionGate.evaluate
+
+    def _spy(self, role, traffic_class=TrafficClass.FOREGROUND_INTERACTIVE, candidate_topology_idx=None):
+        seen.append(candidate_topology_idx)
+        return original(self, role, traffic_class, candidate_topology_idx=candidate_topology_idx)
+
+    monkeypatch.setattr(gate_mod.ContentionGate, "evaluate", _spy)
+    monkeypatch.setattr(gate_mod, "seam_admit", lambda *a, **k: PairDecision.ALLOW)
+    gate = _gate(real_matrix, {"ingest_long_context": [0]})
+    d = gate.admit(
+        "frontdoor",
+        TrafficClass.BACKGROUND,
+        max_queue_wait_ms=100,
+        candidate_topology_idx=3,
+    )
+    assert d.admitted
+    assert seen == [3]

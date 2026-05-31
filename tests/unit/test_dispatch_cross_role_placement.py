@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts" / "server"))
 
 ca_mod = importlib.import_module("src.backends.concurrency_aware")
+contention = importlib.import_module("src.scheduling.contention")
 
 
 class _StubBackend:
@@ -128,3 +130,42 @@ def test_cross_role_flag_off_ignores_other_role(
     with backend._dispatch(session_id="s1") as (chosen_backend, idx, is_full):
         assert is_full is True
         assert acquired[-1] == 0  # full — cross-role holder ignored
+
+
+def test_shape_aware_gate_runs_per_real_candidate_and_skips_denied_idx(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B-live wiring: dispatch evaluates the gate with each real topology_idx.
+
+    Here placement finds q2/q3 safe beside ingest's held node0 half. The fake
+    seam queues q2 and allows q3; dispatch must skip q2 and acquire q3, proving
+    the candidate_topology_idx comes from the actual candidate loop.
+    """
+    monkeypatch.setenv("ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT", "1")
+    monkeypatch.setenv("ORCHESTRATOR_SHAPE_AWARE_CONTENTION", "1")
+    acquired: list[int] = []
+    evaluated: list[int | None] = []
+    backend = _make_frontdoor_backend(monkeypatch)
+    _wire(monkeypatch, {"ingest_long_context": [0]}, acquired)
+
+    class FakeGate:
+        def evaluate(self, role, traffic_class, candidate_topology_idx=None):
+            evaluated.append(candidate_topology_idx)
+            admitted = candidate_topology_idx == 4
+            return SimpleNamespace(
+                admitted=admitted,
+                decision=(
+                    contention.PairDecision.ALLOW
+                    if admitted
+                    else contention.PairDecision.QUEUE
+                ),
+                reason="fake candidate verdict",
+            )
+
+    monkeypatch.setattr("src.scheduling.contention_gate.get_gate", lambda: FakeGate())
+
+    with backend._dispatch(session_id="s1") as (_chosen_backend, idx, is_full):
+        assert is_full is False
+        assert idx == 3  # internal idx for topology q3
+        assert acquired[-1] == 4
+        assert evaluated[:2] == [3, 4]

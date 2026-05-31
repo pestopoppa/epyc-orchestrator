@@ -232,7 +232,7 @@ class InferenceMixin:
         # an admitted request from the active-decode snapshot during its wait.
         # ContentionDenied surfaces as 503 + Retry-After at the chat route.
         from src.scheduling.contention_gate import get_gate, ContentionDenied
-        from src.scheduling.contention import TrafficClass
+        from src.scheduling.contention import TrafficClass, shape_aware_contention_enabled
 
         priority = self.get_request_priority() if hasattr(self, "get_request_priority") else "interactive"
         traffic_class = (
@@ -243,12 +243,19 @@ class InferenceMixin:
             self.get_max_queue_wait_ms() if hasattr(self, "get_max_queue_wait_ms") else None
         )
 
-        gate = get_gate()
-        decision = gate.admit(role, traffic_class, max_wait_ms)
-        if not decision.admitted:
-            raise ContentionDenied(
-                f"contention gate denied role={role} class={traffic_class.value}: {decision.reason}"
-            )
+        backend = self._backends.get(role) if hasattr(self, "_backends") else None
+        defer_to_dispatch = (
+            backend is not None
+            and _backend_manages_region_locks(backend)
+            and shape_aware_contention_enabled()
+        )
+        if not defer_to_dispatch:
+            gate = get_gate()
+            decision = gate.admit(role, traffic_class, max_wait_ms)
+            if not decision.admitted:
+                raise ContentionDenied(
+                    f"contention gate denied role={role} class={traffic_class.value}: {decision.reason}"
+                )
 
         acquire = getattr(self, "_acquire_role", None)
         if acquire:
@@ -512,6 +519,10 @@ class InferenceMixin:
             json_schema=json_schema,
             grammar=grammar,
         )
+        # Dynamic attrs consumed by ConcurrencyAwareBackend's dispatch-time
+        # placement-aware contention gate. The local dataclass has no slots.
+        request.request_priority = self.get_request_priority()
+        request.max_queue_wait_ms = self.get_max_queue_wait_ms()
         req_started = time.perf_counter()
 
         # Admission control: reject early if backend queue is full
