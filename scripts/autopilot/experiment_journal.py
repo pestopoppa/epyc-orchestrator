@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -52,6 +53,16 @@ class DeficiencyCategory(str, Enum):
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 MAX_TRIALS_PER_FILE = 1000
 
+_BASELINE_QUALITY_RE = re.compile(r"\bbaseline\s+([0-9]+(?:\.[0-9]+)?)")
+_SUITE_REGRESSION_RE = re.compile(
+    r"\bSuite\s+'[^']+'\s+regression:\s+-([0-9]+(?:\.[0-9]+)?)"
+)
+_MAX_QUALITY_SCALE = 3.0
+_LEGACY_SCALE_FAILURE_SUMMARY = (
+    "legacy-scale failure_analysis omitted: references impossible 0-3 quality "
+    "baseline/per-suite regression; use recorded q/s/r fields instead"
+)
+
 TSV_COLUMNS = [
     "trial_id",
     "timestamp",
@@ -66,6 +77,42 @@ TSV_COLUMNS = [
     "git_tag",
     "reasoning_hash",
 ]
+
+
+def has_legacy_scale_failure_analysis(text: str) -> bool:
+    """True when old failure text carries impossible 0-3 quality-scale values."""
+    if not text:
+        return False
+    baseline_values = (float(m.group(1)) for m in _BASELINE_QUALITY_RE.finditer(text))
+    if any(v > _MAX_QUALITY_SCALE for v in baseline_values):
+        return True
+    suite_deltas = (float(m.group(1)) for m in _SUITE_REGRESSION_RE.finditer(text))
+    return any(v > _MAX_QUALITY_SCALE for v in suite_deltas)
+
+
+def failure_analysis_for_prompt(entry: "JournalEntry", limit: int | None = None) -> str:
+    """Render failure_analysis for controller-facing prompts without stale scale leaks."""
+    if has_legacy_scale_failure_analysis(entry.failure_analysis):
+        text = _LEGACY_SCALE_FAILURE_SUMMARY
+    else:
+        text = entry.failure_analysis.replace("\n", " | ")
+    if limit is not None:
+        return text[:limit]
+    return text
+
+
+def scrub_legacy_scale_text(text: str) -> str:
+    """Redact any free-text field carrying impossible 0-3 quality-scale values.
+
+    Used for controller-facing fields beyond failure_analysis (self_criticism,
+    optimization_directions) that historically embedded the regression-gate
+    string "… vs baseline 9.900". Returns the legacy-scale summary when the text
+    references an impossible baseline/per-suite value, else the text unchanged —
+    so the planner never re-surfaces a corrupt baseline that has since been fixed.
+    """
+    if has_legacy_scale_failure_analysis(text):
+        return _LEGACY_SCALE_FAILURE_SUMMARY
+    return text
 
 
 @dataclass
@@ -305,7 +352,7 @@ class ExperimentJournal:
                 )
                 if e.failure_analysis:
                     # Compact single-line failure summary for controller visibility
-                    fa_oneline = e.failure_analysis.replace("\n", " | ")[:200]
+                    fa_oneline = failure_analysis_for_prompt(e, limit=200)
                     line += f"  FAILED: {fa_oneline}"
                 lines.append(line)
         return "\n".join(lines)
@@ -473,6 +520,11 @@ class ExperimentJournal:
         ]
         return failed[-n:]
 
+    def failure_analysis_for_prompt(
+        self, entry: JournalEntry, limit: int | None = None
+    ) -> str:
+        return failure_analysis_for_prompt(entry, limit=limit)
+
     def suite_quality_trend(
         self, last_n: int = 10
     ) -> dict[str, list[tuple[int, float]]]:
@@ -518,7 +570,7 @@ class ExperimentJournal:
                 detail = f"q={e.quality:.3f} s={e.speed:.1f}"
             elif e.failure_analysis:
                 # Compact single-line failure summary
-                detail = e.failure_analysis.replace("\n", " | ")[:120]
+                detail = failure_analysis_for_prompt(e, limit=120)
             species_label = e.species
             lines.append(
                 f"  [{tag}] #{e.trial_id} ({species_label}/{hyp})"
@@ -576,7 +628,7 @@ class ExperimentJournal:
                 confidence = "low"
             latest = entries[-1]
             observation = latest.hypothesis or latest.expected_mechanism or (
-                latest.failure_analysis.replace("\n", " | ")[:160]
+                failure_analysis_for_prompt(latest, limit=160)
             ) or "(no description)"
             out[action_type] = {
                 "observation": observation[:240],

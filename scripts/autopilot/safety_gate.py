@@ -23,6 +23,14 @@ DEFAULT_BASELINE_PATH = (
 )
 
 # Hard-coded safety thresholds
+# Quality is scored on a 0-3 scale (eval_tower: fraction_correct * 3.0); reliability
+# is a 0-1 fraction. QUALITY_MAX guards the baseline loader: a persisted baseline.quality
+# (or per-suite value) above this is physically impossible and indicates a corrupt/
+# wrong-scale baseline file. Such a value silently force-reverts every trial via the
+# regression gate (observed 2026-05-27→05-31: a stale baseline of 9.900 reverted ~160
+# trials, including genuinely-good q=2.4 ones). Reject + fall back to defaults instead.
+QUALITY_MAX = 3.0
+RELIABILITY_MAX = 1.0
 # T0 thresholds (10 sentinel questions — inflated scale, saturates at 3.0)
 QUALITY_FLOOR_T0 = 2.0  # Average quality >= 2.0/3.0
 # T1/T2 thresholds (50-500 real benchmark questions — honest signal)
@@ -36,6 +44,13 @@ MAD_HISTORY_DEPTH = 10
 MAD_MIN_SAMPLES = 3  # Below this, skip MAD check (insufficient data → accept)
 MAD_Z_THRESHOLD = 2.0  # Improvement counts as real only if > this many MADs from history median
 MAD_CONSISTENCY = 1.4826  # Scaling so MAD ≈ σ under normal distribution
+# A production-best baseline must never claim a quality the system has never actually
+# achieved. Every trustworthy trial that clears the safety gate is recorded on the Pareto
+# frontier, so a promotion whose quality exceeds the frontier max is a phantom/contaminated
+# measurement (e.g. a T0-saturated or wrong-scale eval) that was never archived. Refusing it
+# closes the exact hole that wrote a 2.900 baseline above the 2.400 archive max on 2026-05-31,
+# which force-reverted every honest trial and gate-locked the loop into no-op distillation.
+BASELINE_ARCHIVE_TOLERANCE = 1e-6  # float-compare slack for the archive-max guard
 
 
 @dataclass
@@ -188,25 +203,70 @@ class Baseline:
     reliability: float = 0.9
     per_suite_quality: dict[str, float] = field(default_factory=dict)
     frontdoor_speed: float = 10.0
+    # Path this baseline was loaded from. save() writes back here by default so a
+    # gate constructed with a custom baseline_path (e.g. a tmp file in tests) can
+    # NEVER clobber the production orchestration/autopilot_baseline.yaml. Excluded
+    # from equality so two baselines with the same metrics still compare equal.
+    # (2026-05-31: a test fixture's update_baseline() wrote quality=2.9 to the real
+    #  baseline via the DEFAULT_BASELINE_PATH fallback, gate-locking the live loop.)
+    source_path: Path | None = field(default=None, compare=False, repr=False)
 
     @classmethod
     def load(cls, path: Path | None = None) -> Baseline:
         path = path or DEFAULT_BASELINE_PATH
         if not path.exists():
             log.warning("No baseline file at %s, using defaults", path)
-            return cls()
+            return cls(source_path=path)
         data = yaml.safe_load(path.read_text())
+        defaults = cls()
+        quality = cls._validate_quality(
+            data.get("quality", defaults.quality), defaults.quality, "quality", path
+        )
+        per_suite = {
+            suite: cls._validate_quality(q, None, f"per_suite[{suite}]", path)
+            for suite, q in (data.get("per_suite_quality", {}) or {}).items()
+        }
+        reliability = data.get("reliability", defaults.reliability)
+        if reliability is not None and not 0.0 <= reliability <= RELIABILITY_MAX:
+            log.error(
+                "Corrupt baseline reliability %.3f in %s (valid 0..%.1f); using default %.3f",
+                reliability, path, RELIABILITY_MAX, defaults.reliability,
+            )
+            reliability = defaults.reliability
         return cls(
-            quality=data.get("quality", 2.0),
+            quality=quality,
             speed=data.get("speed", 10.0),
             cost=data.get("cost", 0.5),
-            reliability=data.get("reliability", 0.9),
-            per_suite_quality=data.get("per_suite_quality", {}),
+            reliability=reliability,
+            per_suite_quality=per_suite,
             frontdoor_speed=data.get("frontdoor_speed", 10.0),
+            source_path=path,
         )
 
+    @staticmethod
+    def _validate_quality(
+        value: float | None, fallback: float | None, label: str, path: Path
+    ) -> float | None:
+        """Reject an out-of-[0, QUALITY_MAX] quality value (corrupt/wrong-scale baseline).
+
+        Returns `fallback` when the value is impossible, after logging loudly. A None
+        value (per-suite "not yet populated") passes through unchanged so the per-suite
+        regression gate stays disabled for that suite.
+        """
+        if value is None:
+            return None
+        if not 0.0 <= value <= QUALITY_MAX:
+            log.error(
+                "Corrupt baseline %s=%.3f in %s exceeds valid quality scale [0, %.1f] — "
+                "this would force-revert every trial via the regression gate; "
+                "falling back to %s. Recompute the baseline from a real 0-3 eval.",
+                label, value, path, QUALITY_MAX, fallback,
+            )
+            return fallback
+        return value
+
     def save(self, path: Path | None = None) -> None:
-        path = path or DEFAULT_BASELINE_PATH
+        path = path or self.source_path or DEFAULT_BASELINE_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "quality": self.quality,
@@ -476,6 +536,23 @@ class SafetyGate:
             return False, f"could not verify topology/matrix: {exc}", proof
         return True, "speed_metric_mode set + matrix OK against live topology", proof
 
+    @staticmethod
+    def _archive_best_quality() -> float | None:
+        """Max quality on the live Pareto frontier, or None if it cannot be read.
+
+        Lazy import + fail-soft: a missing/unreadable archive returns None (the caller
+        skips the archive-max guard but the scale + eligibility gates still apply), so this
+        can never block a legitimate bootstrap write on a fresh state."""
+        try:
+            from scripts.autopilot.pareto_archive import ParetoArchive
+            summary = ParetoArchive().summary()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Archive-max guard: could not read Pareto frontier (%s)", exc)
+            return None
+        if summary.get("frontier_size", 0) <= 0:
+            return None
+        return summary.get("best_quality")
+
     def update_baseline(self, result: EvalResult) -> None:
         """Update baseline with new production-best metrics — HARD-GATED on baseline eligibility
         (operator audit #3): refuses to write unless a recognized speed_metric_mode is set AND the
@@ -486,6 +563,19 @@ class SafetyGate:
         if not eligible:
             log.warning("Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s",
                         reason, proof)
+            return
+        if not 0.0 <= result.quality <= QUALITY_MAX:
+            log.error("Baseline update REFUSED — result.quality %.3f outside valid scale "
+                      "[0, %.1f]; refusing to persist a corrupt/wrong-scale baseline",
+                      result.quality, QUALITY_MAX)
+            return
+        archive_max = self._archive_best_quality()
+        if archive_max is not None and result.quality > archive_max + BASELINE_ARCHIVE_TOLERANCE:
+            log.error("Baseline update REFUSED — result.quality %.3f exceeds Pareto archive "
+                      "max %.3f; a trustworthy trial would already be on the frontier, so this "
+                      "is a phantom/contaminated measurement that must not become the baseline "
+                      "(it would force-revert every honest trial and gate-lock the loop)",
+                      result.quality, archive_max)
             return
         self.baseline.quality = result.quality
         self.baseline.speed = result.speed

@@ -219,7 +219,8 @@ def _build_mutation_context(
     # Gather failure context from recent journal entries (AP-1)
     recent_failures = ctx.journal.recent_failures(species="prompt_forge", n=5)
     failure_context = "\n\n".join(
-        f"Trial #{f.trial_id} ({f.action_type}):\n{f.failure_analysis}"
+        f"Trial #{f.trial_id} ({f.action_type}):\n"
+        f"{ctx.journal.failure_analysis_for_prompt(f)}"
         for f in recent_failures
     )
 

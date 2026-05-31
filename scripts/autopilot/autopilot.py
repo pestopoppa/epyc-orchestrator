@@ -45,7 +45,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 import yaml
 
-from experiment_journal import ExperimentJournal, JournalEntry
+from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import ParetoArchive, ParetoEntry
 from safety_gate import EvalResult, SafetyGate
 from eval_tower import EvalTower
@@ -108,6 +108,15 @@ TAIL_SEED_COUNT = 3         # seeds (not candidates) passed to LLM as inspiratio
 STAGNATION_HV_EPS = 1e-3    # hv_slope_10 strictly below this triggers rich prompt
 STAGNATION_STREAK = 3       # N consecutive same-action_type trials triggers rich prompt
 PLOT_INTERVAL = 10  # Generate plots every N trials
+# A "trial" is an experiment that COLLECTS METRICS (runs an eval). These meta /
+# housekeeping actions intentionally return no EvalResult — they mutate bookkeeping
+# state (knowledge distillation, memory reset) without measuring anything — so they must
+# NOT consume a trial number. They still execute and are logged; they simply do not count.
+# MAX_CONSECUTIVE_META halts the loop if the planner gets stuck emitting only meta actions
+# (the 2026-05-31 gate-lock symptom: ~80 distill_knowledge in a row, counter ticking with
+# zero trials run), turning a silent no-op spin into a loud, fast stop for operator review.
+META_NOOP_ACTIONS = {"distill_knowledge", "reset_memories"}
+MAX_CONSECUTIVE_META = 5
 
 
 def _env_float(name: str, default: float, *, minimum: float = 0.1) -> float:
@@ -1122,7 +1131,7 @@ def _run_loop_inner(
                             f"#{e.trial_id} ({e.species}/{e.action_type}):\n"
                             f"  Hypothesis: {(e.hypothesis or '(none)')[:240]}\n"
                             f"  Outcome:    {outcome}"
-                            + (f"\n  Self-criticism: {e.self_criticism[:200]}" if e.self_criticism else "")
+                            + (f"\n  Self-criticism: {scrub_legacy_scale_text(e.self_criticism)[:200]}" if e.self_criticism else "")
                         )
                     hypotheses_text = "\n\n".join(hyp_lines)
             except Exception as _exc:
@@ -1321,8 +1330,37 @@ def _run_loop_inner(
 
         # ── 4. Evaluate ─────────────────────────────────────────
         if eval_result is None:
-            # Skipped action (e.g. AP-9 scope violation). Clear marker
-            # so a subsequent crash doesn't trigger spurious recovery.
+            action_type = action.get("type", "")
+            if action_type in META_NOOP_ACTIONS:
+                # Meta/housekeeping action: it executed its effect but collected
+                # no metrics, so it is NOT an independent trial — do not consume a
+                # trial number. Track consecutive meta actions so a stuck planner
+                # that only emits no-ops (gate-lock symptom) halts loudly instead
+                # of spinning the counter forever.
+                meta_streak = int(state.get("consecutive_meta_actions", 0)) + 1
+                state["consecutive_meta_actions"] = meta_streak
+                state["in_flight_trial"] = None
+                save_state(state)
+                log.info(
+                    "Meta action '%s' executed (no eval, no metrics) — not counted "
+                    "as a trial (consecutive meta=%d, trial stays at %d)",
+                    action_type, meta_streak, trial_counter,
+                )
+                if meta_streak >= MAX_CONSECUTIVE_META:
+                    state["_dispatch_deficiency"] = "meta_action_loop"
+                    save_state(state)
+                    log.error(
+                        "Planner emitted %d consecutive metric-free meta actions "
+                        "without running a single trial — halting for operator review "
+                        "(likely a gate-lock or stuck planner).",
+                        meta_streak,
+                    )
+                    phase.set("meta_loop_halt", trial_id=trial_counter, meta_streak=meta_streak)
+                    break
+                continue
+            # Genuine skip (AP-9 scope violation / dirty-tree fence / blacklist /
+            # unknown action). Bump trial_counter past it so the planner sees the
+            # gap and a subsequent crash doesn't trigger spurious recovery.
             trial_counter += 1
             state["trial_counter"] = trial_counter
             state["in_flight_trial"] = None
@@ -1699,6 +1737,7 @@ def _run_loop_inner(
         phase.set("save_state", trial_id=trial_counter, species=species_name)
         trial_counter += 1
         state["trial_counter"] = trial_counter
+        state["consecutive_meta_actions"] = 0  # a real metric-collecting trial ran
         state["consecutive_failures"] = gate.consecutive_failures
         state["quality_history"] = gate.quality_history
         archive.save(state)
