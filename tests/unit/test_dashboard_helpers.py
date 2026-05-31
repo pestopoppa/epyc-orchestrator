@@ -295,6 +295,29 @@ def test_task_text_snapshot_uses_slot_prompt_when_available() -> None:
     assert "from event" not in prompt_block
 
 
+def test_pareto_from_journal_excludes_tier0(tmp_path, monkeypatch) -> None:
+    """T0 sentinel rows (10q, quality saturates ~2.4=8/10) must not enter the
+    dashboard-reconstructed frontier/hypervolume — mirrors ec9622d's archive
+    exclusion so the operator panel shows the real T1/T2 frontier, not a phantom 2.4."""
+    journal = tmp_path / "autopilot_journal.jsonl"
+    rows = [
+        # T0 sentinel: saturated quality that WOULD dominate if admitted
+        {"trial_id": 10, "tier": 0, "quality": 2.4, "speed": 60.0, "cost": 0.5,
+         "reliability": 0.9, "timestamp": "2026-05-31T10:00:00+00:00"},
+        # honest T1 entry — the real frontier point
+        {"trial_id": 11, "tier": 1, "quality": 1.9, "speed": 70.0, "cost": 0.5,
+         "reliability": 0.9, "timestamp": "2026-05-31T10:01:00+00:00"},
+    ]
+    journal.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal)
+
+    archive = dashboard._pareto_from_journal(None, current_run_only=False)
+    assert archive is not None
+    frontier_ids = {e["trial_id"] for e in archive["frontier"]}
+    assert frontier_ids == {11}, "only the honest T1 entry belongs on the frontier"
+    assert all(e["trial_id"] != 10 for e in archive["all_entries"]), "T0 excluded entirely"
+
+
 def test_task_text_snapshot_falls_back_to_objective_when_no_slot() -> None:
     events = [{"event_type": "task_started", "timestamp": "t", "data": {"objective": "fallback objective"}}]
     out = dashboard_tasks._task_text_snapshot("chat-2", events, None)

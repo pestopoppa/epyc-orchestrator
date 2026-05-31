@@ -1262,6 +1262,16 @@ def _pareto_from_journal(
     for row in rows:
         if row.get("bug_corrupted_by"):
             continue
+        # T0 is a fast-reject sentinel tier (10q, saturates ~2.4 = 8/10) and must
+        # not enter the operator-facing frontier/hypervolume any more than it enters
+        # the real ParetoArchive (ec9622d excludes it). Without this, the dashboard
+        # reconstructs an independent T0-polluted frontier (phantom q=2.4) that never
+        # reflects the corrected archive. Audit-only — kept in the journal, not plotted.
+        try:
+            if int(row.get("tier", 1)) == 0:
+                continue
+        except (TypeError, ValueError):
+            pass
         ts = _parse_journal_ts(row.get("timestamp"))
         if session_start_ts is not None and (ts is None or ts < session_start_ts):
             continue
