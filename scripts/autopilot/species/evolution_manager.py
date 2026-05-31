@@ -13,8 +13,18 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import sys as _sys
 from pathlib import Path
 from typing import Any
+
+# Distillation reads raw journal entries; route failure_analysis through the
+# legacy-scale scrubber so a corrupt-baseline-period entry (e.g. "vs baseline
+# 9.900") can never re-inject the impossible-scale narrative into a distilled
+# strategy. The planner-prompt scrubber did NOT cover this path (2026-05-31).
+_AUTOPILOT_DIR = str(Path(__file__).resolve().parents[1])
+if _AUTOPILOT_DIR not in _sys.path:
+    _sys.path.insert(0, _AUTOPILOT_DIR)
+from experiment_journal import failure_analysis_for_prompt, scrub_legacy_scale_text  # noqa: E402
 
 log = logging.getLogger("autopilot.evolution_manager")
 
@@ -110,7 +120,9 @@ class EvolutionManager:
             if e.expected_mechanism:
                 summary += f"\n  Mechanism: {e.expected_mechanism}"
             if e.failure_analysis:
-                fa_short = e.failure_analysis.replace("\n", " | ")[:200]
+                # Scrubbed render: omits legacy >3.0-scale baseline/regression text
+                # so distilled strategies can't resurrect the corrupt baseline.
+                fa_short = failure_analysis_for_prompt(e, 200)
                 summary += f"\n  Failure: {fa_short}"
             if e.config_diff:
                 diff_str = json.dumps(e.config_diff)[:200]
@@ -137,8 +149,8 @@ class EvolutionManager:
         for insight in insights:
             try:
                 strategy_store.store(
-                    description=insight.get("description", ""),
-                    insight=insight.get("insight", ""),
+                    description=scrub_legacy_scale_text(insight.get("description", "")),
+                    insight=scrub_legacy_scale_text(insight.get("insight", "")),
                     source_trial_id=trial_id,
                     species=insight.get("species", "all"),
                     metadata={"confidence": insight.get("confidence", "medium")},
