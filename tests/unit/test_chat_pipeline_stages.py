@@ -24,7 +24,10 @@ from src.api.routes.chat_pipeline.stages import (
 from src.api.routes.chat_pipeline.vision_stage import _execute_vision
 from src.api.routes.chat_pipeline.delegation_stage import _execute_delegated
 from src.api.routes.chat_pipeline.proactive_stage import _execute_proactive, _parse_plan_steps
-from src.api.routes.chat_pipeline.direct_stage import _execute_direct
+from src.api.routes.chat_pipeline.direct_stage import (
+    _execute_direct,
+    _restore_stripped_answer_stop,
+)
 from src.api.routes.chat_utils import RoutingResult
 
 
@@ -1211,6 +1214,23 @@ class TestExecuteReact:
 
 class TestExecuteDirect:
     """Tests for _execute_direct stage."""
+
+    def test_restore_stripped_answer_stop_appends_missing_close_tag(self):
+        """Direct stop sequence strips </answer>; restore it for API scoring."""
+        assert (
+            _restore_stripped_answer_stop("<answer>East Lancashire Railway")
+            == "<answer>East Lancashire Railway</answer>"
+        )
+
+    def test_restore_stripped_answer_stop_leaves_other_answers_unchanged(self):
+        assert (
+            _restore_stripped_answer_stop("East Lancashire Railway")
+            == "East Lancashire Railway"
+        )
+        assert (
+            _restore_stripped_answer_stop("<answer>East Lancashire Railway</answer>")
+            == "<answer>East Lancashire Railway</answer>"
+        )
 
     def test_basic_direct_call(self, mock_primitives, mock_state):
         """Basic direct LLM call returns ChatResponse."""

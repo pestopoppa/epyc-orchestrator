@@ -47,6 +47,13 @@ _CODE_TASK_RE = re.compile(
 _CODE_MAX_TOKENS = 4096
 
 
+def _restore_stripped_answer_stop(answer: str) -> str:
+    """Restore answer close tag omitted when ``</answer>`` fires as a stop sequence."""
+    if answer and "<answer>" in answer and "</answer>" not in answer:
+        return answer + "</answer>"
+    return answer
+
+
 def _execute_direct(
     request: ChatRequest,
     routing: RoutingResult,
@@ -166,6 +173,7 @@ def _execute_direct(
     # Defense-in-depth: truncate if model loops back to prompt
     if answer and not answer.startswith("[ERROR"):
         answer = _truncate_looped_answer(answer, direct_prompt)
+        answer = _restore_stripped_answer_stop(answer)
 
     # 2026-05-23: previously stripped gemma-4 `<|channel>thought` markers
     # here as a stop-gap for /completion-routed gemma-4 output. That fix
