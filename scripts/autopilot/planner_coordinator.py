@@ -211,6 +211,7 @@ def plan_with_providers(
         elif _circuit_is_open(planner_state, critic_name):
             degraded = True
         else:
+            active_critique = settings.mode.strip().lower() == "draft_critique"
             critic_provider = provider_factory(critic_name)
             critique_prompt = build_critique_prompt(prompt, draft.text, action, rationale)
             critique_result = critic_provider.invoke(
@@ -221,24 +222,53 @@ def plan_with_providers(
                 cwd=cwd,
             )
             if critique_result.ok:
-                _mark_success(planner_state, critique_result.provider)
                 critique = extract_critique(critique_result.text)
                 critique.provider = critique_result.provider
+                if critique.parse_error:
+                    # The critic invoke "succeeded" (nonzero text) but the text
+                    # is NOT a valid critique block — e.g. Codex emitted prose
+                    # or an error message instead of the json:autopilot_critique
+                    # fence. Do NOT let the dataclass's default decision="approve"
+                    # become a silent rubber-stamp (fail-open). Treat it as a
+                    # FAILED critique: mark failure (feeds circuit breaker),
+                    # degrade, and in draft_critique mode force decision="reject"
+                    # so _reconcile routes the risky action to the safe fallback
+                    # rather than admitting it unreviewed.
+                    _mark_failure(planner_state, critique_result.provider, settings)
+                    degraded = True
+                    if settings.mode.strip().lower() == "draft_critique":
+                        critique.decision = "reject"
+                    action, rationale, canonical_text = _reconcile(
+                        action,
+                        rationale,
+                        draft.text,
+                        critique,
+                        active=active_critique,
+                    )
+                else:
+                    _mark_success(planner_state, critique_result.provider)
+                    action, rationale, canonical_text = _reconcile(
+                        action,
+                        rationale,
+                        draft.text,
+                        critique,
+                        active=active_critique,
+                    )
+            else:
+                _mark_failure(planner_state, critique_result.provider, settings)
+                degraded = True
+                critique = PlannerCritique(
+                    decision="reject" if active_critique else "approve",
+                    raw_text=critique_result.text,
+                    provider=critique_result.provider,
+                    parse_error=critique_result.error or "critique failed",
+                )
                 action, rationale, canonical_text = _reconcile(
                     action,
                     rationale,
                     draft.text,
                     critique,
-                    active=settings.mode == "draft_critique",
-                )
-            else:
-                _mark_failure(planner_state, critique_result.provider, settings)
-                degraded = True
-                critique = PlannerCritique(
-                    decision="approve",
-                    raw_text=critique_result.text,
-                    provider=critique_result.provider,
-                    parse_error=critique_result.error or "critique failed",
+                    active=active_critique,
                 )
 
     decision = PlannerDecision(

@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -140,22 +139,18 @@ class CodexPlannerProvider:
     ) -> PlannerProviderResult:
         del session_id
         start = time.time()
-        prompt_file: str | None = None
         tap = _open_planner_tap()
         raw_events: list[str] = []
 
         try:
-            tmp_dir = Path(os.environ.get("AUTOPILOT_TMP_DIR", "/mnt/raid0/llm/tmp"))
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                suffix=".txt",
-                delete=False,
-                dir=str(tmp_dir),
-            ) as fh:
-                fh.write(prompt)
-                prompt_file = fh.name
-
+            # Prompt is piped to `codex exec` via STDIN (positional `-`), NOT
+            # handed off through a temp file. The read-only sandbox cannot open
+            # an arbitrary /mnt/raid0/llm/tmp/*.txt, so the previous "Read the
+            # file …" approach made Codex emit a file-read error that the
+            # provider then treated as a successful (but unparseable) critique →
+            # fail-open approve. Stdin is sandbox-safe and removes that failure
+            # mode entirely. (codex exec: "[PROMPT] … if `-` is used,
+            # instructions are read from stdin".)
             cmd = [
                 self._binary,
                 "exec",
@@ -165,10 +160,7 @@ class CodexPlannerProvider:
                 "-s",
                 "read-only",
                 "--full-auto",
-                (
-                    f"Read the file {prompt_file} and follow its instructions exactly. "
-                    "Return only the requested structured output."
-                ),
+                "-",
             ]
             if tap is not None:
                 _tap_write(
@@ -183,6 +175,7 @@ class CodexPlannerProvider:
             env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
             proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -190,7 +183,7 @@ class CodexPlannerProvider:
                 env=env,
             )
             try:
-                stdout, stderr = proc.communicate(timeout=timeout)
+                stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 stdout, stderr = proc.communicate()
@@ -268,15 +261,11 @@ class CodexPlannerProvider:
             _archive_codex_call(prompt, result, raw_events)
             return result
         finally:
+            # Prompt is piped via stdin now (no temp file to clean up).
             if tap is not None:
                 try:
                     tap.close()
                 except Exception:
-                    pass
-            if prompt_file:
-                try:
-                    os.unlink(prompt_file)
-                except OSError:
                     pass
 
 

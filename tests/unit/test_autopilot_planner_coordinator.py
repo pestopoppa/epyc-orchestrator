@@ -263,6 +263,134 @@ def test_active_reject_without_revision_uses_safe_seed_batch() -> None:
     assert decision.action["n_questions"] == 10
 
 
+def test_unparseable_critique_fails_closed_not_open() -> None:
+    """Regression: a critic invoke that 'succeeds' (ok=True) but returns text
+    that is NOT a valid json:autopilot_critique block (e.g. Codex emitting a
+    file-read error or prose) must NOT silently auto-approve the risky draft.
+    It must be treated as a FAILED critique → reject → safe seed_batch fallback,
+    and mark the critic degraded for the circuit breaker."""
+    original = {"type": "structural_experiment", "flags": {"a": True}}
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text(original),
+            )
+        ],
+        supports_resume=True,
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            # ok=True but garbage payload — exactly the file-read-error case:
+            # "Unable to read /mnt/raid0/llm/tmp/tmp....txt".
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=True,
+                text="Unable to read /mnt/raid0/llm/tmp/tmpXXXX.txt: file not found",
+            )
+        ],
+    )
+
+    state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    # Fail-closed: the unsafe structural_experiment must NOT be admitted; it is
+    # routed to the safe seed_batch fallback.
+    assert decision.action is not None
+    assert decision.action["type"] == "seed_batch"
+    # The critique is recorded with its parse_error, not a clean approve.
+    assert decision.critique is not None
+    assert decision.critique.parse_error
+    assert decision.degraded is True
+    # Critic marked failed (feeds the circuit breaker).
+    assert state.get("codex", {}).get("failures", 0) >= 1
+
+
+def test_failed_critique_invoke_fails_closed_not_open() -> None:
+    """A critic process failure (timeout, nonzero exit, empty response) must
+    fail closed in active draft_critique mode, not silently admit the draft."""
+    original = {"type": "structural_experiment", "flags": {"a": True}}
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text(original),
+            )
+        ],
+        supports_resume=True,
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="critique",
+                ok=False,
+                text="",
+                error="timeout after 300s",
+            )
+        ],
+    )
+
+    state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.action is not None
+    assert decision.action["type"] == "seed_batch"
+    assert decision.critique is not None
+    assert decision.critique.decision == "reject"
+    assert decision.critique.parse_error == "timeout after 300s"
+    assert decision.degraded is True
+    assert state.get("codex", {}).get("failures", 0) >= 1
+
+
+def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
+    """In shadow_critique (non-binding) mode, an unparseable critique still must
+    not crash or fabricate approval — the draft stands (shadow never revises),
+    but the critic is still marked degraded/failed."""
+    original = {"type": "seed_batch", "n_questions": 10}
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(original))],
+        supports_resume=True,
+    )
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="critique", ok=True, text="garbage not-json")],
+    )
+    state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state=state,
+        settings=PlannerSettings(mode="shadow_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+    assert decision.action == original  # shadow never revises
+    assert decision.critique is not None and decision.critique.parse_error
+    assert decision.degraded is True
+
+
 def test_open_primary_circuit_routes_directly_to_fallback() -> None:
     claude = FakeProvider(
         "claude",

@@ -181,6 +181,111 @@ def test_validate_numeric_trial_accepts_empty_params_for_optuna() -> None:
     ) is None
 
 
+def test_validate_numeric_trial_rejects_unknown_surface() -> None:
+    err = controller_io.validate_single_variable(
+        {"type": "numeric_trial", "surface": "not_a_surface", "params": {}}
+    )
+    assert err and "surface must be one of" in err
+
+
+def test_validate_mutation_rejects_unknown_keys_and_bad_enums() -> None:
+    err = controller_io.validate_single_variable(
+        {
+            "type": "code_mutation",
+            "file": "src/escalation.py",
+            "mutation": "targeted_fix",
+            "target_function": "route",
+        }
+    )
+    assert err and "unsupported keys" in err
+    assert "target_function" in err
+
+    err = controller_io.validate_single_variable(
+        {
+            "type": "prompt_mutation",
+            "file": "frontdoor.md",
+            "mutation": "rewrite_everything",
+        }
+    )
+    assert err and "mutation must be one of" in err
+
+
+def test_validate_gepa_rejects_unbounded_max_evals() -> None:
+    err = controller_io.validate_single_variable(
+        {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 5000}
+    )
+    assert err and "max_evals must be <=" in err
+
+
+def test_validate_slot_compact_schema_matches_handler() -> None:
+    assert controller_io.validate_single_variable(
+        {
+            "type": "slot_compact",
+            "port": 8070,
+            "slot_id": 0,
+            "keep_ratio": 0.3,
+            "scorer": "expected_attention",
+            "keep_first": 5,
+            "n_future": 128,
+            "use_covariance": True,
+        }
+    ) is None
+
+    err = controller_io.validate_single_variable(
+        {
+            "type": "slot_compact",
+            "port": 8070,
+            "slot_id": 0,
+            "keep_ratio": 0.3,
+            "beta": 0.5,
+            "keep_last": 10,
+        }
+    )
+    assert err and "unsupported keys" in err
+    assert "beta" in err
+    assert "keep_last" in err
+
+
+def test_validate_slot_compact_rejects_bad_ranges() -> None:
+    err = controller_io.validate_single_variable(
+        {
+            "type": "slot_compact",
+            "port": 8070,
+            "slot_id": 0,
+            "keep_ratio": 1.5,
+        }
+    )
+    assert err and "keep_ratio must be <=" in err
+
+    err = controller_io.validate_single_variable(
+        {"type": "slot_compact", "port": 8070, "n_future": 0}
+    )
+    assert err and "n_future must be >=" in err
+
+
+def test_validate_deep_eval_rejects_ignored_schema_fields() -> None:
+    err = controller_io.validate_single_variable(
+        {
+            "type": "deep_eval",
+            "tier": 2,
+            "target_trial": 38,
+            "suites": ["coder"],
+            "baseline_recheck": True,
+        }
+    )
+    assert err and "unsupported keys" in err
+    assert "target_trial" in err
+
+
+def test_validate_deep_eval_requires_valid_tier() -> None:
+    assert controller_io.validate_single_variable(
+        {"type": "deep_eval", "tier": 2}
+    ) is None
+    assert controller_io.validate_single_variable({"type": "deep_eval"})
+    assert controller_io.validate_single_variable({"type": "deep_eval", "tier": 3})
+    assert controller_io.validate_single_variable({"type": "deep_eval", "tier": "2"})
+
+
 def test_validate_unknown_action_type_passes() -> None:
     assert controller_io.validate_single_variable({"type": "unknown_thing"}) is None
 

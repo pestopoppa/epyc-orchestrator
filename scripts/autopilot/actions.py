@@ -31,15 +31,19 @@ def _apply_params(*args, **kwargs):
     bottom of autopilot's imports, by which time `apply_params` is bound).
     """
     import sys
-    # autopilot is imported as either 'autopilot' (when scripts/autopilot is on
-    # sys.path — its normal load mode) or 'scripts.autopilot.autopilot' (when
-    # tests import via the package path).
-    mod = sys.modules.get("autopilot") or sys.modules.get("scripts.autopilot.autopilot")
-    if mod is None:
-        # Fallback: import config_applicator directly (no monkeypatch in play)
-        from config_applicator import apply_params as _ap
-        return _ap(*args, **kwargs)
-    return mod.apply_params(*args, **kwargs)
+    # autopilot is imported as either 'autopilot' (normal load mode),
+    # 'scripts.autopilot.autopilot' (package-path tests), or '__main__'
+    # (direct script execution). Prefer the package path when both aliases are
+    # present so tests that monkeypatch that module cannot leak into real
+    # config application.
+    for module_name in ("scripts.autopilot.autopilot", "autopilot", "__main__"):
+        mod = sys.modules.get(module_name)
+        if mod is not None and hasattr(mod, "apply_params"):
+            return mod.apply_params(*args, **kwargs)
+
+    # Fallback: import config_applicator directly (no monkeypatch in play).
+    from config_applicator import apply_params as _ap
+    return _ap(*args, **kwargs)
 
 if TYPE_CHECKING:
     from experiment_journal import ExperimentJournal

@@ -43,6 +43,79 @@ PLANNER_ARCHIVE_PATH = Path(
     "/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl"
 )
 
+_NUMERIC_SURFACES = {"memrl_retrieval", "think_harder", "monitor", "escalation"}
+_PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
+_CODE_MUTATIONS = {"targeted_fix"}
+_SLOT_SCORERS = {"expected_attention", "knorm"}
+
+_ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
+    "seed_batch": {
+        "allowed": {"type", "n_questions", "suites"},
+    },
+    "numeric_trial": {
+        "allowed": {"type", "surface", "params"},
+        "enums": {"surface": _NUMERIC_SURFACES},
+    },
+    "prompt_mutation": {
+        "allowed": {"type", "file", "mutation", "description"},
+        "required": {"file"},
+        "enums": {"mutation": _PROMPT_MUTATIONS},
+    },
+    "gepa_optimize": {
+        "allowed": {"type", "file", "max_evals", "description"},
+        "required": {"file"},
+    },
+    "code_mutation": {
+        "allowed": {"type", "file", "mutation", "description"},
+        "required": {"file"},
+        "enums": {"mutation": _CODE_MUTATIONS},
+    },
+    "structural_experiment": {
+        "allowed": {"type", "flags"},
+        "required": {"flags"},
+    },
+    "structural_prune": {
+        "allowed": {"type", "file", "block", "description"},
+        "required": {"file", "block"},
+    },
+    "slot_compact": {
+        "allowed": {
+            "type",
+            "port",
+            "slot_id",
+            "keep_ratio",
+            "scorer",
+            "keep_first",
+            "n_future",
+            "use_covariance",
+            "layer_weights",
+            "threshold",
+        },
+        "enums": {"scorer": _SLOT_SCORERS},
+    },
+    "train_routing_models": {
+        "allowed": {"type", "min_memories"},
+    },
+    "distill_skillbank": {
+        "allowed": {"type", "teacher", "categories"},
+    },
+    "reset_memories": {
+        "allowed": {"type", "keep_seen", "keep_skills"},
+    },
+    "deep_eval": {
+        "allowed": {"type", "tier"},
+        "required": {"tier"},
+        "enums": {"tier": {0, 1, 2}},
+    },
+    "rollback": {
+        "allowed": {"type", "to_checkpoint"},
+        "enums": {"to_checkpoint": {"production_best"}},
+    },
+    "distill_knowledge": {
+        "allowed": {"type", "last_n"},
+    },
+}
+
 
 def _open_planner_tap() -> Any:
     """Return an append-mode handle on the planner tap, creating dirs if needed."""
@@ -439,6 +512,121 @@ def extract_rationale(text: str) -> dict[str, Any]:
     return {"falsifier": falsifier, "rubric_scores": rubric}
 
 
+def _validate_action_schema(action: dict[str, Any]) -> str | None:
+    action_type = action.get("type", "")
+    schema = _ACTION_SCHEMAS.get(action_type)
+    if schema is None:
+        return None
+
+    allowed = schema.get("allowed", set())
+    extra = sorted(set(action) - allowed)
+    if extra:
+        return (
+            f"{action_type} unsupported keys: {extra}; "
+            f"allowed keys: {sorted(allowed)}"
+        )
+
+    missing = sorted(schema.get("required", set()) - set(action))
+    if missing:
+        if missing == ["file"] and action_type in {
+            "prompt_mutation",
+            "gepa_optimize",
+            "code_mutation",
+        }:
+            return f"{action_type} must specify a single target file"
+        return f"{action_type} missing required keys: {missing}"
+
+    for key, values in schema.get("enums", {}).items():
+        if key not in action:
+            continue
+        value = action[key]
+        if isinstance(value, bool) or value not in values:
+            return (
+                f"{action_type} {key} must be one of {sorted(values)}; "
+                f"got {value!r}"
+            )
+
+    return None
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_int_range(
+    action: dict[str, Any],
+    key: str,
+    *,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> str | None:
+    if key not in action:
+        return None
+    value = action[key]
+    if not _is_int(value):
+        return f"{action.get('type', 'action')} {key} must be an integer; got {value!r}"
+    if min_value is not None and value < min_value:
+        return (
+            f"{action.get('type', 'action')} {key} must be >= {min_value}; "
+            f"got {value!r}"
+        )
+    if max_value is not None and value > max_value:
+        return (
+            f"{action.get('type', 'action')} {key} must be <= {max_value}; "
+            f"got {value!r}"
+        )
+    return None
+
+
+def _validate_number_range(
+    action: dict[str, Any],
+    key: str,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    min_exclusive: bool = False,
+) -> str | None:
+    if key not in action:
+        return None
+    value = action[key]
+    action_type = action.get("type", "action")
+    if not _is_number(value):
+        return f"{action_type} {key} must be numeric; got {value!r}"
+    if min_value is not None:
+        below = value <= min_value if min_exclusive else value < min_value
+        if below:
+            op = ">" if min_exclusive else ">="
+            return f"{action_type} {key} must be {op} {min_value}; got {value!r}"
+    if max_value is not None and value > max_value:
+        return f"{action_type} {key} must be <= {max_value}; got {value!r}"
+    return None
+
+
+def _validate_bool(action: dict[str, Any], key: str) -> str | None:
+    if key not in action:
+        return None
+    value = action[key]
+    if not isinstance(value, bool):
+        return f"{action.get('type', 'action')} {key} must be a boolean; got {value!r}"
+    return None
+
+
+def _validate_str_list(action: dict[str, Any], key: str) -> str | None:
+    if key not in action:
+        return None
+    value = action[key]
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) for item in value)
+    ):
+        return f"{action.get('type', 'action')} {key} must be a list of strings"
+    return None
+
+
 def validate_single_variable(action: dict[str, Any]) -> str | None:
     """AP-9: Validate that an action proposes a single-variable change.
 
@@ -447,28 +635,47 @@ def validate_single_variable(action: dict[str, Any]) -> str | None:
     """
     action_type = action.get("type", "")
 
+    schema_err = _validate_action_schema(action)
+    if schema_err:
+        return schema_err
+
     if action_type in ("prompt_mutation", "gepa_optimize"):
         target = action.get("file", "")
         if not target:
             return f"{action_type} must specify a single target file"
         if "," in target or ";" in target:
             return f"{action_type} targets multiple files: {target}"
+        if action_type == "gepa_optimize":
+            range_err = _validate_int_range(
+                action, "max_evals", min_value=1, max_value=100
+            )
+            if range_err:
+                return range_err
 
     elif action_type == "code_mutation":
         target = action.get("file", "")
         if not target:
             return "code_mutation must specify a single target file"
+        if "," in target or ";" in target:
+            return f"code_mutation targets multiple files: {target}"
 
     elif action_type == "structural_experiment":
         flags = action.get("flags", {})
+        if not isinstance(flags, dict):
+            return "structural_experiment flags must be an object"
         if len(flags) > 1:
             return (
                 f"structural_experiment changes {len(flags)} flags at once "
                 f"({list(flags.keys())}); limit to 1 for clean attribution"
             )
+        for key, value in flags.items():
+            if not isinstance(key, str) or not isinstance(value, bool):
+                return "structural_experiment flags must map string names to booleans"
 
     elif action_type == "numeric_trial":
         params = action.get("params", {})
+        if not isinstance(params, dict):
+            return "numeric_trial params must be an object"
         # Optuna-suggested params are fine (controlled search), but explicit
         # multi-param overrides violate single-variable principle.
         if len(params) > 1:
@@ -476,5 +683,74 @@ def validate_single_variable(action: dict[str, Any]) -> str | None:
                 f"numeric_trial sets {len(params)} params explicitly; "
                 "limit to 1 for clean attribution (Optuna suggestions exempt)"
             )
+
+    elif action_type == "slot_compact":
+        for key, min_value, max_value in (
+            ("port", 1, 65535),
+            ("slot_id", 0, None),
+            ("keep_first", 0, None),
+            ("n_future", 1, 8192),
+        ):
+            range_err = _validate_int_range(
+                action, key, min_value=min_value, max_value=max_value
+            )
+            if range_err:
+                return range_err
+        for key in ("keep_ratio", "threshold"):
+            range_err = _validate_number_range(
+                action, key, min_value=0.0, max_value=1.0, min_exclusive=True
+            )
+            if range_err:
+                return range_err
+        bool_err = _validate_bool(action, "use_covariance")
+        if bool_err:
+            return bool_err
+        if "layer_weights" in action:
+            weights = action["layer_weights"]
+            if (
+                not isinstance(weights, list)
+                or not weights
+                or any(not _is_number(weight) for weight in weights)
+            ):
+                return "slot_compact layer_weights must be a non-empty numeric list"
+
+    elif action_type == "seed_batch":
+        range_err = _validate_int_range(
+            action, "n_questions", min_value=1, max_value=50
+        )
+        if range_err:
+            return range_err
+        list_err = _validate_str_list(action, "suites")
+        if list_err:
+            return list_err
+
+    elif action_type == "train_routing_models":
+        range_err = _validate_int_range(
+            action, "min_memories", min_value=1, max_value=100000
+        )
+        if range_err:
+            return range_err
+
+    elif action_type == "distill_skillbank":
+        if "teacher" in action and not isinstance(action["teacher"], str):
+            return "distill_skillbank teacher must be a string"
+        list_err = _validate_str_list(action, "categories")
+        if list_err:
+            return list_err
+
+    elif action_type == "reset_memories":
+        for key in ("keep_seen", "keep_skills"):
+            bool_err = _validate_bool(action, key)
+            if bool_err:
+                return bool_err
+
+    elif action_type == "deep_eval":
+        # Enum and required-key checks are covered by _ACTION_SCHEMAS.
+        return None
+
+    elif action_type == "distill_knowledge":
+        range_err = _validate_int_range(action, "last_n", min_value=1, max_value=100)
+        if range_err:
+            return range_err
 
     return None

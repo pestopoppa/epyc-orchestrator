@@ -224,12 +224,13 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Structural: {{"type": "structural_experiment", "flags": {{"feature_name": true/false}}}}
 - Prune: {{"type": "structural_prune", "file": "frontdoor.md", "block": "## Section Name", "description": "..."}}
   (Delete an instruction block from a .md prompt file — accepted only if quality >= baseline AND instruction_token_ratio decreases)
-- Compact: {{"type": "slot_compact", "port": 8070, "slot_id": 0, "keep_ratio": 0.3, "beta": 0.5, "keep_first": 5, "keep_last": 10}}
+- Compact: {{"type": "slot_compact", "port": 8070, "slot_id": 0, "keep_ratio": 0.3, "scorer": "expected_attention", "keep_first": 5, "n_future": 128}}
   (AM KV compaction — compress KV cache on a server slot. Use after long-context queries to free memory. Evaluates quality post-compact.)
 - Train: {{"type": "train_routing_models", "min_memories": 500}}
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
 - Deep eval: {{"type": "deep_eval", "tier": 2}}
+  (Only tier is supported: 0, 1, or 2. Do NOT include target_trial, suites, baseline_recheck, or instrumentation fields.)
 - Rollback: {{"type": "rollback", "to_checkpoint": "production_best"}}
 - Distill: {{"type": "distill_knowledge", "last_n": 10}}
   (Run every ~5 trials to extract insights from recent outcomes into strategy memory)
