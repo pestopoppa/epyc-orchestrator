@@ -701,6 +701,34 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
     return "", "", ""
 
 
+def learning_exclusion_criticism(
+    learning_excluded_by: str,
+    learning_excluded_reason: str,
+) -> SelfCriticism:
+    """Controller-facing criticism for journaled-but-untrusted trials.
+
+    SafetyGate can pass a trial while still marking it as `mad_noise`. Those
+    entries are already excluded from Pareto/AP-22 learning, so their journal
+    criticism must not say "keep" or "continue this surface"; that text is fed
+    back into the planner and can create meta-action loops.
+    """
+    label = learning_excluded_by.replace("_", " ")
+    reason = learning_excluded_reason or "outcome was excluded from learning"
+    return SelfCriticism(
+        what_went_wrong=f"Trial excluded from learning: {label}",
+        why_it_happened=reason,
+        what_should_change=(
+            "Do not treat this outcome as a keep or config-efficacy signal; "
+            "require a clean, non-excluded metric trial before continuing this direction"
+        ),
+        optimization_directions=[],
+        keep_or_revert="excluded",
+        keep_revert_reasoning=(
+            f"{reason}; archive/AP-22 learning skipped and planner trust excludes this trial"
+        ),
+    )
+
+
 def load_blacklist() -> list[dict[str, Any]]:
     """Load failure blacklist from YAML."""
     return _load_blacklist_impl(BLACKLIST_PATH)
@@ -1466,6 +1494,9 @@ def _run_loop_inner(
             log.info(
                 "Trial %d: archive.update SKIPPED (learning_excluded_by=%s)",
                 trial_counter, learning_excluded_by,
+            )
+            criticism = learning_exclusion_criticism(
+                learning_excluded_by, learning_excluded_reason
             )
         else:
             pareto_status = archive.update(

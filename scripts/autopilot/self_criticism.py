@@ -22,7 +22,7 @@ class SelfCriticism:
     why_it_happened: str = ""
     what_should_change: str = ""
     optimization_directions: list[str] = field(default_factory=list)
-    keep_or_revert: str = ""  # "keep" | "revert"
+    keep_or_revert: str = ""  # "keep" | "revert" | "excluded"
     keep_revert_reasoning: str = ""
 
     def as_text(self) -> str:

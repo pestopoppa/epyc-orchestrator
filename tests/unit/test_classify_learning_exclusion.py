@@ -14,7 +14,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
-from autopilot import classify_learning_exclusion  # type: ignore[import-not-found]
+from autopilot import (  # type: ignore[import-not-found]
+    classify_learning_exclusion,
+    learning_exclusion_criticism,
+)
 
 
 @dataclass
@@ -45,6 +48,19 @@ def test_mad_noise_only_marks_mad():
     assert by == "mad_noise"
     assert "MAD noise band" in reason
     assert def_cat == "mad_noise"
+
+
+def test_learning_exclusion_criticism_blocks_keep_signal():
+    criticism = learning_exclusion_criticism(
+        "mad_noise",
+        "quality improvement was within MAD noise band",
+    )
+
+    text = criticism.as_text()
+    assert criticism.keep_or_revert == "excluded"
+    assert "Decision: excluded" in text
+    assert "Do not treat this outcome as a keep" in text
+    assert "continue exploring this surface" not in text
 
 
 def test_exogenous_unrecovered_marks_exo():

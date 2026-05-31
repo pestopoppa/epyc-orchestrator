@@ -147,7 +147,7 @@ class JournalEntry:
     instruction_token_count: int = 0  # AP-16: per-request instruction overhead
     instruction_token_ratio: float = 0.0  # AP-16: instruction_tokens / total_input
     self_criticism: str = ""  # AP-23: structured self-criticism from last trial
-    keep_revert_decision: str = ""  # AP-24: "keep" | "revert" | ""
+    keep_revert_decision: str = ""  # AP-24: "keep" | "revert" | "excluded" | ""
     optimization_directions: str = ""  # AP-24: forward-looking next-round guidance
     predicted_objectives: dict[str, float] = field(default_factory=dict)  # PEAF: controller's pre-trial forecast (empty when disabled / unforecast)
     surprise_score: float | None = None  # PEAF: L1 distance in normalised objective space; None when no forecast
