@@ -51,6 +51,30 @@ MAD_CONSISTENCY = 1.4826  # Scaling so MAD ≈ σ under normal distribution
 # closes the exact hole that wrote a 2.900 baseline above the 2.400 archive max on 2026-05-31,
 # which force-reverted every honest trial and gate-locked the loop into no-op distillation.
 BASELINE_ARCHIVE_TOLERANCE = 1e-6  # float-compare slack for the archive-max guard
+DEFAULT_BASELINE_QUALITY = 1.16  # Documented 2026-04-04 T2 calibration fallback
+
+
+def _pareto_frontier_context() -> tuple[float, frozenset[int]] | None:
+    """(best_quality, frozenset of frontier trial_ids) for the live Pareto archive, or None
+    if it is empty/unreadable. Lazy import + fail-soft so a missing archive (fresh bootstrap)
+    never blocks a baseline load or write; the caller treats None as "cannot verify → skip"."""
+    try:
+        from scripts.autopilot.pareto_archive import ParetoArchive
+        frontier = ParetoArchive().frontier()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Archive-max guard: could not read Pareto frontier (%s)", exc)
+        return None
+    if not frontier:
+        return None
+    best_q = max(e.objectives[0] for e in frontier)
+    ids = frozenset(e.trial_id for e in frontier)
+    return best_q, ids
+
+
+def _pareto_frontier_best_quality() -> float | None:
+    """Max quality on the live Pareto frontier, or None if empty/unreadable."""
+    ctx = _pareto_frontier_context()
+    return ctx[0] if ctx is not None else None
 
 
 @dataclass
@@ -197,7 +221,7 @@ class EvalResult:
 
 @dataclass
 class Baseline:
-    quality: float = 2.0
+    quality: float = DEFAULT_BASELINE_QUALITY
     speed: float = 10.0
     cost: float = 0.5
     reliability: float = 0.9
@@ -222,6 +246,24 @@ class Baseline:
         quality = cls._validate_quality(
             data.get("quality", defaults.quality), defaults.quality, "quality", path
         )
+        # Above-archive-max guard for the LOAD path (defense-in-depth). The scale guard
+        # above only catches values outside [0, QUALITY_MAX] — it passes a 2.900 baseline,
+        # which is within scale yet still unachievable when the Pareto frontier max is 2.400.
+        # A persisted baseline strictly above the frontier max force-reverts every honest
+        # trial and gate-locks the loop into no-op distillation (2026-05-31). The write-side
+        # update_baseline() guard cannot help here because a corrupt file is loaded directly.
+        # Fall back to the default floor and log loudly; the operator must recompute. Skipped
+        # when the archive is empty/unreadable (fresh start) so bootstrap is never blocked.
+        archive_max = _pareto_frontier_best_quality()
+        if (quality is not None and archive_max is not None
+                and quality > archive_max + BASELINE_ARCHIVE_TOLERANCE):
+            log.error(
+                "Persisted baseline quality %.3f in %s exceeds Pareto archive max %.3f — "
+                "unachievable/corrupt; it would gate-lock the loop. Falling back to %.3f. "
+                "Recompute the baseline from a real eval (autopilot.py checkpoint --production-best).",
+                quality, path, archive_max, defaults.quality,
+            )
+            quality = defaults.quality
         per_suite = {
             suite: cls._validate_quality(q, None, f"per_suite[{suite}]", path)
             for suite, q in (data.get("per_suite_quality", {}) or {}).items()
@@ -540,25 +582,30 @@ class SafetyGate:
     def _archive_best_quality() -> float | None:
         """Max quality on the live Pareto frontier, or None if it cannot be read.
 
-        Lazy import + fail-soft: a missing/unreadable archive returns None (the caller
-        skips the archive-max guard but the scale + eligibility gates still apply), so this
-        can never block a legitimate bootstrap write on a fresh state."""
-        try:
-            from scripts.autopilot.pareto_archive import ParetoArchive
-            summary = ParetoArchive().summary()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Archive-max guard: could not read Pareto frontier (%s)", exc)
-            return None
-        if summary.get("frontier_size", 0) <= 0:
-            return None
-        return summary.get("best_quality")
+        Fail-soft: a missing/unreadable archive returns None (the caller skips the archive-max
+        guard but the scale + eligibility gates still apply), so this can never block a
+        legitimate bootstrap write on a fresh state."""
+        return _pareto_frontier_best_quality()
 
-    def update_baseline(self, result: EvalResult) -> None:
+    @staticmethod
+    def _archive_frontier_trial_ids() -> frozenset[int]:
+        """Trial ids currently on the Pareto frontier (empty set if empty/unreadable)."""
+        ctx = _pareto_frontier_context()
+        return ctx[1] if ctx is not None else frozenset()
+
+    def update_baseline(self, result: EvalResult, source_trial_id: int | None = None) -> None:
         """Update baseline with new production-best metrics — HARD-GATED on baseline eligibility
         (operator audit #3): refuses to write unless a recognized speed_metric_mode is set AND the
         contention matrix is certified-fresh against the live topology, so a measurement taken on a
         stale/wrong stack (or with unknown concurrent-speed semantics) can never poison the baseline.
-        The baseline_eligible decision + topology/matrix proof are logged either way."""
+        The baseline_eligible decision + topology/matrix proof are logged either way.
+
+        PRECONDITION (archive-first ordering): `result` must already be admitted to the Pareto
+        archive via archive.update() BEFORE promotion, and its `source_trial_id` passed here. The
+        archive-max guard refuses any quality above the frontier max unless the source trial is
+        actually on the frontier — this catches both phantom/contaminated measurements (never
+        archived) and a caller that promotes a genuine new-best before archiving it. Promote in
+        the order: archive.update(entry) → update_baseline(result, source_trial_id=entry.trial_id)."""
         eligible, reason, proof = self._baseline_eligible(result)
         if not eligible:
             log.warning("Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s",
@@ -571,12 +618,20 @@ class SafetyGate:
             return
         archive_max = self._archive_best_quality()
         if archive_max is not None and result.quality > archive_max + BASELINE_ARCHIVE_TOLERANCE:
-            log.error("Baseline update REFUSED — result.quality %.3f exceeds Pareto archive "
-                      "max %.3f; a trustworthy trial would already be on the frontier, so this "
-                      "is a phantom/contaminated measurement that must not become the baseline "
-                      "(it would force-revert every honest trial and gate-lock the loop)",
-                      result.quality, archive_max)
-            return
+            # Above the frontier max. A genuine new-best must be archived FIRST (archive-first
+            # precondition), so its source trial would already be on the frontier; if it is not,
+            # this is either a phantom/contaminated measurement or a caller that skipped
+            # archive.update(). Refuse either way — accepting it would force-revert every honest
+            # trial and gate-lock the loop.
+            on_frontier = source_trial_id is not None and source_trial_id in self._archive_frontier_trial_ids()
+            if not on_frontier:
+                log.error("Baseline update REFUSED — result.quality %.3f exceeds Pareto archive "
+                          "max %.3f and source_trial_id=%s is not on the frontier. Promote only "
+                          "AFTER archive.update() admits the trial; an above-max value with no "
+                          "archived source is a phantom/contaminated measurement that would "
+                          "force-revert every honest trial and gate-lock the loop.",
+                          result.quality, archive_max, source_trial_id)
+                return
         self.baseline.quality = result.quality
         self.baseline.speed = result.speed
         self.baseline.cost = result.cost
