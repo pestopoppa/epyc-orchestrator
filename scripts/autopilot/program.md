@@ -353,10 +353,10 @@ Some open research items in the repo handoffs are tracked but cannot be executed
 **When enabled (default)**, the controller prompt is appended with a brief instruction asking you (the controller) to optionally emit a separate fenced block AFTER the `json:autopilot_actions` block:
 
 ```json:peaf_prediction
-{"quality": 0.72, "speed": 48.0, "cost": 0.05, "reliability": 0.95}
+{"quality": 2.40, "speed": 48.0, "cost": 0.05, "reliability": 0.95}
 ```
 
-This is an OPTIONAL forecast of the trial's four objectives in the same units the journal uses (`quality`/`reliability` in [0,1], `speed` in t/s, `cost` per question). Omit the block if you cannot honestly estimate — do not fill with placeholders. The forecast does NOT affect the action's evaluation or the Pareto archive scoring; it is logged as `predicted_objectives` and the L1 distance to actuals is logged as `surprise_score` for offline correlation analysis.
+This is an OPTIONAL forecast of the trial's four objectives in the same units the journal uses (`quality` in [0,3], `reliability` in [0,1], `speed` in t/s, `cost` per question). Omit the block if you cannot honestly estimate — do not fill with placeholders. The forecast does NOT affect the action's evaluation or the Pareto archive scoring; it is logged as `predicted_objectives` and the L1 distance to actuals is logged as `surprise_score` for offline correlation analysis.
 
 **Cheap-kill criterion**: run `python autopilot.py peaf` periodically. If Pearson r² between surprise and (entry.quality − parent.quality) is < 0.10 over ≥200 predicted trials, the PEAF signal does not correlate with config-quality gradient and the spike is abandoned. If r² ≥ 0.10, surprise is a candidate to promote as a Pareto co-objective in a future PR (NOT autopilot's job — flag in `distill_knowledge` output).
 

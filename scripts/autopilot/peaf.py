@@ -30,7 +30,7 @@ _PREDICTION_BLOCK_RE = re.compile(
 # Objective normalisation. Predicted and actual values land on the same
 # rough scale before L1 distance. Update if the eval tower scales change.
 _OBJECTIVE_SCALES: dict[str, float] = {
-    "quality": 1.0,       # already in [0, 1]
+    "quality": 3.0,       # eval tower quality is scaled to [0, 3]
     "speed": 100.0,       # t/s; ~50 typical, cap normalisation at 100
     "cost": 1.0,          # cost per question, ~$0.01-$1 range
     "reliability": 1.0,   # already in [0, 1]
@@ -63,9 +63,9 @@ def peaf_prompt_addendum() -> str:
         "this trial will produce. Emit it in a separate fenced block AFTER your "
         "action block, exactly like:\n"
         "```json:peaf_prediction\n"
-        '{"quality": 0.72, "speed": 48.0, "cost": 0.05, "reliability": 0.95}\n'
+        '{"quality": 2.40, "speed": 48.0, "cost": 0.05, "reliability": 0.95}\n'
         "```\n"
-        "Use the same units the journal uses (quality and reliability in [0,1], "
+        "Use the same units the journal uses (quality in [0,3], reliability in [0,1], "
         "speed in t/s, cost per question). If you cannot estimate honestly, omit "
         "the block — do NOT fill with placeholders. Surprise score is logged "
         "for offline correlation analysis only; it does not affect the action's "
