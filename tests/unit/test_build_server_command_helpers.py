@@ -307,6 +307,73 @@ def test_dispatcher_routes_default_to_role_builder() -> None:
     m.assert_called_once_with(fake_role, 8070, 0)
 
 
+def test_start_server_vision_forwards_numa_instance_to_prefix(tmp_path, monkeypatch) -> None:
+    """Vision quarter launches must inherit their NUMA_CONFIG CPU mask, not idx0."""
+    calls: list[tuple[str, int]] = []
+
+    def fake_prefix(role: str, instance_idx: int = 0) -> list[str]:
+        calls.append((role, instance_idx))
+        return ["taskset", "-c", f"{role}:{instance_idx}"]
+
+    fake_proc = SimpleNamespace(pid=4242)
+    monkeypatch.setattr(oss, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(oss, "_write_llama_marker", lambda *a, **kw: None)
+    monkeypatch.setattr(oss, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(oss, "build_launch_env", lambda *a, **kw: {})
+    with (
+        patch.object(oss, "_numa_prefix", side_effect=fake_prefix),
+        patch.object(oss, "build_server_command", return_value=["llama-server"]),
+        patch.object(oss.subprocess, "Popen", return_value=fake_proc) as popen,
+    ):
+        info = oss.start_server(
+            port=8187,
+            roles=["vision_escalation"],
+            registry=SimpleNamespace(),
+            vision_mode=True,
+            vision_type="escalation",
+            numa_instance=1,
+        )
+
+    assert info is not None
+    assert calls == [("vision_escalation", 1)]
+    assert popen.call_args.args[0][:3] == ["taskset", "-c", "vision_escalation:1"]
+    _assert_detached_popen(popen)
+
+
+def test_start_server_worker_pool_forwards_numa_instance_to_prefix(tmp_path, monkeypatch) -> None:
+    """Worker quarter launches must use the quarter CPU mask as well as -t 48."""
+    calls: list[tuple[str, int]] = []
+
+    def fake_prefix(role: str, instance_idx: int = 0) -> list[str]:
+        calls.append((role, instance_idx))
+        return ["taskset", "-c", f"{role}:{instance_idx}"]
+
+    fake_proc = SimpleNamespace(pid=4343)
+    monkeypatch.setattr(oss, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(oss, "_write_llama_marker", lambda *a, **kw: None)
+    monkeypatch.setattr(oss, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(oss, "build_launch_env", lambda *a, **kw: {})
+    monkeypatch.setattr(oss, "_runtime_requirements_for_role", lambda *a, **kw: (None, None))
+    with (
+        patch.object(oss, "_numa_prefix", side_effect=fake_prefix),
+        patch.object(oss, "build_server_command", return_value=["llama-server"]),
+        patch.object(oss.subprocess, "Popen", return_value=fake_proc) as popen,
+    ):
+        info = oss.start_server(
+            port=8282,
+            roles=["worker_general"],
+            registry=SimpleNamespace(),
+            worker_pool_mode=True,
+            worker_type="explore",
+            numa_instance=3,
+        )
+
+    assert info is not None
+    assert calls == [("worker_general", 3)]
+    assert popen.call_args.args[0][:3] == ["taskset", "-c", "worker_general:3"]
+    _assert_detached_popen(popen)
+
+
 def test_start_server_default_detaches_child_stdio(tmp_path, monkeypatch) -> None:
     """Stack-managed llama-server children must outlive non-interactive launchers."""
     fake_proc = SimpleNamespace(pid=4444)
