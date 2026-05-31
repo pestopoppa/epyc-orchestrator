@@ -21,6 +21,8 @@ DEFAULT_STATE_PATH = (
 # Reference point for hypervolume (worst acceptable values)
 # Quality: 0, Speed: 0 t/s, Cost: -1.0 (high), Reliability: 0
 REFERENCE_POINT = (0.0, 0.0, -1.0, 0.0)
+MIN_FRONTIER_EVAL_TIER = 1
+PARETO_STATUS_TIER_EXCLUDED = "fast_reject"
 
 
 @dataclass
@@ -86,6 +88,7 @@ class ParetoArchive:
         self._hypervolume_history = [
             tuple(h) for h in archive_data.get("hypervolume_history", [])
         ]
+        self._rebuild_frontier()
 
         # Integrity check: detect lost frontier
         trial_counter = data.get("trial_counter", 0)
@@ -137,9 +140,38 @@ class ParetoArchive:
 
     # ── core operations ─────────────────────────────────────────
 
+    @staticmethod
+    def is_frontier_eligible(entry: ParetoEntry) -> bool:
+        """True when an entry is allowed onto the production Pareto frontier.
+
+        Tier-0 is a fast-reject sentinel eval. Its 10-question granularity makes
+        q=2.4 mean "8/10 on the easy set", not a production-quality ceiling.
+        Keep T0 entries in all_entries for audit, but never let them set the
+        frontier, production_best, hypervolume, or archive-max baseline guard.
+        """
+        return entry.eval_tier >= MIN_FRONTIER_EVAL_TIER
+
+    def _rebuild_frontier(self) -> None:
+        """Recompute frontier from eligible entries, scrubbing legacy T0 pollution."""
+        rebuilt: list[ParetoEntry] = []
+        for entry in self._all_entries:
+            if not self.is_frontier_eligible(entry):
+                entry.is_production_best = False
+                continue
+            if any(existing.dominates(entry) for existing in rebuilt):
+                entry.is_production_best = False
+                continue
+            rebuilt = [existing for existing in rebuilt if not entry.dominates(existing)]
+            rebuilt.append(entry)
+        self._frontier = rebuilt
+
     def is_pareto_candidate(self, objectives: tuple[float, ...]) -> bool:
         """Check if objectives would be non-dominated by current frontier."""
-        entry = ParetoEntry(trial_id=-1, objectives=objectives)
+        entry = ParetoEntry(
+            trial_id=-1,
+            objectives=objectives,
+            eval_tier=MIN_FRONTIER_EVAL_TIER,
+        )
         for f in self._frontier:
             if f.dominates(entry):
                 return False
@@ -148,6 +180,9 @@ class ParetoArchive:
     def update(self, entry: ParetoEntry) -> str:
         """Add entry to archive. Returns 'frontier', 'candidate', or 'dominated'."""
         self._all_entries.append(entry)
+        if not self.is_frontier_eligible(entry):
+            entry.is_production_best = False
+            return PARETO_STATUS_TIER_EXCLUDED
 
         # Check if dominated by any frontier entry
         if not self.is_pareto_candidate(entry.objectives):

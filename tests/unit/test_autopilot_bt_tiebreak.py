@@ -29,6 +29,7 @@ def _make_entry(trial_id: int, q: float, sp: float, neg_cost: float, rel: float)
     return ParetoEntry(
         trial_id=trial_id,
         objectives=(q, sp, neg_cost, rel),
+        eval_tier=1,
     )
 
 

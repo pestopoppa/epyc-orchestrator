@@ -223,7 +223,7 @@ def test_reimport_skips_when_already_in_archive(
 ) -> None:
     journal.record(_make_entry(trial_id=3))
     # Pre-populate the archive with this trial id
-    archive.update(ParetoEntry(trial_id=3, objectives=(0.7, 40.0, -0.3, 0.9)))
+    archive.update(ParetoEntry(trial_id=3, objectives=(0.7, 40.0, -0.3, 0.9), eval_tier=2))
     before = len(archive._all_entries)
     result = autopilot._maybe_reimport_pareto_from_journal(archive, journal, 3)
     assert result is False

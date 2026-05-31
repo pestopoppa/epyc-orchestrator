@@ -129,8 +129,8 @@ def test_load_state_valid_file_returns_parsed(tmp_path: Path) -> None:
 def test_pareto_save_atomic_round_trip(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     archive = ParetoArchive(state_path=state_path)
-    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0)))
-    archive.update(ParetoEntry(trial_id=2, objectives=(0.5, 80.0, -0.3, 0.9)))
+    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0), eval_tier=1))
+    archive.update(ParetoEntry(trial_id=2, objectives=(0.5, 80.0, -0.3, 0.9), eval_tier=1))
     archive.save({"trial_counter": 2})
     # Re-load from the same path
     a2 = ParetoArchive(state_path=state_path)
@@ -151,7 +151,7 @@ def test_pareto_save_updates_caller_state_for_followup_save(tmp_path: Path) -> N
             "hypervolume_history": [],
         },
     }
-    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0)))
+    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0), eval_tier=1))
 
     archive.save(state)
     state_store.save_state(state_path, state)
@@ -167,7 +167,7 @@ def test_pareto_save_crash_during_replace_preserves_original(
     import pareto_archive as pa_mod
     state_path = tmp_path / "state.json"
     archive = ParetoArchive(state_path=state_path)
-    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0)))
+    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0), eval_tier=1))
     archive.save({"trial_counter": 1})
     original = state_path.read_text()
     # Force os.replace to raise on the next save
@@ -176,7 +176,7 @@ def test_pareto_save_crash_during_replace_preserves_original(
         raise OSError("simulated replace failure")
     # pareto_archive imports os as _os inside save() — patch the live module
     monkeypatch.setattr("os.replace", boom)
-    archive.update(ParetoEntry(trial_id=2, objectives=(0.5, 80.0, -0.3, 0.9)))
+    archive.update(ParetoEntry(trial_id=2, objectives=(0.5, 80.0, -0.3, 0.9), eval_tier=1))
     with pytest.raises(OSError):
         archive.save({"trial_counter": 2})
     assert state_path.read_text() == original
