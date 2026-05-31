@@ -79,6 +79,7 @@ from state_store import (
     save_state as _save_state_impl,
 )
 from actions import dispatch_action
+from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER, objectives_from, spec_for
 
 # Preflight diagnostics from seeding infra
 sys.path.insert(0, str(SCRIPT_DIR.parent / "benchmark"))
@@ -514,9 +515,12 @@ def _maybe_reimport_pareto_from_journal(
         return False
     p_entry = ParetoEntry(
         trial_id=entry.trial_id,
-        # ParetoArchive convention: (quality, speed, -cost, reliability) so
-        # higher-is-better on all four axes.
-        objectives=(entry.quality, entry.speed, -entry.cost, entry.reliability),
+        objectives=spec_for(entry.tier).objectives_from_row({
+            "quality": entry.quality,
+            "speed": entry.speed,
+            "cost": entry.cost,
+            "reliability": entry.reliability,
+        }) or (entry.quality, entry.speed, -entry.cost, entry.reliability),
         config_snapshot=entry.config_snapshot,
         git_tag=entry.git_tag,
         eval_tier=entry.tier,
@@ -1312,7 +1316,7 @@ def _run_loop_inner(
                 insights_structured_text = f"(structured insights unavailable: {_exc})"
 
             try:
-                pareto_geometry_text = archive.geometry_text()
+                pareto_geometry_text = archive.geometry_text(tier=DEFAULT_FRONTIER_TIER)
             except Exception as _exc:
                 pareto_geometry_text = f"(geometry unavailable: {_exc})"
 
@@ -1339,7 +1343,7 @@ def _run_loop_inner(
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
                 program=program_text,
-                pareto_summary=archive.summary_text(),
+                pareto_summary=archive.summary_text(tier=DEFAULT_FRONTIER_TIER),
                 pareto_geometry=pareto_geometry_text,
                 journal_trustworthiness=journal_trustworthiness_text,
                 hypotheses_under_test=hypotheses_text,
@@ -1623,7 +1627,7 @@ def _run_loop_inner(
         # ── 4b. Self-Criticism (AP-23/AP-24) ────────────────────
         phase.set("self_criticism", trial_id=trial_counter, species=species_name)
         # Get baseline and previous per-suite for comparison
-        baseline_q = gate.baseline.quality if gate.baseline else 0.0
+        baseline_q = gate.baseline.quality_for_tier(eval_result.tier) if gate.baseline else 0.0
         prev_suite = {}
         recent = journal.by_species(species_name)
         if recent:
@@ -1669,7 +1673,7 @@ def _run_loop_inner(
             pareto_status = archive.update(
                 ParetoEntry(
                     trial_id=trial_counter,
-                    objectives=eval_result.objectives,
+                    objectives=objectives_from(eval_result),
                     config_snapshot=action,
                     species=species_name,
                     timestamp=datetime.now(timezone.utc).isoformat(),
@@ -1678,6 +1682,21 @@ def _run_loop_inner(
                     reasoning=json.dumps(action),
                 )
             )
+            baseline_update = gate.update_baseline(eval_result, source_trial_id=trial_counter)
+            if baseline_update.updated:
+                log.info(
+                    "Trial %d: T%d baseline auto-raised %.3f → %.3f",
+                    trial_counter,
+                    baseline_update.tier,
+                    baseline_update.previous_quality or 0.0,
+                    baseline_update.new_quality,
+                )
+            else:
+                log.info(
+                    "Trial %d: baseline update skipped (%s)",
+                    trial_counter,
+                    baseline_update.reason,
+                )
 
         # B1: Store strategy on Pareto frontier improvements
         if pareto_status == "frontier" and strategy_store is not None:
@@ -2110,7 +2129,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"Paused: {state.get('paused', False)}")
     print(f"Session ID: {state.get('session_id', 'none')}")
     print()
-    print(archive.summary_text())
+    print(archive.summary_text(tier=DEFAULT_FRONTIER_TIER))
     print()
     print(journal.summary_text(10))
 
@@ -2142,7 +2161,7 @@ def cmd_report(args: argparse.Namespace) -> None:
     print(journal.summary_text())
     print()
     print("## Pareto Frontier")
-    print(archive.summary_text())
+    print(archive.summary_text(tier=DEFAULT_FRONTIER_TIER))
     print()
     print("## Species Effectiveness")
     eff = journal.species_effectiveness()

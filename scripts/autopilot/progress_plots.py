@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+
 log = logging.getLogger("autopilot.plots")
 
 PLOTS_DIR = Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_plots"
@@ -272,15 +274,26 @@ def generate_all_plots(
             if e.tier > 0 and not getattr(e, "bug_corrupted_by", "")
         ]
 
-        # 1. Hypervolume trend
-        paths.append(plot_hypervolume_trend(archive.hypervolume_trend(), output_dir))
+        # 1. Hypervolume trend (canonical production tier)
+        paths.append(
+            plot_hypervolume_trend(
+                archive.hypervolume_trend(tier=DEFAULT_FRONTIER_TIER), output_dir
+            )
+        )
 
-        # 2. Pareto frontier 2D
-        frontier = [e.to_dict() for e in archive.frontier()]
+        # 2. Pareto frontier 2D (canonical production tier only; harder tiers
+        # have their own frontiers and must not dominate T1 visually).
+        frontier_entries = archive.frontier(tier=DEFAULT_FRONTIER_TIER)
+        frontier_ids = {e.trial_id for e in frontier_entries}
+        frontier = [e.to_dict() for e in frontier_entries]
         dominated = [
             e.to_dict()
             for e in archive._all_entries
-            if archive.is_frontier_eligible(e) and e not in archive._frontier
+            if (
+                archive.is_frontier_eligible(e)
+                and int(e.eval_tier) == DEFAULT_FRONTIER_TIER
+                and e.trial_id not in frontier_ids
+            )
         ]
         paths.append(plot_pareto_frontier_2d(frontier, dominated, output_dir))
 

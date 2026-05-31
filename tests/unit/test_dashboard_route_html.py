@@ -108,6 +108,9 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "startsWith('journal_')" in body
     assert "const xLo = Math.max(0, xMin - xPad)" in body
     assert "const yLo = Math.max(0, yMin - yPad)" in body
+    assert "d.canonical_tier" in body
+    assert "d.frontiers_by_tier" in body
+    assert "tiers ${tierKeys.map" in body
 
 
 # ----- dashboard_tasks: timezone-aware UTC (Tranche-8 polish) -----

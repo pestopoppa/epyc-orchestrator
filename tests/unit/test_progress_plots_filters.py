@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 import progress_plots  # noqa: E402
+from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER  # noqa: E402
 
 
 @dataclass
@@ -42,18 +43,24 @@ class _ArchiveEntry:
 
 class _Archive:
     def __init__(self) -> None:
-        self._frontier = [_ArchiveEntry(2, 1, (1.5, 20.0, -0.1, 1.0))]
+        self._frontiers = {
+            DEFAULT_FRONTIER_TIER: [_ArchiveEntry(2, 1, (1.5, 20.0, -0.1, 1.0))],
+            2: [_ArchiveEntry(4, 2, (2.2, 8.0, -0.1, 1.0))],
+        }
         self._all_entries = [
             _ArchiveEntry(1, 0, (2.4, 30.0, -0.1, 1.0)),
-            self._frontier[0],
+            self._frontiers[DEFAULT_FRONTIER_TIER][0],
             _ArchiveEntry(3, 1, (1.0, 10.0, -0.1, 1.0)),
+            self._frontiers[2][0],
         ]
 
-    def hypervolume_trend(self):
+    def hypervolume_trend(self, tier=None):
+        assert tier == DEFAULT_FRONTIER_TIER
         return [(2, 1.0)]
 
-    def frontier(self):
-        return list(self._frontier)
+    def frontier(self, tier=None):
+        assert tier == DEFAULT_FRONTIER_TIER
+        return list(self._frontiers[DEFAULT_FRONTIER_TIER])
 
     def is_frontier_eligible(self, entry) -> bool:
         return entry.eval_tier > 0

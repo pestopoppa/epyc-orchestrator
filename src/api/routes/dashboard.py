@@ -72,6 +72,7 @@ from src.api.routes.dashboard_topology import (
     base_role,
 )
 from src.api.routes.dashboard_topology import _load_state_services as _load_state_services_impl
+from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER, MIN_FRONTIER_EVAL_TIER, spec_for
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1114,13 +1115,13 @@ def _parse_journal_ts(value: Any) -> float | None:
 
 def _pareto_objectives_from_journal(entry: dict[str, Any]) -> list[float] | None:
     try:
-        quality = float(entry.get("quality") or 0.0)
-        speed = float(entry.get("speed") or 0.0)
-        cost = float(entry.get("cost") or 0.0)
-        reliability = float(entry.get("reliability") or 0.0)
+        tier = int(entry.get("tier", DEFAULT_FRONTIER_TIER))
     except (TypeError, ValueError):
+        tier = DEFAULT_FRONTIER_TIER
+    objectives = spec_for(tier).objectives_from_row(entry)
+    if objectives is None:
         return None
-    return [quality, speed, -cost, reliability]
+    return list(objectives[:4])
 
 
 def _pareto_dominates(a: list[float], b: list[float]) -> bool:
@@ -1192,6 +1193,7 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "is_production_best": bool(entry.get("is_production_best", False)),
         "timestamp": entry.get("timestamp", ""),
         "reasoning": (entry.get("reasoning") or "")[:200],
+        "eval_tier": entry.get("eval_tier", entry.get("tier", DEFAULT_FRONTIER_TIER)),
     }
 
 
@@ -1240,8 +1242,8 @@ def _pareto_from_journal(
         return None
 
     all_entries: list[dict[str, Any]] = []
-    frontier: list[dict[str, Any]] = []
-    hv_history: list[list[float]] = []
+    frontiers_by_tier: dict[int, list[dict[str, Any]]] = {}
+    hv_history_by_tier: dict[int, list[list[float]]] = {}
     run_meta: dict[str, Any] = {}
     try:
         with open(_AUTOPILOT_JOURNAL_PATH) as f:
@@ -1262,16 +1264,16 @@ def _pareto_from_journal(
     for row in rows:
         if row.get("bug_corrupted_by"):
             continue
+        try:
+            tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
+        except (TypeError, ValueError):
+            tier = DEFAULT_FRONTIER_TIER
         # T0 is a fast-reject sentinel tier (10q, saturates ~2.4 = 8/10) and must
         # not enter the operator-facing frontier/hypervolume any more than it enters
-        # the real ParetoArchive (ec9622d excludes it). Without this, the dashboard
-        # reconstructs an independent T0-polluted frontier (phantom q=2.4) that never
-        # reflects the corrected archive. Audit-only — kept in the journal, not plotted.
-        try:
-            if int(row.get("tier", 1)) == 0:
-                continue
-        except (TypeError, ValueError):
-            pass
+        # the real ParetoArchive. Other tiers are segregated below so T2 validation
+        # points cannot dominate the canonical T1 production frontier.
+        if tier < MIN_FRONTIER_EVAL_TIER:
+            continue
         ts = _parse_journal_ts(row.get("timestamp"))
         if session_start_ts is not None and (ts is None or ts < session_start_ts):
             continue
@@ -1292,29 +1294,42 @@ def _pareto_from_journal(
             "is_production_best": False,
             "timestamp": row.get("timestamp", ""),
             "reasoning": row.get("reasoning", ""),
+            "eval_tier": tier,
         }
         all_entries.append(shaped)
+        frontier = frontiers_by_tier.setdefault(tier, [])
         if not any(_pareto_dominates(f["objectives"], objectives) for f in frontier):
-            frontier = [
+            frontiers_by_tier[tier] = [
                 f for f in frontier
                 if not _pareto_dominates(objectives, f["objectives"])
             ]
-            frontier.append(shaped)
-        hv = round(_pareto_hypervolume([f["objectives"] for f in frontier]), 4)
-        if hv_history:
-            hv = max(hv_history[-1][1], hv)
-        hv_history.append([
+            frontiers_by_tier[tier].append(shaped)
+        tier_frontier = frontiers_by_tier[tier]
+        tier_hv_history = hv_history_by_tier.setdefault(tier, [])
+        hv = round(_pareto_hypervolume([f["objectives"] for f in tier_frontier]), 4)
+        if tier_hv_history:
+            hv = max(tier_hv_history[-1][1], hv)
+        tier_hv_history.append([
             trial_id,
             hv,
         ])
 
     if not all_entries:
         return None
+    canonical_frontier = frontiers_by_tier.get(DEFAULT_FRONTIER_TIER, [])
+    canonical_hv_history = hv_history_by_tier.get(DEFAULT_FRONTIER_TIER, [])
     archive = {
-        "frontier": frontier,
+        "frontier": canonical_frontier,
+        "frontiers_by_tier": {
+            str(tier): front for tier, front in sorted(frontiers_by_tier.items())
+        },
         "all_entries": all_entries,
-        "hypervolume_history": hv_history,
+        "hypervolume_history": canonical_hv_history,
+        "hv_history_by_tier": {
+            str(tier): hist for tier, hist in sorted(hv_history_by_tier.items())
+        },
         "session_start_ts": session_start_ts,
+        "canonical_tier": DEFAULT_FRONTIER_TIER,
     }
     archive.update(run_meta)
     return archive
@@ -1640,10 +1655,27 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
             "hypervolume_history": [],
         })
 
-    frontier_raw = archive.get("frontier", []) or []
+    canonical_tier = int(archive.get("canonical_tier", DEFAULT_FRONTIER_TIER))
+    frontiers_by_tier_raw = archive.get("frontiers_by_tier", {}) or {}
+    hv_history_by_tier_raw = archive.get("hv_history_by_tier", {}) or {}
+    frontier_raw = (
+        frontiers_by_tier_raw.get(str(canonical_tier))
+        or frontiers_by_tier_raw.get(canonical_tier)
+        or archive.get("frontier", [])
+        or []
+    )
     all_raw = archive.get("all_entries", []) or []
-    hv_history = archive.get("hypervolume_history", []) or []
+    hv_history = (
+        hv_history_by_tier_raw.get(str(canonical_tier))
+        or hv_history_by_tier_raw.get(canonical_tier)
+        or archive.get("hypervolume_history", [])
+        or []
+    )
     frontier = [_shape_pareto_entry(e) for e in frontier_raw]
+    frontiers_by_tier = {
+        str(tier): [_shape_pareto_entry(e) for e in entries]
+        for tier, entries in frontiers_by_tier_raw.items()
+    }
     frontier_ids = {f["trial_id"] for f in frontier if f["trial_id"] is not None}
 
     # Dominated entries: newest first, trimmed to max_dominated to bound payload.
@@ -1664,13 +1696,16 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         "source": source,
         "source_reason": source_reason,
         "frontier": frontier,
+        "frontiers_by_tier": frontiers_by_tier,
         "dominated": dominated_shaped,
         "hypervolume_history": hv_shaped,
+        "hv_history_by_tier": hv_history_by_tier_raw,
         "totals": {
             "frontier_size": len(frontier),
             "all_entries": len(all_raw),
             "hv_points": len(hv_shaped),
         },
+        "canonical_tier": canonical_tier,
         "session_start_ts": archive.get("session_start_ts"),
         "journal_run_start_index": archive.get("journal_run_start_index"),
         "journal_run_start_trial_id": archive.get("journal_run_start_trial_id"),

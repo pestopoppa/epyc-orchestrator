@@ -3087,8 +3087,11 @@ async function updatePareto() {
         if (sumEl) {
             if (d.available) {
                 const source = String(d.source || '').startsWith('journal_') ? 'journal' : 'state';
+                const canonicalTier = Number.isFinite(Number(d.canonical_tier)) ? `T${Number(d.canonical_tier)}` : 'T1';
+                const tierKeys = Object.keys(d.frontiers_by_tier || {}).sort((a, b) => Number(a) - Number(b));
+                const tierText = tierKeys.length ? ` · tiers ${tierKeys.map(t => `T${t}`).join('/')}` : '';
                 sumEl.textContent =
-                    `${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials · ${source}`;
+                    `${canonicalTier} ${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials · ${source}${tierText}`;
             } else {
                 sumEl.textContent = '(no autopilot_state.json yet)';
             }
@@ -3162,7 +3165,7 @@ function renderParetoScatter(d) {
     // Dominated points first (so frontier paints on top)
     (d.dominated || []).forEach(p => {
         const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
-        const tip = `trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
+        const tip = `T${p.eval_tier ?? d.canonical_tier ?? 1} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
         parts.push(`<circle class="point-dominated" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5"><title>${tip}</title></circle>`);
     });
     // Frontier line: sort by x ascending, draw polyline through points
@@ -3177,7 +3180,7 @@ function renderParetoScatter(d) {
     frontier.forEach(p => {
         const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
         const cls = p.is_production_best ? 'point-production' : 'point-frontier';
-        const tip = `trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${p.is_production_best ? ' · PRODUCTION' : ''}`;
+        const tip = `T${p.eval_tier ?? d.canonical_tier ?? 1} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${p.is_production_best ? ' · PRODUCTION' : ''}`;
         parts.push(`<circle class="${cls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"><title>${tip}</title></circle>`);
     });
 
