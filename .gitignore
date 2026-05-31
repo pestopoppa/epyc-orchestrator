@@ -112,6 +112,15 @@ orchestration/.lean_cache_key
 # Test artifacts (MagicMock-as-path, etc.)
 MagicMock/
 
+# Generated benchmark/preflight artifacts. Keep curated fixtures in these
+# directories tracked; ignore only ad-hoc run outputs.
+data/bep_sandbox/results-*/
+data/bep_sandbox/INVALID-*/
+data/contention_matrix/affinity_preflight_*.json
+
+# Local SearxNG config export/scratch files
+config/searxng/*.new
+
 # Editor backups
 *~
 \#*\#
