@@ -80,7 +80,7 @@ from state_store import (
     save_state as _save_state_impl,
 )
 from actions import dispatch_action
-from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER, objectives_from, spec_for
+from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER, MIN_FRONTIER_EVAL_TIER, objectives_from, spec_for
 
 # Preflight diagnostics from seeding infra
 sys.path.insert(0, str(SCRIPT_DIR.parent / "benchmark"))
@@ -1697,6 +1697,24 @@ def _run_loop_inner(
         learning_excluded_by, learning_excluded_reason, exclusion_def_cat = (
             classify_learning_exclusion(verdict, eval_result)
         )
+        # Bootstrap a freshly-rebased (empty) frontier. A within-noise above-baseline
+        # trial is normally mad_noise-excluded because it can't be confirmed against an
+        # established point — but right after a deliberate rebase the tier frontier is
+        # EMPTY, so there is nothing to establish it and the archive could never seed
+        # itself. Admit the first such trial as the bootstrap point; subsequent
+        # within-noise trials then resolve as reproduction_confirmed against it. Only
+        # for real eval tiers (>= MIN_FRONTIER_EVAL_TIER); T0 stays audit-only.
+        if (
+            learning_excluded_by == "mad_noise"
+            and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
+            and archive.frontier_size(eval_result.tier) == 0
+        ):
+            log.info(
+                "Trial %d: bootstrapping empty T%d frontier — admitting within-noise "
+                "above-baseline trial as the first point (was mad_noise).",
+                trial_counter, eval_result.tier,
+            )
+            learning_excluded_by, learning_excluded_reason, exclusion_def_cat = "", "", ""
         if learning_excluded_by:
             pareto_status = "dominated"  # placeholder for JournalEntry only
             log.info(
