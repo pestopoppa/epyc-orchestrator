@@ -3252,6 +3252,23 @@ function paretoTierSeries(byTier, fallbackPoints, canonicalTier) {
     return [[String(canonicalTier ?? 1), fallbackPoints || []]];
 }
 
+// Client-side Pareto dominance over the 4D objective tuple (all maximized:
+// quality, speed, -cost, reliability). Used to draw the T0 *audit* frontier —
+// purely for visualization; T0 never enters the real archive/hypervolume.
+function paretoDominates4(a, b) {
+    let ge = true, gt = false;
+    for (let i = 0; i < 4; i++) {
+        const av = a[i] ?? 0, bv = b[i] ?? 0;
+        if (av < bv) { ge = false; break; }
+        if (av > bv) gt = true;
+    }
+    return ge && gt;
+}
+function paretoFrontierOf(points) {
+    const pts = points || [];
+    return pts.filter(p => !pts.some(q => q !== p && paretoDominates4(q.objectives, p.objectives)));
+}
+
 function renderParetoScatter(d) {
     // Quality (x) × Speed (y) scatter. Dominated points dim; each TIER's frontier is its
     // own colored series + line; production-best ringed green. Axis labels + tick gridlines.
@@ -3309,19 +3326,32 @@ function renderParetoScatter(d) {
     parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 2}" text-anchor="middle" font-size="10" fill="#94a3b8">quality →</text>`);
     parts.push(`<text class="axis-label" x="10" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 10 ${PAD.t + plotH / 2})">speed (t/s) →</text>`);
 
-    // T0 audit points first, then dominated, then frontier (so frontier paints on top).
-    // Audit points use the muted slate triangle and are never on any frontier/HV.
-    (d.t0_audit || []).forEach(p => {
+    // T0 audit first (with its own dashed audit-frontier line), then dominated,
+    // then the tier frontiers (so frontiers paint on top).
+    // T0 is audit-only: its frontier is drawn dashed for shape visibility but it
+    // never enters the real archive/hypervolume. Frontier audit points are brighter.
+    const t0pts = d.t0_audit || [];
+    const t0front = paretoFrontierOf(t0pts);
+    const t0frontSet = new Set(t0front);
+    const t0sorted = t0front.slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
+    if (t0sorted.length > 1) {
+        const path = t0sorted.map((p, i) =>
+            `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
+        ).join(' ');
+        parts.push(`<path class="frontier-line" style="stroke:${PARETO_AUDIT_FILL};stroke-dasharray:3 2;opacity:0.75" d="${path}"/>`);
+    }
+    t0pts.forEach(p => {
         const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
-        const tip = `T${p.eval_tier ?? 0} audit · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
-        parts.push(paretoMarker(p.eval_tier ?? 0, x, y, 3, `fill="${PARETO_AUDIT_FILL}" opacity="0.5"`, tip));
+        const onFront = t0frontSet.has(p);
+        const tip = `T${p.eval_tier ?? 0} audit${onFront ? ' · frontier' : ''} · trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
+        parts.push(paretoMarker(p.eval_tier ?? 0, x, y, onFront ? 3.5 : 3, `fill="${PARETO_AUDIT_FILL}" opacity="${onFront ? 0.85 : 0.4}"`, tip));
     });
-    // Dominated points (dimmed, but shaped by their own tier)
+    // Dominated points: colored by their own tier (dimmed via opacity), shaped by tier.
     (d.dominated || []).forEach(p => {
         const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
         const tier = p.eval_tier ?? d.canonical_tier ?? 1;
         const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
-        parts.push(paretoMarker(tier, x, y, 2.5, 'class="point-dominated"', tip));
+        parts.push(paretoMarker(tier, x, y, 2.5, `fill="${paretoTierFill(tier)}" opacity="0.4"`, tip));
     });
     // Per-tier frontiers: each tier drawn as its own colored line + points.
     const series = paretoTierSeries(d.frontiers_by_tier, d.frontier, d.canonical_tier);
