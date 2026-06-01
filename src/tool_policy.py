@@ -60,6 +60,10 @@ TOOL_GROUPS: dict[str, frozenset[str]] = {
 # Explicitly excluded: long_context, agentic (permanently 0.00 — web search is EXPLORE).
 # coder removed: with compute-first prompt priority, web search helps for API/library refs.
 # instruction_precision removed: format/convention questions benefit from web lookup at T1 depth.
+# Factual-retrieval suites (simpleqa, hotpotqa, web_research) are intentionally NOT
+# listed here — selective web search is enabled for them per WS-3 relaxation; the
+# compute-first prompt fix prevents the old 'search-first' regression. Only the
+# compute/reasoning types (math, thinking) remain denied.
 NO_WEB_TASK_TYPES: frozenset[str] = frozenset({
     "math", "thinking",
 })
