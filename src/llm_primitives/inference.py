@@ -769,6 +769,12 @@ class InferenceMixin:
             if not result.success and not result.partial:
                 raise RuntimeError(f"Inference failed: {result.error_message}")
 
+            # SINGLE SOURCE OF TRUTH for model-decode token accounting. This is the
+            # backend's EXACT completion count; the primitives layer must NOT re-add a
+            # char-estimate on top of it (it guards against that via a snapshot). The
+            # Pareto/HV speed objective is derived from this count, so it must equal
+            # MODEL-decoded tokens counted exactly once — tool output is never included
+            # here (effective tool-output throughput is log-only, eval_log_format.py).
             self.total_tokens_generated += result.tokens_generated
             self.total_prompt_eval_ms += result.prompt_eval_ms
             self.total_generation_ms += result.generation_ms

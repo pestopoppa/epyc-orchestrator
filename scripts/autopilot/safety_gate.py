@@ -158,6 +158,11 @@ class EvalResult:
     mean_tools_used: float = 0.0  # Mean tool invocations per (non-error) question.
     tool_use_rate: float = 0.0  # Fraction of questions that invoked >=1 tool.
     total_tool_calls: int = 0  # Total tool invocations across the trial.
+    # Conditional credit, NOT a Pareto objective: marginal usefulness of tools =
+    # P(correct | tools used) - P(correct | no tools). NaN until both arms have a
+    # minimum sample. Used as a planner prior to steer tool-enabling experiments,
+    # scored only by downstream quality/reliability movement — never optimized raw.
+    tool_helpfulness: float = float("nan")
     # AM KV compaction telemetry (populated when compact action is used)
     avg_prompt_tokens: float = 0.0  # Average context length across results
     compaction_events: int = 0  # Number of compacted slots in this eval

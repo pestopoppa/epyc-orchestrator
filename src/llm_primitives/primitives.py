@@ -577,6 +577,10 @@ class LLMPrimitives(
             persona=persona,
         )
 
+        # Snapshot to guard against double-counting model output below: the real
+        # backend path (_real_call -> inference.py) already adds its EXACT completion
+        # token count to total_tokens_generated.
+        _tokens_before = self.total_tokens_generated
         try:
             if self.mock_mode:
                 result = self._mock_call(full_prompt, role)
@@ -600,7 +604,16 @@ class LLMPrimitives(
 
             # Track tokens for current query cost
             completion_tokens = self._estimate_completion_tokens(result)
-            self.total_tokens_generated += completion_tokens
+            # Count model-decode tokens exactly ONCE. The real backend path already
+            # added its exact completion count (inference.py); re-adding the
+            # char-estimate here was double-counting and ~2x-inflating the speed
+            # objective. Only fall back to the estimate when the backend did NOT count
+            # (mock mode / content-cache hit, which return before the backend add).
+            # INVARIANT: total_tokens_generated == MODEL-decoded tokens, once each.
+            # Tool output is never counted here (it returns as next-turn input);
+            # effective tool-output throughput lives only in eval_log_format.py (logs).
+            if self.total_tokens_generated == _tokens_before:
+                self.total_tokens_generated += completion_tokens
             if self._current_query is not None:
                 prompt_tokens = self._estimate_prompt_tokens(full_prompt)
                 self._current_query.prompt_tokens += prompt_tokens
@@ -687,6 +700,7 @@ class LLMPrimitives(
             persona=persona,
         )
 
+        _tokens_before = self.total_tokens_generated  # double-count guard (see call())
         try:
             if self.mock_mode:
                 results = self._mock_batch(prompts, role)
@@ -711,7 +725,9 @@ class LLMPrimitives(
             total_completion_tokens = sum(
                 self._estimate_completion_tokens(r) for r in capped_results
             )
-            self.total_tokens_generated += total_completion_tokens
+            # Count once: skip the char-estimate if the backend already counted (see call()).
+            if self.total_tokens_generated == _tokens_before:
+                self.total_tokens_generated += total_completion_tokens
             if self._current_query is not None:
                 total_prompt_tokens = sum(self._estimate_prompt_tokens(p) for p in prompts)
                 self._current_query.prompt_tokens += total_prompt_tokens
@@ -763,6 +779,7 @@ class LLMPrimitives(
             persona=persona,
         )
 
+        _tokens_before = self.total_tokens_generated  # double-count guard (see call())
         try:
             if self.mock_mode:
                 # Mock mode: simulate async calls
@@ -807,7 +824,9 @@ class LLMPrimitives(
             total_completion_tokens = sum(
                 self._estimate_completion_tokens(r) for r in capped_results
             )
-            self.total_tokens_generated += total_completion_tokens
+            # Count once: skip the char-estimate if the backend already counted (see call()).
+            if self.total_tokens_generated == _tokens_before:
+                self.total_tokens_generated += total_completion_tokens
             if self._current_query is not None:
                 total_prompt_tokens = sum(self._estimate_prompt_tokens(p) for p in prompts)
                 self._current_query.prompt_tokens += total_prompt_tokens

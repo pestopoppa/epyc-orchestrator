@@ -525,6 +525,19 @@ class EvalTower:
         for r in results:
             for name in (r.tools_called or []):
                 tool_name_counts[name] = tool_name_counts.get(name, 0) + 1
+        # Conditional credit — the signal that matters is MARGINAL usefulness, not
+        # "more tools": tool_helpfulness = P(correct | tools used) - P(correct | no
+        # tools). NaN when either arm lacks a minimum sample, so it can't be chased on
+        # thin data. This is telemetry / a planner prior — NEVER a Pareto objective.
+        _MIN_ARM = 3
+        with_tools = [r for r in results if not r.error and r.tools_used > 0]
+        without_tools = [r for r in results if not r.error and r.tools_used == 0]
+        if len(with_tools) >= _MIN_ARM and len(without_tools) >= _MIN_ARM:
+            p_with = sum(1 for r in with_tools if r.correct) / len(with_tools)
+            p_without = sum(1 for r in without_tools if r.correct) / len(without_tools)
+            tool_helpfulness = p_with - p_without
+        else:
+            tool_helpfulness = float("nan")
 
         return EvalResult(
             tier=tier,
@@ -553,10 +566,14 @@ class EvalTower:
                 "mean_tools_used": round(mean_tools_used, 4),
                 "tool_use_rate": round(tool_use_rate, 4),
                 "tool_name_counts": tool_name_counts,
+                "tool_helpfulness": tool_helpfulness,
+                "tool_helpfulness_n_with": len(with_tools),
+                "tool_helpfulness_n_without": len(without_tools),
             },
             mean_tools_used=mean_tools_used,
             tool_use_rate=tool_use_rate,
             total_tool_calls=total_tool_calls,
+            tool_helpfulness=tool_helpfulness,
             median_request_speed=median_request_speed,
             aggregate_speed=aggregate_speed,
             eval_concurrency=eval_concurrency,

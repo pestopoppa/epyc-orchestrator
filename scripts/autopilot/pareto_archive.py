@@ -125,6 +125,19 @@ class ParetoArchive:
         # Integrity check: detect lost frontier
         trial_counter = data.get("trial_counter", 0)
         if trial_counter > 10 and not any(self._frontiers.values()) and not self._all_entries:
+            import os as _os
+            if data.get("_allow_empty_frontier_rebase") or _os.environ.get("AUTOPILOT_ALLOW_EMPTY_FRONTIER") == "1":
+                # Deliberate rebase (e.g. the 2026-06-01 speed double-count correction):
+                # the operator intentionally cleared the archive so it rebuilds on honest
+                # measurements. Allow the empty start instead of refusing. Read from the
+                # state file (survives re-launch/env-stripping) or an env override.
+                log.warning(
+                    "Pareto frontier empty at trial %d, but a deliberate-rebase flag is set "
+                    "(_allow_empty_frontier_rebase / AUTOPILOT_ALLOW_EMPTY_FRONTIER) — starting "
+                    "with an empty frontier; it will rebuild from new trials.",
+                    trial_counter,
+                )
+                return
             log.error(
                 "PARETO FRONTIER LOST: trial_counter=%d but frontier is empty. "
                 "This means autopilot_state.json was not checkpointed or was "

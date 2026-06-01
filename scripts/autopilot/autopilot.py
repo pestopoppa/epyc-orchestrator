@@ -951,6 +951,11 @@ def _run_loop_inner(
     state = load_state()
     journal = ExperimentJournal()
     archive = ParetoArchive()
+    # One-shot: the deliberate-rebase bypass (e.g. the 2026-06-01 speed double-count
+    # correction) is consumed at load — drop it so the frontier-lost guard is fully
+    # re-armed for normal operation and an ACCIDENTAL future wipe is not silently allowed.
+    if state.pop("_allow_empty_frontier_rebase", None):
+        save_state(state)
     gate = SafetyGate(
         consecutive_failures=state.get("consecutive_failures", 0),
         quality_history=state.get("quality_history", []),
@@ -1859,6 +1864,9 @@ def _run_loop_inner(
             "mean_tools_used": getattr(eval_result, "mean_tools_used", 0.0),
             "tool_use_rate": getattr(eval_result, "tool_use_rate", 0.0),
             "total_tool_calls": getattr(eval_result, "total_tool_calls", 0),
+            # The decision-grade signal: marginal usefulness of tools (NaN until
+            # enough sample). Steer by THIS, not raw tool_use_rate.
+            "tool_helpfulness": getattr(eval_result, "tool_helpfulness", float("nan")),
         }
         if learning_excluded_by:
             deficiency_category = exclusion_def_cat
