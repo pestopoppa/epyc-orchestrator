@@ -106,7 +106,13 @@ class ShortTermMemory:
 
         # Update working context
         self._context["Last trial"] = f"Last trial: {outcome.trial_id} ({outcome.species}/{outcome.action_type}, q={outcome.quality:.2f}, {outcome.keep_revert or 'n/a'})"
-        self._context["Best quality"] = f"Best quality: {max(outcome.quality, float(self._context.get('Best quality', 'Best quality: 0').split(': ')[-1])):.2f}"
+        # Robust parse: tolerate a non-numeric/placeholder existing value (e.g. after a
+        # manual edit or a frontier rebase) instead of crashing the whole trial.
+        try:
+            _prev_best = float(self._context.get("Best quality", "Best quality: 0").split(": ")[-1])
+        except (ValueError, IndexError):
+            _prev_best = 0.0
+        self._context["Best quality"] = f"Best quality: {max(outcome.quality, _prev_best):.2f}"
 
         # Track declining suites
         if outcome.per_suite_quality:
