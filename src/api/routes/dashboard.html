@@ -1,6 +1,9 @@
 <!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Orchestrator Dashboard</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/atom-one-dark.min.css">
@@ -1331,14 +1334,27 @@ function topStripCard(label, value, sub, valueClass = '') {
     </div>`;
 }
 
+function progressPhaseName(progress, running) {
+    if (progress && progress.phase) return progress.phase;
+    if (progress && progress.in_flight) return 'trial in flight';
+    return running ? 'phase unknown' : 'process down';
+}
+
 function renderAutopilotRunStrip() {
     const c = document.getElementById('counters');
     if (!c) return;
     const snap = _latestSnapshot || {};
     const proc = _latestProcessStatus || {};
-    const ap = proc.autopilot || {};
-    const phase = proc.autopilot_phase || {};
     const prog = _latestAutopilotProgress || {};
+    const rawAp = proc.autopilot || {};
+    const progressSaysAlive = Boolean(prog.autopilot_alive || prog.in_flight);
+    const ap = {
+        ...rawAp,
+        running: Boolean(rawAp.running || progressSaysAlive),
+        pid: rawAp.pid,
+        etime: rawAp.etime,
+    };
+    const phase = proc.autopilot_phase || {};
     const rolling = snap.source_counts_rolling || {};
     const cumulative = snap.source_counts_cumulative || {};
     const logCounts = snap.log_counts || {};
@@ -1380,9 +1396,9 @@ function renderAutopilotRunStrip() {
         runClass = 'good';
     }
     const workers = proc.gepa_worker_count || 0;
-    const phaseName = phase.phase || (ap.running ? 'phase unknown' : 'process down');
+    const phaseName = phase.phase || progressPhaseName(prog, ap.running);
     const runSub = ap.running
-        ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type ? ` · ${escapeHTML(String(phase.action_type))}` : ''}`
+        ? `${rawAp.running ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))}` : 'autopilot_progress confirms live trial'} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type || prog.action_type ? ` · ${escapeHTML(String(phase.action_type || prog.action_type))}` : ''}`
         : `no process matching autopilot.py start`;
 
     let trialValue = 'no trial';
@@ -2583,6 +2599,35 @@ let _autopilotLogBuffer = "";
 const _AUTOPILOT_LOG_MAX_CHARS = 40000;
 let _autopilotLogPinned = true;
 
+async function fetchInitialSsePayload(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+        const resp = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`, {
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+        if (!resp.body) return null;
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let text = "";
+        while (!text.includes('\n\n')) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            text += decoder.decode(value, { stream: true });
+            if (text.length > 1024 * 1024) break;
+        }
+        try { reader.cancel(); } catch {}
+        const line = text.split('\n').find(l => l.startsWith('data: '));
+        if (!line) return null;
+        return JSON.parse(line.slice(6));
+    } catch {
+        return null;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 function _styleAutopilotLine(line) {
     // Color-code by log keyword. Cheap regex pass; preserves whitespace.
     const escaped = line
@@ -2620,11 +2665,19 @@ function _paintAutopilotLog() {
 function startAutopilotLogStream() {
     if (_autopilotLogStream) _autopilotLogStream.close();
     _autopilotLogBuffer = "";
+    const status = document.getElementById('autopilot-status');
+    if (status) status.textContent = '— connecting to autopilot.log stream';
     _autopilotLogStream = new EventSource('/dashboard/events/autopilot_log');
+    _autopilotLogStream.onopen = () => {
+        if (status) status.textContent = '— autopilot.log stream connected';
+    };
     _autopilotLogStream.onmessage = (e) => {
         try {
             const data = JSON.parse(e.data);
-            if (data.error) return;
+            if (data.error) {
+                if (status) status.textContent = `— autopilot.log error: ${data.error}`;
+                return;
+            }
             if (data.initial) {
                 _autopilotLogBuffer = data.chunk || "";
             } else {
@@ -2633,12 +2686,25 @@ function startAutopilotLogStream() {
                     _autopilotLogBuffer = _autopilotLogBuffer.slice(-_AUTOPILOT_LOG_MAX_CHARS);
                 }
             }
+            const lines = _autopilotLogBuffer ? _autopilotLogBuffer.split('\n').filter(Boolean).length : 0;
+            if (status) status.textContent = `— autopilot.log stream connected · ${lines} lines`;
             _paintAutopilotLog();
-        } catch {}
+        } catch (err) {
+            if (status) status.textContent = `— autopilot.log render error: ${err && err.message ? err.message : err}`;
+        }
     };
     _autopilotLogStream.onerror = () => {
+        if (status) status.textContent = '— autopilot.log stream reconnecting';
         setTimeout(startAutopilotLogStream, 2000);
     };
+    setTimeout(async () => {
+        if (_autopilotLogBuffer) return;
+        const data = await fetchInitialSsePayload('/dashboard/events/autopilot_log');
+        if (!data || data.error || !data.chunk) return;
+        _autopilotLogBuffer = data.chunk;
+        if (status) status.textContent = `— autopilot.log fetch fallback · ${_autopilotLogBuffer.split('\n').filter(Boolean).length} lines`;
+        _paintAutopilotLog();
+    }, 2500);
     // Track user scroll for the same tail-f semantics as raw_tap
     const pre = document.getElementById('autopilot-log-pre');
     if (pre && !pre.dataset.scrollTracked) {
@@ -2822,11 +2888,19 @@ function _paintPlannerTap() {
 function startPlannerTapStream() {
     if (_plannerTapStream) _plannerTapStream.close();
     _plannerTapBuffer = "";
+    const status = document.getElementById('planner-status');
+    if (status) status.textContent = '— connecting to planner tap stream';
     _plannerTapStream = new EventSource('/dashboard/events/planner_tap');
+    _plannerTapStream.onopen = () => {
+        if (status) status.textContent = '— planner tap stream connected';
+    };
     _plannerTapStream.onmessage = (e) => {
         try {
             const data = JSON.parse(e.data);
-            if (data.error) return;
+            if (data.error) {
+                if (status) status.textContent = `— planner tap error: ${data.error}`;
+                return;
+            }
             if (data.initial) _plannerTapBuffer = data.chunk || "";
             else {
                 _plannerTapBuffer += (data.chunk || "");
@@ -2834,10 +2908,25 @@ function startPlannerTapStream() {
                     _plannerTapBuffer = _plannerTapBuffer.slice(-_PLANNER_TAP_MAX_CHARS);
                 }
             }
+            const lines = _plannerTapBuffer ? _plannerTapBuffer.split('\n').filter(Boolean).length : 0;
+            if (status) status.textContent = `— planner tap stream connected · ${lines} lines`;
             _paintPlannerTap();
-        } catch {}
+        } catch (err) {
+            if (status) status.textContent = `— planner tap render error: ${err && err.message ? err.message : err}`;
+        }
     };
-    _plannerTapStream.onerror = () => setTimeout(startPlannerTapStream, 2000);
+    _plannerTapStream.onerror = () => {
+        if (status) status.textContent = '— planner tap stream reconnecting';
+        setTimeout(startPlannerTapStream, 2000);
+    };
+    setTimeout(async () => {
+        if (_plannerTapBuffer) return;
+        const data = await fetchInitialSsePayload('/dashboard/events/planner_tap');
+        if (!data || data.error || !data.chunk) return;
+        _plannerTapBuffer = data.chunk;
+        if (status) status.textContent = `— planner tap fetch fallback · ${_plannerTapBuffer.split('\n').filter(Boolean).length} lines`;
+        _paintPlannerTap();
+    }, 2500);
     const pre = document.getElementById('planner-tap-pre');
     if (pre && !pre.dataset.scrollTracked) {
         pre.dataset.scrollTracked = "1";
@@ -3563,23 +3652,35 @@ function _phaseFocus(d, ap) {
 function _renderAutopilotPhase(d, ap) {
     const el = document.getElementById('autopilot-phase');
     if (!el) return;
+    const progress = _latestAutopilotProgress || {};
     const phase = d.autopilot_phase || {};
-    if (!phase.phase) {
-        el.innerHTML = `<span style="color:var(--dim)">phase: unavailable</span>`;
+    const fallbackPhase = progress.in_flight ? {
+        phase: progress.phase || 'trial in flight',
+        trial_id: progress.trial_id,
+        action_type: progress.action_type,
+        phase_age_s: progress.phase_age_s,
+    } : {};
+    const viewPhase = phase.phase ? phase : fallbackPhase;
+    if (!viewPhase.phase) {
+        const msg = ap && ap.running
+            ? 'phase: process running; no phase marker or in-flight trial reported'
+            : 'phase: unavailable';
+        el.innerHTML = `<span style="color:var(--dim)">${escapeHTML(msg)}</span>`;
         return;
     }
     const age = d.autopilot_phase_age_s != null ? `${Math.round(d.autopilot_phase_age_s)}s ago` : 'mtime unknown';
-    const phaseAgeS = _autopilotPhaseAgeS(phase);
+    const phaseAgeS = _autopilotPhaseAgeS(viewPhase);
     const phaseAge = phaseAgeS != null ? `${Math.round(phaseAgeS)}s in phase` : '';
     const bits = [];
-    if (phase.trial_id != null) bits.push(`trial ${escapeHTML(String(phase.trial_id))}`);
-    if (phase.action_type) bits.push(escapeHTML(String(phase.action_type)));
-    if (phase.species) bits.push(escapeHTML(String(phase.species)));
-    if (phase.prompt_chars != null) bits.push(`${Number(phase.prompt_chars).toLocaleString()} prompt chars`);
-    if (phase.idle_reason) bits.push(escapeHTML(String(phase.idle_reason)));
+    if (viewPhase.trial_id != null) bits.push(`trial ${escapeHTML(String(viewPhase.trial_id))}`);
+    if (viewPhase.action_type) bits.push(escapeHTML(String(viewPhase.action_type)));
+    if (viewPhase.species) bits.push(escapeHTML(String(viewPhase.species)));
+    if (viewPhase.prompt_chars != null) bits.push(`${Number(viewPhase.prompt_chars).toLocaleString()} prompt chars`);
+    if (viewPhase.idle_reason) bits.push(escapeHTML(String(viewPhase.idle_reason)));
+    if (!phase.phase && progress.in_flight) bits.push('from autopilot_progress');
     if (!ap.running) bits.push('process down');
     el.innerHTML = `
-        <span style="color:${ap.running ? 'var(--fg)' : 'var(--bad)'}">phase: ${escapeHTML(String(phase.phase))}</span>
+        <span style="color:${ap.running ? 'var(--fg)' : 'var(--bad)'}">phase: ${escapeHTML(String(viewPhase.phase))}</span>
         <span style="color:var(--dim)"> · ${escapeHTML(age)}${phaseAge ? ` · ${escapeHTML(phaseAge)}` : ''}</span>
         ${bits.length ? `<div style="margin-top:3px;color:var(--muted)">${bits.join(' · ')}</div>` : ''}
     `;
@@ -3587,7 +3688,7 @@ function _renderAutopilotPhase(d, ap) {
 
 async function updateProcessStatus() {
     try {
-        const r = await fetch('/dashboard/api/process_status');
+        const r = await fetch(`/dashboard/api/process_status?t=${Date.now()}`, { cache: 'no-store' });
         const d = await r.json();
         _latestProcessStatus = d;
         if (_rawTapRenderMode === 'structured') paintRawTap();
@@ -3857,10 +3958,13 @@ function startDashboard() {
     checkRenderLibs();
     async function updateAutopilotProgress() {
         try {
-            const r = await fetch('/dashboard/api/autopilot_progress');
+            const r = await fetch(`/dashboard/api/autopilot_progress?t=${Date.now()}`, { cache: 'no-store' });
             const d = await r.json();
             _latestAutopilotProgress = d;
             renderAutopilotRunStrip();
+            if (_latestProcessStatus) {
+                _renderAutopilotPhase(_latestProcessStatus, _latestProcessStatus.autopilot || {});
+            }
             const wrap = document.getElementById('autopilot-trial-progress');
             const label = document.getElementById('autopilot-trial-label');
             const pct = document.getElementById('autopilot-trial-pct');
@@ -4038,7 +4142,7 @@ function startDashboard() {
     }
     async function updateRegionLocks() {
         try {
-            const r = await fetch('/dashboard/api/region_locks');
+            const r = await fetch(`/dashboard/api/region_locks?t=${Date.now()}`, { cache: 'no-store' });
             const d = await r.json();
             const status = document.getElementById('region-locks-status');
             const grid = document.getElementById('region-locks-grid');
@@ -4274,7 +4378,18 @@ function startDashboard() {
             if (lockActivityChanged) {
                 updateTopologyActivity();
             }
-        } catch {}
+        } catch (err) {
+            const status = document.getElementById('region-locks-status');
+            const grid = document.getElementById('region-locks-grid');
+            const msg = err && err.message ? err.message : String(err);
+            if (status) {
+                status.textContent = `— region lock render error: ${msg}`;
+                status.style.color = 'var(--bad,#f87171)';
+            }
+            if (grid) {
+                grid.innerHTML = `<div style="grid-column:1/-1;color:var(--bad,#f87171);font-size:11px">region lock render failed: ${escapeHTML(msg)}</div>`;
+            }
+        }
     }
 
     (async function () {

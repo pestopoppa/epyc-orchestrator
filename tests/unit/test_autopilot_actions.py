@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 actions = importlib.import_module("actions")
+autopilot = importlib.import_module("autopilot")
 
 
 def _ctx(**overrides):
@@ -148,6 +149,29 @@ def test_reset_memories_returns_none_eval() -> None:
     )
     assert result is None
     assert species == "structural_lab"
+
+
+def test_repeated_meta_action_forces_metric_seed_batch() -> None:
+    action, rationale = autopilot._force_metric_action_after_meta(
+        {"type": "distill_knowledge", "last_n": 10},
+        {"consecutive_meta_actions": 1},
+        {"falsifier": "noop"},
+    )
+    assert action == {"type": "seed_batch", "n_questions": 10}
+    assert rationale == {
+        "falsifier": "noop",
+        "meta_action_forced_metric_trial": True,
+    }
+
+
+def test_first_meta_action_is_allowed() -> None:
+    action, rationale = autopilot._force_metric_action_after_meta(
+        {"type": "distill_knowledge", "last_n": 10},
+        {"consecutive_meta_actions": 0},
+        {"falsifier": "noop"},
+    )
+    assert action == {"type": "distill_knowledge", "last_n": 10}
+    assert rationale == {"falsifier": "noop"}
 
 
 # ----- ActionContext bundle -----

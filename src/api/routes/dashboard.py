@@ -915,7 +915,7 @@ async def process_status() -> JSONResponse:
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
         "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
-    })
+    }, headers=_NO_STORE_HEADERS)
 
 
 # ---------------------------------------------------------------------------
@@ -1042,6 +1042,10 @@ async def node_detail(port: int) -> JSONResponse:
 _DASHBOARD_HTML_FOR_VERSION = Path(__file__).parent / "dashboard.html"
 _DASHBOARD_PY_FOR_VERSION = Path(__file__)
 _REPO_ROOT_FOR_VERSION = Path(__file__).resolve().parents[3]
+_NO_STORE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+}
 
 # Fleet startup timestamp — read from the marker file written by
 # scripts/server/orchestrator_stack.start_orchestrator() before uvicorn launches.
@@ -1592,7 +1596,7 @@ async def autopilot_progress() -> JSONResponse:
             # the precise number is in elapsed_s if anyone needs it.
             out["percent"] = round(min(150.0, max(0.0, pct)), 1)
 
-    return JSONResponse(out)
+    return JSONResponse(out, headers=_NO_STORE_HEADERS)
 
 
 @router.get("/dashboard/api/pareto")
@@ -2546,4 +2550,10 @@ def __getattr__(name: str) -> str:
 @router.get("/dashboard")
 async def dashboard_page() -> HTMLResponse:
     """Serve the single-page dashboard (HTML re-read from disk per request)."""
-    return HTMLResponse(_read_dashboard_html())
+    return HTMLResponse(
+        _read_dashboard_html(),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )

@@ -128,6 +128,33 @@ MAX_CONSECUTIVE_META = 5
 BENIGN_LEARNING_EXCLUSIONS = {"reproduction_confirmed"}
 
 
+def _force_metric_action_after_meta(
+    action: dict[str, Any],
+    state: dict[str, Any],
+    rationale: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Replace repeated meta no-ops with a measured action."""
+    if (
+        action.get("type") in META_NOOP_ACTIONS
+        and int(state.get("consecutive_meta_actions", 0)) > 0
+    ):
+        log.warning(
+            "Planner proposed metric-free meta action '%s' after %d "
+            "consecutive meta action(s); forcing seed_batch to restore "
+            "measurement.",
+            action.get("type"),
+            int(state.get("consecutive_meta_actions", 0)),
+        )
+        return (
+            {"type": "seed_batch", "n_questions": 10},
+            {
+                **(rationale or {}),
+                "meta_action_forced_metric_trial": True,
+            },
+        )
+    return action, rationale
+
+
 def _env_float(name: str, default: float, *, minimum: float = 0.1) -> float:
     try:
         return max(minimum, float(os.environ.get(name, str(default))))
@@ -1430,6 +1457,10 @@ def _run_loop_inner(
         if not action:
             log.warning("No action proposed, defaulting to seed_batch")
             action = {"type": "seed_batch", "n_questions": 10}
+
+        # Meta actions are allowed as occasional bookkeeping, but a repeated
+        # metric-free action means the planner is avoiding the experiment loop.
+        action, rationale = _force_metric_action_after_meta(action, state, rationale)
 
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch
