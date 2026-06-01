@@ -1643,8 +1643,18 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
     # not "this API process since reload" and not all historical campaigns.
     # Use the latest journal segment after a trial-id reset so restarts inside
     # the current run survive while pre-current-stack rows stay out.
+    # A deliberate Pareto rebase (e.g. the 2026-06-01 speed double-count correction)
+    # records a stable `pareto_epoch_ts`: trials before it were measured under the old
+    # metric and must NOT be reconstructed onto the frontier (they would dominate the
+    # honest post-fix points on the changed axis). The trial counter is NOT reset on a
+    # rebase, so `current_run_only` alone can't exclude them — scope by timestamp too.
+    pareto_epoch_ts = None
+    try:
+        pareto_epoch_ts = float(data.get("pareto_epoch_ts") or 0.0) or None
+    except (TypeError, ValueError):
+        pareto_epoch_ts = None
     journal_archive = _pareto_from_journal(
-        None,
+        pareto_epoch_ts,
         current_run_only=True,
         max_trial_id=state_trial_counter,
     )
