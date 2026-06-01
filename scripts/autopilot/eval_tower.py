@@ -143,6 +143,14 @@ class QuestionResult:
     branching_density: float = 0.0  # Fraction of <think> steps with branching keywords (intake-378)
     eval_concurrency: int = 1  # Worker fan-out used for this eval batch.
     eval_wall_s: float = 0.0  # End-to-end wall time for the containing eval batch.
+    # Tool telemetry (2026-06-01): captured from the /chat response so the autopilot
+    # can measure — and learn to incentivize — model tool use. `tokens_generated`
+    # above already SUMS every ReAct turn (repl_executor reports
+    # primitives.total_tokens_generated), so tool-turn generation already contributes
+    # to the throughput/speed objective; these fields make the tool activity itself
+    # a recorded, planner-visible signal.
+    tools_used: int = 0  # Number of tool invocations during this question.
+    tools_called: list[str] = field(default_factory=list)  # Tool names, in call order.
     # 2026-05-23 exogenous-restart resilience (handoff Phase 4).
     # Populated by reading the resilient_post `_meta` dict from the /chat response.
     # exogenous_recovered: a service reload was detected and a retry inside
@@ -309,6 +317,8 @@ class EvalTower:
                 degraded=bool(resp.get("degraded", False)),
                 confidence=confidence,
                 branching_density=_compute_branching_density(answer),
+                tools_used=int(resp.get("tools_used", 0) or 0),
+                tools_called=list(resp.get("tools_called") or []),
                 exogenous_recovered=bool(meta.get("exogenous_recovered", False)),
                 exogenous_unrecovered=bool(meta.get("exogenous_unrecovered", False)),
                 external_restart=bool(meta.get("external_restart", False)),
@@ -500,6 +510,22 @@ class EvalTower:
         bd_vals = [r.branching_density for r in results if r.branching_density > 0]
         avg_branching = sum(bd_vals) / len(bd_vals) if bd_vals else 0.0
 
+        # Tool-use telemetry (2026-06-01). Per-question tools_used summed/averaged
+        # over non-error results so the planner can measure and incentivize tool
+        # use. Note: tokens_generated (and hence speed) already includes the tokens
+        # the model generated across every tool/ReAct turn — tool use is NOT
+        # invisible to the throughput objective, only to this explicit signal.
+        tool_counts = [r.tools_used for r in results if not r.error]
+        total_tool_calls = sum(tool_counts)
+        mean_tools_used = (total_tool_calls / len(tool_counts)) if tool_counts else 0.0
+        tool_use_rate = (
+            sum(1 for n in tool_counts if n > 0) / len(tool_counts) if tool_counts else 0.0
+        )
+        tool_name_counts: dict[str, int] = {}
+        for r in results:
+            for name in (r.tools_called or []):
+                tool_name_counts[name] = tool_name_counts.get(name, 0) + 1
+
         return EvalResult(
             tier=tier,
             quality=quality,
@@ -522,7 +548,15 @@ class EvalTower:
                 "eval_wall_s": eval_wall_s,
                 "sum_request_elapsed_s": sum_request_elapsed_s,
                 "tokens_generated": total_tokens_generated,
+                "tokens_include_tool_turns": True,
+                "total_tool_calls": total_tool_calls,
+                "mean_tools_used": round(mean_tools_used, 4),
+                "tool_use_rate": round(tool_use_rate, 4),
+                "tool_name_counts": tool_name_counts,
             },
+            mean_tools_used=mean_tools_used,
+            tool_use_rate=tool_use_rate,
+            total_tool_calls=total_tool_calls,
             median_request_speed=median_request_speed,
             aggregate_speed=aggregate_speed,
             eval_concurrency=eval_concurrency,

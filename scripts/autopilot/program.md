@@ -124,6 +124,10 @@ Evaluated by sampling uniformly across all active suites (equal questions per su
 
 **Promotion gate (T2)**: Full evaluation + Claude-as-Judge scoring. Only for experiments that improve primary metric by >=0.5% and hold for 3 consecutive T0 runs.
 
+**Eval-tier exploration — explore T1 AND T2 freely**: You may choose the eval tier per trial. T1 and T2 are first-class, **independently-tracked** frontiers — each keeps its OWN Pareto frontier, hypervolume, and quality baseline, and quality is **never** compared across tiers. Normal experiment trials grade at T1 via the hybrid eval (T0 fast-reject → T1, 50q). To validate on the full benchmark (gpqa / livecodebench / usaco / math / olympiad-grade — ~500q sampled across all 15 suites), emit a deep-eval action: `{"type": "deep_eval", "tier": 2}`. This is a **LOW-RISK action and may be chosen on any trial** — do not reserve it only for promotions. T2 is harder, so its absolute quality runs LOWER than T1; that gap is the honest signal, **not** a regression — never treat a low T2 number as a failure of a T1-good config. Use T2 to confirm T1 wins generalize and to populate the T2 frontier. Aim to interleave periodic `deep_eval` trials so both frontiers stay populated.
+
+**Tool-use telemetry — incentivize PRODUCTIVE tool use**: Every trial now records, in `eval_details`, the model's tool activity: `tool_use_rate` (fraction of questions invoking ≥1 tool), `mean_tools_used`, `total_tool_calls`, and `tool_name_counts`. Tokens the model generates across **every** tool / ReAct turn already count toward `tokens_generated` and therefore the throughput/speed objective — tool use is **not** penalized as wasted time. You are encouraged to run experiments (prompt / policy / feature-flag / tool-registry mutations) that raise tool use **where it helps**, and watch whether `tool_use_rate` rises ALONGSIDE quality. Tool use that raises `tool_use_rate` without improving quality is not a win — the goal is tools that let the model solve harder problems, especially on T2.
+
 ---
 
 ## Logging Format

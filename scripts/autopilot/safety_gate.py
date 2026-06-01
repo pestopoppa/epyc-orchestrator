@@ -151,6 +151,13 @@ class EvalResult:
     instruction_token_ratio: float = 0.0  # AP-16: instruction_tokens / total_input_tokens
     partial_count: int = 0  # Inference results with partial=True (read_timeout_partial)
     degraded_count: int = 0  # Inference results with degraded=True
+    # Tool-use telemetry (2026-06-01). Trial-level rollup of per-question tool
+    # invocations so the autopilot can measure — and learn to incentivize — model
+    # tool use. tokens_generated/speed already credit tool-turn generation; these
+    # surface the tool activity itself as an explicit, planner-visible signal.
+    mean_tools_used: float = 0.0  # Mean tool invocations per (non-error) question.
+    tool_use_rate: float = 0.0  # Fraction of questions that invoked >=1 tool.
+    total_tool_calls: int = 0  # Total tool invocations across the trial.
     # AM KV compaction telemetry (populated when compact action is used)
     avg_prompt_tokens: float = 0.0  # Average context length across results
     compaction_events: int = 0  # Number of compacted slots in this eval

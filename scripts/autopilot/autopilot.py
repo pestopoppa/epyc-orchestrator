@@ -1853,6 +1853,12 @@ def _run_loop_inner(
             "auroc": eval_result.auroc,
             "calibration_violations": eval_result.calibration_violations,
             "gepa_ratio": state.get("gepa_ratio", 0.30),
+            # Tool-use telemetry (2026-06-01) — surfaced at top level so the planner
+            # can measure and incentivize productive tool use. tokens_generated/speed
+            # already credit tool-turn generation; these are the explicit signal.
+            "mean_tools_used": getattr(eval_result, "mean_tools_used", 0.0),
+            "tool_use_rate": getattr(eval_result, "tool_use_rate", 0.0),
+            "total_tool_calls": getattr(eval_result, "total_tool_calls", 0),
         }
         if learning_excluded_by:
             deficiency_category = exclusion_def_cat
