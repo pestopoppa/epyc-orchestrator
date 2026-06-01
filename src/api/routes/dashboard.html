@@ -3197,9 +3197,32 @@ async function updatePareto() {
     } catch (e) {}
 }
 
+// Per-tier color palette for the segregated Pareto frontiers (quality is never
+// compared across tiers, so each tier is drawn as its own series). T1=blue, T2=amber, ...
+const PARETO_TIER_COLORS = ['#60a5fa', '#f59e0b', '#a78bfa', '#34d399', '#f472b6'];
+function paretoTierColor(tier) {
+    const t = Number(tier);
+    const idx = Number.isFinite(t) ? (t - 1) : 0;
+    return PARETO_TIER_COLORS[((idx % PARETO_TIER_COLORS.length) + PARETO_TIER_COLORS.length) % PARETO_TIER_COLORS.length];
+}
+function paretoTierLegend(tierKeys, x, y) {
+    return (tierKeys || []).map((t, i) => {
+        const cy = y + i * 14;
+        return `<rect x="${x}" y="${(cy - 7).toFixed(1)}" width="9" height="9" fill="${paretoTierColor(t)}"/>`
+             + `<text class="axis-label" x="${x + 13}" y="${(cy + 1).toFixed(1)}" fill="#94a3b8">T${t}</text>`;
+    }).join('');
+}
+// Build the [tier, points] series list, falling back to the canonical projection if the
+// per-tier maps aren't present (back-compat).
+function paretoTierSeries(byTier, fallbackPoints, canonicalTier) {
+    const keys = Object.keys(byTier || {}).sort((a, b) => Number(a) - Number(b));
+    if (keys.length) return keys.map(t => [t, byTier[t] || []]);
+    return [[String(canonicalTier ?? 1), fallbackPoints || []]];
+}
+
 function renderParetoScatter(d) {
-    // Quality (x) × Speed (y) scatter. Dominated points dim, frontier accent,
-    // production-best ringed green. Axis labels + tick gridlines.
+    // Quality (x) × Speed (y) scatter. Dominated points dim; each TIER's frontier is its
+    // own colored series + line; production-best ringed green. Axis labels + tick gridlines.
     const svg = document.getElementById('pareto-plot-qs');
     if (!svg) return;
     const VB = { w: 400, h: 280 };
@@ -3207,7 +3230,8 @@ function renderParetoScatter(d) {
     const plotW = VB.w - PAD.l - PAD.r;
     const plotH = VB.h - PAD.t - PAD.b;
 
-    const allPts = (d.frontier || []).concat(d.dominated || []);
+    const tierFront = Object.values(d.frontiers_by_tier || {}).flat();
+    const allPts = (tierFront.length ? tierFront : (d.frontier || [])).concat(d.dominated || []);
     if (!allPts.length) {
         svg.innerHTML = '<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">no trial data yet</text>';
         return;
@@ -3257,21 +3281,27 @@ function renderParetoScatter(d) {
         const tip = `T${p.eval_tier ?? d.canonical_tier ?? 1} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}`;
         parts.push(`<circle class="point-dominated" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5"><title>${tip}</title></circle>`);
     });
-    // Frontier line: sort by x ascending, draw polyline through points
-    const frontier = (d.frontier || []).slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
-    if (frontier.length > 1) {
-        const path = frontier.map((p, i) =>
-            `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
-        ).join(' ');
-        parts.push(`<path class="frontier-line" d="${path}"/>`);
-    }
-    // Frontier points
-    frontier.forEach(p => {
-        const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
-        const cls = p.is_production_best ? 'point-production' : 'point-frontier';
-        const tip = `T${p.eval_tier ?? d.canonical_tier ?? 1} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${p.is_production_best ? ' · PRODUCTION' : ''}`;
-        parts.push(`<circle class="${cls}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"><title>${tip}</title></circle>`);
+    // Per-tier frontiers: each tier drawn as its own colored line + points.
+    const series = paretoTierSeries(d.frontiers_by_tier, d.frontier, d.canonical_tier);
+    series.forEach(([tier, front]) => {
+        const color = paretoTierColor(tier);
+        const sorted = (front || []).slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
+        if (sorted.length > 1) {
+            const path = sorted.map((p, i) =>
+                `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
+            ).join(' ');
+            parts.push(`<path class="frontier-line" style="stroke:${color}" d="${path}"/>`);
+        }
+        sorted.forEach(p => {
+            const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
+            const prod = p.is_production_best;
+            const tip = `T${tier} trial ${p.trial_id} · ${p.species || ''} · q=${p.objectives[0].toFixed(2)} sp=${p.objectives[1].toFixed(1)}${prod ? ' · PRODUCTION' : ''}`;
+            const ring = prod ? ' stroke="var(--good)" stroke-width="1.5"' : '';
+            parts.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${prod ? 5 : 4}" fill="${color}"${ring}><title>${tip}</title></circle>`);
+        });
     });
+    // Per-tier legend (top-right)
+    parts.push(paretoTierLegend(series.map(s => s[0]), VB.w - 38, PAD.t + 6));
 
     svg.innerHTML = parts.join('');
 }
@@ -3286,13 +3316,14 @@ function renderHypervolumeTimeline(d) {
     const plotW = VB.w - PAD.l - PAD.r;
     const plotH = VB.h - PAD.t - PAD.b;
 
-    const hv = d.hypervolume_history || [];
-    if (!hv.length) {
+    const series = paretoTierSeries(d.hv_history_by_tier, d.hypervolume_history, d.canonical_tier);
+    const allHv = series.flatMap(s => s[1] || []);
+    if (!allHv.length) {
         svg.innerHTML = '<text x="200" y="140" text-anchor="middle" fill="#64748b" font-size="11">no hypervolume history</text>';
         return;
     }
-    const xs = hv.map(p => p[0]);
-    const ys = hv.map(p => p[1]);
+    const xs = allHv.map(p => p[0]);
+    const ys = allHv.map(p => p[1]);
     const xMin = Math.min(...xs), xMax = Math.max(...xs);
     const yMin = 0, yMax = Math.max(...ys, 1e-6);  // floor at 0
     const xRange = (xMax - xMin) || 1;
@@ -3324,14 +3355,18 @@ function renderHypervolumeTimeline(d) {
     parts.push(`<text class="axis-label" x="${PAD.l + plotW / 2}" y="${VB.h - 2}" text-anchor="middle" font-size="10" fill="#94a3b8">trial →</text>`);
     parts.push(`<text class="axis-label" x="14" y="${PAD.t + plotH / 2}" text-anchor="middle" font-size="10" fill="#94a3b8" transform="rotate(-90 14 ${PAD.t + plotH / 2})">hypervolume →</text>`);
 
-    // Line path
-    const path = hv.map((p, i) =>
-        `${i === 0 ? 'M' : 'L'} ${sx(p[0]).toFixed(1)} ${sy(p[1]).toFixed(1)}`
-    ).join(' ');
-    parts.push(`<path class="frontier-line" style="stroke-dasharray:none;opacity:0.9" d="${path}"/>`);
-    // Endpoint dot
-    const last = hv[hv.length - 1];
-    parts.push(`<circle class="point-frontier" cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="4"><title>trial ${last[0]} · hv=${last[1].toFixed(3)}</title></circle>`);
+    // Per-tier hypervolume lines (each tier its own color + endpoint dot)
+    series.forEach(([tier, hist]) => {
+        if (!(hist && hist.length)) return;
+        const color = paretoTierColor(tier);
+        const path = hist.map((p, i) =>
+            `${i === 0 ? 'M' : 'L'} ${sx(p[0]).toFixed(1)} ${sy(p[1]).toFixed(1)}`
+        ).join(' ');
+        parts.push(`<path class="frontier-line" style="stroke:${color};stroke-dasharray:none;opacity:0.9" d="${path}"/>`);
+        const last = hist[hist.length - 1];
+        parts.push(`<circle cx="${sx(last[0]).toFixed(1)}" cy="${sy(last[1]).toFixed(1)}" r="4" fill="${color}"><title>T${tier} trial ${last[0]} · hv=${last[1].toFixed(3)}</title></circle>`);
+    });
+    parts.push(paretoTierLegend(series.map(s => s[0]), VB.w - 38, PAD.t + 6));
 
     svg.innerHTML = parts.join('');
 }
