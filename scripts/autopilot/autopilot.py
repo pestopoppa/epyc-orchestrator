@@ -951,11 +951,15 @@ def _run_loop_inner(
     state = load_state()
     journal = ExperimentJournal()
     archive = ParetoArchive()
-    # One-shot: the deliberate-rebase bypass (e.g. the 2026-06-01 speed double-count
-    # correction) is consumed at load — drop it so the frontier-lost guard is fully
-    # re-armed for normal operation and an ACCIDENTAL future wipe is not silently allowed.
-    if state.pop("_allow_empty_frontier_rebase", None):
+    # Clear the deliberate-rebase bypass ONLY once the frontier has actually rebuilt
+    # (a prior run admitted >=1 point). Clearing it at startup while the frontier is
+    # still empty would re-arm the frontier-lost guard before the bootstrap lands —
+    # crash-looping any restart that happens before the first trial is admitted. Once
+    # a point exists the guard never fires anyway, so this safely re-arms it.
+    if state.get("_allow_empty_frontier_rebase") and archive.frontier_size(DEFAULT_FRONTIER_TIER) > 0:
+        state.pop("_allow_empty_frontier_rebase", None)
         save_state(state)
+        log.info("Rebase complete (frontier rebuilt) — cleared _allow_empty_frontier_rebase; guard re-armed.")
     gate = SafetyGate(
         consecutive_failures=state.get("consecutive_failures", 0),
         quality_history=state.get("quality_history", []),
