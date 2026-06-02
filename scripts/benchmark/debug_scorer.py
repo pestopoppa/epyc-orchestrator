@@ -484,8 +484,23 @@ def _score_substring(
 
     Config:
         case_sensitive: Whether comparison is case-sensitive (default: False).
+
+    Digit-group separators (commas/underscores/spaces sitting *between two
+    digits*) are stripped from both sides before matching, so a correctly
+    computed numeric answer formatted as "479,001,600" still matches the
+    expected substring "479001600". Non-numeric text is untouched because the
+    separator must be flanked by digits on both sides (e.g. "Hello, world" is
+    left as-is). 2026-06-02: fixes the agentic factorial sentinel, which began
+    failing on 06-01 once the compute-first prompt made the model emit
+    comma-grouped results.
     """
     case_sensitive = config.get("case_sensitive", False)
+
+    def _strip_digit_separators(s: str) -> str:
+        return re.sub(r"(?<=\d)[,_ ](?=\d)", "", s)
+
+    answer = _strip_digit_separators(answer)
+    expected = _strip_digit_separators(expected)
 
     if case_sensitive:
         return expected.strip() in answer
