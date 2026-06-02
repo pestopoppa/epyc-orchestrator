@@ -1198,6 +1198,7 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "timestamp": entry.get("timestamp", ""),
         "reasoning": (entry.get("reasoning") or "")[:200],
         "eval_tier": entry.get("eval_tier", entry.get("tier", DEFAULT_FRONTIER_TIER)),
+        "speed_deinflated": bool(entry.get("speed_deinflated", False)),
     }
 
 
@@ -1235,6 +1236,8 @@ def _pareto_from_journal(
     *,
     current_run_only: bool = False,
     max_trial_id: int | None = None,
+    deinflate_before_ts: float | None = None,
+    deinflate_factor: float = 1.0,
 ) -> dict[str, Any] | None:
     """Reconstruct Pareto data from the append-only journal.
 
@@ -1291,6 +1294,21 @@ def _pareto_from_journal(
         objectives = _pareto_objectives_from_journal(row)
         if objectives is None:
             continue
+        # Option (iii) speed rebase: trials recorded BEFORE the metric-fix epoch had
+        # double-counted generated tokens (~1.5-2x), so their speed objective is
+        # overstated. De-inflate it in place (display only — the journal stays as the
+        # audit record) so honest post-fix points are compared on the same scale
+        # instead of being dominated by stale, inflated speed.
+        deinflated = False
+        if (
+            deinflate_before_ts is not None
+            and deinflate_factor != 1.0
+            and ts is not None
+            and ts < deinflate_before_ts
+            and len(objectives) >= 2
+        ):
+            objectives = (objectives[0], objectives[1] * deinflate_factor) + tuple(objectives[2:])
+            deinflated = True
         shaped = {
             "trial_id": row.get("trial_id"),
             "objectives": objectives,
@@ -1300,6 +1318,7 @@ def _pareto_from_journal(
             "timestamp": row.get("timestamp", ""),
             "reasoning": row.get("reasoning", ""),
             "eval_tier": tier,
+            "speed_deinflated": deinflated,
         }
         if audit_only:
             # Audit-only point: visible on the scatter, excluded from every
@@ -1653,10 +1672,20 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         pareto_epoch_ts = float(data.get("pareto_epoch_ts") or 0.0) or None
     except (TypeError, ValueError):
         pareto_epoch_ts = None
+    # Option (iii): rather than EXCLUDING pre-fix trials, keep them but de-inflate their
+    # double-counted speed (factor tunable via state; default 0.5 ≈ the ~2x inflation of
+    # no-thinking eval trials) so the metric correction is visible on the plot.
+    deinflate_factor = 0.5
+    try:
+        deinflate_factor = float(data.get("pareto_pre_epoch_speed_factor", 0.5))
+    except (TypeError, ValueError):
+        deinflate_factor = 0.5
     journal_archive = _pareto_from_journal(
-        pareto_epoch_ts,
+        None,
         current_run_only=True,
         max_trial_id=state_trial_counter,
+        deinflate_before_ts=pareto_epoch_ts,
+        deinflate_factor=deinflate_factor,
     )
     source = "journal_current_run"
     source_reason = "reconstructed from latest trial-id reset segment in autopilot_journal.jsonl"
