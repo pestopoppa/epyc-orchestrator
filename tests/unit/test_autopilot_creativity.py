@@ -135,7 +135,7 @@ def test_hv_slope_noise_floor_clips_below_default_with_calm_history(tmp_path: Pa
     # Push a long, very-low-noise hypervolume trajectory (linear-ish).
     # Slopes should be near-zero variance → calibrated floor below default.
     for tid in range(50):
-        a._hypervolume_history.append((tid, 10.0 + 0.001 * tid))
+        a._hv_hist().append((tid, 10.0 + 0.001 * tid))
     floor = a.hv_slope_noise_floor(floor_default=1e-3, floor_min=1e-6)
     assert floor <= 1e-3
     assert floor >= 1e-6
@@ -150,7 +150,7 @@ def test_hv_slope_noise_floor_never_exceeds_default_even_with_noisy_history(tmp_
     h = 10.0
     for tid in range(80):
         h += rng.uniform(-2.0, 2.0)
-        a._hypervolume_history.append((tid, h))
+        a._hv_hist().append((tid, h))
     floor = a.hv_slope_noise_floor(floor_default=1e-3, floor_min=1e-6)
     assert floor <= 1e-3
     assert floor >= 1e-6
