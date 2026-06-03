@@ -2655,11 +2655,22 @@ function _styleAutopilotLine(line) {
 function _paintAutopilotLog() {
     const pre = document.getElementById('autopilot-log-pre');
     if (!pre) return;
-    const lines = _autopilotLogBuffer.split('\n');
+    const lines = _dedupeAdjacentAutopilotLines(_autopilotLogBuffer.split('\n'));
     pre.innerHTML = lines.map(_styleAutopilotLine).join('\n');
     if (_autopilotLogPinned) {
         pre.scrollTop = pre.scrollHeight;
     }
+}
+
+function _dedupeAdjacentAutopilotLines(lines) {
+    const out = [];
+    let previous = null;
+    for (const line of lines) {
+        if (line && line === previous) continue;
+        out.push(line);
+        if (line) previous = line;
+    }
+    return out;
 }
 
 function startAutopilotLogStream() {

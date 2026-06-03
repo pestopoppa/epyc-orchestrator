@@ -165,6 +165,29 @@ def _env_float(name: str, default: float, *, minimum: float = 0.1) -> float:
 PAUSE_POLL_S = _env_float("AUTOPILOT_PAUSE_POLL_S", 1.0)
 HEALTH_BACKOFF_S = _env_float("AUTOPILOT_HEALTH_BACKOFF_S", 10.0)
 
+
+def _stream_points_to_path(stream: Any, path: Path) -> bool:
+    try:
+        stream_stat = os.fstat(stream.fileno())
+        path_stat = path.stat()
+        return (
+            stream_stat.st_dev == path_stat.st_dev
+            and stream_stat.st_ino == path_stat.st_ino
+        )
+    except OSError:
+        return False
+
+
+def _autopilot_logging_handlers(
+    log_path: Path,
+    stream: Any | None = None,
+) -> list[logging.Handler]:
+    stream = stream or sys.stderr
+    handlers: list[logging.Handler] = [logging.StreamHandler(stream)]
+    if not _stream_points_to_path(stream, log_path):
+        handlers.append(logging.FileHandler(log_path, mode="a"))
+    return handlers
+
 # ── Controller Prompt Template ───────────────────────────────────
 
 PROGRAM_PATH = SCRIPT_DIR / "program.md"
@@ -2594,17 +2617,15 @@ def cmd_calibrate_baseline(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    log_path = ORCH_ROOT / "logs" / "autopilot.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
     # force=True overrides any basicConfig already called at import time
     # (seed_specialist_routing.py calls basicConfig at module level)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(
-                ORCH_ROOT / "logs" / "autopilot.log", mode="a"
-            ),
-        ],
+        handlers=_autopilot_logging_handlers(log_path),
         force=True,
     )
 

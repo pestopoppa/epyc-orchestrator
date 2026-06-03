@@ -84,6 +84,14 @@ def test_dashboard_run_state_active_inference_overrides_quiet_log() -> None:
     assert "runState = hasActiveInference ? 'orphan inference' : 'down'" in body
 
 
+def test_dashboard_autopilot_log_render_dedupes_adjacent_lines() -> None:
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert "function _dedupeAdjacentAutopilotLines(lines)" in body
+    assert "_dedupeAdjacentAutopilotLines(_autopilotLogBuffer.split('\\n'))" in body
+
+
 def test_dashboard_topology_activity_stats_refresh_with_live_age_tick() -> None:
     """Topology activity text should not lag behind lock/tap freshness signals."""
     html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -46,6 +47,35 @@ def _t1_result() -> EvalResult:
         per_suite_quality={"coder": 1.7, "math": 1.9},
         n_questions=100,
     )
+
+
+def test_autopilot_logging_handlers_skip_file_handler_when_stream_is_log(tmp_path: Path) -> None:
+    log_path = tmp_path / "autopilot.log"
+    log_path.write_text("")
+
+    with log_path.open("a") as stream:
+        handlers = autopilot._autopilot_logging_handlers(log_path, stream=stream)
+
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], logging.StreamHandler)
+
+
+def test_autopilot_logging_handlers_keep_file_handler_for_terminal_stream(tmp_path: Path) -> None:
+    log_path = tmp_path / "autopilot.log"
+    log_path.write_text("")
+    other_path = tmp_path / "terminal.log"
+    other_path.write_text("")
+
+    with other_path.open("a") as stream:
+        handlers = autopilot._autopilot_logging_handlers(log_path, stream=stream)
+
+    try:
+        assert len(handlers) == 2
+        assert isinstance(handlers[0], logging.StreamHandler)
+        assert isinstance(handlers[1], logging.FileHandler)
+    finally:
+        for handler in handlers:
+            handler.close()
 
 
 class _FakeEvalTower:
