@@ -233,3 +233,42 @@ def test_structural_lab_memory_count_reads_sqlite_without_episodic_store_import(
     monkeypatch.setattr(sl_mod, "EPISODIC_DB", db_path)
     lab = sl_mod.StructuralLab(orchestrator_url="http://unused-test:0")
     assert lab.summary()["memory_count"] == 2
+
+
+def test_train_routing_models_spawns_venv_interpreter_not_bare_python(tmp_path, monkeypatch):
+    """Regression: the three routing-model trainers must be launched with the
+    current venv interpreter (sys.executable), never a bare 'python'.
+
+    The autopilot daemon runs under .venv/bin/python in a runtime where 'python'
+    is not on PATH; bare-'python' spawns failed with FileNotFoundError, silently
+    turning every train_routing_models trial into three error results.
+    """
+    from scripts.autopilot.species import structural_lab as sl_mod
+
+    captured: list[list[str]] = []
+
+    class _FakeCompleted:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return _FakeCompleted()
+
+    # Capture argv instead of actually launching the trainers.
+    monkeypatch.setattr(sl_mod.subprocess, "run", _fake_run)
+
+    lab = sl_mod.StructuralLab(orchestrator_url="http://unused-test:0")
+    # Clear the memory gate so all three trainer stages dispatch.
+    monkeypatch.setattr(lab, "_get_memory_count", lambda: 10_000)
+
+    results = lab.train_routing_models(min_memories=500)
+
+    # extraction + classifier + graph_router all dispatched (scripts exist in-repo).
+    assert len(captured) == 3, captured
+    for cmd in captured:
+        assert cmd[0] == sys.executable
+        assert cmd[0] != "python"
+    assert all(results[k]["status"] == "ok" for k in ("extraction", "classifier", "graph_router"))
+    assert results["memory_count"] == 10_000

@@ -11,6 +11,7 @@ import logging
 import sqlite3
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -200,7 +201,7 @@ class StructuralLab:
             extract_script = ORCH_ROOT / "scripts" / "graph_router" / "extract_training_data.py"
             if extract_script.exists():
                 proc = subprocess.run(
-                    ["python", str(extract_script)],
+                    [sys.executable, str(extract_script)],
                     capture_output=True, text=True, timeout=120,
                     cwd=str(ORCH_ROOT),
                 )
@@ -219,7 +220,7 @@ class StructuralLab:
             classifier_script = ORCH_ROOT / "scripts" / "graph_router" / "train_routing_classifier.py"
             if classifier_script.exists():
                 proc = subprocess.run(
-                    ["python", str(classifier_script)],
+                    [sys.executable, str(classifier_script)],
                     capture_output=True, text=True, timeout=120,
                     cwd=str(ORCH_ROOT),
                 )
@@ -238,7 +239,7 @@ class StructuralLab:
             gat_script = ORCH_ROOT / "scripts" / "graph_router" / "train_graph_router.py"
             if gat_script.exists():
                 proc = subprocess.run(
-                    ["python", str(gat_script)],
+                    [sys.executable, str(gat_script)],
                     capture_output=True, text=True, timeout=300,
                     cwd=str(ORCH_ROOT),
                 )
