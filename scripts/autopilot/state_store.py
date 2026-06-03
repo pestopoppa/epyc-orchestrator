@@ -21,6 +21,8 @@ import yaml
 
 log = logging.getLogger("autopilot")
 
+LOW_RISK_TYPE_ONLY_BLACKLIST_DENYLIST = {"seed_batch", "deep_eval", "distill_knowledge"}
+
 
 # 2026-05-23 Phase 6a — exit code for "state file corrupt, refuse to start".
 # 70 = EX_SOFTWARE per sysexits.h. Distinguishes config/state failure from
@@ -175,10 +177,25 @@ def append_blacklist(
     fields are present, the entry is skipped silently.
     """
     pattern = {}
-    for key in ("type", "surface", "file", "mutation", "flags"):
+    for key in (
+        "type",
+        "surface",
+        "file",
+        "mutation",
+        "flags",
+        "tier",
+        "n_questions",
+        "suites",
+    ):
         if key in action:
             pattern[key] = action[key]
     if not pattern:
+        return
+    if (
+        set(pattern) == {"type"}
+        and pattern["type"] in LOW_RISK_TYPE_ONLY_BLACKLIST_DENYLIST
+    ):
+        log.info("Skipping broad low-risk blacklist pattern: %s", pattern)
         return
 
     entry = {

@@ -1309,6 +1309,7 @@ def _run_loop_inner(
                     from host_health import HostHealthState  # type: ignore
                     _hh = HostHealthState.snapshot()
                     _throttled, _trig = _hh.is_throttled()
+                    _mem_warnings = _hh.memory_residency_warnings()
                     trust_lines.append(
                         "host-health: "
                         + ("THROTTLED — " + "; ".join(_trig)
@@ -1316,6 +1317,12 @@ def _run_loop_inner(
                            "nominal (no CPU-throttle / page-cache / load signal "
                            "→ a host-noise narrative is UNSUPPORTED)")
                     )
+                    if _mem_warnings:
+                        trust_lines.append(
+                            "memory-residency: ADVISORY — "
+                            + "; ".join(_mem_warnings)
+                            + "; do not use drop_caches for this class of RAM"
+                        )
                 except Exception:
                     trust_lines.append(
                         "host-health: not collected this turn — no positive evidence of "

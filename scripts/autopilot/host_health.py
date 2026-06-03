@@ -49,6 +49,9 @@ _CPU_FREQ_FRACTION_OF_BASE_OK = 0.80  # mean cur_freq must stay above 80% of bas
                                       # below = thermal/power throttling
 _MIN_PAGE_CACHE_AVAILABLE_MB = 4096   # arbitrary lower bound; if Cached drops below this
                                       # under sustained load, fragmentation is likely
+_MIN_MEM_AVAILABLE_MB = 128 * 1024    # below this, long evals can run into real memory pressure
+_HIGH_LLAMA_PRIVATE_DIRTY_MB = 384 * 1024  # retained llama-server KV/context arenas
+_HIGH_LLAMA_LOCKED_MB = 192 * 1024    # mlocked model pages; drop_caches cannot reclaim these
 
 
 @dataclass(frozen=True)
@@ -61,10 +64,19 @@ class HostHealthState:
     base_mhz: float | None
     page_cache_mb: float
     mem_available_mb: float
+    unevictable_mb: float
+    mlocked_mb: float
+    llama_process_count: int
+    llama_pss_mb: float
+    llama_private_dirty_mb: float
+    llama_locked_mb: float
     timestamp: float
 
     @classmethod
     def snapshot(cls) -> "HostHealthState":
+        llama_process_count, llama_pss_mb, llama_private_dirty_mb, llama_locked_mb = (
+            _read_llama_server_memory_mb()
+        )
         return cls(
             loadavg_1min=_read_loadavg_1min(),
             n_cores_online=_read_online_cores(),
@@ -72,6 +84,12 @@ class HostHealthState:
             base_mhz=_read_base_mhz(),
             page_cache_mb=_read_meminfo_mb("Cached"),
             mem_available_mb=_read_meminfo_mb("MemAvailable"),
+            unevictable_mb=_read_meminfo_mb("Unevictable"),
+            mlocked_mb=_read_meminfo_mb("Mlocked"),
+            llama_process_count=llama_process_count,
+            llama_pss_mb=llama_pss_mb,
+            llama_private_dirty_mb=llama_private_dirty_mb,
+            llama_locked_mb=llama_locked_mb,
             timestamp=time.time(),
         )
 
@@ -103,6 +121,31 @@ class HostHealthState:
                 f"page_cache={self.page_cache_mb:.0f} MB < {_MIN_PAGE_CACHE_AVAILABLE_MB} MB"
             )
         return (bool(triggers), triggers)
+
+    def memory_residency_warnings(self) -> list[str]:
+        """Advisory warnings for RAM that drop_caches cannot reclaim.
+
+        These are planner-visible steering signals, not safety gates. High
+        llama private-dirty memory usually means retained KV/context arenas;
+        remediation is slot compaction or role-aware server recycling, not
+        page-cache flushing.
+        """
+        warnings: list[str] = []
+        if 0 < self.mem_available_mb < _MIN_MEM_AVAILABLE_MB:
+            warnings.append(
+                f"mem_available={self.mem_available_mb:.0f} MB < {_MIN_MEM_AVAILABLE_MB} MB"
+            )
+        if self.llama_private_dirty_mb > _HIGH_LLAMA_PRIVATE_DIRTY_MB:
+            warnings.append(
+                f"llama_private_dirty={self.llama_private_dirty_mb:.0f} MB "
+                f"> {_HIGH_LLAMA_PRIVATE_DIRTY_MB} MB; prefer slot_compact or idle server recycle"
+            )
+        if self.llama_locked_mb > _HIGH_LLAMA_LOCKED_MB:
+            warnings.append(
+                f"llama_locked={self.llama_locked_mb:.0f} MB > {_HIGH_LLAMA_LOCKED_MB} MB; "
+                "drop_caches cannot reclaim mlocked model pages"
+            )
+        return warnings
 
 
 def _read_loadavg_1min() -> float:
@@ -138,6 +181,44 @@ def _read_meminfo_mb(field: str) -> float:
     except (OSError, ValueError, IndexError):
         pass
     return 0.0
+
+
+def _read_llama_server_memory_mb(proc_root: Path = Path("/proc")) -> tuple[int, float, float, float]:
+    """Return (processes, PSS MB, Private_Dirty MB, Locked MB) for llama-server."""
+    process_count = 0
+    pss_kb = 0
+    private_dirty_kb = 0
+    locked_kb = 0
+    for proc_dir in proc_root.glob("[0-9]*"):
+        try:
+            cmdline = (proc_dir / "cmdline").read_bytes().replace(b"\x00", b" ")
+        except OSError:
+            continue
+        if b"llama-server" not in cmdline:
+            continue
+        try:
+            lines = (proc_dir / "smaps_rollup").read_text().splitlines()
+        except OSError:
+            continue
+        process_count += 1
+        for line in lines:
+            try:
+                key, rest = line.split(":", 1)
+                value_kb = int(rest.split()[0])
+            except (ValueError, IndexError):
+                continue
+            if key == "Pss":
+                pss_kb += value_kb
+            elif key == "Private_Dirty":
+                private_dirty_kb += value_kb
+            elif key == "Locked":
+                locked_kb += value_kb
+    return (
+        process_count,
+        pss_kb / 1024.0,
+        private_dirty_kb / 1024.0,
+        locked_kb / 1024.0,
+    )
 
 
 def _read_mean_cur_mhz() -> float | None:
@@ -407,18 +488,23 @@ def flush_cache_with_pause(
 def _format_state(state: HostHealthState) -> str:
     ff = state.cpu_freq_fraction
     ff_pct = f"{ff:.0%}" if ff is not None else "N/A"
+    memory = (
+        f"page_cache={state.page_cache_mb:.0f} MB  "
+        f"mem_avail={state.mem_available_mb:.0f} MB  "
+        f"mlocked={state.mlocked_mb:.0f} MB  "
+        f"llama_pss={state.llama_pss_mb:.0f} MB  "
+        f"llama_private_dirty={state.llama_private_dirty_mb:.0f} MB"
+    )
     return (
         f"loadavg(1m)={state.loadavg_1min:.2f}  "
         f"loadavg/cores={state.loadavg_per_core:.2f}  "
         f"cpu_freq={state.mean_cur_mhz:.0f}/{state.base_mhz:.0f} MHz ({ff_pct})  "
-        f"page_cache={state.page_cache_mb:.0f} MB  "
-        f"mem_avail={state.mem_available_mb:.0f} MB"
+        f"{memory}"
         if state.mean_cur_mhz and state.base_mhz else
         f"loadavg(1m)={state.loadavg_1min:.2f}  "
         f"loadavg/cores={state.loadavg_per_core:.2f}  "
         f"cpu_freq=N/A  "
-        f"page_cache={state.page_cache_mb:.0f} MB  "
-        f"mem_avail={state.mem_available_mb:.0f} MB"
+        f"{memory}"
     )
 
 
@@ -436,6 +522,7 @@ def _main() -> int:
     state = HostHealthState.snapshot()
     print(_format_state(state))
     throttled, triggers = state.is_throttled()
+    memory_warnings = state.memory_residency_warnings()
     if throttled:
         print(f"\nTHROTTLED: {len(triggers)} trigger(s):")
         for t in triggers:
@@ -450,6 +537,10 @@ def _main() -> int:
                 return 0 if not state2.is_throttled()[0] else 3
             return 2
         return 1
+    if memory_warnings:
+        print(f"\nMEMORY RESIDENCY: {len(memory_warnings)} advisory warning(s):")
+        for warning in memory_warnings:
+            print(f"  - {warning}")
     print("OK — no throttle detected")
     return 0
 

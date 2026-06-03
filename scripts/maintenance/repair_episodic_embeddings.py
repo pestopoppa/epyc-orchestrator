@@ -247,6 +247,7 @@ def run_repair(
     reembedded_path: Path,
     servers: int = 8,
     batch_size: int = 128,
+    base_port: int = 8090,
     skip_reembed: bool = False,
 ) -> int:
     if not skip_reembed:
@@ -256,6 +257,7 @@ def run_repair(
             sys.executable, str(REEMBED_SCRIPT),
             "--db", str(db_path),  # reembed_episodic_store expects the .db file path
             "--output", str(reembedded_path),
+            "--base-port", str(base_port),
             "--servers", str(servers),
             "--batch-size", str(batch_size),
         ]
@@ -300,6 +302,7 @@ def main() -> int:
     parser.add_argument("--reembedded", type=str, default=str(DEFAULT_REEMBEDDED_PATH))
     parser.add_argument("--servers", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--base-port", type=int, default=8090)
     parser.add_argument(
         "--min-orphans", type=int, default=MIN_ORPHANS_TO_REPAIR,
         help="Skip repair if orphan count is below this threshold (default %(default)s)",
@@ -329,7 +332,7 @@ def main() -> int:
         return 0
 
     print(f"\nProceeding with repair ({report.orphan_count:,} orphans).")
-    print("This will launch 8 BGE servers and may take 5-15 minutes.\n")
+    print(f"This will use {args.servers} BGE servers and may take several minutes.\n")
     run_repair(
         db_path=db_path,
         faiss_path=faiss_path,
@@ -337,6 +340,7 @@ def main() -> int:
         reembedded_path=reembedded_path,
         servers=args.servers,
         batch_size=args.batch_size,
+        base_port=args.base_port,
         skip_reembed=args.skip_reembed,
     )
     print("\nRepair complete. Re-running diagnostic to verify:")

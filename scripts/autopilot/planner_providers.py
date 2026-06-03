@@ -159,7 +159,6 @@ class CodexPlannerProvider:
                 self._model,
                 "-s",
                 "read-only",
-                "--full-auto",
                 "-",
             ]
             if tap is not None:

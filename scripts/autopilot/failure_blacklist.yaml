@@ -10,7 +10,21 @@ blacklist:
   source_trial: -1
   notes: Server launch flag — not runtime-tunable. Prevents restart-based experiments.
 - pattern:
-    type: seed_batch
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 488'
-  added: '2026-05-23T23:08:26.435073+00:00'
-  source_trial: 488
+    type: structural_experiment
+    flags:
+      session_log: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 188'
+  added: '2026-05-31T23:59:58.394405+00:00'
+  source_trial: 188
+- pattern:
+    type: code_mutation
+    file: src/tool_policy.py
+    mutation: targeted_fix
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 190'
+  added: '2026-06-01T00:31:58.040045+00:00'
+  source_trial: 190
+- pattern:
+    type: distill_skillbank
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 193'
+  added: '2026-06-01T01:31:36.486393+00:00'
+  source_trial: 193

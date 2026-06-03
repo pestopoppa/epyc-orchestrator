@@ -110,6 +110,24 @@ def test_append_blacklist_appends_to_existing(tmp_path) -> None:
     assert data["blacklist"][1]["reason"] == "second"
 
 
+def test_append_blacklist_skips_type_only_low_risk_action(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "deep_eval"}, trial_id=2, reason="second", blacklist_path=bl_path,
+    )
+    assert not bl_path.exists()
+
+
+def test_append_blacklist_keeps_specific_low_risk_pattern(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    state_store.append_blacklist(
+        {"type": "deep_eval", "tier": 2}, trial_id=2, reason="second",
+        blacklist_path=bl_path,
+    )
+    data = yaml.safe_load(bl_path.read_text())
+    assert data["blacklist"][0]["pattern"] == {"type": "deep_eval", "tier": 2}
+
+
 def test_append_blacklist_skips_unpatternable_actions(tmp_path) -> None:
     """If no patternable fields are in the action, no entry is written."""
     bl_path = tmp_path / "bl.yaml"

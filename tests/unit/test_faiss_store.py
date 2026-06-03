@@ -3,6 +3,7 @@ Unit tests for FAISS embedding store and EpisodicStore FAISS backend.
 """
 
 import tempfile
+import sqlite3
 from pathlib import Path
 
 import numpy as np
@@ -266,6 +267,43 @@ class TestEpisodicStoreWithFAISS:
         assert memory is not None
         assert memory.action == "route_to_coder"
         assert memory.action_type == "routing"
+
+    def test_parallel_store_instances_assign_distinct_faiss_indices(self, temp_dir):
+        """Stale store instances must reload under lock before assigning indices."""
+        from orchestration.repl_memory import EpisodicStore
+        from orchestration.repl_memory.faiss_store import FAISSEmbeddingStore
+
+        store1 = EpisodicStore(db_path=temp_dir, embedding_dim=128, use_faiss=True)
+        store2 = EpisodicStore(db_path=temp_dir, embedding_dim=128, use_faiss=True)
+
+        try:
+            store1.store(
+                embedding=np.random.randn(128).astype(np.float32),
+                action="action_1",
+                action_type="routing",
+                context={"writer": 1},
+            )
+            store2.store(
+                embedding=np.random.randn(128).astype(np.float32),
+                action="action_2",
+                action_type="routing",
+                context={"writer": 2},
+            )
+
+            with sqlite3.connect(temp_dir / "episodic.db") as conn:
+                indices = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT embedding_idx FROM memories ORDER BY created_at"
+                    )
+                ]
+
+            reloaded = FAISSEmbeddingStore(path=temp_dir, dim=128)
+            assert indices == [0, 1]
+            assert reloaded.count == 2
+        finally:
+            store1.close()
+            store2.close()
 
     def test_retrieve_by_similarity(self, faiss_store):
         """Test similarity-based retrieval."""

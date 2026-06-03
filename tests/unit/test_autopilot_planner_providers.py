@@ -59,3 +59,53 @@ def test_parse_codex_jsonl_falls_back_to_raw_output() -> None:
     output = "plain text result"
 
     assert planner_providers.parse_codex_jsonl(output) == output
+
+
+def test_codex_provider_uses_current_read_only_cli(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def communicate(self, input, timeout):
+            captured["input"] = input
+            captured["timeout"] = timeout
+            return (
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": "ok"},
+                    }
+                ),
+                "",
+            )
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_archive_codex_call", lambda *a, **k: None)
+    monkeypatch.setattr(planner_providers.subprocess, "Popen", fake_popen)
+
+    provider = planner_providers.CodexPlannerProvider(
+        binary_path="codex",
+        model="test-model",
+    )
+    result = provider.invoke("prompt", role="critique", timeout=7, cwd=tmp_path)
+
+    assert result.ok
+    assert captured["cmd"] == [
+        "codex",
+        "exec",
+        "--json",
+        "-m",
+        "test-model",
+        "-s",
+        "read-only",
+        "-",
+    ]
+    assert "--full-auto" not in captured["cmd"]
+    assert captured["input"] == "prompt"
+    assert captured["timeout"] == 7

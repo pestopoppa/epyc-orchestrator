@@ -35,6 +35,50 @@ def test_exogenous_cache_flush_category_exists() -> None:
     assert experiment_journal.DeficiencyCategory.EXOGENOUS_CACHE_FLUSH.value == "exogenous_cache_flush"
 
 
+def test_llama_server_memory_reader_aggregates_rollup(tmp_path: Path) -> None:
+    proc = tmp_path / "123"
+    proc.mkdir()
+    (proc / "cmdline").write_bytes(b"/mnt/raid0/llm/llama.cpp/build/bin/llama-server\x00--port\x008070")
+    (proc / "smaps_rollup").write_text(
+        "Pss:                2048 kB\n"
+        "Private_Dirty:      1024 kB\n"
+        "Locked:              512 kB\n"
+    )
+    other = tmp_path / "456"
+    other.mkdir()
+    (other / "cmdline").write_bytes(b"python\x00worker.py")
+    (other / "smaps_rollup").write_text(
+        "Pss:                9999 kB\n"
+        "Private_Dirty:      9999 kB\n"
+        "Locked:             9999 kB\n"
+    )
+
+    assert host_health._read_llama_server_memory_mb(tmp_path) == (1, 2.0, 1.0, 0.5)
+
+
+def test_memory_residency_warnings_are_advisory() -> None:
+    state = host_health.HostHealthState(
+        loadavg_1min=1.0,
+        n_cores_online=64,
+        mean_cur_mhz=2000.0,
+        base_mhz=2000.0,
+        page_cache_mb=500_000.0,
+        mem_available_mb=500_000.0,
+        unevictable_mb=160_000.0,
+        mlocked_mb=160_000.0,
+        llama_process_count=28,
+        llama_pss_mb=650_000.0,
+        llama_private_dirty_mb=400_000.0,
+        llama_locked_mb=150_000.0,
+        timestamp=0.0,
+    )
+
+    warnings = state.memory_residency_warnings()
+    assert warnings
+    assert "llama_private_dirty" in warnings[0]
+    assert state.is_throttled() == (False, [])
+
+
 def test_flush_sets_paused_true_then_restores(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     _write_state(state_path, paused=False)

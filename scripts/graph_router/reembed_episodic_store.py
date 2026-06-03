@@ -65,10 +65,14 @@ def start_embedding_server(model_path: Path, port: int, threads: int) -> subproc
     cmd = [
         str(LLAMA_SERVER),
         "-m", str(model_path),
+        "--host", "127.0.0.1",
         "--port", str(port),
-        "--embedding",
+        "-np", "4",
         "-t", str(threads),
         "-c", "512",
+        "--embeddings",
+        "--pooling", "cls",
+        "--flash-attn", "on",
         "--log-disable",
     ]
     proc = subprocess.Popen(
@@ -112,10 +116,35 @@ def embed_batch(texts: list[str], port: int) -> np.ndarray:
     return np.array(embeddings, dtype=np.float32)
 
 
-def embed_batch_indexed(batch_idx: int, texts: list[str], port: int):
+def retry_port_order(primary_port: int, ports: list[int]) -> list[int]:
+    """Return primary port, then the rest of the pool in round-robin order."""
+    try:
+        start_idx = ports.index(primary_port)
+    except ValueError:
+        return [primary_port] + ports
+    return [ports[(start_idx + offset) % len(ports)] for offset in range(len(ports))]
+
+
+def embed_batch_indexed(batch_idx: int, texts: list[str], port: int, ports: list[int]):
     """Embed a batch and return (batch_idx, embeddings) for ordered reassembly."""
-    embs = embed_batch(texts, port)
-    return batch_idx, embs
+    retry_ports = retry_port_order(port, ports)
+    last_error: Exception | None = None
+    for attempt, candidate_port in enumerate(retry_ports, start=1):
+        try:
+            embs = embed_batch(texts, candidate_port)
+            if attempt > 1:
+                logger.info(
+                    "Batch %d recovered on port %d after %d attempt(s)",
+                    batch_idx, candidate_port, attempt,
+                )
+            return batch_idx, embs
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Batch %d failed on port %d attempt %d/%d: %s",
+                batch_idx, candidate_port, attempt, len(retry_ports), exc,
+            )
+    raise RuntimeError(f"batch {batch_idx} failed on all embedding ports") from last_error
 
 
 def main():
@@ -126,7 +155,7 @@ def main():
     parser.add_argument("--base-port", type=int, default=8090)
     parser.add_argument("--servers", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--threads-per-server", type=int, default=24)
+    parser.add_argument("--threads-per-server", type=int, default=4)
     args = parser.parse_args()
 
     db_path = Path(args.db)
@@ -215,7 +244,7 @@ def main():
             futures = {}
             for batch_idx, (start, end, texts) in enumerate(batches):
                 port = ports[batch_idx % args.servers]
-                fut = executor.submit(embed_batch_indexed, batch_idx, texts, port)
+                fut = executor.submit(embed_batch_indexed, batch_idx, texts, port, ports)
                 futures[fut] = (batch_idx, start, end)
 
             for fut in as_completed(futures):
@@ -234,8 +263,14 @@ def main():
                         )
                 except Exception as e:
                     logger.error("Batch %d-%d failed: %s", start, end, e)
+                    raise
 
         # ── Reassemble in original order ──
+        if len(results_map) != len(batches):
+            missing = sorted(set(range(len(batches))) - set(results_map))
+            raise RuntimeError(
+                f"Missing embeddings for {len(missing)} batch(es); first missing: {missing[:10]}"
+            )
         all_ids = []
         all_embeddings = []
         all_actions = []

@@ -16,11 +16,13 @@ Enhanced with optional graph integration:
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import re
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +40,18 @@ logger = logging.getLogger(__name__)
 # Default paths (on RAID array per CLAUDE.md requirements)
 DEFAULT_DB_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/sessions")
 DEFAULT_EMBEDDINGS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/embeddings.npy")
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path):
+    """Cross-process lock for FAISS index/id-map mutations."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 class _ClosingSQLiteConnection(sqlite3.Connection):
@@ -161,10 +175,12 @@ class EpisodicStore:
         if use_faiss:
             self.storage_dir = self.db_path
             self.sqlite_path = self.storage_dir / "episodic.db"
+            self._faiss_lock_path = self.storage_dir / ".episodic_faiss.lock"
         else:
             self.storage_dir = self.db_path.parent if self.db_path.suffix == ".db" else self.db_path
             self.sqlite_path = self.db_path if self.db_path.suffix == ".db" else self.db_path / "episodic.db"
             self.embeddings_path = embeddings_path or DEFAULT_EMBEDDINGS_PATH
+            self._faiss_lock_path = None
 
         # Ensure directories exist
         self.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -313,10 +329,66 @@ class EpisodicStore:
         memory_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
-        # Store embedding in FAISS/NumPy
-        embedding_idx = self._embedding_store.add(memory_id, embedding)
+        if self.use_faiss and self._faiss_lock_path is not None:
+            with _exclusive_file_lock(self._faiss_lock_path):
+                # Multiple API/worker processes can keep EpisodicStore instances
+                # open. Reload before assigning the next FAISS index so each
+                # writer observes the latest durable id_map, then save before
+                # releasing the lock to prevent duplicate embedding_idx rows.
+                if hasattr(self._embedding_store, "_load"):
+                    self._embedding_store._load()
+                embedding_idx = self._embedding_store.add(memory_id, embedding)
+                self._embedding_store.save()
+                self._insert_memory_row(
+                    memory_id=memory_id,
+                    embedding_idx=embedding_idx,
+                    action=action,
+                    action_type=action_type,
+                    context=context,
+                    outcome=outcome,
+                    initial_q=initial_q,
+                    now=now,
+                    model_id=model_id,
+                    assigned_role=assigned_role,
+                    sub_decision=sub_decision,
+                )
+        else:
+            # Store embedding in NumPy and persist via write-behind.
+            embedding_idx = self._embedding_store.add(memory_id, embedding)
+            self._insert_memory_row(
+                memory_id=memory_id,
+                embedding_idx=embedding_idx,
+                action=action,
+                action_type=action_type,
+                context=context,
+                outcome=outcome,
+                initial_q=initial_q,
+                now=now,
+                model_id=model_id,
+                assigned_role=assigned_role,
+                sub_decision=sub_decision,
+            )
+            self._dirty = True
+            self._schedule_flush()
 
-        # Store metadata in SQLite
+        return memory_id
+
+    def _insert_memory_row(
+        self,
+        *,
+        memory_id: str,
+        embedding_idx: int,
+        action: str,
+        action_type: str,
+        context: Dict[str, Any],
+        outcome: Optional[str],
+        initial_q: float,
+        now: str,
+        model_id: Optional[str],
+        assigned_role: Optional[str],
+        sub_decision: Optional[str],
+    ) -> None:
+        """Persist SQLite metadata for an already-added embedding."""
         with sqlite3.connect(self.sqlite_path, factory=_ClosingSQLiteConnection) as conn:
             conn.execute(
                 """
@@ -340,12 +412,6 @@ class EpisodicStore:
                 ),
             )
             conn.commit()
-
-        # Mark dirty for write-behind (10s flush interval)
-        self._dirty = True
-        self._schedule_flush()
-
-        return memory_id
 
     def store_immediate(
         self,
