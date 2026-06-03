@@ -211,6 +211,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Slot Memory (KV cache usage — consider slot_compact if tokens > 4000)
 {slot_memory}
 
+### Action Availability
+{action_availability}
+
 ### Species Budget
 {budget}
 
@@ -361,6 +364,108 @@ nothing more.
 
 {bt_tiebreak_hint}
 """
+
+
+_RECOVERY_ONLY_ACTIONS = {
+    "distill_knowledge",
+    "reset_memories",
+    "rollback",
+}
+
+
+def _slot_compaction_viable(slot_memory_text: str) -> bool:
+    """True when any production slot currently has cached tokens."""
+    return any(
+        int(m.group(1)) > 0
+        for m in re.finditer(r"(\d+)\s+tokens cached", slot_memory_text or "")
+    )
+
+
+def _type_only_blacklisted_actions(blacklist: list[dict[str, Any]]) -> dict[str, str]:
+    """Map action_type -> reason for exact type-only blacklist entries."""
+    blocked: dict[str, str] = {}
+    for entry in blacklist:
+        pattern = entry.get("pattern", {})
+        if not isinstance(pattern, dict):
+            continue
+        if set(pattern) == {"type"} and isinstance(pattern.get("type"), str):
+            blocked[pattern["type"]] = entry.get("reason", "blacklisted")
+    return blocked
+
+
+def _build_action_availability(
+    *,
+    journal: ExperimentJournal,
+    known_actions: list[str],
+    memory_count: int,
+    converged: bool,
+    slot_memory_text: str,
+    blacklist: list[dict[str, Any]],
+) -> tuple[str, list[str]]:
+    """Return prompt text + viable tail-seed action types for the planner."""
+    blocked: dict[str, str] = {}
+    cautions: dict[str, str] = {}
+
+    blocked.update(_type_only_blacklisted_actions(blacklist))
+
+    if memory_count < 500:
+        blocked["train_routing_models"] = (
+            f"needs >=500 routing memories; current memory_count={memory_count}"
+        )
+    elif not converged:
+        cautions["train_routing_models"] = (
+            "routing memories exist, but the current seeder session is not "
+            "converged yet; avoid training as a stagnation escape hatch"
+        )
+
+    if not _slot_compaction_viable(slot_memory_text):
+        blocked["slot_compact"] = "all production slots are empty/offline right now"
+
+    cautions["reset_memories"] = (
+        "destructive recovery action; do not use for ordinary stagnation"
+    )
+    cautions["rollback"] = (
+        "recovery-only action; use only after a concrete regression from a known-good point"
+    )
+    cautions["distill_knowledge"] = (
+        "metric-free meta action; do not use to break a measurement stall"
+    )
+
+    try:
+        insights = journal.insights_structured(n=120, exclude_bug_corrupted=True)
+    except Exception:
+        insights = {}
+
+    for action_type in ("prompt_mutation", "train_routing_models"):
+        info = insights.get(action_type)
+        if not info:
+            continue
+        if info.get("successes", 0) == 0 and info.get("failures", 0) >= 1:
+            cautions[action_type] = (
+                f"recent evidence is negative: trials {info.get('trials_supporting', [])} "
+                f"produced only failures ({info.get('observation', '')})"
+            )
+
+    lines = []
+    if blocked:
+        lines.append("Currently unavailable:")
+        for action_type, reason in sorted(blocked.items()):
+            lines.append(f"- `{action_type}`: {reason}")
+    if cautions:
+        lines.append("Use only with a concrete new falsifier:")
+        for action_type, reason in sorted(cautions.items()):
+            lines.append(f"- `{action_type}`: {reason}")
+    if not lines:
+        lines.append("(no action-specific availability constraints detected)")
+
+    viable_tail_actions = [
+        action_type
+        for action_type in known_actions
+        if action_type not in blocked
+        and action_type not in _RECOVERY_ONLY_ACTIONS
+        and not (action_type == "train_routing_models" and not converged)
+    ]
+    return "\n".join(lines), viable_tail_actions
 
 
 def _build_exploration_block(
@@ -669,6 +774,7 @@ def _default_state() -> dict[str, Any]:
         "paused": False,
         "species_budget": SpeciesBudget().as_dict(),
         "td_errors": [],
+        "seeder_state": {},
         # 2026-05-23 Phase 6b — autopilot self-crash recovery markers.
         # in_flight_trial is set immediately BEFORE dispatch_action and
         # cleared only AFTER the final atomic save_state. On startup,
@@ -1021,9 +1127,13 @@ def _run_loop_inner(
         b = state["species_budget"]
         meta.budget = SpeciesBudget(**b)
 
-    # Load TD errors from state
-    if "td_errors" in state:
-        seeder._td_errors = [(i, e) for i, e in enumerate(state["td_errors"])]
+    # Restore seeder convergence state. Prefer the explicit state shape; fall
+    # back to legacy td_errors-only persistence so existing state files still
+    # reconstruct batch_count + convergence streak sensibly.
+    seeder.restore_state(
+        state.get("seeder_state")
+        or {"td_errors": state.get("td_errors", [])}
+    )
 
     trial_counter = state.get("trial_counter", 0)
     plot_paths: list[str] = []
@@ -1372,10 +1482,18 @@ def _run_loop_inner(
                     "distill_skillbank", "reset_memories", "deep_eval",
                     "rollback", "distill_knowledge",
                 ]
+                action_availability_text, viable_tail_actions = _build_action_availability(
+                    journal=journal,
+                    known_actions=_known_actions,
+                    memory_count=memory_count,
+                    converged=converged,
+                    slot_memory_text=slot_memory_text,
+                    blacklist=blacklist,
+                )
                 exploration_block, stagnation_signal = _build_exploration_block(
                     journal=journal,
                     archive=archive,
-                    known_actions=_known_actions,
+                    known_actions=viable_tail_actions,
                 )
             except Exception as _exc:
                 exploration_block = (
@@ -1383,6 +1501,7 @@ def _run_loop_inner(
                     "reasons before committing to your single action.\n"
                     f"(exploration-block assembly failed: {_exc})"
                 )
+                action_availability_text = "(action availability unavailable)"
                 stagnation_signal = "unknown"
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
@@ -1401,6 +1520,7 @@ def _run_loop_inner(
                 memory_count=memory_count,
                 converged=converged,
                 slot_memory=slot_memory_text,
+                action_availability=action_availability_text,
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
                 insights=insights_text,
@@ -2009,10 +2129,13 @@ def _run_loop_inner(
                 notes=f"Auto-checkpoint at trial {trial_counter}",
             )
 
+        # Persist seeder convergence state on every metric-bearing trial so a
+        # restart does not reset train_routing_models eligibility.
+        state["seeder_state"] = seeder.export_state()
+        state["td_errors"] = state["seeder_state"]["td_errors"]
+
         # Generate plots periodically
         if trial_counter % PLOT_INTERVAL == 0:
-            td_errors = seeder.td_errors
-            state["td_errors"] = [e for _, e in td_errors]
             async_tasks.submit_subprocess(
                 f"plots-trial-{trial_counter}",
                 [sys.executable, str(SCRIPT_DIR / "autopilot.py"), "plot"],

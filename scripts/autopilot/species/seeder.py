@@ -11,6 +11,7 @@ and tests each individually with natural mode selection.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from typing import Any
 log = logging.getLogger("autopilot.seeder")
 
 _orch_root = Path(__file__).resolve().parents[3]
+_memory_db = _orch_root / "orchestration" / "repl_memory" / "sessions" / "episodic.db"
 sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
 
 from seeding_eval import evaluate_question_per_role  # noqa: E402
@@ -63,6 +65,25 @@ class SeederBatchResult:
 
 # How often to re-discover active roles (in batches)
 _ROLE_REFRESH_INTERVAL = 10
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_int_like(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _tail_below_threshold(values: list[float], threshold: float) -> int:
+    """Count consecutive trailing values below ``threshold``."""
+    count = 0
+    for value in reversed(values):
+        if value < threshold:
+            count += 1
+        else:
+            break
+    return count
 
 
 class Seeder:
@@ -109,6 +130,38 @@ class Seeder:
     @property
     def is_converged(self) -> bool:
         return self._consecutive_converged >= CONVERGENCE_WINDOW
+
+    def export_state(self) -> dict[str, Any]:
+        """Serialize convergence state for autopilot_state persistence."""
+        return {
+            "td_errors": [err for _, err in self._td_errors],
+            "batch_count": self._batch_count,
+            "consecutive_converged": self._consecutive_converged,
+        }
+
+    def restore_state(self, state: dict[str, Any] | None) -> None:
+        """Restore convergence state from persisted autopilot state."""
+        state = state or {}
+        raw_td_errors = state.get("td_errors", [])
+        if isinstance(raw_td_errors, list):
+            td_errors = [float(err) for err in raw_td_errors if _is_number(err)]
+        else:
+            td_errors = []
+        self._td_errors = list(enumerate(td_errors))
+
+        batch_count = state.get("batch_count")
+        if _is_int_like(batch_count):
+            self._batch_count = max(int(batch_count), len(self._td_errors))
+        else:
+            self._batch_count = len(self._td_errors)
+
+        consecutive = state.get("consecutive_converged")
+        if _is_int_like(consecutive):
+            self._consecutive_converged = max(0, int(consecutive))
+        else:
+            self._consecutive_converged = _tail_below_threshold(
+                td_errors, TD_ERROR_EPSILON
+            )
 
     # ── main entry point ─────────────────────────────────────────
 
@@ -295,16 +348,16 @@ class Seeder:
     # ── memory monitoring ────────────────────────────────────────
 
     def _get_memory_count(self) -> int:
-        """Get routing memory count from episodic store."""
+        """Get routing memory count from SQLite without importing ML deps."""
         try:
-            sys.path.insert(
-                0, str(_orch_root / "orchestration" / "repl_memory")
-            )
-            from episodic_store import EpisodicStore
-            store = EpisodicStore()
-            count = store.count("routing")
-            store.close()
-            return count
+            if not _memory_db.exists():
+                return 0
+            with sqlite3.connect(_memory_db) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM memories WHERE action_type = ?",
+                    ("routing",),
+                ).fetchone()
+            return int(row[0]) if row else 0
         except Exception as e:
             log.debug("Could not get memory count: %s", e)
             return 0

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import shutil
 import subprocess
 import time
@@ -26,6 +27,7 @@ PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
 CLASSIFIER_CONFIG = ORCH_ROOT / "orchestration" / "classifier_config.yaml"
 
 AUTOPILOT_STATE = ORCH_ROOT / "orchestration" / "autopilot_state.json"
+EPISODIC_DB = MEMORY_DIR / "episodic.db"
 
 # Files to checkpoint — autopilot_state.json is CRITICAL (contains Pareto frontier
 # with trial configs, HV history, all entries). Without it, frontier is lost on restart.
@@ -378,13 +380,14 @@ class StructuralLab:
 
     def _get_memory_count(self) -> int:
         try:
-            import sys
-            sys.path.insert(0, str(ORCH_ROOT / "orchestration" / "repl_memory"))
-            from episodic_store import EpisodicStore
-            store = EpisodicStore()
-            count = store.count("routing")
-            store.close()
-            return count
+            if not EPISODIC_DB.exists():
+                return 0
+            with sqlite3.connect(EPISODIC_DB) as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM memories WHERE action_type = ?",
+                    ("routing",),
+                ).fetchone()
+            return int(row[0]) if row else 0
         except Exception:
             return 0
 

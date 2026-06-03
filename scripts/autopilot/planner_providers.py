@@ -123,10 +123,7 @@ class CodexPlannerProvider:
         model: str | None = None,
     ) -> None:
         self._binary = binary_path or os.environ.get("AUTOPILOT_CODEX_BINARY", "codex")
-        self._model = model or os.environ.get(
-            "AUTOPILOT_CODEX_MODEL",
-            "gpt-5.3-codex",
-        )
+        self._model = model or os.environ.get("AUTOPILOT_CODEX_MODEL")
 
     def invoke(
         self,
@@ -155,12 +152,12 @@ class CodexPlannerProvider:
                 self._binary,
                 "exec",
                 "--json",
-                "-m",
-                self._model,
                 "-s",
                 "read-only",
                 "-",
             ]
+            if self._model:
+                cmd[3:3] = ["-m", self._model]
             if tap is not None:
                 _tap_write(
                     tap,

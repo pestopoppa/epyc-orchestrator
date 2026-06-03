@@ -302,6 +302,35 @@ def test_rich_fragment_lists_tail_seeds_and_unfalsified(tmp_path: Path) -> None:
     assert "quality drops >2pp" in block
 
 
+def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> None:
+    j = _fresh_journal(tmp_path)
+    j.record(_entry(
+        185,
+        "prompt_mutation",
+        failure_analysis="prompt edit regressed quality badly",
+        hypothesis="edit frontdoor",
+    ))
+    availability, viable = autopilot._build_action_availability(
+        journal=j,
+        known_actions=KNOWN_ACTIONS,
+        memory_count=100,
+        converged=False,
+        slot_memory_text="  (all slots empty or servers offline)",
+        blacklist=[{"pattern": {"type": "distill_skillbank"}, "reason": "blacklisted"}],
+    )
+    assert "`slot_compact`" in availability
+    assert "`train_routing_models`" in availability
+    assert "`reset_memories`" in availability
+    assert "`distill_skillbank`" in availability
+    assert "`prompt_mutation`" in availability
+    assert "slot_compact" not in viable
+    assert "train_routing_models" not in viable
+    assert "reset_memories" not in viable
+    assert "rollback" not in viable
+    assert "distill_knowledge" not in viable
+    assert "distill_skillbank" not in viable
+
+
 def test_build_exploration_block_resilient_to_archive_errors(tmp_path: Path) -> None:
     j = _well_populated_journal(
         tmp_path,

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
+import sqlite3
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -82,3 +83,52 @@ def test_seeder_run_batch_accumulates_acknowledged_rewards():
     assert result.rewards_injected == 2
     assert result.rewards_delivery == [delivery]
     assert result.results[0]["rewards"] == {"frontdoor": 1.0}
+
+
+def test_seeder_memory_count_reads_sqlite_without_episodic_store_import(tmp_path):
+    mod = _load_module("species_seeder_count_test", _AUTO / "seeder.py")
+    db_path = tmp_path / "episodic.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT NOT NULL)"
+        )
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, ?)",
+            [("a", "routing"), ("b", "routing"), ("c", "escalation")],
+        )
+        conn.commit()
+
+    with patch.object(mod, "_memory_db", db_path):
+        seeder = mod.Seeder(dry_run=True)
+        assert seeder.get_memory_count() == 2
+
+
+def test_seeder_restore_state_recovers_explicit_convergence_fields():
+    mod = _load_module("species_seeder_restore_test", _AUTO / "seeder.py")
+    with patch.object(mod, "discover_active_roles", return_value=[]):
+        seeder = mod.Seeder(dry_run=True)
+    seeder.restore_state(
+        {
+            "td_errors": [0.2, 0.04, 0.03],
+            "batch_count": 7,
+            "consecutive_converged": 5,
+        }
+    )
+
+    assert seeder.convergence_status()["batch_count"] == 7
+    assert seeder.convergence_status()["consecutive_converged"] == 5
+    assert seeder.is_converged is True
+    assert seeder.export_state()["td_errors"] == [0.2, 0.04, 0.03]
+
+
+def test_seeder_restore_state_reconstructs_legacy_td_error_streak():
+    mod = _load_module("species_seeder_legacy_restore_test", _AUTO / "seeder.py")
+    with patch.object(mod, "discover_active_roles", return_value=[]):
+        seeder = mod.Seeder(dry_run=True)
+    seeder.restore_state({"td_errors": [0.2, 0.03, 0.04, 0.01]})
+
+    status = seeder.convergence_status()
+    assert status["batch_count"] == 4
+    assert status["consecutive_converged"] == 3
+    assert status["last_td_error"] == 0.01
+    assert seeder.is_converged is False

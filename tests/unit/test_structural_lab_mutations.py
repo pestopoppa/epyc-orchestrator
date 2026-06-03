@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -213,3 +214,22 @@ def test_cascade_invalidates_routing_classifier_checkpoint(store, lab, tmp_path,
     meta_now = json.loads(classifier_meta.read_text())
     assert meta_now.get("stale") is True
     assert "stale_at" in meta_now
+
+
+def test_structural_lab_memory_count_reads_sqlite_without_episodic_store_import(tmp_path, monkeypatch):
+    from scripts.autopilot.species import structural_lab as sl_mod
+
+    db_path = tmp_path / "episodic.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE memories (id TEXT PRIMARY KEY, action_type TEXT NOT NULL)"
+        )
+        conn.executemany(
+            "INSERT INTO memories (id, action_type) VALUES (?, ?)",
+            [("a", "routing"), ("b", "routing"), ("c", "exploration")],
+        )
+        conn.commit()
+
+    monkeypatch.setattr(sl_mod, "EPISODIC_DB", db_path)
+    lab = sl_mod.StructuralLab(orchestrator_url="http://unused-test:0")
+    assert lab.summary()["memory_count"] == 2
