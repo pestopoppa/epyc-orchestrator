@@ -54,6 +54,11 @@ dependencies = [
 
     # DSPy (AP-18: routing prompt optimization via GEPA)
     "dspy>=2.5.0",
+
+    # Plotting (autopilot progress/Pareto dashboard panels — scripts/autopilot/progress_plots.py).
+    # Used-but-undeclared before 2026-06-04: a venv rebuild silently dropped it and the
+    # plot subprocess swallowed the ImportError, freezing the dashboard panels.
+    "matplotlib>=3.10.9",
 ]
 
 [project.optional-dependencies]

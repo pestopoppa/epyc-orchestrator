@@ -263,8 +263,17 @@ def generate_all_plots(
     journal,  # ExperimentJournal
     td_errors: list[tuple[int, float]] | None = None,
     output_dir: Path | None = None,
+    *,
+    raise_on_error: bool = False,
 ) -> list[Path]:
-    """Generate all 6 plots from current state."""
+    """Generate all 6 plots from current state.
+
+    By default a render failure (e.g. a missing matplotlib dependency or bad
+    journal data) is logged and swallowed, returning whatever subset rendered.
+    Pass ``raise_on_error=True`` so callers whose exit code is monitored (the
+    standalone ``autopilot.py plot`` subprocess) fail loudly instead of
+    silently reporting success.
+    """
     output_dir = output_dir or PLOTS_DIR
     paths = []
 
@@ -329,5 +338,7 @@ def generate_all_plots(
 
     except Exception as e:
         log.error("Error generating plots: %s", e)
+        if raise_on_error:
+            raise
 
     return paths

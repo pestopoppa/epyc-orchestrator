@@ -2412,7 +2412,15 @@ def cmd_plot(args: argparse.Namespace) -> None:
     journal = ExperimentJournal()
     state = load_state()
     td_errors = [(i, e) for i, e in enumerate(state.get("td_errors", []))]
-    paths = generate_all_plots(archive, journal, td_errors)
+    try:
+        paths = generate_all_plots(archive, journal, td_errors, raise_on_error=True)
+    except Exception as e:
+        # Exit non-zero so the async reaper (phase_status.reap) surfaces this as
+        # "[async] plots-trial-N failed" instead of falsely logging "complete".
+        # A swallowed ImportError (missing matplotlib) silently froze the
+        # dashboard panels for days; never let that happen quietly again.
+        log.error("Plot generation failed: %s", e)
+        sys.exit(1)
     for p in paths:
         print(f"  {p}")
 
