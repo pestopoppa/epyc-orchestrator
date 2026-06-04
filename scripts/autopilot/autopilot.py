@@ -451,7 +451,14 @@ def _record_rejected_draft(
 # marked bug_corrupted_by (which would lump it with kills / exogenous reloads /
 # commit-invalidations in the planner's trustworthiness score and manufacture a
 # "noisy/untrustworthy instrument" narrative → meta-action loop). 2026-05-31.
-BENIGN_LEARNING_EXCLUSIONS = {"reproduction_confirmed"}
+# 2026-06-04: `mad_noise` joined this set. Since a trusted within-noise measurement is now
+# Pareto-admissible as a robust-median representative (ParetoArchive.upsert_representative),
+# journaling it as bug_corrupted_by="mad_noise" is semantically wrong — it is a TRUSTED
+# measurement, not corrupted data. AP-22 / strategy-learning suppression is unaffected: that
+# keys on `learning_excluded_by` (still "mad_noise") + `eval_details.learning_exclusion`, NOT
+# bug_corrupted_by. Removing the tag is what lets the dashboard/journal reconstruction treat
+# these rows as representative candidates instead of skipping them as corruption.
+BENIGN_LEARNING_EXCLUSIONS = {"reproduction_confirmed", "mad_noise"}
 
 
 def _force_metric_action_after_meta(
@@ -996,6 +1003,18 @@ def _maybe_reimport_pareto_from_journal(
         log.info(
             "Pareto re-import: trial %d is bug_corrupted_by=%s, skipping",
             trial_id, entry.bug_corrupted_by,
+        )
+        return False
+    # Trusted within-noise rows (mad_noise / reproduction_confirmed) are managed as
+    # robust-median REPRESENTATIVES, not raw per-trial points. Re-importing one as a single
+    # noisy sample would contradict that policy, so skip — the representative is rebuilt from
+    # the persisted reproduction cluster on the next reproduction.
+    excl_by = (entry.eval_details or {}).get("learning_exclusion", {}).get("by", "")
+    if excl_by in BENIGN_LEARNING_EXCLUSIONS:
+        log.info(
+            "Pareto re-import: trial %d is a trusted within-noise exclusion (%s) — "
+            "representative-managed, not raw-re-imported.",
+            trial_id, excl_by,
         )
         return False
     # Already in archive? (use the private _all_entries list — it's the

@@ -15,9 +15,24 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
 from autopilot import (  # type: ignore[import-not-found]
+    BENIGN_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
     learning_exclusion_criticism,
 )
+
+
+def test_mad_noise_is_benign_so_not_journaled_as_bug_corrupted():
+    """2026-06-04 policy correction: a trusted within-noise measurement is now
+    Pareto-admissible (robust-median representative), so it must NOT be journaled as
+    `bug_corrupted_by` — `mad_noise` joins BENIGN_LEARNING_EXCLUSIONS alongside
+    `reproduction_confirmed`. classify still returns `mad_noise` to suppress AP-22
+    learning (that gate keys on `learning_excluded_by`, not `bug_corrupted_by`).
+    Genuine corruption (kills/reloads) stays NON-benign and keeps tagging."""
+    assert "mad_noise" in BENIGN_LEARNING_EXCLUSIONS
+    assert "reproduction_confirmed" in BENIGN_LEARNING_EXCLUSIONS
+    assert "exogenous_operator_reload" not in BENIGN_LEARNING_EXCLUSIONS
+    by, _, _ = classify_learning_exclusion(_FakeVerdict(categories=["mad_noise"]), _FakeEvalResult())
+    assert by == "mad_noise", "still flagged for AP-22 suppression"
 
 
 @dataclass
