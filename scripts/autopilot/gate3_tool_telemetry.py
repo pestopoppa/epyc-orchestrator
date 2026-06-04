@@ -125,6 +125,17 @@ def classify_web_research(resp: dict) -> tuple[str, list[str]]:
 
 def _orchestrator_pid() -> int | None:
     import subprocess
+    # lsof first — most reliable for the :8000 listener; ss -ltnpH output/perms
+    # vary by environment (it didn't parse at the 2026-06-04 deploy, WARN'ing the
+    # env check even though the flags were set).
+    try:
+        out = subprocess.run(
+            ["lsof", "-ti", ":8000", "-sTCP:LISTEN"], capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        if out:
+            return int(out.splitlines()[0])
+    except Exception:
+        pass
     try:
         out = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True, timeout=5).stdout
     except Exception:
