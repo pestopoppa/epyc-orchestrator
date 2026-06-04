@@ -279,6 +279,54 @@ def test_last_invalid_feedback_surfaces_reason_and_count() -> None:
     assert "DO NOT repeat" in text
 
 
+def test_last_invalid_feedback_surfaces_repeats_after_clear() -> None:
+    """A repeated signature must still surface even when last_invalid_action was
+    cleared by a successful (substituted) trial — the persistent counter drives
+    the feedback so a critic-rejected draft cannot silently vanish."""
+    state = {
+        "last_invalid_action": None,
+        "invalid_signature_counts": {'{"type": "x"}': 4},
+    }
+    text = autopilot._build_last_invalid_feedback(state)
+    assert "Repeatedly non-executing" in text
+    assert "4×" in text
+
+
+# ----- draft_critique: rejected-draft feedback (req #3) -----
+
+
+class _FakeCritique:
+    def __init__(self, decision="reject", issues=None):
+        self.decision = decision
+        self.issues = issues or ["unsafe"]
+
+
+def test_record_rejected_draft_counts_and_sets_feedback() -> None:
+    state = {}
+    draft = {"type": "structural_experiment", "flags": {"graph_router": True}}
+    blacklisted = autopilot._record_rejected_draft(state, draft, _FakeCritique(), trial_id=10)
+    assert blacklisted is False  # first occurrence
+    sig = autopilot._action_signature(draft)
+    assert state["invalid_signature_counts"][sig] == 1
+    assert state["last_invalid_status"] == "critic_rejected"
+    assert state["last_invalid_action"] == draft
+    assert "critic rejected" in state["last_invalid_reason"]
+    assert state["consecutive_rejected_drafts"] == 1
+
+
+def test_record_rejected_draft_blacklists_on_repeat(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(autopilot, "append_blacklist",
+                        lambda action, tid, reason: calls.append((action, reason)))
+    state = {}
+    draft = {"type": "structural_experiment", "flags": {"graph_router": True}}
+    autopilot._record_rejected_draft(state, draft, _FakeCritique(), trial_id=1)
+    blacklisted = autopilot._record_rejected_draft(state, draft, _FakeCritique(), trial_id=2)
+    assert blacklisted is True
+    assert len(calls) == 1  # blacklisted exactly once, at the threshold (2x)
+    assert state["consecutive_rejected_drafts"] == 2
+
+
 # ----- ActionContext bundle -----
 
 

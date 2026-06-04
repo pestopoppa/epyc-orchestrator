@@ -391,6 +391,114 @@ def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
     assert decision.degraded is True
 
 
+def test_default_planner_mode_is_active_draft_critique() -> None:
+    """The shipped default must be the BINDING critic (the shadow→active flip)."""
+    assert planner_coordinator.PlannerSettings().mode == "draft_critique"
+    import os as _os
+    saved = _os.environ.pop("AUTOPILOT_PLANNER_MODE", None)
+    try:
+        assert planner_coordinator.load_planner_settings_from_env().mode == "draft_critique"
+    finally:
+        if saved is not None:
+            _os.environ["AUTOPILOT_PLANNER_MODE"] = saved
+
+
+# ----- _reconcile matrix (gates the active-mode default, req #1) -----
+
+PlannerCritique = planner_coordinator.PlannerCritique
+_reconcile = planner_coordinator._reconcile
+
+
+def test_reconcile_inactive_is_passthrough_even_on_reject() -> None:
+    action = {"type": "structural_experiment", "flags": {"a": True}}
+    crit = PlannerCritique(decision="reject", issues=["x"])
+    out_action, out_rat, out_text = _reconcile(action, {"r": 1}, "draft", crit, active=False)
+    assert out_action == action
+    assert out_rat == {"r": 1}
+
+
+def test_reconcile_active_approve_is_passthrough() -> None:
+    action = {"type": "seed_batch", "n_questions": 10}
+    crit = PlannerCritique(decision="approve")
+    out_action, _, _ = _reconcile(action, {}, "draft", crit, active=True)
+    assert out_action == action
+
+
+def test_reconcile_active_revise_applies_valid_revision() -> None:
+    action = {"type": "structural_experiment", "flags": {"a": True}}
+    revised = {"type": "seed_batch", "n_questions": 12}
+    crit = PlannerCritique(decision="revise", revised_action=revised,
+                           revised_rationale={"falsifier": "y", "rubric_scores": {}})
+    out_action, out_rat, out_text = _reconcile(action, {}, "draft", crit, active=True)
+    assert out_action == revised
+    assert out_rat == {"falsifier": "y", "rubric_scores": {}}
+    assert out_text.startswith("```json:autopilot_actions")
+
+
+def test_reconcile_active_revise_with_invalid_revision_keeps_original() -> None:
+    """A revise whose revised_action fails validation must not be dispatched;
+    the original draft stands (it is still subject to dispatch-time validation)."""
+    action = {"type": "seed_batch", "n_questions": 10}
+    bad_revision = {"type": "not_a_real_action"}
+    crit = PlannerCritique(decision="revise", revised_action=bad_revision)
+    out_action, _, _ = _reconcile(action, {}, "draft", crit, active=True)
+    assert out_action == action  # invalid revision rejected, original retained
+
+
+def test_reconcile_active_reject_without_revision_is_safe_seed_batch() -> None:
+    action = {"type": "rollback", "to_checkpoint": "production_best"}
+    crit = PlannerCritique(decision="reject", issues=["unsupported"])
+    out_action, _, _ = _reconcile(action, {}, "draft", crit, active=True)
+    assert out_action["type"] == "seed_batch"
+
+
+def test_decision_carries_original_draft_action_after_substitution() -> None:
+    """draft_action must preserve the planner's ORIGINAL action even when the
+    binding critic substitutes it (so the loop can record the rejected draft)."""
+    original = {"type": "structural_experiment", "flags": {"graph_router": True}}
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True, text=_action_text(original))],
+        supports_resume=True,
+    )
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="critique", ok=True,
+                               text=_critique_text({"decision": "reject", "issues": ["deps unmet"]}))],
+    )
+    decision = planner_coordinator.plan_with_providers(
+        "prompt", session_id=None, planner_state={},
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+    assert decision.action["type"] == "seed_batch"          # substituted
+    assert decision.draft_action == original                # original preserved
+
+
+def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
+    """The critic must SEE the flag schema, current flags, last-invalid action,
+    and blacklist (embedded via the planner prompt) and be told to use them."""
+    planner_prompt = (
+        "### Feature Flags (live state + dependency rules)\n"
+        "  - graph_router (currently OFF) requires [specialist_routing=OFF]\n"
+        "### Last Non-Executing Action (validator/dispatch feedback)\n"
+        "  reason: graph_router feature requires specialist_routing feature\n"
+        "### Blacklisted Configurations\n  some-entry\n"
+    )
+    out = planner_coordinator.build_critique_prompt(
+        planner_prompt, "draft text",
+        {"type": "structural_experiment", "flags": {"graph_router": True}}, {},
+    )
+    # Context embedded:
+    assert "Feature Flags" in out
+    assert "Last Non-Executing Action" in out
+    assert "Blacklisted Configurations" in out
+    assert "specialist_routing" in out
+    # Instructions tell the critic to use them + that the verdict is binding:
+    assert "BINDING" in out
+    assert "dependencies are not all currently ON" in out
+
+
 def test_open_primary_circuit_routes_directly_to_fallback() -> None:
     claude = FakeProvider(
         "claude",

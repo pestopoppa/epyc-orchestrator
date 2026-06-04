@@ -56,7 +56,13 @@ HIGH_RISK_ACTIONS = KNOWN_ACTION_TYPES - LOW_RISK_ACTIONS - MEDIUM_RISK_ACTIONS
 class PlannerSettings:
     primary: str = "claude"
     critic: str = "codex"
-    mode: str = "shadow_critique"
+    # 2026-06-04: default flipped shadow_critique -> draft_critique. The critic is
+    # now BINDING: a valid revised_action is dispatched, and a reject routes to the
+    # safe fallback (see _reconcile). Shadow mode logged 320 reject/revise verdicts
+    # that were all ignored (264 dispatched anyway) while the run dead-locked.
+    # Gated on the expanded _reconcile test matrix + the rejected-draft feedback
+    # path in autopilot.py (a reject can no longer bypass blacklist/quota/skip).
+    mode: str = "draft_critique"
     critique_policy: str = "medium_plus"
     circuit_failures: int = 2
     circuit_cooldown_s: float = 900.0
@@ -88,6 +94,12 @@ class PlannerDecision:
     critic_provider: str = ""
     critique: PlannerCritique | None = None
     predicted_objectives: dict[str, float] = field(default_factory=dict)
+    # The planner's ORIGINAL parsed action, before _reconcile may substitute it
+    # (revised_action in revise, or the safe fallback in reject). The main loop
+    # uses this to record a critic-rejected/revised draft into the invalid-action
+    # feedback + blacklist so a substituted draft cannot silently escape the
+    # feedback loop (draft_critique authority change, 2026-06-04).
+    draft_action: dict[str, Any] | None = None
 
 
 ProviderFactory = Callable[[str], PlannerProvider]
@@ -97,7 +109,7 @@ def load_planner_settings_from_env() -> PlannerSettings:
     return PlannerSettings(
         primary=os.environ.get("AUTOPILOT_PLANNER_PRIMARY", "claude"),
         critic=os.environ.get("AUTOPILOT_PLANNER_CRITIC", "codex"),
-        mode=os.environ.get("AUTOPILOT_PLANNER_MODE", "shadow_critique"),
+        mode=os.environ.get("AUTOPILOT_PLANNER_MODE", "draft_critique"),
         critique_policy=os.environ.get(
             "AUTOPILOT_PLANNER_CRITIQUE_POLICY",
             "medium_plus",
@@ -188,6 +200,9 @@ def plan_with_providers(
     canonical_text = draft.text
     critique: PlannerCritique | None = None
     degraded = False
+    # Snapshot the planner's ORIGINAL action before _reconcile can substitute it
+    # (a dict copy so later mutation of `action` cannot alias it).
+    draft_action = dict(action) if isinstance(action, dict) else action
 
     if not action:
         decision = PlannerDecision(
@@ -284,6 +299,7 @@ def plan_with_providers(
         critic_provider=critique.provider if critique else "",
         critique=critique,
         predicted_objectives=peaf.extract_predicted_objectives(canonical_text),
+        draft_action=draft_action,
     )
     _archive_decision(decision, planner_state)
     return decision
@@ -301,6 +317,20 @@ You are the secondary AutoPilot planner reviewer.
 Review the draft below. Do not invent an independent competing plan. Your job
 is to find missing constraints, unsafe assumptions, weak attribution, missing
 validation, stale context, or an action that violates the single-variable rule.
+
+Your verdict is BINDING (draft_critique mode): a `reject` routes the action to a
+safe fallback, and a `revise` with a valid `revised_action` REPLACES the draft.
+Reject or revise (preferring a concrete `revised_action`) if the draft does any
+of the following — the relevant evidence is in the Original Planner Context:
+  - re-proposes a feature flag whose dependencies are not all currently ON (see
+    the "Feature Flags" section: live state + dependency rules). Prefer a
+    `revised_action` that enables the missing dependency first (one flag/trial).
+  - repeats the "Last Non-Executing Action" (the validator/dispatch already
+    rejected it; re-proposing it burns a trial and will be auto-blacklisted).
+  - matches a "Blacklisted Configurations" entry.
+Do NOT manufacture host-noise / contention narratives when System Health is
+nominal, and do NOT propose operator-domain actions (widening safety-gate
+thresholds, baseline refresh) — those are outside the autopilot action space.
 
 Return JSON ONLY in this fenced block:
 

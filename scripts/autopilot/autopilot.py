@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -141,6 +142,16 @@ INVALID_SIGNATURE_BLACKLIST_THRESHOLD = int(
     os.environ.get("AUTOPILOT_INVALID_BLACKLIST_THRESHOLD", "2")
 )
 
+# 2026-06-04 — draft_critique authority. When the binding critic rejects/revises
+# a draft, the SUBSTITUTED action (safe fallback / revised_action) is what runs —
+# but the rejected draft must still feed the invalid-action feedback + blacklist,
+# or the planner could re-draft the same rejected action forever while the critic
+# silently swaps in seed_batch. A run of consecutive rejected drafts is a stuck
+# planner and halts loudly (mirrors MAX_CONSECUTIVE_META / MAX_CONSECUTIVE_SKIP).
+MAX_CONSECUTIVE_REJECTED_DRAFTS = int(
+    os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_REJECTED_DRAFTS", "4")
+)
+
 # 2026-06-04 — experiment-quota policy (separate memory maintenance from the
 # optimization budget). Once the memory store is already large, an unbounded run
 # of passive seed/distill actions is the planner rationalizing no-op work; cap
@@ -163,6 +174,24 @@ def _action_signature(action: dict[str, Any]) -> str:
         return json.dumps(action, sort_keys=True, default=str)
     except Exception:
         return str(action)
+
+
+def _config_fingerprint(action: dict[str, Any]) -> str:
+    """Stable identity of the DEPLOYED config a trial measures — its active flag set —
+    independent of which action measured it. Reproductions of the same config (even via
+    different action types: seed_batch / numeric_trial / deep_eval) share a fingerprint so
+    the Pareto archive folds them into ONE robust-median representative point rather than N
+    noisy per-trial points. An empty flag set yields a stable 'baseline-config' fingerprint.
+
+    NOTE (2026-06-04): keyed on ``action['flags']`` (the persisted feature-flag set). Param/
+    prompt-only mutations not reflected in flags are not yet distinguished — refine here if
+    those need separate frontier identities."""
+    flags = action.get("flags", {}) or {}
+    try:
+        basis = json.dumps(flags, sort_keys=True, default=str)
+    except Exception:
+        basis = str(sorted(flags.items()))
+    return hashlib.sha1(basis.encode()).hexdigest()[:16]
 
 
 def _enforce_experiment_quota(
@@ -277,12 +306,31 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
     repeat count and blacklist threshold) is what stops the planner re-emitting
     an action the validator already rejected.
     """
+    counts = state.get("invalid_signature_counts", {}) or {}
+    repeated = sorted(
+        ((c, s) for s, c in counts.items() if c >= 2), reverse=True
+    )[:5]
+
+    def _repeated_block(lines: list[str]) -> str:
+        # Persistent across the run (NOT cleared when a trial succeeds), so a
+        # repeatedly-rejected/invalid signature still surfaces even after the
+        # single-turn last_invalid_action has been cleared by a good trial.
+        if repeated:
+            lines.append("  Repeatedly non-executing signatures this run "
+                         f"(auto-blacklisted at {INVALID_SIGNATURE_BLACKLIST_THRESHOLD}×):")
+            for c, s in repeated:
+                lines.append(f"    {c}×  {s[:160]}")
+        return "\n".join(lines)
+
     act = state.get("last_invalid_action")
     if not act:
+        if repeated:
+            return _repeated_block(
+                ["  (last action executed; but these signatures keep failing:)"]
+            )
         return "  (none — the last action executed and produced metrics)"
     reason = state.get("last_invalid_reason", "")
     status = state.get("last_invalid_status", "skipped")
-    counts = state.get("invalid_signature_counts", {}) or {}
     sig = _action_signature(act)
     n = int(counts.get(sig, 0))
     lines = [
@@ -290,7 +338,7 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
         f"  action: {json.dumps(act, default=str)}",
         f"  reason: {reason}",
     ]
-    if status == "invalid":
+    if status in ("invalid", "critic_rejected"):
         lines.append(
             f"  this exact action has failed {n}× and will be AUTO-BLACKLISTED at "
             f"{INVALID_SIGNATURE_BLACKLIST_THRESHOLD}×."
@@ -299,14 +347,7 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
         "  DO NOT repeat it. Fix the stated reason (e.g. enable a missing "
         "dependency flag in its own trial first) or choose a different action."
     )
-    repeated = sorted(
-        ((c, s) for s, c in counts.items() if c >= 2), reverse=True
-    )[:5]
-    if repeated:
-        lines.append("  Repeatedly non-executing signatures this run:")
-        for c, s in repeated:
-            lines.append(f"    {c}×  {s[:160]}")
-    return "\n".join(lines)
+    return _repeated_block(lines)
 
 
 def _record_skip_trial(
@@ -350,6 +391,60 @@ def _record_skip_trial(
         outcome_status=status,
     )
     journal.record(entry)
+
+
+def _record_rejected_draft(
+    state: dict[str, Any],
+    draft_action: dict[str, Any],
+    critique: Any,
+    trial_id: int,
+) -> bool:
+    """Feed a critic-rejected/revised draft into the invalid-action machinery.
+
+    In draft_critique mode the SUBSTITUTED action (safe fallback / revised) is
+    what dispatches, so the rejected draft would otherwise vanish — letting the
+    planner re-draft it forever while the critic silently swaps in seed_batch.
+    Record it like a non-executing action: fingerprint + count (persistent),
+    surface it in the next prompt, auto-blacklist on repeat, and bump the
+    consecutive-rejected-draft streak. Returns True if it was blacklisted.
+
+    Note: the draft is NOT journaled as a trial (no trial number is consumed —
+    the substituted action runs and is journaled instead); this only records the
+    feedback residue so the rejected draft cannot bypass the loop.
+    """
+    issues = []
+    try:
+        issues = list(getattr(critique, "issues", []) or [])
+    except Exception:
+        issues = []
+    reason = "critic rejected: " + ("; ".join(issues) if issues else
+                                    getattr(critique, "decision", "rejected"))
+    sig = _action_signature(draft_action)
+    sig_counts = state.setdefault("invalid_signature_counts", {})
+    sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
+    state["last_invalid_action"] = draft_action
+    state["last_invalid_reason"] = reason
+    state["last_invalid_status"] = "critic_rejected"
+    state["consecutive_rejected_drafts"] = (
+        int(state.get("consecutive_rejected_drafts", 0)) + 1
+    )
+
+    blacklisted = False
+    if sig_counts[sig] >= INVALID_SIGNATURE_BLACKLIST_THRESHOLD:
+        append_blacklist(
+            draft_action, trial_id,
+            f"Auto-blacklisted: {sig_counts[sig]}× critic-rejected — {reason[:80]}",
+        )
+        blacklisted = True
+    log.warning(
+        "Critic %s the draft %s (substituted); recorded as feedback "
+        "[signature seen %d×, consecutive rejected drafts=%d]%s",
+        getattr(critique, "decision", "rejected"),
+        json.dumps(draft_action, default=str),
+        sig_counts[sig], state["consecutive_rejected_drafts"],
+        " — BLACKLISTED" if blacklisted else "",
+    )
+    return blacklisted
 
 # Learning-exclusion reasons that are BENIGN — the trial is excluded from the
 # Pareto archive (no NEW frontier point) but its data is VALID and must NOT be
@@ -1848,6 +1943,45 @@ def _run_loop_inner(
             action = planner_decision.action
             predicted_objectives = planner_decision.predicted_objectives
             rationale = planner_decision.rationale
+
+            # draft_critique authority: a BINDING reject/revise substituted the
+            # planner's draft (safe fallback / revised_action is what `action`
+            # now holds). Record the rejected draft so it cannot bypass the
+            # invalid-action feedback + blacklist — otherwise the planner could
+            # re-draft the same rejected action forever while the critic
+            # silently swaps in the fallback. The substituted `action` still
+            # flows through meta/quota/blacklist/dispatch below unchanged.
+            crit = planner_decision.critique
+            draft_action = planner_decision.draft_action
+            if (
+                planner_decision.mode == "draft_critique"
+                and crit is not None
+                and crit.decision in ("reject", "revise")
+                and draft_action
+                and draft_action != action
+            ):
+                _record_rejected_draft(state, draft_action, crit, trial_counter)
+                blacklist = load_blacklist()  # may have grown
+                if (
+                    int(state.get("consecutive_rejected_drafts", 0))
+                    >= MAX_CONSECUTIVE_REJECTED_DRAFTS
+                ):
+                    # Durable halt mirroring the meta/skip breakers: the planner
+                    # keeps drafting actions the critic overrides — operator call.
+                    state["paused"] = True
+                    state["_dispatch_deficiency"] = "critic_reject_loop"
+                    save_state(state)
+                    log.error(
+                        "Critic rejected/revised %d consecutive planner drafts — "
+                        "pausing for operator review (stuck planner the critic "
+                        "keeps overriding).",
+                        int(state.get("consecutive_rejected_drafts", 0)),
+                    )
+                    phase.set("critic_reject_loop_halt", trial_id=trial_counter)
+                    break
+            else:
+                # Draft accepted (approve / not critiqued / no substitution).
+                state["consecutive_rejected_drafts"] = 0
         else:
             # Autonomous mode: species selection by budget
             phase.set("autonomous_select", trial_id=trial_counter)
@@ -1856,6 +1990,7 @@ def _run_loop_inner(
             predicted_objectives = {}  # PEAF: autonomous mode has no controller forecast
             rationale = {"falsifier": "", "rubric_scores": {}}  # no controller call
             stagnation_signal = ""  # gate is controller-only; autonomous mode skips it
+            state["consecutive_rejected_drafts"] = 0  # no critic in autonomous mode
 
         if not action:
             log.warning("No action proposed, defaulting to seed_batch")
@@ -2178,25 +2313,45 @@ def _run_loop_inner(
         learning_excluded_by, learning_excluded_reason, exclusion_def_cat = (
             classify_learning_exclusion(verdict, eval_result)
         )
-        # Bootstrap a freshly-rebased (empty) frontier. A within-noise above-baseline
-        # trial is normally mad_noise-excluded because it can't be confirmed against an
-        # established point — but right after a deliberate rebase the tier frontier is
-        # EMPTY, so there is nothing to establish it and the archive could never seed
-        # itself. Admit the first such trial as the bootstrap point; subsequent
-        # within-noise trials then resolve as reproduction_confirmed against it. Only
-        # for real eval tiers (>= MIN_FRONTIER_EVAL_TIER); T0 stays audit-only.
+        # Policy correction (2026-06-04 — see autopilot-continuous-optimization handoff):
+        # a TRUSTED within-quality-noise measurement (mad_noise / reproduction_confirmed)
+        # stays excluded from AP-22 / strategy learning, but must NOT be auto-excluded from
+        # the MULTI-OBJECTIVE Pareto archive. The MAD test is quality-only; a trial flat on
+        # quality can still be NON-DOMINATED on speed / cost / reliability and belongs on the
+        # frontier. Admit ONE representative point per stable config fingerprint, dominance
+        # tested on robust-MEDIAN objectives across the reproduction cluster (so a lucky
+        # single-trial speed sample / host-throughput variance can't manufacture frontier
+        # geometry). This also subsumes the old empty-frontier bootstrap: on an empty tier the
+        # first trusted within-noise point becomes the seed via the same median path. AP-22
+        # suppression remains tied to the mad_noise/reproduction_confirmed tag (criticism
+        # below). Non-trusted exclusions (exogenous reload, etc.) still skip entirely.
         if (
-            learning_excluded_by == "mad_noise"
+            learning_excluded_by in ("mad_noise", "reproduction_confirmed")
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
-            and archive.frontier_size(eval_result.tier) == 0
         ):
-            log.info(
-                "Trial %d: bootstrapping empty T%d frontier — admitting within-noise "
-                "above-baseline trial as the first point (was mad_noise).",
-                trial_counter, eval_result.tier,
+            fingerprint = _config_fingerprint(action)
+            pareto_status, rep_objs = archive.upsert_representative(
+                fingerprint,
+                eval_result.tier,
+                objectives_from(eval_result),
+                trial_id=trial_counter,
+                config_snapshot=action,
+                species=species_name,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                memory_count=memory_count,
+                reasoning=json.dumps(action),
             )
-            learning_excluded_by, learning_excluded_reason, exclusion_def_cat = "", "", ""
-        if learning_excluded_by:
+            log.info(
+                "Trial %d: Pareto representative admission %s (T%d fp=%s n=%d) "
+                "median_objs=%s — AP-22/strategy learning still excluded (%s)",
+                trial_counter, pareto_status, eval_result.tier, fingerprint,
+                archive.reproduction_count(eval_result.tier, fingerprint),
+                [round(float(x), 3) for x in rep_objs], learning_excluded_by,
+            )
+            criticism = learning_exclusion_criticism(
+                learning_excluded_by, learning_excluded_reason
+            )
+        elif learning_excluded_by:
             pareto_status = "dominated"  # placeholder for JournalEntry only
             log.info(
                 "Trial %d: archive.update SKIPPED (learning_excluded_by=%s)",
