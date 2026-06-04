@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -187,3 +188,55 @@ def renice_all_threads(pid: int, nice: int) -> None:
             fail += 1
     print(f"    [renice] {ok} thread(s) → nice={nice}"
           + (f" ({fail} failed)" if fail else ""))
+
+
+def set_oom_score_adj(pids: Iterable[int], adj: int = -1000, timeout: int = 5) -> int:
+    """Set oom_score_adj for each pid so earlyoom (and the kernel OOM killer) spare them.
+
+    earlyoom skips processes whose oom_score_adj == -1000 in BOTH its oom_score and
+    --sort-by-rss modes (see epyc-root handoffs/active/earlyoom-oom-protection.md). The
+    orchestrator API master + its uvicorn workers are comm=python, so they cannot be
+    earlyoom --ignore'd by name (they collide with runaway python evals) — oom_score_adj
+    is the durable control-plane protection, replacing the manual one-shot `choom` that
+    did not survive an API restart.
+
+    Lowering oom_score_adj below 0 needs CAP_SYS_RESOURCE, so this uses `sudo -n` (the
+    same NOPASSWD pattern as stack_host.py / host_health.py), preferring `choom` and
+    falling back to `tee /proc/<pid>/oom_score_adj`. Best-effort and idempotent: a
+    missing or password-denied sudo/choom logs a warning and is skipped so a stack
+    start never fails on it. Returns the count of pids successfully set.
+    """
+    targets = [int(p) for p in pids]
+    if not targets:
+        return 0
+    if not shutil.which("sudo"):
+        print(f"    [oom-protect] sudo not found — skipping oom_score_adj={adj} for "
+              f"{len(targets)} pid(s); control plane unprotected from earlyoom")
+        return 0
+    use_choom = shutil.which("choom") is not None
+    ok = 0
+    failed: list[int] = []
+    for pid in targets:
+        try:
+            if use_choom:
+                subprocess.run(
+                    ["sudo", "-n", "choom", "-n", str(adj), "-p", str(pid)],
+                    capture_output=True, timeout=timeout, check=True,
+                )
+            else:
+                subprocess.run(
+                    ["sudo", "-n", "tee", f"/proc/{pid}/oom_score_adj"],
+                    input=f"{adj}\n", text=True, capture_output=True,
+                    timeout=timeout, check=True,
+                )
+            ok += 1
+        except Exception:
+            failed.append(pid)
+    msg = f"    [oom-protect] oom_score_adj={adj} on {ok}/{len(targets)} pid(s)"
+    if failed:
+        msg += (" — could not set "
+                + ",".join(str(p) for p in failed)
+                + " (configure NOPASSWD sudo for choom to protect the control plane "
+                "from earlyoom)")
+    print(msg)
+    return ok

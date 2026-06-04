@@ -143,3 +143,65 @@ def test_renice_all_threads_counts_ok_and_failures(monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert "[renice] 2 thread(s) → nice=19" in out
     assert "(1 failed)" in out
+
+
+def test_set_oom_score_adj_uses_choom_when_available(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return _RunResult()
+
+    # sudo + choom both present
+    monkeypatch.setattr(stack_processes.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(stack_processes.subprocess, "run", fake_run)
+
+    assert stack_processes.set_oom_score_adj([111, 222], adj=-1000) == 2
+    assert calls == [
+        ["sudo", "-n", "choom", "-n", "-1000", "-p", "111"],
+        ["sudo", "-n", "choom", "-n", "-1000", "-p", "222"],
+    ]
+
+
+def test_set_oom_score_adj_falls_back_to_tee_without_choom(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):
+        calls.append(cmd)
+        return _RunResult()
+
+    monkeypatch.setattr(
+        stack_processes.shutil, "which",
+        lambda name: "/usr/bin/sudo" if name == "sudo" else None,
+    )
+    monkeypatch.setattr(stack_processes.subprocess, "run", fake_run)
+
+    assert stack_processes.set_oom_score_adj([111]) == 1
+    assert calls == [["sudo", "-n", "tee", "/proc/111/oom_score_adj"]]
+
+
+def test_set_oom_score_adj_noop_without_sudo(monkeypatch) -> None:
+    def fake_run(_cmd, **_kwargs):
+        raise AssertionError("subprocess.run must not be called when sudo is absent")
+
+    monkeypatch.setattr(stack_processes.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(stack_processes.subprocess, "run", fake_run)
+
+    assert stack_processes.set_oom_score_adj([111, 222]) == 0
+
+
+def test_set_oom_score_adj_is_best_effort_on_failure(monkeypatch) -> None:
+    def fake_run(cmd, **_kwargs):
+        if cmd[-1] == "222":  # second pid denied (e.g. NOPASSWD not configured)
+            raise RuntimeError("sudo: a password is required")
+        return _RunResult()
+
+    monkeypatch.setattr(stack_processes.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(stack_processes.subprocess, "run", fake_run)
+
+    # does not raise; returns the count of successes
+    assert stack_processes.set_oom_score_adj([111, 222]) == 1
+
+
+def test_set_oom_score_adj_empty_is_noop() -> None:
+    assert stack_processes.set_oom_score_adj([]) == 0

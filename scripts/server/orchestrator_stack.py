@@ -249,6 +249,15 @@ def _renice_all_threads(pid: int, nice: int) -> None:
     _stack_processes.renice_all_threads(pid, nice)
 
 
+def _set_oom_protection(pids: list[int], adj: int = -1000) -> int:
+    """Protect control-plane pids from earlyoom via oom_score_adj=-1000.
+
+    See stack_processes.set_oom_score_adj — best-effort (`sudo -n`); the durable
+    replacement for the manual one-shot `choom` that did not survive an API restart.
+    """
+    return _stack_processes.set_oom_score_adj(pids, adj)
+
+
 def kill_process(pid: int, timeout: int = 5) -> bool:
     """Kill a process tree gracefully, then forcefully."""
     return _stack_processes.kill_process_tree(pid, timeout=timeout)
@@ -1238,6 +1247,13 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
 
     if wait_for_health(8000, timeout=60):
         print(f"    [OK] Orchestrator ready")
+        # Durable earlyoom control-plane protection. The API master + its uvicorn
+        # workers are comm=python and cannot be earlyoom --ignore'd by name (they
+        # collide with runaway python evals), so set oom_score_adj=-1000 (earlyoom
+        # skips exactly -1000 in both oom_score and --sort-by-rss modes). Workers
+        # exist by health-check time. Best-effort; replaces the manual one-shot
+        # `choom` that did not survive an API restart.
+        _set_oom_protection([proc.pid, *_child_pids(proc.pid)])
         return ProcessInfo(
             role="orchestrator",
             pid=proc.pid,
@@ -1252,6 +1268,7 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     if proc.poll() is None:
         print("    [WARN] Health probe timed out, but API process is still running")
         print(f"    Check log: {log_file}")
+        _set_oom_protection([proc.pid, *_child_pids(proc.pid)])
         return ProcessInfo(
             role="orchestrator",
             pid=proc.pid,
