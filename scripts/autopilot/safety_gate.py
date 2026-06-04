@@ -163,6 +163,10 @@ class EvalResult:
     # minimum sample. Used as a planner prior to steer tool-enabling experiments,
     # scored only by downstream quality/reliability movement — never optimized raw.
     tool_helpfulness: float = float("nan")
+    # Per-suite marginal usefulness {suite: P(correct|tool) − P(correct|no tool)},
+    # computed within-suite so cross-suite difficulty can't contaminate the signal.
+    # The scalar tool_helpfulness above is the mean of these. Planner prior only.
+    per_suite_tool_helpfulness: dict = field(default_factory=dict)
     # AM KV compaction telemetry (populated when compact action is used)
     avg_prompt_tokens: float = 0.0  # Average context length across results
     compaction_events: int = 0  # Number of compacted slots in this eval

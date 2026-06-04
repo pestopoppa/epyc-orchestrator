@@ -104,3 +104,38 @@ def test_tool_helpfulness_is_marginal_not_raw_rate():
     # thin data (only 1 tool arm) -> NaN, cannot be chased
     thin = [q(2, True), q(0, False), q(0, True)]
     assert math.isnan(t._aggregate(thin, tier=1).tool_helpfulness)
+
+
+def test_tool_helpfulness_is_per_suite_not_cross_suite_contaminated():
+    """Cross-suite composition (trivial no-tool base suite + an all-tool suite)
+    must yield NaN, not a misleading negative. The 2026-06-04 cutover saw −0.4
+    because easy base suites (all correct, no tools) anchored the without-tools
+    arm against the harder tool suite. Helpfulness is now computed within-suite."""
+    t = EvalTower()
+
+    def q(suite: str, tools: int, correct: bool) -> QuestionResult:
+        return QuestionResult(
+            question_id="x", suite=suite, prompt="p", expected="e",
+            answer="a", correct=correct, tokens_generated=100, elapsed_s=2.0,
+            tools_used=tools, tools_called=["get_eval_secret"] * tools,
+        )
+
+    # base: all no-tool + all correct (trivial). tool_use: all-tool, mixed.
+    # NEITHER suite has both arms -> NaN (NOT a negative cross-suite delta).
+    contaminated = (
+        [q("base", 0, True) for _ in range(4)]
+        + [q("tool_use", 1, True), q("tool_use", 1, True), q("tool_use", 1, False)]
+    )
+    er = t._aggregate(contaminated, tier=1)
+    assert math.isnan(er.tool_helpfulness), er.tool_helpfulness
+    assert er.per_suite_tool_helpfulness == {}
+
+    # Within one suite with both arms (>= _MIN_ARM each): delta IS computed and
+    # surfaced per-suite.
+    within = [
+        q("tool_use", 1, True), q("tool_use", 1, True), q("tool_use", 1, True),
+        q("tool_use", 0, False), q("tool_use", 0, False), q("tool_use", 0, False),
+    ]
+    er2 = t._aggregate(within, tier=1)
+    assert er2.per_suite_tool_helpfulness.get("tool_use") == 1.0
+    assert er2.tool_helpfulness == 1.0

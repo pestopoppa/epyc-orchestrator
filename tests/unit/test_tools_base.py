@@ -198,6 +198,58 @@ class TestWithTimeout:
         result = func()
         assert result == "no timeout on Windows"
 
+    def test_timeout_decorator_in_worker_thread(self):
+        """with_timeout must NOT crash off the main thread. Regression: the eval
+        ThreadPoolExecutor and the REPL's parallel dispatch run tools in worker
+        threads, where signal.signal() raises 'signal only works in main thread'
+        — which crashed web_research at the 2026-06-04 cutover gate."""
+        import threading
+
+        @with_timeout(5)
+        def func():
+            return "ran in worker thread"
+
+        out: dict = {}
+
+        def worker():
+            try:
+                out["value"] = func()
+            except Exception as e:  # noqa: BLE001
+                out["error"] = repr(e)
+
+        th = threading.Thread(target=worker)
+        th.start()
+        th.join(timeout=10)
+        assert "error" not in out, f"with_timeout crashed off main thread: {out.get('error')}"
+        assert out.get("value") == "ran in worker thread"
+
+    def test_timeout_decorator_off_main_thread_still_times_out(self):
+        """Off the main thread the futures path must still raise ToolTimeout on
+        overrun (contract preserved) — not silently run unbounded."""
+        import threading
+
+        @with_timeout(1)
+        def slow():
+            time.sleep(3)
+            return "never"
+
+        out: dict = {}
+
+        def worker():
+            try:
+                out["value"] = slow()
+            except ToolTimeout as e:
+                out["timeout"] = str(e)
+            except Exception as e:  # noqa: BLE001
+                out["error"] = repr(e)
+
+        th = threading.Thread(target=worker)
+        th.start()
+        th.join(timeout=10)
+        assert "error" not in out, f"unexpected error off main thread: {out.get('error')}"
+        assert "timeout" in out and "timed out after 1s" in out["timeout"], out
+        assert "value" not in out
+
 
 class TestFormatError:
     """Test format_error() function."""

@@ -206,6 +206,14 @@ class REPLEnvironment(
         self._session_id = task_id or uuid.uuid4().hex[:8]
         self._last_spill_summary: str | None = None  # Rolling summary across spills
         self._tool_invocations = 0  # Count of TOOL()/CALL() invocations
+        # Request-local invocation records (SimpleNamespace with tool_name,
+        # elapsed_ms, success, chain_id, caller_type, result) captured at the
+        # single _invoke_tool chokepoint (context.py), in call order. This is the
+        # ONLY source repl_executor uses for per-request tool telemetry — the
+        # shared ToolRegistry invocation log is process-global and never cleared
+        # per request, so reading it leaks a prior request's tools into a no-tool
+        # request. Per-REPL (per request), so it is inherently request-scoped.
+        self._invoked_tools: list = []
         self._active_tool_chain_id: str | None = None
         self._active_tool_chain_index: int = 0
         self._active_tool_chain_meta: dict[str, Any] | None = None
@@ -255,6 +263,7 @@ class REPLEnvironment(
             "_exploration_calls",
             "_execution_count",
             "_tool_invocations",
+            "_invoked_tools",
             # Logs and buffers
             "_exploration_log",
             "_grep_hits_buffer",

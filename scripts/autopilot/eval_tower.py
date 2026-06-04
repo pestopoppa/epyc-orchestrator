@@ -23,6 +23,10 @@ from safety_gate import EvalResult
 log = logging.getLogger("autopilot.eval")
 
 SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
+# Tool-use sentinels (suite: tool_use) — impossible to pass without a real
+# read_file tool call. INERT unless AUTOPILOT_TOOL_SENTINELS=1 is set, so the
+# live trial set is unchanged until a deliberate cutover (see tool_sentinels.yaml).
+TOOL_SENTINEL_PATH = Path(__file__).resolve().parent / "tool_sentinels.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
 
 
@@ -88,6 +92,9 @@ import sys
 
 _orch_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_orch_root / "scripts" / "benchmark"))
+# Repo root on path so `src.tools.eval_secret` (runtime tool-secret ground truth)
+# imports from the autopilot harness, not just inside the orchestrator process.
+sys.path.insert(0, str(_orch_root))
 
 from seeding_orchestrator import call_orchestrator_forced  # noqa: E402
 from seeding_scoring import score_answer_deterministic  # noqa: E402
@@ -230,6 +237,48 @@ class EvalTower:
         self._sentinels = yaml.safe_load(self._sentinel_path.read_text()) or []
         return self._sentinels
 
+    def _load_tool_sentinels(self) -> list[dict]:
+        """Tool-use sentinels — appended to T0 only when AUTOPILOT_TOOL_SENTINELS=1.
+
+        Returns [] (byte-identical legacy behavior) unless the env flag is set
+        AND tool_sentinels.yaml exists. These questions pin force_mode="repl" and
+        require a counted `get_eval_secret` tool call, moving tools_used /
+        tool_helpfulness off their structural 0.
+
+        The secret VALUES are minted at runtime by the orchestrator (never in
+        source/YAML) and persisted to a tmpfs path the model can't read; here we
+        inject each question's real `expected` from that ground truth, keyed by
+        the name="..." in its prompt. When ground truth is unavailable the
+        placeholder `expected` is left in place — it never matches a real answer,
+        so the question scores INCORRECT rather than spuriously passing on "".
+        """
+        if os.environ.get("AUTOPILOT_TOOL_SENTINELS") != "1":
+            return []
+        if not TOOL_SENTINEL_PATH.exists():
+            log.warning("AUTOPILOT_TOOL_SENTINELS=1 but no file at %s", TOOL_SENTINEL_PATH)
+            return []
+        loaded = yaml.safe_load(TOOL_SENTINEL_PATH.read_text()) or []
+        try:
+            from src.tools.eval_secret import load_persisted_secrets
+            secrets = load_persisted_secrets()
+        except Exception as e:  # noqa: BLE001
+            log.warning("tool_sentinels: could not load runtime secrets: %s", e)
+            secrets = {}
+        if not secrets:
+            log.warning(
+                "tool_sentinels: no runtime eval secrets available; tool_use "
+                "questions will score INCORRECT until the orchestrator (with "
+                "AUTOPILOT_TOOL_SENTINELS=1) has minted them."
+            )
+        for q in loaded:
+            m = _re.search(r'name=\\?"([A-Za-z0-9_]+)\\?"', q.get("prompt", ""))
+            val = secrets.get(m.group(1).lower()) if m else None
+            if val:
+                q["expected"] = val  # real runtime ground truth (never on disk)
+            # else: leave the non-matching placeholder from the YAML in place.
+        log.info("Loaded %d tool-use sentinels (AUTOPILOT_TOOL_SENTINELS=1)", len(loaded))
+        return loaded
+
     def _load_pool(self):
         """Load question pool for T1/T2 validation questions."""
         if self._pool is not None:
@@ -265,8 +314,13 @@ class EvalTower:
         try:
             resp = call_orchestrator_forced(
                 prompt=prompt,
-                force_role="",  # Let routing decide
-                force_mode="",
+                # Let routing decide unless the question pins a mode/role. The
+                # tool_use suite pins force_mode="repl" so the REPL CALL(...)
+                # path (what production actually uses) is exercised
+                # deterministically instead of being left to the router.
+                # Defaults are "" → existing questions are unchanged.
+                force_role=q.get("force_role", ""),
+                force_mode=q.get("force_mode", ""),
                 url=self.url,
                 timeout=self.timeout,
                 image_path=image_path,
@@ -525,17 +579,34 @@ class EvalTower:
         for r in results:
             for name in (r.tools_called or []):
                 tool_name_counts[name] = tool_name_counts.get(name, 0) + 1
-        # Conditional credit — the signal that matters is MARGINAL usefulness, not
-        # "more tools": tool_helpfulness = P(correct | tools used) - P(correct | no
-        # tools). NaN when either arm lacks a minimum sample, so it can't be chased on
-        # thin data. This is telemetry / a planner prior — NEVER a Pareto objective.
+        # Conditional credit — MARGINAL usefulness of tools, computed PER SUITE then
+        # averaged, so a trivially-correct no-tool suite cannot anchor the baseline
+        # and flip the sign. The old cross-suite delta did exactly that: easy base
+        # suites at ~1.0 made the tool-required suite look harmful (−0.4 at the
+        # 2026-06-04 cutover, even though every tool call succeeded). Within a suite
+        # we compare like-with-like: P(correct|tool) − P(correct|no tool). The scalar
+        # is the mean of per-suite deltas over suites with both arms ≥ _MIN_ARM; NaN
+        # when none qualify — an honest "not measurable" beats a contaminated number.
+        # Planner PRIOR, never a Pareto objective.
         _MIN_ARM = 3
         with_tools = [r for r in results if not r.error and r.tools_used > 0]
         without_tools = [r for r in results if not r.error and r.tools_used == 0]
-        if len(with_tools) >= _MIN_ARM and len(without_tools) >= _MIN_ARM:
-            p_with = sum(1 for r in with_tools if r.correct) / len(with_tools)
-            p_without = sum(1 for r in without_tools if r.correct) / len(without_tools)
-            tool_helpfulness = p_with - p_without
+        _by_suite: dict[str, list] = {}
+        for r in results:
+            if not r.error:
+                _by_suite.setdefault(r.suite, []).append(r)
+        per_suite_tool_helpfulness: dict[str, float] = {}
+        for _suite, _rs in _by_suite.items():
+            _w = [r for r in _rs if r.tools_used > 0]
+            _wo = [r for r in _rs if r.tools_used == 0]
+            if len(_w) >= _MIN_ARM and len(_wo) >= _MIN_ARM:
+                _p_w = sum(1 for r in _w if r.correct) / len(_w)
+                _p_wo = sum(1 for r in _wo if r.correct) / len(_wo)
+                per_suite_tool_helpfulness[_suite] = _p_w - _p_wo
+        if per_suite_tool_helpfulness:
+            tool_helpfulness = (
+                sum(per_suite_tool_helpfulness.values()) / len(per_suite_tool_helpfulness)
+            )
         else:
             tool_helpfulness = float("nan")
 
@@ -569,11 +640,13 @@ class EvalTower:
                 "tool_helpfulness": tool_helpfulness,
                 "tool_helpfulness_n_with": len(with_tools),
                 "tool_helpfulness_n_without": len(without_tools),
+                "per_suite_tool_helpfulness": per_suite_tool_helpfulness,
             },
             mean_tools_used=mean_tools_used,
             tool_use_rate=tool_use_rate,
             total_tool_calls=total_tool_calls,
             tool_helpfulness=tool_helpfulness,
+            per_suite_tool_helpfulness=per_suite_tool_helpfulness,
             median_request_speed=median_request_speed,
             aggregate_speed=aggregate_speed,
             eval_concurrency=eval_concurrency,
@@ -622,8 +695,11 @@ class EvalTower:
             log.error("No sentinel questions available for T0")
             return EvalResult(tier=0, quality=0, speed=0, cost=0, reliability=0)
 
+        # Base T0 = first 10 sentinels (unchanged). Tool-use sentinels append
+        # only when AUTOPILOT_TOOL_SENTINELS=1 (else _load_tool_sentinels()→[]).
+        batch = sentinels[:10] + self._load_tool_sentinels()
         with httpx.Client(timeout=self.timeout) as client:
-            results = self._eval_batch(sentinels[:10], client, label="T0")
+            results = self._eval_batch(batch, client, label="T0")
         for r in results:
             log.info(
                 "T0 [%s/%s] %s → %s",

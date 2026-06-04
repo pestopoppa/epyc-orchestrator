@@ -1,0 +1,63 @@
+# ═══════════════════════════════════════════════════════════════════
+# TOOL-USE SENTINELS  (suite: tool_use)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Each question is answered by calling the `get_eval_secret` tool
+# (src/tools/eval_secret.py). The secret VALUES are minted at RUNTIME by the
+# orchestrator and held in memory — they are NOT in this file and NOT in source
+# (an earlier version hardcoded them here + in eval_secret.py, which let a model
+# grep them out of the repo instead of calling the tool). The ground truth is
+# persisted only to a tmpfs path outside read_file's allowed roots; eval_tower's
+# `_load_tool_sentinels` injects each question's real `expected` from there at
+# load time. The placeholder below NEVER matches a real answer, so if ground
+# truth is unavailable these score INCORRECT (not spuriously correct on "").
+#
+# Honest invariant: the AUTHORITATIVE signal is the directly-measured
+# get_eval_secret call count (request-local telemetry), NOT answer-correctness —
+# runtime generation removes the realistic (grep-the-repo) bypass, and the
+# call-count measurement is what guarantees the tool was used.
+#
+# force_mode: "repl" pins the REPL CALL(...) path; scoring is `substring`.
+# FINAL-ANSWER DISCIPLINE (gate-2): each prompt demands the final answer be ONLY
+# the value (no code/quotes/wrapper) — models had returned code templates / the
+# raw ToolOutput repr. INERT unless AUTOPILOT_TOOL_SENTINELS=1.
+
+- id: tool_use_secret_alpha
+  suite: tool_use
+  force_mode: "repl"
+  prompt: "Call the get_eval_secret tool with name=\"alpha\" to retrieve a value that exists ONLY inside that tool — it is not in this prompt and not in any file you can read. Then write your FINAL answer as ONLY the exact value the tool returned, as plain text inside <answer></answer> tags. Do NOT include any code, quotation marks, or the tool-output wrapper — just the value itself."
+  expected: "__resolved_at_runtime__"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: tool_use_secret_bravo
+  suite: tool_use
+  force_mode: "repl"
+  prompt: "Use the get_eval_secret tool with name=\"bravo\" to obtain a secret token held only in server memory. Then write your FINAL answer as ONLY the exact token, as plain text inside <answer></answer> tags — no code, no quotes, no wrapper, just the value."
+  expected: "__resolved_at_runtime__"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: tool_use_secret_charlie
+  suite: tool_use
+  force_mode: "repl"
+  prompt: "Retrieve the value for name=\"charlie\" using the get_eval_secret tool. The value is not provided anywhere in this prompt and is not in any file — only the tool can produce it. Then write your FINAL answer as ONLY the exact value, as plain text inside <answer></answer> tags. Do NOT output code or a string expression; write the literal value the tool returned."
+  expected: "__resolved_at_runtime__"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: tool_use_secret_delta
+  suite: tool_use
+  force_mode: "repl"
+  prompt: "Call get_eval_secret with name=\"delta\" (this is the only tool that can produce the value — do not use web_research or any other tool). Then write your FINAL answer as ONLY the exact value it returned, as plain text inside <answer></answer> tags — no code, no quotes, no wrapper."
+  expected: "__resolved_at_runtime__"
+  scoring_method: substring
+  scoring_config: {}
+
+- id: tool_use_secret_echo
+  suite: tool_use
+  force_mode: "repl"
+  prompt: "Use the get_eval_secret tool with name=\"echo\" to look up a server-memory-only secret. Then write your FINAL answer as ONLY the exact value, as plain text inside <answer></answer> tags — no code, no quotation marks, no tool-output wrapper, just the value itself."
+  expected: "__resolved_at_runtime__"
+  scoring_method: substring
+  scoring_config: {}

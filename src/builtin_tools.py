@@ -34,7 +34,45 @@ def register_builtin_tools(registry: ToolRegistry) -> None:
     _register_code_tools(registry)
     _register_data_tools(registry)
     _register_file_tools(registry)
+    # Eval-only opaque-secret tool — registered ONLY when the tool-use eval
+    # contract is armed, so production stays minimal. See eval_secret.py.
+    import os as _os
+    if _os.environ.get("AUTOPILOT_TOOL_SENTINELS") == "1":
+        _register_eval_tools(registry)
     logger.info(f"Registered {len(registry._tools)} built-in tools")
+
+
+def _register_eval_tools(registry: ToolRegistry) -> None:
+    """Register the eval-only get_eval_secret tool (gated by AUTOPILOT_TOOL_SENTINELS).
+
+    Secrets are minted at runtime here (never committed to source) and persisted
+    only to a tmpfs path outside read_file's allowed roots, so the eval harness
+    can read ground truth while the model-under-test cannot grep it from the repo.
+    The authoritative gate signal remains the directly-measured get_eval_secret
+    call count, not answer-correctness.
+    """
+    from src.tools.eval_secret import (
+        generate_and_persist_secrets as _gen_secrets,
+        get_eval_secret as _get_eval_secret,
+    )
+
+    _gen_secrets()  # mint runtime secrets + persist for the harness
+
+    @registry.register_handler(
+        name="get_eval_secret",
+        description=(
+            "Return an opaque eval secret stored only in server memory (not on "
+            "disk). Args: name (str). Used by the tool-use eval to force a "
+            "counted tool call."
+        ),
+        category=ToolCategory.DATA,
+        parameters={
+            "name": {"type": "string", "description": "Secret name to retrieve", "required": True},
+        },
+    )
+    def get_eval_secret(name: str) -> str:
+        """Return the opaque secret registered under `name`."""
+        return _get_eval_secret(name)
 
 
 def _register_code_tools(registry: ToolRegistry) -> None:

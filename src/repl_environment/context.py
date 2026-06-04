@@ -418,20 +418,71 @@ class _ContextMixin:
     # ------------------------------------------------------------------
 
     def _invoke_tool(self, tool_name: str, **kwargs) -> Any:
-        """Invoke a registered tool.
+        """Invoke a registered tool and capture request-local telemetry.
 
-        Args:
-            tool_name: Name of the tool to invoke.
-            **kwargs: Tool arguments.
-
-        Returns:
-            Tool result.
+        Thin wrapper around _dispatch_tool that records ONE per-request
+        invocation (name, elapsed_ms, success, chain_id, caller_type, result)
+        into self._invoked_tools. repl_executor reads ONLY this list for
+        per-request tool telemetry — NEVER ToolRegistry.get_invocation_log(),
+        which is process-global and never cleared per request: reading it leaks a
+        prior request's tools into a no-tool request (tools_called/tools_used).
+        The records expose the same attribute interface as ToolInvocation so the
+        downstream consumers are unchanged. Covers every dispatch path below.
         """
         if self.tool_registry is None:
             raise RuntimeError("No tool registry configured")
 
-        self._tool_invocations += 1
+        import time as _time
+        from types import SimpleNamespace as _NS
 
+        self._tool_invocations += 1
+        _t0 = _time.perf_counter()
+        _ok = True
+        _result: Any = None
+        try:
+            _result = self._dispatch_tool(tool_name, **kwargs)
+            return _result
+        except Exception:
+            _ok = False
+            raise
+        finally:
+            _records = getattr(self, "_invoked_tools", None)
+            if _records is not None:
+                # Mirror the registry's ToolInvocation semantics regardless of the
+                # structured-output flag. Under ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT
+                # ToolRegistry.invoke() RETURNS a ToolOutput envelope and converts
+                # a handler failure to ToolOutput(ok=False) WITHOUT raising — so
+                # "no exception" is NOT success, and the envelope is NOT the raw
+                # result. Unwrap so success := ok and result := raw output, which
+                # keeps consumers like web_research extraction (isinstance(result,
+                # dict)) and tools_success correct.
+                _succ, _res = _ok, _result
+                try:
+                    from src.registry.tool_registry import ToolOutput as _ToolOutput
+                    _is_envelope = isinstance(_result, _ToolOutput)
+                except Exception:  # pragma: no cover - import guard
+                    _is_envelope = (
+                        hasattr(_result, "ok")
+                        and hasattr(_result, "output")
+                        and hasattr(_result, "status")
+                    )
+                if _is_envelope:
+                    _succ = bool(getattr(_result, "ok", _ok))
+                    _res = getattr(_result, "output", _result)
+                _chain_id = getattr(self, "_active_tool_chain_id", None)
+                _records.append(
+                    _NS(
+                        tool_name=tool_name,
+                        elapsed_ms=(_time.perf_counter() - _t0) * 1000.0,
+                        success=_succ,
+                        chain_id=_chain_id,
+                        caller_type="chain" if _chain_id else "direct",
+                        result=_res,
+                    )
+                )
+
+    def _dispatch_tool(self, tool_name: str, **kwargs) -> Any:
+        """Dispatch a tool call. Telemetry is captured by _invoke_tool."""
         # Task-manager-specialized tools (stateful, request-local).
         if tool_name in {"task_create", "task_update", "task_list", "budget_override"}:
             from orchestration.tools.task_management import set_active_task_manager

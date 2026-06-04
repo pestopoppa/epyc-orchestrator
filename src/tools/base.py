@@ -13,6 +13,7 @@ from __future__ import annotations
 import functools
 import logging
 import signal
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, TypeVar
@@ -60,17 +61,41 @@ def with_timeout(seconds: int) -> Callable[[Callable[..., T]], Callable[..., T]]
             def timeout_handler(signum: int, frame: Any) -> None:
                 raise ToolTimeout(f"Execution timed out after {seconds}s")
 
-            # Only set alarm on Unix
-            if hasattr(signal, "SIGALRM"):
+            # SIGALRM only works in the main thread of the main interpreter —
+            # elsewhere signal.signal() raises "ValueError: signal only works in
+            # main thread". The orchestrator runs tools inside the eval
+            # ThreadPoolExecutor and the REPL's parallel dispatch (this crashed
+            # web_research at the 2026-06-04 cutover gate).
+            on_main_thread = (
+                hasattr(signal, "SIGALRM")
+                and threading.current_thread() is threading.main_thread()
+            )
+            if on_main_thread:
+                # Main thread: SIGALRM can interrupt even a CPU-bound handler.
                 old_handler = signal.signal(signal.SIGALRM, timeout_handler)
                 signal.alarm(seconds)
-
-            try:
-                return func(*args, **kwargs)
-            finally:
-                if hasattr(signal, "SIGALRM"):
+                try:
+                    return func(*args, **kwargs)
+                finally:
                     signal.alarm(0)
                     signal.signal(signal.SIGALRM, old_handler)
+
+            # Worker thread: bound the WAIT with futures so the caller still gets
+            # ToolTimeout on overrun instead of either crashing (old behavior) or
+            # hanging (a naive skip). A stuck/CPU-bound handler thread cannot be
+            # force-killed in Python, so on timeout it is orphaned
+            # (shutdown(wait=False)) — weaker than SIGALRM, but it preserves the
+            # timeout contract and never blocks the caller.
+            import concurrent.futures as _cf
+
+            executor = _cf.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(func, *args, **kwargs)
+            try:
+                return future.result(timeout=seconds)
+            except _cf.TimeoutError:
+                raise ToolTimeout(f"Execution timed out after {seconds}s")
+            finally:
+                executor.shutdown(wait=False)
 
         return wrapper
 

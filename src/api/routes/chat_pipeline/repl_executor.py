@@ -669,11 +669,14 @@ async def _execute_repl(
             real_mode=request.real_mode,
         )
 
-    invocation_log = (
-        repl.tool_registry.get_invocation_log()
-        if repl.tool_registry
-        else []
-    )
+    # REQUEST-LOCAL invocation records captured at the _invoke_tool chokepoint
+    # (context.py). We must NOT use repl.tool_registry.get_invocation_log() here:
+    # that registry is process-global (one instance, src/api/__init__.py) and its
+    # log is never cleared per request, so a later no-tool request would report a
+    # prior request's tools. These records expose the same attribute interface as
+    # ToolInvocation (tool_name/elapsed_ms/success/chain_id/caller_type/result),
+    # so every consumer below is unchanged.
+    invocation_log = list(getattr(repl, "_invoked_tools", None) or [])
     tool_outputs = repl.artifacts.get("_tool_outputs", [])
     tools_success = _tools_success(
         answer,
@@ -690,6 +693,8 @@ async def _execute_repl(
         answer=answer,
     )
 
+    # invocation_log is already request-local (see above), so tools_called/
+    # tool_timings/tools_used are too — a no-tool request reports nothing.
     tools_called = [inv.tool_name for inv in invocation_log]
     tool_timings = [
         {"tool_name": inv.tool_name, "elapsed_ms": inv.elapsed_ms, "success": inv.success}
