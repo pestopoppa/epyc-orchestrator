@@ -93,6 +93,14 @@ except ImportError:
 sys.path.insert(0, str(ORCH_ROOT))
 from orchestration.repl_memory.strategy_store import StrategyStore
 
+# Durable earlyoom control-plane protection (mirrors orchestrator_stack). Guarded so a
+# resolution hiccup never blocks autopilot import/startup — it is strictly best-effort.
+try:
+    from scripts.server.stack_processes import set_oom_score_adj as _set_oom_score_adj
+except Exception:  # pragma: no cover - import-path fallback
+    def _set_oom_score_adj(pids: Any, adj: int = -1000) -> int:
+        return 0
+
 log = logging.getLogger("autopilot")
 
 STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
@@ -2329,6 +2337,14 @@ def cmd_start(args: argparse.Namespace) -> None:
     except BlockingIOError:
         print("ERROR: Another AutoPilot instance is running")
         sys.exit(1)
+
+    # Durable earlyoom protection for THIS process. The autopilot is comm=python
+    # (collides with runaway python evals, so it cannot be earlyoom --ignore'd by
+    # name) and is a long-lived control-plane process; set oom_score_adj=-1000 now
+    # that we hold the singleton lock (earlyoom skips exactly -1000 in both oom_score
+    # and --sort-by-rss modes). Only this pid — the transient GEPA/planner subprocesses
+    # must stay killable. Best-effort (sudo -n). See earlyoom-oom-protection.md.
+    _set_oom_score_adj([os.getpid()])
 
     run_loop(
         max_trials=args.max_trials,
