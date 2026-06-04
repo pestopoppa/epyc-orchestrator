@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+import statistics
+from dataclasses import asdict, dataclass, field, fields
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,12 @@ class ParetoEntry:
     species: str = ""
     timestamp: str = ""
     is_production_best: bool = False
+    # Representative-admission (2026-06-04 policy correction): a stable identity for the
+    # DEPLOYED config a trial measured, so trusted within-noise reproductions dedup into a
+    # single robust-median frontier point instead of N noisy per-trial points. Empty for
+    # ordinary per-trial entries.
+    config_fingerprint: str = ""
+    n_reproductions: int = 1
 
     def dominates(self, other: ParetoEntry) -> bool:
         """True if self dominates other (>= on all, > on at least one)."""
@@ -62,7 +69,11 @@ class ParetoEntry:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ParetoEntry:
-        d = dict(d)
+        # Tolerant load: ignore unknown keys so a state file written by a NEWER schema
+        # (e.g. the 2026-06-04 config_fingerprint fields) never bricks an older reader,
+        # and a missing key just falls back to the dataclass default.
+        known = {f.name for f in fields(cls)}
+        d = {k: v for k, v in d.items() if k in known}
         d["objectives"] = tuple(d["objectives"])
         return cls(**d)
 
@@ -78,6 +89,9 @@ class ParetoArchive:
         self._frontiers: dict[int, list[ParetoEntry]] = {}
         self._all_entries: list[ParetoEntry] = []
         self._hv_history_by_tier: dict[int, list[tuple[int, float]]] = {}
+        # Per-"{tier}:{fingerprint}" raw within-noise measurement clusters, used to
+        # recompute robust-median representative objectives across reproductions.
+        self._repro_clusters: dict[str, list[list[float]]] = {}
         self._load()
 
     # ── per-tier access helpers ──────────────────────────────────
@@ -118,6 +132,13 @@ class ParetoArchive:
             self._hv_history_by_tier = (
                 {DEFAULT_FRONTIER_TIER: legacy_hv} if legacy_hv else {}
             )
+        # Reproduction clusters: raw within-noise measurements per "{tier}:{fingerprint}",
+        # used to recompute robust-median representative objectives. Absent in pre-2026-06-04
+        # state → empty (backward compatible).
+        self._repro_clusters = {
+            str(k): [[float(x) for x in obj] for obj in v]
+            for k, v in (archive_data.get("repro_clusters", {}) or {}).items()
+        }
         # Frontiers are always REBUILT per-tier from all_entries (ignores any legacy `frontier`
         # field + scrubs T0 pollution + auto-migrates old single-frontier state).
         self._rebuild_frontier()
@@ -177,6 +198,10 @@ class ParetoArchive:
                 str(t): list(hist) for t, hist in self._hv_history_by_tier.items()
             },
             "all_entries": [e.to_dict() for e in self._all_entries],
+            "repro_clusters": {
+                str(k): [list(obj) for obj in v]
+                for k, v in self._repro_clusters.items()
+            },
             # Legacy fields = canonical-tier (T1) projection, so direct state-JSON readers
             # (e.g. the dashboard fallback) keep working.
             "frontier": [e.to_dict() for e in canonical_front],
@@ -258,6 +283,76 @@ class ParetoArchive:
         hv = self.hypervolume(tier=tier)
         self._hv_hist(tier).append((entry.trial_id, hv))
         return status
+
+    def reproduction_count(self, tier: int, fingerprint: str) -> int:
+        """Number of measurements folded into the (tier, fingerprint) representative."""
+        return len(self._repro_clusters.get(f"{int(tier)}:{fingerprint}", []))
+
+    def upsert_representative(
+        self,
+        fingerprint: str,
+        tier: int,
+        objectives: tuple[float, ...],
+        *,
+        trial_id: int,
+        **entry_kwargs: Any,
+    ) -> tuple[str, tuple[float, ...]]:
+        """Fold a TRUSTED within-noise measurement into the per-(tier, fingerprint)
+        reproduction cluster, recompute robust-MEDIAN objectives across the cluster, and
+        admit/refresh a SINGLE representative entry for that config.
+
+        Policy correction (2026-06-04): a within-quality-noise trial is excluded from
+        strategy learning (AP-22), but it can still be NON-DOMINATED on speed/cost/
+        reliability and therefore belongs on the multi-objective frontier. Dominance is
+        tested on the cluster MEDIAN — never a lucky single-trial speed sample — so
+        host-throughput variance cannot manufacture separate frontier geometry.
+        Reproductions of the same config (even via different action types) dedup by
+        ``fingerprint``, never by trial id.
+
+        Returns ``(status, median_objectives)``. An empty fingerprint has no stable
+        identity to dedup on, so it falls back to a plain per-trial :meth:`update`.
+        """
+        tier = int(tier)
+        if not fingerprint:
+            status = self.update(
+                ParetoEntry(
+                    trial_id=trial_id,
+                    objectives=tuple(objectives),
+                    eval_tier=tier,
+                    **entry_kwargs,
+                )
+            )
+            return status, tuple(objectives)
+
+        key = f"{tier}:{fingerprint}"
+        cluster = self._repro_clusters.setdefault(key, [])
+        cluster.append([float(x) for x in objectives])
+        median_objs = tuple(statistics.median(axis) for axis in zip(*cluster))
+
+        # Exactly one representative per (tier, fingerprint): drop the prior one before
+        # re-adding with the refreshed median so the cluster can't accrete duplicates.
+        self._all_entries = [
+            e
+            for e in self._all_entries
+            if not (e.config_fingerprint == fingerprint and int(e.eval_tier) == tier)
+        ]
+        self._all_entries.append(
+            ParetoEntry(
+                trial_id=trial_id,
+                objectives=median_objs,
+                eval_tier=tier,
+                config_fingerprint=fingerprint,
+                n_reproductions=len(cluster),
+                **entry_kwargs,
+            )
+        )
+        self._rebuild_frontier()
+        on_frontier = any(
+            e.config_fingerprint == fingerprint and int(e.eval_tier) == tier
+            for e in self._front(tier)
+        )
+        self._hv_hist(tier).append((trial_id, self.hypervolume(tier=tier)))
+        return ("frontier" if on_frontier else "dominated"), median_objs
 
     def frontier(self, tier: int | None = None) -> list[ParetoEntry]:
         return list(self._front(tier))

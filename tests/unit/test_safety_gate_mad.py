@@ -160,8 +160,11 @@ def test_negative_quality_not_recorded(tmp_path):
 
 def test_reproduction_confirmed_on_above_baseline_level(tmp_path):
     """A within-noise reproduction of an established ABOVE-baseline level must
-    tag `reproduction_confirmed` (convergence) ALONGSIDE `mad_noise` — and the
-    MAD invariant is preserved (still mad_noise, no new Pareto point)."""
+    tag `reproduction_confirmed` (convergence) ALONGSIDE `mad_noise`. The invariant
+    tested here is the GATE classification only (still mad_noise). NOTE (2026-06-04
+    policy correction): the tag no longer implies "no Pareto point" — multi-objective
+    archive admission is decoupled from this quality-only test (see
+    ParetoArchive.upsert_representative); only AP-22/strategy learning stays excluded."""
     # History clustered ~1.8, baseline 1.16 (default) → established gain.
     history = [1.74, 1.58, 1.66, 1.82, 1.80]
     g = _gate(tmp_path, history=history)
