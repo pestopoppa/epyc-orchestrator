@@ -168,7 +168,8 @@ def test_dispatch_action_routes_dirty_mutation_to_skip(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Fence reports dirty; the handler must never run and dispatch returns the
-    # skipped-trial shape (None, action_type).
+    # skipped-trial shape (SkipOutcome, action_type) so the main loop journals
+    # the fence reason instead of silently dropping it.
     called = {"handler": False}
 
     def fake_handler(_action, _ctx):  # pragma: no cover - must not be called
@@ -185,7 +186,9 @@ def test_dispatch_action_routes_dirty_mutation_to_skip(
         seeder=None, swarm=None, forge=None, lab=None, tower=None,
         gate=None, archive=None, journal=None, state={},
     )
-    assert result is None
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "Dirty-tree fence" in result.reason
     assert species == "code_mutation"
     assert called["handler"] is False
 

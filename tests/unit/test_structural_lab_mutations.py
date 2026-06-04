@@ -235,6 +235,53 @@ def test_structural_lab_memory_count_reads_sqlite_without_episodic_store_import(
     assert lab.summary()["memory_count"] == 2
 
 
+def _lab_with_flags(monkeypatch, current):
+    from scripts.autopilot.species import structural_lab as sl_mod
+    lab = sl_mod.StructuralLab(orchestrator_url="http://unused-test:0")
+    monkeypatch.setattr(lab, "current_flags", lambda: dict(current))
+    return lab
+
+
+def test_propose_flag_validates_merged_live_state_single_dependency(monkeypatch):
+    """Enabling a dependent flag one-at-a-time validates against the merged live
+    config, not the partial patch (the High blocker fix)."""
+    # memrl is live-ON → enabling specialist_routing alone is valid.
+    lab = _lab_with_flags(monkeypatch, {"memrl": True, "specialist_routing": False})
+    assert lab.propose_flag_experiment({"specialist_routing": True})["status"] == "valid"
+
+    # specialist_routing live-ON → enabling graph_router alone is valid.
+    lab = _lab_with_flags(
+        monkeypatch, {"memrl": True, "specialist_routing": True, "graph_router": False}
+    )
+    assert lab.propose_flag_experiment({"graph_router": True})["status"] == "valid"
+
+
+def test_propose_flag_still_rejects_when_merged_dependency_unmet(monkeypatch):
+    """A genuine dependency violation against KNOWN live state stays 'invalid'
+    (blacklist-eligible)."""
+    # memrl live-OFF → graph_router can't be enabled (needs specialist_routing→memrl).
+    lab = _lab_with_flags(monkeypatch, {"memrl": False, "specialist_routing": False})
+    result = lab.propose_flag_experiment({"graph_router": True})
+    assert result["status"] == "invalid"
+    assert any("specialist_routing" in e for e in result["errors"])
+
+
+def test_propose_flag_unreadable_live_state_is_error_not_invalid(monkeypatch):
+    """When live flags can't be read, a dependency failure is NOT trustworthy →
+    status 'error' (non-blacklisting), not 'invalid' (the Medium fix)."""
+    lab = _lab_with_flags(monkeypatch, {})  # orchestrator unreachable
+    result = lab.propose_flag_experiment({"graph_router": True})
+    assert result["status"] == "error"
+    assert "unavailable" in result["error"]
+
+
+def test_propose_flag_unknown_name_is_invalid_regardless_of_live_state(monkeypatch):
+    lab = _lab_with_flags(monkeypatch, {})
+    result = lab.propose_flag_experiment({"not_a_real_flag": True})
+    assert result["status"] == "invalid"
+    assert "Unknown flags" in result["errors"][0]
+
+
 def test_train_routing_models_spawns_venv_interpreter_not_bare_python(tmp_path, monkeypatch):
     """Regression: the three routing-model trainers must be launched with the
     current venv interpreter (sys.executable), never a bare 'python'.

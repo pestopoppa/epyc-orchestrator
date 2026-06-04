@@ -33,13 +33,17 @@ def _ctx(**overrides):
 
 
 def test_dispatcher_rejects_ap9_scope_violation(caplog) -> None:
-    # numeric_trial with 2 explicit params violates AP-9
+    # numeric_trial with 2 explicit params violates AP-9. The dispatcher now
+    # returns a structured SkipOutcome (not bare None) so the main loop can
+    # journal/count/feed-back the reason.
     result, species = actions.dispatch_action(
         {"type": "numeric_trial", "params": {"a": 1, "b": 2}},
         seeder=None, swarm=None, forge=None, lab=None, tower=None,
         gate=None, archive=None, journal=None, state={},
     )
-    assert result is None
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "AP-9" in result.reason
     assert species == "numeric_trial"
 
 
@@ -49,8 +53,49 @@ def test_dispatcher_unknown_action_type() -> None:
         seeder=None, swarm=None, forge=None, lab=None, tower=None,
         gate=None, archive=None, journal=None, state={},
     )
-    assert result is None
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "unknown action type" in result.reason
     assert species == "unknown"
+
+
+def test_structural_experiment_invalid_flags_returns_skip_outcome() -> None:
+    """Invalid flag dependency surfaces the validator reason as a SkipOutcome,
+    not a bare None — this is the graph_router-deadlock fix."""
+    class FakeLab:
+        def propose_flag_experiment(self, flags):
+            return {
+                "status": "invalid",
+                "errors": ["graph_router feature requires specialist_routing feature"],
+                "proposed_flags": flags,
+            }
+
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        _ctx(lab=FakeLab()),
+    )
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "specialist_routing" in result.reason
+    assert species == "structural_lab"
+
+
+def test_structural_experiment_error_status_is_skipped_not_invalid() -> None:
+    """A transient validator 'error' (e.g. orchestrator unreachable) maps to a
+    non-blacklisting 'skipped' SkipOutcome, never 'invalid' — so a blip cannot
+    permanently blacklist a valid flag."""
+    class FakeLab:
+        def propose_flag_experiment(self, flags):
+            return {"status": "error", "error": "live flag state unavailable"}
+
+    result, species = actions._action_structural_experiment(
+        {"type": "structural_experiment", "flags": {"graph_router": True}},
+        _ctx(lab=FakeLab()),
+    )
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "unavailable" in result.reason
+    assert species == "structural_lab"
 
 
 def test_dispatcher_routes_to_correct_handler(monkeypatch) -> None:
@@ -172,6 +217,66 @@ def test_first_meta_action_is_allowed() -> None:
     )
     assert action == {"type": "distill_knowledge", "last_n": 10}
     assert rationale == {"falsifier": "noop"}
+
+
+# ----- experiment quota (passive-action ceiling) -----
+
+
+def test_quota_passes_passive_below_memory_threshold() -> None:
+    state = {"consecutive_passive_actions": 99}
+    action, _ = autopilot._enforce_experiment_quota(
+        {"type": "seed_batch", "n_questions": 10}, state,
+        memory_count=10, rationale=None, trial_counter=1,
+    )
+    # Below threshold seeding is legitimate — never overridden.
+    assert action["type"] == "seed_batch"
+    assert state["consecutive_passive_actions"] == 100
+
+
+def test_quota_forces_experiment_after_consecutive_passive_when_memory_large() -> None:
+    state = {"consecutive_passive_actions": autopilot.MAX_CONSECUTIVE_PASSIVE}
+    action, rationale = autopilot._enforce_experiment_quota(
+        {"type": "seed_batch", "n_questions": 10}, state,
+        memory_count=autopilot.QUOTA_MEMORY_THRESHOLD + 1,
+        rationale={"falsifier": "x"}, trial_counter=0,
+    )
+    assert action["type"] == "numeric_trial"
+    assert action["params"] == {}
+    assert rationale["experiment_quota_forced"] is True
+    # Counter resets after forcing an experiment.
+    assert state["consecutive_passive_actions"] == 0
+
+
+def test_quota_resets_counter_on_nonpassive_action() -> None:
+    state = {"consecutive_passive_actions": 5}
+    action, _ = autopilot._enforce_experiment_quota(
+        {"type": "prompt_mutation", "file": "frontdoor.md"}, state,
+        memory_count=99999, rationale=None, trial_counter=0,
+    )
+    assert action["type"] == "prompt_mutation"
+    assert state["consecutive_passive_actions"] == 0
+
+
+# ----- non-executing-action residue feedback -----
+
+
+def test_last_invalid_feedback_none_when_clean() -> None:
+    assert "none" in autopilot._build_last_invalid_feedback({}).lower()
+
+
+def test_last_invalid_feedback_surfaces_reason_and_count() -> None:
+    act = {"type": "structural_experiment", "flags": {"graph_router": True}}
+    sig = autopilot._action_signature(act)
+    state = {
+        "last_invalid_action": act,
+        "last_invalid_reason": "graph_router feature requires specialist_routing feature",
+        "last_invalid_status": "invalid",
+        "invalid_signature_counts": {sig: 3},
+    }
+    text = autopilot._build_last_invalid_feedback(state)
+    assert "specialist_routing" in text
+    assert "3×" in text
+    assert "DO NOT repeat" in text
 
 
 # ----- ActionContext bundle -----

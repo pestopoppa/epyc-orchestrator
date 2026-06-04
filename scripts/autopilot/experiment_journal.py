@@ -32,6 +32,17 @@ class DeficiencyCategory(str, Enum):
     CODE_VALIDATION = "code_validation"
     SHRINKAGE = "shrinkage"
     REVERT = "revert"
+    # 2026-06-04 non-executing-action residue (graph_router deadlock fix). An
+    # action that never ran an eval — so it has no quality/speed evidence — but
+    # whose failure reason is actionable and MUST be fed back to the planner
+    # instead of being silently dropped (the "return None, increment, continue"
+    # blind spot that let 119 identical invalid structural_experiments dispatch).
+    #   INVALID_ACTION: failed pre-execution validation (e.g. a feature flag
+    #     whose dependency is not enabled). Carries the validator reason.
+    #   DISPATCH_SKIPPED: skipped at the dispatcher (AP-9 scope violation,
+    #     dirty-tree fence, unknown action type, or a handler no-op).
+    INVALID_ACTION = "invalid_action"
+    DISPATCH_SKIPPED = "dispatch_skipped"
     # 2026-05-23 exogenous-restart resilience (handoff Phase 5).
     # EXOGENOUS_RELOAD: trial corrupted by an operator/external service reload
     #   detected via fleet markers; at least one question stayed unrecovered.
@@ -167,6 +178,13 @@ class JournalEntry:
     # empty so legacy entries stay loadable.
     falsifier: str = ""
     rubric_scores: dict[str, Any] = field(default_factory=dict)
+    # 2026-06-04: outcome status for non-executing trials. "ok" for a normal
+    # metric-collecting trial; "invalid" when the action failed pre-execution
+    # validation (e.g. a flag dependency); "skipped" when the dispatcher dropped
+    # it (AP-9 scope / dirty-tree / unknown / handler no-op). Lets the planner and
+    # audits distinguish "ran and scored 0" from "never ran" — the residue that
+    # was previously discarded by the bare-None skip path.
+    outcome_status: str = "ok"
     # 2026-05-24: stagnation gate signal that fired for this trial (empty for
     # lean-prompt trials, or e.g. "hv_slope_10=+0.00000 < eps=0.00100;
     # last 3 trials all action_type=seed_batch" when the rich prompt was used).
@@ -260,6 +278,7 @@ class ExperimentJournal:
                         falsifier=data.get("falsifier", ""),
                         rubric_scores=data.get("rubric_scores", {}),
                         stagnation_signal=data.get("stagnation_signal", ""),
+                        outcome_status=data.get("outcome_status", "ok"),
                     )
                     self._entries.append(entry)
             batch += 1

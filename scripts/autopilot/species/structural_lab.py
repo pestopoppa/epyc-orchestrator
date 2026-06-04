@@ -337,7 +337,20 @@ class StructuralLab:
     ) -> dict[str, Any]:
         """Propose a feature flag experiment.
 
-        Validates flag dependencies before applying.
+        Validates flag dependencies against the MERGED candidate config (live
+        flags + proposed overrides), not the partial patch. Validating only
+        ``Features(**flags)`` defaults every unspecified flag to False, so a
+        single-flag enable of a dependent feature always fails its dependency
+        check — e.g. ``{"specialist_routing": True}`` reports "requires memrl"
+        even when memrl is live-ON. That made the documented two-step
+        (enable dependency in one trial, dependent flag in the next) impossible.
+        Merging mirrors what apply_flag_experiment / POST /config actually do.
+
+        Status contract:
+          valid   — merged config passes all dependency checks.
+          invalid — KNOWN live state + a stable dependency violation. Blacklistable.
+          error   — could not validate reliably (exception, OR live flag state
+                    unavailable so the merge is untrustworthy). NOT blacklistable.
         """
         import sys
         sys.path.insert(0, str(ORCH_ROOT / "src"))
@@ -345,7 +358,8 @@ class StructuralLab:
         try:
             from features import Features, _REGISTRY_BY_NAME
 
-            # Validate all flags exist in the declarative registry
+            # Validate all flags exist in the declarative registry (always
+            # trustworthy — registry-based, independent of live state).
             unknown = set(flags.keys()) - set(_REGISTRY_BY_NAME.keys())
             if unknown:
                 return {
@@ -354,13 +368,33 @@ class StructuralLab:
                     "proposed_flags": flags,
                 }
 
-            test_features = Features(**flags)
-            errors = test_features.validate()
+            current = self.current_flags()  # {} if orchestrator unreachable
+            merged = {
+                k: v
+                for k, v in {**current, **flags}.items()
+                if k in _REGISTRY_BY_NAME
+            }
+            errors = Features(**merged).validate()
             if errors:
+                if not current:
+                    # No live state — the merge is just the partial patch and
+                    # its dependency failures are not trustworthy. Surface as a
+                    # transient error so the caller does NOT auto-blacklist a
+                    # flag that might be perfectly valid against real config.
+                    return {
+                        "status": "error",
+                        "error": (
+                            "; ".join(errors)
+                            + " (live flag state unavailable; not validated "
+                            "against merged config)"
+                        ),
+                        "proposed_flags": flags,
+                    }
                 return {
                     "status": "invalid",
                     "errors": errors,
                     "proposed_flags": flags,
+                    "merged_flags": merged,
                 }
         except Exception as e:
             return {"status": "error", "error": str(e)}
@@ -376,6 +410,47 @@ class StructuralLab:
             return resp.json()
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    def current_flags(self) -> dict[str, bool]:
+        """Read the live feature-flag state from the orchestrator.
+
+        POST /config with an empty body applies no overrides and returns the
+        full current feature summary (see src/api/routes/config.py). This is the
+        only way to GET live flags — there is no dedicated GET endpoint. Returns
+        an empty dict if the orchestrator is unreachable so callers can degrade
+        to "unknown" rather than crash the planner prompt assembly.
+        """
+        import httpx
+        try:
+            resp = httpx.post(f"{self.url}/config", json={}, timeout=10)
+            resp.raise_for_status()
+            return dict(resp.json().get("features", {}))
+        except Exception:
+            return {}
+
+    def flag_schema(self) -> list[dict[str, Any]]:
+        """Return the declarative feature registry for the planner prompt.
+
+        Each entry: {name, dependencies, default_prod, description}. Sourced from
+        src/features.py _FEATURE_REGISTRY (the single source of truth the flag
+        validator also reads), so the planner sees the same dependency rules that
+        propose_flag_experiment() enforces — e.g. graph_router -> specialist_routing.
+        """
+        import sys
+        sys.path.insert(0, str(ORCH_ROOT / "src"))
+        try:
+            from features import _FEATURE_REGISTRY  # type: ignore
+        except Exception:
+            return []
+        return [
+            {
+                "name": s.name,
+                "dependencies": list(s.dependencies),
+                "default_prod": s.default_prod,
+                "description": s.description,
+            }
+            for s in _FEATURE_REGISTRY
+        ]
 
     # ── helpers ──────────────────────────────────────────────────
 

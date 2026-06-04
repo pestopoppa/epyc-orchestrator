@@ -63,6 +63,34 @@ log = logging.getLogger("autopilot")
 
 
 @dataclass
+class SkipOutcome:
+    """Structured residue for an action that did NOT execute an eval.
+
+    Returned (in the eval-result slot of the ``(result, species)`` tuple) instead
+    of a bare ``None`` so the main loop can treat a non-executing action as a
+    first-class trial outcome: journal it, fingerprint it, count it, and feed the
+    reason back to the planner / blacklist. Before this existed, the dispatcher's
+    ``return None`` path silently dropped the only actionable signal — which let
+    the planner re-sample an impossible action forever (the 2026-06 graph_router
+    deadlock: 119 identical invalid ``structural_experiment`` dispatches, each
+    rejected with "graph_router feature requires specialist_routing feature",
+    none of it ever reaching the planner).
+
+    status: "invalid"  — failed pre-execution validation (actionable; e.g. a
+                          feature flag whose dependency is not enabled). Eligible
+                          for signature blacklisting because the reason is stable.
+            "skipped"  — dropped by a dispatcher guard (AP-9 scope, dirty-tree
+                          fence, unknown type, handler no-op). Counted + halted on
+                          runaway, but NOT auto-blacklisted (the coarse pattern
+                          would over-match, e.g. blacklisting all numeric_trials).
+    reason:  human/planner-readable explanation (the validator/guard message).
+    """
+    status: str
+    reason: str
+    action_type: str = ""
+
+
+@dataclass
 class _ActionContext:
     """Dependency bundle passed to each action handler."""
     seeder: "Seeder"
@@ -438,9 +466,22 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
 def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
     flags = action.get("flags", {})
     validation = ctx.lab.propose_flag_experiment(flags)
-    if validation.get("status") != "valid":
+    status = validation.get("status")
+    if status != "valid":
         log.warning("Invalid flag experiment: %s", validation)
-        return None, "structural_lab"
+        # Surface the validator's reason instead of dropping it (graph_router
+        # deadlock fix). The errors list carries the exact fix, e.g.
+        # "graph_router feature requires specialist_routing feature".
+        #
+        # Map the validator status onto the SkipOutcome status so only STABLE
+        # validation failures ("invalid") are blacklist-eligible. A transient
+        # "error" (orchestrator unreachable, exception) must NOT be blacklisted,
+        # or a momentary blip could permanently ban a perfectly valid flag.
+        if status == "invalid":
+            reason = "; ".join(validation.get("errors", [])) or "invalid flag experiment"
+            return SkipOutcome("invalid", reason, "structural_experiment"), "structural_lab"
+        reason = str(validation.get("error", "flag experiment error"))
+        return SkipOutcome("skipped", reason, "structural_experiment"), "structural_lab"
 
     ctx.lab.apply_flag_experiment(flags)
     eval_result = ctx.tower.hybrid_eval()
@@ -743,8 +784,13 @@ def dispatch_action(
     strategy_store: "StrategyStore | None" = None,
     evo: "EvolutionManager | None" = None,
     watcher: Any | None = None,
-) -> tuple[EvalResult | None, str]:
+) -> tuple[EvalResult | SkipOutcome | None, str]:
     """Execute an action and return (eval_result, species_name).
+
+    The first element is an ``EvalResult`` for a metric-collecting trial, a
+    ``SkipOutcome`` for an action that failed validation or was dropped by a
+    dispatcher guard (so the main loop gets the reason as residue), or ``None``
+    for a handler that ran a side effect but collected no metrics (meta no-op).
 
     `watcher`: OrchestratorWatcher (Phase 5). When non-None, action handlers
     that issue /chat traffic (seed_batch + variants) use it to detect operator
@@ -757,20 +803,20 @@ def dispatch_action(
     scope_err = validate_single_variable(action)
     if scope_err:
         log.warning("AP-9 scope violation: %s — skipping trial", scope_err)
-        return None, action_type
+        return SkipOutcome("skipped", f"AP-9 scope violation: {scope_err}", action_type), action_type
     # Dirty-tree fence (see _mutation_dirty_target_reason): a file-mutating
     # action must never commit — or write over — pre-existing uncommitted work.
     dirty_reason = _mutation_dirty_target_reason(action)
     if dirty_reason:
         log.warning("Dirty-tree fence: %s — skipping trial", dirty_reason)
-        return None, action_type
+        return SkipOutcome("skipped", f"Dirty-tree fence: {dirty_reason}", action_type), action_type
 
     log.info("Dispatching action: %s", action_type)
 
     handler = _ACTION_HANDLERS.get(action_type)
     if handler is None:
         log.warning("Unknown action type: %s", action_type)
-        return None, "unknown"
+        return SkipOutcome("skipped", f"unknown action type: {action_type}", action_type), "unknown"
 
     ctx = _ActionContext(
         seeder=seeder, swarm=swarm, forge=forge, lab=lab, tower=tower,

@@ -79,7 +79,7 @@ from state_store import (
     load_state as _load_state_impl,
     save_state as _save_state_impl,
 )
-from actions import dispatch_action
+from actions import dispatch_action, SkipOutcome
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER, MIN_FRONTIER_EVAL_TIER, objectives_from, spec_for
 
 # Preflight diagnostics from seeding infra
@@ -127,6 +127,229 @@ PLOT_INTERVAL = 10  # Generate plots every N trials
 # zero trials run), turning a silent no-op spin into a loud, fast stop for operator review.
 META_NOOP_ACTIONS = {"distill_knowledge", "reset_memories"}
 MAX_CONSECUTIVE_META = 5
+
+# 2026-06-04 — non-executing-action (invalid/skipped) handling. The dispatcher
+# now returns a SkipOutcome (not bare None) for actions that fail validation or
+# are dropped by a guard. These are first-class outcomes: journaled, counted,
+# fingerprinted, blacklisted, and circuit-broken — closing the blind spot that
+# let the planner re-sample an impossible action 119× (graph_router deadlock).
+MAX_CONSECUTIVE_SKIP = int(os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_SKIP", "4"))
+# A repeated *invalid* signature (stable validator reason, e.g. an unmet flag
+# dependency) is auto-blacklisted at this many occurrences. Only "invalid"
+# outcomes are blacklisted — generic "skipped" ones use too coarse a pattern.
+INVALID_SIGNATURE_BLACKLIST_THRESHOLD = int(
+    os.environ.get("AUTOPILOT_INVALID_BLACKLIST_THRESHOLD", "2")
+)
+
+# 2026-06-04 — experiment-quota policy (separate memory maintenance from the
+# optimization budget). Once the memory store is already large, an unbounded run
+# of passive seed/distill actions is the planner rationalizing no-op work; cap
+# consecutive passive actions and force a frontier-moving experiment instead.
+PASSIVE_ACTIONS = {"seed_batch", "distill_knowledge", "distill_skillbank"}
+QUOTA_MEMORY_THRESHOLD = int(
+    os.environ.get("AUTOPILOT_QUOTA_MEMORY_THRESHOLD", "2000")
+)
+MAX_CONSECUTIVE_PASSIVE = int(
+    os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_PASSIVE", "3")
+)
+# numeric_trial with empty params is the safest self-configuring frontier action
+# (Optuna suggests the values; no file/flag dependency to get wrong).
+_QUOTA_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
+
+
+def _action_signature(action: dict[str, Any]) -> str:
+    """Stable fingerprint of an action for repeat-detection across the run."""
+    try:
+        return json.dumps(action, sort_keys=True, default=str)
+    except Exception:
+        return str(action)
+
+
+def _enforce_experiment_quota(
+    action: dict[str, Any],
+    state: dict[str, Any],
+    memory_count: int,
+    rationale: dict[str, Any] | None = None,
+    trial_counter: int = 0,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Cap consecutive passive (seed/distill) actions once memory is large.
+
+    Below QUOTA_MEMORY_THRESHOLD the system is still legitimately seeding, so
+    passive actions pass through (the counter is still tracked). At or above the
+    threshold, a run of more than MAX_CONSECUTIVE_PASSIVE passive actions is
+    replaced with a frontier-moving numeric_trial so the planner cannot
+    rationalize passive work forever. Non-passive actions reset the counter.
+    """
+    atype = action.get("type", "")
+    if atype not in PASSIVE_ACTIONS:
+        state["consecutive_passive_actions"] = 0
+        return action, rationale
+
+    streak = int(state.get("consecutive_passive_actions", 0))
+    if memory_count >= QUOTA_MEMORY_THRESHOLD and streak >= MAX_CONSECUTIVE_PASSIVE:
+        surface = _QUOTA_NUMERIC_SURFACES[trial_counter % len(_QUOTA_NUMERIC_SURFACES)]
+        log.warning(
+            "Experiment quota: %d consecutive passive actions with memory_count=%d "
+            ">= %d threshold; forcing frontier-moving numeric_trial(surface=%s) "
+            "instead of another '%s'.",
+            streak, memory_count, QUOTA_MEMORY_THRESHOLD, surface, atype,
+        )
+        state["consecutive_passive_actions"] = 0
+        return (
+            {"type": "numeric_trial", "surface": surface, "params": {}},
+            {
+                **(rationale or {}),
+                "experiment_quota_forced": True,
+                "experiment_quota_reason": (
+                    f"{streak} consecutive passive actions at memory={memory_count}"
+                ),
+            },
+        )
+
+    state["consecutive_passive_actions"] = streak + 1
+    return action, rationale
+
+
+def _build_feature_flags_block(lab: Any) -> str:
+    """Render live feature-flag state + dependency rules for the planner prompt.
+
+    The planner previously had no view of which flags exist, what they depend on,
+    or which are currently on — so it proposed graph_router (off) without
+    specialist_routing (off) 119× in a row. This block gives it the same
+    dependency rules the validator enforces, plus live state, so it can enable a
+    missing dependency first instead of re-sampling an impossible flag.
+    """
+    try:
+        current = lab.current_flags()
+    except Exception:
+        current = {}
+    try:
+        schema = lab.flag_schema()
+    except Exception:
+        schema = []
+    if not schema:
+        return "  (feature flag registry unavailable)"
+
+    def state_str(name: str) -> str:
+        if not current:
+            return "?"
+        return "ON" if current.get(name) else "OFF"
+
+    on = sorted(n for n, v in current.items() if v) if current else []
+    lines: list[str] = []
+    if current:
+        lines.append(f"Currently ON ({len(on)}): " + (", ".join(on) or "(none)"))
+    else:
+        lines.append("Currently ON: (unknown — orchestrator /config not reachable)")
+    lines.append("")
+    lines.append(
+        "Flags WITH dependencies (single-variable rule, AP-9: enable a missing "
+        "dependency in its OWN trial first, then the dependent flag NEXT trial):"
+    )
+    any_dep = False
+    for spec in schema:
+        deps = spec.get("dependencies") or []
+        if not deps:
+            continue
+        any_dep = True
+        dep_states = ", ".join(f"{d}={state_str(d)}" for d in deps)
+        deps_met = bool(current) and all(current.get(d) for d in deps)
+        verdict = "DEPS MET — eligible" if deps_met else "DEPS MISSING — do NOT propose yet"
+        lines.append(
+            f"  - {spec['name']} (currently {state_str(spec['name'])}) "
+            f"requires [{dep_states}] → {verdict}"
+        )
+    if not any_dep:
+        lines.append("  (no dependency-bearing flags in registry)")
+    lines.append("")
+    lines.append(
+        "RULE: never propose structural_experiment for a flag whose dependencies "
+        "are not all currently ON. Setting a flag that is already ON is a no-op "
+        "and burns a trial."
+    )
+    return "\n".join(lines)
+
+
+def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
+    """Render the last non-executing action + its reason for the planner prompt.
+
+    This is the residue that was previously discarded. Showing it (with the
+    repeat count and blacklist threshold) is what stops the planner re-emitting
+    an action the validator already rejected.
+    """
+    act = state.get("last_invalid_action")
+    if not act:
+        return "  (none — the last action executed and produced metrics)"
+    reason = state.get("last_invalid_reason", "")
+    status = state.get("last_invalid_status", "skipped")
+    counts = state.get("invalid_signature_counts", {}) or {}
+    sig = _action_signature(act)
+    n = int(counts.get(sig, 0))
+    lines = [
+        f"⚠ Your LAST action did NOT execute (status={status}) — it collected no metrics.",
+        f"  action: {json.dumps(act, default=str)}",
+        f"  reason: {reason}",
+    ]
+    if status == "invalid":
+        lines.append(
+            f"  this exact action has failed {n}× and will be AUTO-BLACKLISTED at "
+            f"{INVALID_SIGNATURE_BLACKLIST_THRESHOLD}×."
+        )
+    lines.append(
+        "  DO NOT repeat it. Fix the stated reason (e.g. enable a missing "
+        "dependency flag in its own trial first) or choose a different action."
+    )
+    repeated = sorted(
+        ((c, s) for s, c in counts.items() if c >= 2), reverse=True
+    )[:5]
+    if repeated:
+        lines.append("  Repeatedly non-executing signatures this run:")
+        for c, s in repeated:
+            lines.append(f"    {c}×  {s[:160]}")
+    return "\n".join(lines)
+
+
+def _record_skip_trial(
+    journal: Any,
+    trial_id: int,
+    action: dict[str, Any],
+    species: str,
+    status: str,
+    reason: str,
+    memory_count: int,
+) -> None:
+    """Journal a non-executing trial so it leaves durable residue (audit + planner).
+
+    Uses pareto_status="skipped" and outcome_status to keep these out of the
+    frontier/quality math while still recording that the trial number was
+    consumed and why.
+    """
+    from experiment_journal import DeficiencyCategory
+
+    deficiency = (
+        DeficiencyCategory.INVALID_ACTION.value
+        if status == "invalid"
+        else DeficiencyCategory.DISPATCH_SKIPPED.value
+    )
+    entry = JournalEntry(
+        trial_id=trial_id,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        species=species or "dispatch",
+        action_type=action.get("type", ""),
+        tier=0,
+        quality=0.0,
+        speed=0.0,
+        cost=0.0,
+        reliability=0.0,
+        pareto_status="skipped",
+        config_snapshot=dict(action),
+        reasoning=json.dumps(action, default=str),
+        memory_count=memory_count,
+        failure_analysis=reason,
+        deficiency_category=deficiency,
+        outcome_status=status,
+    )
+    journal.record(entry)
 
 # Learning-exclusion reasons that are BENIGN — the trial is excluded from the
 # Pareto archive (no NEW frontier point) but its data is VALID and must NOT be
@@ -274,6 +497,12 @@ Stagnation signal: {stagnation_signal}
 ### Blacklisted Configurations
 {blacklist_text}
 
+### Feature Flags (live state + dependency rules — read before any structural_experiment)
+{feature_flags_block}
+
+### Last Non-Executing Action (validator/dispatch feedback — MUST address before re-proposing)
+{last_invalid_feedback}
+
 ### Plot Paths (reference for trend analysis)
 {plot_paths}
 
@@ -281,7 +510,12 @@ Stagnation signal: {stagnation_signal}
 
 1. If memories < 500: ALWAYS prioritize seeding (seed_batch)
 2. If Q-values converged and models not trained: trigger train_routing_models
-3. If models trained and not enabled: try structural_experiment with routing features
+3. If models trained and not enabled: try structural_experiment with routing
+   features — but ONLY for a flag whose dependencies are ALL currently ON (see
+   "Feature Flags" above). One flag per trial (AP-9): e.g. graph_router requires
+   specialist_routing, so if specialist_routing is OFF, enable IT first (its own
+   trial), then graph_router next trial. Never re-propose a flag the validator
+   just rejected (see "Last Non-Executing Action").
 4. If stagnating (hv_slope < 0.001): try prompt_mutation or widen numeric search
 5. If quality regression after changes: rollback to last good checkpoint
 6. Consider the species budget allocation when choosing actions
@@ -1562,6 +1796,8 @@ def _run_loop_inner(
                 last_criticism=last_criticism_text,  # AP-23
                 model_signatures=model_signatures_text,
                 blacklist_text=blacklist_text,
+                feature_flags_block=_build_feature_flags_block(lab),
+                last_invalid_feedback=_build_last_invalid_feedback(state),
                 code_targets=", ".join(CODE_MUTATION_ALLOWLIST),
                 plot_paths="\n".join(f"  - {p}" for p in plot_paths) or "  (none yet)",
             ) + peaf.peaf_prompt_addendum()
@@ -1628,6 +1864,13 @@ def _run_loop_inner(
         # Meta actions are allowed as occasional bookkeeping, but a repeated
         # metric-free action means the planner is avoiding the experiment loop.
         action, rationale = _force_metric_action_after_meta(action, state, rationale)
+
+        # Experiment quota: once memory is large, cap consecutive passive
+        # (seed/distill) actions so the planner cannot rationalize no-op work
+        # forever — force a frontier-moving experiment instead.
+        action, rationale = _enforce_experiment_quota(
+            action, state, memory_count, rationale, trial_counter,
+        )
 
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch
@@ -1699,9 +1942,9 @@ def _run_loop_inner(
             )
 
         # ── 4. Evaluate ─────────────────────────────────────────
-        if eval_result is None:
+        if eval_result is None or isinstance(eval_result, SkipOutcome):
             action_type = action.get("type", "")
-            if action_type in META_NOOP_ACTIONS:
+            if eval_result is None and action_type in META_NOOP_ACTIONS:
                 # Meta/housekeeping action: it executed its effect but collected
                 # no metrics, so it is NOT an independent trial — do not consume a
                 # trial number. Track consecutive meta actions so a stuck planner
@@ -1756,13 +1999,89 @@ def _run_loop_inner(
                     )
                     break
                 continue
-            # Genuine skip (AP-9 scope violation / dirty-tree fence / blacklist /
-            # unknown action). Bump trial_counter past it so the planner sees the
-            # gap and a subsequent crash doesn't trigger spurious recovery.
+
+            # Non-executing action (invalid flags / AP-9 scope / dirty-tree
+            # fence / unknown type / handler no-op). This was the blind spot: the
+            # old path bumped the counter and `continue`d, discarding the reason —
+            # so the planner re-sampled an impossible action 119× until max_trials
+            # (the graph_router deadlock). Now it leaves durable residue: the
+            # reason is journaled, fingerprinted, counted, fed back to the next
+            # planner prompt, blacklisted on repeat, and circuit-broken on a run.
+            if isinstance(eval_result, SkipOutcome):
+                skip_status = eval_result.status
+                skip_reason = eval_result.reason
+            else:
+                skip_status = "skipped"
+                skip_reason = f"{action_type} returned no eval result (handler no-op)"
+
+            sig = _action_signature(action)
+            sig_counts = state.setdefault("invalid_signature_counts", {})
+            sig_counts[sig] = int(sig_counts.get(sig, 0)) + 1
+            skip_streak = int(state.get("consecutive_skip_actions", 0)) + 1
+            state["consecutive_skip_actions"] = skip_streak
+            state["last_invalid_action"] = action
+            state["last_invalid_reason"] = skip_reason
+            state["last_invalid_status"] = skip_status
+
+            try:
+                _record_skip_trial(
+                    journal, trial_counter, action, species_name,
+                    skip_status, skip_reason, memory_count,
+                )
+            except Exception:
+                log.debug("skip-trial journal write failed", exc_info=True)
+
+            log.warning(
+                "Trial %d %s (%s): %s [signature seen %d×, consecutive skips=%d]",
+                trial_counter, skip_status, action_type, skip_reason,
+                sig_counts[sig], skip_streak,
+            )
+            phase.set(
+                "dispatch_skip",
+                trial_id=trial_counter,
+                action_type=action_type,
+                skip_status=skip_status,
+            )
+
+            # Auto-blacklist a repeated INVALID signature (stable validator
+            # reason → safe to pattern-match). "skipped" outcomes are NOT
+            # blacklisted: their coarse pattern would over-match (e.g. one
+            # scope-violating numeric_trial would ban all numeric_trials).
+            if (
+                skip_status == "invalid"
+                and sig_counts[sig] >= INVALID_SIGNATURE_BLACKLIST_THRESHOLD
+            ):
+                append_blacklist(
+                    action, trial_counter,
+                    f"Auto-blacklisted: {sig_counts[sig]}× invalid — {skip_reason[:80]}",
+                )
+                blacklist = load_blacklist()
+
             trial_counter += 1
             state["trial_counter"] = trial_counter
             state["in_flight_trial"] = None
             save_state(state)
+
+            # Hard circuit-breaker mirroring MAX_CONSECUTIVE_META: a run of
+            # non-executing actions means a stuck planner / impossible action
+            # space. Latch paused=True so a supervisor restart cannot re-enter
+            # the loop (same durable-halt semantics as the meta-action guard).
+            if skip_streak >= MAX_CONSECUTIVE_SKIP:
+                state["paused"] = True
+                state["_dispatch_deficiency"] = "skip_action_loop"
+                save_state(state)
+                log.error(
+                    "Planner emitted %d consecutive non-executing actions "
+                    "(last: %s — %s); pausing for operator review (stuck planner "
+                    "or impossible action space).",
+                    skip_streak, action_type, skip_reason,
+                )
+                phase.set(
+                    "skip_loop_halt",
+                    trial_id=trial_counter,
+                    skip_streak=skip_streak,
+                )
+                break
             continue
 
         # AP-13: Emit grep-parseable metrics
@@ -2045,8 +2364,12 @@ def _run_loop_inner(
             "tool_use_rate": getattr(eval_result, "tool_use_rate", 0.0),
             "total_tool_calls": getattr(eval_result, "total_tool_calls", 0),
             # The decision-grade signal: marginal usefulness of tools (NaN until
-            # enough sample). Steer by THIS, not raw tool_use_rate.
+            # enough sample). Steer by THIS, not raw tool_use_rate. Now computed
+            # per-suite then averaged, so trivially-correct no-tool suites can't
+            # contaminate the sign (was −0.4 cross-suite at cutover for all-passing
+            # tool calls). Per-suite breakdown below for the suite under test.
             "tool_helpfulness": getattr(eval_result, "tool_helpfulness", float("nan")),
+            "per_suite_tool_helpfulness": getattr(eval_result, "per_suite_tool_helpfulness", {}),
         }
         if learning_excluded_by:
             deficiency_category = exclusion_def_cat
@@ -2194,6 +2517,14 @@ def _run_loop_inner(
         trial_counter += 1
         state["trial_counter"] = trial_counter
         state["consecutive_meta_actions"] = 0  # a real metric-collecting trial ran
+        # A trial executed and produced metrics — clear the non-executing-action
+        # residue so the next prompt's "Last Non-Executing Action" feedback only
+        # reflects an UNRESOLVED skip (the per-signature counts persist for the
+        # blacklist threshold across the whole run).
+        state["consecutive_skip_actions"] = 0
+        state["last_invalid_action"] = None
+        state["last_invalid_reason"] = ""
+        state["last_invalid_status"] = ""
         state["consecutive_failures"] = gate.consecutive_failures
         state["quality_history"] = gate.quality_history
         state["quality_history_by_tier"] = gate.quality_history_by_tier
