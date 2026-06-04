@@ -176,18 +176,34 @@ def _action_signature(action: dict[str, Any]) -> str:
         return str(action)
 
 
+# Free-text / per-trial narrative keys that DESCRIBE an action but do not DETERMINE the config
+# it deploys. Excluded from the config fingerprint so genuine reproductions (same intervention,
+# differently narrated) still cluster. Keep this set tight — strip ONLY truly ephemeral metadata;
+# anything that changes behaviour (type, params, flags, surface, n_questions, …) must stay.
+# Mirrored by dashboard._config_fingerprint_from_row — keep the two in sync.
+_EPHEMERAL_ACTION_KEYS = frozenset({"description", "hypothesis", "reasoning", "expected_mechanism"})
+
+
+def _canonical_action(action: dict[str, Any]) -> dict[str, Any]:
+    """Drop ephemeral narrative keys so the fingerprint is canonical across reproductions."""
+    if not isinstance(action, dict):
+        return action
+    return {k: v for k, v in action.items() if k not in _EPHEMERAL_ACTION_KEYS}
+
+
 def _config_fingerprint(action: dict[str, Any]) -> str:
     """Stable identity of the config a trial measures, keyed on the FULL action signature
-    (type + params + flags). Empirically (2026-06-04 live data) the action — not just the flag
-    set — determines the outcome: `seed_batch` and `train_routing_models` yield different
-    quality at identical (empty) flags, and almost every trial runs with empty flags, so a
-    flags-only key collapses the whole run into one heterogeneous cluster whose median is
-    dominated. Keying on the action makes genuine reproductions (same action+params — e.g.
-    repeated `seed_batch n_questions=10`) share a fingerprint so the archive folds their
-    host-noisy measurements into ONE robust-median representative, while distinct interventions
-    stay distinct."""
+    (type + params + flags) MINUS ephemeral narrative keys. Empirically (2026-06-04 live data)
+    the action — not just the flag set — determines the outcome: `seed_batch` and
+    `train_routing_models` yield different quality at identical (empty) flags, and almost every
+    trial runs with empty flags, so a flags-only key collapses the whole run into one
+    heterogeneous cluster whose median is dominated. Keying on the (canonicalised) action makes
+    genuine reproductions (same action+params — e.g. repeated `seed_batch n_questions=10`) share
+    a fingerprint so the archive folds their host-noisy measurements into ONE robust-median
+    representative, while distinct interventions stay distinct. `sort_keys` makes it
+    order-independent; `_EPHEMERAL_ACTION_KEYS` keeps narrative text from fragmenting clusters."""
     try:
-        basis = json.dumps(action, sort_keys=True, default=str)
+        basis = json.dumps(_canonical_action(action), sort_keys=True, default=str)
     except Exception:
         basis = str(action)
     return hashlib.sha1(basis.encode()).hexdigest()[:16]

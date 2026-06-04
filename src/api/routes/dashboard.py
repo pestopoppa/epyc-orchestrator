@@ -1135,18 +1135,26 @@ def _pareto_objectives_from_journal(entry: dict[str, Any]) -> list[float] | None
 _WITHIN_NOISE_EXCL = {"mad_noise", "reproduction_confirmed"}
 
 
+# Mirror of autopilot._EPHEMERAL_ACTION_KEYS — keep in sync. Narrative keys that describe an
+# action but do not determine the deployed config are excluded from the fingerprint.
+_EPHEMERAL_ACTION_KEYS = frozenset({"description", "hypothesis", "reasoning", "expected_mechanism"})
+
+
 def _config_fingerprint_from_row(row: dict[str, Any]) -> str:
     """Mirror autopilot._config_fingerprint for a journal row: keyed on the FULL action
     signature (the journaled config_snapshot, falling back to the reasoning string which also
-    stores the action JSON). The action — not just the flag set — determines the outcome, so
-    genuine reproductions (same action+params) cluster into ONE robust-median representative
-    while distinct interventions stay distinct."""
+    stores the action JSON) MINUS ephemeral narrative keys. The action — not just the flag set —
+    determines the outcome, so genuine reproductions (same action+params, differently narrated)
+    cluster into ONE robust-median representative while distinct interventions stay distinct.
+    `sort_keys` makes it canonical/order-independent."""
     cfg = row.get("config_snapshot")
     if not cfg:
         try:
             cfg = json.loads(row.get("reasoning") or "{}")
         except Exception:
             cfg = {}
+    if isinstance(cfg, dict):
+        cfg = {k: v for k, v in cfg.items() if k not in _EPHEMERAL_ACTION_KEYS}
     try:
         return json.dumps(cfg, sort_keys=True, default=str)
     except Exception:
