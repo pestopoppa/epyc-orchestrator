@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import re
+import statistics
 import time
 from collections import deque
 from datetime import datetime, date
@@ -1128,6 +1129,30 @@ def _pareto_objectives_from_journal(entry: dict[str, Any]) -> list[float] | None
     return list(objectives[:4])
 
 
+# Trusted within-noise exclusion reasons (recorded in eval_details.learning_exclusion.by).
+# These are NOT corruption — they are Pareto-admissible as robust-median representatives,
+# mirroring autopilot.BENIGN_LEARNING_EXCLUSIONS / ParetoArchive.upsert_representative.
+_WITHIN_NOISE_EXCL = {"mad_noise", "reproduction_confirmed"}
+
+
+def _config_fingerprint_from_row(row: dict[str, Any]) -> str:
+    """Mirror autopilot._config_fingerprint for a journal row: keyed on the FULL action
+    signature (the journaled config_snapshot, falling back to the reasoning string which also
+    stores the action JSON). The action — not just the flag set — determines the outcome, so
+    genuine reproductions (same action+params) cluster into ONE robust-median representative
+    while distinct interventions stay distinct."""
+    cfg = row.get("config_snapshot")
+    if not cfg:
+        try:
+            cfg = json.loads(row.get("reasoning") or "{}")
+        except Exception:
+            cfg = {}
+    try:
+        return json.dumps(cfg, sort_keys=True, default=str)
+    except Exception:
+        return str(cfg)
+
+
 def _pareto_dominates(a: list[float], b: list[float]) -> bool:
     return all(x >= y for x, y in zip(a, b)) and any(x > y for x, y in zip(a, b))
 
@@ -1269,9 +1294,21 @@ def _pareto_from_journal(
     if current_run_only:
         rows, run_meta = _latest_journal_run_rows(rows)
 
+    # Policy parity (2026-06-04): mirror ParetoArchive.upsert_representative. A TRUSTED
+    # within-noise row (mad_noise / reproduction_confirmed) is NOT corruption — it is a
+    # representative candidate. Legacy rows carry bug_corrupted_by="mad_noise"; post-2026-06-04
+    # rows carry the reason only in eval_details.learning_exclusion.by. Cluster such rows by
+    # stable config fingerprint and admit ONE robust-MEDIAN representative per config, so the
+    # panel matches the live archive instead of hiding the points (old skip) or admitting N
+    # noisy per-trial samples. Genuine corruption (kills / reloads / commit-SHA) still excluded.
+    processed: list[tuple[int, dict[str, Any]]] = []
+    repr_clusters: dict[tuple[int, str], dict[str, Any]] = {}
     for row in rows:
-        if row.get("bug_corrupted_by"):
-            continue
+        bug = row.get("bug_corrupted_by") or ""
+        excl_by = (row.get("eval_details") or {}).get("learning_exclusion", {}).get("by", "")
+        if bug and bug != "mad_noise":
+            continue  # genuine corruption: kill / exogenous reload / commit-invalidation
+        trusted_within_noise = bug == "mad_noise" or excl_by in _WITHIN_NOISE_EXCL
         try:
             tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
         except (TypeError, ValueError):
@@ -1309,6 +1346,7 @@ def _pareto_from_journal(
         ):
             objectives = (objectives[0], objectives[1] * deinflate_factor) + tuple(objectives[2:])
             deinflated = True
+        objectives = list(objectives)
         shaped = {
             "trial_id": row.get("trial_id"),
             "objectives": objectives,
@@ -1325,6 +1363,31 @@ def _pareto_from_journal(
             # frontier, hypervolume, and the dominated/all-entries accounting.
             t0_audit.append(shaped)
             continue
+        if trusted_within_noise:
+            # Defer: fold into a per-(tier, fingerprint) cluster; emit ONE median below.
+            key = (tier, _config_fingerprint_from_row(row))
+            cl = repr_clusters.setdefault(key, {"objs": [], "last_tid": -1, "shaped": shaped})
+            cl["objs"].append(objectives)
+            if trial_id >= cl["last_tid"]:
+                cl["last_tid"], cl["shaped"] = trial_id, shaped
+            continue
+        processed.append((trial_id, shaped))
+
+    # One robust-median representative per (tier, fingerprint); dominance is tested on the
+    # MEDIAN, never a lucky single-trial speed sample (mirrors the live archive's upsert).
+    for (rep_tier, fp), cl in repr_clusters.items():
+        rep = dict(cl["shaped"])
+        rep["objectives"] = [statistics.median(axis) for axis in zip(*cl["objs"])]
+        rep["config_fingerprint"] = fp
+        rep["n_reproductions"] = len(cl["objs"])
+        rep["is_representative"] = True
+        processed.append((cl["last_tid"], rep))
+
+    # Replay in trial order through the same per-tier domination + hypervolume logic.
+    processed.sort(key=lambda item: item[0])
+    for trial_id, shaped in processed:
+        tier = shaped["eval_tier"]
+        objectives = shaped["objectives"]
         all_entries.append(shaped)
         frontier = frontiers_by_tier.setdefault(tier, [])
         if not any(_pareto_dominates(f["objectives"], objectives) for f in frontier):

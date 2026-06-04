@@ -177,20 +177,19 @@ def _action_signature(action: dict[str, Any]) -> str:
 
 
 def _config_fingerprint(action: dict[str, Any]) -> str:
-    """Stable identity of the DEPLOYED config a trial measures — its active flag set —
-    independent of which action measured it. Reproductions of the same config (even via
-    different action types: seed_batch / numeric_trial / deep_eval) share a fingerprint so
-    the Pareto archive folds them into ONE robust-median representative point rather than N
-    noisy per-trial points. An empty flag set yields a stable 'baseline-config' fingerprint.
-
-    NOTE (2026-06-04): keyed on ``action['flags']`` (the persisted feature-flag set). Param/
-    prompt-only mutations not reflected in flags are not yet distinguished — refine here if
-    those need separate frontier identities."""
-    flags = action.get("flags", {}) or {}
+    """Stable identity of the config a trial measures, keyed on the FULL action signature
+    (type + params + flags). Empirically (2026-06-04 live data) the action — not just the flag
+    set — determines the outcome: `seed_batch` and `train_routing_models` yield different
+    quality at identical (empty) flags, and almost every trial runs with empty flags, so a
+    flags-only key collapses the whole run into one heterogeneous cluster whose median is
+    dominated. Keying on the action makes genuine reproductions (same action+params — e.g.
+    repeated `seed_batch n_questions=10`) share a fingerprint so the archive folds their
+    host-noisy measurements into ONE robust-median representative, while distinct interventions
+    stay distinct."""
     try:
-        basis = json.dumps(flags, sort_keys=True, default=str)
+        basis = json.dumps(action, sort_keys=True, default=str)
     except Exception:
-        basis = str(sorted(flags.items()))
+        basis = str(action)
     return hashlib.sha1(basis.encode()).hexdigest()[:16]
 
 
