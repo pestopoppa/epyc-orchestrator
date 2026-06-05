@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 # Helper modules (extracted earlier in the refactor)
+from scripts.server import stack_checkpoint as _stack_checkpoint
 from scripts.server import stack_processes as _stack_processes
 from scripts.server.stack_docker import (
     _docker_available,
@@ -73,9 +74,9 @@ def wait_for_health(
 
 def _orchestrator_stack():
     """Lazy import of orchestrator_stack to access functions defined there
-    (start_server, start_orchestrator, start_*, init_memrl_and_tools, the
-    thin process/state wrappers). orchestrator_stack imports this module
-    lazily inside main() so no module-load cycle exists.
+    (start_server, start_orchestrator, start_*, the thin process/state wrappers).
+    orchestrator_stack imports this module lazily inside main() so no module-load
+    cycle exists.
     """
     from scripts.server import orchestrator_stack
 
@@ -101,10 +102,6 @@ def start_sd_server(*a, **kw):
 
 def start_whisper(*a, **kw):
     return _orchestrator_stack().start_whisper(*a, **kw)
-
-
-def init_memrl_and_tools(*a, **kw):
-    return _orchestrator_stack().init_memrl_and_tools(*a, **kw)
 
 
 def load_state(*a, **kw):
@@ -230,9 +227,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         try:
             validate_or_raise(_registry_yaml)
         except RegistryValidationError as exc:
-            print(f"[registry-validator] FATAL — refusing to start a stack on a broken registry:")
+            print("[registry-validator] FATAL — refusing to start a stack on a broken registry:")
             print(f"  {exc}")
-            print(f"  Fix the registry, then re-run.")
+            print("  Fix the registry, then re-run.")
             return 2
     except ImportError:
         # Validator module not present (older deployment) — proceed without gate.
@@ -300,8 +297,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                 return 0
 
             print(
-                f"  (Template loaded but not yet used for server launch — "
-                f"integration pending DS-7 Phase 2)"
+                "  (Template loaded but not yet used for server launch — "
+                "integration pending DS-7 Phase 2)"
             )
             print()
         except FileNotFoundError as exc:
@@ -482,10 +479,10 @@ def cmd_start(args: argparse.Namespace) -> int:
         # spam at every start since most roles are fine.
         if any("worker_general" in s.get("roles", []) for s in servers_to_start):
             print(
-                f"  [advisory] worker_general (gemma4-MTP) runs at -t 96; if its full + 4 quarters "
-                f"are all kept (default 'both'), expect 1.5× CPU oversubscription. "
-                f"Use '--numa-mode full' (single instance) or '--numa-mode quarter' (4 concurrent) "
-                f"for that role specifically. See launcher-numa-mode-gating.md."
+                "  [advisory] worker_general (gemma4-MTP) runs at -t 96; if its full + 4 quarters "
+                "are all kept (default 'both'), expect 1.5x CPU oversubscription. "
+                "Use '--numa-mode full' (single instance) or '--numa-mode quarter' (4 concurrent) "
+                "for that role specifically. See launcher-numa-mode-gating.md."
             )
     pre_filter_count = len(servers_to_start)
     servers_to_start = _filter_by_numa_mode(servers_to_start, numa_mode)
@@ -514,7 +511,6 @@ def cmd_start(args: argparse.Namespace) -> int:
     print()
 
     # Check target ports — skip healthy, clean up unhealthy
-    target_ports = {s["port"] for s in servers_to_start}
     print("[2] Checking target ports...")
     already_healthy_ports: set[int] = set()
     for server in servers_to_start:
@@ -764,10 +760,10 @@ def cmd_stop(args: argparse.Namespace) -> int:
             for pid in pids:
                 print(f"  Stopping PID {pid} on port {port}...")
                 if kill_process(pid):
-                    print(f"    [OK] Stopped")
+                    print("    [OK] Stopped")
                     killed += 1
                 else:
-                    print(f"    [!] Failed to stop")
+                    print("    [!] Failed to stop")
         print(f"Stopped {killed} orphaned processes")
         save_state({})
         return 0
@@ -793,16 +789,16 @@ def cmd_stop(args: argparse.Namespace) -> int:
                 print(f"Stopping Docker container {name}...")
                 if stop_docker_container(info.role):
                     del state[name]
-                    print(f"  [OK] Stopped")
+                    print("  [OK] Stopped")
                 else:
                     print(f"  [!] Failed to stop container {name}")
             else:
                 print(f"Stopping {name} (PID {info.pid})...")
                 if kill_process(info.pid):
                     del state[name]
-                    print(f"  [OK] Stopped")
+                    print("  [OK] Stopped")
                 else:
-                    print(f"  [!] Failed to stop")
+                    print("  [!] Failed to stop")
         else:
             print(f"  [?] {name} not found in state")
 
@@ -819,9 +815,9 @@ def cmd_stop(args: argparse.Namespace) -> int:
                 for pid in pids:
                     print(f"  Stopping orphan PID {pid} on port {port}...")
                     if kill_process(pid):
-                        print(f"    [OK] Stopped")
+                        print("    [OK] Stopped")
                     else:
-                        print(f"    [!] Failed to stop")
+                        print("    [!] Failed to stop")
 
     return 0
 
@@ -893,7 +889,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
             if info:
                 state["orchestrator"] = info
             else:
-                print(f"  [!] Failed to restart orchestrator")
+                print("  [!] Failed to restart orchestrator")
                 return 1
 
         elif component in PORT_MAP:

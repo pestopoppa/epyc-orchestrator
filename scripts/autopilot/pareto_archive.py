@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-import statistics
 from dataclasses import asdict, dataclass, field, fields
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +20,19 @@ DEFAULT_STATE_PATH = (
 # Per-tier scoring lives in the shared TierSpec module (single source of truth, imported the
 # same way by scripts/autopilot and src/api). REFERENCE_POINT / MIN_FRONTIER_EVAL_TIER kept as
 # back-compat aliases for any importer.
+from src.autopilot_core.pareto_math import (  # noqa: E402
+    dominates as pareto_dominates,
+    hypervolume as pareto_hypervolume,
+    hypervolume_monte_carlo as pareto_hypervolume_monte_carlo,
+    median_objectives,
+)
 from src.autopilot_core.tier_specs import (  # noqa: E402
     DEFAULT_FRONTIER_TIER,
-    DEFAULT_REFERENCE_POINT as REFERENCE_POINT,
+    DEFAULT_REFERENCE_POINT,
     MIN_FRONTIER_EVAL_TIER,
     spec_for,
 )
+REFERENCE_POINT = DEFAULT_REFERENCE_POINT
 PARETO_STATUS_TIER_EXCLUDED = "fast_reject"
 
 
@@ -54,13 +59,7 @@ class ParetoEntry:
 
     def dominates(self, other: ParetoEntry) -> bool:
         """True if self dominates other (>= on all, > on at least one)."""
-        dominated = False
-        for a, b in zip(self.objectives, other.objectives):
-            if a < b:
-                return False
-            if a > b:
-                dominated = True
-        return dominated
+        return pareto_dominates(self.objectives, other.objectives)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -327,7 +326,7 @@ class ParetoArchive:
         key = f"{tier}:{fingerprint}"
         cluster = self._repro_clusters.setdefault(key, [])
         cluster.append([float(x) for x in objectives])
-        median_objs = tuple(statistics.median(axis) for axis in zip(*cluster))
+        median_objs = median_objectives(cluster)
 
         # Exactly one representative per (tier, fingerprint): drop the prior one before
         # re-adding with the refreshed median so the cluster can't accrete duplicates.
@@ -922,56 +921,11 @@ def _hypervolume_4d(
     For small frontiers (<100 entries), this is fast enough.
     Falls back to 2D Monte Carlo approximation for very large frontiers.
     """
-    n = len(points)
-    if n == 0:
-        return 0.0
-
-    # Filter points that dominate the reference point
-    valid = []
-    for p in points:
-        if all(pi > ri for pi, ri in zip(p, ref)):
-            valid.append(p)
-    if not valid:
-        return 0.0
-
-    if n > 100:
-        # For large frontiers, use Monte Carlo approximation
-        return _hypervolume_monte_carlo(valid, ref, samples=10000)
-
-    # Inclusion-exclusion
-    total = 0.0
-    for size in range(1, len(valid) + 1):
-        sign = (-1) ** (size + 1)
-        for subset in combinations(valid, size):
-            # Intersection box: min of each objective across subset
-            box_min = tuple(min(p[d] for p in subset) for d in range(4))
-            vol = 1.0
-            for d in range(4):
-                vol *= max(0.0, box_min[d] - ref[d])
-            total += sign * vol
-    return total
+    return pareto_hypervolume(points, ref, exact_limit=100, samples=10000)
 
 
 def _hypervolume_monte_carlo(
     points: list[tuple[float, ...]], ref: tuple[float, ...], samples: int = 10000
 ) -> float:
     """Monte Carlo hypervolume approximation."""
-    import random
-
-    dims = len(ref)
-    # Bounding box
-    upper = tuple(max(p[d] for p in points) for d in range(dims))
-    box_vol = 1.0
-    for d in range(dims):
-        box_vol *= upper[d] - ref[d]
-
-    hits = 0
-    rng = random.Random(42)
-    for _ in range(samples):
-        sample = tuple(rng.uniform(ref[d], upper[d]) for d in range(dims))
-        # Check if any point dominates this sample
-        for p in points:
-            if all(p[d] >= sample[d] for d in range(dims)):
-                hits += 1
-                break
-    return box_vol * hits / samples
+    return pareto_hypervolume_monte_carlo(points, ref, samples=samples)

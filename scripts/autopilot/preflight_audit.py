@@ -36,7 +36,6 @@ def _header(title: str) -> None:
 
 
 def _check(name: str, condition: bool, detail: str = "") -> bool:
-    status = "PASS" if condition else "FAIL"
     mark = "✓" if condition else "✗"
     suffix = f" — {detail}" if detail else ""
     print(f"  [{mark}] {name}{suffix}")
@@ -175,7 +174,7 @@ def audit_blacklist() -> bool:
 
     all_ok = True
     all_ok &= _check("No auto-blacklisted entries", len(auto) == 0, f"{len(auto)} found")
-    _check(f"Manual entries preserved", len(manual) > 0, f"{len(manual)}")
+    _check("Manual entries preserved", len(manual) > 0, f"{len(manual)}")
     return all_ok
 
 

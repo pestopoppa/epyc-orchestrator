@@ -269,7 +269,7 @@ class NumericSwarm:
         from collections import Counter
         counts = Counter(labels)
         largest_label = counts.most_common(1)[0][0]
-        cluster_indices = [i for i, l in enumerate(labels) if l == largest_label]
+        cluster_indices = [i for i, label in enumerate(labels) if label == largest_label]
 
         # Centroid of largest cluster (in original space)
         cluster_matrix = matrix[cluster_indices]

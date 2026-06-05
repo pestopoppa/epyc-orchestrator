@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import fcntl
-import hashlib
 import json
 import logging
 import os
@@ -38,12 +37,13 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 # Setup paths
 SCRIPT_DIR = Path(__file__).resolve().parent
 ORCH_ROOT = SCRIPT_DIR.parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(ORCH_ROOT))
 
 import yaml
 
@@ -81,6 +81,16 @@ from state_store import (
     save_state as _save_state_impl,
 )
 from actions import dispatch_action, SkipOutcome
+from src.autopilot_core.action_identity import (
+    EPHEMERAL_ACTION_KEYS,
+    action_signature,
+    canonical_action,
+    config_fingerprint,
+)
+from src.autopilot_core.learning_exclusions import (
+    BENIGN_LEARNING_EXCLUSIONS,
+    classify_learning_exclusion,
+)
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER, MIN_FRONTIER_EVAL_TIER, objectives_from, spec_for
 
 # Preflight diagnostics from seeding infra
@@ -91,7 +101,6 @@ except ImportError:
     get_preflight_diagnostics = None  # type: ignore[assignment]
 
 # Strategy store for species memory (B1)
-sys.path.insert(0, str(ORCH_ROOT))
 from orchestration.repl_memory.strategy_store import StrategyStore
 
 # Durable earlyoom control-plane protection (mirrors orchestrator_stack). Guarded so a
@@ -103,6 +112,14 @@ except Exception:  # pragma: no cover - import-path fallback
         return 0
 
 log = logging.getLogger("autopilot")
+
+if TYPE_CHECKING:
+    from autopilot_tui import AutoPilotTUI
+
+_EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
+_action_signature = action_signature
+_canonical_action = canonical_action
+_config_fingerprint = config_fingerprint
 
 STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 LOCK_PATH = ORCH_ROOT / "orchestration" / ".autopilot.lock"
@@ -166,47 +183,6 @@ MAX_CONSECUTIVE_PASSIVE = int(
 # numeric_trial with empty params is the safest self-configuring frontier action
 # (Optuna suggests the values; no file/flag dependency to get wrong).
 _QUOTA_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
-
-
-def _action_signature(action: dict[str, Any]) -> str:
-    """Stable fingerprint of an action for repeat-detection across the run."""
-    try:
-        return json.dumps(action, sort_keys=True, default=str)
-    except Exception:
-        return str(action)
-
-
-# Free-text / per-trial narrative keys that DESCRIBE an action but do not DETERMINE the config
-# it deploys. Excluded from the config fingerprint so genuine reproductions (same intervention,
-# differently narrated) still cluster. Keep this set tight — strip ONLY truly ephemeral metadata;
-# anything that changes behaviour (type, params, flags, surface, n_questions, …) must stay.
-# Mirrored by dashboard._config_fingerprint_from_row — keep the two in sync.
-_EPHEMERAL_ACTION_KEYS = frozenset({"description", "hypothesis", "reasoning", "expected_mechanism"})
-
-
-def _canonical_action(action: dict[str, Any]) -> dict[str, Any]:
-    """Drop ephemeral narrative keys so the fingerprint is canonical across reproductions."""
-    if not isinstance(action, dict):
-        return action
-    return {k: v for k, v in action.items() if k not in _EPHEMERAL_ACTION_KEYS}
-
-
-def _config_fingerprint(action: dict[str, Any]) -> str:
-    """Stable identity of the config a trial measures, keyed on the FULL action signature
-    (type + params + flags) MINUS ephemeral narrative keys. Empirically (2026-06-04 live data)
-    the action — not just the flag set — determines the outcome: `seed_batch` and
-    `train_routing_models` yield different quality at identical (empty) flags, and almost every
-    trial runs with empty flags, so a flags-only key collapses the whole run into one
-    heterogeneous cluster whose median is dominated. Keying on the (canonicalised) action makes
-    genuine reproductions (same action+params — e.g. repeated `seed_batch n_questions=10`) share
-    a fingerprint so the archive folds their host-noisy measurements into ONE robust-median
-    representative, while distinct interventions stay distinct. `sort_keys` makes it
-    order-independent; `_EPHEMERAL_ACTION_KEYS` keeps narrative text from fragmenting clusters."""
-    try:
-        basis = json.dumps(_canonical_action(action), sort_keys=True, default=str)
-    except Exception:
-        basis = str(action)
-    return hashlib.sha1(basis.encode()).hexdigest()[:16]
 
 
 def _enforce_experiment_quota(
@@ -460,21 +436,6 @@ def _record_rejected_draft(
         " — BLACKLISTED" if blacklisted else "",
     )
     return blacklisted
-
-# Learning-exclusion reasons that are BENIGN — the trial is excluded from the
-# Pareto archive (no NEW frontier point) but its data is VALID and must NOT be
-# marked bug_corrupted_by (which would lump it with kills / exogenous reloads /
-# commit-invalidations in the planner's trustworthiness score and manufacture a
-# "noisy/untrustworthy instrument" narrative → meta-action loop). 2026-05-31.
-# 2026-06-04: `mad_noise` joined this set. Since a trusted within-noise measurement is now
-# Pareto-admissible as a robust-median representative (ParetoArchive.upsert_representative),
-# journaling it as bug_corrupted_by="mad_noise" is semantically wrong — it is a TRUSTED
-# measurement, not corrupted data. AP-22 / strategy-learning suppression is unaffected: that
-# keys on `learning_excluded_by` (still "mad_noise") + `eval_details.learning_exclusion`, NOT
-# bug_corrupted_by. Removing the tag is what lets the dashboard/journal reconstruction treat
-# these rows as representative candidates instead of skipping them as corruption.
-BENIGN_LEARNING_EXCLUSIONS = {"reproduction_confirmed", "mad_noise"}
-
 
 def _force_metric_action_after_meta(
     action: dict[str, Any],
@@ -955,7 +916,7 @@ def _build_exploration_block(
             bt_tiebreak_text = "\n".join(lines)
             note = bt.get("note", "")
             if "disagrees" in note:
-                bt_signal = f"BT-tiebreak disagrees with hypervolume top"
+                bt_signal = "BT-tiebreak disagrees with hypervolume top"
     except Exception as exc:  # noqa: BLE001 — defensive; BT must never block exploration
         bt_tiebreak_text = f"  (BT tiebreak unavailable: {exc!s})"
 
@@ -1192,70 +1153,6 @@ def save_state(state: dict[str, Any]) -> None:
     _save_state_impl(STATE_PATH, state)
 
 
-def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, str, str]:
-    """Decide whether this trial should be excluded from archive + AP-22 memory.
-
-    Returns ``(learning_excluded_by, learning_excluded_reason,
-    deficiency_category_override)``. An empty ``learning_excluded_by``
-    means "include normally" — keep gate-derived deficiency_category.
-
-    Two exclusion paths today, evaluated in priority order:
-
-    1. ``exogenous_operator_reload`` — trial had questions that stayed
-       unrecovered after a detected operator/service reload. Aggregate
-       numbers are based on partially-missing data, so admitting it to
-       the Pareto archive or AP-22 memory would distort learning.
-    2. ``mad_noise`` — the safety gate's MAD significance test marked an
-       improvement-direction quality delta as falling inside the recent
-       rolling-history noise band. Learning from noise inflates strategy
-       memory + Pareto archive with false positives (intake-421).
-
-    Exogenous wins on the rare path where both could fire — the exo-bypass
-    above ``gate.check()`` constructs a fresh empty SafetyVerdict, so
-    ``mad_noise`` cannot be in ``verdict.categories`` for exo trials;
-    the priority order is still encoded here defensively.
-    """
-    has_exo_unrecovered = getattr(eval_result, "n_exogenous_unrecovered", 0) > 0
-    if has_exo_unrecovered:
-        preview_ids = list(getattr(eval_result, "exogenous_question_ids", []))[:10]
-        n_q = getattr(eval_result, "n_questions", 0) or len(
-            getattr(eval_result, "exogenous_question_ids", []) or []
-        )
-        reason = (
-            f"{eval_result.n_exogenous_unrecovered}/{n_q} questions "
-            f"remained unrecovered after detected service reload "
-            f"(sample ids: {preview_ids})"
-        )
-        return "exogenous_operator_reload", reason, "exogenous_reload"
-
-    categories = getattr(verdict, "categories", None) or []
-    if "mad_noise" in categories:
-        if "reproduction_confirmed" in categories:
-            # Benign convergence: a within-noise REPRODUCTION of an already-
-            # established above-baseline gain. Excluded from the Pareto archive
-            # (no NEW point) like any mad_noise trial, but the measurement is
-            # VALID. _finalize leaves bug_corrupted_by EMPTY for this reason so
-            # the trustworthiness score never lumps repeated confirmations in
-            # with kills / reloads / commit-invalidations (2026-05-31 incident:
-            # that conflation drove a meta-action loop / "noisy instrument"
-            # narrative). The criticism conveys convergence, not failure.
-            return (
-                "reproduction_confirmed",
-                "within-noise reproduction of an already-established above-"
-                "baseline config: convergence/confirmation of an existing gain, "
-                "not a new improvement and not corrupted data",
-                "reproduction_confirmed",
-            )
-        return (
-            "mad_noise",
-            "quality improvement was within MAD noise band per safety_gate "
-            "rolling-history significance test",
-            "mad_noise",
-        )
-
-    return "", "", ""
-
-
 def learning_exclusion_criticism(
     learning_excluded_by: str,
     learning_excluded_reason: str,
@@ -1424,12 +1321,11 @@ def run_loop(
     """Main optimization loop."""
     # Optional TUI for live inference monitoring
     tui = None
-    tui_ctx = None
     if use_tui:
         try:
             from autopilot_tui import AutoPilotTUI
             tui = AutoPilotTUI()
-            tui_ctx = tui.__enter__()
+            tui.__enter__()
         except Exception as e:
             log.warning("TUI not available: %s", e)
             tui = None
@@ -2423,6 +2319,23 @@ def _run_loop_inner(
                     baseline_update.reason,
                 )
 
+        # Extract hypothesis and expected mechanism from action/controller
+        hypothesis = action.get("description", "")
+        # AP-15: Fallback for species that don't provide description
+        if not hypothesis:
+            action_type = action.get("type", "")
+            if action_type == "seed_batch":
+                hypothesis = f"Seed {action.get('n_questions', 10)} questions across {action.get('suites', 'all')}"
+            elif action_type == "numeric_trial":
+                hypothesis = f"Optimize {action.get('surface', 'unknown')} surface"
+            elif action_type == "structural_experiment":
+                hypothesis = f"Toggle flags: {action.get('flags', {})}"
+            elif action_type in ("train_routing_models", "distill_skillbank", "rollback"):
+                hypothesis = action_type.replace("_", " ").title()
+        expected_mechanism = (
+            action.get("mutation", "") or action.get("surface", "") or action.get("type", "")
+        )
+
         # B1: Store strategy on Pareto frontier improvements
         if pareto_status == "frontier" and strategy_store is not None:
             try:
@@ -2486,21 +2399,6 @@ def _run_loop_inner(
         active_flags_list = [
             f"{k}={v}" for k, v in active_flags_dict.items()
         ] if active_flags_dict else []
-
-        # Extract hypothesis and expected mechanism from action/controller
-        hypothesis = action.get("description", "")
-        # AP-15: Fallback for species that don't provide description
-        if not hypothesis:
-            action_type = action.get("type", "")
-            if action_type == "seed_batch":
-                hypothesis = f"Seed {action.get('n_questions', 10)} questions across {action.get('suites', 'all')}"
-            elif action_type == "numeric_trial":
-                hypothesis = f"Optimize {action.get('surface', 'unknown')} surface"
-            elif action_type == "structural_experiment":
-                hypothesis = f"Toggle flags: {action.get('flags', {})}"
-            elif action_type in ("train_routing_models", "distill_skillbank", "rollback"):
-                hypothesis = action_type.replace("_", " ").title()
-        expected_mechanism = action.get("mutation", "") or action.get("surface", "") or action.get("type", "")
 
         # AP-14: Extract deficiency category from safety verdict + dispatch side channel
         deficiency_category = ""
@@ -3307,7 +3205,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     from autopilot_tui import AutoPilotTUI
     print("Starting standalone TUI monitor (read-only)...")
     print("Press Ctrl+C to exit.\n")
-    with AutoPilotTUI() as tui:
+    with AutoPilotTUI():
         try:
             while True:
                 time.sleep(1)

@@ -16,7 +16,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 log = logging.getLogger("autopilot.seeder")
 

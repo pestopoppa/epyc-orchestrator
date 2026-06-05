@@ -21,11 +21,9 @@ import asyncio
 import json
 import logging
 import re
-import statistics
 import time
 from collections import deque
 from datetime import datetime, date
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -73,7 +71,24 @@ from src.api.routes.dashboard_topology import (
     base_role,
 )
 from src.api.routes.dashboard_topology import _load_state_services as _load_state_services_impl
-from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER, MIN_FRONTIER_EVAL_TIER, spec_for
+from src.autopilot_core.action_identity import (
+    EPHEMERAL_ACTION_KEYS,
+    config_fingerprint_from_row as core_config_fingerprint_from_row,
+)
+from src.autopilot_core.journal_reconstruction import (
+    latest_journal_run_rows as core_latest_journal_run_rows,
+    objectives_from_journal_row as core_objectives_from_journal_row,
+    parse_journal_ts as core_parse_journal_ts,
+    reconstruct_archive_from_journal_rows,
+)
+from src.autopilot_core.learning_exclusions import (
+    WITHIN_NOISE_EXCLUSIONS,
+)
+from src.autopilot_core.pareto_math import (
+    dominates as core_pareto_dominates,
+    hypervolume as _pareto_hypervolume_impl,
+)
+from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -890,7 +905,7 @@ async def process_status() -> JSONResponse:
                 if size > 16 * 1024:
                     f.seek(-16 * 1024, 2)
                 tail = f.read().decode("utf-8", errors="ignore")
-            recent_lines = [l for l in tail.splitlines() if l.strip()][-5:]
+            recent_lines = [line for line in tail.splitlines() if line.strip()][-5:]
         except Exception:
             pass
     # Stream-source mtimes — drive the live-dot activity-state badges in the
@@ -1100,120 +1115,35 @@ def _read_git_short_sha() -> str | None:
 _AUTOPILOT_STATE_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_state.json"
 _AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" / "autopilot_journal.jsonl"
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
-_PARETO_REFERENCE_POINT = (0.0, 0.0, -1.0, 0.0)
+_EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
+_WITHIN_NOISE_EXCL = WITHIN_NOISE_EXCLUSIONS
 
 
 def _parse_journal_ts(value: Any) -> float | None:
-    """Parse a journal `timestamp` value (ISO-8601 string or unix float) to unix seconds."""
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            from datetime import datetime
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-        except Exception:
-            return None
-    return None
+    return core_parse_journal_ts(value)
 
 
 def _pareto_objectives_from_journal(entry: dict[str, Any]) -> list[float] | None:
-    try:
-        tier = int(entry.get("tier", DEFAULT_FRONTIER_TIER))
-    except (TypeError, ValueError):
-        tier = DEFAULT_FRONTIER_TIER
-    objectives = spec_for(tier).objectives_from_row(entry)
-    if objectives is None:
-        return None
-    return list(objectives[:4])
-
-
-# Trusted within-noise exclusion reasons (recorded in eval_details.learning_exclusion.by).
-# These are NOT corruption — they are Pareto-admissible as robust-median representatives,
-# mirroring autopilot.BENIGN_LEARNING_EXCLUSIONS / ParetoArchive.upsert_representative.
-_WITHIN_NOISE_EXCL = {"mad_noise", "reproduction_confirmed"}
-
-
-# Mirror of autopilot._EPHEMERAL_ACTION_KEYS — keep in sync. Narrative keys that describe an
-# action but do not determine the deployed config are excluded from the fingerprint.
-_EPHEMERAL_ACTION_KEYS = frozenset({"description", "hypothesis", "reasoning", "expected_mechanism"})
+    return core_objectives_from_journal_row(entry)
 
 
 def _config_fingerprint_from_row(row: dict[str, Any]) -> str:
-    """Mirror autopilot._config_fingerprint for a journal row: keyed on the FULL action
-    signature (the journaled config_snapshot, falling back to the reasoning string which also
-    stores the action JSON) MINUS ephemeral narrative keys. The action — not just the flag set —
-    determines the outcome, so genuine reproductions (same action+params, differently narrated)
-    cluster into ONE robust-median representative while distinct interventions stay distinct.
-    `sort_keys` makes it canonical/order-independent."""
-    cfg = row.get("config_snapshot")
-    if not cfg:
-        try:
-            cfg = json.loads(row.get("reasoning") or "{}")
-        except Exception:
-            cfg = {}
-    if isinstance(cfg, dict):
-        cfg = {k: v for k, v in cfg.items() if k not in _EPHEMERAL_ACTION_KEYS}
-    try:
-        return json.dumps(cfg, sort_keys=True, default=str)
-    except Exception:
-        return str(cfg)
+    return core_config_fingerprint_from_row(row)
 
 
 def _pareto_dominates(a: list[float], b: list[float]) -> bool:
-    return all(x >= y for x, y in zip(a, b)) and any(x > y for x, y in zip(a, b))
+    return core_pareto_dominates(a, b)
+
+
+def _latest_journal_run_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return core_latest_journal_run_rows(rows)
 
 
 def _pareto_hypervolume(points: list[list[float]]) -> float:
-    """Compute the same 4D max-objective hypervolume used by autopilot.
-
-    Dashboard sessions normally have a small frontier. If it grows beyond the
-    exact inclusion-exclusion range, return a deterministic coarse estimate so
-    the trend still moves without making the dashboard endpoint expensive.
-    """
-    valid = [
-        p for p in points
-        if len(p) >= 4 and all(pi > ri for pi, ri in zip(p[:4], _PARETO_REFERENCE_POINT))
-    ]
-    if not valid:
-        return 0.0
-    if len(valid) > 100:
-        # Deterministic approximation over a small lattice. This branch should
-        # be rare for a current autopilot session, but prevents pathological
-        # request latency if the frontier becomes very large.
-        maxes = [max(p[d] for p in valid) for d in range(4)]
-        spans = [max(0.0, maxes[d] - _PARETO_REFERENCE_POINT[d]) for d in range(4)]
-        total_box = 1.0
-        for span in spans:
-            total_box *= span
-        if total_box <= 0.0:
-            return 0.0
-        dominated = 0
-        samples = 4096
-        for i in range(samples):
-            coords = []
-            n = i
-            for d in range(4):
-                n = (1103515245 * n + 12345 + d) & 0x7fffffff
-                frac = (n % 1024) / 1023.0
-                coords.append(_PARETO_REFERENCE_POINT[d] + frac * spans[d])
-            if any(all(p[d] >= coords[d] for d in range(4)) for p in valid):
-                dominated += 1
-        return total_box * (dominated / samples)
-
-    total = 0.0
-    for size in range(1, len(valid) + 1):
-        sign = (-1) ** (size + 1)
-        for subset in combinations(valid, size):
-            volume = 1.0
-            for dim in range(4):
-                volume *= max(
-                    0.0,
-                    min(point[dim] for point in subset) - _PARETO_REFERENCE_POINT[dim],
-                )
-            total += sign * volume
-    return total
+    """Compatibility wrapper for tests; implementation lives in autopilot_core."""
+    return _pareto_hypervolume_impl(points)
 
 
 def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
@@ -1235,35 +1165,6 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _latest_journal_run_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Return the latest contiguous journal segment after a trial-id reset.
-
-    `autopilot_journal.jsonl` is append-only across stack/campaign restarts.
-    The current run is identifiable by the last point where trial_id decreases
-    (for example old trial 569 followed by new trial 0). This keeps dashboard
-    progress plots scoped to the current orchestration stack/run while still
-    surviving API/autopilot reloads inside that run.
-    """
-    start_idx = 0
-    prev_trial_id: int | None = None
-    for i, row in enumerate(rows):
-        try:
-            trial_id = int(row.get("trial_id"))
-        except (TypeError, ValueError):
-            continue
-        if prev_trial_id is not None and trial_id < prev_trial_id:
-            start_idx = i
-        prev_trial_id = trial_id
-
-    selected = rows[start_idx:]
-    meta = {
-        "journal_run_start_index": start_idx,
-        "journal_run_start_trial_id": selected[0].get("trial_id") if selected else None,
-        "journal_run_start_ts": selected[0].get("timestamp") if selected else None,
-    }
-    return selected, meta
-
-
 def _pareto_from_journal(
     session_start_ts: float | None,
     *,
@@ -1272,20 +1173,10 @@ def _pareto_from_journal(
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
 ) -> dict[str, Any] | None:
-    """Reconstruct Pareto data from the append-only journal.
-
-    By default this can reconstruct any timestamp-filtered slice. For the
-    dashboard's main plots, use `current_run_only=True` so old incompatible
-    stack/campaign rows do not pollute the current frontier.
-    """
+    """Reconstruct Pareto data from the append-only journal."""
     if not _AUTOPILOT_JOURNAL_PATH.exists():
         return None
 
-    all_entries: list[dict[str, Any]] = []
-    frontiers_by_tier: dict[int, list[dict[str, Any]]] = {}
-    hv_history_by_tier: dict[int, list[list[float]]] = {}
-    t0_audit: list[dict[str, Any]] = []
-    run_meta: dict[str, Any] = {}
     try:
         with open(_AUTOPILOT_JOURNAL_PATH) as f:
             rows = []
@@ -1299,141 +1190,14 @@ def _pareto_from_journal(
     except Exception:
         return None
 
-    if current_run_only:
-        rows, run_meta = _latest_journal_run_rows(rows)
-
-    # Policy parity (2026-06-04): mirror ParetoArchive.upsert_representative. A TRUSTED
-    # within-noise row (mad_noise / reproduction_confirmed) is NOT corruption — it is a
-    # representative candidate. Legacy rows carry bug_corrupted_by="mad_noise"; post-2026-06-04
-    # rows carry the reason only in eval_details.learning_exclusion.by. Cluster such rows by
-    # stable config fingerprint and admit ONE robust-MEDIAN representative per config, so the
-    # panel matches the live archive instead of hiding the points (old skip) or admitting N
-    # noisy per-trial samples. Genuine corruption (kills / reloads / commit-SHA) still excluded.
-    processed: list[tuple[int, dict[str, Any]]] = []
-    repr_clusters: dict[tuple[int, str], dict[str, Any]] = {}
-    for row in rows:
-        bug = row.get("bug_corrupted_by") or ""
-        excl_by = (row.get("eval_details") or {}).get("learning_exclusion", {}).get("by", "")
-        if bug and bug != "mad_noise":
-            continue  # genuine corruption: kill / exogenous reload / commit-invalidation
-        trusted_within_noise = bug == "mad_noise" or excl_by in _WITHIN_NOISE_EXCL
-        try:
-            tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
-        except (TypeError, ValueError):
-            tier = DEFAULT_FRONTIER_TIER
-        # T0 is a fast-reject sentinel tier (10q, saturates ~2.4 = 8/10). It is
-        # AUDIT-ONLY: surfaced on the scatter as dim points for operator visibility
-        # but it must NEVER enter a frontier or the hypervolume (mirroring the real
-        # ParetoArchive, which excludes it). Tiers >=1 are segregated below so T2
-        # validation points cannot dominate the canonical T1 production frontier.
-        audit_only = tier < MIN_FRONTIER_EVAL_TIER
-        ts = _parse_journal_ts(row.get("timestamp"))
-        if session_start_ts is not None and (ts is None or ts < session_start_ts):
-            continue
-        try:
-            trial_id = int(row.get("trial_id"))
-        except (TypeError, ValueError):
-            continue
-        if max_trial_id is not None and trial_id > max_trial_id:
-            continue
-        objectives = _pareto_objectives_from_journal(row)
-        if objectives is None:
-            continue
-        # Option (iii) speed rebase: trials recorded BEFORE the metric-fix epoch had
-        # double-counted generated tokens (~1.5-2x), so their speed objective is
-        # overstated. De-inflate it in place (display only — the journal stays as the
-        # audit record) so honest post-fix points are compared on the same scale
-        # instead of being dominated by stale, inflated speed.
-        deinflated = False
-        if (
-            deinflate_before_ts is not None
-            and deinflate_factor != 1.0
-            and ts is not None
-            and ts < deinflate_before_ts
-            and len(objectives) >= 2
-        ):
-            objectives = (objectives[0], objectives[1] * deinflate_factor) + tuple(objectives[2:])
-            deinflated = True
-        objectives = list(objectives)
-        shaped = {
-            "trial_id": row.get("trial_id"),
-            "objectives": objectives,
-            "git_tag": row.get("git_tag", ""),
-            "species": row.get("species", ""),
-            "is_production_best": False,
-            "timestamp": row.get("timestamp", ""),
-            "reasoning": row.get("reasoning", ""),
-            "eval_tier": tier,
-            "speed_deinflated": deinflated,
-        }
-        if audit_only:
-            # Audit-only point: visible on the scatter, excluded from every
-            # frontier, hypervolume, and the dominated/all-entries accounting.
-            t0_audit.append(shaped)
-            continue
-        if trusted_within_noise:
-            # Defer: fold into a per-(tier, fingerprint) cluster; emit ONE median below.
-            key = (tier, _config_fingerprint_from_row(row))
-            cl = repr_clusters.setdefault(key, {"objs": [], "last_tid": -1, "shaped": shaped})
-            cl["objs"].append(objectives)
-            if trial_id >= cl["last_tid"]:
-                cl["last_tid"], cl["shaped"] = trial_id, shaped
-            continue
-        processed.append((trial_id, shaped))
-
-    # One robust-median representative per (tier, fingerprint); dominance is tested on the
-    # MEDIAN, never a lucky single-trial speed sample (mirrors the live archive's upsert).
-    for (rep_tier, fp), cl in repr_clusters.items():
-        rep = dict(cl["shaped"])
-        rep["objectives"] = [statistics.median(axis) for axis in zip(*cl["objs"])]
-        rep["config_fingerprint"] = fp
-        rep["n_reproductions"] = len(cl["objs"])
-        rep["is_representative"] = True
-        processed.append((cl["last_tid"], rep))
-
-    # Replay in trial order through the same per-tier domination + hypervolume logic.
-    processed.sort(key=lambda item: item[0])
-    for trial_id, shaped in processed:
-        tier = shaped["eval_tier"]
-        objectives = shaped["objectives"]
-        all_entries.append(shaped)
-        frontier = frontiers_by_tier.setdefault(tier, [])
-        if not any(_pareto_dominates(f["objectives"], objectives) for f in frontier):
-            frontiers_by_tier[tier] = [
-                f for f in frontier
-                if not _pareto_dominates(objectives, f["objectives"])
-            ]
-            frontiers_by_tier[tier].append(shaped)
-        tier_frontier = frontiers_by_tier[tier]
-        tier_hv_history = hv_history_by_tier.setdefault(tier, [])
-        hv = round(_pareto_hypervolume([f["objectives"] for f in tier_frontier]), 4)
-        if tier_hv_history:
-            hv = max(tier_hv_history[-1][1], hv)
-        tier_hv_history.append([
-            trial_id,
-            hv,
-        ])
-
-    if not all_entries and not t0_audit:
-        return None
-    canonical_frontier = frontiers_by_tier.get(DEFAULT_FRONTIER_TIER, [])
-    canonical_hv_history = hv_history_by_tier.get(DEFAULT_FRONTIER_TIER, [])
-    archive = {
-        "frontier": canonical_frontier,
-        "frontiers_by_tier": {
-            str(tier): front for tier, front in sorted(frontiers_by_tier.items())
-        },
-        "all_entries": all_entries,
-        "t0_audit": t0_audit,
-        "hypervolume_history": canonical_hv_history,
-        "hv_history_by_tier": {
-            str(tier): hist for tier, hist in sorted(hv_history_by_tier.items())
-        },
-        "session_start_ts": session_start_ts,
-        "canonical_tier": DEFAULT_FRONTIER_TIER,
-    }
-    archive.update(run_meta)
-    return archive
+    return reconstruct_archive_from_journal_rows(
+        rows,
+        session_start_ts,
+        current_run_only=current_run_only,
+        max_trial_id=max_trial_id,
+        deinflate_before_ts=deinflate_before_ts,
+        deinflate_factor=deinflate_factor,
+    )
 
 
 def _newest_autopilot_log() -> Path | None:
@@ -1716,12 +1480,6 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
             data = json.loads(_AUTOPILOT_STATE_PATH.read_text())
         except Exception as exc:
             state_error = f"failed to parse autopilot_state.json: {exc}"
-
-    session_start_ts = None
-    try:
-        session_start_ts = float(data.get("autopilot_fleet_started_at") or 0.0) or None
-    except (TypeError, ValueError):
-        session_start_ts = None
 
     state_trial_counter = None
     try:
@@ -2554,9 +2312,9 @@ async def gepa_status() -> JSONResponse:
 
     lines = tail.splitlines()
     gepa_lines = [
-        l for l in lines
-        if "gepa" in l.lower() or "Trial" in l or "sentinel" in l.lower()
-        or "Dispatching action" in l or "prompt_forge" in l
+        line for line in lines
+        if "gepa" in line.lower() or "Trial" in line or "sentinel" in line.lower()
+        or "Dispatching action" in line or "prompt_forge" in line
     ][-30:]
     trial_state = _parse_trial_state(tail)
 

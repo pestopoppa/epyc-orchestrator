@@ -241,7 +241,7 @@ class AutoPilotTUI:
             roles_str = "idle"
 
         header_parts = [
-            f" AutoPilot",
+            " AutoPilot",
             f"trial #{trial}",
         ]
         if species:
@@ -420,7 +420,7 @@ def main():
         log_path=args.log,
         tap_path=args.tap,
         repl_tap_path=args.repl_tap,
-    ) as tui:
+    ):
         try:
             while True:
                 time.sleep(1)

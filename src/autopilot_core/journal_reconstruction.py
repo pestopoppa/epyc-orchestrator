@@ -1,0 +1,203 @@
+"""Reconstruct Pareto archive state from append-only autopilot journal rows."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Iterable
+
+from src.autopilot_core.action_identity import config_fingerprint_from_row
+from src.autopilot_core.learning_exclusions import WITHIN_NOISE_EXCLUSIONS
+from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
+from src.autopilot_core.tier_specs import (
+    DEFAULT_FRONTIER_TIER,
+    MIN_FRONTIER_EVAL_TIER,
+    spec_for,
+)
+
+
+def parse_journal_ts(value: Any) -> float | None:
+    """Parse a journal timestamp value to Unix seconds."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+    return None
+
+
+def objectives_from_journal_row(row: dict[str, Any]) -> list[float] | None:
+    """Canonical objective tuple for a journal row, as a JSON-ready list."""
+    try:
+        tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
+    except (TypeError, ValueError):
+        tier = DEFAULT_FRONTIER_TIER
+    objectives = spec_for(tier).objectives_from_row(row)
+    if objectives is None:
+        return None
+    return [float(value) for value in objectives[:4]]
+
+
+def latest_journal_run_rows(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Return the latest contiguous journal segment after a trial-id reset."""
+    start_idx = 0
+    prev_trial_id: int | None = None
+    for idx, row in enumerate(rows):
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        if prev_trial_id is not None and trial_id < prev_trial_id:
+            start_idx = idx
+        prev_trial_id = trial_id
+
+    selected = rows[start_idx:]
+    meta = {
+        "journal_run_start_index": start_idx,
+        "journal_run_start_trial_id": selected[0].get("trial_id") if selected else None,
+        "journal_run_start_ts": selected[0].get("timestamp") if selected else None,
+    }
+    return selected, meta
+
+
+def reconstruct_archive_from_journal_rows(
+    rows: Iterable[dict[str, Any]],
+    session_start_ts: float | None,
+    *,
+    current_run_only: bool = False,
+    max_trial_id: int | None = None,
+    deinflate_before_ts: float | None = None,
+    deinflate_factor: float = 1.0,
+) -> dict[str, Any] | None:
+    """Replay journal rows into the dashboard/offline Pareto archive shape."""
+    selected_rows = list(rows)
+    run_meta: dict[str, Any] = {}
+    if current_run_only:
+        selected_rows, run_meta = latest_journal_run_rows(selected_rows)
+
+    all_entries: list[dict[str, Any]] = []
+    frontiers_by_tier: dict[int, list[dict[str, Any]]] = {}
+    hv_history_by_tier: dict[int, list[list[float]]] = {}
+    t0_audit: list[dict[str, Any]] = []
+    processed: list[tuple[int, dict[str, Any]]] = []
+    repr_clusters: dict[tuple[int, str], dict[str, Any]] = {}
+
+    for row in selected_rows:
+        bug = row.get("bug_corrupted_by") or ""
+        excl_by = (row.get("eval_details") or {}).get("learning_exclusion", {}).get("by", "")
+        if bug and bug != "mad_noise":
+            continue
+        trusted_within_noise = bug == "mad_noise" or excl_by in WITHIN_NOISE_EXCLUSIONS
+
+        try:
+            tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
+        except (TypeError, ValueError):
+            tier = DEFAULT_FRONTIER_TIER
+        audit_only = tier < MIN_FRONTIER_EVAL_TIER
+
+        ts = parse_journal_ts(row.get("timestamp"))
+        if session_start_ts is not None and (ts is None or ts < session_start_ts):
+            continue
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        if max_trial_id is not None and trial_id > max_trial_id:
+            continue
+
+        objectives = objectives_from_journal_row(row)
+        if objectives is None:
+            continue
+
+        deinflated = False
+        if (
+            deinflate_before_ts is not None
+            and deinflate_factor != 1.0
+            and ts is not None
+            and ts < deinflate_before_ts
+            and len(objectives) >= 2
+        ):
+            objectives = list(objectives)
+            objectives[1] = objectives[1] * deinflate_factor
+            deinflated = True
+
+        shaped = {
+            "trial_id": row.get("trial_id"),
+            "objectives": list(objectives),
+            "git_tag": row.get("git_tag", ""),
+            "species": row.get("species", ""),
+            "is_production_best": False,
+            "timestamp": row.get("timestamp", ""),
+            "reasoning": row.get("reasoning", ""),
+            "eval_tier": tier,
+            "speed_deinflated": deinflated,
+        }
+        if audit_only:
+            t0_audit.append(shaped)
+            continue
+        if trusted_within_noise:
+            fingerprint = config_fingerprint_from_row(row)
+            key = (tier, fingerprint)
+            cluster = repr_clusters.setdefault(
+                key,
+                {"objs": [], "last_tid": -1, "shaped": shaped},
+            )
+            cluster["objs"].append(objectives)
+            if trial_id >= cluster["last_tid"]:
+                cluster["last_tid"], cluster["shaped"] = trial_id, shaped
+            continue
+        processed.append((trial_id, shaped))
+
+    for (_rep_tier, fingerprint), cluster in repr_clusters.items():
+        representative = dict(cluster["shaped"])
+        representative["objectives"] = list(median_objectives(cluster["objs"]))
+        representative["config_fingerprint"] = fingerprint
+        representative["n_reproductions"] = len(cluster["objs"])
+        representative["is_representative"] = True
+        processed.append((cluster["last_tid"], representative))
+
+    processed.sort(key=lambda item: item[0])
+    for trial_id, shaped in processed:
+        tier = shaped["eval_tier"]
+        objectives = shaped["objectives"]
+        all_entries.append(shaped)
+        frontier = frontiers_by_tier.setdefault(tier, [])
+        if not any(dominates(front["objectives"], objectives) for front in frontier):
+            frontiers_by_tier[tier] = [
+                front for front in frontier
+                if not dominates(objectives, front["objectives"])
+            ]
+            frontiers_by_tier[tier].append(shaped)
+        tier_frontier = frontiers_by_tier[tier]
+        tier_hv_history = hv_history_by_tier.setdefault(tier, [])
+        hv = round(hypervolume([front["objectives"] for front in tier_frontier]), 4)
+        if tier_hv_history:
+            hv = max(tier_hv_history[-1][1], hv)
+        tier_hv_history.append([trial_id, hv])
+
+    if not all_entries and not t0_audit:
+        return None
+
+    canonical_frontier = frontiers_by_tier.get(DEFAULT_FRONTIER_TIER, [])
+    canonical_hv_history = hv_history_by_tier.get(DEFAULT_FRONTIER_TIER, [])
+    archive = {
+        "frontier": canonical_frontier,
+        "frontiers_by_tier": {
+            str(tier): frontier for tier, frontier in sorted(frontiers_by_tier.items())
+        },
+        "all_entries": all_entries,
+        "t0_audit": t0_audit,
+        "hypervolume_history": canonical_hv_history,
+        "hv_history_by_tier": {
+            str(tier): hist for tier, hist in sorted(hv_history_by_tier.items())
+        },
+        "session_start_ts": session_start_ts,
+        "canonical_tier": DEFAULT_FRONTIER_TIER,
+    }
+    archive.update(run_meta)
+    return archive
