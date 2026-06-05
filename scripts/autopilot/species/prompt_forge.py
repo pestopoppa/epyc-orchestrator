@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 log = logging.getLogger("autopilot.prompt_forge")
+
+if TYPE_CHECKING:
+    from scripts.autopilot.worktree_manager import ExperimentContext
 
 import ast
 import importlib
@@ -302,10 +306,10 @@ class PromptForge:
     ) -> str:
         """Build the prompt for Claude CLI to propose a mutation."""
         lines = [
-            f"You are an expert prompt engineer optimizing an LLM orchestration system.",
-            f"",
+            "You are an expert prompt engineer optimizing an LLM orchestration system.",
+            "",
             f"## Task: {mutation_type} mutation on `{target_file}`",
-            f"",
+            "",
         ]
 
         if description:
@@ -369,28 +373,38 @@ class PromptForge:
         return "\n".join(lines)
 
     def _extract_mutation(self, result: str, original: str) -> str:
-        """Extract mutated prompt from Claude's response."""
-        # Look for markdown fenced block
-        if "```markdown" in result:
-            start = result.index("```markdown") + len("```markdown")
-            end = result.index("```", start)
-            return result[start:end].strip()
+        """Extract mutated prompt from Claude's response.
 
-        # Fallback: look for any fenced block that looks like a prompt
-        if "```" in result:
-            blocks = result.split("```")
-            for i in range(1, len(blocks), 2):
-                block = blocks[i]
-                # Skip json blocks
-                if block.strip().startswith(("json", "{")):
-                    continue
-                # Skip short blocks
-                if len(block.strip()) > 100:
-                    # Remove language tag if present
-                    lines = block.strip().split("\n")
-                    if lines[0].strip() in ("md", "markdown", "text"):
-                        return "\n".join(lines[1:]).strip()
-                    return block.strip()
+        Only fences whose opening backticks begin a line are treated as block
+        delimiters. This prevents an inline fenced-code mention inside the
+        reply's *prose* (e.g. a sentence quoting ``result.index(...)``) from
+        being mis-captured as the payload — a bug that overwrote a prompt file
+        with the model's prose and committed it.
+        """
+        # Line-anchored fenced blocks: the opening backticks (with optional
+        # language tag) must start a line; the body runs to the next line that
+        # starts with a fence, or end-of-string.
+        fence = re.compile(
+            r"^[ \t]*`{3,}[ \t]*([\w:.\-]*)[ \t]*\r?\n(.*?)(?:\r?\n[ \t]*`{3,}|\Z)",
+            re.DOTALL | re.MULTILINE,
+        )
+        blocks = [(tag.strip().lower(), body) for tag, body in fence.findall(result)]
+
+        # Prefer an explicitly prose/markdown-tagged block.
+        for tag, body in blocks:
+            if tag in ("markdown", "md", "text"):
+                return body.strip()
+
+        # Fallback: the largest block that is not a json/actions or object block.
+        candidates = [
+            body
+            for tag, body in blocks
+            if not tag.startswith("json")
+            and not body.lstrip().startswith("{")
+            and len(body.strip()) > 100
+        ]
+        if candidates:
+            return max(candidates, key=lambda b: len(b.strip())).strip()
 
         log.warning("Could not extract mutation from response, returning original")
         return original
