@@ -695,9 +695,12 @@ class EvalTower:
             log.error("No sentinel questions available for T0")
             return EvalResult(tier=0, quality=0, speed=0, cost=0, reliability=0)
 
-        # Base T0 = first 10 sentinels (unchanged). Tool-use sentinels append
-        # only when AUTOPILOT_TOOL_SENTINELS=1 (else _load_tool_sentinels()→[]).
-        batch = sentinels[:10] + self._load_tool_sentinels()
+        # T0 is a fast pass/fail GATE only — its telemetry is NOT journaled into
+        # the trial record (hybrid/progressive eval journals T1/T2). Tool-use
+        # sentinels therefore live in T1 AND T2 (the journaled evals), not here,
+        # so get_eval_secret / tool_helpfulness telemetry actually reaches the
+        # planner. (Keeping them here too would only double-run the sentinels.)
+        batch = sentinels[:10]
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(batch, client, label="T0")
         for r in results:
@@ -728,6 +731,10 @@ class EvalTower:
             questions.extend(sample)
         rng.shuffle(questions)
         questions = questions[:n]
+        # Tool-use sentinels join the JOURNALED eval (T1) so get_eval_secret /
+        # tool_helpfulness telemetry reaches the trial record + planner. Inert
+        # ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
+        questions = questions + self._load_tool_sentinels()
 
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=10, label="T1")
@@ -751,6 +758,9 @@ class EvalTower:
             questions.extend(sample)
         rng.shuffle(questions)
         questions = questions[:n]
+        # Tool-use sentinels also join T2 (the journaled deep eval) for the same
+        # reason as T1. Inert ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
+        questions = questions + self._load_tool_sentinels()
 
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=50, label="T2")
