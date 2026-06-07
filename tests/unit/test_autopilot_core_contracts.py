@@ -133,3 +133,49 @@ def test_genuine_corruption_remains_excluded() -> None:
     assert archive is not None
     assert {entry["trial_id"] for entry in archive["all_entries"]} == {1}
     assert {entry["trial_id"] for entry in archive["frontier"]} == {1}
+
+
+def test_reconstruction_reports_bug_corruption_exclusions() -> None:
+    """A mass of corruption-tagged trials must be COUNTED, not silently dropped.
+
+    This is the telemetry that lets the dashboard explain "frozen at ~700 while
+    1000 trials ran" — trials 701+ tagged ``bug_corrupted_by`` vanish from the
+    frontier, and the operator needs to see that they were excluded, not lost.
+    """
+    rows = [
+        _row(1, 1.50, 40.0),
+        _row(2, 1.60, 45.0, bug_corrupted_by="deadbeefcafe1234"),
+        _row(3, 1.70, 50.0, bug_corrupted_by="exogenous_operator_reload"),
+        _row(4, 1.80, 55.0),
+    ]
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    excl = archive["exclusions"]["bug_corrupted"]
+    assert excl["count"] == 2
+    assert excl["max_trial_id"] == 3
+    assert archive["journal_max_trial_id"] == 4
+    assert {e["trial_id"] for e in archive["all_entries"]} == {1, 4}
+
+
+def test_reconstruction_uncapped_includes_newer_rows_and_reports_cap() -> None:
+    """The hardened dashboard default (no cap) shows every journaled trial; when
+    a cap IS applied it must report what it truncated so a stale state counter
+    is detectable instead of silently hiding newer rows."""
+    rows = [_row(i, 1.5 + i * 0.01, 40.0 + i) for i in range(1, 6)]  # trials 1..5
+
+    uncapped = reconstruct_archive_from_journal_rows(rows, None, current_run_only=True)
+    assert uncapped["journal_max_trial_id"] == 5
+    assert uncapped["exclusions"]["truncated_above_cap"]["count"] == 0
+    assert max(e["trial_id"] for e in uncapped["all_entries"]) == 5
+
+    capped = reconstruct_archive_from_journal_rows(
+        rows, None, current_run_only=True, max_trial_id=3
+    )
+    assert max(e["trial_id"] for e in capped["all_entries"]) == 3
+    trunc = capped["exclusions"]["truncated_above_cap"]
+    assert trunc["count"] == 2
+    assert trunc["max_trial_id"] == 5
+    assert capped["exclusions"]["max_trial_id_cap"] == 3
+    # journal_max_trial_id tracks the FULL segment, above the cap — that is how
+    # a caller spots staleness (counter 3 < journal max 5).
+    assert capped["journal_max_trial_id"] == 5

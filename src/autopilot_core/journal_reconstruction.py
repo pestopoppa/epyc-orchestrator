@@ -87,10 +87,36 @@ def reconstruct_archive_from_journal_rows(
     processed: list[tuple[int, dict[str, Any]]] = []
     repr_clusters: dict[tuple[int, str], dict[str, Any]] = {}
 
+    # Exclusion telemetry — so a dashboard can SHOW why trials vanished from the
+    # frontier instead of silently truncating. Two paths drop rows: a
+    # `bug_corrupted_by` tag (rolled-back / corrupted trials) and the optional
+    # `max_trial_id` cap. `journal_max_trial_id` is the highest trial id present
+    # in the segment regardless of any filter, so callers can detect a stale
+    # state counter that lags the journal.
+    excluded_bug = {"count": 0, "max_trial_id": None}
+    truncated_cap = {"count": 0, "max_trial_id": None}
+    journal_max_trial_id: int | None = None
+
+    def _bump(slot: dict[str, Any], tid: int) -> None:
+        slot["count"] += 1
+        if slot["max_trial_id"] is None or tid > slot["max_trial_id"]:
+            slot["max_trial_id"] = tid
+
     for row in selected_rows:
+        try:
+            _row_tid = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            _row_tid = None
+        if _row_tid is not None and (
+            journal_max_trial_id is None or _row_tid > journal_max_trial_id
+        ):
+            journal_max_trial_id = _row_tid
+
         bug = row.get("bug_corrupted_by") or ""
         excl_by = (row.get("eval_details") or {}).get("learning_exclusion", {}).get("by", "")
         if bug and bug != "mad_noise":
+            if _row_tid is not None:
+                _bump(excluded_bug, _row_tid)
             continue
         trusted_within_noise = bug == "mad_noise" or excl_by in WITHIN_NOISE_EXCLUSIONS
 
@@ -108,6 +134,7 @@ def reconstruct_archive_from_journal_rows(
         except (TypeError, ValueError):
             continue
         if max_trial_id is not None and trial_id > max_trial_id:
+            _bump(truncated_cap, trial_id)
             continue
 
         objectives = objectives_from_journal_row(row)
@@ -198,6 +225,12 @@ def reconstruct_archive_from_journal_rows(
         },
         "session_start_ts": session_start_ts,
         "canonical_tier": DEFAULT_FRONTIER_TIER,
+        "journal_max_trial_id": journal_max_trial_id,
+        "exclusions": {
+            "bug_corrupted": excluded_bug,
+            "truncated_above_cap": truncated_cap,
+            "max_trial_id_cap": max_trial_id,
+        },
     }
     archive.update(run_meta)
     return archive

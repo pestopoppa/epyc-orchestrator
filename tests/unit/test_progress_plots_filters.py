@@ -131,3 +131,36 @@ def test_generate_all_plots_filters_t0_and_bug_corrupted_points(monkeypatch, tmp
     assert [p["trial_id"] for p in captured["dominated"]] == [3]
     assert [p["trial_id"] for p in captured["suite_data"]] == [2]
     assert [p["trial_id"] for p in captured["timeline"]] == [2]
+
+
+def test_frontier_envelope_2d_keeps_2d_nondominated_sorted_by_speed() -> None:
+    # objectives = (quality, speed, -cost, reliability); envelope maximizes
+    # quality and speed. Returns (speed, quality) pairs sorted by speed.
+    pts = [
+        {"objectives": [1.0, 60.0, -0.1, 1.0]},  # fastest, low quality — on edge
+        {"objectives": [2.0, 30.0, -0.1, 1.0]},  # best quality, slower — on edge
+        {"objectives": [1.0, 20.0, -0.1, 1.0]},  # 2D-dominated by the first
+        {"objectives": [1.5, 10.0, -0.1, 1.0]},  # 2D-dominated by the second
+    ]
+    assert progress_plots._frontier_envelope_2d(pts) == [(30.0, 2.0), (60.0, 1.0)]
+
+
+def test_frontier_envelope_2d_degenerate_cases() -> None:
+    # A single frontier member cannot form a line (len < 2) — this is the case
+    # that historically rendered as "scatter but no frontier".
+    assert progress_plots._frontier_envelope_2d(
+        [{"objectives": [1.0, 2.0, -0.1, 1.0]}]
+    ) == [(2.0, 1.0)]
+    assert progress_plots._frontier_envelope_2d([]) == []
+
+
+def test_plot_pareto_frontier_2d_renders_file_with_frontier_line(tmp_path: Path) -> None:
+    # Exercises the real matplotlib path (envelope length 2 → ax.plot line drawn)
+    # so the new frontier-line code can't raise on a normal frontier.
+    frontier = [
+        {"objectives": [2.0, 30.0, -0.1, 1.0], "species": "seeder"},
+        {"objectives": [1.0, 60.0, -0.1, 1.0], "species": "structural_lab"},
+    ]
+    dominated = [{"objectives": [1.0, 20.0, -0.1, 1.0], "species": "seeder"}]
+    out = progress_plots.plot_pareto_frontier_2d(frontier, dominated, tmp_path)
+    assert out.exists() and out.stat().st_size > 0

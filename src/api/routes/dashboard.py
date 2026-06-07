@@ -1509,15 +1509,44 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         deinflate_factor = float(data.get("pareto_pre_epoch_speed_factor", 0.5))
     except (TypeError, ValueError):
         deinflate_factor = 0.5
+    # Do NOT cap reconstruction at state_trial_counter. The append-only journal —
+    # not the periodically-saved state counter — is the source of truth for
+    # progress (that is the whole reason this endpoint reconstructs from the
+    # journal). `autopilot_state.json` is rewritten every trial in the happy path,
+    # but a crash / SIGKILL / rewind between saves leaves the counter STALE; the
+    # old `max_trial_id=state_trial_counter` cap then silently dropped every
+    # journal row newer than the last save (the recurring "dashboard frozen at
+    # ~700 while the journal holds 1000 trials" report). `current_run_only` +
+    # `pareto_epoch_ts` already scope to the live run, so the cap only ever
+    # truncated real data. We now surface the divergence as a warning instead.
     journal_archive = _pareto_from_journal(
         None,
         current_run_only=True,
-        max_trial_id=state_trial_counter,
+        max_trial_id=None,
         deinflate_before_ts=pareto_epoch_ts,
         deinflate_factor=deinflate_factor,
     )
     source = "journal_current_run"
     source_reason = "reconstructed from latest trial-id reset segment in autopilot_journal.jsonl"
+
+    stale_state_warning = None
+    if journal_archive:
+        _j_max = journal_archive.get("journal_max_trial_id")
+        if (
+            state_trial_counter is not None
+            and isinstance(_j_max, int)
+            and state_trial_counter < _j_max
+        ):
+            stale_state_warning = {
+                "state_trial_counter": state_trial_counter,
+                "journal_max_trial_id": _j_max,
+                "detail": (
+                    f"autopilot_state.json trial_counter ({state_trial_counter}) lags "
+                    f"the journal (max trial {_j_max}); showing all journaled trials. "
+                    "State file is likely stale (autopilot crashed or was rewound "
+                    "between saves)."
+                ),
+            }
 
     if journal_archive:
         archive = journal_archive
@@ -1576,6 +1605,12 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         "available": True,
         "source": source,
         "source_reason": source_reason,
+        # Visibility into why trials may be missing from the frontier, so the
+        # operator never has to guess whether the plot is stale or the data is.
+        "stale_state_warning": stale_state_warning,
+        "state_trial_counter": state_trial_counter,
+        "journal_max_trial_id": archive.get("journal_max_trial_id") if isinstance(archive, dict) else None,
+        "exclusions": archive.get("exclusions") if isinstance(archive, dict) else None,
         "frontier": frontier,
         "frontiers_by_tier": frontiers_by_tier,
         "dominated": dominated_shaped,
