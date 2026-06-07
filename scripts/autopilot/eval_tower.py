@@ -500,6 +500,14 @@ class EvalTower:
             suite: (sum(vals) / len(vals)) * 3.0
             for suite, vals in suite_correct.items()
         }
+        # Per-suite question counts (2026-06-06). The per-suite regression gate is
+        # otherwise blind to sample size: on a hybrid eval each suite draws only
+        # ~2 questions, so the score is quantized to {0.0, 1.5, 3.0} and a single
+        # correct→incorrect flip is a -1.5 swing — 15× the fixed -0.1 gate, tripping
+        # it on essentially every trial. Carrying the count lets the gate make the
+        # threshold resolution-aware (3/n single-flip quantum) instead of false-
+        # positiving the seeder loop into a critic-reject deadlock.
+        per_suite_counts = {suite: len(vals) for suite, vals in suite_correct.items()}
 
         # Routing distribution
         route_counts: dict[str, int] = {}
@@ -617,11 +625,13 @@ class EvalTower:
             cost=cost,
             reliability=reliability,
             per_suite_quality=per_suite,
+            per_suite_counts=per_suite_counts,
             routing_distribution=routing_dist,
             n_questions=len(results),
             details={
                 "correct": correct_count,
                 "total": len(results),
+                "per_suite_counts": per_suite_counts,
                 "errors": sum(1 for r in results if r.error),
                 "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",
                 "speed_metric_mode": speed_metric_mode,

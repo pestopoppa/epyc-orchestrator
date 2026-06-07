@@ -2290,6 +2290,20 @@ def _run_loop_inner(
             criticism = learning_exclusion_criticism(
                 learning_excluded_by, learning_excluded_reason
             )
+        elif not verdict.passed:
+            # Safety verdict FAILED and this is not a benign within-noise exclusion
+            # (e.g. a genuine per-suite regression at adequate n, possibly co-tagged
+            # mad_noise on the quality axis — see classify_learning_exclusion). A
+            # failed trial must NEVER clean-update the Pareto archive or raise the
+            # baseline. It is a real failed experiment, NOT corrupted data, so we
+            # leave bug_corrupted_by unset; the deficiency category is taken from
+            # verdict.categories below. (2026-06-06: previously such a trial fell
+            # through to the clean-update branch and could admit/raise on a failure.)
+            pareto_status = "dominated"  # placeholder for JournalEntry only
+            log.info(
+                "Trial %d: archive.update SKIPPED (safety verdict failed: %s)",
+                trial_counter, ", ".join(verdict.categories) or "unspecified",
+            )
         else:
             pareto_status = archive.update(
                 ParetoEntry(
@@ -2932,6 +2946,10 @@ def _format_baseline_tier_yaml(baseline: Baseline) -> str:
             int(tier): suites
             for tier, suites in sorted(baseline.per_suite_quality_by_tier.items())
         },
+        "per_suite_counts_by_tier": {
+            int(tier): counts
+            for tier, counts in sorted(baseline.per_suite_counts_by_tier.items())
+        },
     }
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip()
 
@@ -2943,6 +2961,7 @@ def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
         text = path.read_text()
         text = _drop_top_level_yaml_block(text, "baselines_by_tier")
         text = _drop_top_level_yaml_block(text, "per_suite_quality_by_tier")
+        text = _drop_top_level_yaml_block(text, "per_suite_counts_by_tier")
         path.write_text(text.rstrip() + "\n\n" + _format_baseline_tier_yaml(baseline) + "\n")
         return
 
@@ -2955,6 +2974,7 @@ def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
         "per_suite_quality": baseline.per_suite_quality,
         "baselines_by_tier": baseline.baselines_by_tier,
         "per_suite_quality_by_tier": baseline.per_suite_quality_by_tier,
+        "per_suite_counts_by_tier": baseline.per_suite_counts_by_tier,
     }
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
@@ -2999,6 +3019,11 @@ def _apply_calibrated_baseline_result(baseline: Baseline, result: EvalResult) ->
         )
     baseline.baselines_by_tier[tier] = quality
     baseline.per_suite_quality_by_tier[tier] = dict(result.per_suite_quality)
+    # Persist the per-suite question counts the baseline was measured at so the
+    # per-suite regression gate's threshold knows the baseline's own sampling
+    # resolution (3/n quantum); without this a calibration refresh leaves the
+    # baseline-side count term inactive (2026-06-07).
+    baseline.per_suite_counts_by_tier[tier] = dict(getattr(result, "per_suite_counts", {}) or {})
 
 
 def calibrate_baseline(

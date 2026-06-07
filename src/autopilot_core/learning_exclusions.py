@@ -29,7 +29,17 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
         return "exogenous_operator_reload", reason, "exogenous_reload"
 
     categories = getattr(verdict, "categories", None) or []
-    if "mad_noise" in categories:
+    # The MAD test is QUALITY-ONLY. A within-noise quality reading must not launder
+    # a FAILED safety verdict (per-suite regression, quality floor, throughput, …)
+    # into a "trusted within-noise representative" — that path admits the trial to
+    # the Pareto frontier (autopilot.py upsert_representative) and suppresses its
+    # deficiency. 2026-06-06: trial 707 failed three per-suite regression checks yet
+    # was admitted as mad_noise. Only treat the within-noise tags as benign when the
+    # verdict OTHERWISE PASSED; otherwise fall through to the normal failed-trial
+    # path (deficiency from verdict.categories), which skips archive admission
+    # without mislabelling the trial as corrupted data.
+    verdict_passed = bool(getattr(verdict, "passed", True))
+    if "mad_noise" in categories and verdict_passed:
         if "reproduction_confirmed" in categories:
             return (
                 "reproduction_confirmed",

@@ -40,7 +40,29 @@ QUALITY_FLOOR_T0 = 2.0  # Average quality >= 2.0/3.0
 # T1/T2 thresholds (50-500 real benchmark questions — honest signal)
 QUALITY_FLOOR_T1 = 1.0  # ~33% correct minimum
 REGRESSION_THRESHOLD = -0.05  # Max quality drop vs baseline (fraction of baseline)
-PER_SUITE_REGRESSION = -0.1  # Max per-suite quality drop
+PER_SUITE_REGRESSION = -0.1  # Max per-suite quality drop (fixed floor; see below)
+# Minimum per-suite sample below which the per-suite regression gate is purely
+# advisory: at n questions a single correct→incorrect flip moves the 0-3 score by
+# 3/n, so the *smallest observable* regression is already 3/n. When 3/n exceeds the
+# fixed PER_SUITE_REGRESSION floor the gate cannot distinguish a real regression
+# from one-question sampling noise — so the threshold is widened to that quantum.
+# (2026-06-06: at ~2 q/suite the -0.1 floor fired -1.5 "regressions" on every
+# seeder trial, mass-excluding via mad_noise and deadlocking the planner/critic.)
+def per_suite_regression_threshold(
+    result_n: int | None, baseline_n: int | None
+) -> float:
+    """Resolution-aware per-suite regression threshold (a negative number).
+
+    A suite delta must be MORE negative than this to count as a violation. The
+    bound is the coarser of the two samples' single-flip quantum (3/n) and never
+    tighter than the fixed PER_SUITE_REGRESSION floor. Missing/zero counts fall
+    back to the fixed floor (pre-2026-06-06 behavior)."""
+    quanta = [abs(PER_SUITE_REGRESSION)]
+    if result_n and result_n > 0:
+        quanta.append(3.0 / result_n)
+    if baseline_n and baseline_n > 0:
+        quanta.append(3.0 / baseline_n)
+    return -max(quanta)
 ARCHITECT_ROUTING_CAP = 0.80  # Max fraction routed to architect-tier
 MAX_CONSECUTIVE_FAILURES = 3  # Auto-rollback after this many failures
 # MAD noise filter (intake-421 pi-autoresearch). Quality history depth + significance threshold.
@@ -112,6 +134,27 @@ def _normalize_suite_by_tier(raw: Any, path: Path) -> dict[int, dict[str, float 
     return normalized
 
 
+def _normalize_counts_by_tier(raw: Any, path: Path) -> dict[int, dict[str, int]]:
+    """Normalize nested per-suite question counts keyed by eval tier (ints >= 0)."""
+    normalized: dict[int, dict[str, int]] = {}
+    for tier, suites in (raw or {}).items():
+        try:
+            t = int(tier)
+        except (TypeError, ValueError):
+            log.error("Ignoring per-suite count tier key %r in %s; expected integer tier", tier, path)
+            continue
+        tier_counts: dict[str, int] = {}
+        for suite, n in (suites or {}).items():
+            try:
+                c = int(n)
+            except (TypeError, ValueError):
+                continue
+            if c >= 0:
+                tier_counts[suite] = c
+        normalized[t] = tier_counts
+    return normalized
+
+
 @dataclass
 class SafetyVerdict:
     passed: bool
@@ -132,6 +175,12 @@ class EvalResult:
     cost: float  # Normalized cost 0-1
     reliability: float  # Fraction of non-error responses
     per_suite_quality: dict[str, float] = field(default_factory=dict)
+    # Per-suite question counts for this eval (2026-06-06). Lets the per-suite
+    # regression gate scale its threshold to sampling resolution (3/n per flip):
+    # at ~2 questions/suite the score quantizes to {0,1.5,3} and a one-question
+    # flip would otherwise trip the fixed -0.1 gate every trial. Empty ⇒ gate
+    # falls back to the fixed -0.1 floor (pre-2026-06-06 behavior).
+    per_suite_counts: dict[str, int] = field(default_factory=dict)
     routing_distribution: dict[str, float] = field(default_factory=dict)
     n_questions: int = 0
     details: dict[str, Any] = field(default_factory=dict)
@@ -279,6 +328,11 @@ class Baseline:
     per_suite_quality: dict[str, float] = field(default_factory=dict)
     baselines_by_tier: dict[int, float] = field(default_factory=dict)
     per_suite_quality_by_tier: dict[int, dict[str, float | None]] = field(default_factory=dict)
+    # Per-suite question counts the baseline was measured at, per tier (2026-06-06).
+    # Feeds per_suite_regression_threshold so the gate knows the baseline's own
+    # sampling resolution. Empty until a baseline is refreshed post-2026-06-06; the
+    # gate then falls back to the result's resolution (or the fixed -0.1 floor).
+    per_suite_counts_by_tier: dict[int, dict[str, int]] = field(default_factory=dict)
     frontdoor_speed: float = 10.0
     # Path this baseline was loaded from. save() writes back here by default so a
     # gate constructed with a custom baseline_path (e.g. a tmp file in tests) can
@@ -339,6 +393,9 @@ class Baseline:
         per_suite_by_tier = _normalize_suite_by_tier(
             data.get("per_suite_quality_by_tier", {}), path
         )
+        per_suite_counts_by_tier = _normalize_counts_by_tier(
+            data.get("per_suite_counts_by_tier", {}), path
+        )
         reliability = data.get("reliability", defaults.reliability)
         if reliability is not None and not 0.0 <= reliability <= RELIABILITY_MAX:
             log.error(
@@ -354,6 +411,7 @@ class Baseline:
             per_suite_quality=per_suite,
             baselines_by_tier=baselines_by_tier,
             per_suite_quality_by_tier=per_suite_by_tier,
+            per_suite_counts_by_tier=per_suite_counts_by_tier,
             frontdoor_speed=data.get("frontdoor_speed", 10.0),
             source_path=path,
         )
@@ -394,6 +452,7 @@ class Baseline:
             "per_suite_quality": self.per_suite_quality,
             "baselines_by_tier": self.baselines_by_tier,
             "per_suite_quality_by_tier": self.per_suite_quality_by_tier,
+            "per_suite_counts_by_tier": self.per_suite_counts_by_tier,
             "frontdoor_speed": self.frontdoor_speed,
         }
         path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
@@ -405,6 +464,9 @@ class Baseline:
         )
         self.per_suite_quality_by_tier.update(
             _normalize_suite_by_tier(state.get("per_suite_quality_by_tier", {}), state_path)
+        )
+        self.per_suite_counts_by_tier.update(
+            _normalize_counts_by_tier(state.get("per_suite_counts_by_tier", {}), state_path)
         )
 
     def quality_for_tier(self, tier: int, *, strict: bool = False) -> float | None:
@@ -421,10 +483,20 @@ class Baseline:
             return tier_suites
         return {} if strict else self.per_suite_quality
 
+    def per_suite_counts_for_tier(self, tier: int) -> dict[str, int]:
+        """Return the per-suite question counts the same-tier baseline was measured at.
+
+        Empty when the baseline predates per-suite count tracking (2026-06-06) —
+        callers then fall back to the result's own resolution / the fixed floor."""
+        return self.per_suite_counts_by_tier.get(int(tier), {})
+
     def update_tier(self, result: EvalResult) -> None:
         tier = int(result.tier)
         self.baselines_by_tier[tier] = result.quality
         self.per_suite_quality_by_tier.setdefault(tier, {}).update(result.per_suite_quality)
+        result_counts = getattr(result, "per_suite_counts", None) or {}
+        if result_counts:
+            self.per_suite_counts_by_tier.setdefault(tier, {}).update(result_counts)
         if tier == DEFAULT_FRONTIER_TIER:
             self.quality = result.quality
             self.per_suite_quality.update(result.per_suite_quality)
@@ -445,6 +517,9 @@ class Baseline:
             },
             "per_suite_quality_by_tier": {
                 str(tier): suites for tier, suites in sorted(self.per_suite_quality_by_tier.items())
+            },
+            "per_suite_counts_by_tier": {
+                str(tier): counts for tier, counts in sorted(self.per_suite_counts_by_tier.items())
             },
             "frontdoor_speed": self.frontdoor_speed,
         }
@@ -613,16 +688,29 @@ class SafetyGate:
                         f"from archive/learning by autopilot." + convergence_note
                     )
 
-        # 3. Per-suite regression
+        # 3. Per-suite regression (resolution-aware since 2026-06-06). A per-suite
+        # score is fraction_correct*3 over only the questions that suite drew; at
+        # ~2 q/suite a single flip is a 1.5 swing, so a fixed -0.1 floor flagged
+        # pure sampling noise as a regression on essentially every trial and
+        # deadlocked the planner. The threshold is widened to the coarser of the
+        # result's and baseline's single-flip quantum (3/n); counts default empty
+        # ⇒ fixed -0.1 floor (unchanged behavior for pre-2026-06-06 baselines).
         baseline_suites = self.baseline.per_suite_for_tier(result.tier)
+        baseline_counts = self.baseline.per_suite_counts_for_tier(result.tier)
+        result_counts = getattr(result, "per_suite_counts", None) or {}
         for suite, quality in result.per_suite_quality.items():
             baseline_q = baseline_suites.get(suite)
             if baseline_q is not None:
                 suite_delta = quality - baseline_q
-                if suite_delta < PER_SUITE_REGRESSION:
+                threshold = per_suite_regression_threshold(
+                    result_counts.get(suite), baseline_counts.get(suite)
+                )
+                if suite_delta < threshold:
                     violations.append(
                         f"Suite '{suite}' regression: {suite_delta:+.3f} "
-                        f"(threshold: {PER_SUITE_REGRESSION})"
+                        f"(threshold: {threshold:+.3f}; "
+                        f"n_result={result_counts.get(suite)}, "
+                        f"n_baseline={baseline_counts.get(suite)})"
                     )
                     if "per_suite_regression" not in categories:
                         categories.append("per_suite_regression")
