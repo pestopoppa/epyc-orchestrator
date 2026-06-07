@@ -100,3 +100,54 @@ def test_runtime_generation_roundtrip(tmp_path, monkeypatch):
         assert val == minted[name] and len(val) >= 12
         assert val not in src and val not in yml, f"{name} secret leaked to disk"
     assert es.get_eval_secret("nope").startswith("ERROR")
+
+
+def test_load_or_create_is_idempotent_across_reloads(tmp_path, monkeypatch):
+    """A reload (fresh in-memory, existing valid file) must LOAD the same secret,
+    not re-mint — else the harness's `expected` drifts mid-trial and tool_use
+    scores wrong even when the tool was called (the 2026-06-05 bug)."""
+    import src.tools.eval_secret as es
+
+    monkeypatch.setattr(es, "SECRETS_PATH", tmp_path / "s.json")
+    es._SECRETS = {}
+    first = es.generate_and_persist_secrets()
+    # simulate an orchestrator reload: new process => empty memory, same file.
+    es._SECRETS = {}
+    second = es.generate_and_persist_secrets()
+    assert second == first, "reload re-minted instead of loading the existing file"
+    assert es.load_persisted_secrets() == first
+    # repeated registration within one process is also stable.
+    assert es.generate_and_persist_secrets() == first
+
+
+def test_concurrent_first_start_converges_on_one_set(tmp_path):
+    """uvicorn --workers first-start: N processes racing on an ABSENT file must
+    all converge on ONE secret set (atomic load-or-create, no torn writes)."""
+    import json as _json
+    import os as _os
+    import subprocess
+    import sys as _sys
+
+    secrets_path = tmp_path / "race_secrets.json"
+    code = (
+        "import json, sys\n"
+        f"sys.path.insert(0, {str(_REPO)!r})\n"
+        "import src.tools.eval_secret as es\n"
+        "print(json.dumps(es.generate_and_persist_secrets()))\n"
+    )
+    env = dict(_os.environ, EVAL_SECRETS_PATH=str(secrets_path))
+    procs = [
+        subprocess.Popen(
+            [_sys.executable, "-c", code], env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        for _ in range(8)
+    ]
+    outs = []
+    for p in procs:
+        out, err = p.communicate(timeout=60)
+        assert p.returncode == 0, f"worker failed: {err}"
+        outs.append(_json.loads(out.strip().splitlines()[-1]))
+    first = outs[0]
+    assert all(o == first for o in outs), f"workers diverged: {outs}"
+    assert _json.loads(secrets_path.read_text()) == first  # file == winning set
