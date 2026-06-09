@@ -51,6 +51,21 @@ MEDIUM_RISK_ACTIONS = {
 }
 HIGH_RISK_ACTIONS = KNOWN_ACTION_TYPES - LOW_RISK_ACTIONS - MEDIUM_RISK_ACTIONS
 
+# Actions safe to DISPATCH WITHOUT a critic verdict (degraded/uncritiqued mode).
+# Intentionally EMPTY: when the binding critic is unavailable we PAUSE by default
+# rather than run anything unreviewed. NOTE this is deliberately stricter than
+# LOW_RISK_ACTIONS — seed_batch is NOT here, because low-risk seed looping was the
+# exact failure the critic exists to catch (critic_reject_loop @708). Extend ONLY
+# with genuinely observational, non-mutating, non-looping action types.
+OBSERVATIONAL_ACTIONS: frozenset[str] = frozenset()
+
+# Claude planner drafts run a ~80KB prompt WITH tool access (Read/Grep/Glob) and
+# take 60-228s in practice; the old hard 300s default intermittently KILLED a
+# slow-but-valid draft → "empty response" → degraded (and, since 2026-06-07, a
+# critic_unavailable pause that stalled the run, e.g. @711). Give generous
+# headroom; operator-tunable via AUTOPILOT_PLANNER_TIMEOUT. (2026-06-09)
+DEFAULT_PLANNER_TIMEOUT = int(os.environ.get("AUTOPILOT_PLANNER_TIMEOUT", "600"))
+
 
 @dataclass
 class PlannerSettings:
@@ -123,7 +138,7 @@ def plan_with_providers(
     prompt: str,
     *,
     session_id: str | None,
-    timeout: int = 300,
+    timeout: int = DEFAULT_PLANNER_TIMEOUT,
     cwd: Path | str | None = None,
     planner_state: dict[str, Any] | None = None,
     stagnation_signal: str = "",
@@ -303,6 +318,30 @@ def plan_with_providers(
     )
     _archive_decision(decision, planner_state)
     return decision
+
+
+def uncritiqued_dispatch_block_reason(decision: PlannerDecision) -> str:
+    """Pause reason if a DEGRADED decision must NOT dispatch its action.
+
+    When the planner ran degraded with NO critic verdict (e.g. the draft provider
+    returned empty and the fallback draft IS the critic provider, so no critique
+    ran — `degraded and critique is None`), the action is uncritiqued. It may
+    dispatch ONLY if it is explicitly observational (OBSERVATIONAL_ACTIONS, empty
+    by default); otherwise return "critic_unavailable" so the caller PAUSES for
+    operator review instead of running it unreviewed. seed_batch is deliberately
+    not observational (low-risk seed looping was the failure the critic catches).
+
+    Returns "" when a real critique exists, when not degraded, or when there is no
+    dict action (the no-action path is handled separately by the caller).
+    """
+    if not decision.degraded or decision.critique is not None:
+        return ""
+    action = decision.action
+    if not isinstance(action, dict):
+        return ""
+    if action.get("type") in OBSERVATIONAL_ACTIONS:
+        return ""
+    return "critic_unavailable"
 
 
 def build_critique_prompt(

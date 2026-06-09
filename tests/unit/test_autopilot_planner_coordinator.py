@@ -530,3 +530,35 @@ def test_open_primary_circuit_routes_directly_to_fallback() -> None:
     assert decision.fallback_reason == "claude circuit open"
     assert claude.calls == []
     assert len(codex.calls) == 1
+
+
+def _uncritiqued_decision(action: Any, *, degraded: bool, critique: Any):
+    return planner_coordinator.PlannerDecision(
+        action=action, rationale={}, session_id=None, canonical_text="",
+        draft_text="", draft_provider="codex", mode="draft_critique",
+        degraded=degraded, critique=critique,
+    )
+
+
+def test_uncritiqued_degraded_nonobservational_action_pauses() -> None:
+    """Degraded with NO critic verdict + non-observational action => critic_unavailable.
+    seed_batch is explicitly NOT safe (the @708 critic_reject_loop failure mode)."""
+    ubr = planner_coordinator.uncritiqued_dispatch_block_reason
+    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
+               degraded=True, critique=None)) == "critic_unavailable"
+    # OBSERVATIONAL_ACTIONS is empty => every non-observational action blocks.
+    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
+               degraded=True, critique=None)) == "critic_unavailable"
+
+
+def test_uncritiqued_gate_allows_when_critiqued_or_not_degraded() -> None:
+    ubr = planner_coordinator.uncritiqued_dispatch_block_reason
+    crit = planner_coordinator.PlannerCritique(decision="approve", provider="codex")
+    # real critic verdict => not uncritiqued => no pause
+    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
+               degraded=True, critique=crit)) == ""
+    # not degraded => no pause
+    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
+               degraded=False, critique=None)) == ""
+    # no dict action => handled by the separate no-action path => no pause
+    assert ubr(_uncritiqued_decision(None, degraded=True, critique=None)) == ""
