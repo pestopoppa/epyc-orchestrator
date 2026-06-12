@@ -247,6 +247,7 @@ class TestTryCheapFirstEdgeCases:
     ):
         """When LLM returns answer shorter than 20 chars, returns None."""
         mock_primitives.llm_call.return_value = "Too short"
+        mock_state.progress_logger = MagicMock()
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             mock_cfg.return_value.chat.try_cheap_first_phase = "A"
@@ -262,6 +263,12 @@ class TestTryCheapFirstEdgeCases:
                 "direct",
             )
             assert result is None
+            entry = mock_state.progress_logger.log.call_args.args[0]
+            assert entry.event_type.value == "routing_fallback"
+            assert entry.data["kind"] == "try_cheap_first"
+            assert entry.data["cheap_first_attempted"] is True
+            assert entry.data["cheap_first_passed"] is False
+            assert entry.data["reason"] == "empty_or_short_answer"
 
     @pytest.mark.asyncio
     async def test_returns_none_on_error_answer(
@@ -293,6 +300,7 @@ class TestTryCheapFirstEdgeCases:
         mock_primitives.llm_call.return_value = (
             "The meaning of life is a philosophical question that has been debated for centuries."
         )
+        mock_state.progress_logger = MagicMock()
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             mock_cfg.return_value.chat.try_cheap_first_phase = "A"
@@ -317,6 +325,12 @@ class TestTryCheapFirstEdgeCases:
                 assert result.cheap_first_passed is True
                 assert result.routed_to == "worker_explore"
                 assert "cheap_first" in result.routing_strategy
+                entry = mock_state.progress_logger.log.call_args.args[0]
+                assert entry.event_type.value == "routing_fallback"
+                assert entry.data["kind"] == "try_cheap_first"
+                assert entry.data["cheap_first_attempted"] is True
+                assert entry.data["cheap_first_passed"] is True
+                assert entry.data["reason"] == "passed"
 
     @pytest.mark.asyncio
     async def test_returns_none_on_llm_exception(

@@ -31,6 +31,7 @@ class RoutingDecision:
     task_id: str
     timestamp: str
     chosen_action: str
+    action_topk: list[str]
     strategy: str
     q_topk: list[float]
     selection_score_topk: list[float]
@@ -60,6 +61,9 @@ class RegretReport:
     pct_trivial_spread: float = 0.0  # spread < 0.01
 
     # Decision alignment
+    identifiable_regret_decisions: int = 0
+    regret_identifiable_pct: float = 0.0
+    regret_gate_pct: float = 0.0
     top_candidate_selected_pct: float = 0.0
     mean_decision_regret: float = 0.0
     max_decision_regret: float = 0.0
@@ -77,13 +81,24 @@ class RegretReport:
     band_counts: dict[str, int] = field(default_factory=dict)
     band_regret: dict[str, float] = field(default_factory=dict)
 
+    # Try-cheap-first denominator and acceptance telemetry.
+    cheap_first_total: int = 0
+    cheap_first_attempted: int = 0
+    cheap_first_passed: int = 0
+    cheap_first_reasons: dict[str, int] = field(default_factory=dict)
+
+    # Caveats are first-class so downstream handoffs do not treat proxy metrics
+    # as observed oracle regret.
+    measurement_notes: list[str] = field(default_factory=list)
+
 
 def parse_progress_logs(log_dir: Path, from_date: str, to_date: str) -> tuple[
-    dict[str, RoutingDecision], dict[str, TaskOutcome]
+    dict[str, RoutingDecision], dict[str, TaskOutcome], dict[str, dict[str, Any]]
 ]:
     """Parse progress JSONL logs for routing decisions and task outcomes."""
     decisions: dict[str, RoutingDecision] = {}
     outcomes: dict[str, TaskOutcome] = {}
+    cheap_first: dict[str, dict[str, Any]] = {}
 
     pattern = str(log_dir / "*.jsonl")
     files = sorted(glob.glob(pattern))
@@ -117,7 +132,11 @@ def parse_progress_logs(log_dir: Path, from_date: str, to_date: str) -> tuple[
                         decisions[task_id] = RoutingDecision(
                             task_id=task_id,
                             timestamp=entry.get("timestamp", ""),
-                            chosen_action=routing[0] if routing else "unknown",
+                            chosen_action=data.get(
+                                "chosen_action",
+                                routing[0] if routing else "unknown",
+                            ),
+                            action_topk=data.get("action_topk", []),
                             strategy=data.get("strategy", data.get("decision_source", "unknown")),
                             q_topk=q_topk,
                             selection_score_topk=sel_topk,
@@ -128,25 +147,36 @@ def parse_progress_logs(log_dir: Path, from_date: str, to_date: str) -> tuple[
                             q_robust_confidence=data.get("q_robust_confidence", 0.0),
                         )
 
-                elif event_type == "task_completed" and task_id:
-                    outcome = data.get("outcome", "unknown")
-                    reward = data.get("reward", 0.0)
+                elif event_type in ("task_completed", "task_failed") and task_id:
+                    outcome = entry.get("outcome") or data.get("outcome")
+                    if not outcome:
+                        outcome = "failure" if event_type == "task_failed" else "unknown"
+                    reward = entry.get("reward", data.get("reward", 0.0))
                     outcomes[task_id] = TaskOutcome(
                         task_id=task_id,
                         outcome=outcome,
                         reward=reward,
                     )
 
-    return decisions, outcomes
+                elif (
+                    event_type == "routing_fallback"
+                    and task_id
+                    and data.get("kind") == "try_cheap_first"
+                ):
+                    cheap_first[task_id] = data
+
+    return decisions, outcomes, cheap_first
 
 
 def compute_regret(
     decisions: dict[str, RoutingDecision],
     outcomes: dict[str, TaskOutcome],
+    cheap_first: dict[str, dict[str, Any]] | None = None,
 ) -> RegretReport:
     """Compute regret metrics from routing decisions and outcomes."""
     report = RegretReport()
     report.total_decisions = len(decisions)
+    cheap_first = cheap_first or {}
 
     if not decisions:
         return report
@@ -176,25 +206,19 @@ def compute_regret(
             q_spread = max(d.q_topk) - min(d.q_topk)
             q_spreads.append(q_spread)
 
-        # Decision regret: did we pick the top-ranked candidate?
-        # The top candidate is index 0 in selection_score_topk (already sorted descending)
-        # If selected model maps to index 0, regret = 0. Otherwise, regret = score[0] - score[selected_idx]
-        # Since we don't have memory IDs in logs, we approximate:
-        # selected model was routed, so it should correspond to the top score
-        # Regret > 0 only if strategy != "learned" (rules/classifier may override)
         if len(d.selection_score_topk) >= 2:
             top_score = d.selection_score_topk[0]
-            # If strategy is "learned", model was selected by Q-score ranking → index 0
-            # If strategy is "rules" or "classifier", model may not be the Q-winner
-            if d.strategy in ("learned", "memrl"):
-                # Learned routing should always pick top — regret ~0
+            regret: float | None = None
+            if d.chosen_action and d.action_topk and d.chosen_action in d.action_topk:
+                selected_idx = d.action_topk.index(d.chosen_action)
+                if selected_idx < len(d.selection_score_topk):
+                    regret = max(0.0, top_score - d.selection_score_topk[selected_idx])
+            elif d.strategy in ("learned", "memrl"):
                 regret = 0.0
-            else:
-                # Rules/classifier override: regret is unknown without memory IDs
-                # Approximate: if all scores are close (spread < 0.01), no regret regardless
-                regret = 0.0  # Conservative — can't compute without memory IDs
 
-            decision_regrets.append(regret)
+            if regret is not None:
+                report.identifiable_regret_decisions += 1
+                decision_regrets.append(regret)
 
         # Difficulty band
         band_counter[d.difficulty_band] += 1
@@ -226,8 +250,13 @@ def compute_regret(
     if decision_regrets:
         report.mean_decision_regret = sum(decision_regrets) / len(decision_regrets)
         report.max_decision_regret = max(decision_regrets)
+        report.regret_gate_pct = report.mean_decision_regret * 100
         report.top_candidate_selected_pct = (
             sum(1 for r in decision_regrets if r < 0.001) / len(decision_regrets) * 100
+        )
+    if report.total_decisions:
+        report.regret_identifiable_pct = (
+            report.identifiable_regret_decisions / report.total_decisions * 100
         )
 
     if top_selected_outcomes:
@@ -240,6 +269,29 @@ def compute_regret(
         band: sum(regrets) / len(regrets) if regrets else 0.0
         for band, regrets in band_regrets.items()
     }
+    report.cheap_first_total = len(cheap_first)
+    if cheap_first:
+        report.cheap_first_attempted = sum(
+            1 for row in cheap_first.values()
+            if row.get("cheap_first_attempted") is True
+        )
+        report.cheap_first_passed = sum(
+            1 for row in cheap_first.values()
+            if row.get("cheap_first_passed") is True
+        )
+        report.cheap_first_reasons = dict(Counter(
+            str(row.get("reason", "unknown")) for row in cheap_first.values()
+        ))
+
+    if report.identifiable_regret_decisions < report.total_decisions:
+        missing = report.total_decisions - report.identifiable_regret_decisions
+        report.measurement_notes.append(
+            f"{missing} routing decisions lack enough action_topk telemetry for true selected-vs-best regret."
+        )
+    if report.regret_gate_pct < 5.0:
+        report.measurement_notes.append(
+            "DAR-1 gate remains closed: no >=5% mean decision-regret signal was proven."
+        )
 
     return report
 
@@ -263,8 +315,10 @@ def print_report(report: RegretReport) -> None:
     print(f"{'Uniform Q-values (<0.001 spread):':<40} {report.pct_uniform_q:.1f}%")
 
     print(f"\n--- Decision Alignment ---")
+    print(f"{'Regret-identifiable decisions:':<40} {report.identifiable_regret_decisions} ({report.regret_identifiable_pct:.1f}%)")
     print(f"{'Top candidate selected:':<40} {report.top_candidate_selected_pct:.1f}%")
     print(f"{'Mean decision regret:':<40} {report.mean_decision_regret:.4f}")
+    print(f"{'DAR-1 gate regret pct:':<40} {report.regret_gate_pct:.2f}%")
     print(f"{'Max decision regret:':<40} {report.max_decision_regret:.4f}")
 
     print(f"\n--- Outcome Correlation ---")
@@ -277,6 +331,14 @@ def print_report(report: RegretReport) -> None:
         regret = report.band_regret.get(band, 0.0)
         if count > 0:
             print(f"  {band:<12} n={count:<6} avg_regret={regret:.4f}")
+
+    print(f"\n--- Try-Cheap-First Counters ---")
+    print(f"{'Counter rows:':<40} {report.cheap_first_total}")
+    print(f"{'Attempts:':<40} {report.cheap_first_attempted}")
+    print(f"{'Accepted:':<40} {report.cheap_first_passed}")
+    if report.cheap_first_reasons:
+        for reason, count in sorted(report.cheap_first_reasons.items(), key=lambda item: (-item[1], item[0])):
+            print(f"  {reason:<34} {count}")
 
     # Interpretation
     print(f"\n--- Interpretation ---")
@@ -300,6 +362,11 @@ def print_report(report: RegretReport) -> None:
         else:
             print(f"⚠ Top-candidate selection is WORSE ({delta:+.1f}pp) — Q-scorer is miscalibrated. DAR-2 is HIGH value.")
 
+    if report.measurement_notes:
+        print(f"\n--- Measurement Notes ---")
+        for note in report.measurement_notes:
+            print(f"- {note}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="DAR-1: Offline routing regret analysis")
@@ -317,13 +384,13 @@ def main():
         print(f"Error: log directory not found: {log_dir}", file=sys.stderr)
         sys.exit(1)
 
-    decisions, outcomes = parse_progress_logs(log_dir, args.from_date, args.to_date)
+    decisions, outcomes, cheap_first = parse_progress_logs(log_dir, args.from_date, args.to_date)
 
     if not decisions:
         print("No routing decisions found in specified date range.", file=sys.stderr)
         sys.exit(1)
 
-    report = compute_regret(decisions, outcomes)
+    report = compute_regret(decisions, outcomes, cheap_first)
 
     if args.json:
         import dataclasses

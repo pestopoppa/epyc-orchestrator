@@ -135,6 +135,10 @@ class HybridRouter:
         self.last_decision_meta = {
             "decision_source": strategy,
             "chosen_action": chosen_action or "",
+            "action_topk": [
+                self._normalize_action(getattr(r.memory, "action", ""))
+                for r in top
+            ],
             "similarity_topk": [round(r.similarity, 4) for r in top],
             "q_topk": [round(r.q_value, 4) for r in top],
             "q_robust_confidence": round(top[0].q_confidence, 4) if top else 0.0,

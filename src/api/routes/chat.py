@@ -241,20 +241,67 @@ async def _try_cheap_first(
 
     cfg = get_config().chat
     if not cfg.try_cheap_first_enabled:
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=False,
+            passed=None,
+            reason="disabled",
+            cheap_role=str(getattr(cfg, "try_cheap_first_role", "")),
+            phase=str(getattr(cfg, "try_cheap_first_phase", "")),
+        )
         return None
 
     # Skip for forced modes, vision, delegation, or already-cheap roles
     cheap_role = cfg.try_cheap_first_role
     if request.force_mode or request.force_role:
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=False,
+            passed=None,
+            reason="forced_request",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+        )
         return None
     if str(initial_role) in {"worker_explore", "worker_math", "worker_vision"}:
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=False,
+            passed=None,
+            reason="already_cheap_or_vision",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+            initial_role=str(initial_role),
+        )
         return None  # Already cheap
     if execution_mode == "delegated":
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=False,
+            passed=None,
+            reason="delegated_mode",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+        )
         return None
 
     # RI-2: Skip cheap-first when factual risk is high — cheap models are
     # unreliable on factual questions and incorrect answers are worse than slow.
     if routing.factual_risk_band == "high":
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=False,
+            passed=None,
+            reason="high_factual_risk",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+            factual_risk_band=routing.factual_risk_band,
+        )
         return None
 
     # Phase B/C: check Q-value before attempting
@@ -273,6 +320,17 @@ async def _try_cheap_first(
                     if r.memory.metadata.get("role") == cheap_role:
                         worker_q = max(worker_q, r.q_value)
                 if worker_q < cfg.try_cheap_first_q_threshold:
+                    _log_cheap_first_counter(
+                        state,
+                        routing.task_id,
+                        attempted=False,
+                        passed=None,
+                        reason="low_q_value",
+                        cheap_role=cheap_role,
+                        phase=cfg.try_cheap_first_phase,
+                        worker_q=worker_q,
+                        q_threshold=cfg.try_cheap_first_q_threshold,
+                    )
                     return None  # MemRL says cheap won't work for this task class
             except Exception:
                 pass  # Fall through to Phase A behavior
@@ -313,12 +371,42 @@ async def _try_cheap_first(
         answer = answer.strip()
     except Exception as e:
         log.debug("Cheap-first attempt failed: %s", e)
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=True,
+            passed=False,
+            reason="llm_exception",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+            detail=type(e).__name__,
+        )
         return None
 
     # Quality gate: reject empty, very short, or error-like answers
     if not answer or len(answer) < 20:
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=True,
+            passed=False,
+            reason="empty_or_short_answer",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+            answer_chars=len(answer or ""),
+        )
         return None
     if answer.startswith("[ERROR"):
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=True,
+            passed=False,
+            reason="error_answer",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+            answer_chars=len(answer),
+        )
         return None
 
     # Check for obvious quality issues
@@ -327,6 +415,17 @@ async def _try_cheap_first(
     quality_issue = _detect_output_quality_issue(answer)
     if quality_issue:
         log.debug("Cheap-first quality gate failed: %s", quality_issue)
+        _log_cheap_first_counter(
+            state,
+            routing.task_id,
+            attempted=True,
+            passed=False,
+            reason="quality_issue",
+            cheap_role=cheap_role,
+            phase=cfg.try_cheap_first_phase,
+            answer_chars=len(answer),
+            detail=str(quality_issue)[:160],
+        )
         return None
 
     # Passed quality gate — return cheap answer
@@ -334,6 +433,17 @@ async def _try_cheap_first(
     log.info(
         "Try-cheap-first PASSED: %s answered in %.1fs (phase %s)",
         cheap_role, elapsed, cfg.try_cheap_first_phase,
+    )
+    _log_cheap_first_counter(
+        state,
+        routing.task_id,
+        attempted=True,
+        passed=True,
+        reason="passed",
+        cheap_role=cheap_role,
+        phase=cfg.try_cheap_first_phase,
+        elapsed_seconds=elapsed,
+        answer_chars=len(answer),
     )
 
     return ChatResponse(
@@ -353,6 +463,63 @@ async def _try_cheap_first(
         skill_ids=routing.skill_ids,
         tokens_generated=primitives.total_tokens_generated,
     )
+
+
+def _log_cheap_first_counter(
+    state: AppState,
+    task_id: str,
+    *,
+    attempted: bool,
+    passed: bool | None,
+    reason: str,
+    cheap_role: str = "",
+    phase: str = "",
+    initial_role: str = "",
+    factual_risk_band: str = "",
+    worker_q: float | None = None,
+    q_threshold: float | None = None,
+    elapsed_seconds: float | None = None,
+    answer_chars: int | None = None,
+    detail: str = "",
+) -> None:
+    """Append try-cheap-first denominator/accept/reject telemetry to progress JSONL."""
+    progress_logger = getattr(state, "progress_logger", None)
+    if not progress_logger:
+        return
+    try:
+        from orchestration.repl_memory.progress_logger import EventType, ProgressEntry
+
+        data = {
+            "kind": "try_cheap_first",
+            "cheap_first_attempted": attempted,
+            "cheap_first_passed": passed,
+            "reason": reason,
+            "cheap_role": str(cheap_role or ""),
+            "phase": str(phase or ""),
+        }
+        if initial_role:
+            data["initial_role"] = initial_role
+        if factual_risk_band:
+            data["factual_risk_band"] = factual_risk_band
+        if worker_q is not None:
+            data["worker_q"] = round(float(worker_q), 4)
+        if q_threshold is not None:
+            data["q_threshold"] = round(float(q_threshold), 4)
+        if elapsed_seconds is not None:
+            data["elapsed_seconds"] = round(float(elapsed_seconds), 4)
+        if answer_chars is not None:
+            data["answer_chars"] = int(answer_chars)
+        if detail:
+            data["detail"] = detail
+        progress_logger.log(
+            ProgressEntry(
+                event_type=EventType.ROUTING_FALLBACK,
+                task_id=task_id,
+                data=data,
+            )
+        )
+    except Exception:
+        log.debug("Cheap-first progress telemetry failed", exc_info=True)
 
 
 async def _handle_chat(
@@ -488,6 +655,16 @@ async def _handle_chat(
         # and task types that require multi-step REPL execution (coder, agentic).
         _task_type = routing.task_ir.get("task_type")
         if request.prompt.lower().startswith(_FACTUAL_QUESTION_PREFIXES) or _task_type in _REPL_ONLY_TASK_TYPES:
+            _log_cheap_first_counter(
+                state,
+                routing.task_id,
+                attempted=False,
+                passed=None,
+                reason="pre_bypass",
+                cheap_role=get_config().chat.try_cheap_first_role,
+                phase=get_config().chat.try_cheap_first_phase,
+                detail="factual_prefix_or_repl_only_task",
+            )
             cheap_result = None
         else:
             cheap_result = await _try_cheap_first(
@@ -500,6 +677,16 @@ async def _handle_chat(
             # model returned a function body without formatting (e.g. HumanEval/MBPP
             # intercepted before task_type bypass fires). REPL handles these correctly.
             if cheap_result.answer and "<answer>" not in cheap_result.answer:
+                _log_cheap_first_counter(
+                    state,
+                    routing.task_id,
+                    attempted=True,
+                    passed=False,
+                    reason="raw_answer_without_answer_tag",
+                    cheap_role=cheap_result.routed_to,
+                    phase=get_config().chat.try_cheap_first_phase,
+                    answer_chars=len(cheap_result.answer),
+                )
                 cheap_result = None
         if cheap_result is not None:
             return _finalize(cheap_result)
