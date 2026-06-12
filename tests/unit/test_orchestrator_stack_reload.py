@@ -58,6 +58,53 @@ def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
     assert saved[-1]["embedder"] == replacement_info
 
 
+def test_reload_document_formalizer_uses_auxiliary_starter(monkeypatch) -> None:
+    old_info = stack.ProcessInfo(
+        role="document_formalizer",
+        pid=111,
+        port=9001,
+        started_at="before",
+        model_path="old",
+        log_file="old.log",
+    )
+    new_info = stack.ProcessInfo(
+        role="document_formalizer",
+        pid=222,
+        port=9001,
+        started_at="after",
+        model_path="LightOnOCR-2-1B-bbox",
+        log_file="document_formalizer.log",
+    )
+    state = {"document_formalizer": old_info}
+    killed: list[int] = []
+    pid_helper_calls: list[int] = []
+    saved: list[dict[str, stack.ProcessInfo]] = []
+
+    monkeypatch.setattr(stack, "load_state", lambda: state)
+    monkeypatch.setattr(stack, "save_state", lambda value: saved.append(dict(value)))
+    monkeypatch.setattr(
+        stack,
+        "RegistryLoader",
+        lambda: (_ for _ in ()).throw(AssertionError("registry should not load")),
+    )
+    monkeypatch.setattr(stack, "kill_process", lambda pid: killed.append(pid))
+    monkeypatch.setattr(stack.time, "sleep", lambda _seconds: None)
+
+    def fake_pids_on_port(port: int) -> list[int]:
+        pid_helper_calls.append(port)
+        return [333]
+
+    monkeypatch.setattr(stack, "_pids_on_port", fake_pids_on_port)
+    monkeypatch.setattr(stack, "start_document_formalizer", lambda: new_info)
+
+    rc = stack.cmd_reload(Namespace(components=["document_formalizer"]))
+
+    assert rc == 0
+    assert killed == [333]
+    assert pid_helper_calls == [9001]
+    assert saved[-1] == {"document_formalizer": new_info}
+
+
 def test_preserved_process_info_records_listener_pid(monkeypatch) -> None:
     monkeypatch.setattr(stack_commands, "_pids_on_port", lambda port: [777])
 

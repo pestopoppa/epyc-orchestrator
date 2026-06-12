@@ -825,7 +825,13 @@ def cmd_stop(args: argparse.Namespace) -> int:
 def cmd_reload(args: argparse.Namespace) -> int:
     """Reload components."""
     state = load_state()
-    registry = RegistryLoader()
+    registry: RegistryLoader | None = None
+
+    def get_registry() -> RegistryLoader:
+        nonlocal registry
+        if registry is None:
+            registry = RegistryLoader()
+        return registry
 
     for component in args.components:
         print(f"Reloading {component}...")
@@ -863,7 +869,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 info = start_server(
                     port,
                     [role],
-                    registry,
+                    get_registry(),
                     dev_mode=False,
                     embedding_mode=True,
                 )
@@ -890,6 +896,23 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 state["orchestrator"] = info
             else:
                 print("  [!] Failed to restart orchestrator")
+                return 1
+
+        elif component == "document_formalizer":
+            port = 9001
+
+            # Auxiliary service: do not route through start_server()/RegistryLoader.
+            # It is a Python OCR service, not a llama-server registry role.
+            for pid in _pids_on_port(port):
+                kill_process(pid)
+            state.pop("document_formalizer", None)
+            time.sleep(1)
+
+            info = start_document_formalizer()
+            if info:
+                state["document_formalizer"] = info
+            else:
+                print("  [!] Failed to restart document_formalizer")
                 return 1
 
         elif component in PORT_MAP:
@@ -929,7 +952,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
             info = start_server(
                 port,
                 roles,
-                registry,
+                get_registry(),
                 dev_mode=False,
                 embedding_mode=embedding_mode,
                 worker_pool_mode=worker_pool_mode,
