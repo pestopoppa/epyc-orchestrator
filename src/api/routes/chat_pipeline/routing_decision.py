@@ -63,6 +63,8 @@ def select_initial_route(
         return [request.force_role], "forced", skill_context
     if request.role and request.role not in ("", "frontdoor"):
         return [request.role], "explicit", skill_context
+    if request.image_path or request.image_base64:
+        return ["worker_vision"], "vision_input", skill_context
     if state.hybrid_router and request.real_mode:
         if hasattr(state.hybrid_router, "route_with_skills") and features().skillbank:
             routing_decision, routing_strategy, skill_context = (

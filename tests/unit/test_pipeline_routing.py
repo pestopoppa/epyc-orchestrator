@@ -231,21 +231,21 @@ class TestRouteRequest:
         # architect_general has longer timeout (300s in ROLE_TIMEOUTS)
         assert result.timeout_s >= 120  # At least default
 
-    def test_image_path_triggers_vision_classification(self):
-        """Image path triggers vision classification."""
+    def test_image_path_bypasses_learned_text_routing(self):
+        """Unforced image requests route to vision before the learned router."""
         request = ChatRequest(prompt="describe", real_mode=True, image_path="/path/to/img.png")
         state = MagicMock()
-        state.hybrid_router = None
+        state.hybrid_router.route.return_value = ([str(Role.FRONTDOOR)], "learned")
         state.failure_graph = None
         state.progress_logger = None
 
         with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
-            mock_classify.return_value = ("worker_vision", "classified")
-            _route_request(request, state)
+            result = _route_request(request, state)
 
-        mock_classify.assert_called_once()
-        args, kwargs = mock_classify.call_args
-        assert kwargs.get("has_image") is True or args[-1] is True
+        state.hybrid_router.route.assert_not_called()
+        mock_classify.assert_not_called()
+        assert result.routing_strategy == "vision_input"
+        assert result.routing_decision == ["worker_vision"]
 
     def test_memrl_initialized_for_real_mode(self):
         """MemRL initialized early for real_mode requests."""

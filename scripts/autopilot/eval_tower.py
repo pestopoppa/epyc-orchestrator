@@ -366,7 +366,7 @@ class EvalTower:
                 error=error,
                 tokens_generated=tokens,
                 elapsed_s=elapsed,
-                route_used=resp.get("model", ""),
+                route_used=str(resp.get("routed_to") or resp.get("model") or ""),
                 cost_tier=resp.get("cost_tier", 0),
                 scoring_method=scoring_method,
                 partial=bool(resp.get("partial", False)),
@@ -720,7 +720,14 @@ class EvalTower:
         # sentinels therefore live in T1 AND T2 (the journaled evals), not here,
         # so get_eval_secret / tool_helpfulness telemetry actually reaches the
         # planner. (Keeping them here too would only double-run the sentinels.)
-        batch = sentinels[:10]
+        batch = []
+        for q in sentinels[:10]:
+            sentinel_q = dict(q)
+            suite = str(sentinel_q.get("suite", "unknown"))
+            if not suite.startswith("sentinel_"):
+                suite = f"sentinel_{suite}"
+            sentinel_q["suite"] = suite
+            batch.append(sentinel_q)
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(batch, client, label="T0")
         for r in results:

@@ -65,6 +65,18 @@ export LLAMA_CPP_BIN="${ORCHESTRATOR_PATHS_LLAMA_CPP_BIN}"
 export ORCHESTRATOR_PATHS_LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER:-${LLAMA_CPP_BIN}/llama-server}"
 export LLAMA_SERVER="${ORCHESTRATOR_PATHS_LLAMA_SERVER}"
 
+if [[ -z "${ORCHESTRATOR_PATHS_LLAMA_MTMD:-}" ]]; then
+  for mtmd_candidate in \
+    "${LLAMA_CPP_BIN}/llama-mtmd-cli" \
+    "${LLM_ROOT}/llama.cpp/build-v2/bin/llama-mtmd-cli" \
+    "${LLM_ROOT}/llama.cpp/build_libomp_pgo_bolt/bin/llama-mtmd-cli" \
+    "${LLM_ROOT}/llama.cpp/build-blis52/bin/llama-mtmd-cli"; do
+    if [[ -x "${mtmd_candidate}" ]]; then
+      export ORCHESTRATOR_PATHS_LLAMA_MTMD="${mtmd_candidate}"
+      break
+    fi
+  done
+fi
 export ORCHESTRATOR_PATHS_LLAMA_MTMD="${ORCHESTRATOR_PATHS_LLAMA_MTMD:-${LLAMA_CPP_BIN}/llama-mtmd-cli}"
 export LLAMA_MTMD="${ORCHESTRATOR_PATHS_LLAMA_MTMD}"
 
