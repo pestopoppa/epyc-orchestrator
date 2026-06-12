@@ -239,7 +239,18 @@ def plan_with_providers(
         if draft.provider == critic_name:
             degraded = True
         elif _circuit_is_open(planner_state, critic_name):
+            # Critic circuit is open (it failed repeatedly and is cooling down),
+            # but the PRIMARY draft succeeded. Treat as critic-unavailable on a
+            # TRUSTED draft: keep the draft and let the dispatch gate proceed for
+            # low/medium-risk actions (pause only for HIGH risk) rather than
+            # discarding a good primary draft for a stale seed_batch fallback.
+            # (2026-06-10)
             degraded = True
+            critique = PlannerCritique(
+                decision="unavailable",
+                provider=critic_name,
+                parse_error="critic circuit open",
+            )
         else:
             active_critique = settings.mode.strip().lower() == "draft_critique"
             critic_provider = provider_factory(critic_name)
@@ -258,23 +269,21 @@ def plan_with_providers(
                     # The critic invoke "succeeded" (nonzero text) but the text
                     # is NOT a valid critique block — e.g. Codex emitted prose
                     # or an error message instead of the json:autopilot_critique
-                    # fence. Do NOT let the dataclass's default decision="approve"
-                    # become a silent rubber-stamp (fail-open). Treat it as a
-                    # FAILED critique: mark failure (feeds circuit breaker),
-                    # degrade, and in draft_critique mode force decision="reject"
-                    # so _reconcile routes the risky action to the safe fallback
-                    # rather than admitting it unreviewed.
+                    # fence. This is a FAILED REVIEW, not a rejection of the draft.
+                    # Mark failure (feeds circuit breaker) and degrade. In binding
+                    # (draft_critique) mode flag the verdict "unavailable" and KEEP
+                    # the trusted-primary draft: the dispatch gate then proceeds for
+                    # low/medium-risk actions and pauses only for HIGH-risk ones.
+                    # We deliberately do NOT force a `reject` → seed_batch fallback:
+                    # a critic *failure* must not discard a good primary draft, and
+                    # the stale-seed substitution is what re-triggered the
+                    # critic_reject_loop halt @708. A genuine parsed `reject` (no
+                    # parse_error) still routes to the safe fallback below. (2026-06-10)
                     _mark_failure(planner_state, critique_result.provider, settings)
                     degraded = True
-                    if settings.mode.strip().lower() == "draft_critique":
-                        critique.decision = "reject"
-                    action, rationale, canonical_text = _reconcile(
-                        action,
-                        rationale,
-                        draft.text,
-                        critique,
-                        active=active_critique,
-                    )
+                    if active_critique:
+                        critique.decision = "unavailable"
+                    # keep draft action/rationale/canonical_text (no _reconcile)
                 else:
                     _mark_success(planner_state, critique_result.provider)
                     action, rationale, canonical_text = _reconcile(
@@ -285,21 +294,21 @@ def plan_with_providers(
                         active=active_critique,
                     )
             else:
+                # The critic invoke FAILED outright (timeout / empty / nonzero rc).
+                # Same principle as the parse_error branch: a failed *review* must
+                # not discard the trusted-primary draft. Binding mode → verdict
+                # "unavailable" + KEEP the draft (gate proceeds for low/medium risk,
+                # pauses for HIGH risk). Shadow mode → non-binding, fail-open to the
+                # draft. Neither substitutes the stale seed_batch fallback. (2026-06-10)
                 _mark_failure(planner_state, critique_result.provider, settings)
                 degraded = True
                 critique = PlannerCritique(
-                    decision="reject" if active_critique else "approve",
+                    decision="unavailable" if active_critique else "approve",
                     raw_text=critique_result.text,
                     provider=critique_result.provider,
                     parse_error=critique_result.error or "critique failed",
                 )
-                action, rationale, canonical_text = _reconcile(
-                    action,
-                    rationale,
-                    draft.text,
-                    critique,
-                    active=active_critique,
-                )
+                # keep draft action/rationale/canonical_text (no _reconcile)
 
     decision = PlannerDecision(
         action=action,
@@ -320,28 +329,82 @@ def plan_with_providers(
     return decision
 
 
-def uncritiqued_dispatch_block_reason(decision: PlannerDecision) -> str:
+def uncritiqued_dispatch_block_reason(
+    decision: PlannerDecision,
+    *,
+    is_blacklisted: bool = False,
+    is_repeated: bool = False,
+) -> str:
     """Pause reason if a DEGRADED decision must NOT dispatch its action.
 
-    When the planner ran degraded with NO critic verdict (e.g. the draft provider
-    returned empty and the fallback draft IS the critic provider, so no critique
-    ran — `degraded and critique is None`), the action is uncritiqued. It may
-    dispatch ONLY if it is explicitly observational (OBSERVATIONAL_ACTIONS, empty
-    by default); otherwise return "critic_unavailable" so the caller PAUSES for
-    operator review instead of running it unreviewed. seed_batch is deliberately
-    not observational (low-risk seed looping was the failure the critic catches).
+    Two distinct degraded shapes, handled differently (2026-06-10):
 
-    Returns "" when a real critique exists, when not degraded, or when there is no
-    dict action (the no-action path is handled separately by the caller).
+    * NO critique object at all (`critique is None`): the PRIMARY failed to draft
+      and the draft fell back to the critic provider (or the critic circuit opened
+      before any draft existed). The action is uncritiqued AND not from the trusted
+      primary → dispatch ONLY if explicitly observational (OBSERVATIONAL_ACTIONS,
+      empty by default), else pause `critic_unavailable` for operator review.
+      seed_batch is deliberately not observational (low-risk seed looping was the
+      failure the critic catches — critic_reject_loop @708).
+
+    * Critic verdict `"unavailable"`: the PRIMARY drafted fine but the binding
+      critic could not render a verdict (timeout / empty / unparseable / circuit
+      open). A failed *review* must not discard a good primary draft — but RISK
+      CLASS ALONE IS NOT A SUFFICIENT GUARD (the @708 failure was "low-risk" seed
+      looping). Tightened dispatch rule:
+        - HIGH risk → pause.
+        - seed_batch / passive low-risk actions (the loop-prone class) → pause,
+          unless explicitly observational + one-shot (OBSERVATIONAL_ACTIONS).
+        - MEDIUM-risk experiment → proceed ONLY IF novel and non-looping:
+          not `is_blacklisted`, not `is_repeated` (a recurring invalid signature),
+          and carrying a real `falsifier` hypothesis; else pause.
+      `is_blacklisted` / `is_repeated` are supplied by the caller (which holds the
+      blacklist + invalid-signature state). Shadow (non-binding) mode never blocks.
+
+    Returns "" when a real verdict exists (approve/reject/revise, already
+    reconciled), when not degraded, or when there is no dict action (the no-action
+    path is handled separately by the caller).
     """
-    if not decision.degraded or decision.critique is not None:
+    if not decision.degraded:
         return ""
     action = decision.action
     if not isinstance(action, dict):
         return ""
-    if action.get("type") in OBSERVATIONAL_ACTIONS:
-        return ""
-    return "critic_unavailable"
+    crit = decision.critique
+    # Case A — no trusted primary draft (no critique object).
+    if crit is None:
+        if action.get("type") in OBSERVATIONAL_ACTIONS:
+            return ""
+        return "critic_unavailable"
+    # Case B — trusted primary draft, but the binding critic could not review it.
+    if crit.decision == "unavailable":
+        if decision.mode.strip().lower() != "draft_critique":
+            return ""  # shadow / non-binding: advisory critic, never blocks
+        atype = action.get("type", "")
+        risk = action_risk(action)
+        # HIGH risk → never auto-run an unreviewed structural/code/registry change.
+        if risk == "high":
+            return "critic_unavailable"
+        # seed_batch / passive low-risk actions are the LOOP-PRONE class the critic
+        # exists to catch (the @708 failure was "low-risk" seed looping). Risk class
+        # alone is NOT enough — pause unless the action is EXPLICITLY observational
+        # and one-shot (membership in OBSERVATIONAL_ACTIONS, empty by default).
+        if atype in LOW_RISK_ACTIONS:
+            return "" if atype in OBSERVATIONAL_ACTIONS else "critic_unavailable"
+        # MEDIUM-risk experiment may proceed ONLY IF it is genuinely novel and not
+        # loop-keeping: not blacklisted, not a repeated (recurring-invalid) action,
+        # and carrying a real falsifiable hypothesis. Otherwise pause for review.
+        if risk == "medium":
+            if is_blacklisted or is_repeated:
+                return "critic_unavailable"
+            rationale = decision.rationale if isinstance(decision.rationale, dict) else {}
+            if not str(rationale.get("falsifier", "")).strip():
+                return "critic_unavailable"  # no hypothesis → treat as loop-keeping
+            return ""
+        # Any other class → pause (safe default).
+        return "critic_unavailable"
+    # A real verdict was already reconciled upstream → never blocks here.
+    return ""
 
 
 def build_critique_prompt(

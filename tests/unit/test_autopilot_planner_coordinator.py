@@ -267,8 +267,11 @@ def test_unparseable_critique_fails_closed_not_open() -> None:
     """Regression: a critic invoke that 'succeeds' (ok=True) but returns text
     that is NOT a valid json:autopilot_critique block (e.g. Codex emitting a
     file-read error or prose) must NOT silently auto-approve the risky draft.
-    It must be treated as a FAILED critique → reject → safe seed_batch fallback,
-    and mark the critic degraded for the circuit breaker."""
+    It must be treated as a FAILED REVIEW: verdict "unavailable", the trusted
+    primary draft KEPT (not swapped for seed_batch), critic marked degraded for
+    the circuit breaker. Because the draft is HIGH-risk, the dispatch gate then
+    fails CLOSED by PAUSING (critic_unavailable) — the unsafe draft is still not
+    admitted unreviewed. (Behavior refined 2026-06-10.)"""
     original = {"type": "structural_experiment", "flags": {"a": True}}
     claude = FakeProvider(
         "claude",
@@ -305,21 +308,29 @@ def test_unparseable_critique_fails_closed_not_open() -> None:
         provider_factory=_factory({"claude": claude, "codex": codex}),
     )
 
-    # Fail-closed: the unsafe structural_experiment must NOT be admitted; it is
-    # routed to the safe seed_batch fallback.
+    # New contract (2026-06-10): a FAILED review does NOT substitute seed_batch —
+    # the trusted-primary draft is KEPT and the verdict is "unavailable".
     assert decision.action is not None
-    assert decision.action["type"] == "seed_batch"
-    # The critique is recorded with its parse_error, not a clean approve.
+    assert decision.action["type"] == "structural_experiment"
     assert decision.critique is not None
-    assert decision.critique.parse_error
+    assert decision.critique.decision == "unavailable"
+    assert decision.critique.parse_error  # recorded, not a clean approve
     assert decision.degraded is True
     # Critic marked failed (feeds the circuit breaker).
     assert state.get("codex", {}).get("failures", 0) >= 1
+    # Fail-closed for HIGH-risk: the unsafe uncritiqued draft is NOT admitted —
+    # the dispatch gate pauses for operator review.
+    assert (
+        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
+        == "critic_unavailable"
+    )
 
 
 def test_failed_critique_invoke_fails_closed_not_open() -> None:
-    """A critic process failure (timeout, nonzero exit, empty response) must
-    fail closed in active draft_critique mode, not silently admit the draft."""
+    """A critic process failure (timeout, nonzero exit, empty response) on a
+    HIGH-risk draft must fail closed: keep the trusted draft + verdict
+    "unavailable", and the dispatch gate PAUSES (critic_unavailable) rather than
+    admit it unreviewed or substitute a stale seed_batch. (Refined 2026-06-10.)"""
     original = {"type": "structural_experiment", "flags": {"a": True}}
     claude = FakeProvider(
         "claude",
@@ -356,12 +367,18 @@ def test_failed_critique_invoke_fails_closed_not_open() -> None:
     )
 
     assert decision.action is not None
-    assert decision.action["type"] == "seed_batch"
+    # Trusted draft KEPT (not seed_batch); verdict "unavailable".
+    assert decision.action["type"] == "structural_experiment"
     assert decision.critique is not None
-    assert decision.critique.decision == "reject"
+    assert decision.critique.decision == "unavailable"
     assert decision.critique.parse_error == "timeout after 300s"
     assert decision.degraded is True
     assert state.get("codex", {}).get("failures", 0) >= 1
+    # HIGH-risk + critic unavailable => gate pauses (fails closed).
+    assert (
+        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
+        == "critic_unavailable"
+    )
 
 
 def test_unparseable_critique_shadow_mode_keeps_draft() -> None:
@@ -532,10 +549,11 @@ def test_open_primary_circuit_routes_directly_to_fallback() -> None:
     assert len(codex.calls) == 1
 
 
-def _uncritiqued_decision(action: Any, *, degraded: bool, critique: Any):
+def _uncritiqued_decision(action: Any, *, degraded: bool, critique: Any,
+                          rationale: Any = None, mode: str = "draft_critique"):
     return planner_coordinator.PlannerDecision(
-        action=action, rationale={}, session_id=None, canonical_text="",
-        draft_text="", draft_provider="codex", mode="draft_critique",
+        action=action, rationale=rationale or {}, session_id=None, canonical_text="",
+        draft_text="", draft_provider="codex", mode=mode,
         degraded=degraded, critique=critique,
     )
 
@@ -562,3 +580,85 @@ def test_uncritiqued_gate_allows_when_critiqued_or_not_degraded() -> None:
                degraded=False, critique=None)) == ""
     # no dict action => handled by the separate no-action path => no pause
     assert ubr(_uncritiqued_decision(None, degraded=True, critique=None)) == ""
+
+
+def test_uncritiqued_unavailable_dispatch_rule() -> None:
+    """Tightened Case-B rule (2026-06-12): verdict 'unavailable' on a TRUSTED
+    primary draft. Risk class alone is NOT the guard (the @708 failure was
+    'low-risk' seed looping):
+      - HIGH risk => pause.
+      - seed_batch / passive low-risk => pause (loop-prone class).
+      - MEDIUM experiment => proceed ONLY IF novel + non-looping (not blacklisted,
+        not repeated, carries a falsifier); else pause.
+      - shadow (non-binding) mode => never blocks."""
+    ubr = planner_coordinator.uncritiqued_dispatch_block_reason
+    unavail = planner_coordinator.PlannerCritique(
+        decision="unavailable", provider="claude", parse_error="timeout"
+    )
+    falsifier = {"falsifier": "tps drops >5% if X regresses"}
+
+    # HIGH risk => pause
+    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
+               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+    # seed_batch (loop-prone low-risk) => pause even with a falsifier
+    assert ubr(_uncritiqued_decision({"type": "seed_batch", "n_questions": 12},
+               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+    # passive low-risk (deep_eval) => pause (not in OBSERVATIONAL_ACTIONS)
+    assert ubr(_uncritiqued_decision({"type": "deep_eval", "tier": 2},
+               degraded=True, critique=unavail, rationale=falsifier)) == "critic_unavailable"
+
+    # MEDIUM experiment, novel + falsifier => PROCEED
+    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
+               degraded=True, critique=unavail, rationale=falsifier)) == ""
+    # MEDIUM but no falsifier (loop-keeping) => pause
+    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
+               degraded=True, critique=unavail, rationale={})) == "critic_unavailable"
+    # MEDIUM + blacklisted => pause
+    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
+               degraded=True, critique=unavail, rationale=falsifier),
+               is_blacklisted=True) == "critic_unavailable"
+    # MEDIUM + repeated (recurring invalid signature) => pause
+    assert ubr(_uncritiqued_decision({"type": "numeric_trial"},
+               degraded=True, critique=unavail, rationale=falsifier),
+               is_repeated=True) == "critic_unavailable"
+
+    # shadow (non-binding) mode never blocks, even for HIGH risk
+    assert ubr(_uncritiqued_decision({"type": "structural_experiment"},
+               degraded=True, critique=unavail, rationale=falsifier,
+               mode="shadow_critique")) == ""
+
+
+def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
+    """End-to-end (2026-06-12): a critic failure on a seed_batch draft KEEPS the
+    draft (verdict 'unavailable', not a stale seed_batch *substitution*) — but the
+    tightened gate still PAUSES it, because seed looping is the exact @708 failure
+    the critic exists to catch. Risk class alone must not let it through."""
+    original = {"type": "seed_batch", "n_questions": 12}  # loop-prone low-risk
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True,
+                               text=_action_text(original))],
+        supports_resume=True,
+    )
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="critique", ok=False,
+                               text="", error="timeout after 600s")],
+    )
+    state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt", session_id=None, planner_state=state,
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+    # Draft KEPT (not the seed_batch-fallback substitution), verdict 'unavailable'.
+    assert decision.action == original
+    assert decision.critique is not None
+    assert decision.critique.decision == "unavailable"
+    assert decision.degraded is True
+    assert state.get("codex", {}).get("failures", 0) >= 1
+    # seed_batch is loop-prone => the gate pauses for operator review.
+    assert (
+        planner_coordinator.uncritiqued_dispatch_block_reason(decision)
+        == "critic_unavailable"
+    )
