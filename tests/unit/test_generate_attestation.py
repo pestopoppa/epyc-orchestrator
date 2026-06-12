@@ -206,6 +206,43 @@ def test_build_serving_config_reports_numa_match() -> None:
     assert rows[0]["numa_intent"]["role"] == "frontdoor"
 
 
+def test_collect_eval_instrument_hashes_files_and_env(tmp_path: Path) -> None:
+    sentinel = tmp_path / "tool_sentinels.yaml"
+    sentinel.write_text("sentinels: []\n", encoding="utf-8")
+    proc_root = tmp_path / "proc"
+    for pid, env in (
+        (200, b"AUTOPILOT_TOOL_SENTINELS=1\0"),
+        (201, b""),
+    ):
+        pid_dir = proc_root / str(pid)
+        pid_dir.mkdir(parents=True)
+        (pid_dir / "environ").write_bytes(env)
+
+    report = attest.collect_eval_instrument(
+        [
+            {"pid": 200, "kind": "autopilot"},
+            {"pid": 201, "kind": "orchestrator_api"},
+        ],
+        proc_root=proc_root,
+        sentinel_paths=(sentinel,),
+    )
+
+    assert report["status"] == "warn"
+    assert report["files"][0]["exists"] is True
+    assert report["files"][0]["sha256"]
+    assert report["missing_tool_sentinel_env"] == [{"pid": 201, "kind": "orchestrator_api"}]
+
+
+def test_parse_gitnexus_status_marks_stale() -> None:
+    parsed = attest._parse_gitnexus_status(
+        "Repository: /repo\nIndexed commit: abc123\nCurrent commit: def456\nStatus: stale"
+    )
+
+    assert parsed["indexed_commit"] == "abc123"
+    assert parsed["current_commit"] == "def456"
+    assert parsed["stale"] is True
+
+
 def test_build_report_from_fake_proc(monkeypatch, tmp_path: Path) -> None:
     proc_root = tmp_path / "proc"
     pid_dir = proc_root / "123"

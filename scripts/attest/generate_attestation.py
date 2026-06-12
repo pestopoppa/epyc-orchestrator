@@ -27,6 +27,18 @@ DEFAULT_REGISTRY = Path("orchestration/model_registry.yaml")
 DEFAULT_OUT_DIR = Path("orchestration/attestation")
 DEFAULT_PROC_ROOT = Path("/proc")
 DEFAULT_CONFIG_URL = "http://127.0.0.1:8000"
+DEFAULT_SENTINEL_FILES = (
+    Path("orchestration/instrument_eras.yaml"),
+    Path("scripts/autopilot/sentinel_questions.yaml"),
+    Path("scripts/autopilot/tool_sentinels.yaml"),
+    Path("orchestration/deep_research_sentinel.yaml"),
+)
+DEFAULT_GITNEXUS_REPOS = (
+    Path("/mnt/raid0/llm/epyc-root"),
+    Path("/mnt/raid0/llm/epyc-orchestrator"),
+    Path("/mnt/raid0/llm/epyc-inference-research"),
+    Path("/mnt/raid0/llm/llama.cpp"),
+)
 LLAMA_LIB_NAMES = ("libllama", "libggml", "libmtmd")
 PROCESS_MARKERS = (
     "llama-server",
@@ -59,6 +71,27 @@ def sha256_file(path: Path) -> str | None:
         return h.hexdigest()
     except OSError:
         return None
+
+
+def file_attestation(path: Path) -> dict[str, Any]:
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        return {
+            "path": str(path),
+            "exists": False,
+            "error": str(exc),
+            "sha256": None,
+        }
+    return {
+        "path": str(path),
+        "exists": True,
+        "size_bytes": stat.st_size,
+        "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "sha256": sha256_file(path),
+    }
 
 
 def read_cmdline(pid: int, proc_root: Path = DEFAULT_PROC_ROOT) -> list[str]:
@@ -500,6 +533,94 @@ def collect_feature_flags(
     }
 
 
+def collect_eval_instrument(
+    processes: list[dict[str, Any]],
+    *,
+    proc_root: Path = DEFAULT_PROC_ROOT,
+    sentinel_paths: tuple[Path, ...] = DEFAULT_SENTINEL_FILES,
+) -> dict[str, Any]:
+    files = [file_attestation(path) for path in sentinel_paths]
+    process_env: list[dict[str, Any]] = []
+    missing_tool_sentinel_env: list[dict[str, Any]] = []
+    for proc in processes:
+        if proc["kind"] not in {"autopilot", "orchestrator_api"}:
+            continue
+        env = read_environ(proc["pid"], proc_root)
+        value = env.get("AUTOPILOT_TOOL_SENTINELS")
+        row = {
+            "pid": proc["pid"],
+            "kind": proc["kind"],
+            "has_AUTOPILOT_TOOL_SENTINELS": value is not None,
+            "AUTOPILOT_TOOL_SENTINELS": value,
+        }
+        process_env.append(row)
+        if value is None:
+            missing_tool_sentinel_env.append(
+                {
+                    "pid": proc["pid"],
+                    "kind": proc["kind"],
+                }
+            )
+    missing_files = [item for item in files if not item.get("exists")]
+    status = "ok" if not missing_files and not missing_tool_sentinel_env else "warn"
+    return {
+        "status": status,
+        "files": files,
+        "process_env": process_env,
+        "missing_files": missing_files,
+        "missing_tool_sentinel_env": missing_tool_sentinel_env,
+    }
+
+
+def _parse_gitnexus_status(output: str) -> dict[str, Any]:
+    parsed: dict[str, Any] = {"raw": output}
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip().lower().replace(" ", "_")
+        parsed[key] = value.strip()
+    indexed = parsed.get("indexed_commit")
+    current = parsed.get("current_commit")
+    parsed["stale"] = bool(indexed and current and indexed != current)
+    return parsed
+
+
+def collect_drift_checks(
+    *,
+    gitnexus_repos: tuple[Path, ...] = DEFAULT_GITNEXUS_REPOS,
+) -> dict[str, Any]:
+    gitnexus: list[dict[str, Any]] = []
+    for repo in gitnexus_repos:
+        entry: dict[str, Any] = {"repo": str(repo)}
+        try:
+            result = subprocess.run(
+                ["gitnexus", "status"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            entry["returncode"] = result.returncode
+            entry.update(_parse_gitnexus_status(result.stdout.strip()))
+            if result.stderr.strip():
+                entry["stderr"] = result.stderr.strip()
+        except Exception as exc:
+            entry.update({"returncode": None, "error": str(exc), "stale": True})
+        gitnexus.append(entry)
+    stale = [
+        item
+        for item in gitnexus
+        if item.get("stale") or item.get("returncode") not in (0, None) or item.get("error")
+    ]
+    return {
+        "status": "ok" if not stale else "warn",
+        "gitnexus": gitnexus,
+        "stale_or_error": stale,
+    }
+
+
 def parse_readelf_dynamic(output: str) -> dict[str, Any]:
     needed: list[str] = []
     rpaths: list[str] = []
@@ -721,6 +842,8 @@ def summarize(
     *,
     feature_flags: dict[str, Any] | None = None,
     serving_config: list[dict[str, Any]] | None = None,
+    eval_instrument: dict[str, Any] | None = None,
+    drift: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     by_kind: dict[str, int] = {}
@@ -783,6 +906,32 @@ def summarize(
                 "issues": flag_issues or ["feature_flag_attestation_warn"],
             }
         )
+    if eval_instrument and eval_instrument.get("status") == "warn":
+        eval_issues: list[str] = []
+        if eval_instrument.get("missing_files"):
+            eval_issues.append(f"missing_instrument_files={len(eval_instrument['missing_files'])}")
+        if eval_instrument.get("missing_tool_sentinel_env"):
+            eval_issues.append(
+                "missing_AUTOPILOT_TOOL_SENTINELS="
+                f"{len(eval_instrument['missing_tool_sentinel_env'])}"
+            )
+        issues.append(
+            {
+                "pid": "",
+                "kind": "eval_instrument",
+                "port": "",
+                "issues": eval_issues or ["eval_instrument_warn"],
+            }
+        )
+    if drift and drift.get("status") == "warn":
+        issues.append(
+            {
+                "pid": "",
+                "kind": "drift",
+                "port": "",
+                "issues": [f"gitnexus_stale_or_error={len(drift.get('stale_or_error') or [])}"],
+            }
+        )
     return {
         "process_count": len(processes),
         "by_kind": dict(sorted(by_kind.items())),
@@ -799,6 +948,7 @@ def build_report(
     flag_polls: int = 0,
     flag_delay_s: float = 0.05,
     flag_min_workers: int = 1,
+    gitnexus_repos: tuple[Path, ...] = (),
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     registry_ports = load_registry_ports(registry)
@@ -812,10 +962,12 @@ def build_report(
         min_workers=flag_min_workers,
         proc_root=proc_root,
     )
+    eval_instrument = collect_eval_instrument(processes, proc_root=proc_root)
+    drift = collect_drift_checks(gitnexus_repos=gitnexus_repos)
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": generated_at or utc_now(),
-        "scope": "W1_W2_process_flags_serving_config",
+        "scope": "W1_W2_W3_process_flags_serving_eval_drift",
         "sources": {
             "proc_root": str(proc_root),
             "registry": str(registry),
@@ -827,15 +979,17 @@ def build_report(
             "processes": processes,
             "feature_flags": feature_flags,
             "serving_config": serving_config,
+            "eval_instrument": eval_instrument,
+            "drift": drift,
         },
         "summary": summarize(
             processes,
             feature_flags=feature_flags,
             serving_config=serving_config,
+            eval_instrument=eval_instrument,
+            drift=drift,
         ),
         "pending_sections": [
-            "eval_instrument_w3",
-            "drift_w3",
             "backup_w3",
             "cadence_consumers_w4",
         ],
@@ -946,6 +1100,66 @@ def render_markdown(report: dict[str, Any]) -> str:
                 ),
             )
         )
+    eval_instrument = report["sections"].get("eval_instrument") or {}
+    lines.extend(
+        [
+            "",
+            "## Eval Instrument",
+            "",
+            f"Status: `{eval_instrument.get('status', 'unknown')}`",
+            "",
+            "| file | exists | sha256[:12] | mtime |",
+            "|---|---|---|---|",
+        ]
+    )
+    for item in eval_instrument.get("files") or []:
+        lines.append(
+            "| `{path}` | {exists} | {sha} | {mtime} |".format(
+                path=item.get("path", ""),
+                exists=item.get("exists"),
+                sha=(item.get("sha256") or "")[:12],
+                mtime=item.get("mtime") or "",
+            )
+        )
+    process_env = eval_instrument.get("process_env") or []
+    if process_env:
+        lines.extend(
+            [
+                "",
+                "| pid | kind | AUTOPILOT_TOOL_SENTINELS |",
+                "|---:|---|---|",
+            ]
+        )
+        for item in process_env:
+            lines.append(
+                "| {pid} | {kind} | `{value}` |".format(
+                    pid=item.get("pid", ""),
+                    kind=item.get("kind", ""),
+                    value=item.get("AUTOPILOT_TOOL_SENTINELS") or "",
+                )
+            )
+    drift = report["sections"].get("drift") or {}
+    lines.extend(
+        [
+            "",
+            "## Drift",
+            "",
+            f"Status: `{drift.get('status', 'unknown')}`",
+            "",
+            "| repo | indexed | current | stale | status |",
+            "|---|---|---|---|---|",
+        ]
+    )
+    for item in drift.get("gitnexus") or []:
+        lines.append(
+            "| `{repo}` | {indexed} | {current} | {stale} | {status} |".format(
+                repo=item.get("repo", ""),
+                indexed=item.get("indexed_commit", ""),
+                current=item.get("current_commit", ""),
+                stale=item.get("stale", ""),
+                status=item.get("status", ""),
+            )
+        )
     if summary["issues"]:
         lines.extend(["", "## Issues", "", "| pid | kind | port | issues |", "|---:|---|---:|---|"])
         for issue in summary["issues"]:
@@ -990,9 +1204,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--flag-polls", type=int, default=120)
     parser.add_argument("--flag-delay-s", type=float, default=0.05)
     parser.add_argument("--flag-min-workers", type=int, default=1)
+    parser.add_argument(
+        "--gitnexus-repo",
+        action="append",
+        type=Path,
+        default=None,
+        help="Repository path to include in GitNexus freshness checks; repeatable.",
+    )
     parser.add_argument("--generated-at", default=None)
     parser.add_argument("--print-md", action="store_true")
     args = parser.parse_args(argv)
+    gitnexus_repos = tuple(args.gitnexus_repo or DEFAULT_GITNEXUS_REPOS)
 
     report = build_report(
         registry=args.registry,
@@ -1001,6 +1223,7 @@ def main(argv: list[str] | None = None) -> int:
         flag_polls=args.flag_polls,
         flag_delay_s=args.flag_delay_s,
         flag_min_workers=args.flag_min_workers,
+        gitnexus_repos=gitnexus_repos,
         generated_at=args.generated_at,
     )
     json_path, md_path = write_report(report, args.out_dir)

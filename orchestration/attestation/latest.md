@@ -1,9 +1,9 @@
 # Running-State Attestation
 
-Generated: `2026-06-12T21:20:59Z`
-Scope: `W1_W2_process_flags_serving_config`
+Generated: `2026-06-12T21:27:12Z`
+Scope: `W1_W2_W3_process_flags_serving_eval_drift`
 Processes: `34`
-Issues: `14`
+Issues: `16`
 
 ## Process Summary
 
@@ -59,9 +59,9 @@ Issues: `14`
 
 Status: `warn`
 Endpoint: `http://127.0.0.1:8000/config/attest`
-Workers seen: `6`
+Workers seen: `5`
 Heterogeneous flags: `0`
-Intent diffs: `48`
+Intent diffs: `40`
 Env diffs: `0`
 
 | pid | error | enabled flags |
@@ -70,8 +70,7 @@ Env diffs: `0`
 | 2780310 |  | 41 |
 | 2780311 |  | 41 |
 | 2780313 |  | 41 |
-| 2780314 |  | 41 |
-| 2825661 |  | 41 |
+| 2974316 |  | 41 |
 
 ## Serving Config
 
@@ -106,6 +105,34 @@ Env diffs: `0`
 | 1896682 | 8094 |  | `/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf` | `` | 512 | 4 | 0,96 | 0-191 |  | n/a |
 | 1896917 | 8095 |  | `/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf` | `` | 512 | 4 | 0,96 | 0-191 |  | n/a |
 
+## Eval Instrument
+
+Status: `warn`
+
+| file | exists | sha256[:12] | mtime |
+|---|---|---|---|
+| `orchestration/instrument_eras.yaml` | True | 4e612860c32d | 2026-06-12T21:01:17Z |
+| `scripts/autopilot/sentinel_questions.yaml` | True | f31b2f07f1c8 | 2026-06-12T21:01:17Z |
+| `scripts/autopilot/tool_sentinels.yaml` | True | b8b82b6d17b0 | 2026-06-12T21:01:17Z |
+| `orchestration/deep_research_sentinel.yaml` | True | 2b1cfe9bc3e2 | 2026-06-12T21:01:17Z |
+
+| pid | kind | AUTOPILOT_TOOL_SENTINELS |
+|---:|---|---|
+| 2780307 | orchestrator_api | `` |
+| 2798819 | autopilot | `` |
+| 2798824 | autopilot | `` |
+
+## Drift
+
+Status: `warn`
+
+| repo | indexed | current | stale | status |
+|---|---|---|---|---|
+| `/mnt/raid0/llm/epyc-root` | d805720 | d805720 | False | ✅ up-to-date |
+| `/mnt/raid0/llm/epyc-orchestrator` | 594cfb5 | 2e253e9 | True | ⚠️ stale (re-run gitnexus analyze) |
+| `/mnt/raid0/llm/epyc-inference-research` | 3606f9e | 3606f9e | False | ✅ up-to-date |
+| `/mnt/raid0/llm/llama.cpp` | ff6943a | ff6943a | False | ✅ up-to-date |
+
 ## Issues
 
 | pid | kind | port | issues |
@@ -123,8 +150,10 @@ Env diffs: `0`
 | 1896475 | llama_server | 8093 | port_not_found_in_registry |
 | 1896682 | llama_server | 8094 | port_not_found_in_registry |
 | 1896917 | llama_server | 8095 | port_not_found_in_registry |
-|  | feature_flags |  | flag_intent_diffs=48 |
+|  | feature_flags |  | flag_workers_seen=5<6, flag_intent_diffs=40 |
+|  | eval_instrument |  | missing_AUTOPILOT_TOOL_SENTINELS=3 |
+|  | drift |  | gitnexus_stale_or_error=1 |
 
 ## Pending Sections
 
-eval_instrument_w3, drift_w3, backup_w3, cadence_consumers_w4
+backup_w3, cadence_consumers_w4
