@@ -1,0 +1,51 @@
+# Instrument-era registry — APPEND-ONLY. Consumed by replay/dashboard/verdict tools and agent sessions.
+# Authority: /workspace/MEASUREMENT.md §5 (retroactivity & reconciliation). Created 2026-06-12 (Fable 5 review).
+# Rule: when interpreting any historical metric, era-label it first, then apply its verb
+#   (retro-certify | demote-to-prior | retire-view). Never edit rows; append new eras.
+
+eras:
+  - id: E0
+    until: "2026-04-26"
+    scope: cpu_bench
+    note: "Pre-canonical bench protocol. All CPU bench claims demote-to-prior (empirically: EP +17% collapsed to +1.6% on canonical re-measurement)."
+
+  - id: E1
+    from: "2026-04-26"
+    scope: cpu_bench
+    note: "Canonical bench era (CPU20; bench_canonical.sh/canonical_recipe.py from 2026-05-28). Results with recorded command+env retro-certify to P-BENCH-1/2."
+
+  - id: E2
+    from: "2026-06-01T19:20:16Z"   # == pareto_epoch_ts 1780341616 in autopilot_state.json
+    scope: autopilot_speed
+    note: >
+      Speed objective de-double-counted. Pre-E2 journal speeds are inflated x1.55-2;
+      read-time deinflation factor 0.5 applies before this boundary.
+      WARNING (false friend): eval_details.speed_metric_mode is 'aggregate_batch_tps' on BOTH
+      sides of this boundary — era-label by timestamp vs pareto_epoch_ts ONLY, never by that field.
+
+  - id: E3a
+    from: "2026-06-04T06:41:00Z"
+    scope: autopilot_quality
+    note: "Tool sentinels live (T0 n=15 era starts). Pre-boundary rows: 'tool_use' key ABSENT from per_suite_quality (absence == era marker). tool telemetry before this = structurally zero, not model behavior."
+
+  - id: E3b
+    from: "2026-06-05T13:07:00Z"   # trial 652
+    scope: autopilot_quality
+    note: "T1 instrument n: 38 -> 43 (tool sentinels joined journaled T1). The n boundary is trial 652, NOT the 06-04 cutover. Era-label by details.total. Cross-n frontier comparisons invalid."
+
+  - id: E3-routing
+    from: "2026-05-25T15:35:00Z"
+    scope: routing_memory
+    note: "Episodic memory reset. All 287K+ current rows post-date this; ALL are demote-to-prior wholesale (trained under flawed-instrument eras; no reward decomposition stored — see MEASUREMENT.md §5 corpus 4)."
+
+  # E4 opens when the instrument repair lands (dead items fixed/excised, core_v2, task_rate axis,
+  # sequential verdicts, per-question ledger). Append it then with: core_id, policy_version,
+  # and the rule that E<=3 T1 frontiers/baselines are retired views (no cross-era dominance).
+
+known_dead_instrument_items:
+  # Discovered 2026-06-12 (fable5-findings-01-impl-plan §2.0). Until repaired, ALL T1 quality
+  # numbers have effective n ~= 35 of 43 and ceiling ~= 2.44/3.0.
+  - { suite: usaco, qids: [usaco_silver_1326, usaco_silver_759], cause: "expected=='' never scored (eval_tower truthy-expected gate)" }
+  - { suite: instruction_precision, qids: [ifeval_2292, ifeval_3691], cause: "expected=='' never scored" }
+  - { suite: bigcodebench, qids: ["bcb_BigCodeBench/228", "bcb_BigCodeBench/51"], cause: "test_code imports pandas; absent from venv" }
+  - { suite: vl, qids: [chart_test_0452, chart_test_1401], cause: "UNRESOLVED — servers live + image_path forwarded, yet 0/376; trace one request" }
