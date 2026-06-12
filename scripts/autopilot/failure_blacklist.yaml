@@ -28,3 +28,285 @@ blacklist:
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 193'
   added: '2026-06-01T01:31:36.486393+00:00'
   source_trial: 193
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 360'
+  added: '2026-06-03T15:07:36.868467+00:00'
+  source_trial: 360
+- pattern:
+    type: deep_eval
+    tier: 2
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 367'
+  added: '2026-06-04T06:25:47.773880+00:00'
+  source_trial: 367
+- pattern:
+    type: seed_batch
+    n_questions: 10
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 379'
+  added: '2026-06-04T09:15:51.921541+00:00'
+  source_trial: 379
+- pattern:
+    type: structural_experiment
+    flags:
+      skillbank: true
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 505'
+  added: '2026-06-04T15:42:30.779348+00:00'
+  source_trial: 505
+- pattern:
+    type: structural_experiment
+    flags:
+      graph_router: true
+  reason: 'Auto-blacklisted: 2× invalid — graph_router feature requires specialist_routing
+    feature'
+  added: '2026-06-04T17:17:42.501586+00:00'
+  source_trial: 518
+- pattern:
+    type: seed_batch
+    n_questions: 3
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft proposes
+    seed_batch n_questions=3, but available action s'
+  added: '2026-06-04T19:11:59.386464+00:00'
+  source_trial: 528
+- pattern:
+    type: numeric_trial
+    surface: monitor
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft action is
+    technically allowed, but the rationale relies o'
+  added: '2026-06-05T00:40:04.377779+00:00'
+  source_trial: 570
+- pattern:
+    type: structural_experiment
+    flags:
+      parallel_execution: true
+  reason: 'Auto-blacklisted: 2× invalid — parallel_execution feature requires architect_delegation
+    feature'
+  added: '2026-06-05T01:56:28.232661+00:00'
+  source_trial: 581
+- pattern:
+    type: prompt_mutation
+    file: frontdoor.md
+  reason: 'MANUAL FREEZE: prompt_forge _extract_mutation captured reply prose and
+    overwrote frontdoor.md repeatedly (commits 2bc46c4 / 81d0b0d), zeroing eval suites.
+    Root-cause fix is committed (2cb4096) but needs an autopilot restart to take effect
+    and clear the in-memory cached baseline. Blocks all prompt_mutation subtypes (compress
+    / targeted_fix / few_shot_evolution) on frontdoor.md.'
+  added: '2026-06-05T03:05:00Z'
+  severity: corruption
+  source_trial: -1
+  notes: Manual recovery entry — remove after restarting the autopilot (loads 2cb4096
+    and clears the cached baseline).
+- pattern:
+    type: gepa_optimize
+    file: frontdoor.md
+  reason: 'MANUAL FREEZE (companion to the entry above): freeze all frontdoor.md mutation
+    while extractor fix 2cb4096 is pending a restart. frontdoor.md has documented
+    catastrophic blast radius (#185 / #190 / #191 / #536).'
+  added: '2026-06-05T03:05:00Z'
+  severity: corruption
+  source_trial: -1
+  notes: Manual recovery entry — remove after restarting the autopilot.
+- pattern:
+    type: structural_experiment
+    flags:
+      generalized_interrupts: true
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 610'
+  added: '2026-06-05T06:25:48.426834+00:00'
+  source_trial: 610
+- pattern:
+    type: seed_batch
+    n_questions: 20
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft relies on
+    an invented seed/numeric alternation and choose'
+  added: '2026-06-05T08:35:03.192753+00:00'
+  source_trial: 621
+- pattern:
+    type: structural_experiment
+    flags:
+      staged_rewards: true
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 637'
+  added: '2026-06-05T10:40:25.917649+00:00'
+  source_trial: 637
+- pattern:
+    type: structural_experiment
+    flags:
+      plan_review: true
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 653'
+  added: '2026-06-05T13:25:12.455715+00:00'
+  source_trial: 653
+- pattern:
+    type: structural_experiment
+    flags:
+      architect_delegation: true
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 655'
+  added: '2026-06-05T14:12:36.611610+00:00'
+  source_trial: 655
+- pattern:
+    type: seed_batch
+    n_questions: 15
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 659'
+  added: '2026-06-05T15:32:11.810006+00:00'
+  source_trial: 659
+- pattern:
+    type: rollback
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft action is
+    recovery-only but rollback already failed at #6'
+  added: '2026-06-05T16:33:14.117892+00:00'
+  source_trial: 662
+- pattern:
+    type: seed_batch
+    n_questions: 10
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 662'
+  added: '2026-06-05T16:52:12.039230+00:00'
+  source_trial: 662
+- pattern:
+    type: deep_eval
+    tier: 1
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft rationale
+    over-attributes repeated gate failures to a sta'
+  added: '2026-06-05T17:16:06.484971+00:00'
+  source_trial: 664
+- pattern:
+    type: structural_experiment
+    flags:
+      specialist_routing: true
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 664'
+  added: '2026-06-05T17:32:53.917962+00:00'
+  source_trial: 664
+- pattern:
+    type: structural_experiment
+    flags:
+      graph_router: true
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft action exactly
+    matches a Blacklisted Configurations entry'
+  added: '2026-06-05T19:16:24.457198+00:00'
+  source_trial: 669
+- pattern:
+    type: structural_experiment
+    flags:
+      ingest_triviality_guard: true
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 669'
+  added: '2026-06-05T19:32:16.562936+00:00'
+  source_trial: 669
+- pattern:
+    type: seed_batch
+    n_questions: 30
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 671'
+  added: '2026-06-05T20:19:56.955132+00:00'
+  source_trial: 671
+- pattern:
+    type: deep_eval
+    tier: 0
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft relies on
+    stale/contradictory attribution: #666/#672/#674'
+  added: '2026-06-05T20:56:24.544732+00:00'
+  source_trial: 675
+- pattern:
+    type: numeric_trial
+    surface: escalation
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 677'
+  added: '2026-06-05T21:55:43.679582+00:00'
+  source_trial: 677
+- pattern:
+    type: seed_batch
+    n_questions: 28
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft re-attempts
+    exact seed_batch n=28 from #678 despite a rec'
+  added: '2026-06-05T22:52:07.161137+00:00'
+  source_trial: 680
+- pattern:
+    type: numeric_trial
+    surface: think_harder
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 680'
+  added: '2026-06-05T23:08:10.746561+00:00'
+  source_trial: 680
+- pattern:
+    type: seed_batch
+    n_questions: 10
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 682'
+  added: '2026-06-05T23:48:53.673573+00:00'
+  source_trial: 682
+- pattern:
+    type: structural_experiment
+    flags:
+      personas: true
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 684'
+  added: '2026-06-06T00:29:08.050854+00:00'
+  source_trial: 684
+- pattern:
+    type: seed_batch
+    n_questions: 24
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 687'
+  added: '2026-06-06T02:08:35.878397+00:00'
+  source_trial: 687
+- pattern:
+    type: seed_batch
+    n_questions: 18
+    suites:
+    - agentic
+    - mode_advantage_hard
+    - instruction_precision
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 690'
+  added: '2026-06-06T04:00:38.860186+00:00'
+  source_trial: 690
+- pattern:
+    type: seed_batch
+    n_questions: 16
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 693'
+  added: '2026-06-06T05:17:42.095992+00:00'
+  source_trial: 693
+- pattern:
+    type: seed_batch
+    n_questions: 10
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 696'
+  added: '2026-06-06T06:38:54.051485+00:00'
+  source_trial: 696
+- pattern:
+    type: structural_experiment
+    flags:
+      personas: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 698'
+  added: '2026-06-06T07:30:53.773390+00:00'
+  source_trial: 698
+- pattern:
+    type: seed_batch
+    n_questions: 11
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 701'
+  added: '2026-06-06T08:44:40.035107+00:00'
+  source_trial: 701
+- pattern:
+    type: seed_batch
+    n_questions: 13
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 704'
+  added: '2026-06-06T09:52:49.678145+00:00'
+  source_trial: 704
+- pattern:
+    type: seed_batch
+    n_questions: 12
+  reason: 'MANUAL operator recovery @708 (critic_reject_loop): planner fixated on
+    seed_batch n=12 (already ran+failed at #699); critic rejected 4 consecutive drafts.
+    Blacklisted to break the immediate loop while the poisoned resumed planner session
+    is reset (session_id cleared). Remove once the planner stops loop-keeping.'
+  added: '2026-06-07T16:05:24+00:00'
+  source_trial: 708
+- pattern:
+    type: structural_experiment
+    flags:
+      worker_call_budget: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 727'
+  added: '2026-06-10T16:12:37.246112+00:00'
+  source_trial: 727
+- pattern:
+    type: structural_experiment
+    flags:
+      langgraph_coder_escalation: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 738'
+  added: '2026-06-10T19:55:05.936904+00:00'
+  source_trial: 738
+- pattern:
+    type: numeric_trial
+    surface: monitor
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft exactly matches
+    Blacklisted Configurations {''type'':''numer'
+  added: '2026-06-10T22:52:41.781433+00:00'
+  source_trial: 747
