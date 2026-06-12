@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -45,6 +46,103 @@ from .staged_scorer import StagedQScorer
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MODEL_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
+)
+
+FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
+    "frontdoor": 12.7,
+    "coder_escalation": 10.8,
+    "architect_general": 4.3,
+    "architect_coding": 8.0,
+    "ingest_long_context": 12.0,
+    "worker_explore": 50.0,
+    "worker_general": 50.0,
+    "worker_math": 50.0,
+    "toolrunner": 50.0,
+    "worker_vision": 15.28,
+    "vision_escalation": 27.6,
+}
+
+SERVER_MODE_TPS_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "frontdoor": ("frontdoor",),
+    "coder_escalation": ("coder_escalation",),
+    "architect_general": ("architect_general",),
+    "ingest_long_context": ("ingest_long_context",),
+    # The production worker server is shared by these scorer roles.
+    "worker": ("worker_explore", "worker_general", "worker_math", "toolrunner"),
+}
+
+ROLE_PERFORMANCE_TPS_FALLBACKS: Dict[str, str] = {
+    "worker_vision": "worker_vision",
+    "vision_escalation": "vision_escalation",
+}
+
+
+def _coerce_tps(value: Any) -> float | None:
+    """Return a numeric t/s value from registry scalars or lower-bound ranges."""
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+        return parsed if parsed > 0 else None
+    if isinstance(value, str):
+        match = re.search(r"\d+(?:\.\d+)?", value)
+        if match:
+            parsed = float(match.group(0))
+            return parsed if parsed > 0 else None
+    return None
+
+
+def _performance_tps(role_record: dict[str, Any]) -> float | None:
+    perf = role_record.get("performance", {})
+    if not isinstance(perf, dict):
+        return None
+    return _coerce_tps(perf.get("optimized_tps")) or _coerce_tps(perf.get("baseline_tps"))
+
+
+def registry_baseline_tps_by_role(
+    registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
+) -> Dict[str, float]:
+    """Load QScorer t/s baselines from the lean model registry.
+
+    The scorer keeps a fallback table so tests, replay tools, and degraded
+    maintenance scripts can run without the registry. Live roles prefer the
+    deployment `server_mode.*.throughput` values; vision-only roles use
+    `roles.*.performance.optimized_tps` because they are not normal text
+    server-mode entries.
+    """
+    baselines = dict(FALLBACK_BASELINE_TPS_BY_ROLE)
+    try:
+        import yaml
+
+        data = yaml.safe_load(registry_path.read_text()) or {}
+    except Exception as exc:
+        logger.warning("Using fallback q_scorer TPS baselines; registry load failed: %s", exc)
+        return baselines
+
+    server_mode = data.get("server_mode", {})
+    if isinstance(server_mode, dict):
+        for server_key, target_roles in SERVER_MODE_TPS_ROLE_ALIASES.items():
+            record = server_mode.get(server_key, {})
+            if not isinstance(record, dict):
+                continue
+            tps = _coerce_tps(record.get("throughput"))
+            if tps is None:
+                continue
+            for role in target_roles:
+                baselines[role] = tps
+
+    roles = data.get("roles", {})
+    if isinstance(roles, dict):
+        for target_role, registry_role in ROLE_PERFORMANCE_TPS_FALLBACKS.items():
+            record = roles.get(registry_role, {})
+            if not isinstance(record, dict):
+                continue
+            tps = _performance_tps(record)
+            if tps is not None:
+                baselines[target_role] = tps
+
+    return baselines
+
 
 @dataclass
 class ScoringConfig:
@@ -73,39 +171,13 @@ class ScoringConfig:
     # Only applied when answer is correct (incorrect = 0.0, no cost term).
     cost_penalty_lambda: float = 0.15
 
-    # Per-role optimized tokens/second from production benchmarks.
-    # Used to normalize cost: expected_elapsed = tokens_generated / baseline_tps.
-    # Deployment-mode t/s from NUMA-pinned production, per model_registry.yaml.
-    # Updated 2026-03-29: frontdoor lookup disabled (segfault on hybrids),
-    # architect_coding swapped to REAP-246B.
-    # Updated 2026-05-08: worker_explore/worker_general/worker_math swapped from
-    # Qwen3-Coder-30B-A3B Q4 (39.1 t/s) → gemma4-26B-A4B Q4_K_M MTP (50.0 t/s).
-    # Value chosen as a lower bound across deployment modes — solo full instance
-    # measured at 76.5 t/s (--numa-mode full), per-quarter under 4-way contention
-    # estimated at ~50 t/s. The lower bound prevents spurious cost penalties when
-    # the operator uses --numa-mode quarter; full-mode requests will register
-    # as faster-than-expected (cost_ratio < 1, no penalty) which the scorer
-    # tolerates correctly.
-    # KNOWN STALE (do NOT trust without re-measurement; tracked in
-    # project_qscorer_calibration memory):
-    #   - frontdoor: was Qwen3.5-35B-A3B; May-6 swapped to Qwen3.6-35B-A3B Q8
-    #   - coder_escalation: was Qwen2.5-Coder-32B; May-6 shares frontdoor GGUF
-    #   - architect_coding: ROLE REMOVED 2026-05-06 (REAP-246B retired)
-    #   - architect_general: still Qwen3.5-122B-A10B but Probe B 2026-05-04
-    #     re-measured at 12.19 t/s (single-instance NPS4), not 4.3 t/s
-    baseline_tps_by_role: Dict[str, float] = field(default_factory=lambda: {
-        "frontdoor": 12.7,           # KNOWN STALE — see comment above
-        "coder_escalation": 10.8,    # KNOWN STALE — see comment above
-        "architect_general": 4.3,    # KNOWN STALE — Probe B 2026-05-04 = 12.19 t/s
-        "architect_coding": 8.0,     # ROLE REMOVED 2026-05-06 — entry retained for legacy callers
-        "ingest_long_context": 12.0, # Qwen3-Next-80B-A3B, no spec (SSM), 96t
-        "worker_explore": 50.0,      # gemma4-26B-A4B Q4_K_M MTP (2026-05-08 swap; was Qwen3-Coder 39.1)
-        "worker_general": 50.0,      # alias for worker_explore (renamed 2026-05-06; same gemma4 process)
-        "worker_math": 50.0,         # shares worker_explore process
-        "toolrunner": 50.0,          # shares worker_explore process
-        "worker_vision": 15.28,      # unchanged (vision model, no sweep data)
-        "vision_escalation": 27.6,   # unchanged (vision model, no sweep data)
-    })
+    # Per-role optimized tokens/second from production benchmarks. Loaded from
+    # orchestration/model_registry.yaml at config construction time, with a
+    # fallback table for offline scripts. Used to normalize cost:
+    # expected_elapsed = tokens_generated / baseline_tps.
+    baseline_tps_by_role: Dict[str, float] = field(
+        default_factory=registry_baseline_tps_by_role
+    )
 
     # Per-role quality baselines (from RESULTS.md relative benchmark scores).
     # Used for quality-gap penalty: penalize using expensive model when cheap suffices.

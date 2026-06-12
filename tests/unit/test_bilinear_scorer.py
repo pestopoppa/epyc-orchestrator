@@ -40,7 +40,7 @@ class TestModelFeatures:
         features = extract_model_features(cfg)
         assert "frontdoor" in features
         assert "architect_general" in features
-        assert features["frontdoor"].baseline_tps == 12.7
+        assert features["frontdoor"].baseline_tps == 24.3
         assert features["frontdoor"].is_moe == 1.0
 
 
