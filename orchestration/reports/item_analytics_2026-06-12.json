@@ -1,0 +1,1528 @@
+{
+  "generated_at": "2026-06-12T20:50:31Z",
+  "parameters": {
+    "days": 7,
+    "last_trials": 100,
+    "min_observations": 5
+  },
+  "schema_version": 1,
+  "source_rows": 664,
+  "windows": {
+    "last_100_trials": {
+      "flagged_questions": [],
+      "flagged_suites": [
+        {
+          "artifact_verdict": "genuinely_hard_candidate",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0,
+          "observations": 94,
+          "p_correct": 0.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "mode_advantage_hard",
+          "verdict_basis": "Pinned near zero with no structural artifact documented in the Fable5 audit; requires per-qid vectors/core_v2 calibration before treating it as a useful discriminator.",
+          "zero_quality_trials": 94
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0797872340425532,
+          "observations": 94,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.33662270919780296,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "usaco",
+          "verdict_basis": "Fable5 audit found seed-42 T1 rows with expected='' behind a text-scorer gate; W4 replaced empty-expected sampled rows for future evals.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0797872340425532,
+          "observations": 94,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.33662270919780296,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "vl",
+          "verdict_basis": "Fable5 follow-up traced historical VL zeros to routing/OCR plumbing; W4 repaired image bypass and OCR MTMD fallback, so historical pinned-zero is artifact-contaminated.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.1595744680851064,
+          "observations": 94,
+          "p_correct": 0.06944444444444445,
+          "quality_std": 0.6732454183956059,
+          "question_evals": 144,
+          "saturated_trials": 5,
+          "suite": "instruction_precision",
+          "verdict_basis": "Fable5 audit found fixed-pool expected='' instruction-precision rows; historical nonzero values are tier/sentinel mixing, not proof of item health.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.19148936170212766,
+          "observations": 94,
+          "p_correct": 0.08333333333333333,
+          "quality_std": 0.7333484229623015,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "bigcodebench",
+          "verdict_basis": "Fable5 audit found the fixed BigCodeBench rows require pandas, which was absent in the orchestrator environment; W4 added the dependency.",
+          "zero_quality_trials": 88
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.4042553191489362,
+          "observations": 94,
+          "p_correct": 0.4722222222222222,
+          "quality_std": 0.36667421148115076,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "gpqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 6
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.4680851063829787,
+          "observations": 94,
+          "p_correct": 0.4930555555555556,
+          "quality_std": 0.21645733988697663,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "simpleqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 2
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 94,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "agentic",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 94,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "mode_advantage",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 94,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "skill_transfer",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.7234042553191489,
+          "observations": 94,
+          "p_correct": 0.5763888888888888,
+          "quality_std": 0.5340383148089843,
+          "question_evals": 144,
+          "saturated_trials": 14,
+          "suite": "long_context",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 2.1382978723404253,
+          "observations": 94,
+          "p_correct": 0.6527777777777778,
+          "quality_std": 0.7416351088482288,
+          "question_evals": 144,
+          "saturated_trials": 40,
+          "suite": "hotpotqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 2.8404255319148937,
+          "observations": 94,
+          "p_correct": 0.9375,
+          "quality_std": 0.4624907472188119,
+          "question_evals": 144,
+          "saturated_trials": 84,
+          "suite": "general",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 79,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.372413793103448,
+          "observations": 87,
+          "p_correct": 0.9661538461538461,
+          "quality_std": 0.9920013041301695,
+          "question_evals": 325,
+          "saturated_trials": 54,
+          "suite": "tool_use",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 7
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.9361702127659575,
+          "observations": 94,
+          "p_correct": 0.9722222222222222,
+          "quality_std": 0.3027712653352704,
+          "question_evals": 144,
+          "saturated_trials": 90,
+          "suite": "livecodebench",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.984042553191489,
+          "observations": 94,
+          "p_correct": 0.9930555555555556,
+          "quality_std": 0.1538880440583982,
+          "question_evals": 144,
+          "saturated_trials": 93,
+          "suite": "cruxeval",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.984042553191489,
+          "observations": 94,
+          "p_correct": 0.9930555555555556,
+          "quality_std": 0.1538880440583982,
+          "question_evals": 144,
+          "saturated_trials": 93,
+          "suite": "math",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 94,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 94,
+          "suite": "coder",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 94,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 94,
+          "suite": "debugbench",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 94,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 94,
+          "suite": "thinking",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        }
+      ],
+      "per_qid_available": false,
+      "per_qid_limitation": "journal rows do not persist per-question results yet; N2 ledger must add them",
+      "question_summary": [],
+      "suite_summary": [
+        {
+          "artifact_verdict": "genuinely_hard_candidate",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0,
+          "observations": 94,
+          "p_correct": 0.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "mode_advantage_hard",
+          "verdict_basis": "Pinned near zero with no structural artifact documented in the Fable5 audit; requires per-qid vectors/core_v2 calibration before treating it as a useful discriminator.",
+          "zero_quality_trials": 94
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0797872340425532,
+          "observations": 94,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.33662270919780296,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "usaco",
+          "verdict_basis": "Fable5 audit found seed-42 T1 rows with expected='' behind a text-scorer gate; W4 replaced empty-expected sampled rows for future evals.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0797872340425532,
+          "observations": 94,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.33662270919780296,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "vl",
+          "verdict_basis": "Fable5 follow-up traced historical VL zeros to routing/OCR plumbing; W4 repaired image bypass and OCR MTMD fallback, so historical pinned-zero is artifact-contaminated.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.1595744680851064,
+          "observations": 94,
+          "p_correct": 0.06944444444444445,
+          "quality_std": 0.6732454183956059,
+          "question_evals": 144,
+          "saturated_trials": 5,
+          "suite": "instruction_precision",
+          "verdict_basis": "Fable5 audit found fixed-pool expected='' instruction-precision rows; historical nonzero values are tier/sentinel mixing, not proof of item health.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.19148936170212766,
+          "observations": 94,
+          "p_correct": 0.08333333333333333,
+          "quality_std": 0.7333484229623015,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "bigcodebench",
+          "verdict_basis": "Fable5 audit found the fixed BigCodeBench rows require pandas, which was absent in the orchestrator environment; W4 added the dependency.",
+          "zero_quality_trials": 88
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.4042553191489362,
+          "observations": 94,
+          "p_correct": 0.4722222222222222,
+          "quality_std": 0.36667421148115076,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "gpqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 6
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.4680851063829787,
+          "observations": 94,
+          "p_correct": 0.4930555555555556,
+          "quality_std": 0.21645733988697663,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "simpleqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 2
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 94,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "agentic",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 94,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "mode_advantage",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 94,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "skill_transfer",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.7234042553191489,
+          "observations": 94,
+          "p_correct": 0.5763888888888888,
+          "quality_std": 0.5340383148089843,
+          "question_evals": 144,
+          "saturated_trials": 14,
+          "suite": "long_context",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 2.1382978723404253,
+          "observations": 94,
+          "p_correct": 0.6527777777777778,
+          "quality_std": 0.7416351088482288,
+          "question_evals": 144,
+          "saturated_trials": 40,
+          "suite": "hotpotqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 2.8404255319148937,
+          "observations": 94,
+          "p_correct": 0.9375,
+          "quality_std": 0.4624907472188119,
+          "question_evals": 144,
+          "saturated_trials": 84,
+          "suite": "general",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 79,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.372413793103448,
+          "observations": 87,
+          "p_correct": 0.9661538461538461,
+          "quality_std": 0.9920013041301695,
+          "question_evals": 325,
+          "saturated_trials": 54,
+          "suite": "tool_use",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 7
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.9361702127659575,
+          "observations": 94,
+          "p_correct": 0.9722222222222222,
+          "quality_std": 0.3027712653352704,
+          "question_evals": 144,
+          "saturated_trials": 90,
+          "suite": "livecodebench",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.984042553191489,
+          "observations": 94,
+          "p_correct": 0.9930555555555556,
+          "quality_std": 0.1538880440583982,
+          "question_evals": 144,
+          "saturated_trials": 93,
+          "suite": "cruxeval",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.984042553191489,
+          "observations": 94,
+          "p_correct": 0.9930555555555556,
+          "quality_std": 0.1538880440583982,
+          "question_evals": 144,
+          "saturated_trials": 93,
+          "suite": "math",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 94,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 94,
+          "suite": "coder",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 94,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 94,
+          "suite": "debugbench",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 86,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 94,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 94,
+          "suite": "thinking",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        }
+      ],
+      "trial_count": 100,
+      "trial_id_max": 784,
+      "trial_id_min": 685,
+      "watchlist_verdicts": [
+        {
+          "artifact_verdict": "genuinely_hard_candidate",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0,
+          "observations": 94,
+          "p_correct": 0.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "mode_advantage_hard",
+          "verdict_basis": "Pinned near zero with no structural artifact documented in the Fable5 audit; requires per-qid vectors/core_v2 calibration before treating it as a useful discriminator.",
+          "zero_quality_trials": 94
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0797872340425532,
+          "observations": 94,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.33662270919780296,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "usaco",
+          "verdict_basis": "Fable5 audit found seed-42 T1 rows with expected='' behind a text-scorer gate; W4 replaced empty-expected sampled rows for future evals.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.0797872340425532,
+          "observations": 94,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.33662270919780296,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "vl",
+          "verdict_basis": "Fable5 follow-up traced historical VL zeros to routing/OCR plumbing; W4 repaired image bypass and OCR MTMD fallback, so historical pinned-zero is artifact-contaminated.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.1595744680851064,
+          "observations": 94,
+          "p_correct": 0.06944444444444445,
+          "quality_std": 0.6732454183956059,
+          "question_evals": 144,
+          "saturated_trials": 5,
+          "suite": "instruction_precision",
+          "verdict_basis": "Fable5 audit found fixed-pool expected='' instruction-precision rows; historical nonzero values are tier/sentinel mixing, not proof of item health.",
+          "zero_quality_trials": 89
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 86,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.19148936170212766,
+          "observations": 94,
+          "p_correct": 0.08333333333333333,
+          "quality_std": 0.7333484229623015,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "bigcodebench",
+          "verdict_basis": "Fable5 audit found the fixed BigCodeBench rows require pandas, which was absent in the orchestrator environment; W4 added the dependency.",
+          "zero_quality_trials": 88
+        }
+      ]
+    },
+    "last_7_days": {
+      "flagged_questions": [],
+      "flagged_suites": [
+        {
+          "artifact_verdict": "genuinely_hard_candidate",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.02830188679245283,
+          "observations": 106,
+          "p_correct": 0.0,
+          "quality_std": 0.29000804054602636,
+          "question_evals": 144,
+          "saturated_trials": 1,
+          "suite": "mode_advantage_hard",
+          "verdict_basis": "Pinned near zero with no structural artifact documented in the Fable5 audit; requires per-qid vectors/core_v2 calibration before treating it as a useful discriminator.",
+          "zero_quality_trials": 105
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.07142857142857142,
+          "observations": 105,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.31943828249996997,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "usaco",
+          "verdict_basis": "Fable5 audit found seed-42 T1 rows with expected='' behind a text-scorer gate; W4 replaced empty-expected sampled rows for future evals.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.07142857142857142,
+          "observations": 105,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.31943828249996997,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "vl",
+          "verdict_basis": "Fable5 follow-up traced historical VL zeros to routing/OCR plumbing; W4 repaired image bypass and OCR MTMD fallback, so historical pinned-zero is artifact-contaminated.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.16981132075471697,
+          "observations": 106,
+          "p_correct": 0.06944444444444445,
+          "quality_std": 0.693251813995239,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "instruction_precision",
+          "verdict_basis": "Fable5 audit found fixed-pool expected='' instruction-precision rows; historical nonzero values are tier/sentinel mixing, not proof of item health.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.17142857142857143,
+          "observations": 105,
+          "p_correct": 0.08333333333333333,
+          "quality_std": 0.6963461489687967,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "bigcodebench",
+          "verdict_basis": "Fable5 audit found the fixed BigCodeBench rows require pandas, which was absent in the orchestrator environment; W4 added the dependency.",
+          "zero_quality_trials": 99
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.4142857142857144,
+          "observations": 105,
+          "p_correct": 0.4722222222222222,
+          "quality_std": 0.3481730744843983,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "gpqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 6
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.4858490566037736,
+          "observations": 106,
+          "p_correct": 0.4930555555555556,
+          "quality_std": 0.2519503841712008,
+          "question_evals": 144,
+          "saturated_trials": 1,
+          "suite": "simpleqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 2
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.570754716981132,
+          "observations": 106,
+          "p_correct": 0.5,
+          "quality_std": 0.31800290171100326,
+          "question_evals": 144,
+          "saturated_trials": 5,
+          "suite": "agentic",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 105,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "mode_advantage",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 105,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "skill_transfer",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.8396226415094339,
+          "observations": 106,
+          "p_correct": 0.5763888888888888,
+          "quality_std": 0.6277662173439292,
+          "question_evals": 144,
+          "saturated_trials": 24,
+          "suite": "long_context",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 2.2358490566037736,
+          "observations": 106,
+          "p_correct": 0.6527777777777778,
+          "quality_std": 0.7498664886504776,
+          "question_evals": 144,
+          "saturated_trials": 52,
+          "suite": "hotpotqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 2.858490566037736,
+          "observations": 106,
+          "p_correct": 0.9375,
+          "quality_std": 0.4384509448536698,
+          "question_evals": 144,
+          "saturated_trials": 96,
+          "suite": "general",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 83,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.1979591836734693,
+          "observations": 98,
+          "p_correct": 0.9661538461538461,
+          "quality_std": 1.0874027840044176,
+          "question_evals": 325,
+          "saturated_trials": 54,
+          "suite": "tool_use",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 11
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.942857142857143,
+          "observations": 105,
+          "p_correct": 0.9722222222222222,
+          "quality_std": 0.28713930346059685,
+          "question_evals": 144,
+          "saturated_trials": 101,
+          "suite": "livecodebench",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.9857142857142858,
+          "observations": 105,
+          "p_correct": 0.9930555555555556,
+          "quality_std": 0.14568627181693672,
+          "question_evals": 144,
+          "saturated_trials": 104,
+          "suite": "cruxeval",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.9858490566037736,
+          "observations": 106,
+          "p_correct": 0.9930555555555556,
+          "quality_std": 0.14500402027301318,
+          "question_evals": 144,
+          "saturated_trials": 105,
+          "suite": "math",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 106,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 106,
+          "suite": "coder",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 105,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 105,
+          "suite": "debugbench",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 106,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 106,
+          "suite": "thinking",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        }
+      ],
+      "per_qid_available": false,
+      "per_qid_limitation": "journal rows do not persist per-question results yet; N2 ledger must add them",
+      "question_summary": [],
+      "suite_summary": [
+        {
+          "artifact_verdict": "genuinely_hard_candidate",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.02830188679245283,
+          "observations": 106,
+          "p_correct": 0.0,
+          "quality_std": 0.29000804054602636,
+          "question_evals": 144,
+          "saturated_trials": 1,
+          "suite": "mode_advantage_hard",
+          "verdict_basis": "Pinned near zero with no structural artifact documented in the Fable5 audit; requires per-qid vectors/core_v2 calibration before treating it as a useful discriminator.",
+          "zero_quality_trials": 105
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.07142857142857142,
+          "observations": 105,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.31943828249996997,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "usaco",
+          "verdict_basis": "Fable5 audit found seed-42 T1 rows with expected='' behind a text-scorer gate; W4 replaced empty-expected sampled rows for future evals.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.07142857142857142,
+          "observations": 105,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.31943828249996997,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "vl",
+          "verdict_basis": "Fable5 follow-up traced historical VL zeros to routing/OCR plumbing; W4 repaired image bypass and OCR MTMD fallback, so historical pinned-zero is artifact-contaminated.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.16981132075471697,
+          "observations": 106,
+          "p_correct": 0.06944444444444445,
+          "quality_std": 0.693251813995239,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "instruction_precision",
+          "verdict_basis": "Fable5 audit found fixed-pool expected='' instruction-precision rows; historical nonzero values are tier/sentinel mixing, not proof of item health.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.17142857142857143,
+          "observations": 105,
+          "p_correct": 0.08333333333333333,
+          "quality_std": 0.6963461489687967,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "bigcodebench",
+          "verdict_basis": "Fable5 audit found the fixed BigCodeBench rows require pandas, which was absent in the orchestrator environment; W4 added the dependency.",
+          "zero_quality_trials": 99
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.4142857142857144,
+          "observations": 105,
+          "p_correct": 0.4722222222222222,
+          "quality_std": 0.3481730744843983,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "gpqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 6
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.4858490566037736,
+          "observations": 106,
+          "p_correct": 0.4930555555555556,
+          "quality_std": 0.2519503841712008,
+          "question_evals": 144,
+          "saturated_trials": 1,
+          "suite": "simpleqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 2
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.570754716981132,
+          "observations": 106,
+          "p_correct": 0.5,
+          "quality_std": 0.31800290171100326,
+          "question_evals": 144,
+          "saturated_trials": 5,
+          "suite": "agentic",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 105,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "mode_advantage",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.5,
+          "observations": 105,
+          "p_correct": 0.5,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "skill_transfer",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 1.8396226415094339,
+          "observations": 106,
+          "p_correct": 0.5763888888888888,
+          "quality_std": 0.6277662173439292,
+          "question_evals": 144,
+          "saturated_trials": 24,
+          "suite": "long_context",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 2.2358490566037736,
+          "observations": 106,
+          "p_correct": 0.6527777777777778,
+          "quality_std": 0.7498664886504776,
+          "question_evals": 144,
+          "saturated_trials": 52,
+          "suite": "hotpotqa",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "not_pinned",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 2.858490566037736,
+          "observations": 106,
+          "p_correct": 0.9375,
+          "quality_std": 0.4384509448536698,
+          "question_evals": 144,
+          "saturated_trials": 96,
+          "suite": "general",
+          "verdict_basis": "Suite did not cross pinned-zero or saturation thresholds in this window.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 83,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.1979591836734693,
+          "observations": 98,
+          "p_correct": 0.9661538461538461,
+          "quality_std": 1.0874027840044176,
+          "question_evals": 325,
+          "saturated_trials": 54,
+          "suite": "tool_use",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 11
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.942857142857143,
+          "observations": 105,
+          "p_correct": 0.9722222222222222,
+          "quality_std": 0.28713930346059685,
+          "question_evals": 144,
+          "saturated_trials": 101,
+          "suite": "livecodebench",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.9857142857142858,
+          "observations": 105,
+          "p_correct": 0.9930555555555556,
+          "quality_std": 0.14568627181693672,
+          "question_evals": 144,
+          "saturated_trials": 104,
+          "suite": "cruxeval",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 2.9858490566037736,
+          "observations": 106,
+          "p_correct": 0.9930555555555556,
+          "quality_std": 0.14500402027301318,
+          "question_evals": 144,
+          "saturated_trials": 105,
+          "suite": "math",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 106,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 106,
+          "suite": "coder",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 105,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 105,
+          "suite": "debugbench",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        },
+        {
+          "artifact_verdict": "saturated_low_discrimination",
+          "error_trials": 90,
+          "flags": [
+            "saturated",
+            "errors_present"
+          ],
+          "mean_quality": 3.0,
+          "observations": 106,
+          "p_correct": 1.0,
+          "quality_std": 0.0,
+          "question_evals": 144,
+          "saturated_trials": 106,
+          "suite": "thinking",
+          "verdict_basis": "Suite is near-always correct in this window and contributes little decision signal.",
+          "zero_quality_trials": 0
+        }
+      ],
+      "trial_count": 112,
+      "trial_id_max": 784,
+      "trial_id_min": 673,
+      "watchlist_verdicts": [
+        {
+          "artifact_verdict": "genuinely_hard_candidate",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.02830188679245283,
+          "observations": 106,
+          "p_correct": 0.0,
+          "quality_std": 0.29000804054602636,
+          "question_evals": 144,
+          "saturated_trials": 1,
+          "suite": "mode_advantage_hard",
+          "verdict_basis": "Pinned near zero with no structural artifact documented in the Fable5 audit; requires per-qid vectors/core_v2 calibration before treating it as a useful discriminator.",
+          "zero_quality_trials": 105
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.07142857142857142,
+          "observations": 105,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.31943828249996997,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "usaco",
+          "verdict_basis": "Fable5 audit found seed-42 T1 rows with expected='' behind a text-scorer gate; W4 replaced empty-expected sampled rows for future evals.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "pinned_zero_or_broken",
+            "errors_present"
+          ],
+          "mean_quality": 0.07142857142857142,
+          "observations": 105,
+          "p_correct": 0.034722222222222224,
+          "quality_std": 0.31943828249996997,
+          "question_evals": 144,
+          "saturated_trials": 0,
+          "suite": "vl",
+          "verdict_basis": "Fable5 follow-up traced historical VL zeros to routing/OCR plumbing; W4 repaired image bypass and OCR MTMD fallback, so historical pinned-zero is artifact-contaminated.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.16981132075471697,
+          "observations": 106,
+          "p_correct": 0.06944444444444445,
+          "quality_std": 0.693251813995239,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "instruction_precision",
+          "verdict_basis": "Fable5 audit found fixed-pool expected='' instruction-precision rows; historical nonzero values are tier/sentinel mixing, not proof of item health.",
+          "zero_quality_trials": 100
+        },
+        {
+          "artifact_verdict": "artifact",
+          "error_trials": 90,
+          "flags": [
+            "errors_present"
+          ],
+          "mean_quality": 0.17142857142857143,
+          "observations": 105,
+          "p_correct": 0.08333333333333333,
+          "quality_std": 0.6963461489687967,
+          "question_evals": 144,
+          "saturated_trials": 6,
+          "suite": "bigcodebench",
+          "verdict_basis": "Fable5 audit found the fixed BigCodeBench rows require pandas, which was absent in the orchestrator environment; W4 added the dependency.",
+          "zero_quality_trials": 99
+        }
+      ]
+    }
+  }
+}
