@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -166,6 +166,37 @@ def _journal_section(journal: Any, lookback: int = 20) -> list[str]:
     return lines
 
 
+def _economics_section(now: datetime, repo_root: Path | None = None) -> list[str]:
+    """Render a compact read-only economics summary for the daily digest."""
+    root = repo_root or Path(__file__).resolve().parents[2]
+    start = (now.astimezone(timezone.utc) - timedelta(days=6)).date()
+    try:
+        from scripts.economics.ledger import summarize_economics
+
+        ledger = summarize_economics(
+            week_start=start,
+            planner_archive=root / "logs" / "planner_archive.jsonl",
+            journal_dir=root / "orchestration",
+            cloud_costs=root / "orchestration" / "cloud_costs.yaml",
+            progress_root=Path("/mnt/raid0/llm/epyc-root/progress"),
+            orch_progress_dir=root / "logs" / "progress",
+            now=now,
+        )
+    except Exception as e:
+        return [
+            "### Economics (last 7 days)",
+            f"- unavailable: {e}",
+        ]
+    return [
+        "### Economics (last 7 days)",
+        f"- planner cloud spend: ${ledger.planner.total_usd:.4f}",
+        f"- manual cloud spend: ${ledger.manual.total_usd:.4f}",
+        f"- local eval wall time: {ledger.local.eval_hours:.2f}h",
+        f"- autopilot eval trials: {ledger.local.trials}",
+        f"- decision markers: {ledger.throughput.progress_decision_markers}",
+    ]
+
+
 def render_digest(
     *,
     swarm: Any,
@@ -185,6 +216,8 @@ def render_digest(
     body.extend(_archive_section(archive))
     body.append("")
     body.extend(_structural_lab_section(lab))
+    body.append("")
+    body.extend(_economics_section(now))
     body.append("")
     body.append("### NumericSwarm surfaces")
     body.append("")
