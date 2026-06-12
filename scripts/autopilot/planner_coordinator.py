@@ -173,7 +173,8 @@ def plan_with_providers(
         session_update = draft.session_id
 
     action = extract_action(draft.text)
-    if not _draft_is_usable(draft, action):
+    draft_unusable = _draft_unusable_reason(draft, action)
+    if draft_unusable:
         _mark_failure(planner_state, draft.provider, settings)
         if (
             allow_fallback
@@ -197,7 +198,7 @@ def plan_with_providers(
             if _draft_is_usable(fallback, fallback_action):
                 fallback_reason = (
                     fallback_reason
-                    or f"{draft.provider} draft failed: {draft.error or 'invalid action'}"
+                    or f"{draft.provider} draft failed: {draft_unusable}"
                 )
                 _mark_success(planner_state, fallback.provider)
                 draft = fallback
@@ -206,7 +207,7 @@ def plan_with_providers(
                 _mark_failure(planner_state, fallback.provider, settings)
         else:
             fallback_reason = fallback_reason or (
-                f"{draft.provider} draft failed: {draft.error or 'invalid action'}"
+                f"{draft.provider} draft failed: {draft_unusable}"
             )
     else:
         _mark_success(planner_state, draft.provider)
@@ -605,7 +606,23 @@ def _draft_is_usable(
     result: PlannerProviderResult,
     action: dict[str, Any] | None,
 ) -> bool:
-    return result.ok and action is not None and _action_validation_error(action) is None
+    return not _draft_unusable_reason(result, action)
+
+
+def _draft_unusable_reason(
+    result: PlannerProviderResult,
+    action: dict[str, Any] | None,
+) -> str:
+    """Why a draft is unusable ("" if usable). Surfaces the EXACT schema-validation
+    error (e.g. an out-of-range min_memories) rather than an opaque 'invalid action'
+    — so the planner fallback log + the next trial's 'Last Non-Executing Action'
+    feedback can self-correct instead of re-drafting the same hidden-cap violation
+    (root cause of the #776 train_routing_models pause, 2026-06-11)."""
+    if not result.ok:
+        return result.error or "provider error / empty response"
+    if action is None:
+        return "no parseable json:autopilot_actions block"
+    return _action_validation_error(action) or ""
 
 
 def _action_validation_error(action: dict[str, Any] | None) -> str | None:

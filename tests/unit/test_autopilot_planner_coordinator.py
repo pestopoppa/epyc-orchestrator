@@ -582,6 +582,37 @@ def test_uncritiqued_gate_allows_when_critiqued_or_not_degraded() -> None:
     assert ubr(_uncritiqued_decision(None, degraded=True, critique=None)) == ""
 
 
+def test_draft_validation_error_is_surfaced_not_opaque() -> None:
+    """#776 root cause (2026-06-11): a draft that PARSES but violates a schema cap
+    (train_routing_models min_memories > 100000) must surface the EXACT validator
+    error in fallback_reason, not an opaque 'invalid action' — so the next trial's
+    feedback can self-correct."""
+    bad = {"type": "train_routing_models", "min_memories": 250000}
+    good = {"type": "train_routing_models", "min_memories": 500}
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="draft", ok=True,
+                               text=_action_text(bad))],
+    )
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True,
+                               text=_action_text(good))],
+        supports_resume=True,
+    )
+    state: dict[str, Any] = {}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt", session_id=None, planner_state=state,
+        settings=PlannerSettings(primary="codex", critic="claude", mode="fallback"),
+        provider_factory=_factory({"codex": codex, "claude": claude}),
+    )
+    assert decision.fallback_reason
+    assert "invalid action" not in decision.fallback_reason
+    assert "min_memories" in decision.fallback_reason
+    assert "100000" in decision.fallback_reason
+    assert decision.action == good  # the valid fallback draft was adopted
+
+
 def test_uncritiqued_unavailable_dispatch_rule() -> None:
     """Tightened Case-B rule (2026-06-12): verdict 'unavailable' on a TRUSTED
     primary draft. Risk class alone is NOT the guard (the @708 failure was
