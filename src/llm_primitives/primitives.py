@@ -160,6 +160,18 @@ class LLMPrimitives(
             "llm_primitives_request_task_id",
             default=None,
         )
+        self._request_id_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+            "llm_primitives_request_id",
+            default=None,
+        )
+        self._request_trial_id_ctx: contextvars.ContextVar[Any] = contextvars.ContextVar(
+            "llm_primitives_request_trial_id",
+            default=None,
+        )
+        self._request_batch_id_ctx: contextvars.ContextVar[Any] = contextvars.ContextVar(
+            "llm_primitives_request_batch_id",
+            default=None,
+        )
         self._max_queue_wait_ms_ctx: contextvars.ContextVar[int | None] = contextvars.ContextVar(
             "llm_primitives_max_queue_wait_ms",
             default=None,
@@ -232,6 +244,19 @@ class LLMPrimitives(
             return value
         return self._request_task_id
 
+    def get_request_id(self) -> str | None:
+        """Get caller-supplied request id for telemetry attribution."""
+        value = self._request_id_ctx.get()
+        return str(value) if value not in (None, "") else None
+
+    def get_request_trial_id(self):
+        """Get caller-supplied autopilot/benchmark trial id, if present."""
+        return self._request_trial_id_ctx.get()
+
+    def get_request_batch_id(self):
+        """Get caller-supplied batch/concurrency id, if present."""
+        return self._request_batch_id_ctx.get()
+
     def get_request_priority(self) -> str:
         """Get request-local priority used by admission control."""
         value = self._request_priority_ctx.get()
@@ -257,6 +282,9 @@ class LLMPrimitives(
         cancel_check=None,
         deadline_s: float | None = None,
         task_id: str | None = None,
+        request_id: str | None = None,
+        trial_id=None,
+        batch_id=None,
         priority: str = "interactive",
         max_queue_wait_ms: int | None = None,
     ):
@@ -289,10 +317,16 @@ class LLMPrimitives(
             "depth_override_skip_events": 0,
             "depth_override_skip_reasons": [],
             "request_priority": normalized_priority,
+            "request_id": request_id,
+            "trial_id": trial_id,
+            "batch_id": batch_id,
         }
         token_cancel = self._request_cancel_check_ctx.set(cancel_check)
         token_deadline = self._request_deadline_s_ctx.set(deadline_s)
         token_task = self._request_task_id_ctx.set(task_id)
+        token_request = self._request_id_ctx.set(request_id)
+        token_trial = self._request_trial_id_ctx.set(trial_id)
+        token_batch = self._request_batch_id_ctx.set(batch_id)
         token_priority = self._request_priority_ctx.set(normalized_priority)
         token_queue_wait = self._max_queue_wait_ms_ctx.set(max_queue_wait_ms)
         try:
@@ -307,6 +341,9 @@ class LLMPrimitives(
             self._request_cancel_check_ctx.reset(token_cancel)
             self._request_deadline_s_ctx.reset(token_deadline)
             self._request_task_id_ctx.reset(token_task)
+            self._request_id_ctx.reset(token_request)
+            self._request_trial_id_ctx.reset(token_trial)
+            self._request_batch_id_ctx.reset(token_batch)
             self._request_priority_ctx.reset(token_priority)
             self._max_queue_wait_ms_ctx.reset(token_queue_wait)
 

@@ -571,6 +571,9 @@ async def _handle_chat(
         cancel_check=cancel_event.is_set if cancel_event is not None else None,
         deadline_s=request_deadline_s,
         task_id=routing.task_id,
+        request_id=request.request_id,
+        trial_id=request.trial_id,
+        batch_id=request.batch_id,
         priority=(
             "background"
             if str(request.request_priority).strip().lower() == "background"

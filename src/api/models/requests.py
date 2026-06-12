@@ -86,6 +86,19 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional session identifier for cross-request REPL globals restore.",
     )
+    request_id: str | None = Field(
+        default=None,
+        description="Optional caller request id for tracing. The live inference tap "
+        "records this as parent_request_id and still creates one unique id per model call.",
+    )
+    trial_id: int | str | None = Field(
+        default=None,
+        description="Optional autopilot/benchmark trial id for inference tap attribution.",
+    )
+    batch_id: int | str | None = Field(
+        default=None,
+        description="Optional concurrency/eval batch id for inference tap attribution.",
+    )
     request_priority: str = Field(
         default="interactive",
         description="Admission priority: 'interactive' (default) or 'background'. "
