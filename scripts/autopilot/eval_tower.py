@@ -333,7 +333,9 @@ class EvalTower:
             tokens = resp.get("tokens_generated", 0)
 
             correct = False
-            if not error and expected:
+            expected_free_scorers = {"code_execution", "programmatic"}
+            can_score = bool(expected) or scoring_method in expected_free_scorers
+            if not error and can_score:
                 correct = score_answer_deterministic(
                     answer=answer,
                     expected=expected,

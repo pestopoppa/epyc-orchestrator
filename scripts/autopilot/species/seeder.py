@@ -109,6 +109,7 @@ class Seeder:
         self.on_question = on_question
         self._seen: set[str] = set()
         self._td_errors: list[tuple[int, float]] = []  # (batch_num, avg_td_error)
+        self._question_results: list[dict[str, Any]] = []
         self._batch_count = 0
         self._consecutive_converged = 0
         self._active_roles: list[dict[str, Any]] = []
@@ -137,6 +138,8 @@ class Seeder:
             "td_errors": [err for _, err in self._td_errors],
             "batch_count": self._batch_count,
             "consecutive_converged": self._consecutive_converged,
+            "seen_question_ids": sorted(self._seen),
+            "question_results": list(self._question_results),
         }
 
     def restore_state(self, state: dict[str, Any] | None) -> None:
@@ -162,6 +165,20 @@ class Seeder:
             self._consecutive_converged = _tail_below_threshold(
                 td_errors, TD_ERROR_EPSILON
             )
+
+        raw_seen = state.get("seen_question_ids", state.get("seen", []))
+        if isinstance(raw_seen, list):
+            self._seen = {str(qid) for qid in raw_seen if qid}
+        else:
+            self._seen = set()
+
+        raw_results = state.get("question_results", [])
+        if isinstance(raw_results, list):
+            self._question_results = [
+                dict(row) for row in raw_results if isinstance(row, dict)
+            ]
+        else:
+            self._question_results = []
 
     # ── main entry point ─────────────────────────────────────────
 
@@ -295,17 +312,32 @@ class Seeder:
                     if qid:
                         self._seen.add(qid)
 
-                    # Store result for logging
-                    batch_result.results.append({
+                    # Store result for logging and durable item analytics.
+                    result_row = {
+                        "batch_num": self._batch_count,
+                        "seed": seed,
                         "suite": q.get("suite", "unknown"),
                         "question_id": qid,
                         "rewards": rewards,
                         "roles_tested": metadata.get("roles_tested", []),
-                    })
+                    }
+                    batch_result.results.append(result_row)
+                    self._question_results.append(result_row)
 
                 except Exception as e:
                     log.error("Error on question %d: %s", i, e)
                     batch_result.n_errors += 1
+                    qid = q.get("id", q.get("question_id", f"q_{i}"))
+                    result_row = {
+                        "batch_num": self._batch_count,
+                        "seed": seed,
+                        "suite": q.get("suite", "unknown"),
+                        "question_id": qid,
+                        "error": str(e),
+                        "roles_tested": [],
+                    }
+                    batch_result.results.append(result_row)
+                    self._question_results.append(result_row)
 
                 if (i + 1) % 5 == 0:
                     log.info("  Seeding progress: %d/%d", i + 1, len(questions))

@@ -578,6 +578,14 @@ def _score_f1(
 def _normalize_text(text: str) -> str:
     """Normalize text for F1 scoring (SQuAD-style)."""
     import string
+    import unicodedata
+
+    # Fold diacritics before punctuation stripping so answer variants like
+    # "Dusan Lajovic" and "Dušan Lajović" score as the same tokens.
+    text = "".join(
+        ch for ch in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(ch)
+    )
 
     # Lowercase
     text = text.lower()

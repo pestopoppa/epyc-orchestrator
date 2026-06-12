@@ -76,6 +76,15 @@ def test_score_answer_deterministic_passes_explicit_config():
     assert calls["config"] == {"extract_patterns": ["x"]}
 
 
+def test_score_answer_deterministic_f1_folds_diacritics():
+    assert _MOD.score_answer_deterministic(
+        "Dusan Lajovic",
+        "Dušan Lajović",
+        scoring_method="f1",
+        scoring_config={"threshold": 1.0},
+    ) is True
+
+
 def test_classify_error_branches():
     assert _MOD._classify_error(None) == "none"
     assert _MOD._classify_error("Connection reset by peer") == "infrastructure"
