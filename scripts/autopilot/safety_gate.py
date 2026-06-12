@@ -9,7 +9,7 @@ import logging
 import math
 import statistics
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +40,29 @@ QUALITY_FLOOR_T0 = 2.0  # Average quality >= 2.0/3.0
 # T1/T2 thresholds (50-500 real benchmark questions — honest signal)
 QUALITY_FLOOR_T1 = 1.0  # ~33% correct minimum
 REGRESSION_THRESHOLD = -0.05  # Max quality drop vs baseline (fraction of baseline)
-PER_SUITE_REGRESSION = -0.1  # Max per-suite quality drop
+PER_SUITE_REGRESSION = -0.1  # Max per-suite quality drop (fixed floor; see below)
+# Minimum per-suite sample below which the per-suite regression gate is purely
+# advisory: at n questions a single correct→incorrect flip moves the 0-3 score by
+# 3/n, so the *smallest observable* regression is already 3/n. When 3/n exceeds the
+# fixed PER_SUITE_REGRESSION floor the gate cannot distinguish a real regression
+# from one-question sampling noise — so the threshold is widened to that quantum.
+# (2026-06-06: at ~2 q/suite the -0.1 floor fired -1.5 "regressions" on every
+# seeder trial, mass-excluding via mad_noise and deadlocking the planner/critic.)
+def per_suite_regression_threshold(
+    result_n: int | None, baseline_n: int | None
+) -> float:
+    """Resolution-aware per-suite regression threshold (a negative number).
+
+    A suite delta must be MORE negative than this to count as a violation. The
+    bound is the coarser of the two samples' single-flip quantum (3/n) and never
+    tighter than the fixed PER_SUITE_REGRESSION floor. Missing/zero counts fall
+    back to the fixed floor (pre-2026-06-06 behavior)."""
+    quanta = [abs(PER_SUITE_REGRESSION)]
+    if result_n and result_n > 0:
+        quanta.append(3.0 / result_n)
+    if baseline_n and baseline_n > 0:
+        quanta.append(3.0 / baseline_n)
+    return -max(quanta)
 ARCHITECT_ROUTING_CAP = 0.80  # Max fraction routed to architect-tier
 MAX_CONSECUTIVE_FAILURES = 3  # Auto-rollback after this many failures
 # MAD noise filter (intake-421 pi-autoresearch). Quality history depth + significance threshold.
@@ -55,6 +77,7 @@ MAD_CONSISTENCY = 1.4826  # Scaling so MAD ≈ σ under normal distribution
 # closes the exact hole that wrote a 2.900 baseline above the 2.400 archive max on 2026-05-31,
 # which force-reverted every honest trial and gate-locked the loop into no-op distillation.
 BASELINE_ARCHIVE_TOLERANCE = 1e-6  # float-compare slack for the archive-max guard
+BASELINE_PROMOTION_REPRO_MIN = 3  # replicated cluster members before baseline ratchet
 DEFAULT_BASELINE_QUALITY = 1.16  # Documented 2026-04-04 T2 calibration fallback
 
 
@@ -112,6 +135,27 @@ def _normalize_suite_by_tier(raw: Any, path: Path) -> dict[int, dict[str, float 
     return normalized
 
 
+def _normalize_counts_by_tier(raw: Any, path: Path) -> dict[int, dict[str, int]]:
+    """Normalize nested per-suite question counts keyed by eval tier (ints >= 0)."""
+    normalized: dict[int, dict[str, int]] = {}
+    for tier, suites in (raw or {}).items():
+        try:
+            t = int(tier)
+        except (TypeError, ValueError):
+            log.error("Ignoring per-suite count tier key %r in %s; expected integer tier", tier, path)
+            continue
+        tier_counts: dict[str, int] = {}
+        for suite, n in (suites or {}).items():
+            try:
+                c = int(n)
+            except (TypeError, ValueError):
+                continue
+            if c >= 0:
+                tier_counts[suite] = c
+        normalized[t] = tier_counts
+    return normalized
+
+
 @dataclass
 class SafetyVerdict:
     passed: bool
@@ -132,6 +176,12 @@ class EvalResult:
     cost: float  # Normalized cost 0-1
     reliability: float  # Fraction of non-error responses
     per_suite_quality: dict[str, float] = field(default_factory=dict)
+    # Per-suite question counts for this eval (2026-06-06). Lets the per-suite
+    # regression gate scale its threshold to sampling resolution (3/n per flip):
+    # at ~2 questions/suite the score quantizes to {0,1.5,3} and a one-question
+    # flip would otherwise trip the fixed -0.1 gate every trial. Empty ⇒ gate
+    # falls back to the fixed -0.1 floor (pre-2026-06-06 behavior).
+    per_suite_counts: dict[str, int] = field(default_factory=dict)
     routing_distribution: dict[str, float] = field(default_factory=dict)
     n_questions: int = 0
     details: dict[str, Any] = field(default_factory=dict)
@@ -204,6 +254,10 @@ class EvalResult:
     n_external_restart: int = 0
     exogenous_question_ids: list[str] = field(default_factory=list)
     exogenous_marker_log: list[dict] = field(default_factory=list)
+    # SafetyGate.check() is called by several action handlers and again by the
+    # main loop. Cache the first verdict on the result so one trial mutates MAD
+    # history / consecutive-failure state exactly once.
+    gate_verdict: SafetyVerdict | None = field(default=None, repr=False, compare=False)
 
     @property
     def objectives(self) -> tuple[float, float, float, float]:
@@ -279,6 +333,11 @@ class Baseline:
     per_suite_quality: dict[str, float] = field(default_factory=dict)
     baselines_by_tier: dict[int, float] = field(default_factory=dict)
     per_suite_quality_by_tier: dict[int, dict[str, float | None]] = field(default_factory=dict)
+    # Per-suite question counts the baseline was measured at, per tier (2026-06-06).
+    # Feeds per_suite_regression_threshold so the gate knows the baseline's own
+    # sampling resolution. Empty until a baseline is refreshed post-2026-06-06; the
+    # gate then falls back to the result's resolution (or the fixed -0.1 floor).
+    per_suite_counts_by_tier: dict[int, dict[str, int]] = field(default_factory=dict)
     frontdoor_speed: float = 10.0
     # Path this baseline was loaded from. save() writes back here by default so a
     # gate constructed with a custom baseline_path (e.g. a tmp file in tests) can
@@ -339,6 +398,9 @@ class Baseline:
         per_suite_by_tier = _normalize_suite_by_tier(
             data.get("per_suite_quality_by_tier", {}), path
         )
+        per_suite_counts_by_tier = _normalize_counts_by_tier(
+            data.get("per_suite_counts_by_tier", {}), path
+        )
         reliability = data.get("reliability", defaults.reliability)
         if reliability is not None and not 0.0 <= reliability <= RELIABILITY_MAX:
             log.error(
@@ -354,6 +416,7 @@ class Baseline:
             per_suite_quality=per_suite,
             baselines_by_tier=baselines_by_tier,
             per_suite_quality_by_tier=per_suite_by_tier,
+            per_suite_counts_by_tier=per_suite_counts_by_tier,
             frontdoor_speed=data.get("frontdoor_speed", 10.0),
             source_path=path,
         )
@@ -394,6 +457,7 @@ class Baseline:
             "per_suite_quality": self.per_suite_quality,
             "baselines_by_tier": self.baselines_by_tier,
             "per_suite_quality_by_tier": self.per_suite_quality_by_tier,
+            "per_suite_counts_by_tier": self.per_suite_counts_by_tier,
             "frontdoor_speed": self.frontdoor_speed,
         }
         path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True))
@@ -405,6 +469,9 @@ class Baseline:
         )
         self.per_suite_quality_by_tier.update(
             _normalize_suite_by_tier(state.get("per_suite_quality_by_tier", {}), state_path)
+        )
+        self.per_suite_counts_by_tier.update(
+            _normalize_counts_by_tier(state.get("per_suite_counts_by_tier", {}), state_path)
         )
 
     def quality_for_tier(self, tier: int, *, strict: bool = False) -> float | None:
@@ -421,13 +488,25 @@ class Baseline:
             return tier_suites
         return {} if strict else self.per_suite_quality
 
+    def per_suite_counts_for_tier(self, tier: int) -> dict[str, int]:
+        """Return the per-suite question counts the same-tier baseline was measured at.
+
+        Empty when the baseline predates per-suite count tracking (2026-06-06) —
+        callers then fall back to the result's own resolution / the fixed floor."""
+        return self.per_suite_counts_by_tier.get(int(tier), {})
+
     def update_tier(self, result: EvalResult) -> None:
         tier = int(result.tier)
         self.baselines_by_tier[tier] = result.quality
         self.per_suite_quality_by_tier.setdefault(tier, {}).update(result.per_suite_quality)
+        result_counts = getattr(result, "per_suite_counts", None) or {}
+        if result_counts:
+            self.per_suite_counts_by_tier.setdefault(tier, {}).update(result_counts)
         if tier == DEFAULT_FRONTIER_TIER:
             self.quality = result.quality
             self.per_suite_quality.update(result.per_suite_quality)
+            if result.speed > 0:
+                self.frontdoor_speed = result.speed
         self.speed = result.speed
         self.cost = result.cost
         self.reliability = result.reliability
@@ -445,6 +524,9 @@ class Baseline:
             },
             "per_suite_quality_by_tier": {
                 str(tier): suites for tier, suites in sorted(self.per_suite_quality_by_tier.items())
+            },
+            "per_suite_counts_by_tier": {
+                str(tier): counts for tier, counts in sorted(self.per_suite_counts_by_tier.items())
             },
             "frontdoor_speed": self.frontdoor_speed,
         }
@@ -532,6 +614,9 @@ class SafetyGate:
 
     def check(self, result: EvalResult) -> SafetyVerdict:
         """Run all safety checks on an eval result."""
+        if result.gate_verdict is not None:
+            return result.gate_verdict
+
         violations = []
         warnings = []
         categories = []  # AP-14: track which checks failed
@@ -613,16 +698,29 @@ class SafetyGate:
                         f"from archive/learning by autopilot." + convergence_note
                     )
 
-        # 3. Per-suite regression
+        # 3. Per-suite regression (resolution-aware since 2026-06-06). A per-suite
+        # score is fraction_correct*3 over only the questions that suite drew; at
+        # ~2 q/suite a single flip is a 1.5 swing, so a fixed -0.1 floor flagged
+        # pure sampling noise as a regression on essentially every trial and
+        # deadlocked the planner. The threshold is widened to the coarser of the
+        # result's and baseline's single-flip quantum (3/n); counts default empty
+        # ⇒ fixed -0.1 floor (unchanged behavior for pre-2026-06-06 baselines).
         baseline_suites = self.baseline.per_suite_for_tier(result.tier)
+        baseline_counts = self.baseline.per_suite_counts_for_tier(result.tier)
+        result_counts = getattr(result, "per_suite_counts", None) or {}
         for suite, quality in result.per_suite_quality.items():
             baseline_q = baseline_suites.get(suite)
             if baseline_q is not None:
                 suite_delta = quality - baseline_q
-                if suite_delta < PER_SUITE_REGRESSION:
+                threshold = per_suite_regression_threshold(
+                    result_counts.get(suite), baseline_counts.get(suite)
+                )
+                if suite_delta < threshold:
                     violations.append(
                         f"Suite '{suite}' regression: {suite_delta:+.3f} "
-                        f"(threshold: {PER_SUITE_REGRESSION})"
+                        f"(threshold: {threshold:+.3f}; "
+                        f"n_result={result_counts.get(suite)}, "
+                        f"n_baseline={baseline_counts.get(suite)})"
                     )
                     if "per_suite_regression" not in categories:
                         categories.append("per_suite_regression")
@@ -729,6 +827,7 @@ class SafetyGate:
             self._history_for_tier(result.tier).append(result.quality)
             self._last_history_tier = int(result.tier)
 
+        result.gate_verdict = verdict
         return verdict
 
     def _proxy_check(self, result: EvalResult) -> list[str]:
@@ -807,6 +906,42 @@ class SafetyGate:
         ctx = _pareto_frontier_context(tier=tier)
         return ctx[1] if ctx is not None else frozenset()
 
+    @staticmethod
+    def _archive_frontier_entry(
+        source_trial_id: int | None, tier: int | None = None
+    ) -> dict[str, Any] | None:
+        """Same-tier frontier entry for source_trial_id, reduced to stable evidence fields."""
+        if source_trial_id is None:
+            return None
+        try:
+            from scripts.autopilot.pareto_archive import ParetoArchive
+
+            for entry in ParetoArchive().frontier(tier=tier):
+                if int(entry.trial_id) == int(source_trial_id):
+                    return {
+                        "trial_id": int(entry.trial_id),
+                        "objectives": tuple(float(x) for x in entry.objectives),
+                        "n_reproductions": int(getattr(entry, "n_reproductions", 1) or 1),
+                        "config_fingerprint": getattr(entry, "config_fingerprint", ""),
+                    }
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Baseline repro guard: could not read Pareto frontier (%s)", exc)
+        return None
+
+    @staticmethod
+    def _quality_quantum(result: EvalResult) -> float | None:
+        """Smallest observable quality step for this eval on the 0-3 scale."""
+        n = int(getattr(result, "n_questions", 0) or 0)
+        if n <= 0:
+            counts = getattr(result, "per_suite_counts", None) or {}
+            n = sum(int(v) for v in counts.values() if int(v) > 0)
+        if n <= 0 and isinstance(getattr(result, "details", None), dict):
+            try:
+                n = int(result.details.get("total", 0) or 0)
+            except (TypeError, ValueError):
+                n = 0
+        return (3.0 / n) if n > 0 else None
+
     def update_baseline(
         self, result: EvalResult, source_trial_id: int | None = None
     ) -> BaselineUpdateResult:
@@ -873,10 +1008,66 @@ class SafetyGate:
                     False, "quality exceeds same-tier archive max", tier,
                     previous_quality, result.quality, proof,
                 )
-        self.baseline.update_tier(result)
+        promotion_result = result
+        if archive_max is not None:
+            quantum = self._quality_quantum(result)
+            if quantum is None:
+                reason = "missing n_questions/per-suite counts for reproduced baseline promotion"
+                log.warning("Baseline update REFUSED — %s", reason)
+                return BaselineUpdateResult(
+                    False, reason, tier, previous_quality, result.quality, proof
+                )
+            repro_entry = self._archive_frontier_entry(source_trial_id, tier)
+            if repro_entry is None:
+                reason = (
+                    "source trial is not a same-tier frontier representative; "
+                    "baseline promotions require reproduced frontier evidence"
+                )
+                log.warning("Baseline update REFUSED — %s", reason)
+                return BaselineUpdateResult(
+                    False, reason, tier, previous_quality, result.quality, proof
+                )
+            objectives = tuple(repro_entry.get("objectives") or ())
+            if len(objectives) < 4:
+                reason = "frontier representative missing objective tuple"
+                log.warning("Baseline update REFUSED — %s", reason)
+                return BaselineUpdateResult(
+                    False, reason, tier, previous_quality, result.quality, proof
+                )
+            n_reproductions = int(repro_entry.get("n_reproductions", 1) or 1)
+            median_quality = float(objectives[0])
+            required_quality = float(previous_quality or 0.0) + quantum
+            if n_reproductions < BASELINE_PROMOTION_REPRO_MIN:
+                reason = (
+                    f"baseline promotion needs >= {BASELINE_PROMOTION_REPRO_MIN} "
+                    f"reproductions; source has {n_reproductions}"
+                )
+                log.info("Baseline update skipped — %s", reason)
+                return BaselineUpdateResult(
+                    False, reason, tier, previous_quality, result.quality, proof
+                )
+            if median_quality + BASELINE_ARCHIVE_TOLERANCE < required_quality:
+                reason = (
+                    f"reproduced median q={median_quality:.3f} does not clear baseline "
+                    f"{previous_quality:.3f} by one quantum ({quantum:.4f})"
+                )
+                log.info("Baseline update skipped — %s", reason)
+                return BaselineUpdateResult(
+                    False, reason, tier, previous_quality, result.quality, proof
+                )
+            promotion_result = replace(
+                result,
+                quality=median_quality,
+                speed=float(objectives[1]),
+                cost=-float(objectives[2]),
+                reliability=float(objectives[3]),
+            )
+        self.baseline.update_tier(promotion_result)
         log.info("Baseline state updated — baseline_eligible=true (%s) | proof=%s | T%d q=%.3f s=%.1f",
-                 reason, proof, tier, result.quality, result.speed)
-        return BaselineUpdateResult(True, reason, tier, previous_quality, result.quality, proof)
+                 reason, proof, tier, promotion_result.quality, promotion_result.speed)
+        return BaselineUpdateResult(
+            True, reason, tier, previous_quality, promotion_result.quality, proof
+        )
 
     def reset_failures(self) -> None:
         self._consecutive_failures = 0

@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
@@ -66,6 +68,9 @@ def test_aggregate_uses_batch_throughput_for_concurrent_objective() -> None:
     assert out.details["median_request_tps"] == out.median_request_speed
     assert out.details["aggregate_tps"] == out.aggregate_speed
     assert out.details["speed_metric_mode"] == "aggregate_batch_tps"
+    assert out.details["task_rate_qph"] == pytest.approx(900.0)
+    assert out.details["goodput_qph"] == pytest.approx(600.0)
+    assert out.details["tokens_per_solved_task"] == 140.0
 
 
 def test_eval_result_grep_lines_include_concurrency_metrics() -> None:

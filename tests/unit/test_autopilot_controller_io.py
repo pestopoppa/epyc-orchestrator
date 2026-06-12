@@ -271,10 +271,14 @@ def test_validate_deep_eval_rejects_ignored_schema_fields() -> None:
             "target_trial": 38,
             "suites": ["coder"],
             "baseline_recheck": True,
+            "n_questions": 500,
+            "seed": 1234,
         }
     )
     assert err and "unsupported keys" in err
     assert "target_trial" in err
+    assert "n_questions" in err
+    assert "seed" in err
 
 
 def test_validate_deep_eval_requires_valid_tier() -> None:

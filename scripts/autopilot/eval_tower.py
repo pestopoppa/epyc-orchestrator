@@ -477,6 +477,11 @@ class EvalTower:
             if total_tokens_generated > 0 and eval_wall_s > 0
             else 0.0
         )
+        task_rate_qph = (len(results) / (eval_wall_s / 3600.0)) if eval_wall_s > 0 else 0.0
+        goodput_qph = (quality / 3.0) * task_rate_qph
+        tokens_per_solved_task = (
+            total_tokens_generated / correct_count if correct_count > 0 else 0.0
+        )
         eval_concurrency = max((r.eval_concurrency for r in results), default=1)
         concurrent_eval = eval_concurrency > 1 and aggregate_speed > 0
         speed_metric_mode = (
@@ -500,6 +505,14 @@ class EvalTower:
             suite: (sum(vals) / len(vals)) * 3.0
             for suite, vals in suite_correct.items()
         }
+        # Per-suite question counts (2026-06-06). The per-suite regression gate is
+        # otherwise blind to sample size: on a hybrid eval each suite draws only
+        # ~2 questions, so the score is quantized to {0.0, 1.5, 3.0} and a single
+        # correct→incorrect flip is a -1.5 swing — 15× the fixed -0.1 gate, tripping
+        # it on essentially every trial. Carrying the count lets the gate make the
+        # threshold resolution-aware (3/n single-flip quantum) instead of false-
+        # positiving the seeder loop into a critic-reject deadlock.
+        per_suite_counts = {suite: len(vals) for suite, vals in suite_correct.items()}
 
         # Routing distribution
         route_counts: dict[str, int] = {}
@@ -617,11 +630,13 @@ class EvalTower:
             cost=cost,
             reliability=reliability,
             per_suite_quality=per_suite,
+            per_suite_counts=per_suite_counts,
             routing_distribution=routing_dist,
             n_questions=len(results),
             details={
                 "correct": correct_count,
                 "total": len(results),
+                "per_suite_counts": per_suite_counts,
                 "errors": sum(1 for r in results if r.error),
                 "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",
                 "speed_metric_mode": speed_metric_mode,
@@ -632,6 +647,9 @@ class EvalTower:
                 "eval_wall_s": eval_wall_s,
                 "sum_request_elapsed_s": sum_request_elapsed_s,
                 "tokens_generated": total_tokens_generated,
+                "task_rate_qph": task_rate_qph,
+                "goodput_qph": goodput_qph,
+                "tokens_per_solved_task": tokens_per_solved_task,
                 "tokens_include_tool_turns": True,
                 "total_tool_calls": total_tool_calls,
                 "mean_tools_used": round(mean_tools_used, 4),
@@ -809,12 +827,19 @@ class EvalTower:
             return ""
 
     def hybrid_eval(self, seed: int = 42, t1_n: int = 50) -> EvalResult:
-        """Hybrid evaluation: T0 as fast pre-filter, T1 as real gate.
+        """Hybrid evaluation: T1 as the real gate; legacy T0 prefilter is opt-in.
 
-        - If T0 fails (quality < 2.5), reject immediately without T1 cost.
-        - If T0 passes, run T1 (50 questions, ~2-3min) for real signal.
-        - Returns T0 result on fast-reject, T1 result otherwise.
+        Fable5 instrument review found the T0 sentinel slice can hide harder
+        sentinels behind ``[:10]`` and produce bad fast rejects. Default to the
+        journaled T1 instrument; operators can temporarily restore the old
+        prefilter with AUTOPILOT_HYBRID_T0_GATE=1.
         """
+        if os.environ.get("AUTOPILOT_HYBRID_T0_GATE") != "1":
+            log.info("Hybrid eval: T0 gate disabled, running T1 (%d questions)...", t1_n)
+            t1 = self.eval_t1(n=t1_n, seed=seed)
+            log.info("Hybrid eval: T1 result q=%.3f r=%.2f", t1.quality, t1.reliability)
+            return t1
+
         t0 = self.eval_t0()
         if t0.quality < 2.5:
             log.info("Hybrid eval: T0 failed (q=%.3f), fast-reject", t0.quality)

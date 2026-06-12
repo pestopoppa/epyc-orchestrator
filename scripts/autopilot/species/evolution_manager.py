@@ -67,6 +67,27 @@ Include 3-7 insights. Be specific and actionable, not generic.
 """
 
 
+_CORRUPTED_DEFICIENCIES = {
+    "exogenous_reload",
+    "autopilot_killed_mid_trial",
+    "exogenous_cache_flush",
+}
+
+
+def _is_distillable_entry(entry: Any) -> bool:
+    """True if a journal row is trustworthy enough for strategy distillation."""
+    if getattr(entry, "bug_corrupted_by", ""):
+        return False
+    if getattr(entry, "outcome_status", "ok") != "ok":
+        return False
+    if getattr(entry, "keep_revert_decision", "") == "excluded":
+        return False
+    if getattr(entry, "deficiency_category", "") in _CORRUPTED_DEFICIENCIES:
+        return False
+    details = getattr(entry, "eval_details", {}) or {}
+    return not (isinstance(details, dict) and details.get("learning_exclusion"))
+
+
 class EvolutionManager:
     """Species 4: Knowledge distillation from experiment outcomes.
 
@@ -103,9 +124,15 @@ class EvolutionManager:
         Returns:
             Summary dict with distillation results.
         """
-        entries = journal_entries[-last_n:]
+        recent_raw = journal_entries[-last_n:]
+        entries = [e for e in recent_raw if _is_distillable_entry(e)]
+        filtered_count = len(recent_raw) - len(entries)
         if not entries:
-            return {"status": "skipped", "reason": "no entries to distill"}
+            return {
+                "status": "skipped",
+                "reason": "no trustworthy entries to distill",
+                "entries_filtered": filtered_count,
+            }
 
         # Build trial summaries for the prompt
         summaries = []
@@ -168,6 +195,7 @@ class EvolutionManager:
             "insights_stored": stored,
             "insights_total": len(insights),
             "trials_analyzed": len(entries),
+            "entries_filtered": filtered_count,
         }
 
     def _invoke_llm(self, prompt: str) -> str:

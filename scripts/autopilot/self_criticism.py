@@ -22,7 +22,7 @@ class SelfCriticism:
     why_it_happened: str = ""
     what_should_change: str = ""
     optimization_directions: list[str] = field(default_factory=list)
-    keep_or_revert: str = ""  # "keep" | "revert" | "excluded"
+    keep_or_revert: str = ""  # "keep" | "revert" | "unchanged" | "excluded"
     keep_revert_reasoning: str = ""
 
     def as_text(self) -> str:
@@ -45,6 +45,16 @@ class SelfCriticism:
         return "; ".join(self.optimization_directions)
 
 
+def _quality_delta_threshold(eval_result: EvalResult) -> float:
+    """Decision threshold in quality units: at least one observable eval quantum."""
+    n = int(getattr(eval_result, "n_questions", 0) or 0)
+    if n <= 0:
+        counts = getattr(eval_result, "per_suite_counts", None) or {}
+        n = sum(int(v) for v in counts.values() if int(v) > 0)
+    quantum = (3.0 / n) if n > 0 else 0.0
+    return max(0.02, quantum)
+
+
 def generate_self_criticism(
     action: dict,
     eval_result: EvalResult,
@@ -65,22 +75,26 @@ def generate_self_criticism(
     # ── Determine keep vs revert ─────────────────────────────────
     if verdict.passed:
         quality_delta = eval_result.quality - baseline_quality if baseline_quality else 0
-        if quality_delta > 0.02:
+        delta_threshold = _quality_delta_threshold(eval_result)
+        if quality_delta > delta_threshold:
             crit.keep_or_revert = "keep"
             crit.keep_revert_reasoning = (
                 f"Quality improved by {quality_delta:+.3f} over baseline "
-                f"(q={eval_result.quality:.3f} vs base={baseline_quality:.3f})"
+                f"(q={eval_result.quality:.3f} vs base={baseline_quality:.3f}; "
+                f"threshold={delta_threshold:.3f})"
             )
-        elif quality_delta < -0.02:
+        elif quality_delta < -delta_threshold:
             crit.keep_or_revert = "revert"
             crit.keep_revert_reasoning = (
                 f"Quality regressed by {quality_delta:+.3f} despite passing gates "
-                f"(q={eval_result.quality:.3f} vs base={baseline_quality:.3f})"
+                f"(q={eval_result.quality:.3f} vs base={baseline_quality:.3f}; "
+                f"threshold={delta_threshold:.3f})"
             )
         else:
-            crit.keep_or_revert = "keep"
+            crit.keep_or_revert = "unchanged"
             crit.keep_revert_reasoning = (
-                f"Neutral quality change ({quality_delta:+.3f}), keeping to accumulate data"
+                f"Quality change {quality_delta:+.3f} is within eval resolution "
+                f"(threshold={delta_threshold:.3f}); no keep/revert signal"
             )
     else:
         crit.keep_or_revert = "revert"

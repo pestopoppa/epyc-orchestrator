@@ -24,6 +24,9 @@ from typing import Any, Callable
 # Canonical 4D objective shape + hypervolume reference point (worst acceptable values).
 # (quality↑, speed↑, -cost↑ i.e. lower cost better, reliability↑)
 DEFAULT_REFERENCE_POINT: tuple[float, ...] = (0.0, 0.0, -1.0, 0.0)
+LEGACY_OBJECTIVE_POLICY = "legacy_4d_v1"
+TASK_RATE_OBJECTIVE_POLICY = "task_rate_3d_v1"
+TASK_RATE_REFERENCE_POINT: tuple[float, ...] = (0.0, 0.0, 0.0)
 
 # T0 is a fast-reject sentinel tier (10q, quality saturates ~2.4 = 8/10) and never enters any
 # frontier/baseline. Tiers >= this each keep their own segregated frontier + baseline.
@@ -50,6 +53,97 @@ def _default_objectives_from_row(row: dict) -> tuple[float, ...] | None:
             float(row.get("quality") or 0.0),
             float(row.get("speed") or 0.0),
             -float(row.get("cost") or 0.0),
+            float(row.get("reliability") or 0.0),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _nested(row: dict, *path: str) -> Any:
+    current: Any = row
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _task_rate_inputs_from_row(row: dict) -> tuple[float, float]:
+    eval_details = row.get("eval_details") or {}
+    n_questions = (
+        row.get("n_questions")
+        or _nested(eval_details, "details", "total")
+        or _nested(eval_details, "details", "n_questions")
+        or _nested(eval_details, "details", "per_suite_counts_total")
+    )
+    if not n_questions:
+        counts = _nested(eval_details, "details", "per_suite_counts")
+        if isinstance(counts, dict):
+            n_questions = sum(int(v) for v in counts.values() if int(v) > 0)
+    eval_wall_s = (
+        row.get("eval_wall_s")
+        or eval_details.get("eval_wall_s")
+        or _nested(eval_details, "details", "eval_wall_s")
+    )
+    return _as_float(n_questions), _as_float(eval_wall_s)
+
+
+def task_rate_qph_from(result: Any) -> float:
+    """Questions completed per eval-wall-hour; 0 when wall/n are unavailable."""
+    n_questions = _as_float(
+        getattr(result, "n_questions", None)
+        or _nested(getattr(result, "details", {}) or {}, "total")
+    )
+    eval_wall_s = _as_float(
+        getattr(result, "eval_wall_s", None)
+        or _nested(getattr(result, "details", {}) or {}, "eval_wall_s")
+    )
+    if n_questions <= 0 or eval_wall_s <= 0:
+        return 0.0
+    return n_questions / (eval_wall_s / 3600.0)
+
+
+def task_rate_qph_from_row(row: dict) -> float:
+    """Questions completed per eval-wall-hour from a journal row."""
+    n_questions, eval_wall_s = _task_rate_inputs_from_row(row)
+    if n_questions <= 0 or eval_wall_s <= 0:
+        return 0.0
+    return n_questions / (eval_wall_s / 3600.0)
+
+
+def goodput_qph_from(result: Any) -> float:
+    """Solved-question rate: quality-scaled task_rate on the 0-3 quality scale."""
+    return (_as_float(getattr(result, "quality", 0.0)) / 3.0) * task_rate_qph_from(result)
+
+
+def goodput_qph_from_row(row: dict) -> float:
+    """Solved-question rate from a journal row."""
+    return (_as_float(row.get("quality")) / 3.0) * task_rate_qph_from_row(row)
+
+
+def task_rate_objectives_from(result: Any, tier: int | None = None) -> tuple[float, ...]:
+    """Shadow 3D vector: (quality, task_rate_qph, reliability)."""
+    _ = tier  # Reserved for future tier-specific rate semantics.
+    return (
+        _as_float(getattr(result, "quality", 0.0)),
+        task_rate_qph_from(result),
+        _as_float(getattr(result, "reliability", 0.0)),
+    )
+
+
+def task_rate_objectives_from_row(row: dict) -> tuple[float, ...] | None:
+    """Shadow 3D vector from a journal row: (quality, task_rate_qph, reliability)."""
+    try:
+        return (
+            float(row.get("quality") or 0.0),
+            task_rate_qph_from_row(row),
             float(row.get("reliability") or 0.0),
         )
     except (TypeError, ValueError):

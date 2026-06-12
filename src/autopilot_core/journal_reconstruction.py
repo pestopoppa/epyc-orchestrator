@@ -10,8 +10,12 @@ from src.autopilot_core.learning_exclusions import WITHIN_NOISE_EXCLUSIONS
 from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
+    LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
+    TASK_RATE_OBJECTIVE_POLICY,
+    TASK_RATE_REFERENCE_POINT,
     spec_for,
+    task_rate_objectives_from_row,
 )
 
 
@@ -29,16 +33,29 @@ def parse_journal_ts(value: Any) -> float | None:
     return None
 
 
-def objectives_from_journal_row(row: dict[str, Any]) -> list[float] | None:
+def _reference_point_for_policy(objective_policy: str) -> tuple[float, ...]:
+    if objective_policy == TASK_RATE_OBJECTIVE_POLICY:
+        return TASK_RATE_REFERENCE_POINT
+    return spec_for(DEFAULT_FRONTIER_TIER).reference_point
+
+
+def objectives_from_journal_row(
+    row: dict[str, Any],
+    *,
+    objective_policy: str = LEGACY_OBJECTIVE_POLICY,
+) -> list[float] | None:
     """Canonical objective tuple for a journal row, as a JSON-ready list."""
     try:
         tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
     except (TypeError, ValueError):
         tier = DEFAULT_FRONTIER_TIER
-    objectives = spec_for(tier).objectives_from_row(row)
+    if objective_policy == TASK_RATE_OBJECTIVE_POLICY:
+        objectives = task_rate_objectives_from_row(row)
+    else:
+        objectives = spec_for(tier).objectives_from_row(row)
     if objectives is None:
         return None
-    return [float(value) for value in objectives[:4]]
+    return [float(value) for value in objectives]
 
 
 def latest_journal_run_rows(
@@ -73,8 +90,12 @@ def reconstruct_archive_from_journal_rows(
     max_trial_id: int | None = None,
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
+    objective_policy: str = LEGACY_OBJECTIVE_POLICY,
 ) -> dict[str, Any] | None:
     """Replay journal rows into the dashboard/offline Pareto archive shape."""
+    if objective_policy not in {LEGACY_OBJECTIVE_POLICY, TASK_RATE_OBJECTIVE_POLICY}:
+        raise ValueError(f"unknown objective_policy: {objective_policy}")
+
     selected_rows = list(rows)
     run_meta: dict[str, Any] = {}
     if current_run_only:
@@ -87,10 +108,36 @@ def reconstruct_archive_from_journal_rows(
     processed: list[tuple[int, dict[str, Any]]] = []
     repr_clusters: dict[tuple[int, str], dict[str, Any]] = {}
 
+    # Exclusion telemetry — so a dashboard can SHOW why trials vanished from the
+    # frontier instead of silently truncating. Two paths drop rows: a
+    # `bug_corrupted_by` tag (rolled-back / corrupted trials) and the optional
+    # `max_trial_id` cap. `journal_max_trial_id` is the highest trial id present
+    # in the segment regardless of any filter, so callers can detect a stale
+    # state counter that lags the journal.
+    excluded_bug = {"count": 0, "max_trial_id": None}
+    truncated_cap = {"count": 0, "max_trial_id": None}
+    journal_max_trial_id: int | None = None
+
+    def _bump(slot: dict[str, Any], tid: int) -> None:
+        slot["count"] += 1
+        if slot["max_trial_id"] is None or tid > slot["max_trial_id"]:
+            slot["max_trial_id"] = tid
+
     for row in selected_rows:
+        try:
+            _row_tid = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            _row_tid = None
+        if _row_tid is not None and (
+            journal_max_trial_id is None or _row_tid > journal_max_trial_id
+        ):
+            journal_max_trial_id = _row_tid
+
         bug = row.get("bug_corrupted_by") or ""
         excl_by = (row.get("eval_details") or {}).get("learning_exclusion", {}).get("by", "")
         if bug and bug != "mad_noise":
+            if _row_tid is not None:
+                _bump(excluded_bug, _row_tid)
             continue
         trusted_within_noise = bug == "mad_noise" or excl_by in WITHIN_NOISE_EXCLUSIONS
 
@@ -108,14 +155,17 @@ def reconstruct_archive_from_journal_rows(
         except (TypeError, ValueError):
             continue
         if max_trial_id is not None and trial_id > max_trial_id:
+            _bump(truncated_cap, trial_id)
             continue
 
-        objectives = objectives_from_journal_row(row)
+        objectives = objectives_from_journal_row(row, objective_policy=objective_policy)
         if objectives is None:
             continue
 
         deinflated = False
         if (
+            objective_policy == LEGACY_OBJECTIVE_POLICY
+            and
             deinflate_before_ts is not None
             and deinflate_factor != 1.0
             and ts is not None
@@ -162,6 +212,7 @@ def reconstruct_archive_from_journal_rows(
         processed.append((cluster["last_tid"], representative))
 
     processed.sort(key=lambda item: item[0])
+    reference_point = _reference_point_for_policy(objective_policy)
     for trial_id, shaped in processed:
         tier = shaped["eval_tier"]
         objectives = shaped["objectives"]
@@ -175,7 +226,13 @@ def reconstruct_archive_from_journal_rows(
             frontiers_by_tier[tier].append(shaped)
         tier_frontier = frontiers_by_tier[tier]
         tier_hv_history = hv_history_by_tier.setdefault(tier, [])
-        hv = round(hypervolume([front["objectives"] for front in tier_frontier]), 4)
+        hv = round(
+            hypervolume(
+                [front["objectives"] for front in tier_frontier],
+                ref=reference_point,
+            ),
+            4,
+        )
         if tier_hv_history:
             hv = max(tier_hv_history[-1][1], hv)
         tier_hv_history.append([trial_id, hv])
@@ -198,6 +255,13 @@ def reconstruct_archive_from_journal_rows(
         },
         "session_start_ts": session_start_ts,
         "canonical_tier": DEFAULT_FRONTIER_TIER,
+        "objective_policy": objective_policy,
+        "journal_max_trial_id": journal_max_trial_id,
+        "exclusions": {
+            "bug_corrupted": excluded_bug,
+            "truncated_above_cap": truncated_cap,
+            "max_trial_id_cap": max_trial_id,
+        },
     }
     archive.update(run_meta)
     return archive

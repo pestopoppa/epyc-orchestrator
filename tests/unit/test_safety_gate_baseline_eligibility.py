@@ -20,7 +20,23 @@ def _result(speed_metric_mode: str = "aggregate_batch_tps") -> EvalResult:
     # quality/per-suite must stay within the 0-3 scale; the loader + update_baseline
     # now reject out-of-scale values (see test_baseline_scale_guard.py).
     return EvalResult(tier=2, quality=2.9, speed=99.0, cost=0.1, reliability=0.99,
-                      per_suite_quality={"coder": 2.9}, speed_metric_mode=speed_metric_mode)
+                      per_suite_quality={"coder": 2.9}, n_questions=50,
+                      speed_metric_mode=speed_metric_mode)
+
+
+def _repro_entry(
+    quality: float = 2.9,
+    speed: float = 88.0,
+    cost: float = 0.2,
+    reliability: float = 0.98,
+    n_reproductions: int = 3,
+) -> dict:
+    return {
+        "trial_id": 123,
+        "objectives": (quality, speed, -cost, reliability),
+        "n_reproductions": n_reproductions,
+        "config_fingerprint": "fp-test",
+    }
 
 
 def test_baseline_refused_on_unrecognized_speed_mode(tmp_path):
@@ -57,16 +73,35 @@ def test_baseline_refused_when_quality_exceeds_archive_max(tmp_path, monkeypatch
     assert g.baseline.quality == before, "baseline must NOT update above the archive max"
 
 
-def test_baseline_written_when_quality_within_archive_max(tmp_path, monkeypatch):
-    """A promotion at/under the frontier max is a real achieved measurement — allowed."""
+def test_baseline_written_when_reproduced_quality_within_archive_max(tmp_path, monkeypatch):
+    """A promotion at/under the frontier max still needs reproduced representative evidence."""
     g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
     monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
     monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.9))
-    result = g.update_baseline(_result())  # quality=2.9, archive max 2.9 → within tolerance
+    monkeypatch.setattr(
+        SafetyGate, "_archive_frontier_entry", staticmethod(lambda source_trial_id, tier=None: _repro_entry())
+    )
+    result = g.update_baseline(_result(), source_trial_id=123)  # archive max 2.9 + n=3 evidence
     assert result.updated
     assert g.baseline.quality_for_tier(2, strict=True) == pytest.approx(2.9), (
-        "result at the same-tier archive max must write"
+        "reproduced result at the same-tier archive max must write"
     )
+
+
+def test_baseline_refused_without_reproduced_frontier_evidence(tmp_path, monkeypatch):
+    """A single frontier trial is not enough to ratchet the production baseline."""
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
+    monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.9))
+    monkeypatch.setattr(
+        SafetyGate,
+        "_archive_frontier_entry",
+        staticmethod(lambda source_trial_id, tier=None: _repro_entry(n_reproductions=1)),
+    )
+    result = g.update_baseline(_result(), source_trial_id=123)
+    assert not result.updated
+    assert "reproductions" in result.reason
+    assert g.baseline.quality_for_tier(2, strict=True) is None
 
 
 def test_baseline_update_is_monotonic_within_tier(tmp_path, monkeypatch):
@@ -102,7 +137,10 @@ def test_baseline_state_round_trips_per_tier(tmp_path, monkeypatch):
     g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
     monkeypatch.setattr(g, "_baseline_eligible", lambda result: (True, "test-eligible", {"x": 1}))
     monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.9))
-    result = g.update_baseline(_result())
+    monkeypatch.setattr(
+        SafetyGate, "_archive_frontier_entry", staticmethod(lambda source_trial_id, tier=None: _repro_entry())
+    )
+    result = g.update_baseline(_result(), source_trial_id=123)
     assert result.updated
 
     restored = SafetyGate(
@@ -111,6 +149,43 @@ def test_baseline_state_round_trips_per_tier(tmp_path, monkeypatch):
     )
     assert restored.baseline.quality_for_tier(2, strict=True) == pytest.approx(2.9)
     assert restored.baseline.per_suite_for_tier(2, strict=True)["coder"] == pytest.approx(2.9)
+
+
+def test_reproduced_promotion_uses_representative_median_and_refreshes_frontdoor_speed(
+    tmp_path, monkeypatch
+):
+    """Accepted production-tier promotions use the representative median objectives."""
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml")
+    before_frontdoor = g.baseline.frontdoor_speed
+    result = _result()
+    result.tier = 1
+    result.quality = 2.95
+    result.speed = 99.0
+    result.cost = 0.05
+    result.reliability = 0.99
+    monkeypatch.setattr(g, "_baseline_eligible", lambda r: (True, "test-eligible", {"x": 1}))
+    monkeypatch.setattr(SafetyGate, "_archive_best_quality", staticmethod(lambda tier=None: 2.8))
+    monkeypatch.setattr(
+        SafetyGate, "_archive_frontier_trial_ids", staticmethod(lambda tier=None: frozenset({123}))
+    )
+    monkeypatch.setattr(
+        SafetyGate,
+        "_archive_frontier_entry",
+        staticmethod(
+            lambda source_trial_id, tier=None: _repro_entry(
+                quality=2.8, speed=77.0, cost=0.25, reliability=0.96
+            )
+        ),
+    )
+    update = g.update_baseline(result, source_trial_id=123)
+    assert update.updated
+    assert update.new_quality == pytest.approx(2.8)
+    assert g.baseline.quality_for_tier(1, strict=True) == pytest.approx(2.8)
+    assert g.baseline.speed == pytest.approx(77.0)
+    assert g.baseline.cost == pytest.approx(0.25)
+    assert g.baseline.reliability == pytest.approx(0.96)
+    assert g.baseline.frontdoor_speed != pytest.approx(before_frontdoor)
+    assert g.baseline.frontdoor_speed == pytest.approx(77.0)
 
 
 def test_baseline_refused_above_max_when_source_not_on_frontier(tmp_path, monkeypatch):

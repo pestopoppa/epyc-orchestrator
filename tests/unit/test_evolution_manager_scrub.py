@@ -74,3 +74,60 @@ def test_distill_scrubs_legacy_scale_input_and_output() -> None:
     assert "-6.900" not in stored["insight"]
     assert "legacy-scale" in stored["description"]
     assert "legacy-scale" in stored["insight"]
+
+
+def test_distill_filters_corrupt_and_learning_excluded_rows() -> None:
+    manager = CapturingEvolutionManager()
+    store = FakeStrategyStore()
+    corrupt = JournalEntry(
+        trial_id=41,
+        timestamp="2026-06-01T00:00:00Z",
+        species="seeder",
+        action_type="seed_batch",
+        tier=1,
+        quality=0.0,
+        speed=0.0,
+        cost=0.5,
+        reliability=0.0,
+        pareto_status="dominated",
+        hypothesis="CORRUPT_SHOULD_NOT_APPEAR",
+        bug_corrupted_by="exogenous_operator_reload",
+    )
+    excluded = JournalEntry(
+        trial_id=42,
+        timestamp="2026-06-01T00:01:00Z",
+        species="seeder",
+        action_type="seed_batch",
+        tier=1,
+        quality=1.7,
+        speed=50.0,
+        cost=0.2,
+        reliability=0.98,
+        pareto_status="frontier",
+        hypothesis="EXCLUDED_SHOULD_NOT_APPEAR",
+        keep_revert_decision="excluded",
+        eval_details={"learning_exclusion": {"by": "mad_noise"}},
+    )
+    clean_failure = JournalEntry(
+        trial_id=43,
+        timestamp="2026-06-01T00:02:00Z",
+        species="numeric_swarm",
+        action_type="numeric_trial",
+        tier=1,
+        quality=1.1,
+        speed=40.0,
+        cost=0.2,
+        reliability=0.98,
+        pareto_status="dominated",
+        hypothesis="CLEAN_FAILURE_SHOULD_APPEAR",
+        failure_analysis="valid regression to analyze",
+    )
+
+    result = manager.distill([corrupt, excluded, clean_failure], store, last_n=3, trial_id=200)
+
+    assert result["status"] == "success"
+    assert result["trials_analyzed"] == 1
+    assert result["entries_filtered"] == 2
+    assert "CLEAN_FAILURE_SHOULD_APPEAR" in manager.prompt
+    assert "CORRUPT_SHOULD_NOT_APPEAR" not in manager.prompt
+    assert "EXCLUDED_SHOULD_NOT_APPEAR" not in manager.prompt

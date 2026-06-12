@@ -91,7 +91,17 @@ from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
 )
-from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER, MIN_FRONTIER_EVAL_TIER, objectives_from, spec_for
+from src.autopilot_core.tier_specs import (
+    DEFAULT_FRONTIER_TIER,
+    LEGACY_OBJECTIVE_POLICY,
+    MIN_FRONTIER_EVAL_TIER,
+    TASK_RATE_OBJECTIVE_POLICY,
+    goodput_qph_from,
+    objectives_from,
+    spec_for,
+    task_rate_objectives_from,
+    task_rate_qph_from,
+)
 
 # Preflight diagnostics from seeding infra
 sys.path.insert(0, str(SCRIPT_DIR.parent / "benchmark"))
@@ -2290,6 +2300,20 @@ def _run_loop_inner(
             criticism = learning_exclusion_criticism(
                 learning_excluded_by, learning_excluded_reason
             )
+        elif not verdict.passed:
+            # Safety verdict FAILED and this is not a benign within-noise exclusion
+            # (e.g. a genuine per-suite regression at adequate n, possibly co-tagged
+            # mad_noise on the quality axis — see classify_learning_exclusion). A
+            # failed trial must NEVER clean-update the Pareto archive or raise the
+            # baseline. It is a real failed experiment, NOT corrupted data, so we
+            # leave bug_corrupted_by unset; the deficiency category is taken from
+            # verdict.categories below. (2026-06-06: previously such a trial fell
+            # through to the clean-update branch and could admit/raise on a failure.)
+            pareto_status = "dominated"  # placeholder for JournalEntry only
+            log.info(
+                "Trial %d: archive.update SKIPPED (safety verdict failed: %s)",
+                trial_counter, ", ".join(verdict.categories) or "unspecified",
+            )
         else:
             pareto_status = archive.update(
                 ParetoEntry(
@@ -2337,7 +2361,12 @@ def _run_loop_inner(
         )
 
         # B1: Store strategy on Pareto frontier improvements
-        if pareto_status == "frontier" and strategy_store is not None:
+        if (
+            pareto_status == "frontier"
+            and strategy_store is not None
+            and not learning_excluded_by
+            and verdict.passed
+        ):
             try:
                 strategy_store.store(
                     description=f"{action.get('type', '')}: {hypothesis}",
@@ -2427,6 +2456,8 @@ def _run_loop_inner(
         metric_schema_version = getattr(eval_result, "metric_schema_version", 1)
         harness_metrics = getattr(eval_result, "harness_metrics", {}) or {}
         oracle_adequacy = getattr(eval_result, "oracle_adequacy", {}) or {}
+        legacy_objectives = list(objectives_from(eval_result))
+        task_rate_objectives = list(task_rate_objectives_from(eval_result))
         eval_details_dict: dict[str, Any] = {
             "per_suite_quality": eval_result.per_suite_quality,
             "routing_distribution": eval_result.routing_distribution,
@@ -2434,6 +2465,12 @@ def _run_loop_inner(
             "metric_schema_version": metric_schema_version,
             "harness_metrics": harness_metrics,
             "oracle_adequacy": oracle_adequacy,
+            "objective_policy_live": LEGACY_OBJECTIVE_POLICY,
+            "objective_policy_shadow": TASK_RATE_OBJECTIVE_POLICY,
+            "objectives_legacy_v1": legacy_objectives,
+            "objectives_task_rate_v1": task_rate_objectives,
+            "task_rate_qph": task_rate_qph_from(eval_result),
+            "goodput_qph": goodput_qph_from(eval_result),
             "speed_metric_mode": getattr(eval_result, "speed_metric_mode", "median_request_tps"),
             "median_request_speed": getattr(eval_result, "median_request_speed", 0.0),
             "aggregate_speed": getattr(eval_result, "aggregate_speed", 0.0),
@@ -2932,6 +2969,10 @@ def _format_baseline_tier_yaml(baseline: Baseline) -> str:
             int(tier): suites
             for tier, suites in sorted(baseline.per_suite_quality_by_tier.items())
         },
+        "per_suite_counts_by_tier": {
+            int(tier): counts
+            for tier, counts in sorted(baseline.per_suite_counts_by_tier.items())
+        },
     }
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip()
 
@@ -2943,6 +2984,7 @@ def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
         text = path.read_text()
         text = _drop_top_level_yaml_block(text, "baselines_by_tier")
         text = _drop_top_level_yaml_block(text, "per_suite_quality_by_tier")
+        text = _drop_top_level_yaml_block(text, "per_suite_counts_by_tier")
         path.write_text(text.rstrip() + "\n\n" + _format_baseline_tier_yaml(baseline) + "\n")
         return
 
@@ -2955,6 +2997,7 @@ def _write_baseline_yaml_tiers(path: Path, baseline: Baseline) -> None:
         "per_suite_quality": baseline.per_suite_quality,
         "baselines_by_tier": baseline.baselines_by_tier,
         "per_suite_quality_by_tier": baseline.per_suite_quality_by_tier,
+        "per_suite_counts_by_tier": baseline.per_suite_counts_by_tier,
     }
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
@@ -2999,6 +3042,11 @@ def _apply_calibrated_baseline_result(baseline: Baseline, result: EvalResult) ->
         )
     baseline.baselines_by_tier[tier] = quality
     baseline.per_suite_quality_by_tier[tier] = dict(result.per_suite_quality)
+    # Persist the per-suite question counts the baseline was measured at so the
+    # per-suite regression gate's threshold knows the baseline's own sampling
+    # resolution (3/n quantum); without this a calibration refresh leaves the
+    # baseline-side count term inactive (2026-06-07).
+    baseline.per_suite_counts_by_tier[tier] = dict(getattr(result, "per_suite_counts", {}) or {})
 
 
 def calibrate_baseline(
