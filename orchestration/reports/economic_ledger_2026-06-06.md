@@ -36,11 +36,18 @@ Window: 2026-06-06 through 2026-06-12 UTC
 
 This section is a proxy. The repo does not yet expose a canonical operator-decision event stream.
 - root progress files scanned: 3
-- progress decision markers: 111
-- halt/resume/restart mentions: 29
+- progress decision markers: 115
+- halt/resume/restart mentions: 31
 - automated routing decisions: 7674
 - completed interactive tasks: 6907
 - median task duration from progress JSONL: 19.80s
+
+## Standing decision-rule review
+
+- rules source: `economic_rules.yaml`
+- planner spend rule: projected monthly planner spend $410.75 vs threshold $250.00 -> TRIGGER: raise F3-W3a planner-distill priority for operator review
+- operator gate-latency rule: threshold 3.0 days -> not evaluated: canonical gate-latency event stream is absent; progress markers remain proxy-only
+- review scope: decision support only; no automatic priority mutation.
 
 ## Parse health
 

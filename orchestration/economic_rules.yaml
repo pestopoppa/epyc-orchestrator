@@ -1,0 +1,14 @@
+# Economic ledger standing decision rules.
+#
+# These thresholds turn weekly ledger reports into operator-review prompts only.
+# They do not mutate priorities or start HW-gated work automatically.
+
+# If projected monthly planner cloud spend exceeds this amount, raise F3-W3a
+# planner-distill priority for operator review. F3-W3a remains HW-gated until a
+# training-capable GPU path exists.
+planner_monthly_spend_threshold_usd: 250.0
+
+# If median operator gate latency exceeds this, invest in a decision-queue
+# surface. The current ledger reports this rule as not evaluated until a
+# canonical halt/gate/resume event stream exists.
+operator_gate_latency_threshold_days: 3.0

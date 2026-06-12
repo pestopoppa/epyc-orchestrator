@@ -26,9 +26,11 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT_PLANNER_ARCHIVE = REPO / "logs" / "planner_archive.jsonl"
 DEFAULT_JOURNAL_DIR = REPO / "orchestration"
 DEFAULT_CLOUD_COSTS = REPO / "orchestration" / "cloud_costs.yaml"
+DEFAULT_RULES = REPO / "orchestration" / "economic_rules.yaml"
 DEFAULT_REPORT_DIR = REPO / "orchestration" / "reports"
 DEFAULT_PROGRESS_ROOT = Path(os.environ.get("EPYC_ROOT_PROGRESS", "/mnt/raid0/llm/epyc-root/progress"))
 DEFAULT_ORCH_PROGRESS = REPO / "logs" / "progress"
+MEAN_DAYS_PER_MONTH = 365.25 / 12.0
 
 
 @dataclass
@@ -82,6 +84,21 @@ class ThroughputProxy:
 
 
 @dataclass
+class DecisionRules:
+    planner_monthly_spend_threshold_usd: float = 250.0
+    operator_gate_latency_threshold_days: float = 3.0
+    source_exists: bool = False
+
+
+@dataclass
+class DecisionRuleReview:
+    projected_monthly_planner_spend_usd: float
+    planner_spend_triggered: bool
+    operator_gate_latency_median_days: float | None
+    operator_gate_latency_triggered: bool | None
+
+
+@dataclass
 class EconomicsLedger:
     window_start: datetime
     window_end: datetime
@@ -89,10 +106,16 @@ class EconomicsLedger:
     manual: ManualSpend
     local: LocalInference
     throughput: ThroughputProxy
+    rules: DecisionRules
+    review: DecisionRuleReview
 
     @property
     def total_cloud_usd(self) -> float:
         return self.planner.total_usd + self.manual.total_usd
+
+    @property
+    def days(self) -> int:
+        return max(1, (self.window_end - self.window_start).days)
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -224,6 +247,22 @@ def _load_cloud_entries(path: Path) -> tuple[list[dict[str, Any]], bool]:
     else:
         entries = []
     return [item for item in entries if isinstance(item, dict)], True
+
+
+def _load_rules(path: Path) -> DecisionRules:
+    rules = DecisionRules(source_exists=path.exists())
+    if not path.exists():
+        return rules
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        return rules
+    planner = _as_float(data.get("planner_monthly_spend_threshold_usd"))
+    gate_latency = _as_float(data.get("operator_gate_latency_threshold_days"))
+    if planner is not None and planner >= 0:
+        rules.planner_monthly_spend_threshold_usd = planner
+    if gate_latency is not None and gate_latency >= 0:
+        rules.operator_gate_latency_threshold_days = gate_latency
+    return rules
 
 
 def _summarize_manual(path: Path, start: datetime, end: datetime) -> ManualSpend:
@@ -389,6 +428,25 @@ def _summarize_throughput(
     return out
 
 
+def _review_rules(
+    planner: PlannerSpend,
+    throughput: ThroughputProxy,
+    rules: DecisionRules,
+    *,
+    days: int,
+) -> DecisionRuleReview:
+    projected = planner.total_usd * (MEAN_DAYS_PER_MONTH / max(1, days))
+    # Gate-latency has no canonical event stream yet. Progress markers are a
+    # throughput proxy only, so the monthly rule is not allowed to fire on them.
+    gate_latency_median_days: float | None = None
+    return DecisionRuleReview(
+        projected_monthly_planner_spend_usd=projected,
+        planner_spend_triggered=projected > rules.planner_monthly_spend_threshold_usd,
+        operator_gate_latency_median_days=gate_latency_median_days,
+        operator_gate_latency_triggered=None,
+    )
+
+
 def summarize_economics(
     *,
     week_start: date | datetime | None = None,
@@ -396,6 +454,7 @@ def summarize_economics(
     planner_archive: Path = DEFAULT_PLANNER_ARCHIVE,
     journal_dir: Path = DEFAULT_JOURNAL_DIR,
     cloud_costs: Path = DEFAULT_CLOUD_COSTS,
+    rules_path: Path = DEFAULT_RULES,
     progress_root: Path = DEFAULT_PROGRESS_ROOT,
     orch_progress_dir: Path = DEFAULT_ORCH_PROGRESS,
     now: datetime | None = None,
@@ -409,18 +468,23 @@ def summarize_economics(
         start_date = week_start
     start = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
     end = start + timedelta(days=days)
+    planner = _summarize_planner(planner_archive, start, end)
+    throughput = _summarize_throughput(progress_root, orch_progress_dir, start, end)
+    rules = _load_rules(rules_path)
     return EconomicsLedger(
         window_start=start,
         window_end=end,
-        planner=_summarize_planner(planner_archive, start, end),
+        planner=planner,
         manual=_summarize_manual(cloud_costs, start, end),
         local=_summarize_local(journal_dir, start, end),
-        throughput=_summarize_throughput(progress_root, orch_progress_dir, start, end),
+        throughput=throughput,
+        rules=rules,
+        review=_review_rules(planner, throughput, rules, days=days),
     )
 
 
-def _money(value: float) -> str:
-    return f"${value:.4f}"
+def _money(value: float, digits: int = 4) -> str:
+    return f"${value:.{digits}f}"
 
 
 def _hours(value: float) -> str:
@@ -449,6 +513,22 @@ def render_report(ledger: EconomicsLedger) -> str:
     )
     median_task = ledger.throughput.median_task_duration_s
     median_task_text = f"{median_task:.2f}s" if median_task is not None else "n/a"
+    rules_source = "`economic_rules.yaml`" if ledger.rules.source_exists else "built-in defaults"
+    planner_rule = (
+        "TRIGGER: raise F3-W3a planner-distill priority for operator review"
+        if ledger.review.planner_spend_triggered
+        else "hold: below threshold"
+    )
+    gate_rule = (
+        "not evaluated: canonical gate-latency event stream is absent; "
+        "progress markers remain proxy-only"
+        if ledger.review.operator_gate_latency_triggered is None
+        else (
+            "TRIGGER: invest in decision-queue surface"
+            if ledger.review.operator_gate_latency_triggered
+            else "hold: below threshold"
+        )
+    )
     lines = [
         "# Economic Ledger",
         "",
@@ -490,6 +570,20 @@ def render_report(ledger: EconomicsLedger) -> str:
         f"- completed interactive tasks: {ledger.throughput.task_completions}",
         f"- median task duration from progress JSONL: {median_task_text}",
         "",
+        "## Standing decision-rule review",
+        "",
+        f"- rules source: {rules_source}",
+        (
+            "- planner spend rule: projected monthly planner spend "
+            f"{_money(ledger.review.projected_monthly_planner_spend_usd, 2)} "
+            f"vs threshold {_money(ledger.rules.planner_monthly_spend_threshold_usd, 2)} -> {planner_rule}"
+        ),
+        (
+            "- operator gate-latency rule: threshold "
+            f"{ledger.rules.operator_gate_latency_threshold_days:.1f} days -> {gate_rule}"
+        ),
+        "- review scope: decision support only; no automatic priority mutation.",
+        "",
         "## Parse health",
         "",
         f"- planner malformed rows: {ledger.planner.malformed_rows}",
@@ -507,6 +601,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--planner-archive", type=Path, default=DEFAULT_PLANNER_ARCHIVE)
     parser.add_argument("--journal-dir", type=Path, default=DEFAULT_JOURNAL_DIR)
     parser.add_argument("--cloud-costs", type=Path, default=DEFAULT_CLOUD_COSTS)
+    parser.add_argument("--rules", type=Path, default=DEFAULT_RULES)
     parser.add_argument("--progress-root", type=Path, default=DEFAULT_PROGRESS_ROOT)
     parser.add_argument("--orch-progress-dir", type=Path, default=DEFAULT_ORCH_PROGRESS)
     parser.add_argument("--output", type=Path, help="Markdown report path. Defaults under orchestration/reports.")
@@ -522,6 +617,7 @@ def main() -> int:
         planner_archive=args.planner_archive,
         journal_dir=args.journal_dir,
         cloud_costs=args.cloud_costs,
+        rules_path=args.rules,
         progress_root=args.progress_root,
         orch_progress_dir=args.orch_progress_dir,
     )

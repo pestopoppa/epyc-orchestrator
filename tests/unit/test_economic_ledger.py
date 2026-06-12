@@ -105,6 +105,7 @@ def test_economic_ledger_summarizes_real_sources(tmp_path: Path) -> None:
         planner_archive=planner,
         journal_dir=journal_dir,
         cloud_costs=cloud,
+        rules_path=tmp_path / "missing_rules.yaml",
         progress_root=progress_root,
         orch_progress_dir=orch_progress,
     )
@@ -122,11 +123,15 @@ def test_economic_ledger_summarizes_real_sources(tmp_path: Path) -> None:
     assert summary.throughput.routing_decisions == 1
     assert summary.throughput.task_completions == 1
     assert summary.throughput.median_task_duration_s == 4.0
+    assert summary.review.planner_spend_triggered is False
+    assert summary.review.operator_gate_latency_triggered is None
 
     report = ledger_mod.render_report(summary)
     assert "total cloud spend: $3.7500" in report
     assert "local eval wall time by consumer" in report.lower()
     assert "proxy" in report
+    assert "Standing decision-rule review" in report
+    assert "hold: below threshold" in report
 
 
 def test_digest_economics_section_is_best_effort(tmp_path: Path) -> None:
@@ -135,3 +140,38 @@ def test_digest_economics_section_is_best_effort(tmp_path: Path) -> None:
     assert section[0] == "### Economics (last 7 days)"
     assert any("planner cloud spend" in line for line in section)
     assert any("local eval wall time" in line for line in section)
+
+
+def test_planner_spend_rule_triggers_with_low_threshold(tmp_path: Path) -> None:
+    planner = tmp_path / "logs" / "planner_archive.jsonl"
+    _append_jsonl(
+        planner,
+        [
+            {
+                "ts_iso": "2026-06-10T12:00:00+00:00",
+                "provider": "claude",
+                "role": "draft",
+                "total_cost_usd": 10.0,
+            },
+        ],
+    )
+    rules = tmp_path / "economic_rules.yaml"
+    rules.write_text(
+        "planner_monthly_spend_threshold_usd: 1.0\n"
+        "operator_gate_latency_threshold_days: 3.0\n"
+    )
+
+    summary = ledger_mod.summarize_economics(
+        week_start=date(2026, 6, 8),
+        planner_archive=planner,
+        journal_dir=tmp_path / "orchestration",
+        cloud_costs=tmp_path / "missing_cloud_costs.yaml",
+        rules_path=rules,
+        progress_root=tmp_path / "progress",
+        orch_progress_dir=tmp_path / "logs" / "progress",
+    )
+
+    assert summary.rules.source_exists is True
+    assert summary.review.planner_spend_triggered is True
+    report = ledger_mod.render_report(summary)
+    assert "TRIGGER: raise F3-W3a planner-distill priority" in report
