@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import importlib
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +18,130 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 controller_io = importlib.import_module("controller_io")
+
+
+class _FakePlannerProcess:
+    def __init__(
+        self,
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        returncode: int = 0,
+        timeout: bool = False,
+    ) -> None:
+        self.stdout = io.StringIO(stdout)
+        self.stderr = io.StringIO(stderr)
+        self.returncode = returncode
+        self.timeout = timeout
+        self.killed = False
+
+    def wait(self, timeout: int) -> int:
+        if self.timeout:
+            raise subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
+        return self.returncode
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
+def _redirect_planner_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    archive_path = tmp_path / "planner_archive.jsonl"
+    monkeypatch.setattr(controller_io, "PLANNER_ARCHIVE_PATH", archive_path)
+    monkeypatch.setattr(controller_io, "PLANNER_TAP_PATH", tmp_path / "planner_tap.log")
+    return archive_path
+
+
+def _read_archive_record(path: Path) -> dict:
+    lines = path.read_text().strip().splitlines()
+    assert len(lines) == 1
+    return json.loads(lines[0])
+
+
+# ----- invoke_controller archival -----
+
+
+def test_invoke_controller_archives_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive_path = _redirect_planner_logs(monkeypatch, tmp_path)
+    proc = _FakePlannerProcess(
+        stdout='{"type":"system","subtype":"init","session_id":"sid-fail"}\n',
+        stderr="planner failed hard",
+        returncode=2,
+    )
+    monkeypatch.setattr(controller_io.subprocess, "Popen", lambda *a, **k: proc)
+
+    result, session_id = controller_io.invoke_controller(
+        "prompt",
+        session_id="resume-id",
+        timeout=1,
+        cwd=tmp_path,
+    )
+
+    assert result == ""
+    assert session_id == "resume-id"
+    record = _read_archive_record(archive_path)
+    assert record["subtype"] == "failed"
+    assert record["returncode"] == 2
+    assert record["stderr_preview"] == "planner failed hard"
+    assert record["session_id"] == "sid-fail"
+    assert record["resume_session_id"] == "resume-id"
+    assert record["n_events"] == 1
+
+
+def test_invoke_controller_archives_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive_path = _redirect_planner_logs(monkeypatch, tmp_path)
+    proc = _FakePlannerProcess(
+        stdout='{"type":"system","subtype":"init","session_id":"sid-timeout"}\n',
+        timeout=True,
+    )
+    monkeypatch.setattr(controller_io.subprocess, "Popen", lambda *a, **k: proc)
+
+    result, session_id = controller_io.invoke_controller(
+        "prompt",
+        session_id="resume-timeout",
+        timeout=1,
+        cwd=tmp_path,
+    )
+
+    assert result == ""
+    assert session_id == "resume-timeout"
+    assert proc.killed
+    record = _read_archive_record(archive_path)
+    assert record["subtype"] == "timeout"
+    assert record["timed_out"] is True
+    assert record["timeout_s"] == 1
+    assert record["session_id"] == "sid-timeout"
+
+
+def test_invoke_controller_archives_missing_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    archive_path = _redirect_planner_logs(monkeypatch, tmp_path)
+
+    def _raise_missing(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError
+
+    monkeypatch.setattr(controller_io.subprocess, "Popen", _raise_missing)
+
+    result, session_id = controller_io.invoke_controller(
+        "prompt",
+        session_id="resume-missing",
+        timeout=1,
+        cwd=tmp_path,
+    )
+
+    assert result == ""
+    assert session_id == "resume-missing"
+    record = _read_archive_record(archive_path)
+    assert record["subtype"] == "file_not_found"
+    assert record["error"] == "Claude CLI not found"
 
 
 # ----- extract_action -----
