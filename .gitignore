@@ -61,6 +61,7 @@ Thumbs.db
 orchestration/last_task_ir.json
 orchestration/last_architecture_ir.json
 orchestration/gate_report_*.json
+orchestration/runtime_flags.json
 
 # Tool plugin settings (per-user configuration)
 src/tool_settings/
