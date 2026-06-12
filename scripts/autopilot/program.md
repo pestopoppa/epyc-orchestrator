@@ -118,9 +118,9 @@ metric = correct_answers / total_questions
 Evaluated by sampling uniformly across all active suites (equal questions per suite) to ensure representative coverage. Sample size per trial is configurable via `--sample-size` (default: 15 per suite for T0, full pool for T2).
 
 **Secondary (tracked, used for Pareto optimization)**:
-- **Throughput**: tokens/second per role, weighted by request volume share
-- **Escalation rate**: fraction of requests escalated beyond frontdoor (lower is better — escalation costs time and occupies specialist slots)
-- **Cost proxy**: per-request cost estimated as `sum(tokens_generated[role] / throughput_tps[role])` across all roles touched. This measures wall-clock slot occupancy — a request that uses an architect for 30s at 5 t/s costs 6x more than a frontdoor request taking 5s at 12.7 t/s. Throughput values come from `autopilot_baseline.yaml` (measured, not assumed).
+- **Current speed objective**: EvalTower `speed` remains the active Pareto speed axis. In concurrent evals this is aggregate batch t/s; `median_request_tps`, `aggregate_tps`, `eval_concurrency`, and `eval_wall_s` are retained so host throttling and fan-out effects are diagnosable.
+- **Task-rate shadow policy**: every eval row also records `task_rate_qph`, `goodput_qph`, and `tokens_per_solved_task`. `task_rate_qph` is questions per eval-wall-hour; `goodput_qph` is quality-scaled solved-task rate; `tokens_per_solved_task` is the planner-visible bloat signal for verbosity/compression work.
+- **Escalation and tier telemetry**: escalation rate, route mix, and `cost_tier` remain routing/capacity diagnostics. The current instrument does not compute the old wall-occupancy proxy `sum(tokens_generated[role] / throughput_tps[role])`; do not reason as if that proxy is a live Pareto objective.
 
 **Promotion gate (T2)**: Full evaluation + Claude-as-Judge scoring. Only for experiments that improve primary metric by >=0.5% and hold for 3 consecutive T0 runs.
 
