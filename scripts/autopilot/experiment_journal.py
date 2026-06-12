@@ -367,7 +367,7 @@ class ExperimentJournal:
         recent = self.recent(last_n)
         if recent:
             lines.append(f"\nLast {len(recent)} trials:")
-            for e in recent:
+            for i, e in enumerate(recent):
                 prefix = f"  #{e.trial_id} [{e.species}/{e.action_type}] "
                 if e.bug_corrupted_by:
                     line = (
@@ -393,9 +393,17 @@ class ExperimentJournal:
                         + f"→ {e.pareto_status}"
                     )
                 if e.failure_analysis:
-                    # Compact single-line failure summary for controller visibility
-                    fa_oneline = failure_analysis_for_prompt(e, limit=200)
-                    line += f"  FAILED: {fa_oneline}"
+                    # Compact single-line failure summary for controller visibility.
+                    # Prompt-budget trim (2026-06-10): full detail only for the most
+                    # recent 6 failures (the ones the planner actually reasons about
+                    # next); older failures show a short tag so the journal section
+                    # stays small. Cap shortened 200→140.
+                    if i >= len(recent) - 6:
+                        fa_oneline = failure_analysis_for_prompt(e, limit=140)
+                        line += f"  FAILED: {fa_oneline}"
+                    else:
+                        fa_oneline = failure_analysis_for_prompt(e, limit=60)
+                        line += f"  FAILED({fa_oneline})"
                 lines.append(line)
         return "\n".join(lines)
 
