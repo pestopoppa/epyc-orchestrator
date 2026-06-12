@@ -42,23 +42,6 @@ _ROOT_LM_SYSTEM_FALLBACK = (
     "Always end with FINAL() or FINAL_VAR()."
 )
 
-_CONFIDENCE_ESTIMATION_FALLBACK = """Estimate your probability of correctly answering this question.
-
-Question: {question}{context_section}
-
-Rate your confidence (0.0-1.0) for each approach:
-- SELF: You handle it (no escalation or delegation)
-- ARCHITECT: Escalate to architect for complex reasoning you cannot handle
-- WORKER: Delegate to faster worker models
-
-Score based on fit:
-- SELF: Within your capability
-- ARCHITECT: Needs deeper reasoning or complex design
-- WORKER: Simple/rote task, or can be split into parallel subtasks
-
-Output ONLY this format, nothing else:
-CONF|SELF:X.XX|ARCHITECT:X.XX|WORKER:X.XX"""
-
 _TASK_DECOMPOSITION_FALLBACK = """Decompose this task into 2-5 parallel-executable steps.
 Return ONLY a JSON array, no markdown fences, no explanation.
 
@@ -972,39 +955,4 @@ def build_task_decomposition_prompt(objective: str, context: str = "") -> str:
         "task_decomposition", _TASK_DECOMPOSITION_FALLBACK,
         objective=objective[:500],
         context_note=context_note,
-    )
-
-
-def build_confidence_estimation_prompt(
-    question: str,
-    context: str = "",
-    max_question_chars: int = 500,
-    max_context_chars: int = 300,
-) -> str:
-    """Build prompt for frontdoor confidence estimation.
-
-    Asks the model to estimate its probability of correctly answering
-    via different routing strategies. Used for confidence-based routing
-    where the highest-confidence approach above threshold is selected.
-
-    Args:
-        question: The user's question.
-        context: Optional context text.
-        max_question_chars: Truncation limit for question.
-        max_context_chars: Truncation limit for context.
-
-    Returns:
-        Prompt string that elicits confidence scores in CONF|...|... format.
-
-    Example output from model:
-        CONF|SELF:0.85|ARCHITECT:0.60|CODER:0.30|WORKER:0.20
-    """
-    context_section = ""
-    if context:
-        context_section = f"\n\nContext ({len(context)} chars):\n{context[:max_context_chars]}{'...' if len(context) > max_context_chars else ''}"
-
-    return resolve_prompt(
-        "confidence_estimation", _CONFIDENCE_ESTIMATION_FALLBACK,
-        question=f"{question[:max_question_chars]}{'...' if len(question) > max_question_chars else ''}",
-        context_section=context_section,
     )

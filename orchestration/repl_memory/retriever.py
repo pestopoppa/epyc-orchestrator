@@ -864,12 +864,6 @@ class SkillAugmentedRouter:
         """Delegate to HybridRouter.route_with_mode (unchanged interface)."""
         return self.hybrid_router.route_with_mode(task_ir)
 
-    def route_3way(
-        self, task_ir: Dict[str, Any], cost_tiers: Optional[Dict[str, int]] = None
-    ) -> Tuple[str, str, float]:
-        """Delegate to HybridRouter.route_3way (unchanged interface)."""
-        return self.hybrid_router.route_3way(task_ir, cost_tiers)
-
     @property
     def retriever(self):
         """Expose underlying retriever for protocol compatibility."""

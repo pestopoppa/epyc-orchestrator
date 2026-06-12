@@ -55,9 +55,6 @@ class TestSkillAugmentedRouter:
             def route_with_mode(self, task_ir):
                 return routing_decision or ["frontdoor"], strategy, "direct"
 
-            def route_3way(self, task_ir, cost_tiers=None):
-                return "SELF:direct", strategy, 0.7
-
         return MockHybridRouter()
 
     def _make_mock_embedder(self, dim=128):
@@ -151,16 +148,6 @@ class TestSkillAugmentedRouter:
         decision, strategy, mode = router.route_with_mode({"task_type": "code"})
         assert decision == ["coder"]
         assert mode == "direct"
-
-    def test_route_3way_delegates(self, skill_bank, skill_retriever):
-        from orchestration.repl_memory.retriever import SkillAugmentedRouter
-
-        hybrid = self._make_mock_hybrid_router()
-        embedder = self._make_mock_embedder()
-        router = SkillAugmentedRouter(hybrid, skill_retriever, embedder)
-
-        action, strategy, confidence = router.route_3way({"task_type": "code"})
-        assert action == "SELF:direct"
 
     def test_retriever_property_exposes_underlying(self, skill_bank, skill_retriever):
         from orchestration.repl_memory.retriever import SkillAugmentedRouter

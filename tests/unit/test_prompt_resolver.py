@@ -188,7 +188,6 @@ class TestPromptFilesExist:
             "review_verdict",
             "revision",
             "plan_review",
-            "confidence_estimation",
             "task_decomposition",
             "formalizer",
         ],
