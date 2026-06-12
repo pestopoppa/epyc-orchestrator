@@ -12,8 +12,9 @@ import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 import httpx
 import yaml
@@ -73,6 +74,11 @@ def _env_int(name: str, default: int) -> int:
         return int(os.environ.get(name, default))
     except (TypeError, ValueError):
         return default
+
+
+def _stable_question_qid(suite: str, prompt_text: str) -> str:
+    payload = f"{suite}\x00{prompt_text}".encode("utf-8", errors="replace")
+    return hashlib.sha1(payload).hexdigest()[:16]
 
 
 def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
@@ -174,6 +180,7 @@ class QuestionResult:
     suite: str
     prompt: str
     expected: str
+    qid: str = ""
     answer: str = ""
     correct: bool = False
     error: str | None = None
@@ -341,6 +348,9 @@ class EvalTower:
         expected = q.get("expected", "")
         qid = q.get("id", q.get("question_id", "unknown"))
         suite = q.get("suite", "unknown")
+        stable_qid = str(q.get("qid") or q.get("stable_qid") or "").strip()
+        if not stable_qid:
+            stable_qid = _stable_question_qid(str(suite), str(prompt))
         scoring_method = q.get("scoring_method", "exact_match")
         scoring_config = q.get("scoring_config", {})
         image_path = q.get("image_path", "")
@@ -397,6 +407,7 @@ class EvalTower:
                 suite=suite,
                 prompt=prompt,
                 expected=expected,
+                qid=stable_qid,
                 answer=answer,
                 correct=correct,
                 error=error,
@@ -423,6 +434,7 @@ class EvalTower:
                 suite=suite,
                 prompt=prompt,
                 expected=expected,
+                qid=stable_qid,
                 error=str(e),
                 elapsed_s=elapsed,
             )
@@ -551,6 +563,16 @@ class EvalTower:
         # threshold resolution-aware (3/n single-flip quantum) instead of false-
         # positiving the seeder loop into a critic-reject deadlock.
         per_suite_counts = {suite: len(vals) for suite, vals in suite_correct.items()}
+        question_results = [
+            {
+                "qid": r.qid or _stable_question_qid(str(r.suite), str(r.prompt)),
+                "suite": r.suite,
+                "correct": bool(r.correct),
+                "latency_ms": int(round(max(0.0, r.elapsed_s) * 1000)),
+                "tools_used": int(r.tools_used or 0),
+            }
+            for r in results
+        ]
 
         # Routing distribution
         route_counts: dict[str, int] = {}
@@ -671,6 +693,7 @@ class EvalTower:
             per_suite_counts=per_suite_counts,
             routing_distribution=routing_dist,
             n_questions=len(results),
+            question_results=question_results,
             details={
                 "correct": correct_count,
                 "total": len(results),

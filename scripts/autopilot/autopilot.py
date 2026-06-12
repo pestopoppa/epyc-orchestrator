@@ -2627,6 +2627,7 @@ def _run_loop_inner(
         eval_details_dict: dict[str, Any] = {
             "per_suite_quality": eval_result.per_suite_quality,
             "routing_distribution": eval_result.routing_distribution,
+            "question_results": list(getattr(eval_result, "question_results", []) or []),
             "details": eval_result.details,
             "metric_schema_version": metric_schema_version,
             "harness_metrics": harness_metrics,

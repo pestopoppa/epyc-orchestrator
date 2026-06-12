@@ -184,6 +184,9 @@ class EvalResult:
     per_suite_counts: dict[str, int] = field(default_factory=dict)
     routing_distribution: dict[str, float] = field(default_factory=dict)
     n_questions: int = 0
+    # Per-question paired-design ledger vector, journaled in JSONL only. Each
+    # item is compact: {qid, suite, correct, latency_ms, tools_used}.
+    question_results: list[dict[str, Any]] = field(default_factory=list)
     details: dict[str, Any] = field(default_factory=dict)
     # HLE-4 observe-only metrics. The authoritative record schema lives in
     # src/trace/harness_schema.py; these fields only carry per-trial payloads

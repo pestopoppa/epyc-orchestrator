@@ -56,6 +56,17 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
         cost=0.2,
         reliability=0.95,
         pareto_status="candidate",
+        eval_details={
+            "question_results": [
+                {
+                    "qid": "q-stable",
+                    "suite": "general",
+                    "correct": True,
+                    "latency_ms": 123,
+                    "tools_used": 0,
+                }
+            ]
+        },
         metric_schema_version=1,
         harness_metrics={"planning_stability": {"score": 0.6, "evidence_event_ids": [42]}},
         oracle_adequacy={"coding_sentinel": {"oracle_type": "pytest", "deterministic": True}},
@@ -65,6 +76,7 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
 
     raw = json.loads((tmp_path / "autopilot_journal.jsonl").read_text().splitlines()[0])
     assert raw["metric_schema_version"] == 1
+    assert raw["eval_details"]["question_results"][0]["qid"] == "q-stable"
     assert raw["harness_metrics"]["planning_stability"]["score"] == 0.6
     assert raw["oracle_adequacy"]["coding_sentinel"]["oracle_type"] == "pytest"
 
@@ -73,6 +85,7 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
     assert loaded.metric_schema_version == 1
     assert loaded.harness_metrics == entry.harness_metrics
     assert loaded.oracle_adequacy == entry.oracle_adequacy
+    assert loaded.eval_details["question_results"][0]["qid"] == "q-stable"
 
 
 def test_journal_loads_hle_fields_from_legacy_eval_details(tmp_path: Path) -> None:

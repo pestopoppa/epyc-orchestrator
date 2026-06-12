@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -71,6 +72,39 @@ def test_aggregate_uses_batch_throughput_for_concurrent_objective() -> None:
     assert out.details["task_rate_qph"] == pytest.approx(900.0)
     assert out.details["goodput_qph"] == pytest.approx(600.0)
     assert out.details["tokens_per_solved_task"] == 140.0
+
+
+def test_aggregate_emits_compact_stable_question_results() -> None:
+    tower = EvalTower()
+    out = tower._aggregate(
+        [
+            QuestionResult(
+                question_id="transient-source-id",
+                suite="math",
+                prompt="What is two plus two?",
+                expected="4",
+                answer="4",
+                correct=True,
+                tokens_generated=5,
+                elapsed_s=1.234,
+                tools_used=2,
+            )
+        ],
+        tier=1,
+    )
+
+    expected_qid = hashlib.sha1(b"math\x00What is two plus two?").hexdigest()[:16]
+    assert out.question_results == [
+        {
+            "qid": expected_qid,
+            "suite": "math",
+            "correct": True,
+            "latency_ms": 1234,
+            "tools_used": 2,
+        }
+    ]
+    assert "prompt" not in out.question_results[0]
+    assert "answer" not in out.question_results[0]
 
 
 def test_eval_result_grep_lines_include_concurrency_metrics() -> None:
