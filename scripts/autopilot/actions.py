@@ -483,8 +483,10 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
         reason = str(validation.get("error", "flag experiment error"))
         return SkipOutcome("skipped", reason, "structural_experiment"), "structural_lab"
 
-    ctx.lab.apply_flag_experiment(flags)
+    apply_result = ctx.lab.apply_flag_experiment(flags)
     eval_result = ctx.tower.hybrid_eval()
+    eval_result.details.setdefault("flag_attestation", apply_result.get("attestation"))
+    eval_result.details.setdefault("flag_apply_result", apply_result)
 
     # Revert if quality drops
     verdict = ctx.gate.check(eval_result)
@@ -492,7 +494,8 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
         log.warning("Structural experiment failed safety gate, reverting")
         # Revert flags
         reverted = {k: not v for k, v in flags.items()}
-        ctx.lab.apply_flag_experiment(reverted)
+        revert_result = ctx.lab.apply_flag_experiment(reverted)
+        eval_result.details["flag_revert_result"] = revert_result
     else:
         # AP-7: Structural change accepted — invalidate stale Optuna trials
         ctx.swarm.mark_epoch(f"structural_experiment:{flags}")

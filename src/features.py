@@ -46,13 +46,27 @@ Adding New Features:
 
 from __future__ import annotations
 
+import json
+import os
 import threading
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from src.env_parsing import env_bool
 
-# Environment variable prefix for all feature flags
+# Environment variable prefixes for feature flags.
+#
+# ORCHESTRATOR_<FLAG> is the legacy spelling and remains supported for
+# compatibility. ORCHESTRATOR_FEATURE_<FLAG> is preferred for stack-managed
+# API workers because top-level ORCHESTRATOR_* names can collide with
+# structured Pydantic settings such as OrchestratorSettings.repl.
 ENV_PREFIX = "ORCHESTRATOR_"
+FEATURE_ENV_PREFIX = "ORCHESTRATOR_FEATURE_"
+RUNTIME_FLAGS_ENV = "ORCHESTRATOR_RUNTIME_FLAGS_PATH"
+RUNTIME_FLAGS_TTL_S = 1.0
 
 
 # ── Declarative Feature Registry ──────────────────────────────────────────
@@ -190,6 +204,94 @@ _FEATURE_REGISTRY: tuple[FeatureSpec, ...] = (
 
 # Indexed for fast lookup
 _REGISTRY_BY_NAME: dict[str, FeatureSpec] = {s.name: s for s in _FEATURE_REGISTRY}
+
+
+def runtime_flags_path() -> Path:
+    """Shared runtime flag override file used by all API workers."""
+    override = os.environ.get(RUNTIME_FLAGS_ENV)
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[1] / "orchestration" / "runtime_flags.json"
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return None
+
+
+def _runtime_records(path: Path | None = None) -> dict[str, dict[str, Any]]:
+    path = path or runtime_flags_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    raw = data.get("flags", {}) if isinstance(data, dict) else {}
+    if not isinstance(raw, dict):
+        return {}
+    records: dict[str, dict[str, Any]] = {}
+    for name, record in raw.items():
+        if name not in _REGISTRY_BY_NAME:
+            continue
+        if isinstance(record, dict):
+            value = _coerce_bool(record.get("value"))
+            if value is None:
+                continue
+            records[name] = {
+                "value": value,
+                "set_by": str(record.get("set_by") or "unknown"),
+                "ts": str(record.get("ts") or ""),
+            }
+        else:
+            value = _coerce_bool(record)
+            if value is not None:
+                records[name] = {"value": value, "set_by": "legacy", "ts": ""}
+    return records
+
+
+def runtime_flag_overrides(path: Path | None = None) -> dict[str, bool]:
+    """Return valid runtime overrides from the shared flag file."""
+    return {name: bool(record["value"]) for name, record in _runtime_records(path).items()}
+
+
+def write_runtime_flag_overrides(
+    overrides: dict[str, bool],
+    *,
+    set_by: str = "unknown",
+    path: Path | None = None,
+) -> Path:
+    """Atomically write runtime feature overrides for all worker processes."""
+    path = path or runtime_flags_path()
+    records = _runtime_records(path)
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for name, value in overrides.items():
+        if name not in _REGISTRY_BY_NAME:
+            continue
+        records[name] = {
+            "value": bool(value),
+            "set_by": set_by,
+            "ts": ts,
+        }
+    payload = {
+        "version": 1,
+        "updated_at": ts,
+        "flags": records,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+    return path
 
 
 @dataclass
@@ -523,6 +625,45 @@ def _feature_flag_bool(name: str, default: bool = False) -> bool:
     return env_bool(key, default)
 
 
+def _compute_feature_flags(
+    *,
+    production: bool = False,
+    override: dict[str, bool] | None = None,
+) -> tuple[dict[str, bool], dict[str, str]]:
+    defaults = {
+        spec.name: (spec.default_prod if production else spec.default_test)
+        for spec in _FEATURE_REGISTRY
+    }
+    flags: dict[str, bool] = {}
+    sources: dict[str, str] = {}
+    for spec in _FEATURE_REGISTRY:
+        env_key = f"{ENV_PREFIX}{spec.env_var}"
+        feature_env_key = f"{FEATURE_ENV_PREFIX}{spec.env_var}"
+        if env_key in os.environ:
+            value = _feature_flag_bool(spec.env_var, defaults[spec.name])
+            source = env_key
+        elif feature_env_key in os.environ:
+            value = env_bool(feature_env_key, defaults[spec.name])
+            source = feature_env_key
+        else:
+            value = defaults[spec.name]
+            source = "default_prod" if production else "default_test"
+        flags[spec.name] = value
+        sources[spec.name] = source
+
+    runtime_path = runtime_flags_path()
+    for name, value in runtime_flag_overrides(runtime_path).items():
+        flags[name] = value
+        sources[name] = f"runtime_file:{runtime_path}"
+
+    if override:
+        for name, value in override.items():
+            flags[name] = bool(value)
+            sources[name] = "override"
+
+    return flags, sources
+
+
 def get_features(
     *,
     production: bool = False,
@@ -554,28 +695,29 @@ def get_features(
         # Test with specific features
         features = get_features(override={"memrl": True, "tools": False})
     """
-    # Derive defaults from registry
-    defaults = {
-        spec.name: (spec.default_prod if production else spec.default_test)
-        for spec in _FEATURE_REGISTRY
-    }
-
-    # Read from environment (overrides defaults)
-    flags = {
-        spec.name: _feature_flag_bool(spec.env_var, defaults[spec.name])
-        for spec in _FEATURE_REGISTRY
-    }
-
-    # Apply explicit overrides
-    if override:
-        flags.update(override)
-
+    flags, _sources = _compute_feature_flags(production=production, override=override)
     return Features(**flags)
+
+
+def feature_sources(*, production: bool = False) -> dict[str, str]:
+    """Return the source for each effective feature value."""
+    _flags, sources = _compute_feature_flags(production=production)
+    return sources
 
 
 # Singleton for global access (lazy-loaded, thread-safe)
 _features: Features | None = None
 _features_lock = threading.Lock()
+_features_runtime_path: Path | None = None
+_features_runtime_mtime: float | None = None
+_features_runtime_last_check = 0.0
+
+
+def _runtime_mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except FileNotFoundError:
+        return None
 
 
 def features() -> Features:
@@ -592,12 +734,25 @@ def features() -> Features:
     Returns:
         Global Features instance.
     """
-    global _features
-    if _features is None:
-        with _features_lock:
-            if _features is None:
+    global _features, _features_runtime_last_check, _features_runtime_mtime, _features_runtime_path
+    now = time.monotonic()
+    path = runtime_flags_path()
+    with _features_lock:
+        if _features is None:
+            _features = get_features()
+            _features_runtime_path = path
+            _features_runtime_mtime = _runtime_mtime(path)
+            _features_runtime_last_check = now
+            return _features
+
+        if now - _features_runtime_last_check >= RUNTIME_FLAGS_TTL_S:
+            mtime = _runtime_mtime(path)
+            if path != _features_runtime_path or mtime != _features_runtime_mtime:
                 _features = get_features()
-    return _features
+                _features_runtime_path = path
+                _features_runtime_mtime = mtime
+            _features_runtime_last_check = now
+        return _features
 
 
 def reset_features() -> None:
@@ -605,9 +760,12 @@ def reset_features() -> None:
 
     Call this to re-read feature flags from environment.
     """
-    global _features
+    global _features, _features_runtime_last_check, _features_runtime_mtime, _features_runtime_path
     with _features_lock:
         _features = None
+        _features_runtime_path = None
+        _features_runtime_mtime = None
+        _features_runtime_last_check = 0.0
 
 
 def set_features(new_features: Features) -> None:
@@ -616,6 +774,9 @@ def set_features(new_features: Features) -> None:
     Args:
         new_features: Features instance to use globally.
     """
-    global _features
+    global _features, _features_runtime_last_check, _features_runtime_mtime, _features_runtime_path
     with _features_lock:
         _features = new_features
+        _features_runtime_path = runtime_flags_path()
+        _features_runtime_mtime = _runtime_mtime(_features_runtime_path)
+        _features_runtime_last_check = time.monotonic()

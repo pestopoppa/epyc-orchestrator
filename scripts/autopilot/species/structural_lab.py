@@ -407,9 +407,83 @@ class StructuralLab:
         try:
             resp = httpx.post(f"{self.url}/config", json=flags, timeout=10)
             resp.raise_for_status()
-            return resp.json()
+            result = resp.json()
+            result["attestation"] = self.attest_flags(flags)
+            return result
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    def attest_flags(
+        self,
+        expected: dict[str, bool] | None = None,
+        *,
+        polls: int = 120,
+        timeout_s: float = 15.0,
+    ) -> dict[str, Any]:
+        """Poll /config/attest and summarize cross-worker flag consistency."""
+        import httpx
+        import time
+
+        deadline = time.time() + timeout_s
+        seen: dict[str, dict[str, Any]] = {}
+        attempts = 0
+        last_error = ""
+        while attempts < polls and time.time() < deadline:
+            attempts += 1
+            try:
+                resp = httpx.get(
+                    f"{self.url}/config/attest",
+                    headers={"Connection": "close"},
+                    timeout=2,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                pid = str(data.get("pid") or f"unknown-{attempts}")
+                seen[pid] = data
+            except Exception as exc:
+                last_error = str(exc)
+            time.sleep(0.05)
+
+        diffs: list[dict[str, Any]] = []
+        expected = expected or {}
+        for pid, data in seen.items():
+            flags = data.get("flags", {}) or {}
+            for name, value in expected.items():
+                if flags.get(name) != bool(value):
+                    diffs.append({
+                        "pid": pid,
+                        "flag": name,
+                        "expected": bool(value),
+                        "actual": flags.get(name),
+                    })
+
+        heterogeneous: dict[str, dict[str, Any]] = {}
+        if seen:
+            all_names = sorted({
+                name
+                for data in seen.values()
+                for name in (data.get("flags", {}) or {}).keys()
+            })
+            for name in all_names:
+                values = {
+                    pid: (data.get("flags", {}) or {}).get(name)
+                    for pid, data in seen.items()
+                }
+                if len(set(values.values())) > 1:
+                    heterogeneous[name] = values
+
+        status = "ok" if seen and not diffs and not heterogeneous else "mismatch"
+        if not seen:
+            status = "error"
+        return {
+            "status": status,
+            "workers_seen": len(seen),
+            "attempts": attempts,
+            "expected": expected,
+            "diffs": diffs,
+            "heterogeneous": heterogeneous,
+            "last_error": last_error,
+        }
 
     def current_flags(self) -> dict[str, bool]:
         """Read the live feature-flag state from the orchestrator.
@@ -422,11 +496,16 @@ class StructuralLab:
         """
         import httpx
         try:
-            resp = httpx.post(f"{self.url}/config", json={}, timeout=10)
+            resp = httpx.get(f"{self.url}/config/attest", timeout=10)
             resp.raise_for_status()
-            return dict(resp.json().get("features", {}))
+            return dict(resp.json().get("flags", {}))
         except Exception:
-            return {}
+            try:
+                resp = httpx.post(f"{self.url}/config", json={}, timeout=10)
+                resp.raise_for_status()
+                return dict(resp.json().get("features", {}))
+            except Exception:
+                return {}
 
     def flag_schema(self) -> list[dict[str, Any]]:
         """Return the declarative feature registry for the planner prompt.

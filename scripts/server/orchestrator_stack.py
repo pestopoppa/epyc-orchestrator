@@ -1099,6 +1099,35 @@ def _apply_orchestrator_profile(env: dict[str, str], profile: str | None) -> Non
         env.setdefault(key, value)
 
 
+PRODUCTION_FEATURE_WAVE_OVERRIDES: dict[str, bool] = {
+    # Fable5 routing-truth W1: conservative wave-1 production intent.
+    "specialist_routing": True,
+    "model_fallback": True,
+    # Wave-2 paths have been dormant for months; keep them declared-off until
+    # each has its own observation window.
+    "plan_review": False,
+    "architect_delegation": False,
+    "parallel_execution": False,
+    "unified_streaming": False,
+    # Weights have been absent since the 2026-05-25 memory reset.
+    "routing_classifier": False,
+}
+
+
+def _production_feature_env() -> dict[str, str]:
+    """Complete, attestable ORCHESTRATOR_FEATURE_* block for API workers."""
+    from src.features import FEATURE_ENV_PREFIX, _FEATURE_REGISTRY, _REGISTRY_BY_NAME
+
+    block = {
+        f"{FEATURE_ENV_PREFIX}{spec.env_var}": "1" if spec.default_prod else "0"
+        for spec in _FEATURE_REGISTRY
+    }
+    for name, enabled in PRODUCTION_FEATURE_WAVE_OVERRIDES.items():
+        spec = _REGISTRY_BY_NAME[name]
+        block[f"{FEATURE_ENV_PREFIX}{spec.env_var}"] = "1" if enabled else "0"
+    return block
+
+
 def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     """Start the orchestrator API."""
     log_file = LOG_DIR / "orchestrator.log"
@@ -1115,9 +1144,10 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env = os.environ.copy()
     env["HF_HOME"] = str(_PATHS["cache_dir"] / "huggingface")
     env["TMPDIR"] = str(_PATHS["tmp_dir"])
-    # Feature flags: enable production capabilities
-    env["ORCHESTRATOR_MEMRL"] = "1"
-    env["ORCHESTRATOR_ROUTING_CLASSIFIER"] = "1"
+    # Feature flags: make every registry flag explicit in /proc/<pid>/environ.
+    # Later targeted env assignments preserve existing operational launch intent
+    # for rollout flags that are not part of routing-truth wave gating.
+    env.update(_production_feature_env())
     # 2026-05-22 Phase 5: per-CPU-region cross-process locks enabled by
     # default. Replaces the single global heavy_model.lock with
     # per-(role, atomic-region) fcntl locks so frontdoor full (0-47)
