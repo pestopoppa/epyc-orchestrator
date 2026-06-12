@@ -49,6 +49,33 @@ def plot_hypervolume_trend(
     return path
 
 
+def _frontier_envelope_2d(points: list[dict]) -> list[tuple[float, float]]:
+    """2D Pareto envelope (maximize speed & quality) of ``points``.
+
+    Returns ``(speed, quality)`` pairs forming the actual upper-right edge in
+    this projection, sorted by speed for line drawing. The archive frontier is
+    non-dominated in the full 4D objective space, so its 2D (speed×quality)
+    projection can contain points dominated on these two axes alone; connecting
+    every member would zig-zag. We keep only the points not 2D-dominated so the
+    drawn line is a monotone trade-off curve. Fewer than 2 envelope points means
+    no line can be drawn (a single frontier member renders as a lone marker).
+    """
+    proj: list[tuple[float, float]] = []
+    for p in points:
+        obj = p.get("objectives") or []
+        if len(obj) >= 2:
+            proj.append((float(obj[1]), float(obj[0])))  # (speed, quality)
+    envelope = [
+        (s, q)
+        for (s, q) in proj
+        if not any(
+            s2 >= s and q2 >= q and (s2, q2) != (s, q) for (s2, q2) in proj
+        )
+    ]
+    envelope.sort(key=lambda sq: sq[0])
+    return envelope
+
+
 def plot_pareto_frontier_2d(
     frontier: list[dict], dominated: list[dict], output_dir: Path | None = None
 ) -> Path:
@@ -71,6 +98,19 @@ def plot_pareto_frontier_2d(
         d_q = [p["objectives"][0] for p in dominated]
         d_s = [p["objectives"][1] for p in dominated]
         ax.scatter(d_s, d_q, c="lightgrey", s=20, alpha=0.4, label="Dominated")
+
+    # The actual Pareto frontier line: connect the frontier's 2D speed×quality
+    # envelope so the trade-off curve is visible, not just a point cloud. Drawn
+    # under the species markers (zorder=1). Historically this plot was scatter-
+    # only, which read as "no frontier" to operators.
+    envelope = _frontier_envelope_2d(frontier)
+    if len(envelope) >= 2:
+        ex = [s for s, _ in envelope]
+        ey = [q for _, q in envelope]
+        ax.plot(
+            ex, ey, "--", color="#37474F", linewidth=1.6, alpha=0.75,
+            zorder=1, label="Pareto frontier",
+        )
 
     # Frontier points colored by species
     for species, color in species_colors.items():

@@ -3190,8 +3190,17 @@ async function updatePareto() {
                 const canonicalTier = Number.isFinite(Number(d.canonical_tier)) ? `T${Number(d.canonical_tier)}` : 'T1';
                 const tierKeys = Object.keys(d.frontiers_by_tier || {}).sort((a, b) => Number(a) - Number(b));
                 const tierText = tierKeys.length ? ` · tiers ${tierKeys.map(t => `T${t}`).join('/')}` : '';
-                sumEl.textContent =
-                    `${canonicalTier} ${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials · ${source}${tierText}`;
+                let txt = `${canonicalTier} ${d.totals.frontier_size} frontier · ${d.totals.all_entries} trials · ${source}${tierText}`;
+                // Surface why trials may be missing rather than letting the plot
+                // look silently complete (the recurring "frozen at ~700" confusion).
+                if (d.stale_state_warning) {
+                    txt += ` · ⚠ state stale (counter ${d.stale_state_warning.state_trial_counter} < journal ${d.stale_state_warning.journal_max_trial_id})`;
+                }
+                const bugExcl = d.exclusions && d.exclusions.bug_corrupted;
+                if (bugExcl && bugExcl.count) {
+                    txt += ` · ⚠ ${bugExcl.count} excluded (corrupted, ≤trial ${bugExcl.max_trial_id})`;
+                }
+                sumEl.textContent = txt;
             } else {
                 sumEl.textContent = '(no autopilot_state.json yet)';
             }
@@ -3280,6 +3289,24 @@ function paretoFrontierOf(points) {
     return pts.filter(p => !pts.some(q => q !== p && paretoDominates4(q.objectives, p.objectives)));
 }
 
+// 2D Pareto envelope (maximize objectives[0]=quality and objectives[1]=speed),
+// sorted by quality for path drawing. Unlike the 4D archive frontier — whose
+// projection can collapse to a SINGLE point that cannot form a line — this is
+// the visible quality×speed trade-off edge and is drawable from >=2 points, so
+// every tier with enough data shows an actual frontier line over its cloud.
+function paretoEnvelope2D(points) {
+    const pts = (points || []).filter(
+        p => p && Array.isArray(p.objectives) && p.objectives.length >= 2
+    );
+    const nd = pts.filter(p => !pts.some(q =>
+        q !== p
+        && q.objectives[0] >= p.objectives[0]
+        && q.objectives[1] >= p.objectives[1]
+        && (q.objectives[0] > p.objectives[0] || q.objectives[1] > p.objectives[1])
+    ));
+    return nd.slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
+}
+
 function renderParetoScatter(d) {
     // Quality (x) × Speed (y) scatter. Dominated points dim; each TIER's frontier is its
     // own colored series + line; production-best ringed green. Axis labels + tick gridlines.
@@ -3365,16 +3392,29 @@ function renderParetoScatter(d) {
         parts.push(paretoMarker(tier, x, y, 2.5, `fill="${paretoTierFill(tier)}" opacity="0.4"`, tip));
     });
     // Per-tier frontiers: each tier drawn as its own colored line + points.
+    // The LINE is the tier's 2D quality×speed envelope over ALL its shown points
+    // (frontier ∪ dominated), so a frontier curve is visible even when the
+    // archived 4D frontier collapses to a single point in this projection. The
+    // MARKERS stay the true archive frontier members (production-best ringed).
+    const ptsByTier = {};
+    Object.entries(d.frontiers_by_tier || {}).forEach(([t, arr]) =>
+        (arr || []).forEach(p => { (ptsByTier[String(t)] = ptsByTier[String(t)] || []).push(p); })
+    );
+    (d.dominated || []).forEach(p => {
+        const t = String(p.eval_tier ?? d.canonical_tier ?? 1);
+        (ptsByTier[t] = ptsByTier[t] || []).push(p);
+    });
     const series = paretoTierSeries(d.frontiers_by_tier, d.frontier, d.canonical_tier);
     series.forEach(([tier, front]) => {
         const color = paretoTierColor(tier);
-        const sorted = (front || []).slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
-        if (sorted.length > 1) {
-            const path = sorted.map((p, i) =>
+        const envelope = paretoEnvelope2D(ptsByTier[String(tier)] || front || []);
+        if (envelope.length > 1) {
+            const path = envelope.map((p, i) =>
                 `${i === 0 ? 'M' : 'L'} ${sx(p.objectives[0]).toFixed(1)} ${sy(p.objectives[1]).toFixed(1)}`
             ).join(' ');
             parts.push(`<path class="frontier-line" style="stroke:${color}" d="${path}"/>`);
         }
+        const sorted = (front || []).slice().sort((a, b) => a.objectives[0] - b.objectives[0]);
         sorted.forEach(p => {
             const x = sx(p.objectives[0]), y = sy(p.objectives[1]);
             const prod = p.is_production_best;

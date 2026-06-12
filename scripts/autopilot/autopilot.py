@@ -70,7 +70,7 @@ from controller_io import (
     validate_single_variable as _validate_single_variable,
     _unwrap_action,
 )
-from planner_coordinator import plan_with_providers
+from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
     append_blacklist as _append_blacklist_impl,
     check_blacklist,
@@ -134,6 +134,11 @@ _config_fingerprint = config_fingerprint
 STATE_PATH = ORCH_ROOT / "orchestration" / "autopilot_state.json"
 LOCK_PATH = ORCH_ROOT / "orchestration" / ".autopilot.lock"
 BLACKLIST_PATH = SCRIPT_DIR / "failure_blacklist.yaml"
+# Prompt-budget cap (2026-06-10): only the most-recent N blacklist entries are
+# RENDERED into the planner prompt (the full list is always enforced at dispatch
+# by check_blacklist()). Keeps the unbounded-growth blacklist from dominating the
+# ~80KB prompt. Operator-tunable.
+BLACKLIST_RENDER_CAP = int(os.environ.get("AUTOPILOT_BLACKLIST_RENDER_CAP", "18"))
 ORCHESTRATOR_URL = "http://localhost:8000"
 
 # 2026-05-23 constrained-creativity planner knobs (gated on stagnation).
@@ -146,6 +151,11 @@ TAIL_SEED_COUNT = 3         # seeds (not candidates) passed to LLM as inspiratio
 STAGNATION_HV_EPS = 1e-3    # hv_slope_10 strictly below this triggers rich prompt
 STAGNATION_STREAK = 3       # N consecutive same-action_type trials triggers rich prompt
 PLOT_INTERVAL = 10  # Generate plots every N trials
+# Plots also refresh on a wall-clock timer so a long mid-decade gap (e.g. a
+# multi-hour tier-2 eval) doesn't leave the dashboard stale, and a blocking
+# lifecycle render is time-capped so shutdown can never hang on it.
+PLOT_MAX_AGE_S = 600.0
+PLOT_SYNC_TIMEOUT_S = 180.0
 # A "trial" is an experiment that COLLECTS METRICS (runs an eval). These meta /
 # housekeeping actions intentionally return no EvalResult — they mutate bookkeeping
 # state (knowledge distillation, memory reset) without measuring anything — so they must
@@ -565,9 +575,6 @@ Your job: analyze current system state and propose the SINGLE best next action.
 ### Recent Insights (cross-species, structured per action_type, bug-corrupted excluded)
 {insights_structured}
 
-### Recent Insights (legacy flat — for backward compatibility)
-{insights}
-
 ### Exploration mode
 Stagnation signal: {stagnation_signal}
 
@@ -628,6 +635,8 @@ Respond with EXACTLY ONE action in a ```json:autopilot_actions block:
 - Compact: {{"type": "slot_compact", "port": 8070, "slot_id": 0, "keep_ratio": 0.3, "scorer": "expected_attention", "keep_first": 5, "n_future": 128}}
   (AM KV compaction — compress KV cache on a server slot. Use after long-context queries to free memory. Evaluates quality post-compact.)
 - Train: {{"type": "train_routing_models", "min_memories": 500}}
+  (min_memories: integer 1-100000; default 500. Do NOT set it to the current
+  memory_count — the validator REJECTS any value above 100000.)
 - Distill: {{"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]}}
 - Reset: {{"type": "reset_memories", "keep_seen": true, "keep_skills": true}}
 - Deep eval: {{"type": "deep_eval", "tier": 2}}
@@ -769,6 +778,19 @@ def _build_action_availability(
         cautions["train_routing_models"] = (
             "routing memories exist, but the current seeder session is not "
             "converged yet; avoid training as a stagnation escape hatch"
+        )
+    # Validator caps train_routing_models.min_memories at 100000 (controller_io.py).
+    # When the live corpus already exceeds the cap, say so explicitly so the planner
+    # does NOT infer "use the current memory_count" and cross the hidden schema limit
+    # (root cause of the #776 invalid-action pause, 2026-06-11).
+    if memory_count > 100_000 and "train_routing_models" not in blocked:
+        _cap_note = (
+            f"min_memories is capped at 100000 — do NOT set it to the live "
+            f"memory_count ({memory_count}); valid range 1-100000 (default 500)"
+        )
+        _existing = cautions.get("train_routing_models")
+        cautions["train_routing_models"] = (
+            f"{_existing}; {_cap_note}" if _existing else _cap_note
         )
 
     if not _slot_compaction_viable(slot_memory_text):
@@ -1473,6 +1495,37 @@ def _run_loop_inner(
     async_tasks = AsyncTaskRunner()
     phase.set("starting", trial_id=trial_counter, dry_run=dry_run)
 
+    # ── Plot freshness, decoupled from the trial loop ──────────────────────
+    # Pre-2026-06-07, plots regenerated ONLY at `trial_counter % PLOT_INTERVAL
+    # == 0`, fired from inside this loop. So any stop on a non-multiple-of-N
+    # (operator pause, SIGTERM, max-trials, internal halt) froze the PNGs at the
+    # last decade boundary — observed: a run reached trial 707/708 but the
+    # dashboard PNGs stayed at the trial-700 render. We now ALSO refresh on a
+    # wall-clock timer (mid-decade) and force a synchronous render on every
+    # lifecycle transition so the operator's view always reflects the last
+    # completed trial.
+    plot_clock = {"last_ts": 0.0, "last_pause_trial": -1}
+
+    def _refresh_plots(*, sync: bool, reason: str) -> None:
+        """Regenerate the dashboard PNGs from current on-disk state.
+
+        ``sync=True`` blocks until the child ``autopilot.py plot`` completes —
+        for lifecycle transitions where the process may exit right after.
+        ``sync=False`` submits the existing non-blocking async subprocess
+        (steady state). Both read freshly-saved state/journal from disk, so a
+        ``sync=True`` caller must have ``save_state()``-ed first.
+        """
+        plot_clock["last_ts"] = time.time()
+        cmd = [sys.executable, str(SCRIPT_DIR / "autopilot.py"), "plot"]
+        if sync:
+            try:
+                subprocess.run(cmd, cwd=ORCH_ROOT, timeout=PLOT_SYNC_TIMEOUT_S, check=False)
+                log.info("Plots refreshed synchronously (%s, trial=%d)", reason, trial_counter)
+            except Exception as exc:
+                log.warning("Synchronous plot refresh (%s) failed: %s", reason, exc)
+        else:
+            async_tasks.submit_subprocess(f"plots-trial-{trial_counter}", cmd, cwd=ORCH_ROOT)
+
     while not shutdown_requested:
         async_tasks.reap(logger=log)
         phase.set("loop_start", trial_id=trial_counter)
@@ -1519,6 +1572,14 @@ def _run_loop_inner(
             save_state(state)
 
         if state.get("paused"):
+            # Refresh plots once on ENTERING a pause episode. trial_counter is
+            # frozen while paused, so the guard fires exactly once per episode
+            # (not every PAUSE_POLL_S poll) and re-fires only if trials advanced
+            # before a later re-pause. This covers operator `pause` AND internal
+            # halts (meta-loop latch), which rarely land on a %N boundary.
+            if plot_clock["last_pause_trial"] != trial_counter:
+                plot_clock["last_pause_trial"] = trial_counter
+                _refresh_plots(sync=True, reason="pause")
             log.info("AutoPilot paused, waiting...")
             phase.set(
                 "paused",
@@ -1585,14 +1646,26 @@ def _run_loop_inner(
                 program_text = PROGRAM_PATH.read_text()
             except OSError:
                 program_text = "(program.md not found)"
-            # B4/B5: Format insights for controller
-            insights_text = journal.insights_text(n=10)
-
-            # B2: Format blacklist for controller
+            # B2: Format blacklist for controller. Prompt-budget trim (2026-06-10):
+            # the blacklist grows unbounded (auto-appended on failures) and the FULL
+            # list is still enforced at dispatch by check_blacklist(); the planner
+            # only needs a recent, compact view to avoid re-proposing. Render the
+            # most-recent BLACKLIST_RENDER_CAP entries with a length-capped reason,
+            # plus a one-line count of any older entries elided (still enforced).
             if blacklist:
+                shown = blacklist[-BLACKLIST_RENDER_CAP:]
                 bl_lines = []
-                for entry in blacklist:
-                    bl_lines.append(f"  - {entry.get('pattern', {})} — {entry.get('reason', '')}")
+                for entry in shown:
+                    reason = str(entry.get("reason", ""))
+                    if len(reason) > 80:
+                        reason = reason[:79] + "…"
+                    bl_lines.append(f"  - {entry.get('pattern', {})} — {reason}")
+                elided = len(blacklist) - len(shown)
+                if elided > 0:
+                    bl_lines.append(
+                        f"  …(+{elided} older blacklisted configs not shown; all "
+                        f"{len(blacklist)} remain enforced at dispatch)"
+                    )
                 blacklist_text = "\n".join(bl_lines)
             else:
                 blacklist_text = "  (none)"
@@ -1823,7 +1896,6 @@ def _run_loop_inner(
                 action_availability=action_availability_text,
                 budget=json.dumps(meta.budget.as_dict(), indent=2),
                 suite_quality_trends=_format_suite_trends(journal.suite_quality_trend(10)),
-                insights=insights_text,
                 insights_structured=insights_structured_text,
                 stagnation_signal=stagnation_signal,
                 exploration_block=exploration_block,
@@ -1883,6 +1955,50 @@ def _run_loop_inner(
             action = planner_decision.action
             predicted_objectives = planner_decision.predicted_objectives
             rationale = planner_decision.rationale
+
+            # Degraded/uncritiqued safety gate (2026-06-07, tightened 2026-06-12):
+            # two cases (see uncritiqued_dispatch_block_reason).
+            #   (A) NO critique object — the PRIMARY failed and the draft fell back
+            #       to the critic provider: uncritiqued AND untrusted, so dispatch
+            #       only if observational, else PAUSE.
+            #   (B) verdict "unavailable" — the PRIMARY drafted fine but the binding
+            #       critic could not review it (timeout/empty/unparseable/circuit).
+            #       RISK CLASS ALONE IS NOT A SUFFICIENT GUARD (the @708 failure was
+            #       "low-risk" seed looping): HIGH → pause; seed_batch/passive →
+            #       pause unless explicitly observational+one-shot; MEDIUM experiment
+            #       → proceed ONLY IF novel and non-looping (not blacklisted, not a
+            #       recurring-invalid signature, carries a real falsifier). The gate
+            #       is pure, so supply the blacklist + invalid-signature context here.
+            # Mirrors the critic_reject_loop / meta / skip durable halts.
+            _gate_action = planner_decision.action
+            _gate_is_bl = bool(
+                isinstance(_gate_action, dict)
+                and check_blacklist(_gate_action, blacklist)
+            )
+            _gate_is_rep = bool(
+                isinstance(_gate_action, dict)
+                and _action_signature(_gate_action)
+                in (state.get("invalid_signature_counts", {}) or {})
+            )
+            _uncritiqued_block = uncritiqued_dispatch_block_reason(
+                planner_decision,
+                is_blacklisted=_gate_is_bl,
+                is_repeated=_gate_is_rep,
+            )
+            if _uncritiqued_block:
+                state["paused"] = True
+                state["_dispatch_deficiency"] = _uncritiqued_block
+                save_state(state)
+                log.error(
+                    "Planner ran degraded with NO critic verdict and drafted a "
+                    "non-observational action %r — pausing (%s) for operator review "
+                    "instead of dispatching unreviewed (fallback_reason=%r).",
+                    action.get("type") if isinstance(action, dict) else action,
+                    _uncritiqued_block,
+                    planner_decision.fallback_reason,
+                )
+                phase.set("critic_unavailable_halt", trial_id=trial_counter)
+                break
 
             # draft_critique authority: a BINDING reject/revise substituted the
             # planner's draft (safe fallback / revised_action is what `action`
@@ -2612,13 +2728,14 @@ def _run_loop_inner(
         state["seeder_state"] = seeder.export_state()
         state["td_errors"] = state["seeder_state"]["td_errors"]
 
-        # Generate plots periodically
-        if trial_counter % PLOT_INTERVAL == 0:
-            async_tasks.submit_subprocess(
-                f"plots-trial-{trial_counter}",
-                [sys.executable, str(SCRIPT_DIR / "autopilot.py"), "plot"],
-                cwd=ORCH_ROOT,
-            )
+        # Generate plots on a trial-count OR wall-clock cadence, so a long
+        # mid-decade gap still refreshes instead of waiting for the next %N
+        # boundary (which may never arrive if the run stops first).
+        if (
+            trial_counter % PLOT_INTERVAL == 0
+            or (time.time() - plot_clock["last_ts"]) >= PLOT_MAX_AGE_S
+        ):
+            _refresh_plots(sync=False, reason="periodic")
             plot_paths = [
                 str(PLOTS_DIR / name)
                 for name in (
@@ -2708,6 +2825,12 @@ def _run_loop_inner(
     log.info("AutoPilot shutting down (trial=%d)", trial_counter)
     archive.save(state)
     save_state(state)
+    # Final synchronous plot render so the operator's last view reflects the
+    # final completed trial. Covers SIGTERM/SIGINT and the max-trials break (both
+    # exit the loop to here); the %N-boundary regen almost never lands on the
+    # exact stopping trial. Skipped in dry_run (no real metrics produced).
+    if not dry_run:
+        _refresh_plots(sync=True, reason="shutdown")
     if strategy_store is not None:
         strategy_store.close()
     if not dry_run:
