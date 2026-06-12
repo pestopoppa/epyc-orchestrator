@@ -234,6 +234,19 @@ def _expanded_active_roles(
     return roles
 
 
+def _registry_date(*configs: dict[str, Any] | None) -> Any:
+    for cfg in configs:
+        if not isinstance(cfg, dict):
+            continue
+        value = cfg.get("benchmark_date")
+        if value is not None:
+            return _coerce_scalar(value)
+        performance = cfg.get("performance")
+        if isinstance(performance, dict) and performance.get("benchmark_date") is not None:
+            return _coerce_scalar(performance["benchmark_date"])
+    return None
+
+
 def _quality(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dict[str, Any]:
     suite_vector: dict[str, float] = {}
     performance = role_cfg.get("performance") if isinstance(role_cfg, dict) else None
@@ -256,7 +269,7 @@ def _quality(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dic
     if isinstance(server_cfg, dict) and server_cfg.get("benchmark_score"):
         measured.append(
             {
-                "date": _coerce_scalar(server_cfg.get("benchmark_date")),
+                "date": _registry_date(server_cfg, role_cfg),
                 "protocol": "registry benchmark_score",
                 "value": str(server_cfg["benchmark_score"]),
             }
@@ -264,7 +277,7 @@ def _quality(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dic
     elif isinstance(performance, dict) and performance:
         measured.append(
             {
-                "date": _coerce_scalar(role_cfg.get("benchmark_date")),
+                "date": _registry_date(role_cfg),
                 "protocol": "registry performance block",
                 "value": {k: _coerce_scalar(v) for k, v in performance.items()},
             }
@@ -295,7 +308,7 @@ def _speed(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dict[
     if throughput is not None:
         measured.append(
             {
-                "date": _coerce_scalar(server_cfg.get("benchmark_date")),
+                "date": _registry_date(server_cfg, role_cfg),
                 "protocol": "server_mode throughput",
                 "value_tps": throughput,
             }
@@ -303,7 +316,7 @@ def _speed(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dict[
     elif optimized is not None or baseline is not None:
         measured.append(
             {
-                "date": _coerce_scalar(role_cfg.get("benchmark_date")),
+                "date": _registry_date(role_cfg),
                 "protocol": "registry performance block",
                 "baseline_tps": baseline,
                 "optimized_tps": optimized,
@@ -320,7 +333,11 @@ def _speed(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dict[
     }
 
 
-def _acceleration(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dict[str, Any]:
+def _acceleration(
+    role_cfg: dict[str, Any],
+    server_cfg: dict[str, Any] | None,
+    enrichment_records: list[dict[str, Any]],
+) -> dict[str, Any]:
     accel: dict[str, Any] = {}
     for source in (role_cfg, server_cfg or {}):
         candidate = source.get("acceleration") if isinstance(source, dict) else None
@@ -338,14 +355,22 @@ def _acceleration(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -
         if value:
             draft_compat.append(_canonical_slug(str(value)))
 
-    chat_kwargs = server_cfg.get("chat_template_kwargs") if isinstance(server_cfg, dict) else None
     enable_thinking = None
-    if isinstance(chat_kwargs, dict) and "enable_thinking" in chat_kwargs:
-        enable_thinking = bool(chat_kwargs["enable_thinking"])
-    else:
-        model = role_cfg.get("model") if isinstance(role_cfg, dict) else None
+    for source in _enrichment_sources(role_cfg, server_cfg, enrichment_records):
+        chat_kwargs = source.get("chat_template_kwargs") if isinstance(source, dict) else None
+        if isinstance(chat_kwargs, dict) and "enable_thinking" in chat_kwargs:
+            enable_thinking = bool(chat_kwargs["enable_thinking"])
+            break
+        model = source.get("model") if isinstance(source, dict) else None
         if isinstance(model, dict) and model.get("disable_thinking") is True:
             enable_thinking = False
+            break
+        if source.get("disable_thinking") is True:
+            enable_thinking = False
+            break
+        if source.get("reasoning") == "off":
+            enable_thinking = False
+            break
 
     kv = server_cfg.get("kv_quant") if isinstance(server_cfg, dict) else None
     if not isinstance(kv, dict):
@@ -383,10 +408,20 @@ def _serving(
         numa_ports = server_cfg.get("numa_ports")
         if isinstance(numa_ports, list):
             ports.extend(int(item) for item in numa_ports if isinstance(item, int))
+    else:
+        role_port = role_cfg.get("port") if isinstance(role_cfg, dict) else None
+        if isinstance(role_port, int):
+            ports.append(role_port)
+        role_server = role_cfg.get("server") if isinstance(role_cfg, dict) else None
+        endpoint = role_server.get("endpoint") if isinstance(role_server, dict) else None
+        if isinstance(endpoint, str):
+            match = re.search(r":(\d+)(?:/|$)", endpoint)
+            if match:
+                ports.append(int(match.group(1)))
 
     numa_instances = server_cfg.get("numa_instances") if isinstance(server_cfg, dict) else None
     if not server_cfg:
-        numa_policy = "unresolved_no_server_binding"
+        numa_policy = "role_endpoint_binding" if ports else "unresolved_no_server_binding"
     elif numa_instances == 4:
         numa_policy = "4x48t_quarter_instances"
     elif numa_instances == 1:
@@ -403,6 +438,108 @@ def _serving(
         "ports": sorted(set(ports)),
         "server_role": server_role,
     }
+
+
+def _enrichment_sources(
+    role_cfg: dict[str, Any],
+    server_cfg: dict[str, Any] | None,
+    enrichment_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sources: list[dict[str, Any]] = [role_cfg]
+    if isinstance(server_cfg, dict):
+        sources.append(server_cfg)
+    for record in enrichment_records:
+        for key in ("model", "config"):
+            source = record.get(key)
+            if isinstance(source, dict):
+                sources.append(source)
+    return sources
+
+
+def _first_context_value(
+    role_cfg: dict[str, Any],
+    server_cfg: dict[str, Any] | None,
+    enrichment_records: list[dict[str, Any]],
+) -> Any:
+    for source in _enrichment_sources(role_cfg, server_cfg, enrichment_records):
+        model = source.get("model") if isinstance(source, dict) else None
+        for candidate in (model, source):
+            if not isinstance(candidate, dict):
+                continue
+            for key in (
+                "ctx_max",
+                "context_length",
+                "max_context",
+                "context_size",
+                "n_ctx",
+                "ctx_size",
+            ):
+                value = candidate.get(key)
+                if value is not None:
+                    return value
+    return None
+
+
+def _descriptor_modalities(model: dict[str, Any], role_cfg: dict[str, Any]) -> list[str]:
+    modalities = {"text"}
+    if model.get("mmproj_path"):
+        modalities.add("vision")
+    candidate_roles = role_cfg.get("candidate_roles") if isinstance(role_cfg, dict) else None
+    if isinstance(candidate_roles, list) and any("vision" in str(role) for role in candidate_roles):
+        modalities.add("vision")
+    return sorted(modalities)
+
+
+def _record_model_names(cfg: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    model = cfg.get("model") if isinstance(cfg, dict) else None
+    if isinstance(model, dict):
+        for key in ("name", "path", "huggingface_id"):
+            value = model.get(key)
+            if value:
+                names.append(str(value))
+    elif isinstance(model, str):
+        names.append(model)
+    for key in ("model_path",):
+        value = cfg.get(key)
+        if value:
+            names.append(str(value))
+    return names
+
+
+def _descriptor_lookup_keys(name: str | None, quant: str | None) -> set[str]:
+    if not name:
+        return set()
+    keys = {_canonical_slug(name), _canonical_model_id(name, None)}
+    inferred_quant = _quant_from(name, {"quant": quant} if quant else {})
+    if inferred_quant:
+        keys.add(_canonical_model_id(name, inferred_quant))
+    return keys
+
+
+def _build_enrichment_index(registry: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(registry, dict):
+        return {}
+    index: dict[str, list[dict[str, Any]]] = {}
+    for section_name in ("roles", "server_mode"):
+        section = registry.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        for key, cfg in section.items():
+            if not isinstance(cfg, dict):
+                continue
+            model = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+            quant = str(model.get("quant")) if isinstance(model, dict) and model.get("quant") else None
+            record = {
+                "section": section_name,
+                "key": str(key),
+                "config": cfg,
+                "model": model,
+            }
+            for name in _record_model_names(cfg):
+                for lookup_key in _descriptor_lookup_keys(name, quant):
+                    index.setdefault(lookup_key, []).append(record)
+    return index
 
 
 def _merge_descriptor(target: dict[str, Any], incoming: dict[str, Any]) -> None:
@@ -447,6 +584,7 @@ def _descriptor_for_role(
     server_role: str | None,
     server_cfg: dict[str, Any] | None,
     binding_kind: str | None,
+    enrichment_index: dict[str, list[dict[str, Any]]],
 ) -> dict[str, Any] | None:
     model = _first_model_dict(role_cfg, server_cfg)
     model_name = _first_model_name(role_cfg, server_cfg)
@@ -455,6 +593,9 @@ def _descriptor_for_role(
 
     quant = _quant_from(model_name, model)
     model_id = _canonical_model_id(model_name, quant)
+    enrichment_records: list[dict[str, Any]] = []
+    for key in _descriptor_lookup_keys(model_name, quant):
+        enrichment_records.extend(enrichment_index.get(key, []))
     arch = str(model.get("architecture") or "unknown")
     params_b = _params_from(model_name, model)
     active_b = _active_from(model_name, arch, params_b)
@@ -488,8 +629,8 @@ def _descriptor_for_role(
         "active_b": active_b,
         "quant": quant,
         "mem_gb": _as_float(mem_gb),
-        "ctx_max": model.get("ctx_max") or model.get("context_length"),
-        "modalities": ["text"],
+        "ctx_max": _first_context_value(role_cfg, server_cfg, enrichment_records),
+        "modalities": _descriptor_modalities(model, role_cfg),
         "role_bindings": {
             "roles": [role],
             "server_roles": [server_role] if server_role else [],
@@ -498,7 +639,7 @@ def _descriptor_for_role(
         },
         "quality": _quality(role_cfg, server_cfg),
         "speed": _speed(role_cfg, server_cfg),
-        "acceleration": _acceleration(role_cfg, server_cfg),
+        "acceleration": _acceleration(role_cfg, server_cfg, enrichment_records),
         "serving": _serving(role_cfg, server_role, server_cfg),
         "known_gaps": known_gaps,
     }
@@ -530,8 +671,10 @@ def compile_model_descriptors(
     registries in place.
     """
     registry = _load_yaml(lean_registry_path)
+    research_registry: dict[str, Any] | None = None
     if research_registry_path is not None and research_registry_path.exists():
-        _load_yaml(research_registry_path)
+        research_registry = _load_yaml(research_registry_path)
+    enrichment_index = _build_enrichment_index(research_registry)
 
     roles = registry.get("roles") or {}
     server_mode = registry.get("server_mode") or {}
@@ -548,7 +691,14 @@ def compile_model_descriptors(
         if not isinstance(role_cfg, dict):
             role_cfg = {}
 
-        descriptor = _descriptor_for_role(role, role_cfg, server_role, server_cfg, binding_kind)
+        descriptor = _descriptor_for_role(
+            role,
+            role_cfg,
+            server_role,
+            server_cfg,
+            binding_kind,
+            enrichment_index,
+        )
         if descriptor is None:
             continue
         existing = descriptors.get(descriptor["model_id"])

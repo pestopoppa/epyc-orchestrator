@@ -177,3 +177,109 @@ def test_allow_incomplete_records_known_gaps_and_writes(tmp_path: Path) -> None:
     assert compiled["status"] == "compiled_with_gaps"
     assert loaded["models"][0]["known_gaps"]
     assert "worker_math" in loaded["models"][0]["role_bindings"]["roles"]
+
+
+def test_compile_enriches_context_and_thinking_from_research_registry(tmp_path: Path) -> None:
+    lean_path = _write_yaml(
+        tmp_path / "lean.yaml",
+        {
+            "server_mode": {
+                "frontdoor": {
+                    "port": 8070,
+                    "model": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                    "model_role": "frontdoor",
+                    "throughput": 24.3,
+                    "benchmark_score": "170/183 (93%)",
+                    "chat_template_kwargs": {"enable_thinking": False},
+                }
+            },
+            "roles": {
+                "frontdoor": {
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B-Q8_0",
+                        "quant": "Q8_0",
+                        "architecture": "qwen35moe",
+                        "size_gb": 37,
+                    },
+                    "performance": {
+                        "quality_pct": 93,
+                        "benchmark_date": "2026-05-04",
+                    },
+                }
+            },
+        },
+    )
+    research_path = _write_yaml(
+        tmp_path / "research.yaml",
+        {
+            "roles": {
+                "qwen36_q8_0": {
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B",
+                        "path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                        "quant": "Q8_0",
+                        "max_context": 262144,
+                        "disable_thinking": True,
+                    }
+                }
+            }
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=lean_path,
+        research_registry_path=research_path,
+        active_roles={"frontdoor"},
+    )
+
+    model = compiled["models"][0]
+    assert model["ctx_max"] == 262144
+    assert model["acceleration"]["enable_thinking"] is False
+    assert model["quality"]["measured"][0]["date"] == "2026-05-04"
+    assert compiled["status"] == "compiled"
+
+
+def test_compile_uses_role_endpoint_for_dedicated_vision_role(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {},
+            "roles": {
+                "worker_vision": {
+                    "port": 8086,
+                    "model": {
+                        "name": "Qwen2.5-VL-7B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "dense",
+                        "size_gb": 4.4,
+                        "ctx_max": 32768,
+                        "mmproj_path": "/models/mmproj.gguf",
+                    },
+                    "candidate_roles": ["vision"],
+                    "server": {"endpoint": "http://localhost:8086"},
+                    "acceleration": {
+                        "type": "baseline",
+                        "disallowed": ["speculative_decoding"],
+                    },
+                    "performance": {
+                        "vl_score": "11/12 (92%)",
+                        "benchmark_date": "2026-03-04",
+                    },
+                }
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"worker_vision"},
+        allow_incomplete=True,
+    )
+
+    model = compiled["models"][0]
+    assert model["serving"]["ports"] == [8086]
+    assert model["serving"]["numa_policy"] == "role_endpoint_binding"
+    assert model["modalities"] == ["text", "vision"]
+    assert "Missing serving port binding" not in model["known_gaps"]
+    assert "Missing server_mode binding" not in model["known_gaps"]
