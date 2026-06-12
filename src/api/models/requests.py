@@ -118,8 +118,8 @@ class ChatRequest(BaseModel):
         "to quarter on concurrent arrival. Short interactive turns should set "
         "this low (e.g. 200) to skip migration and queue/cold-start instead. "
         "Long conversations + background probes can amortize a longer budget. "
-        "Currently advisory only — migration is disabled under "
-        "ORCHESTRATOR_PER_REGION_LOCKS=1 (production default); see "
+        "Honored by the per-region-locks session-handover migration transaction "
+        "when one is attempted; see "
         "ConcurrencyAwareBackend.kv_migration_status() for runtime state.",
     )
     stop_sequences: list[str] | None = Field(
