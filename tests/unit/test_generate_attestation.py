@@ -125,6 +125,87 @@ def test_llama_resolution_detects_cross_tree_mismatch() -> None:
     assert status["issues"] == ["libllama.so_tree_mismatch:/mnt/raid0/llm/llama.cpp"]
 
 
+def test_collect_feature_flags_detects_worker_drift(monkeypatch, tmp_path: Path) -> None:
+    proc_root = tmp_path / "proc"
+    for pid, value in ((101, "1"), (102, "0")):
+        pid_dir = proc_root / str(pid)
+        pid_dir.mkdir(parents=True)
+        (pid_dir / "environ").write_bytes(f"ORCHESTRATOR_FEATURE_MODEL_FALLBACK={value}\0".encode())
+    responses = [
+        {
+            "pid": 101,
+            "flags": {"model_fallback": True},
+            "sources": {"model_fallback": "ORCHESTRATOR_FEATURE_MODEL_FALLBACK"},
+        },
+        {
+            "pid": 102,
+            "flags": {"model_fallback": False},
+            "sources": {"model_fallback": "ORCHESTRATOR_FEATURE_MODEL_FALLBACK"},
+        },
+    ]
+
+    monkeypatch.setattr(attest, "_fetch_json", lambda _url: responses.pop(0))
+    monkeypatch.setattr(
+        attest,
+        "load_declared_feature_env",
+        lambda: {
+            "status": "ok",
+            "env": {"ORCHESTRATOR_FEATURE_MODEL_FALLBACK": "1"},
+            "flag_env_names": {
+                "model_fallback": "ORCHESTRATOR_FEATURE_MODEL_FALLBACK",
+            },
+            "flags": {"model_fallback": True},
+        },
+    )
+
+    report = attest.collect_feature_flags(polls=2, delay_s=0, proc_root=proc_root)
+
+    assert report["status"] == "warn"
+    assert report["heterogeneous"] == {
+        "model_fallback": {"101": True, "102": False},
+    }
+    assert report["intent_diffs"] == [
+        {
+            "pid": "102",
+            "flag": "model_fallback",
+            "expected": True,
+            "actual": False,
+            "source": "ORCHESTRATOR_FEATURE_MODEL_FALLBACK",
+        }
+    ]
+    assert report["env_diffs"] == [
+        {
+            "pid": "102",
+            "env": "ORCHESTRATOR_FEATURE_MODEL_FALLBACK",
+            "expected": "1",
+            "actual": "0",
+        }
+    ]
+
+
+def test_build_serving_config_reports_numa_match() -> None:
+    rows = attest.build_serving_config(
+        [
+            {
+                "pid": 123,
+                "kind": "llama_server",
+                "port": 8070,
+                "registry_matches": [{"registry_section": "server_mode.frontdoor"}],
+                "args": {
+                    "model_path": "/models/model.gguf",
+                    "context_length": "32768",
+                    "threads": "96",
+                },
+                "cpus_allowed_list": "0-3",
+            }
+        ],
+        numa_ports={8070: {"role": "frontdoor", "cpu_list": "0-3", "threads": 96}},
+    )
+
+    assert rows[0]["numa_match"] is True
+    assert rows[0]["numa_intent"]["role"] == "frontdoor"
+
+
 def test_build_report_from_fake_proc(monkeypatch, tmp_path: Path) -> None:
     proc_root = tmp_path / "proc"
     pid_dir = proc_root / "123"
@@ -157,6 +238,11 @@ def test_build_report_from_fake_proc(monkeypatch, tmp_path: Path) -> None:
         "run_dynamic_checks",
         lambda _exe: {"status": "ok", "issues": [], "readelf": {}, "ldd": {}},
     )
+    monkeypatch.setattr(
+        attest,
+        "load_numa_ports",
+        lambda: {8070: {"role": "frontdoor", "cpu_list": "0-3", "threads": 4}},
+    )
 
     report = attest.build_report(
         registry=registry,
@@ -172,4 +258,6 @@ def test_build_report_from_fake_proc(monkeypatch, tmp_path: Path) -> None:
     assert process["registry_matches"][0]["registry_section"] == "server_mode.frontdoor"
     assert process["cpus_allowed_list"] == "0-3"
     assert process["start_time"] == "2023-11-14T22:13:20Z"
+    assert report["sections"]["feature_flags"]["status"] == "disabled"
+    assert report["sections"]["serving_config"][0]["numa_match"] is True
     assert report["summary"]["issue_count"] == 0

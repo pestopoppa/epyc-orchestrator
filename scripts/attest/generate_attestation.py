@@ -13,6 +13,9 @@ import json
 import os
 import re
 import subprocess
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -23,6 +26,7 @@ import yaml
 DEFAULT_REGISTRY = Path("orchestration/model_registry.yaml")
 DEFAULT_OUT_DIR = Path("orchestration/attestation")
 DEFAULT_PROC_ROOT = Path("/proc")
+DEFAULT_CONFIG_URL = "http://127.0.0.1:8000"
 LLAMA_LIB_NAMES = ("libllama", "libggml", "libmtmd")
 PROCESS_MARKERS = (
     "llama-server",
@@ -86,6 +90,40 @@ def read_status(pid: int, proc_root: Path = DEFAULT_PROC_ROOT) -> dict[str, str]
     return status
 
 
+def read_task_cpu_masks(pid: int, proc_root: Path = DEFAULT_PROC_ROOT) -> dict[str, int]:
+    task_root = proc_root / str(pid) / "task"
+    masks: dict[str, int] = {}
+    try:
+        task_dirs = list(task_root.iterdir())
+    except OSError:
+        return masks
+    for task_dir in task_dirs:
+        if not task_dir.name.isdigit():
+            continue
+        try:
+            status = read_status(int(task_dir.name), proc_root / str(pid) / "task")
+        except OSError:
+            continue
+        mask = status.get("Cpus_allowed_list")
+        if mask:
+            masks[mask] = masks.get(mask, 0) + 1
+    return dict(sorted(masks.items(), key=lambda item: (-item[1], item[0])))
+
+
+def read_environ(pid: int, proc_root: Path = DEFAULT_PROC_ROOT) -> dict[str, str]:
+    try:
+        raw = (proc_root / str(pid) / "environ").read_bytes()
+    except OSError:
+        return {}
+    env: dict[str, str] = {}
+    for part in raw.split(b"\0"):
+        if not part or b"=" not in part:
+            continue
+        key, value = part.split(b"=", 1)
+        env[key.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
+    return env
+
+
 def read_proc_start_time(pid: int, proc_root: Path = DEFAULT_PROC_ROOT) -> str | None:
     try:
         stat = (proc_root / str(pid) / "stat").read_text(encoding="utf-8")
@@ -119,6 +157,50 @@ def _flag_value(args: list[str], *names: str) -> str | None:
 
 def _has_flag(args: list[str], name: str) -> bool:
     return name in args
+
+
+def _env_bool(raw: str | None) -> bool | None:
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _parse_cpu_list(value: str | None) -> set[int]:
+    cpus: set[int] = set()
+    if not value:
+        return cpus
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start, end = part.split("-", 1)
+            if start.isdigit() and end.isdigit():
+                cpus.update(range(int(start), int(end) + 1))
+        elif part.isdigit():
+            cpus.add(int(part))
+    return cpus
+
+
+def _format_cpu_set(cpus: set[int]) -> str:
+    if not cpus:
+        return ""
+    ordered = sorted(cpus)
+    ranges: list[str] = []
+    start = prev = ordered[0]
+    for cpu in ordered[1:]:
+        if cpu == prev + 1:
+            prev = cpu
+            continue
+        ranges.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = cpu
+    ranges.append(str(start) if start == prev else f"{start}-{prev}")
+    return ",".join(ranges)
 
 
 def classify_process(cmdline: list[str]) -> str | None:
@@ -213,6 +295,209 @@ def load_registry_ports(path: Path) -> dict[int, list[dict[str, Any]]]:
 
     walk(data, [])
     return ports
+
+
+def load_numa_ports() -> dict[int, dict[str, Any]]:
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+    except Exception:
+        return {}
+    ports: dict[int, dict[str, Any]] = {}
+    for role, cfg in NUMA_CONFIG.items():
+        if not isinstance(cfg, dict):
+            continue
+        policy = cfg.get("numactl_policy")
+        for idx, instance in enumerate(cfg.get("instances") or []):
+            if len(instance) < 3:
+                continue
+            cpu_list, port, threads = instance[:3]
+            if isinstance(port, int):
+                ports[port] = {
+                    "role": role,
+                    "instance_idx": idx,
+                    "cpu_list": str(cpu_list),
+                    "threads": int(threads),
+                    "numactl_policy": policy,
+                }
+    return ports
+
+
+def load_declared_feature_env() -> dict[str, Any]:
+    try:
+        from scripts.server.orchestrator_stack import _production_feature_env
+        from src.features import _FEATURE_REGISTRY
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "error": str(exc),
+            "env": {},
+            "flag_env_names": {},
+            "flags": {},
+        }
+
+    env = _production_feature_env()
+    flag_env_names = {
+        spec.name: f"ORCHESTRATOR_FEATURE_{spec.env_var}" for spec in _FEATURE_REGISTRY
+    }
+    flags = {
+        name: _env_bool(env.get(env_name))
+        for name, env_name in flag_env_names.items()
+        if env_name in env
+    }
+    return {
+        "status": "ok",
+        "env": env,
+        "flag_env_names": flag_env_names,
+        "flags": flags,
+    }
+
+
+def _fetch_json(url: str, timeout_s: float = 2.0) -> dict[str, Any]:
+    request = urllib.request.Request(url, headers={"Connection": "close"})
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:
+        raw = response.read()
+    return json.loads(raw.decode("utf-8"))
+
+
+def _flag_heterogeneity(workers: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    all_flags = sorted(
+        {name for data in workers.values() for name in (data.get("flags", {}) or {}).keys()}
+    )
+    hetero: dict[str, dict[str, Any]] = {}
+    for name in all_flags:
+        values = {
+            pid: (data.get("flags", {}) or {}).get(name)
+            for pid, data in workers.items()
+            if not data.get("error")
+        }
+        if values and len(set(values.values())) > 1:
+            hetero[name] = values
+    return hetero
+
+
+def _expected_flag_diffs(
+    workers: dict[str, dict[str, Any]],
+    expected: dict[str, bool | None],
+) -> list[dict[str, Any]]:
+    diffs: list[dict[str, Any]] = []
+    for pid, data in workers.items():
+        if data.get("error"):
+            continue
+        flags = data.get("flags", {}) or {}
+        sources = data.get("sources", {}) or {}
+        for name, expected_value in expected.items():
+            if expected_value is None:
+                continue
+            actual = flags.get(name)
+            if actual != expected_value:
+                diffs.append(
+                    {
+                        "pid": pid,
+                        "flag": name,
+                        "expected": expected_value,
+                        "actual": actual,
+                        "source": sources.get(name),
+                    }
+                )
+    return diffs
+
+
+def _worker_env_diffs(
+    worker_env: dict[str, dict[str, str]],
+    expected_env: dict[str, str],
+) -> list[dict[str, Any]]:
+    diffs: list[dict[str, Any]] = []
+    for pid, env in worker_env.items():
+        for name, expected in expected_env.items():
+            actual = env.get(name)
+            if actual != expected:
+                diffs.append(
+                    {
+                        "pid": pid,
+                        "env": name,
+                        "expected": expected,
+                        "actual": actual,
+                    }
+                )
+    return diffs
+
+
+def collect_feature_flags(
+    *,
+    config_url: str = DEFAULT_CONFIG_URL,
+    polls: int = 0,
+    delay_s: float = 0.05,
+    min_workers: int = 1,
+    proc_root: Path = DEFAULT_PROC_ROOT,
+) -> dict[str, Any]:
+    declared = load_declared_feature_env()
+    endpoint = f"{config_url.rstrip('/')}/config/attest"
+    workers: dict[str, dict[str, Any]] = {}
+    if polls <= 0:
+        return {
+            "status": "disabled",
+            "endpoint": endpoint,
+            "polls": polls,
+            "min_workers": min_workers,
+            "declared": declared,
+            "workers_seen": 0,
+            "workers": {},
+            "worker_env": {},
+            "heterogeneous": {},
+            "intent_diffs": [],
+            "env_diffs": [],
+            "errors": {},
+            "too_few_workers": False,
+        }
+
+    for idx in range(polls):
+        try:
+            data = _fetch_json(endpoint)
+        except Exception as exc:
+            data = {"pid": f"error-{idx}", "error": str(exc), "flags": {}, "sources": {}}
+        pid = str(data.get("pid") or f"unknown-{idx}")
+        workers[pid] = data
+        if delay_s > 0 and idx + 1 < polls:
+            time.sleep(delay_s)
+
+    worker_env: dict[str, dict[str, str]] = {}
+    expected_env = declared.get("env", {}) or {}
+    selected_env_names = set(expected_env)
+    selected_env_names.add("ORCHESTRATOR_RUNTIME_FLAGS_PATH")
+    for pid in workers:
+        if not pid.isdigit():
+            continue
+        env = read_environ(int(pid), proc_root)
+        worker_env[pid] = {
+            key: value
+            for key, value in sorted(env.items())
+            if key in selected_env_names or key.startswith("ORCHESTRATOR_FEATURE_")
+        }
+
+    errors = {pid: data.get("error") for pid, data in workers.items() if data.get("error")}
+    hetero = _flag_heterogeneity(workers)
+    expected_flags = declared.get("flags", {}) or {}
+    intent_diffs = _expected_flag_diffs(workers, expected_flags)
+    env_diffs = _worker_env_diffs(worker_env, expected_env)
+    too_few_workers = len([pid for pid in workers if pid.isdigit()]) < min_workers
+    status = "ok"
+    if errors or hetero or intent_diffs or env_diffs or too_few_workers:
+        status = "warn"
+    return {
+        "status": status,
+        "endpoint": endpoint,
+        "polls": polls,
+        "min_workers": min_workers,
+        "declared": declared,
+        "workers_seen": len(workers),
+        "workers": workers,
+        "worker_env": worker_env,
+        "heterogeneous": hetero,
+        "intent_diffs": intent_diffs,
+        "env_diffs": env_diffs,
+        "errors": errors,
+        "too_few_workers": too_few_workers,
+    }
 
 
 def parse_readelf_dynamic(output: str) -> dict[str, Any]:
@@ -366,6 +651,7 @@ def collect_processes(
                 "registry_matches": registry_matches,
                 "args": args,
                 "cpus_allowed_list": status.get("Cpus_allowed_list"),
+                "task_cpu_masks": read_task_cpu_masks(pid, proc_root),
                 "state": status.get("State"),
                 "dynamic_linking": run_dynamic_checks(exe),
             }
@@ -373,7 +659,69 @@ def collect_processes(
     return processes
 
 
-def summarize(processes: list[dict[str, Any]]) -> dict[str, Any]:
+def build_serving_config(
+    processes: list[dict[str, Any]],
+    *,
+    numa_ports: dict[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    numa_ports = numa_ports or {}
+    rows: list[dict[str, Any]] = []
+    for proc in processes:
+        if proc["kind"] != "llama_server":
+            continue
+        port = proc.get("port")
+        args = proc.get("args") or {}
+        numa_intent = numa_ports.get(port) if isinstance(port, int) else None
+        cpus_allowed = proc.get("cpus_allowed_list")
+        task_cpu_masks = proc.get("task_cpu_masks") or {}
+        task_cpu_union: set[int] = set()
+        for mask in task_cpu_masks:
+            task_cpu_union.update(_parse_cpu_list(mask))
+        task_cpu_union_text = _format_cpu_set(task_cpu_union)
+        expected_cpus = _parse_cpu_list(numa_intent.get("cpu_list") if numa_intent else None)
+        process_cpus = _parse_cpu_list(cpus_allowed)
+        numa_match = None
+        if numa_intent and cpus_allowed:
+            numa_match = (
+                process_cpus == expected_cpus
+                or task_cpu_union == expected_cpus
+                or numa_intent.get("cpu_list") in task_cpu_masks
+            )
+        rows.append(
+            {
+                "pid": proc["pid"],
+                "port": port,
+                "registry_matches": proc.get("registry_matches") or [],
+                "model_path": args.get("model_path"),
+                "draft_model_path": args.get("draft_model_path"),
+                "mmproj_path": args.get("mmproj_path"),
+                "parallel_slots": args.get("parallel_slots"),
+                "context_length": args.get("context_length"),
+                "threads": args.get("threads"),
+                "ubatch_size": args.get("ubatch_size"),
+                "kv_cache_type_k": args.get("kv_cache_type_k"),
+                "kv_cache_type_v": args.get("kv_cache_type_v"),
+                "spec_type": args.get("spec_type"),
+                "draft_max": args.get("draft_max"),
+                "flash_attention": args.get("flash_attention"),
+                "mlock": args.get("mlock"),
+                "no_mmap": args.get("no_mmap"),
+                "cpus_allowed_list": cpus_allowed,
+                "task_cpu_masks": task_cpu_masks,
+                "task_cpu_union": task_cpu_union_text,
+                "numa_intent": numa_intent,
+                "numa_match": numa_match,
+            }
+        )
+    return rows
+
+
+def summarize(
+    processes: list[dict[str, Any]],
+    *,
+    feature_flags: dict[str, Any] | None = None,
+    serving_config: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     by_kind: dict[str, int] = {}
     for proc in processes:
@@ -397,6 +745,44 @@ def summarize(processes: list[dict[str, Any]]) -> dict[str, Any]:
                     "issues": ["port_not_found_in_registry"],
                 }
             )
+    for row in serving_config or []:
+        if row.get("numa_match") is False:
+            issues.append(
+                {
+                    "pid": row["pid"],
+                    "kind": "llama_server",
+                    "port": row.get("port"),
+                    "issues": [
+                        "cpu_affinity_mismatch:"
+                        f"actual={row.get('cpus_allowed_list')}:"
+                        f"task_union={row.get('task_cpu_union')}:"
+                        f"expected={row.get('numa_intent', {}).get('cpu_list')}"
+                    ],
+                }
+            )
+    if feature_flags and feature_flags.get("status") == "warn":
+        flag_issues: list[str] = []
+        if feature_flags.get("errors"):
+            flag_issues.append(f"flag_endpoint_errors={len(feature_flags['errors'])}")
+        if feature_flags.get("too_few_workers"):
+            flag_issues.append(
+                f"flag_workers_seen={feature_flags.get('workers_seen')}"
+                f"<{feature_flags.get('min_workers')}"
+            )
+        if feature_flags.get("heterogeneous"):
+            flag_issues.append(f"heterogeneous_flags={len(feature_flags['heterogeneous'])}")
+        if feature_flags.get("intent_diffs"):
+            flag_issues.append(f"flag_intent_diffs={len(feature_flags['intent_diffs'])}")
+        if feature_flags.get("env_diffs"):
+            flag_issues.append(f"feature_env_diffs={len(feature_flags['env_diffs'])}")
+        issues.append(
+            {
+                "pid": "",
+                "kind": "feature_flags",
+                "port": "",
+                "issues": flag_issues or ["feature_flag_attestation_warn"],
+            }
+        )
     return {
         "process_count": len(processes),
         "by_kind": dict(sorted(by_kind.items())),
@@ -409,26 +795,45 @@ def build_report(
     *,
     registry: Path = DEFAULT_REGISTRY,
     proc_root: Path = DEFAULT_PROC_ROOT,
+    config_url: str = DEFAULT_CONFIG_URL,
+    flag_polls: int = 0,
+    flag_delay_s: float = 0.05,
+    flag_min_workers: int = 1,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     registry_ports = load_registry_ports(registry)
     processes = collect_processes(proc_root=proc_root, registry_ports=registry_ports)
+    numa_ports = load_numa_ports()
+    serving_config = build_serving_config(processes, numa_ports=numa_ports)
+    feature_flags = collect_feature_flags(
+        config_url=config_url,
+        polls=flag_polls,
+        delay_s=flag_delay_s,
+        min_workers=flag_min_workers,
+        proc_root=proc_root,
+    )
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": generated_at or utc_now(),
-        "scope": "W1_process_inventory",
+        "scope": "W1_W2_process_flags_serving_config",
         "sources": {
             "proc_root": str(proc_root),
             "registry": str(registry),
+            "config_url": config_url,
         },
         "registry_ports": {str(port): entries for port, entries in sorted(registry_ports.items())},
+        "numa_ports": {str(port): entry for port, entry in sorted(numa_ports.items())},
         "sections": {
             "processes": processes,
+            "feature_flags": feature_flags,
+            "serving_config": serving_config,
         },
-        "summary": summarize(processes),
+        "summary": summarize(
+            processes,
+            feature_flags=feature_flags,
+            serving_config=serving_config,
+        ),
         "pending_sections": [
-            "feature_flags_w2",
-            "serving_config_w2",
             "eval_instrument_w3",
             "drift_w3",
             "backup_w3",
@@ -481,6 +886,66 @@ def render_markdown(report: dict[str, Any]) -> str:
                 status=link_status,
             )
         )
+    feature_flags = report["sections"].get("feature_flags") or {}
+    lines.extend(
+        [
+            "",
+            "## Feature Flags",
+            "",
+            f"Status: `{feature_flags.get('status', 'unknown')}`",
+            f"Endpoint: `{feature_flags.get('endpoint', '')}`",
+            f"Workers seen: `{feature_flags.get('workers_seen', 0)}`",
+            f"Heterogeneous flags: `{len(feature_flags.get('heterogeneous') or {})}`",
+            f"Intent diffs: `{len(feature_flags.get('intent_diffs') or [])}`",
+            f"Env diffs: `{len(feature_flags.get('env_diffs') or [])}`",
+            "",
+        ]
+    )
+    workers = feature_flags.get("workers") or {}
+    if workers:
+        lines.extend(["| pid | error | enabled flags |", "|---:|---|---:|"])
+        for pid, worker in sorted(workers.items()):
+            enabled = sum(1 for value in (worker.get("flags") or {}).values() if value is True)
+            lines.append(
+                "| {pid} | {error} | {enabled} |".format(
+                    pid=pid,
+                    error=worker.get("error") or "",
+                    enabled=enabled,
+                )
+            )
+        lines.append("")
+    serving = report["sections"].get("serving_config") or []
+    lines.extend(
+        [
+            "## Serving Config",
+            "",
+            "| pid | port | registry | model | draft | ctx | threads | proc cpus | task union | cpu intent | numa |",
+            "|---:|---:|---|---|---|---:|---:|---|---|---|---|",
+        ]
+    )
+    for row in serving:
+        matches = row.get("registry_matches") or []
+        registry = ", ".join(dict.fromkeys(match["registry_section"] for match in matches))
+        intent = row.get("numa_intent") or {}
+        lines.append(
+            "| {pid} | {port} | {registry} | `{model}` | `{draft}` | {ctx} | {threads} | {cpus} | {task_union} | {intent} | {numa} |".format(
+                pid=row["pid"],
+                port=row.get("port") if row.get("port") is not None else "",
+                registry=registry,
+                model=row.get("model_path") or "",
+                draft=row.get("draft_model_path") or "",
+                ctx=row.get("context_length") or "",
+                threads=row.get("threads") or "",
+                cpus=row.get("cpus_allowed_list") or "",
+                task_union=row.get("task_cpu_union") or "",
+                intent=intent.get("cpu_list") or "",
+                numa=(
+                    "n/a"
+                    if row.get("numa_match") is None
+                    else ("ok" if row.get("numa_match") else "mismatch")
+                ),
+            )
+        )
     if summary["issues"]:
         lines.extend(["", "## Issues", "", "| pid | kind | port | issues |", "|---:|---|---:|---|"])
         for issue in summary["issues"]:
@@ -521,6 +986,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--proc-root", type=Path, default=DEFAULT_PROC_ROOT)
+    parser.add_argument("--config-url", default=DEFAULT_CONFIG_URL)
+    parser.add_argument("--flag-polls", type=int, default=120)
+    parser.add_argument("--flag-delay-s", type=float, default=0.05)
+    parser.add_argument("--flag-min-workers", type=int, default=1)
     parser.add_argument("--generated-at", default=None)
     parser.add_argument("--print-md", action="store_true")
     args = parser.parse_args(argv)
@@ -528,6 +997,10 @@ def main(argv: list[str] | None = None) -> int:
     report = build_report(
         registry=args.registry,
         proc_root=args.proc_root,
+        config_url=args.config_url,
+        flag_polls=args.flag_polls,
+        flag_delay_s=args.flag_delay_s,
+        flag_min_workers=args.flag_min_workers,
         generated_at=args.generated_at,
     )
     json_path, md_path = write_report(report, args.out_dir)
