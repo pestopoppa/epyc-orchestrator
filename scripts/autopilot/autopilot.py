@@ -49,7 +49,7 @@ import yaml
 
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import ParetoArchive, ParetoEntry
-from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
+from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate, SafetyVerdict
 from eval_tower import EvalTower
 from config_applicator import apply_params, health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
@@ -90,6 +90,12 @@ from src.autopilot_core.action_identity import (
 from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
+)
+from src.autopilot_core.attestation_trust import (
+    EXOGENOUS_ATTESTATION_CHANGED,
+    attestation_changed,
+    attestation_precondition,
+    describe_attestation_change,
 )
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
@@ -1233,6 +1239,42 @@ def learning_exclusion_criticism(
     )
 
 
+def _attach_attestation_trust(
+    eval_result: EvalResult,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(eval_result.details, dict):
+        eval_result.details = {}
+    trust = eval_result.details.setdefault("attestation_trust", {})
+    if not isinstance(trust, dict):
+        trust = {}
+        eval_result.details["attestation_trust"] = trust
+    changed = attestation_changed(before, after)
+    trust["before"] = before
+    trust["after"] = after
+    trust["changed"] = changed
+    if changed:
+        trust["change_reason"] = describe_attestation_change(before, after)
+    return changed
+
+
+def _mark_attestation_boundary(
+    verdict: SafetyVerdict,
+    eval_result: EvalResult,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> None:
+    if not _attach_attestation_trust(eval_result, before, after):
+        return
+    reason = describe_attestation_change(before, after)
+    if EXOGENOUS_ATTESTATION_CHANGED not in verdict.categories:
+        verdict.categories.append(EXOGENOUS_ATTESTATION_CHANGED)
+    if reason not in verdict.warnings:
+        verdict.warnings.append(reason)
+    eval_result.gate_verdict = verdict
+
+
 def _classify_meta_halt(journal: Any) -> str:
     """Classify a meta-action-loop halt as 'converged' vs 'stuck'.
 
@@ -1351,6 +1393,7 @@ def run_loop(
     use_tui: bool = False,
 ) -> None:
     """Main optimization loop."""
+    os.environ.setdefault("AUTOPILOT_ATTESTATION_REQUIRED", "1")
     # Optional TUI for live inference monitoring
     tui = None
     if use_tui:
@@ -2098,12 +2141,14 @@ def _run_loop_inner(
         #   - finds the trial in the journal (case a) → re-syncs counter
         #   - finds nothing (case b) → writes AUTOPILOT_KILLED placeholder
         # Both cases prevent silent corruption of the planner's view.
+        attestation_before = attestation_precondition()
         state["in_flight_trial"] = {
             "trial_id": trial_counter,
             "action": action,
             "started_at": time.time(),
             "host_pid": os.getpid(),
             "host_started_at": state.get("autopilot_fleet_started_at"),
+            "attestation_before": attestation_before,
         }
         save_state(state)
 
@@ -2275,6 +2320,9 @@ def _run_loop_inner(
                 break
             continue
 
+        attestation_after = attestation_precondition()
+        _attach_attestation_trust(eval_result, attestation_before, attestation_after)
+
         # AP-13: Emit grep-parseable metrics
         phase.set("safety_gate", trial_id=trial_counter, species=species_name)
         log.info("\n%s", eval_result.to_grep_lines(trial_counter, species_name))
@@ -2316,6 +2364,12 @@ def _run_loop_inner(
         else:
             # Safety gate
             verdict = gate.check(eval_result)
+            _mark_attestation_boundary(
+                verdict,
+                eval_result,
+                attestation_before,
+                attestation_after,
+            )
             failure_analysis = gate.analyze_failure(eval_result, verdict)
             if not verdict:
                 log.warning(

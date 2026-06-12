@@ -596,6 +596,32 @@ class SafetyGate:
             int(tier), deque(maxlen=MAD_HISTORY_DEPTH)
         )
 
+    @staticmethod
+    def _record_attestation_precondition(
+        result: EvalResult,
+        warnings: list[str],
+        categories: list[str],
+    ) -> None:
+        try:
+            from src.autopilot_core.attestation_trust import attestation_precondition
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Attestation precondition unavailable: {exc}")
+            categories.append("exogenous_attestation_stale")
+            return
+        state = attestation_precondition()
+        if not isinstance(result.details, dict):
+            result.details = {}
+        attestation = result.details.setdefault("attestation_trust", {})
+        if isinstance(attestation, dict):
+            attestation["gate"] = state
+            attestation.setdefault("after", state)
+        if not state.get("ok"):
+            warnings.append(
+                "Attestation freshness precondition failed: "
+                f"{state.get('reason') or state.get('status')}"
+            )
+            categories.append(state.get("category") or "exogenous_attestation_stale")
+
     def _mad_significance(self, new_quality: float, tier: int) -> tuple[bool, float, float, float]:
         """Decide whether ``new_quality`` is statistically significant vs history.
 
@@ -620,6 +646,7 @@ class SafetyGate:
         violations = []
         warnings = []
         categories = []  # AP-14: track which checks failed
+        self._record_attestation_precondition(result, warnings, categories)
 
         # 1. Quality floor (tier-aware)
         quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1

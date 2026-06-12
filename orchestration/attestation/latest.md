@@ -1,7 +1,8 @@
 # Running-State Attestation
 
-Generated: `2026-06-12T21:27:12Z`
-Scope: `W1_W2_W3_process_flags_serving_eval_drift`
+Generated: `2026-06-12T21:40:45Z`
+Trigger: `manual_w4_validation`
+Scope: `W1_W2_W3_W4_process_flags_serving_eval_drift_cadence_consumers`
 Processes: `34`
 Issues: `16`
 
@@ -59,9 +60,9 @@ Issues: `16`
 
 Status: `warn`
 Endpoint: `http://127.0.0.1:8000/config/attest`
-Workers seen: `5`
+Workers seen: `6`
 Heterogeneous flags: `0`
-Intent diffs: `40`
+Intent diffs: `48`
 Env diffs: `0`
 
 | pid | error | enabled flags |
@@ -70,6 +71,7 @@ Env diffs: `0`
 | 2780310 |  | 41 |
 | 2780311 |  | 41 |
 | 2780313 |  | 41 |
+| 2780314 |  | 41 |
 | 2974316 |  | 41 |
 
 ## Serving Config
@@ -128,7 +130,7 @@ Status: `warn`
 
 | repo | indexed | current | stale | status |
 |---|---|---|---|---|
-| `/mnt/raid0/llm/epyc-root` | d805720 | d805720 | False | ✅ up-to-date |
+| `/mnt/raid0/llm/epyc-root` | 1848277 | 1848277 | False | ✅ up-to-date |
 | `/mnt/raid0/llm/epyc-orchestrator` | 594cfb5 | 2e253e9 | True | ⚠️ stale (re-run gitnexus analyze) |
 | `/mnt/raid0/llm/epyc-inference-research` | 3606f9e | 3606f9e | False | ✅ up-to-date |
 | `/mnt/raid0/llm/llama.cpp` | ff6943a | ff6943a | False | ✅ up-to-date |
@@ -150,10 +152,10 @@ Status: `warn`
 | 1896475 | llama_server | 8093 | port_not_found_in_registry |
 | 1896682 | llama_server | 8094 | port_not_found_in_registry |
 | 1896917 | llama_server | 8095 | port_not_found_in_registry |
-|  | feature_flags |  | flag_workers_seen=5<6, flag_intent_diffs=40 |
+|  | feature_flags |  | flag_intent_diffs=48 |
 |  | eval_instrument |  | missing_AUTOPILOT_TOOL_SENTINELS=3 |
 |  | drift |  | gitnexus_stale_or_error=1 |
 
 ## Pending Sections
 
-backup_w3, cadence_consumers_w4
+backup_w3

@@ -156,6 +156,67 @@ def _scan_known_ports() -> dict[int, list[int]]:
     return _stack_processes.scan_known_ports(known_ports)
 
 
+def _run_attestation_snapshot(trigger: str) -> None:
+    """Best-effort lifecycle attestation; findings must not block stack control."""
+    if os.environ.get("ORCHESTRATOR_ATTESTATION_ON_LIFECYCLE", "1").lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        print("[attestation] skipped (ORCHESTRATOR_ATTESTATION_ON_LIFECYCLE=0)")
+        return
+    project_root = _PATHS["project_root"]
+    script = project_root / "scripts" / "attest" / "generate_attestation.py"
+    if not script.exists():
+        print(f"[attestation] skipped: missing {script}")
+        return
+    registry = project_root / "orchestration" / "model_registry.yaml"
+    out_dir = project_root / "orchestration" / "attestation"
+    flag_polls = os.environ.get("ORCHESTRATOR_ATTESTATION_FLAG_POLLS", "120")
+    flag_min_workers = os.environ.get(
+        "ORCHESTRATOR_ATTESTATION_FLAG_MIN_WORKERS",
+        os.environ.get("ORCHESTRATOR_UVICORN_WORKERS", "6"),
+    )
+    timeout_s = int(os.environ.get("ORCHESTRATOR_ATTESTATION_TIMEOUT_S", "120"))
+    cmd = [
+        sys.executable,
+        str(script),
+        "--registry",
+        str(registry),
+        "--out-dir",
+        str(out_dir),
+        "--flag-polls",
+        str(flag_polls),
+        "--flag-min-workers",
+        str(flag_min_workers),
+        "--trigger",
+        trigger,
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[attestation] warning: snapshot failed for {trigger}: {exc}")
+        return
+    if result.stdout.strip():
+        print(result.stdout.strip())
+    if result.stderr.strip():
+        print(f"[attestation] stderr: {result.stderr.strip()[:500]}")
+    if result.returncode in (0, 1):
+        print(f"[attestation] snapshot written for {trigger} (rc={result.returncode})")
+    else:
+        print(
+            f"[attestation] warning: snapshot command failed for {trigger} (rc={result.returncode})"
+        )
+
+
 def _preserved_process_info(
     role: str,
     port: int,
@@ -739,6 +800,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     print("STACK READY")
     print("=" * 60)
     cmd_status(args)
+    _run_attestation_snapshot("stack_start")
 
     return 0
 
@@ -991,6 +1053,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
                 print(f"  [?] Unknown component: {component}")
 
     save_state(state)
+    _run_attestation_snapshot(f"stack_reload:{','.join(args.components)}")
     return 0
 
 

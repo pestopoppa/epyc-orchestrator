@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-12T21:27:12Z",
+  "generated_at": "2026-06-12T21:40:45Z",
   "numa_ports": {
     "8070": {
       "cpu_list": "0-47,96-143",
@@ -157,8 +157,7 @@
     }
   },
   "pending_sections": [
-    "backup_w3",
-    "cadence_consumers_w4"
+    "backup_w3"
   ],
   "registry_ports": {
     "8070": [
@@ -388,16 +387,16 @@
       }
     ]
   },
-  "schema_version": 3,
-  "scope": "W1_W2_W3_process_flags_serving_eval_drift",
+  "schema_version": 4,
+  "scope": "W1_W2_W3_W4_process_flags_serving_eval_drift_cadence_consumers",
   "sections": {
     "drift": {
       "gitnexus": [
         {
-          "current_commit": "d805720",
-          "indexed": "6/12/2026, 9:24:04 PM",
-          "indexed_commit": "d805720",
-          "raw": "Repository: /mnt/raid0/llm/epyc-root\nIndexed: 6/12/2026, 9:24:04 PM\nIndexed commit: d805720\nCurrent commit: d805720\nStatus: \u2705 up-to-date",
+          "current_commit": "1848277",
+          "indexed": "6/12/2026, 9:31:24 PM",
+          "indexed_commit": "1848277",
+          "raw": "Repository: /mnt/raid0/llm/epyc-root\nIndexed: 6/12/2026, 9:31:24 PM\nIndexed commit: 1848277\nCurrent commit: 1848277\nStatus: \u2705 up-to-date",
           "repo": "/mnt/raid0/llm/epyc-root",
           "repository": "/mnt/raid0/llm/epyc-root",
           "returncode": 0,
@@ -786,168 +785,56 @@
           "actual": true,
           "expected": false,
           "flag": "langgraph_ingest",
-          "pid": "2780311",
+          "pid": "2780314",
           "source": "ORCHESTRATOR_LANGGRAPH_INGEST"
         },
         {
           "actual": true,
           "expected": false,
           "flag": "langgraph_architect",
-          "pid": "2780311",
+          "pid": "2780314",
           "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT"
         },
         {
           "actual": true,
           "expected": false,
           "flag": "langgraph_architect_coding",
-          "pid": "2780311",
+          "pid": "2780314",
           "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"
         },
         {
           "actual": true,
           "expected": false,
           "flag": "langgraph_worker",
-          "pid": "2780311",
+          "pid": "2780314",
           "source": "ORCHESTRATOR_LANGGRAPH_WORKER"
         },
         {
           "actual": true,
           "expected": false,
           "flag": "langgraph_frontdoor",
-          "pid": "2780311",
+          "pid": "2780314",
           "source": "ORCHESTRATOR_LANGGRAPH_FRONTDOOR"
         },
         {
           "actual": true,
           "expected": false,
           "flag": "langgraph_coder",
-          "pid": "2780311",
+          "pid": "2780314",
           "source": "ORCHESTRATOR_LANGGRAPH_CODER"
         },
         {
           "actual": true,
           "expected": false,
           "flag": "langgraph_coder_escalation",
-          "pid": "2780311",
+          "pid": "2780314",
           "source": "ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION"
         },
         {
           "actual": true,
           "expected": false,
           "flag": "ure_uncertainty_shadow_log",
-          "pid": "2780311",
-          "source": "ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_ingest",
-          "pid": "2974316",
-          "source": "ORCHESTRATOR_LANGGRAPH_INGEST"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_architect",
-          "pid": "2974316",
-          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_architect_coding",
-          "pid": "2974316",
-          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_worker",
-          "pid": "2974316",
-          "source": "ORCHESTRATOR_LANGGRAPH_WORKER"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_frontdoor",
-          "pid": "2974316",
-          "source": "ORCHESTRATOR_LANGGRAPH_FRONTDOOR"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_coder",
-          "pid": "2974316",
-          "source": "ORCHESTRATOR_LANGGRAPH_CODER"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_coder_escalation",
-          "pid": "2974316",
-          "source": "ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "ure_uncertainty_shadow_log",
-          "pid": "2974316",
-          "source": "ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_ingest",
-          "pid": "2780310",
-          "source": "ORCHESTRATOR_LANGGRAPH_INGEST"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_architect",
-          "pid": "2780310",
-          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_architect_coding",
-          "pid": "2780310",
-          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_worker",
-          "pid": "2780310",
-          "source": "ORCHESTRATOR_LANGGRAPH_WORKER"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_frontdoor",
-          "pid": "2780310",
-          "source": "ORCHESTRATOR_LANGGRAPH_FRONTDOOR"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_coder",
-          "pid": "2780310",
-          "source": "ORCHESTRATOR_LANGGRAPH_CODER"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "langgraph_coder_escalation",
-          "pid": "2780310",
-          "source": "ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION"
-        },
-        {
-          "actual": true,
-          "expected": false,
-          "flag": "ure_uncertainty_shadow_log",
-          "pid": "2780310",
+          "pid": "2780314",
           "source": "ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG"
         },
         {
@@ -1060,13 +947,181 @@
           "expected": false,
           "flag": "ure_uncertainty_shadow_log",
           "pid": "2780313",
+          "source": "ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_ingest",
+          "pid": "2780310",
+          "source": "ORCHESTRATOR_LANGGRAPH_INGEST"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_architect",
+          "pid": "2780310",
+          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_architect_coding",
+          "pid": "2780310",
+          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_worker",
+          "pid": "2780310",
+          "source": "ORCHESTRATOR_LANGGRAPH_WORKER"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_frontdoor",
+          "pid": "2780310",
+          "source": "ORCHESTRATOR_LANGGRAPH_FRONTDOOR"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_coder",
+          "pid": "2780310",
+          "source": "ORCHESTRATOR_LANGGRAPH_CODER"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_coder_escalation",
+          "pid": "2780310",
+          "source": "ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "ure_uncertainty_shadow_log",
+          "pid": "2780310",
+          "source": "ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_ingest",
+          "pid": "2974316",
+          "source": "ORCHESTRATOR_LANGGRAPH_INGEST"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_architect",
+          "pid": "2974316",
+          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_architect_coding",
+          "pid": "2974316",
+          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_worker",
+          "pid": "2974316",
+          "source": "ORCHESTRATOR_LANGGRAPH_WORKER"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_frontdoor",
+          "pid": "2974316",
+          "source": "ORCHESTRATOR_LANGGRAPH_FRONTDOOR"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_coder",
+          "pid": "2974316",
+          "source": "ORCHESTRATOR_LANGGRAPH_CODER"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_coder_escalation",
+          "pid": "2974316",
+          "source": "ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "ure_uncertainty_shadow_log",
+          "pid": "2974316",
+          "source": "ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_ingest",
+          "pid": "2780311",
+          "source": "ORCHESTRATOR_LANGGRAPH_INGEST"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_architect",
+          "pid": "2780311",
+          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_architect_coding",
+          "pid": "2780311",
+          "source": "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_worker",
+          "pid": "2780311",
+          "source": "ORCHESTRATOR_LANGGRAPH_WORKER"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_frontdoor",
+          "pid": "2780311",
+          "source": "ORCHESTRATOR_LANGGRAPH_FRONTDOOR"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_coder",
+          "pid": "2780311",
+          "source": "ORCHESTRATOR_LANGGRAPH_CODER"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "langgraph_coder_escalation",
+          "pid": "2780311",
+          "source": "ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION"
+        },
+        {
+          "actual": true,
+          "expected": false,
+          "flag": "ure_uncertainty_shadow_log",
+          "pid": "2780311",
           "source": "ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG"
         }
       ],
       "min_workers": 6,
-      "polls": 480,
+      "polls": 120,
       "status": "warn",
-      "too_few_workers": true,
+      "too_few_workers": false,
       "worker_env": {
         "2780309": {
           "ORCHESTRATOR_FEATURE_ACCURATE_TOKEN_COUNTING": "0",
@@ -1321,6 +1376,90 @@
           "ORCHESTRATOR_FEATURE_WORKER_CALL_BUDGET": "1"
         },
         "2780313": {
+          "ORCHESTRATOR_FEATURE_ACCURATE_TOKEN_COUNTING": "0",
+          "ORCHESTRATOR_FEATURE_APPROVAL_GATES": "1",
+          "ORCHESTRATOR_FEATURE_ARCHITECT_DELEGATION": "0",
+          "ORCHESTRATOR_FEATURE_BATCH_EDIT_MODE": "0",
+          "ORCHESTRATOR_FEATURE_BINDING_ROUTING": "0",
+          "ORCHESTRATOR_FEATURE_CACHING": "1",
+          "ORCHESTRATOR_FEATURE_CASCADING_TOOL_POLICY": "1",
+          "ORCHESTRATOR_FEATURE_CLAUDE_CODE_MCP_CHAT": "0",
+          "ORCHESTRATOR_FEATURE_CONTENT_CACHE": "0",
+          "ORCHESTRATOR_FEATURE_CONTEXT_COMPRESSION": "0",
+          "ORCHESTRATOR_FEATURE_CREDENTIAL_REDACTION": "1",
+          "ORCHESTRATOR_FEATURE_DCP_PRE_ASSEMBLY": "0",
+          "ORCHESTRATOR_FEATURE_DEEP_RESEARCH_MODE": "0",
+          "ORCHESTRATOR_FEATURE_DEFERRED_TOOL_RESULTS": "0",
+          "ORCHESTRATOR_FEATURE_DEPTH_MODEL_OVERRIDES": "1",
+          "ORCHESTRATOR_FEATURE_ESCALATION_COMPRESSION": "1",
+          "ORCHESTRATOR_FEATURE_FINAL_SCHEMA_VALIDATION": "0",
+          "ORCHESTRATOR_FEATURE_GENERALIZED_INTERRUPTS": "0",
+          "ORCHESTRATOR_FEATURE_GENERATION_MONITOR": "1",
+          "ORCHESTRATOR_FEATURE_GRAPH_ROUTER": "0",
+          "ORCHESTRATOR_FEATURE_HELPFULNESS_SCORING": "0",
+          "ORCHESTRATOR_FEATURE_HIERARCHICAL_SPECULATION": "0",
+          "ORCHESTRATOR_FEATURE_INGEST_TRIVIALITY_GUARD": "0",
+          "ORCHESTRATOR_FEATURE_INJECTION_SCANNING": "1",
+          "ORCHESTRATOR_FEATURE_INPUT_FORMALIZER": "1",
+          "ORCHESTRATOR_FEATURE_INTERLEAVED_EDIT_RIDER": "0",
+          "ORCHESTRATOR_FEATURE_LANGGRAPH_ARCHITECT": "0",
+          "ORCHESTRATOR_FEATURE_LANGGRAPH_ARCHITECT_CODING": "0",
+          "ORCHESTRATOR_FEATURE_LANGGRAPH_BRIDGE": "0",
+          "ORCHESTRATOR_FEATURE_LANGGRAPH_CODER": "0",
+          "ORCHESTRATOR_FEATURE_LANGGRAPH_CODER_ESCALATION": "0",
+          "ORCHESTRATOR_FEATURE_LANGGRAPH_FRONTDOOR": "0",
+          "ORCHESTRATOR_FEATURE_LANGGRAPH_INGEST": "0",
+          "ORCHESTRATOR_FEATURE_LANGGRAPH_WORKER": "0",
+          "ORCHESTRATOR_FEATURE_LOGIT_PROBE": "0",
+          "ORCHESTRATOR_FEATURE_MEMRL": "1",
+          "ORCHESTRATOR_FEATURE_MOCK_MODE": "0",
+          "ORCHESTRATOR_FEATURE_MODEL_FALLBACK": "1",
+          "ORCHESTRATOR_FEATURE_MODEL_GRADING": "0",
+          "ORCHESTRATOR_FEATURE_OPENAI_COMPAT": "1",
+          "ORCHESTRATOR_FEATURE_OUTPUT_FORMALIZER": "1",
+          "ORCHESTRATOR_FEATURE_OUTPUT_SPILL_TO_FILE": "1",
+          "ORCHESTRATOR_FEATURE_PARALLEL_EXECUTION": "0",
+          "ORCHESTRATOR_FEATURE_PARALLEL_TOOLS": "1",
+          "ORCHESTRATOR_FEATURE_PERSONAS": "0",
+          "ORCHESTRATOR_FEATURE_PLAN_REVIEW": "0",
+          "ORCHESTRATOR_FEATURE_PROCESS_REWARD_TELEMETRY": "0",
+          "ORCHESTRATOR_FEATURE_REACT_MODE": "1",
+          "ORCHESTRATOR_FEATURE_REASONING_LENGTH_ALARM": "1",
+          "ORCHESTRATOR_FEATURE_REPL": "1",
+          "ORCHESTRATOR_FEATURE_RESTRICTED_PYTHON": "0",
+          "ORCHESTRATOR_FEATURE_RESUME_TOKENS": "1",
+          "ORCHESTRATOR_FEATURE_ROLE_AWARE_COMPACTION": "0",
+          "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER": "0",
+          "ORCHESTRATOR_FEATURE_SCRIPTS": "1",
+          "ORCHESTRATOR_FEATURE_SCRIPT_INTERCEPTION": "0",
+          "ORCHESTRATOR_FEATURE_SEGMENT_CACHE_DEDUP": "0",
+          "ORCHESTRATOR_FEATURE_SELF_SPECULATION": "0",
+          "ORCHESTRATOR_FEATURE_SEMANTIC_CLASSIFIERS": "1",
+          "ORCHESTRATOR_FEATURE_SESSION_COMPACTION": "1",
+          "ORCHESTRATOR_FEATURE_SESSION_LOG": "1",
+          "ORCHESTRATOR_FEATURE_SESSION_SCRATCHPAD": "1",
+          "ORCHESTRATOR_FEATURE_SESSION_TOKEN_BUDGET": "0",
+          "ORCHESTRATOR_FEATURE_SIDE_EFFECT_TRACKING": "1",
+          "ORCHESTRATOR_FEATURE_SKILLBANK": "0",
+          "ORCHESTRATOR_FEATURE_SPECIALIST_ROUTING": "1",
+          "ORCHESTRATOR_FEATURE_STAGED_REWARDS": "0",
+          "ORCHESTRATOR_FEATURE_STATE_HISTORY_SNAPSHOTS": "0",
+          "ORCHESTRATOR_FEATURE_STREAMING": "1",
+          "ORCHESTRATOR_FEATURE_STRUCTURED_DELIMITERS": "1",
+          "ORCHESTRATOR_FEATURE_STRUCTURED_TOOL_OUTPUT": "1",
+          "ORCHESTRATOR_FEATURE_SWARM_FANOUT": "0",
+          "ORCHESTRATOR_FEATURE_TASK_TOKEN_BUDGET": "1",
+          "ORCHESTRATOR_FEATURE_TOOLS": "1",
+          "ORCHESTRATOR_FEATURE_TOOL_OUTPUT_COMPRESSION": "0",
+          "ORCHESTRATOR_FEATURE_TOOL_RESULT_CLEARING": "1",
+          "ORCHESTRATOR_FEATURE_TWO_LEVEL_CONDENSATION": "0",
+          "ORCHESTRATOR_FEATURE_UNIFIED_STREAMING": "0",
+          "ORCHESTRATOR_FEATURE_URE_UNCERTAINTY_SHADOW_LOG": "0",
+          "ORCHESTRATOR_FEATURE_USER_MODELING": "0",
+          "ORCHESTRATOR_FEATURE_WEB_RESEARCH_RERANK": "0",
+          "ORCHESTRATOR_FEATURE_WORKER_CALL_BUDGET": "1"
+        },
+        "2780314": {
           "ORCHESTRATOR_FEATURE_ACCURATE_TOKEN_COUNTING": "0",
           "ORCHESTRATOR_FEATURE_APPROVAL_GATES": "1",
           "ORCHESTRATOR_FEATURE_ARCHITECT_DELEGATION": "0",
@@ -2174,6 +2313,177 @@
             "worker_call_budget": "ORCHESTRATOR_WORKER_CALL_BUDGET"
           }
         },
+        "2780314": {
+          "flags": {
+            "accurate_token_counting": false,
+            "approval_gates": true,
+            "architect_delegation": false,
+            "batch_edit_mode": false,
+            "binding_routing": false,
+            "caching": true,
+            "cascading_tool_policy": true,
+            "claude_code_mcp_chat": false,
+            "content_cache": false,
+            "context_compression": false,
+            "credential_redaction": true,
+            "dcp_pre_assembly": false,
+            "deep_research_mode": false,
+            "deferred_tool_results": false,
+            "depth_model_overrides": true,
+            "escalation_compression": true,
+            "final_schema_validation": false,
+            "generalized_interrupts": false,
+            "generation_monitor": true,
+            "graph_router": false,
+            "helpfulness_scoring": false,
+            "hierarchical_speculation": false,
+            "ingest_triviality_guard": false,
+            "injection_scanning": true,
+            "input_formalizer": true,
+            "interleaved_edit_rider": false,
+            "langgraph_architect": true,
+            "langgraph_architect_coding": true,
+            "langgraph_bridge": false,
+            "langgraph_coder": true,
+            "langgraph_coder_escalation": true,
+            "langgraph_frontdoor": true,
+            "langgraph_ingest": true,
+            "langgraph_worker": true,
+            "logit_probe": false,
+            "memrl": true,
+            "mock_mode": false,
+            "model_fallback": true,
+            "model_grading": false,
+            "openai_compat": true,
+            "output_formalizer": true,
+            "output_spill_to_file": true,
+            "parallel_execution": false,
+            "parallel_tools": true,
+            "personas": false,
+            "plan_review": false,
+            "process_reward_telemetry": false,
+            "react_mode": true,
+            "reasoning_length_alarm": true,
+            "repl": true,
+            "restricted_python": false,
+            "resume_tokens": true,
+            "role_aware_compaction": false,
+            "routing_classifier": false,
+            "script_interception": false,
+            "scripts": true,
+            "segment_cache_dedup": false,
+            "self_speculation": false,
+            "semantic_classifiers": true,
+            "session_compaction": true,
+            "session_log": true,
+            "session_scratchpad": true,
+            "session_token_budget": false,
+            "side_effect_tracking": true,
+            "skillbank": false,
+            "specialist_routing": true,
+            "staged_rewards": false,
+            "state_history_snapshots": false,
+            "streaming": true,
+            "structured_delimiters": true,
+            "structured_tool_output": true,
+            "swarm_fanout": false,
+            "task_token_budget": true,
+            "tool_output_compression": false,
+            "tool_result_clearing": true,
+            "tools": true,
+            "two_level_condensation": false,
+            "unified_streaming": false,
+            "ure_uncertainty_shadow_log": true,
+            "user_modeling": false,
+            "web_research_rerank": false,
+            "worker_call_budget": true
+          },
+          "pid": 2780314,
+          "sources": {
+            "accurate_token_counting": "ORCHESTRATOR_FEATURE_ACCURATE_TOKEN_COUNTING",
+            "approval_gates": "ORCHESTRATOR_APPROVAL_GATES",
+            "architect_delegation": "ORCHESTRATOR_FEATURE_ARCHITECT_DELEGATION",
+            "batch_edit_mode": "ORCHESTRATOR_FEATURE_BATCH_EDIT_MODE",
+            "binding_routing": "ORCHESTRATOR_FEATURE_BINDING_ROUTING",
+            "caching": "ORCHESTRATOR_CACHING",
+            "cascading_tool_policy": "ORCHESTRATOR_CASCADING_TOOL_POLICY",
+            "claude_code_mcp_chat": "ORCHESTRATOR_FEATURE_CLAUDE_CODE_MCP_CHAT",
+            "content_cache": "ORCHESTRATOR_FEATURE_CONTENT_CACHE",
+            "context_compression": "ORCHESTRATOR_FEATURE_CONTEXT_COMPRESSION",
+            "credential_redaction": "ORCHESTRATOR_FEATURE_CREDENTIAL_REDACTION",
+            "dcp_pre_assembly": "ORCHESTRATOR_FEATURE_DCP_PRE_ASSEMBLY",
+            "deep_research_mode": "ORCHESTRATOR_FEATURE_DEEP_RESEARCH_MODE",
+            "deferred_tool_results": "ORCHESTRATOR_FEATURE_DEFERRED_TOOL_RESULTS",
+            "depth_model_overrides": "ORCHESTRATOR_FEATURE_DEPTH_MODEL_OVERRIDES",
+            "escalation_compression": "ORCHESTRATOR_FEATURE_ESCALATION_COMPRESSION",
+            "final_schema_validation": "ORCHESTRATOR_FEATURE_FINAL_SCHEMA_VALIDATION",
+            "generalized_interrupts": "ORCHESTRATOR_FEATURE_GENERALIZED_INTERRUPTS",
+            "generation_monitor": "ORCHESTRATOR_GENERATION_MONITOR",
+            "graph_router": "ORCHESTRATOR_FEATURE_GRAPH_ROUTER",
+            "helpfulness_scoring": "ORCHESTRATOR_FEATURE_HELPFULNESS_SCORING",
+            "hierarchical_speculation": "ORCHESTRATOR_FEATURE_HIERARCHICAL_SPECULATION",
+            "ingest_triviality_guard": "ORCHESTRATOR_FEATURE_INGEST_TRIVIALITY_GUARD",
+            "injection_scanning": "ORCHESTRATOR_FEATURE_INJECTION_SCANNING",
+            "input_formalizer": "ORCHESTRATOR_FEATURE_INPUT_FORMALIZER",
+            "interleaved_edit_rider": "ORCHESTRATOR_FEATURE_INTERLEAVED_EDIT_RIDER",
+            "langgraph_architect": "ORCHESTRATOR_LANGGRAPH_ARCHITECT",
+            "langgraph_architect_coding": "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING",
+            "langgraph_bridge": "ORCHESTRATOR_FEATURE_LANGGRAPH_BRIDGE",
+            "langgraph_coder": "ORCHESTRATOR_LANGGRAPH_CODER",
+            "langgraph_coder_escalation": "ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION",
+            "langgraph_frontdoor": "ORCHESTRATOR_LANGGRAPH_FRONTDOOR",
+            "langgraph_ingest": "ORCHESTRATOR_LANGGRAPH_INGEST",
+            "langgraph_worker": "ORCHESTRATOR_LANGGRAPH_WORKER",
+            "logit_probe": "ORCHESTRATOR_FEATURE_LOGIT_PROBE",
+            "memrl": "ORCHESTRATOR_FEATURE_MEMRL",
+            "mock_mode": "ORCHESTRATOR_MOCK_MODE",
+            "model_fallback": "ORCHESTRATOR_FEATURE_MODEL_FALLBACK",
+            "model_grading": "ORCHESTRATOR_FEATURE_MODEL_GRADING",
+            "openai_compat": "ORCHESTRATOR_FEATURE_OPENAI_COMPAT",
+            "output_formalizer": "ORCHESTRATOR_FEATURE_OUTPUT_FORMALIZER",
+            "output_spill_to_file": "ORCHESTRATOR_FEATURE_OUTPUT_SPILL_TO_FILE",
+            "parallel_execution": "ORCHESTRATOR_FEATURE_PARALLEL_EXECUTION",
+            "parallel_tools": "ORCHESTRATOR_FEATURE_PARALLEL_TOOLS",
+            "personas": "ORCHESTRATOR_FEATURE_PERSONAS",
+            "plan_review": "ORCHESTRATOR_FEATURE_PLAN_REVIEW",
+            "process_reward_telemetry": "ORCHESTRATOR_FEATURE_PROCESS_REWARD_TELEMETRY",
+            "react_mode": "ORCHESTRATOR_REACT_MODE",
+            "reasoning_length_alarm": "ORCHESTRATOR_FEATURE_REASONING_LENGTH_ALARM",
+            "repl": "ORCHESTRATOR_FEATURE_REPL",
+            "restricted_python": "ORCHESTRATOR_FEATURE_RESTRICTED_PYTHON",
+            "resume_tokens": "ORCHESTRATOR_RESUME_TOKENS",
+            "role_aware_compaction": "ORCHESTRATOR_FEATURE_ROLE_AWARE_COMPACTION",
+            "routing_classifier": "ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER",
+            "script_interception": "ORCHESTRATOR_FEATURE_SCRIPT_INTERCEPTION",
+            "scripts": "ORCHESTRATOR_SCRIPTS",
+            "segment_cache_dedup": "ORCHESTRATOR_FEATURE_SEGMENT_CACHE_DEDUP",
+            "self_speculation": "ORCHESTRATOR_FEATURE_SELF_SPECULATION",
+            "semantic_classifiers": "ORCHESTRATOR_FEATURE_SEMANTIC_CLASSIFIERS",
+            "session_compaction": "ORCHESTRATOR_FEATURE_SESSION_COMPACTION",
+            "session_log": "ORCHESTRATOR_SESSION_LOG",
+            "session_scratchpad": "ORCHESTRATOR_SESSION_SCRATCHPAD",
+            "session_token_budget": "ORCHESTRATOR_FEATURE_SESSION_TOKEN_BUDGET",
+            "side_effect_tracking": "ORCHESTRATOR_SIDE_EFFECT_TRACKING",
+            "skillbank": "ORCHESTRATOR_FEATURE_SKILLBANK",
+            "specialist_routing": "ORCHESTRATOR_FEATURE_SPECIALIST_ROUTING",
+            "staged_rewards": "ORCHESTRATOR_FEATURE_STAGED_REWARDS",
+            "state_history_snapshots": "ORCHESTRATOR_FEATURE_STATE_HISTORY_SNAPSHOTS",
+            "streaming": "ORCHESTRATOR_STREAMING",
+            "structured_delimiters": "ORCHESTRATOR_FEATURE_STRUCTURED_DELIMITERS",
+            "structured_tool_output": "ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT",
+            "swarm_fanout": "ORCHESTRATOR_FEATURE_SWARM_FANOUT",
+            "task_token_budget": "ORCHESTRATOR_TASK_TOKEN_BUDGET",
+            "tool_output_compression": "ORCHESTRATOR_FEATURE_TOOL_OUTPUT_COMPRESSION",
+            "tool_result_clearing": "ORCHESTRATOR_FEATURE_TOOL_RESULT_CLEARING",
+            "tools": "ORCHESTRATOR_TOOLS",
+            "two_level_condensation": "ORCHESTRATOR_FEATURE_TWO_LEVEL_CONDENSATION",
+            "unified_streaming": "ORCHESTRATOR_FEATURE_UNIFIED_STREAMING",
+            "ure_uncertainty_shadow_log": "ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG",
+            "user_modeling": "runtime_file:/mnt/raid0/llm/epyc-orchestrator/orchestration/runtime_flags.json",
+            "web_research_rerank": "ORCHESTRATOR_FEATURE_WEB_RESEARCH_RERANK",
+            "worker_call_budget": "ORCHESTRATOR_WORKER_CALL_BUDGET"
+          }
+        },
         "2974316": {
           "flags": {
             "accurate_token_counting": false,
@@ -2346,7 +2656,7 @@
           }
         }
       },
-      "workers_seen": 5
+      "workers_seen": 6
     },
     "processes": [
       {
@@ -2478,7 +2788,7 @@
           }
         ],
         "start_time": "2026-05-30T01:12:01Z",
-        "state": "R (running)",
+        "state": "S (sleeping)",
         "task_cpu_masks": {
           "0,96": 2,
           "0-47,96-143": 193,
@@ -6842,7 +7152,7 @@
         "start_time": "2026-06-12T18:47:14Z",
         "state": "S (sleeping)",
         "task_cpu_masks": {
-          "0-191": 72
+          "0-191": 73
         }
       }
     ],
@@ -8742,8 +9052,7 @@
       },
       {
         "issues": [
-          "flag_workers_seen=5<6",
-          "flag_intent_diffs=40"
+          "flag_intent_diffs=48"
         ],
         "kind": "feature_flags",
         "pid": "",
@@ -8767,5 +9076,6 @@
       }
     ],
     "process_count": 34
-  }
+  },
+  "trigger": "manual_w4_validation"
 }

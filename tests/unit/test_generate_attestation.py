@@ -284,9 +284,12 @@ def test_build_report_from_fake_proc(monkeypatch, tmp_path: Path) -> None:
     report = attest.build_report(
         registry=registry,
         proc_root=proc_root,
+        trigger="unit_test",
         generated_at="2026-06-12T00:00:00Z",
     )
 
+    assert report["schema_version"] == 4
+    assert report["trigger"] == "unit_test"
     assert report["summary"]["process_count"] == 1
     process = report["sections"]["processes"][0]
     assert process["pid"] == 123

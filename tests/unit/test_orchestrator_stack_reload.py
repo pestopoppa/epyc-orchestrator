@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from types import SimpleNamespace
 
 from scripts.server import orchestrator_stack as stack
 from scripts.server import stack_commands
@@ -142,3 +143,33 @@ def test_scan_known_ports_includes_warm_aux_and_docker(monkeypatch) -> None:
 
     assert stack_commands._scan_known_ports() == {}
     assert captured == [[8000, 8070, 8085, 8088, 8180, 8190, 9000, 9001]]
+
+
+def test_run_attestation_snapshot_treats_issue_exit_as_written(
+    monkeypatch,
+    tmp_path,
+    capsys,
+) -> None:
+    project_root = tmp_path
+    script = project_root / "scripts" / "attest" / "generate_attestation.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("print('stub')\n", encoding="utf-8")
+    (project_root / "orchestration").mkdir()
+    calls = []
+
+    monkeypatch.setattr(stack_commands, "_PATHS", {"project_root": project_root})
+    monkeypatch.setattr(
+        stack_commands.subprocess,
+        "run",
+        lambda cmd, **kwargs: (
+            calls.append((cmd, kwargs))
+            or SimpleNamespace(returncode=1, stdout="wrote latest.json\n", stderr="")
+        ),
+    )
+
+    stack_commands._run_attestation_snapshot("unit_reload")
+
+    out = capsys.readouterr().out
+    assert "snapshot written for unit_reload (rc=1)" in out
+    assert "--trigger" in calls[0][0]
+    assert "unit_reload" in calls[0][0]

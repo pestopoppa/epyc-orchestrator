@@ -5,6 +5,7 @@ AP-22 memory?" decision so the run_loop wiring is testable without driving
 the whole loop. Two exclusion paths today: exogenous_operator_reload and
 mad_noise. Exogenous takes priority on the rare both-set path.
 """
+
 from __future__ import annotations
 
 import sys
@@ -31,13 +32,16 @@ def test_mad_noise_is_benign_so_not_journaled_as_bug_corrupted():
     assert "mad_noise" in BENIGN_LEARNING_EXCLUSIONS
     assert "reproduction_confirmed" in BENIGN_LEARNING_EXCLUSIONS
     assert "exogenous_operator_reload" not in BENIGN_LEARNING_EXCLUSIONS
-    by, _, _ = classify_learning_exclusion(_FakeVerdict(categories=["mad_noise"]), _FakeEvalResult())
+    by, _, _ = classify_learning_exclusion(
+        _FakeVerdict(categories=["mad_noise"]), _FakeEvalResult()
+    )
     assert by == "mad_noise", "still flagged for AP-22 suppression"
 
 
 @dataclass
 class _FakeVerdict:
     """Minimal SafetyVerdict stand-in — only `.categories` is read."""
+
     categories: list[str] = field(default_factory=list)
     passed: bool = True
 
@@ -45,6 +49,7 @@ class _FakeVerdict:
 @dataclass
 class _FakeEvalResult:
     """Minimal EvalResult stand-in for the fields classify_learning_exclusion reads."""
+
     n_exogenous_unrecovered: int = 0
     exogenous_question_ids: list[str] = field(default_factory=list)
     n_questions: int = 0
@@ -125,6 +130,50 @@ def test_exo_priority_over_mad_when_both_somehow_fire():
     assert def_cat == "exogenous_reload"
 
 
+def test_attestation_boundary_category_excludes_learning():
+    details = {
+        "attestation_trust": {
+            "change_reason": "attestation artifact changed during trial: a -> b",
+        }
+    }
+    v = _FakeVerdict(categories=["exogenous_attestation_changed"])
+    r = _FakeEvalResult()
+    r.details = details
+
+    by, reason, def_cat = classify_learning_exclusion(v, r)
+
+    assert by == "exogenous_attestation_changed"
+    assert "changed during trial" in reason
+    assert def_cat == "exogenous_attestation_changed"
+
+
+def test_attestation_stale_category_uses_gate_reason():
+    details = {
+        "attestation_trust": {
+            "gate": {"reason": "attestation age 20000s exceeds max 14400s"},
+        }
+    }
+    v = _FakeVerdict(categories=["exogenous_attestation_stale"])
+    r = _FakeEvalResult()
+    r.details = details
+
+    by, reason, def_cat = classify_learning_exclusion(v, r)
+
+    assert by == "exogenous_attestation_stale"
+    assert "exceeds max" in reason
+    assert def_cat == "exogenous_attestation_stale"
+
+
+def test_cache_flush_category_is_non_benign_exclusion():
+    v = _FakeVerdict(categories=["exogenous_cache_flush"])
+
+    by, reason, def_cat = classify_learning_exclusion(v, _FakeEvalResult())
+
+    assert by == "exogenous_cache_flush"
+    assert "NUMA rewarm" in reason
+    assert def_cat == "exogenous_cache_flush"
+
+
 def test_exo_n_questions_fallback_to_question_ids_len():
     """When n_questions=0 but exogenous_question_ids has entries, the reason
     string should still produce a sensible denominator."""
@@ -152,6 +201,8 @@ def test_recovered_only_exo_is_not_excluded():
 def test_missing_attributes_safe():
     """Helper must not crash if the verdict / eval_result are missing fields
     (e.g. lightweight mocks in other tests). Treat as no exclusion."""
+
     class _Empty: ...
+
     by, reason, def_cat = classify_learning_exclusion(_Empty(), _Empty())
     assert by == "" and reason == "" and def_cat == ""

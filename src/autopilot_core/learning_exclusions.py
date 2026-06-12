@@ -7,6 +7,21 @@ from typing import Any
 BENIGN_LEARNING_EXCLUSIONS = frozenset({"reproduction_confirmed", "mad_noise"})
 WITHIN_NOISE_EXCLUSIONS = BENIGN_LEARNING_EXCLUSIONS
 
+EXOGENOUS_CATEGORY_REASONS = {
+    "exogenous_cache_flush": (
+        "host page-cache flush or NUMA rewarm overlapped the trial; "
+        "throughput was measured under an external remediation window"
+    ),
+    "exogenous_attestation_stale": (
+        "running-state attestation freshness precondition failed; "
+        "trial cannot be trusted as a clean system-state measurement"
+    ),
+    "exogenous_attestation_changed": (
+        "running-state attestation artifact changed during the trial; "
+        "trial spanned a system-state boundary"
+    ),
+}
+
 
 def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, str, str]:
     """Decide whether a trial should be excluded from strategy learning.
@@ -29,6 +44,21 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
         return "exogenous_operator_reload", reason, "exogenous_reload"
 
     categories = getattr(verdict, "categories", None) or []
+    for category, fallback_reason in EXOGENOUS_CATEGORY_REASONS.items():
+        if category in categories:
+            reason = fallback_reason
+            details = getattr(eval_result, "details", None)
+            if isinstance(details, dict):
+                trust = details.get("attestation_trust")
+                if isinstance(trust, dict):
+                    if category == "exogenous_attestation_changed":
+                        reason = trust.get("change_reason") or reason
+                    elif category == "exogenous_attestation_stale":
+                        gate = trust.get("gate") or trust.get("after") or {}
+                        if isinstance(gate, dict):
+                            reason = gate.get("reason") or gate.get("status") or reason
+            return category, reason, category
+
     # The MAD test is QUALITY-ONLY. A within-noise quality reading must not launder
     # a FAILED safety verdict (per-suite regression, quality floor, throughput, …)
     # into a "trusted within-noise representative" — that path admits the trial to

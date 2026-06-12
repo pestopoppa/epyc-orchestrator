@@ -949,6 +949,7 @@ def build_report(
     flag_delay_s: float = 0.05,
     flag_min_workers: int = 1,
     gitnexus_repos: tuple[Path, ...] = (),
+    trigger: str = "manual",
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     registry_ports = load_registry_ports(registry)
@@ -965,9 +966,10 @@ def build_report(
     eval_instrument = collect_eval_instrument(processes, proc_root=proc_root)
     drift = collect_drift_checks(gitnexus_repos=gitnexus_repos)
     report = {
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at": generated_at or utc_now(),
-        "scope": "W1_W2_W3_process_flags_serving_eval_drift",
+        "trigger": trigger,
+        "scope": "W1_W2_W3_W4_process_flags_serving_eval_drift_cadence_consumers",
         "sources": {
             "proc_root": str(proc_root),
             "registry": str(registry),
@@ -991,7 +993,6 @@ def build_report(
         ),
         "pending_sections": [
             "backup_w3",
-            "cadence_consumers_w4",
         ],
     }
     return report
@@ -1003,6 +1004,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "# Running-State Attestation",
         "",
         f"Generated: `{report['generated_at']}`",
+        f"Trigger: `{report.get('trigger', '')}`",
         f"Scope: `{report['scope']}`",
         f"Processes: `{summary['process_count']}`",
         f"Issues: `{summary['issue_count']}`",
@@ -1212,6 +1214,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Repository path to include in GitNexus freshness checks; repeatable.",
     )
     parser.add_argument("--generated-at", default=None)
+    parser.add_argument("--trigger", default="manual")
     parser.add_argument("--print-md", action="store_true")
     args = parser.parse_args(argv)
     gitnexus_repos = tuple(args.gitnexus_repo or DEFAULT_GITNEXUS_REPOS)
@@ -1224,6 +1227,7 @@ def main(argv: list[str] | None = None) -> int:
         flag_delay_s=args.flag_delay_s,
         flag_min_workers=args.flag_min_workers,
         gitnexus_repos=gitnexus_repos,
+        trigger=args.trigger,
         generated_at=args.generated_at,
     )
     json_path, md_path = write_report(report, args.out_dir)
