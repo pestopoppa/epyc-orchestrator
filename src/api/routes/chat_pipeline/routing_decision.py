@@ -242,6 +242,7 @@ def routing_meta(
     difficulty_score: float,
     difficulty_band: str,
     estimated_cost: float,
+    assigned_role: str,
 ) -> dict:
     """Build progress-log routing metadata."""
     meta = {
@@ -255,6 +256,7 @@ def routing_meta(
         "factual_risk_band": factual_risk_band,
         "difficulty_score": round(difficulty_score, 4),
         "difficulty_band": difficulty_band,
+        "assigned_role": assigned_role,
         "estimated_cost": round(estimated_cost, 6),
     }
     if state.llm_primitives and hasattr(state.llm_primitives, "get_stats"):
@@ -297,16 +299,20 @@ def routing_meta(
             meta.update(router_meta)
         except Exception:
             pass
-    # J10 (URE-1): shadow-log routing-decision uncertainty. Flag-gated
-    # (features().ure_uncertainty_shadow_log, default off) + try/except-safe —
-    # zero behavior change when off and MUST NOT break the routing hot path.
-    # The assembled `meta` carries the q_topk / selection_score_topk /
-    # classifier_confidence / decision_source signals compute_routing_uncertainty
-    # consumes.
+    # J10 (URE-1): persist uncertainty into the canonical progress event when
+    # shadow logging is enabled. The sidecar remains for older ingest jobs, but
+    # W7 requires the QScorer/replay path to see these fields directly.
     try:
         from src.features import features
         if features().ure_uncertainty_shadow_log:
-            from src.uncertainty_shadow import emit_uncertainty_shadow
+            from src.uncertainty_shadow import (
+                compute_routing_uncertainty,
+                emit_uncertainty_shadow,
+            )
+            uncertainty = compute_routing_uncertainty(meta)
+            meta["uncertainty_score"] = uncertainty["score"]
+            meta["uncertainty_components"] = uncertainty["components"]
+            meta["uncertainty_n_alternatives"] = uncertainty["n_alternatives"]
             emit_uncertainty_shadow(meta, request_id=getattr(request, "session_id", None))
     except Exception:
         pass
@@ -326,6 +332,7 @@ def log_routing_start(
     difficulty_score: float,
     difficulty_band: str,
     estimated_cost: float,
+    assigned_role: str,
 ) -> None:
     """Log routing start to MemRL progress logger when available."""
     if not state.progress_logger:
@@ -345,6 +352,7 @@ def log_routing_start(
             difficulty_score,
             difficulty_band,
             estimated_cost,
+            assigned_role,
         ),
     )
 

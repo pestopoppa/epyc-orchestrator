@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from src.api.routes.chat_pipeline.routing import (
     _preprocess,
     _route_request,
 )
+from src.api.routes.chat_pipeline.routing_decision import routing_meta
 from src.api.routes.chat_utils import RoutingResult
 from src.roles import Role
 
@@ -729,3 +731,60 @@ class TestTrinityRoleShadow:
         ):
             result = _route_request(request, self._state())
         assert result.assigned_role == "worker"
+
+    def test_shadow_role_persisted_in_progress_metadata(self):
+        request = ChatRequest(
+            prompt="Plan a migration.",
+            mock_mode=True,
+            real_mode=False,
+        )
+        state = self._state()
+        state.progress_logger = MagicMock()
+        result = _route_request(request, state)
+
+        call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
+        assert result.assigned_role == "thinker"
+        assert call_kwargs["routing_meta"]["assigned_role"] == "thinker"
+
+
+def test_routing_meta_persists_ure_uncertainty_when_shadow_enabled(monkeypatch):
+    request = ChatRequest(prompt="Which backend should handle this?")
+    state = SimpleNamespace(
+        active_requests=0,
+        llm_primitives=None,
+        registry=None,
+        hybrid_router=SimpleNamespace(
+            last_decision_meta={
+                "chosen_action": "frontdoor",
+                "q_topk": [0.5, 0.49],
+                "selection_score_topk": [0.5, 0.49],
+                "q_robust_confidence": 0.5,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "src.features.features",
+        lambda: SimpleNamespace(ure_uncertainty_shadow_log=True),
+    )
+    monkeypatch.setattr(
+        "src.uncertainty_shadow.emit_uncertainty_shadow",
+        lambda meta, **kwargs: True,
+    )
+
+    meta = routing_meta(
+        request,
+        state,
+        routing_strategy="learned",
+        heuristic_priors={},
+        factual_risk_score=0.1,
+        factual_risk_band="low",
+        difficulty_score=0.2,
+        difficulty_band="easy",
+        estimated_cost=0.001,
+        assigned_role="worker",
+    )
+
+    assert meta["assigned_role"] == "worker"
+    assert 0.0 <= meta["uncertainty_score"] <= 1.0
+    assert meta["uncertainty_components"]
+    assert meta["uncertainty_n_alternatives"] == 2

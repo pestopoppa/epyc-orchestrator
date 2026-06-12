@@ -118,10 +118,16 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         task_id,
     )
 
+    # TR-3.2: Trinity tri-role classification (shadow mode). Always populates
+    # `assigned_role` regardless of the ROLE_AWARE_ROUTING flag — TR-4 gates
+    # acting on the role; TR-3.3 uses shadow telemetry to decide promotion.
+    _assigned_role = classify_trinity_role(request, routing_decision, task_id)
+
     # Estimated cost (tier weight × prompt tokens / 1M — relative units for Pareto)
     _estimated_cost = estimate_routing_cost(request, state, routing_decision)
 
-    # Log task start (MemRL integration)
+    # Log task start (MemRL integration). This must happen after all shadow
+    # signals are computed so TR-3.3/W7 telemetry is durable in progress JSONL.
     log_routing_start(
         request,
         state,
@@ -135,6 +141,7 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         _difficulty_score,
         _difficulty_band,
         _estimated_cost,
+        _assigned_role,
     )
 
     # Compute role-specific timeout
@@ -152,11 +159,6 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
     # web tools for reasoning domains. Without this, task_type stays "chat" and
     # NO_WEB_TASK_TYPES never matches.
     derive_task_type_from_route(task_ir, routing_decision)
-
-    # TR-3.2: Trinity tri-role classification (shadow mode). Always populates
-    # `assigned_role` regardless of the ROLE_AWARE_ROUTING flag — TR-4 gates
-    # acting on the role; TR-3.3 uses shadow telemetry to decide promotion.
-    _assigned_role = classify_trinity_role(request, routing_decision, task_id)
 
     return RoutingResult(
         task_id=task_id,
