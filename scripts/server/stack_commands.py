@@ -180,6 +180,9 @@ def _preserved_process_info(
 def cmd_start(args: argparse.Namespace) -> int:
     """Start the orchestrator stack."""
     _registry_yaml = Path(__file__).parent.parent.parent / "orchestration" / "model_registry.yaml"
+    _descriptor_yaml = (
+        Path(__file__).parent.parent.parent / "orchestration" / "model_descriptors.yaml"
+    )
     _master_registry = Path(
         "/mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml"
     )
@@ -235,6 +238,31 @@ def cmd_start(args: argparse.Namespace) -> int:
         # Validator module not present (older deployment) — proceed without gate.
         # Once landed everywhere, drop this fallback.
         pass
+
+    if getattr(args, "compile_descriptors", False):
+        try:
+            from src.registry.model_descriptors import write_model_descriptors
+
+            active_roles = set(ROLE_LAUNCH_META.keys())
+            for meta in ROLE_LAUNCH_META.values():
+                aliases = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
+                if isinstance(aliases, list):
+                    active_roles.update(str(alias) for alias in aliases)
+            allow_incomplete = bool(getattr(args, "allow_incomplete_descriptors", False))
+            print(f"[descriptor-compile] lean={_registry_yaml}")
+            print(f"[descriptor-compile] research={_master_registry}")
+            print(f"[descriptor-compile] active_roles={sorted(active_roles)}")
+            write_model_descriptors(
+                _descriptor_yaml,
+                lean_registry_path=_registry_yaml,
+                research_registry_path=_master_registry,
+                active_roles=active_roles,
+                allow_incomplete=allow_incomplete,
+            )
+            print(f"[descriptor-compile] OK — wrote {_descriptor_yaml}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[descriptor-compile] FATAL: {exc}")
+            return 2
 
     # DS-7 / NIB2-19: --migrate-to handler (runs before any start path)
     migrate_to = getattr(args, "migrate_to", None)

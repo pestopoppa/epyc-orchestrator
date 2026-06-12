@@ -1,0 +1,179 @@
+"""Tests for compiling model-capability descriptors from registries."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import yaml
+
+from src.registry.model_descriptors import (
+    DescriptorCompileError,
+    compile_model_descriptors,
+    write_model_descriptors,
+)
+
+
+def _write_yaml(path: Path, data: dict) -> Path:
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {
+                "frontdoor": {
+                    "port": 8070,
+                    "model": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                    "model_path": "/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                    "model_role": "frontdoor",
+                    "memory_gb": 37,
+                    "throughput": 24.3,
+                    "benchmark_score": "170/183 (92.9%)",
+                    "benchmark_date": "2026-05-04",
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "kv_quant": {"k": "q8_0", "v": "q8_0"},
+                    "numa_instances": 1,
+                    "numa_ports": [8080],
+                },
+                "coder_escalation": {
+                    "port": 8070,
+                    "model": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                    "model_path": "/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+                    "model_role": "coder_escalation",
+                    "memory_gb": 37,
+                    "throughput": 24.3,
+                    "benchmark_score": "29/30 (97%)",
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "kv_quant": {"k": "q8_0", "v": "q8_0"},
+                    "numa_instances": 1,
+                },
+            },
+            "roles": {
+                "frontdoor": {
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B-Q8_0",
+                        "quant": "Q8_0",
+                        "architecture": "qwen35moe",
+                        "size_gb": 37,
+                        "ctx_max": 131072,
+                    },
+                    "performance": {"quality_pct": 93, "baseline_tps": 24.3},
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True},
+                },
+                "coder_escalation": {
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B-Q8_0",
+                        "quant": "Q8_0",
+                        "architecture": "qwen35moe",
+                        "size_gb": 37,
+                        "ctx_max": 131072,
+                    },
+                    "performance": {"coder_suite": "29/30 (97%)"},
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True},
+                },
+                "worker_summarize": {
+                    "model": {
+                        "name": "Qwen3.6-35B-A3B-Q8_0",
+                        "quant": "Q8_0",
+                        "architecture": "qwen35moe",
+                        "size_gb": 37,
+                        "ctx_max": 131072,
+                    },
+                    "performance": {"long_context": "27/27 (100%)"},
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True},
+                },
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"frontdoor", "coder_escalation", "worker_summarize"},
+    )
+
+    assert compiled["status"] == "compiled"
+    assert len(compiled["models"]) == 1
+    model = compiled["models"][0]
+    assert model["model_id"] == "qwen3.6-35b-a3b-q8-0"
+    assert model["role_bindings"]["roles"] == [
+        "coder_escalation",
+        "frontdoor",
+        "worker_summarize",
+    ]
+    assert model["role_bindings"]["server_roles"] == ["coder_escalation", "frontdoor"]
+    assert model["quality"]["suite_vector"]["quality"] == 0.93
+    assert model["quality"]["suite_vector"]["coder_suite"] == 0.9667
+    assert not any("server" in gap or "port" in gap for gap in model["known_gaps"])
+
+
+def test_compile_refuses_missing_load_bearing_fields(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {},
+            "roles": {
+                "worker_math": {
+                    "model": {
+                        "name": "Qwen2.5-Math-7B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "dense",
+                        "size_gb": 4.4,
+                    },
+                    "acceleration": {"type": "speculative_decoding", "draft_role": "draft"},
+                    "memory": {"pinned": True},
+                }
+            },
+        },
+    )
+
+    with pytest.raises(DescriptorCompileError) as exc:
+        compile_model_descriptors(
+            lean_registry_path=registry_path,
+            research_registry_path=None,
+            active_roles={"worker_math"},
+        )
+
+    assert "Missing quality suite_vector evidence" in str(exc.value)
+    assert "Missing server_mode binding" in str(exc.value)
+
+
+def test_allow_incomplete_records_known_gaps_and_writes(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {},
+            "roles": {
+                "worker_math": {
+                    "model": {
+                        "name": "Qwen2.5-Math-7B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "dense",
+                        "size_gb": 4.4,
+                    },
+                    "acceleration": {"type": "speculative_decoding", "draft_role": "draft"},
+                    "memory": {"pinned": True},
+                }
+            },
+        },
+    )
+    output = tmp_path / "model_descriptors.yaml"
+
+    compiled = write_model_descriptors(
+        output,
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"worker_math"},
+        allow_incomplete=True,
+    )
+
+    loaded = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert compiled["status"] == "compiled_with_gaps"
+    assert loaded["models"][0]["known_gaps"]
+    assert "worker_math" in loaded["models"][0]["role_bindings"]["roles"]

@@ -1591,6 +1591,19 @@ def main() -> int:
         "ORCHESTRATOR_REGISTRY_NO_COMPILE=1 to disable when this flag "
         "is on.",
     )
+    start_parser.add_argument(
+        "--compile-descriptors",
+        action="store_true",
+        help="Compile orchestration/model_descriptors.yaml from the active "
+        "lean/research registries before starting. Strict by default: refuses "
+        "missing load-bearing descriptor fields.",
+    )
+    start_parser.add_argument(
+        "--allow-incomplete-descriptors",
+        action="store_true",
+        help="With --compile-descriptors, emit descriptor records with known_gaps "
+        "instead of failing on incomplete evidence. Intended for diagnostics only.",
+    )
 
     # Stop command
     stop_parser = subparsers.add_parser("stop", help="Stop components")
