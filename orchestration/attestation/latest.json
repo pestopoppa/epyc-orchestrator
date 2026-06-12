@@ -1,0 +1,3998 @@
+{
+  "generated_at": "2026-06-12T21:11:37Z",
+  "pending_sections": [
+    "feature_flags_w2",
+    "serving_config_w2",
+    "eval_instrument_w3",
+    "drift_w3",
+    "backup_w3",
+    "cadence_consumers_w4"
+  ],
+  "registry_ports": {
+    "8070": [
+      {
+        "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "port_kind": "primary",
+        "registry_section": "server_mode.frontdoor",
+        "role": "frontdoor"
+      },
+      {
+        "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "port_kind": "primary",
+        "registry_section": "server_mode.coder_escalation",
+        "role": "coder_escalation"
+      }
+    ],
+    "8072": [
+      {
+        "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "server_mode.worker",
+        "role": "worker"
+      }
+    ],
+    "8080": [
+      {
+        "model_name": null,
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "runtime_defaults.server_defaults",
+        "role": "server_defaults"
+      },
+      {
+        "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.frontdoor",
+        "role": "frontdoor"
+      }
+    ],
+    "8082": [
+      {
+        "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+        "model_path": null,
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.worker",
+        "role": "worker"
+      },
+      {
+        "model_name": "Qwen/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "worker_pool.workers.explore",
+        "role": "explore"
+      }
+    ],
+    "8083": [
+      {
+        "model_name": "Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "server_mode.architect_general",
+        "role": "architect_general"
+      },
+      {
+        "model_name": "Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
+        "model_path": null,
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.architect_general",
+        "role": "architect_general"
+      }
+    ],
+    "8085": [
+      {
+        "model_name": "Qwen3-Next-80B-A3B-Q4_K_M.gguf",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "server_mode.ingest_long_context",
+        "role": "ingest_long_context"
+      }
+    ],
+    "8086": [
+      {
+        "model_name": "Qwen2.5-VL-7B-Instruct",
+        "model_path": "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+        "port_kind": "primary",
+        "registry_section": "roles.worker_vision",
+        "role": "worker_vision"
+      }
+    ],
+    "8087": [
+      {
+        "model_name": "Qwen3-VL-30B-A3B-Instruct",
+        "model_path": "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+        "port_kind": "primary",
+        "registry_section": "roles.vision_escalation",
+        "role": "vision_escalation"
+      }
+    ],
+    "8088": [
+      {
+        "model_name": "lightonai/LateOn-Code",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "server_mode.nextplaid_code",
+        "role": "nextplaid_code"
+      }
+    ],
+    "8089": [
+      {
+        "model_name": "lightonai/GTE-ModernColBERT-v1",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "server_mode.nextplaid_docs",
+        "role": "nextplaid_docs"
+      }
+    ],
+    "8092": [
+      {
+        "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "worker_pool.workers.code",
+        "role": "code"
+      }
+    ],
+    "8102": [
+      {
+        "model_name": "Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/Qwen2.5-Coder-1.5B-Instruct-Q8_0.gguf",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "worker_pool.workers.fast",
+        "role": "fast"
+      }
+    ],
+    "8180": [
+      {
+        "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.frontdoor",
+        "role": "frontdoor"
+      }
+    ],
+    "8182": [
+      {
+        "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+        "model_path": null,
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.worker",
+        "role": "worker"
+      }
+    ],
+    "8190": [
+      {
+        "model_name": "ernie-image-turbo-Q8_0.gguf",
+        "model_path": "/mnt/raid0/llm/models/diffusion/ernie-image-turbo-gguf/ernie-image-turbo-Q8_0.gguf",
+        "port_kind": "primary",
+        "registry_section": "server_mode.sd_server",
+        "role": "sd_server"
+      }
+    ],
+    "8196": [
+      {
+        "model_name": "cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M.gguf",
+        "model_path": "/mnt/raid0/llm/lmstudio/models/bartowski/cerebras_Qwen3-Coder-REAP-25B-A3B-GGUF/cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M.gguf",
+        "port_kind": "primary",
+        "registry_section": "server_mode.reap_25b",
+        "role": "reap_25b"
+      }
+    ],
+    "8280": [
+      {
+        "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.frontdoor",
+        "role": "frontdoor"
+      }
+    ],
+    "8282": [
+      {
+        "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+        "model_path": null,
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.worker",
+        "role": "worker"
+      }
+    ],
+    "8380": [
+      {
+        "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.frontdoor",
+        "role": "frontdoor"
+      }
+    ],
+    "8382": [
+      {
+        "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+        "model_path": null,
+        "port_kind": "numa_replica",
+        "registry_section": "server_mode.worker",
+        "role": "worker"
+      }
+    ],
+    "9000": [
+      {
+        "model_name": "large-v3-turbo",
+        "model_path": null,
+        "port_kind": "primary",
+        "registry_section": "server_mode.voice_server",
+        "role": "voice_server"
+      }
+    ],
+    "9001": [
+      {
+        "model_name": "LightOnOCR-2-1B-bbox-Q4_K_M.gguf",
+        "model_path": "/mnt/raid0/llm/models/LightOnOCR-2-1B-bbox-Q4_K_M.gguf",
+        "port_kind": "primary",
+        "registry_section": "server_mode.document_formalizer",
+        "role": "document_formalizer"
+      }
+    ]
+  },
+  "schema_version": 1,
+  "scope": "W1_process_inventory",
+  "sections": {
+    "processes": [
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8070,
+          "spec_type": null,
+          "threads": "96",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8070",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "96",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--mlock",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/frontdoor"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1435666,
+        "port": 8070,
+        "registry_matches": [
+          {
+            "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "port_kind": "primary",
+            "registry_section": "server_mode.frontdoor",
+            "role": "frontdoor"
+          },
+          {
+            "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "port_kind": "primary",
+            "registry_section": "server_mode.coder_escalation",
+            "role": "coder_escalation"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:01Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8080,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8080",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "48",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--mlock",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/frontdoor"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1436035,
+        "port": 8080,
+        "registry_matches": [
+          {
+            "model_name": null,
+            "model_path": null,
+            "port_kind": "primary",
+            "registry_section": "runtime_defaults.server_defaults",
+            "role": "server_defaults"
+          },
+          {
+            "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.frontdoor",
+            "role": "frontdoor"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:05Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8180,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8180",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "48",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--mlock",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/frontdoor"
+        ],
+        "cpus_allowed_list": "24,120",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1436294,
+        "port": 8180,
+        "registry_matches": [
+          {
+            "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.frontdoor",
+            "role": "frontdoor"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:09Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8280,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8280",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "48",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--mlock",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/frontdoor"
+        ],
+        "cpus_allowed_list": "48,144",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1436547,
+        "port": 8280,
+        "registry_matches": [
+          {
+            "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.frontdoor",
+            "role": "frontdoor"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:13Z",
+        "state": "R (running)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8380,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8380",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "48",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--mlock",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/frontdoor"
+        ],
+        "cpus_allowed_list": "72,168",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1436801,
+        "port": 8380,
+        "registry_matches": [
+          {
+            "model_name": "Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "model_path": "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.frontdoor",
+            "role": "frontdoor"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:17Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": "2",
+          "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "no_mmap": true,
+          "parallel_slots": "1",
+          "port": 8072,
+          "spec_type": "mtp",
+          "threads": "96",
+          "ubatch_size": "512"
+        },
+        "binary_sha256": "3a49fb4a781ce0cc2bdeec46072fdc26005867cb9a8f4fb668b913fe6203f7e7",
+        "cmdline": [
+          "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "-md",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "--spec-type",
+          "mtp",
+          "--draft-max",
+          "2",
+          "--draft-p-min",
+          "0.0",
+          "--threads-draft",
+          "16",
+          "-ub",
+          "512",
+          "--no-mmap",
+          "--reasoning",
+          "off",
+          "--jinja",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8072",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "96",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+            "libgomp.so.1": "/lib/x86_64-linux-gnu/libgomp.so.1",
+            "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/ik_llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+              "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+              "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libmtmd.so",
+              "libllama.so",
+              "libggml.so",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [
+              "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+              "/mnt/raid0/llm/ik_llama.cpp/build/src",
+              "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1437087,
+        "port": 8072,
+        "registry_matches": [
+          {
+            "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+            "model_path": null,
+            "port_kind": "primary",
+            "registry_section": "server_mode.worker",
+            "role": "worker"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:21Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": "2",
+          "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "no_mmap": true,
+          "parallel_slots": "1",
+          "port": 8082,
+          "spec_type": "mtp",
+          "threads": "48",
+          "ubatch_size": "512"
+        },
+        "binary_sha256": "3a49fb4a781ce0cc2bdeec46072fdc26005867cb9a8f4fb668b913fe6203f7e7",
+        "cmdline": [
+          "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "-md",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "--spec-type",
+          "mtp",
+          "--draft-max",
+          "2",
+          "--draft-p-min",
+          "0.0",
+          "--threads-draft",
+          "16",
+          "-ub",
+          "512",
+          "--no-mmap",
+          "--reasoning",
+          "off",
+          "--jinja",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8082",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "48",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+            "libgomp.so.1": "/lib/x86_64-linux-gnu/libgomp.so.1",
+            "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/ik_llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+              "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+              "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libmtmd.so",
+              "libllama.so",
+              "libggml.so",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [
+              "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+              "/mnt/raid0/llm/ik_llama.cpp/build/src",
+              "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1437398,
+        "port": 8082,
+        "registry_matches": [
+          {
+            "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+            "model_path": null,
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.worker",
+            "role": "worker"
+          },
+          {
+            "model_name": "Qwen/Qwen2.5-7B-Instruct-GGUF/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+            "model_path": null,
+            "port_kind": "primary",
+            "registry_section": "worker_pool.workers.explore",
+            "role": "explore"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:26Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": "2",
+          "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "no_mmap": true,
+          "parallel_slots": "1",
+          "port": 8182,
+          "spec_type": "mtp",
+          "threads": "48",
+          "ubatch_size": "512"
+        },
+        "binary_sha256": "3a49fb4a781ce0cc2bdeec46072fdc26005867cb9a8f4fb668b913fe6203f7e7",
+        "cmdline": [
+          "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "-md",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "--spec-type",
+          "mtp",
+          "--draft-max",
+          "2",
+          "--draft-p-min",
+          "0.0",
+          "--threads-draft",
+          "16",
+          "-ub",
+          "512",
+          "--no-mmap",
+          "--reasoning",
+          "off",
+          "--jinja",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8182",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "48",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "24,120",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+            "libgomp.so.1": "/lib/x86_64-linux-gnu/libgomp.so.1",
+            "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/ik_llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+              "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+              "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libmtmd.so",
+              "libllama.so",
+              "libggml.so",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [
+              "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+              "/mnt/raid0/llm/ik_llama.cpp/build/src",
+              "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1437701,
+        "port": 8182,
+        "registry_matches": [
+          {
+            "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+            "model_path": null,
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.worker",
+            "role": "worker"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:31Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": "2",
+          "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "no_mmap": true,
+          "parallel_slots": "1",
+          "port": 8382,
+          "spec_type": "mtp",
+          "threads": "48",
+          "ubatch_size": "512"
+        },
+        "binary_sha256": "3a49fb4a781ce0cc2bdeec46072fdc26005867cb9a8f4fb668b913fe6203f7e7",
+        "cmdline": [
+          "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "-md",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "--spec-type",
+          "mtp",
+          "--draft-max",
+          "2",
+          "--draft-p-min",
+          "0.0",
+          "--threads-draft",
+          "16",
+          "-ub",
+          "512",
+          "--no-mmap",
+          "--reasoning",
+          "off",
+          "--jinja",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8382",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "48",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "72,168",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+            "libgomp.so.1": "/lib/x86_64-linux-gnu/libgomp.so.1",
+            "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/ik_llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+              "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+              "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libmtmd.so",
+              "libllama.so",
+              "libggml.so",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [
+              "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+              "/mnt/raid0/llm/ik_llama.cpp/build/src",
+              "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1439054,
+        "port": 8382,
+        "registry_matches": [
+          {
+            "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+            "model_path": null,
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.worker",
+            "role": "worker"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:42Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q4_0",
+          "kv_cache_type_v": "f16",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/lmstudio/models/unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
+          "no_mmap": false,
+          "parallel_slots": "2",
+          "port": 8083,
+          "spec_type": null,
+          "threads": "96",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8083",
+          "-np",
+          "2",
+          "-c",
+          "16384",
+          "-t",
+          "96",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "-ctk",
+          "q4_0",
+          "-ctv",
+          "f16",
+          "--mlock",
+          "--override-kv",
+          "qwen35moe.expert_used_count=int:8",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/architect_general"
+        ],
+        "cpus_allowed_list": "0",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1439342,
+        "port": 8083,
+        "registry_matches": [
+          {
+            "model_name": "Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
+            "model_path": null,
+            "port_kind": "primary",
+            "registry_section": "server_mode.architect_general",
+            "role": "architect_general"
+          },
+          {
+            "model_name": "Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
+            "model_path": null,
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.architect_general",
+            "role": "architect_general"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:47Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q4_0",
+          "kv_cache_type_v": "q4_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8085,
+          "spec_type": null,
+          "threads": "96",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8085",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "96",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q4_0",
+          "-ctv",
+          "q4_0",
+          "--mlock",
+          "--override-kv",
+          "qwen3next.expert_used_count=int:4",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/ingest_long_context"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1440472,
+        "port": 8085,
+        "registry_matches": [
+          {
+            "model_name": "Qwen3-Next-80B-A3B-Q4_K_M.gguf",
+            "model_path": null,
+            "port_kind": "primary",
+            "registry_section": "server_mode.ingest_long_context",
+            "role": "ingest_long_context"
+          }
+        ],
+        "start_time": "2026-05-30T01:12:57Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q4_0",
+          "kv_cache_type_v": "q4_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8185,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8185",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "48",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q4_0",
+          "-ctv",
+          "q4_0",
+          "--mlock",
+          "--override-kv",
+          "qwen3next.expert_used_count=int:4",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/ingest_long_context"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1441532,
+        "port": 8185,
+        "registry_matches": [],
+        "start_time": "2026-05-30T01:13:03Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q4_0",
+          "kv_cache_type_v": "q4_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8285,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8285",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "48",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q4_0",
+          "-ctv",
+          "q4_0",
+          "--mlock",
+          "--override-kv",
+          "qwen3next.expert_used_count=int:4",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/ingest_long_context"
+        ],
+        "cpus_allowed_list": "24,120",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1442152,
+        "port": 8285,
+        "registry_matches": [],
+        "start_time": "2026-05-30T01:13:09Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q4_0",
+          "kv_cache_type_v": "q4_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8385,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8385",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "48",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q4_0",
+          "-ctv",
+          "q4_0",
+          "--mlock",
+          "--override-kv",
+          "qwen3next.expert_used_count=int:4",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/ingest_long_context"
+        ],
+        "cpus_allowed_list": "48,144",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1442510,
+        "port": 8385,
+        "registry_matches": [],
+        "start_time": "2026-05-30T01:13:17Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "32768",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": "q4_0",
+          "kv_cache_type_v": "q4_0",
+          "mlock": true,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8485,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": "8192"
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8485",
+          "-np",
+          "1",
+          "-c",
+          "32768",
+          "-t",
+          "48",
+          "-ub",
+          "8192",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "-ctk",
+          "q4_0",
+          "-ctv",
+          "q4_0",
+          "--mlock",
+          "--override-kv",
+          "qwen3next.expert_used_count=int:4",
+          "--slot-save-path",
+          "/mnt/raid0/llm/cache/kv_slots/ingest_long_context"
+        ],
+        "cpus_allowed_list": "72,168",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1443092,
+        "port": 8485,
+        "registry_matches": [],
+        "start_time": "2026-05-30T01:13:23Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "8192",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf",
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "2",
+          "port": 8086,
+          "spec_type": null,
+          "threads": "24",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+          "--mmproj",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8086",
+          "-np",
+          "2",
+          "-c",
+          "8192",
+          "-t",
+          "24",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "24,120",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1443581,
+        "port": 8086,
+        "registry_matches": [
+          {
+            "model_name": "Qwen2.5-VL-7B-Instruct",
+            "model_path": "lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",
+            "port_kind": "primary",
+            "registry_section": "roles.worker_vision",
+            "role": "worker_vision"
+          }
+        ],
+        "start_time": "2026-05-30T01:13:29Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8087,
+          "spec_type": null,
+          "threads": "96",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "--mmproj",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "--override-kv",
+          "qwen3vlmoe.expert_used_count=int:4",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8087",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "96",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "72,168",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1443828,
+        "port": 8087,
+        "registry_matches": [
+          {
+            "model_name": "Qwen3-VL-30B-A3B-Instruct",
+            "model_path": "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+            "port_kind": "primary",
+            "registry_section": "roles.vision_escalation",
+            "role": "vision_escalation"
+          }
+        ],
+        "start_time": "2026-05-30T01:13:31Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8187,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "--mmproj",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "--override-kv",
+          "qwen3vlmoe.expert_used_count=int:4",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8187",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "48",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1444178,
+        "port": 8187,
+        "registry_matches": [],
+        "start_time": "2026-05-30T01:13:35Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8287,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "--mmproj",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "--override-kv",
+          "qwen3vlmoe.expert_used_count=int:4",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8287",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "48",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "24,120",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1444690,
+        "port": 8287,
+        "registry_matches": [],
+        "start_time": "2026-05-30T01:13:39Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8387,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "--mmproj",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "--override-kv",
+          "qwen3vlmoe.expert_used_count=int:4",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8387",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "48",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "48,144",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1448544,
+        "port": 8387,
+        "registry_matches": [],
+        "start_time": "2026-05-30T01:13:43Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "model_path": "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "no_mmap": false,
+          "parallel_slots": "1",
+          "port": 8487,
+          "spec_type": null,
+          "threads": "48",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",
+          "--mmproj",
+          "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf",
+          "--override-kv",
+          "qwen3vlmoe.expert_used_count=int:4",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8487",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "48",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "72,168",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1452208,
+        "port": 8487,
+        "registry_matches": [],
+        "start_time": "2026-05-30T01:13:47Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "port": 9000
+        },
+        "binary_sha256": "efb29ce53d36ebaeee80e3aa44fd6c7f9d71bbded5fe1665240b2ed8ecaeee0e",
+        "cmdline": [
+          "/mnt/raid0/llm/pace-env/bin/python",
+          "/mnt/raid0/llm/epyc-inference-research/scripts/voice/whisper_server.py",
+          "--port",
+          "9000",
+          "--model",
+          "large-v3-turbo"
+        ],
+        "cpus_allowed_list": "0-191",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libexpat.so.1": "/lib/x86_64-linux-gnu/libexpat.so.1",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": null,
+            "issues": [],
+            "resolved": {}
+          },
+          "readelf": {
+            "needed": [
+              "libm.so.6",
+              "libz.so.1",
+              "libexpat.so.1",
+              "libc.so.6"
+            ],
+            "rpath": [],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/usr/bin/python3.13",
+        "kind": "whisper",
+        "pid": 1457275,
+        "port": 9000,
+        "registry_matches": [
+          {
+            "model_name": "large-v3-turbo",
+            "model_path": null,
+            "port_kind": "primary",
+            "registry_section": "server_mode.voice_server",
+            "role": "voice_server"
+          }
+        ],
+        "start_time": "2026-05-30T01:14:09Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "16384",
+          "draft_max": "2",
+          "draft_model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "flash_attention": "on",
+          "kv_cache_type_k": "q8_0",
+          "kv_cache_type_v": "q8_0",
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "no_mmap": true,
+          "parallel_slots": "1",
+          "port": 8282,
+          "spec_type": "mtp",
+          "threads": "48",
+          "ubatch_size": "512"
+        },
+        "binary_sha256": "3a49fb4a781ce0cc2bdeec46072fdc26005867cb9a8f4fb668b913fe6203f7e7",
+        "cmdline": [
+          "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+          "-md",
+          "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf",
+          "--spec-type",
+          "mtp",
+          "--draft-max",
+          "2",
+          "--draft-p-min",
+          "0.0",
+          "--threads-draft",
+          "16",
+          "-ub",
+          "512",
+          "--no-mmap",
+          "--reasoning",
+          "off",
+          "--jinja",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8282",
+          "-np",
+          "1",
+          "-c",
+          "16384",
+          "-t",
+          "48",
+          "-ctk",
+          "q8_0",
+          "-ctv",
+          "q8_0",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "48,144",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+            "libgomp.so.1": "/lib/x86_64-linux-gnu/libgomp.so.1",
+            "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/ik_llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml.so": "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src/libggml.so",
+              "libllama.so": "/mnt/raid0/llm/ik_llama.cpp/build/src/libllama.so",
+              "libmtmd.so": "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd/libmtmd.so"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libmtmd.so",
+              "libllama.so",
+              "libggml.so",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [
+              "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+              "/mnt/raid0/llm/ik_llama.cpp/build/src",
+              "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1796140,
+        "port": 8282,
+        "registry_matches": [
+          {
+            "model_name": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+            "model_path": null,
+            "port_kind": "numa_replica",
+            "registry_section": "server_mode.worker",
+            "role": "worker"
+          }
+        ],
+        "start_time": "2026-06-03T11:22:49Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "512",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "no_mmap": false,
+          "parallel_slots": "4",
+          "port": 8090,
+          "spec_type": null,
+          "threads": "4",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8090",
+          "-np",
+          "4",
+          "-c",
+          "512",
+          "-t",
+          "4",
+          "--embeddings",
+          "--pooling",
+          "cls",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1895852,
+        "port": 8090,
+        "registry_matches": [],
+        "start_time": "2026-06-03T13:31:49Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "512",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "no_mmap": false,
+          "parallel_slots": "4",
+          "port": 8091,
+          "spec_type": null,
+          "threads": "4",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8091",
+          "-np",
+          "4",
+          "-c",
+          "512",
+          "-t",
+          "4",
+          "--embeddings",
+          "--pooling",
+          "cls",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1896061,
+        "port": 8091,
+        "registry_matches": [],
+        "start_time": "2026-06-03T13:31:51Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "512",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "no_mmap": false,
+          "parallel_slots": "4",
+          "port": 8092,
+          "spec_type": null,
+          "threads": "4",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8092",
+          "-np",
+          "4",
+          "-c",
+          "512",
+          "-t",
+          "4",
+          "--embeddings",
+          "--pooling",
+          "cls",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1896269,
+        "port": 8092,
+        "registry_matches": [
+          {
+            "model_name": "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
+            "model_path": null,
+            "port_kind": "primary",
+            "registry_section": "worker_pool.workers.code",
+            "role": "code"
+          }
+        ],
+        "start_time": "2026-06-03T13:31:54Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "512",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "no_mmap": false,
+          "parallel_slots": "4",
+          "port": 8093,
+          "spec_type": null,
+          "threads": "4",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8093",
+          "-np",
+          "4",
+          "-c",
+          "512",
+          "-t",
+          "4",
+          "--embeddings",
+          "--pooling",
+          "cls",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1896475,
+        "port": 8093,
+        "registry_matches": [],
+        "start_time": "2026-06-03T13:31:56Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "512",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "no_mmap": false,
+          "parallel_slots": "4",
+          "port": 8094,
+          "spec_type": null,
+          "threads": "4",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8094",
+          "-np",
+          "4",
+          "-c",
+          "512",
+          "-t",
+          "4",
+          "--embeddings",
+          "--pooling",
+          "cls",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1896682,
+        "port": 8094,
+        "registry_matches": [],
+        "start_time": "2026-06-03T13:31:58Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "context_length": "512",
+          "draft_max": null,
+          "draft_model_path": null,
+          "flash_attention": "on",
+          "kv_cache_type_k": null,
+          "kv_cache_type_v": null,
+          "mlock": false,
+          "mmproj_path": null,
+          "model_path": "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "no_mmap": false,
+          "parallel_slots": "4",
+          "port": 8095,
+          "spec_type": null,
+          "threads": "4",
+          "ubatch_size": null
+        },
+        "binary_sha256": "78deb8cb0e254d7f9097dfb436a25129a547e60d08823343b4f0c570a446f3d2",
+        "cmdline": [
+          "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+          "-m",
+          "/mnt/raid0/llm/models/bge-large-en-v1.5-f16.gguf",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8095",
+          "-np",
+          "4",
+          "-c",
+          "512",
+          "-t",
+          "4",
+          "--embeddings",
+          "--pooling",
+          "cls",
+          "--flash-attn",
+          "on"
+        ],
+        "cpus_allowed_list": "0,96",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libcrypto.so.3": "/lib/x86_64-linux-gnu/libcrypto.so.3",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libgcc_s.so.1": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+            "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+            "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+            "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+            "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+            "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0",
+            "libomp.so": "/opt/AMD/aocc-compiler-5.0.0/lib/libomp.so",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libssl.so.3": "/lib/x86_64-linux-gnu/libssl.so.3",
+            "libstdc++.so.6": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+            "libz.so.1": "/lib/x86_64-linux-gnu/libz.so.1",
+            "libzstd.so.1": "/lib/x86_64-linux-gnu/libzstd.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": "/mnt/raid0/llm/llama.cpp",
+            "issues": [],
+            "resolved": {
+              "libggml-base.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-base.so.0",
+              "libggml-cpu.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml-cpu.so.0",
+              "libggml.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libggml.so.0",
+              "libllama-common.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama-common.so.0",
+              "libllama.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libllama.so.0",
+              "libmtmd.so.0": "/mnt/raid0/llm/llama.cpp/build/bin/libmtmd.so.0"
+            }
+          },
+          "readelf": {
+            "needed": [
+              "libllama-common.so.0",
+              "libmtmd.so.0",
+              "libllama.so.0",
+              "libggml.so.0",
+              "libggml-cpu.so.0",
+              "libggml-base.so.0",
+              "libssl.so.3",
+              "libcrypto.so.3",
+              "libstdc++.so.6",
+              "libm.so.6",
+              "libgcc_s.so.1",
+              "libc.so.6",
+              "ld-linux-x86-64.so.2"
+            ],
+            "rpath": [],
+            "runpath": [
+              "/mnt/raid0/llm/llama.cpp/build/bin"
+            ]
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/mnt/raid0/llm/llama.cpp/build/bin/llama-server",
+        "kind": "llama_server",
+        "pid": 1896917,
+        "port": 8095,
+        "registry_matches": [],
+        "start_time": "2026-06-03T13:32:00Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "port": null
+        },
+        "binary_sha256": "a1512f9a07029c4a9b02a1bb63bbd156d36b0dcb26f49cb7f5ee175f19b222da",
+        "cmdline": [
+          "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3",
+          "/mnt/raid0/llm/epyc-orchestrator/src/mcp_server.py"
+        ],
+        "cpus_allowed_list": "0-191",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libutil.so.1": "/lib/x86_64-linux-gnu/libutil.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": null,
+            "issues": [],
+            "resolved": {}
+          },
+          "readelf": {
+            "needed": [
+              "libpthread.so.0",
+              "libdl.so.2",
+              "libutil.so.1",
+              "librt.so.1",
+              "libm.so.6",
+              "libc.so.6"
+            ],
+            "rpath": [
+              "$ORIGIN/../lib"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/home/node/.local/share/uv/python/cpython-3.14.5-linux-x86_64-gnu/bin/python3.14",
+        "kind": "mcp_server",
+        "pid": 2395669,
+        "port": null,
+        "registry_matches": [],
+        "start_time": "2026-06-12T12:16:19Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "port": 8000
+        },
+        "binary_sha256": "a1512f9a07029c4a9b02a1bb63bbd156d36b0dcb26f49cb7f5ee175f19b222da",
+        "cmdline": [
+          "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+          "-m",
+          "uvicorn",
+          "src.api:app",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "8000",
+          "--workers",
+          "6",
+          "--limit-concurrency",
+          "16"
+        ],
+        "cpus_allowed_list": "0-191",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libutil.so.1": "/lib/x86_64-linux-gnu/libutil.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": null,
+            "issues": [],
+            "resolved": {}
+          },
+          "readelf": {
+            "needed": [
+              "libpthread.so.0",
+              "libdl.so.2",
+              "libutil.so.1",
+              "librt.so.1",
+              "libm.so.6",
+              "libc.so.6"
+            ],
+            "rpath": [
+              "$ORIGIN/../lib"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/home/node/.local/share/uv/python/cpython-3.14.5-linux-x86_64-gnu/bin/python3.14",
+        "kind": "orchestrator_api",
+        "pid": 2780307,
+        "port": 8000,
+        "registry_matches": [],
+        "start_time": "2026-06-12T18:27:43Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "port": 9001
+        },
+        "binary_sha256": "a1512f9a07029c4a9b02a1bb63bbd156d36b0dcb26f49cb7f5ee175f19b222da",
+        "cmdline": [
+          "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python",
+          "/mnt/raid0/llm/epyc-orchestrator/src/services/lightonocr_llama_server.py",
+          "--port",
+          "9001"
+        ],
+        "cpus_allowed_list": "0-191",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libutil.so.1": "/lib/x86_64-linux-gnu/libutil.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": null,
+            "issues": [],
+            "resolved": {}
+          },
+          "readelf": {
+            "needed": [
+              "libpthread.so.0",
+              "libdl.so.2",
+              "libutil.so.1",
+              "librt.so.1",
+              "libm.so.6",
+              "libc.so.6"
+            ],
+            "rpath": [
+              "$ORIGIN/../lib"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/home/node/.local/share/uv/python/cpython-3.14.5-linux-x86_64-gnu/bin/python3.14",
+        "kind": "lightonocr",
+        "pid": 2796323,
+        "port": 9001,
+        "registry_matches": [
+          {
+            "model_name": "LightOnOCR-2-1B-bbox-Q4_K_M.gguf",
+            "model_path": "/mnt/raid0/llm/models/LightOnOCR-2-1B-bbox-Q4_K_M.gguf",
+            "port_kind": "primary",
+            "registry_section": "server_mode.document_formalizer",
+            "role": "document_formalizer"
+          }
+        ],
+        "start_time": "2026-06-12T18:44:14Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "port": null
+        },
+        "binary_sha256": "ba56e9683b88e05c73abb2d9b8daa3a68fc1507040f52e3a09b0dc2becf827e1",
+        "cmdline": [
+          "uv",
+          "run",
+          "python",
+          "scripts/autopilot/autopilot.py",
+          "start",
+          "--max-trials",
+          "1000"
+        ],
+        "cpus_allowed_list": "0-191",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {},
+          "ldd_returncode": 1,
+          "llama_resolution": {
+            "expected_tree": null,
+            "issues": [],
+            "resolved": {}
+          },
+          "readelf": {
+            "needed": [],
+            "rpath": [],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/usr/bin/uv",
+        "kind": "autopilot",
+        "pid": 2798819,
+        "port": null,
+        "registry_matches": [],
+        "start_time": "2026-06-12T18:47:14Z",
+        "state": "S (sleeping)"
+      },
+      {
+        "args": {
+          "port": null
+        },
+        "binary_sha256": "a1512f9a07029c4a9b02a1bb63bbd156d36b0dcb26f49cb7f5ee175f19b222da",
+        "cmdline": [
+          "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3",
+          "scripts/autopilot/autopilot.py",
+          "start",
+          "--max-trials",
+          "1000"
+        ],
+        "cpus_allowed_list": "0-191",
+        "dynamic_linking": {
+          "issues": [],
+          "ldd": {
+            "/lib64/ld-linux-x86-64.so.2": "/lib64/ld-linux-x86-64.so.2",
+            "libc.so.6": "/lib/x86_64-linux-gnu/libc.so.6",
+            "libdl.so.2": "/lib/x86_64-linux-gnu/libdl.so.2",
+            "libm.so.6": "/lib/x86_64-linux-gnu/libm.so.6",
+            "libpthread.so.0": "/lib/x86_64-linux-gnu/libpthread.so.0",
+            "librt.so.1": "/lib/x86_64-linux-gnu/librt.so.1",
+            "libutil.so.1": "/lib/x86_64-linux-gnu/libutil.so.1",
+            "linux-vdso.so.1": null
+          },
+          "ldd_returncode": 0,
+          "llama_resolution": {
+            "expected_tree": null,
+            "issues": [],
+            "resolved": {}
+          },
+          "readelf": {
+            "needed": [
+              "libpthread.so.0",
+              "libdl.so.2",
+              "libutil.so.1",
+              "librt.so.1",
+              "libm.so.6",
+              "libc.so.6"
+            ],
+            "rpath": [
+              "$ORIGIN/../lib"
+            ],
+            "runpath": []
+          },
+          "readelf_returncode": 0,
+          "status": "ok"
+        },
+        "exe": "/home/node/.local/share/uv/python/cpython-3.14.5-linux-x86_64-gnu/bin/python3.14",
+        "kind": "autopilot",
+        "pid": 2798824,
+        "port": null,
+        "registry_matches": [],
+        "start_time": "2026-06-12T18:47:14Z",
+        "state": "S (sleeping)"
+      }
+    ]
+  },
+  "sources": {
+    "proc_root": "/proc",
+    "registry": "orchestration/model_registry.yaml"
+  },
+  "summary": {
+    "by_kind": {
+      "autopilot": 2,
+      "lightonocr": 1,
+      "llama_server": 28,
+      "mcp_server": 1,
+      "orchestrator_api": 1,
+      "whisper": 1
+    },
+    "issue_count": 13,
+    "issues": [
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1441532,
+        "port": 8185
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1442152,
+        "port": 8285
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1442510,
+        "port": 8385
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1443092,
+        "port": 8485
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1444178,
+        "port": 8187
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1444690,
+        "port": 8287
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1448544,
+        "port": 8387
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1452208,
+        "port": 8487
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1895852,
+        "port": 8090
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1896061,
+        "port": 8091
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1896475,
+        "port": 8093
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1896682,
+        "port": 8094
+      },
+      {
+        "issues": [
+          "port_not_found_in_registry"
+        ],
+        "kind": "llama_server",
+        "pid": 1896917,
+        "port": 8095
+      }
+    ],
+    "process_count": 34
+  }
+}
