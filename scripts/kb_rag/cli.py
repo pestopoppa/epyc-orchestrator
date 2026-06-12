@@ -2,6 +2,7 @@
 
 Subcommands:
   build    — full or incremental rebuild of the index
+  eval     — K7 retrieval-quality sweep over curated evidence cases
   query    — top-K MaxSim retrieval
   update   — re-encode a specified list of files (incremental)
   stats    — index summary
@@ -30,6 +31,7 @@ from src.retrieval.kb_rag import (  # noqa: E402
 )
 
 DEFAULT_CONFIG = _REPO / "config" / "kb_rag_config.yaml"
+DEFAULT_EVAL_CASES = _REPO / "scripts" / "kb_rag" / "k7_seed_cases.json"
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
@@ -66,6 +68,22 @@ def _cmd_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_eval(args: argparse.Namespace) -> int:
+    from scripts.kb_rag.eval_k7 import run_eval
+
+    summary = run_eval(
+        cases_path=args.cases or DEFAULT_EVAL_CASES,
+        index_dir=args.index_dir or DEFAULT_INDEX_DIR,
+        output_dir=args.output_dir,
+        configs=args.configs,
+        cutoffs=args.cutoffs,
+        top_k=args.top_k,
+        limit_cases=args.limit_cases,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0 if summary.get("ok") else 1
+
+
 def _cmd_stats(args: argparse.Namespace) -> int:
     s = stats(index_dir=args.index_dir or DEFAULT_INDEX_DIR)
     print(json.dumps(s, indent=2))
@@ -91,6 +109,19 @@ def main(argv: list[str] | None = None) -> int:
     pq.add_argument("--top-k", type=int, default=8)
     pq.add_argument("--json", action="store_true")
     pq.set_defaults(func=_cmd_query)
+
+    pe = sub.add_parser("eval", help="K7 retrieval-quality sweep")
+    pe.add_argument("--cases", help=f"case JSON file (default: {DEFAULT_EVAL_CASES})")
+    pe.add_argument("--output-dir", help="directory for summary.json + rows.jsonl")
+    pe.add_argument(
+        "--configs",
+        default="default",
+        help="comma list of configs or default/all",
+    )
+    pe.add_argument("--cutoffs", default="3,5,10", help="comma-separated recall cutoffs")
+    pe.add_argument("--top-k", type=int, help="query depth; defaults to max cutoff")
+    pe.add_argument("--limit-cases", type=int, help="run only the first N cases")
+    pe.set_defaults(func=_cmd_eval)
 
     ps = sub.add_parser("stats", help="index summary")
     ps.set_defaults(func=_cmd_stats)
