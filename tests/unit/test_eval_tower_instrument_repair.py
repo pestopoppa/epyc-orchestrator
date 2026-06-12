@@ -12,6 +12,11 @@ import eval_tower  # noqa: E402
 from eval_tower import EvalTower, QuestionResult  # noqa: E402
 
 
+class _PrefixRng:
+    def sample(self, population, k):  # noqa: ANN001
+        return list(population[:k])
+
+
 def test_programmatic_scorer_runs_with_empty_expected(monkeypatch) -> None:
     tower = EvalTower()
 
@@ -65,6 +70,52 @@ def test_empty_expected_still_blocks_plain_exact_match(monkeypatch) -> None:
         )
 
     assert result.correct is False
+
+
+def test_empty_expected_text_scorer_is_not_scoreable() -> None:
+    assert not eval_tower._is_scoreable_question(
+        {
+            "id": "dead-text",
+            "expected": "",
+            "scoring_method": "substring",
+        }
+    )
+    assert eval_tower._is_scoreable_question(
+        {
+            "id": "expected-free-programmatic",
+            "expected": "",
+            "scoring_method": "programmatic",
+        }
+    )
+
+
+def test_sampling_replaces_unscoreable_items_from_same_suite() -> None:
+    suite_qs = [
+        {
+            "id": "dead-text",
+            "expected": "",
+            "scoring_method": "substring",
+        },
+        {
+            "id": "valid-text",
+            "expected": "answer",
+            "scoring_method": "substring",
+        },
+        {
+            "id": "valid-programmatic",
+            "expected": "",
+            "scoring_method": "programmatic",
+        },
+    ]
+
+    sample = eval_tower._sample_scoreable_questions(
+        "instruction_precision",
+        suite_qs,
+        per_suite=2,
+        rng=_PrefixRng(),
+    )
+
+    assert [q["id"] for q in sample] == ["valid-text", "valid-programmatic"]
 
 
 def test_eval_question_records_chat_response_routed_to(monkeypatch) -> None:

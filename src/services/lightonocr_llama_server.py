@@ -49,10 +49,45 @@ MMPROJ_PATH = os.environ.get(
     "LIGHTONOCR_MMPROJ",
     str(_svc.lightonocr_mmproj),
 )
-CLI_PATH = os.environ.get(
+_CONFIGURED_CLI_PATH = os.environ.get(
     "LLAMA_MTMD_CLI",
     str(_vis.llama_mtmd_cli),
 )
+
+
+def _resolve_mtmd_cli(configured: str) -> str:
+    """Return an executable llama-mtmd-cli path without overriding explicit config."""
+    if os.environ.get("LLAMA_MTMD_CLI") or os.environ.get("ORCHESTRATOR_PATHS_LLAMA_MTMD"):
+        return configured
+
+    configured_path = Path(configured)
+    if configured_path.exists():
+        return configured
+
+    llama_root = configured_path.parents[2] if len(configured_path.parents) >= 3 else None
+    if llama_root is None:
+        return configured
+
+    for candidate in (
+        llama_root / "build-v2/bin/llama-mtmd-cli",
+        llama_root / "build_libomp_pgo_bolt/bin/llama-mtmd-cli",
+        llama_root / "build-blis52/bin/llama-mtmd-cli",
+    ):
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return configured
+
+
+def _mtmd_subprocess_env(cli_path: str, threads: int) -> dict[str, str]:
+    env = {**os.environ, "OMP_NUM_THREADS": str(threads)}
+    cli_dir = str(Path(cli_path).resolve().parent)
+    ld_parts = [part for part in env.get("LD_LIBRARY_PATH", "").split(":") if part]
+    if cli_dir not in ld_parts:
+        env["LD_LIBRARY_PATH"] = ":".join([cli_dir, *ld_parts])
+    return env
+
+
+CLI_PATH = _resolve_mtmd_cli(_CONFIGURED_CLI_PATH)
 
 # Worker pool configuration (8×12 optimal based on benchmarks)
 NUM_WORKERS = int(os.environ.get("LIGHTONOCR_WORKERS", "8"))
@@ -132,7 +167,7 @@ class LlamaOCRWorker:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,  # Separate stderr from stdout
-                env={**os.environ, "OMP_NUM_THREADS": str(self.threads)},
+                env=_mtmd_subprocess_env(CLI_PATH, self.threads),
             )
 
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=TIMEOUT_SEC)

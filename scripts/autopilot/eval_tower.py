@@ -28,6 +28,44 @@ SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 # live trial set is unchanged until a deliberate cutover (see tool_sentinels.yaml).
 TOOL_SENTINEL_PATH = Path(__file__).resolve().parent / "tool_sentinels.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
+_EXPECTED_FREE_SCORERS = {"code_execution", "programmatic"}
+
+
+def _is_scoreable_question(q: dict) -> bool:
+    expected = q.get("expected", "")
+    scoring_method = str(q.get("scoring_method", "exact_match"))
+    has_expected = expected is not None and str(expected) != ""
+    return has_expected or scoring_method in _EXPECTED_FREE_SCORERS
+
+
+def _sample_scoreable_questions(
+    suite: str,
+    suite_qs: list[dict],
+    per_suite: int,
+    rng: random.Random,
+) -> list[dict]:
+    sample_size = min(per_suite, len(suite_qs))
+    sample = rng.sample(suite_qs, sample_size)
+    dead = [q for q in sample if not _is_scoreable_question(q)]
+    if not dead:
+        return sample
+
+    seen = {id(q) for q in sample}
+    replacements = []
+    for q in suite_qs:
+        if id(q) in seen or not _is_scoreable_question(q):
+            continue
+        replacements.append(q)
+        if len(replacements) == len(dead):
+            break
+
+    log.warning(
+        "Excised %d structurally unscorable %s eval item(s); replacements=%d",
+        len(dead),
+        suite,
+        len(replacements),
+    )
+    return [q for q in sample if _is_scoreable_question(q)] + replacements
 
 
 def _env_int(name: str, default: int) -> int:
@@ -333,9 +371,7 @@ class EvalTower:
             tokens = resp.get("tokens_generated", 0)
 
             correct = False
-            expected_free_scorers = {"code_execution", "programmatic"}
-            can_score = bool(expected) or scoring_method in expected_free_scorers
-            if not error and can_score:
+            if not error and _is_scoreable_question(q):
                 correct = score_answer_deterministic(
                     answer=answer,
                     expected=expected,
@@ -754,7 +790,7 @@ class EvalTower:
         questions = []
         for suite in suites:
             suite_qs = pool[suite]
-            sample = rng.sample(suite_qs, min(per_suite, len(suite_qs)))
+            sample = _sample_scoreable_questions(suite, suite_qs, per_suite, rng)
             questions.extend(sample)
         rng.shuffle(questions)
         questions = questions[:n]
@@ -781,7 +817,7 @@ class EvalTower:
         questions = []
         for suite in suites:
             suite_qs = pool[suite]
-            sample = rng.sample(suite_qs, min(per_suite, len(suite_qs)))
+            sample = _sample_scoreable_questions(suite, suite_qs, per_suite, rng)
             questions.extend(sample)
         rng.shuffle(questions)
         questions = questions[:n]
