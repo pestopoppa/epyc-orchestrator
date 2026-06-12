@@ -26,10 +26,10 @@ from typing import Callable, Iterable
 
 
 class InclusionMode:
-    FULL = "full"               # whole file body
-    SLICES = "slices"           # selected line ranges only
+    FULL = "full"  # whole file body
+    SLICES = "slices"  # selected line ranges only
     CODEMAP_ONLY = "codemap_only"  # signature-only API skeleton, no bodies
-    EXCLUDED = "excluded"       # deliberately left out (with a reason)
+    EXCLUDED = "excluded"  # deliberately left out (with a reason)
     ALL = ("full", "slices", "codemap_only", "excluded")
 
 
@@ -80,6 +80,7 @@ def merge_line_ranges(ranges: Iterable[LineRange], *, adjacency_gap: int = 0) ->
 
 # ─── token estimation (audit note #1: model-calibrated, conservative) ─────────────
 
+
 #: Default estimator. Conservative (tends to *over*-estimate) so the packer fails closed
 #: rather than overflowing the target window. Replace with a real tokenizer via
 #: ContextBundle(token_estimator=...) once the target role's tokenizer is wired.
@@ -96,16 +97,24 @@ TokenEstimator = Callable[[str], int]
 # ─── exclusion policy (audit note #5: filters belong in DCP-1, not as an afterthought) ──
 
 _EXCLUDE_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"(^|/)(node_modules|vendor|\.venv|venv|site-packages|dist|build|target)/"),
-     "vendored/build directory"),
-    (re.compile(r"\.(gguf|bin|so|dylib|dll|o|a|png|jpg|jpeg|gif|pdf|zip|tar|gz|whl|faiss|npy|npz|safetensors|onnx)$"),
-     "binary/artifact"),
-    (re.compile(r"(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Cargo\.lock|uv\.lock)$"),
-     "lockfile"),
-    (re.compile(r"(\.pb\.go|_pb2\.py|\.generated\.|\.min\.js)$"),
-     "generated code"),
-    (re.compile(r"(^|/)(\.env(\..*)?|id_rsa|.*\.pem|.*\.key)$"),
-     "secrets-like file"),
+    (
+        re.compile(r"(^|/)(node_modules|vendor|\.venv|venv|site-packages|dist|build|target)/"),
+        "vendored/build directory",
+    ),
+    (
+        re.compile(
+            r"\.(gguf|bin|so|dylib|dll|o|a|png|jpg|jpeg|gif|pdf|zip|tar|gz|whl|faiss|npy|npz|safetensors|onnx)$"
+        ),
+        "binary/artifact",
+    ),
+    (
+        re.compile(
+            r"(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Cargo\.lock|uv\.lock)$"
+        ),
+        "lockfile",
+    ),
+    (re.compile(r"(\.pb\.go|_pb2\.py|\.generated\.|\.min\.js)$"), "generated code"),
+    (re.compile(r"(^|/)(\.env(\..*)?|id_rsa|.*\.pem|.*\.key)$"), "secrets-like file"),
 ]
 
 
@@ -242,10 +251,13 @@ class ContextBundle:
             "total_tokens": self.total_tokens(),
             "remaining": self.remaining(),
             "fits": self.fits(),
-            "bands": None if self.bands is None
+            "bands": None
+            if self.bands is None
             else {
-                "task": self.bands.task, "codemap": self.bands.codemap,
-                "editable": self.bands.editable, "tests": self.bands.tests,
+                "task": self.bands.task,
+                "codemap": self.bands.codemap,
+                "editable": self.bands.editable,
+                "tests": self.bands.tests,
                 "output_reserve": self.bands.output_reserve,
             },
             "entries": [
@@ -280,11 +292,11 @@ class Candidate:
     """
 
     path: str
-    priority: float                                   # higher = include first
+    priority: float  # higher = include first
     cost_full: int
     cost_slices: int
     cost_codemap: int
-    desired_mode: str = InclusionMode.FULL            # best mode we'd like for this file
+    desired_mode: str = InclusionMode.FULL  # best mode we'd like for this file
     line_ranges: list[LineRange] = field(default_factory=list)
     symbol_ids: list[str] = field(default_factory=list)
     content_sha256: str | None = None
@@ -324,19 +336,26 @@ def pack_to_budget(
     """
     effective_budget = budget if bands is None else budget - bands.output_reserve
     bundle = ContextBundle(
-        budget=effective_budget, bundle_id=bundle_id, repo_sha=repo_sha,
-        gitnexus_index_commit=gitnexus_index_commit, bands=bands,
+        budget=effective_budget,
+        bundle_id=bundle_id,
+        repo_sha=repo_sha,
+        gitnexus_index_commit=gitnexus_index_commit,
+        bands=bands,
     )
     for cand in sorted(candidates, key=lambda c: (-c.priority, c.path)):
         policy_reason = (
-            default_exclusion_reason(cand.path)
-            if cand.source != SourceKind.MANUAL_SEED else None
+            default_exclusion_reason(cand.path) if cand.source != SourceKind.MANUAL_SEED else None
         )
         if policy_reason is not None:
-            bundle.entries.append(BundleEntry(
-                path=cand.path, mode=InclusionMode.EXCLUDED, source=cand.source,
-                reason_downgraded_or_excluded=policy_reason,
-            ))
+            bundle.entries.append(
+                BundleEntry(
+                    path=cand.path,
+                    mode=InclusionMode.EXCLUDED,
+                    source=cand.source,
+                    content_sha256=cand.content_sha256,
+                    reason_downgraded_or_excluded=policy_reason,
+                )
+            )
             continue
 
         placed = False
@@ -345,21 +364,33 @@ def pack_to_budget(
             if bundle.total_tokens() + cost <= effective_budget:
                 downgraded = mode != cand.desired_mode
                 entry = BundleEntry(
-                    path=cand.path, mode=mode,
+                    path=cand.path,
+                    mode=mode,
                     line_ranges=list(cand.line_ranges) if mode == InclusionMode.SLICES else [],
-                    symbol_ids=list(cand.symbol_ids), content_sha256=cand.content_sha256,
-                    source=cand.source, estimated_tokens=cost,
+                    symbol_ids=list(cand.symbol_ids),
+                    content_sha256=cand.content_sha256,
+                    source=cand.source,
+                    estimated_tokens=cost,
                     reason_included=f"priority={cand.priority:g}",
                     reason_downgraded_or_excluded=(
-                        f"downgraded {cand.desired_mode}->{mode} to fit budget" if downgraded else None
+                        f"downgraded {cand.desired_mode}->{mode} to fit budget"
+                        if downgraded
+                        else None
                     ),
                 )
                 bundle.entries.append(entry)
                 placed = True
                 break
         if not placed:
-            bundle.entries.append(BundleEntry(
-                path=cand.path, mode=InclusionMode.EXCLUDED, source=cand.source,
-                reason_downgraded_or_excluded="no mode fits remaining budget (fail-closed)",
-            ))
+            bundle.entries.append(
+                BundleEntry(
+                    path=cand.path,
+                    mode=InclusionMode.EXCLUDED,
+                    source=cand.source,
+                    line_ranges=list(cand.line_ranges),
+                    symbol_ids=list(cand.symbol_ids),
+                    content_sha256=cand.content_sha256,
+                    reason_downgraded_or_excluded="no mode fits remaining budget (fail-closed)",
+                )
+            )
     return bundle

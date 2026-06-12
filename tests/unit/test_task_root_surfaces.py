@@ -9,6 +9,7 @@ Covers the Phase-0 audit surfaces that are unit-testable without inference:
 (#10 DCP file_reader is covered in test_dcp4_wiring.py; full write/read tool round-trips
 land in the Phase 3 driver dry-run.)
 """
+
 from __future__ import annotations
 
 import json
@@ -29,6 +30,7 @@ def _env():
 
 
 # ─── #1/#2 _validate_file_path ────────────────────────────────────────────────────
+
 
 def test_validate_relative_path_resolves_under_scratch(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
@@ -58,6 +60,7 @@ def test_validate_default_off_unchanged(tmp_path):
 # (llm_root + /tmp). Since the scratch lives under /tmp, the global /tmp prefix made every
 # outside path validate (/tmp/x, ../x, the orchestrator tree). When a task-root is active the
 # allowed set must be the scratch root ONLY.
+
 
 def test_validate_rejects_outside_paths_when_task_root_active(monkeypatch, tmp_path):
     monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
@@ -94,6 +97,7 @@ def test_file_write_safe_rejects_escape_when_task_root_active(monkeypatch, tmp_p
 
 # ─── #8 _batch_edit_repo_root ─────────────────────────────────────────────────────
 
+
 def test_batch_edit_repo_root_follows_task_root(monkeypatch, tmp_path):
     from src.graph.helpers import _batch_edit_repo_root
 
@@ -111,6 +115,7 @@ def test_batch_edit_repo_root_default_is_project_root(monkeypatch):
 
 # ─── #7 code_search (index-free scratch search) ───────────────────────────────────
 
+
 def test_code_search_returns_scratch_files(monkeypatch, tmp_path):
     (tmp_path / "cart.py").write_text("def total():\n    return sum(items)\n")
     (tmp_path / "checkout.py").write_text("from cart import total\n")
@@ -120,10 +125,25 @@ def test_code_search_returns_scratch_files(monkeypatch, tmp_path):
     out = env._code_search("total cart", limit=5)
     hits = json.loads(out)
     paths = {h["path"] for h in hits}
-    assert "cart.py" in paths       # matched by name + body
-    assert "checkout.py" in paths   # matched by body ("cart", "total")
-    # each hit is ColGREP-JSON-shaped (path/score/start_line)
-    assert all("path" in h and "score" in h and "start_line" in h for h in hits)
+    assert "cart.py" in paths  # matched by name + body
+    assert "checkout.py" in paths  # matched by body ("cart", "total")
+    # each hit is ColGREP-JSON-shaped (path/score/start_line/end_line)
+    assert all("path" in h and "score" in h and "start_line" in h and "end_line" in h for h in hits)
+    by_path = {h["path"]: h for h in hits}
+    assert by_path["cart.py"]["start_line"] == 1
+    assert by_path["cart.py"]["end_line"] == 2
+
+
+def test_code_search_pads_large_scratch_file_match(monkeypatch, tmp_path):
+    lines = [f"value_{i} = 0" for i in range(1, 101)]
+    lines[49] = "target_marker = compute_total(items)"
+    (tmp_path / "large.py").write_text("\n".join(lines) + "\n")
+    monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(tmp_path))
+    env = _env()
+    hits = json.loads(env._code_search("target_marker compute_total", limit=5))
+    hit = next(h for h in hits if h["path"] == "large.py")
+    assert hit["start_line"] == 30
+    assert hit["end_line"] == 70
 
 
 def test_code_search_default_off_uses_indexed_engine(monkeypatch):
@@ -132,14 +152,17 @@ def test_code_search_default_off_uses_indexed_engine(monkeypatch):
     from unittest.mock import patch
 
     env = _env()
-    with patch.object(env, "_task_root_code_search") as scratch, \
-         patch.object(env, "_colgrep_search", return_value="[]") as colgrep, \
-         patch.object(env, "_nextplaid_search", return_value="[]"):
+    with (
+        patch.object(env, "_task_root_code_search") as scratch,
+        patch.object(env, "_colgrep_search", return_value="[]"),
+        patch.object(env, "_nextplaid_search", return_value="[]"),
+    ):
         env._code_search("anything", limit=5)
     scratch.assert_not_called()  # scratch path never taken when env unset
 
 
 # ─── #5 run_shell cwd ─────────────────────────────────────────────────────────────
+
 
 def test_run_shell_cwd_is_scratch(monkeypatch, tmp_path):
     import os

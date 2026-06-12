@@ -17,11 +17,12 @@ from src.context_discovery import (
 
 # ─── ColGREP JSON parsing ────────────────────────────────────────────────────────
 
+
 def test_parse_colgrep_json_variants() -> None:
     payload = [
         {"path": "a.py", "start_line": 10, "end_line": 20, "score": 0.9},
-        {"file": "b.py", "start": 5, "end": 5, "relevance": 0.5},   # alt field names
-        {"nope": 1},                                                # no path → skipped
+        {"file": "b.py", "start": 5, "end": 5, "relevance": 0.5},  # alt field names
+        {"nope": 1},  # no path → skipped
     ]
     hits = parse_colgrep_json(payload)
     assert [h.path for h in hits] == ["a.py", "b.py"]
@@ -31,22 +32,29 @@ def test_parse_colgrep_json_variants() -> None:
 
 def test_parse_colgrep_json_string_and_garbage() -> None:
     assert parse_colgrep_json("not json") == []
-    assert parse_colgrep_json('[{"path": "x.py", "start_line": 1, "end_line": 2, "score": 0.3}]')[0].path == "x.py"
+    assert (
+        parse_colgrep_json('[{"path": "x.py", "start_line": 1, "end_line": 2, "score": 0.3}]')[
+            0
+        ].path
+        == "x.py"
+    )
     assert parse_colgrep_json({"results": [{"path": "y.py"}]})[0].path == "y.py"  # nested
 
 
 # ─── discovery (pass 1) ──────────────────────────────────────────────────────────
 
+
 def test_discover_groups_merges_ranks_and_excludes() -> None:
     def fake_search(query, limit):
         return [
             DiscoveredHit("a.py", [LineRange(1, 5)], 0.4),
-            DiscoveredHit("a.py", [LineRange(4, 9)], 0.8),     # same file → merge ranges, max score
+            DiscoveredHit("a.py", [LineRange(4, 9)], 0.8),  # same file → merge ranges, max score
             DiscoveredHit("node_modules/x.js", [LineRange(1, 2)], 0.99),  # policy-excluded
             DiscoveredHit("b.py", [LineRange(10, 12)], 0.6),
         ]
+
     hits = discover_candidates("q", code_search_fn=fake_search, max_files=8)
-    assert [h.path for h in hits] == ["a.py", "b.py"]      # node_modules dropped; ranked by score
+    assert [h.path for h in hits] == ["a.py", "b.py"]  # node_modules dropped; ranked by score
     a = next(h for h in hits if h.path == "a.py")
     assert [(r.start, r.end) for r in a.line_ranges] == [(1, 9)]  # merged
     assert a.score == 0.8
@@ -55,12 +63,14 @@ def test_discover_groups_merges_ranks_and_excludes() -> None:
 def test_discover_respects_max_files() -> None:
     def fake_search(q, limit):
         return [DiscoveredHit(f"f{i}.py", [LineRange(1, 1)], float(i)) for i in range(10)]
+
     hits = discover_candidates("q", code_search_fn=fake_search, max_files=3)
     assert len(hits) == 3
     assert [h.path for h in hits] == ["f9.py", "f8.py", "f7.py"]  # top-3 by score
 
 
 # ─── DCP-3 codemap ───────────────────────────────────────────────────────────────
+
 
 def test_python_codemap_signatures_only() -> None:
     src = textwrap.dedent('''
@@ -97,6 +107,7 @@ def test_python_codemap_empty_module_returns_none() -> None:
 
 # ─── cost (pass 2) ───────────────────────────────────────────────────────────────
 
+
 def test_cost_candidates_computes_modes() -> None:
     files = {
         "a.py": "def f():\n    return 1\n" + ("# pad\n" * 50),  # big-ish python
@@ -109,20 +120,24 @@ def test_cost_candidates_computes_modes() -> None:
     cands = cost_candidates(hits, file_reader_fn=lambda p: files[p])
     a = next(c for c in cands if c.path == "a.py")
     b = next(c for c in cands if c.path == "b.txt")
-    assert a.desired_mode == InclusionMode.SLICES   # had ranges
-    assert a.cost_codemap < a.cost_full             # codemap cheaper than full body
-    assert a.cost_slices < a.cost_full              # 2 lines < whole file
-    assert b.desired_mode == InclusionMode.FULL     # no ranges
+    assert a.desired_mode == InclusionMode.SLICES  # had ranges
+    assert a.content_sha256 is not None and len(a.content_sha256) == 64
+    assert a.cost_codemap < a.cost_full  # codemap cheaper than full body
+    assert a.cost_slices < a.cost_full  # 2 lines < whole file
+    assert b.desired_mode == InclusionMode.FULL  # no ranges
+    assert b.content_sha256 is not None and len(b.content_sha256) == 64
     assert b.priority == 0.5
 
 
 def test_cost_candidates_skips_unreadable() -> None:
     def reader(p):
         raise FileNotFoundError(p)
+
     assert cost_candidates([DiscoveredHit("gone.py", [], 0.5)], file_reader_fn=reader) == []
 
 
 # ─── end-to-end assemble ─────────────────────────────────────────────────────────
+
 
 def test_assemble_delegation_bundle_end_to_end() -> None:
     files = {
@@ -137,8 +152,10 @@ def test_assemble_delegation_bundle_end_to_end() -> None:
         ]
 
     bundle = assemble_delegation_bundle(
-        "fix hot path", budget=10_000,
-        code_search_fn=fake_search, file_reader_fn=lambda p: files[p],
+        "fix hot path",
+        budget=10_000,
+        code_search_fn=fake_search,
+        file_reader_fn=lambda p: files[p],
         bundle_id="b1",
     )
     assert bundle.bundle_id == "b1"
@@ -151,6 +168,8 @@ def test_assemble_delegation_bundle_end_to_end() -> None:
     hot = next(e for e in m["entries"] if e["path"] == "hot.py")
     assert hot["source"] == "colgrep"
     assert hot["mode"] in ("slices", "full")
+    assert hot["content_sha256"] is not None
+    assert len(hot["content_sha256"]) == 64
 
 
 def test_assemble_tight_budget_downgrades_or_excludes() -> None:
@@ -160,6 +179,7 @@ def test_assemble_tight_budget_downgrades_or_excludes() -> None:
         return [DiscoveredHit("a.py", [LineRange(1, 1)], 0.9)]
 
     bundle = assemble_delegation_bundle(
-        "q", budget=5, code_search_fn=fake_search, file_reader_fn=lambda p: files[p])
+        "q", budget=5, code_search_fn=fake_search, file_reader_fn=lambda p: files[p]
+    )
     # budget of 5 tokens → can't fit full; ends up sliced/codemap or excluded — but never overflows
     assert bundle.total_tokens() <= 5

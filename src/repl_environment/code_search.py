@@ -147,8 +147,8 @@ class _CodeSearchMixin:
 
     def _task_root_code_search(self, query: str, limit: int) -> str:
         """Index-free code search over the scratch task-root (#7). Returns a ColGREP-JSON-shaped
-        string (path/score/start_line) so `parse_colgrep_json` consumes it unchanged. Used only
-        when ORCHESTRATOR_EDIT_ROOT is active (small scratch repos)."""
+        string (path/score/start_line/end_line) so `parse_colgrep_json` consumes it unchanged.
+        Used only when ORCHESTRATOR_EDIT_ROOT is active (small scratch repos)."""
         import json
         import re
 
@@ -157,7 +157,25 @@ class _CodeSearchMixin:
         root = get_task_root()
         terms = [t for t in re.split(r"\W+", query.lower()) if len(t) > 2]
         code_exts = {".py", ".txt", ".md", ".cfg", ".toml", ".json", ".yaml", ".yml", ".js", ".ts"}
+        full_file_line_limit = 80
+        context_padding = 20
         hits: list[dict] = []
+
+        def _matched_window(lines: list[str]) -> tuple[int, int]:
+            if not lines:
+                return (1, 1)
+            if len(lines) <= full_file_line_limit:
+                return (1, len(lines))
+            first_ln = 1
+            for i, line in enumerate(lines, 1):
+                if any(t in line.lower() for t in terms):
+                    first_ln = i
+                    break
+            return (
+                max(1, first_ln - context_padding),
+                min(len(lines), first_ln + context_padding),
+            )
+
         for p in sorted(root.rglob("*")):
             if not p.is_file() or p.suffix not in code_exts:
                 continue
@@ -175,12 +193,15 @@ class _CodeSearchMixin:
             score = name_score * 5 + body_score
             if score <= 0:
                 continue
-            first_ln = 1
-            for i, line in enumerate(text.splitlines(), 1):
-                if any(t in line.lower() for t in terms):
-                    first_ln = i
-                    break
-            hits.append({"path": rel_s, "score": float(score), "start_line": first_ln})
+            start_ln, end_ln = _matched_window(text.splitlines())
+            hits.append(
+                {
+                    "path": rel_s,
+                    "score": float(score),
+                    "start_line": start_ln,
+                    "end_line": end_ln,
+                }
+            )
         hits.sort(key=lambda h: -h["score"])
         return json.dumps(hits[:limit])
 
@@ -216,9 +237,7 @@ class _CodeSearchMixin:
 
         client = self._get_nextplaid_client(index)
         if client is None:
-            output = json.dumps(
-                {"results": [], "error": "NextPLAID not available"}
-            )
+            output = json.dumps({"results": [], "error": "NextPLAID not available"})
             return self._maybe_wrap_tool_output(output)
 
         try:
@@ -318,19 +337,29 @@ class _CodeSearchMixin:
         # FinalSignal/ASTSecurityVisitor/create_repl_environment).
         alpha = os.environ.get("REPL_COLGREP_ALPHA", "0.95")
         cmd = [
-            bin_path, "search", query,
-            "-k", str(min(limit, 20)),
-            "--alpha", alpha,
+            bin_path,
+            "search",
+            query,
+            "-k",
+            str(min(limit, 20)),
+            "--alpha",
+            alpha,
             "--json",
             proj_path,
         ]
         try:
             proc = subprocess.run(
-                cmd, env=env, capture_output=True, text=True,
-                timeout=COLGREP_TIMEOUT_S, check=False,
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=COLGREP_TIMEOUT_S,
+                check=False,
             )
         except subprocess.TimeoutExpired:
-            logger.warning("ColGREP timed out after %ds, falling back to NextPLAID", COLGREP_TIMEOUT_S)
+            logger.warning(
+                "ColGREP timed out after %ds, falling back to NextPLAID", COLGREP_TIMEOUT_S
+            )
             return self._nextplaid_search(query, index="code", limit=limit)
         except OSError as e:
             logger.warning("ColGREP subprocess failed: %s, falling back to NextPLAID", e)
@@ -386,7 +415,9 @@ class _CodeSearchMixin:
 
         response = {"results": results, "index": "code", "query": query, "engine": "colgrep"}
         self._exploration_log.add_event(
-            "code_search", {"query": query, "index": "code", "engine": "colgrep"}, response,
+            "code_search",
+            {"query": query, "index": "code", "engine": "colgrep"},
+            response,
         )
         node_id = self._research_context.add(
             tool="code_search",

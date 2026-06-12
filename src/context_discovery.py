@@ -22,6 +22,7 @@ dispatcher) is DCP-4 — a reviewed hook, since it touches the live delegation p
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 from dataclasses import dataclass, field
 
@@ -106,7 +107,9 @@ def discover_candidates(
             continue
         cur = by_path.get(h.path)
         if cur is None:
-            by_path[h.path] = DiscoveredHit(path=h.path, line_ranges=list(h.line_ranges), score=h.score)
+            by_path[h.path] = DiscoveredHit(
+                path=h.path, line_ranges=list(h.line_ranges), score=h.score
+            )
         else:
             cur.line_ranges.extend(h.line_ranges)
             cur.score = max(cur.score, h.score)
@@ -152,7 +155,9 @@ def build_python_codemap(source: str, *, max_doc_chars: int = 80) -> str | None:
             bases = ", ".join(ast.unparse(b) for b in node.bases)
             out.append(f"class {node.name}({bases}):" if bases else f"class {node.name}:")
             _doc(node, "    ")
-            members = [n for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            members = [
+                n for n in node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
             if not members:
                 out.append("    ...")
             for m in members:
@@ -185,13 +190,12 @@ def cost_candidates(
             continue
         if body is None:
             continue
+        content_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
         lines = body.splitlines()
         cost_full = token_estimator(body)
 
         if h.line_ranges:
-            sliced = "\n".join(
-                "\n".join(lines[r.start - 1: r.end]) for r in h.line_ranges
-            )
+            sliced = "\n".join("\n".join(lines[r.start - 1 : r.end]) for r in h.line_ranges)
             cost_slices = token_estimator(sliced)
             desired = InclusionMode.SLICES
         else:
@@ -201,16 +205,19 @@ def cost_candidates(
         codemap = codemap_fn(body) if h.path.endswith(".py") else None
         cost_codemap = token_estimator(codemap) if codemap else min(cost_slices, cost_full)
 
-        out.append(Candidate(
-            path=h.path,
-            priority=h.score,
-            cost_full=cost_full,
-            cost_slices=cost_slices,
-            cost_codemap=cost_codemap,
-            desired_mode=desired,
-            line_ranges=list(h.line_ranges),
-            source=SourceKind.COLGREP,
-        ))
+        out.append(
+            Candidate(
+                path=h.path,
+                priority=h.score,
+                cost_full=cost_full,
+                cost_slices=cost_slices,
+                cost_codemap=cost_codemap,
+                desired_mode=desired,
+                line_ranges=list(h.line_ranges),
+                content_sha256=content_sha256,
+                source=SourceKind.COLGREP,
+            )
+        )
     return out
 
 
@@ -232,7 +239,9 @@ def assemble_delegation_bundle(
     The live wiring that supplies the orchestrator's ColGREP + workspace reader and attaches the
     bundle at delegation is DCP-4 (a reviewed hook).
     """
-    hits = discover_candidates(query, code_search_fn=code_search_fn, limit=limit, max_files=max_files)
+    hits = discover_candidates(
+        query, code_search_fn=code_search_fn, limit=limit, max_files=max_files
+    )
     candidates = cost_candidates(hits, file_reader_fn=file_reader_fn)
     return pack_to_budget(candidates, budget, bands=bands, bundle_id=bundle_id, repo_sha=repo_sha)
 
@@ -265,9 +274,7 @@ def render_bundle(
             text = body
         elif e.mode == InclusionMode.SLICES and e.line_ranges:
             lines = body.splitlines()
-            text = "\n".join(
-                "\n".join(lines[r.start - 1: r.end]) for r in e.line_ranges
-            )
+            text = "\n".join("\n".join(lines[r.start - 1 : r.end]) for r in e.line_ranges)
         elif e.mode == InclusionMode.CODEMAP_ONLY:
             text = (codemap_fn(body) if e.path.endswith(".py") else None) or ""
         else:
