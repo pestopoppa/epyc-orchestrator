@@ -14,8 +14,10 @@ import logging
 import re
 from typing import Any
 
+import yaml
 
 from src.constants import TASK_IR_OBJECTIVE_LEN
+from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
 from src.task_ir import canonicalize_task_ir
 
 log = logging.getLogger(__name__)
@@ -60,6 +62,19 @@ _TOOL_REQUIRED_KEYWORDS = {
     "compute": None,
     "run the": "run_shell",
 }
+
+_HEURISTIC_PRIOR_ROLE_CANDIDATES = (
+    "frontdoor",
+    "worker_general",
+    "architect_general",
+    "coder_escalation",
+)
+_DEGRADED_HEURISTIC_PRIOR_ROLES = (
+    "frontdoor",
+    "worker_general",
+    "architect_general",
+    "coder_escalation",
+)
 
 
 def detect_tool_requirement(prompt: str) -> tuple[bool, str | None]:
@@ -243,6 +258,26 @@ def _role_to_task_type(role: str) -> str:
     return "general"
 
 
+def _live_heuristic_prior_roles() -> tuple[str, ...]:
+    try:
+        with DEFAULT_STACK_PRIORS.open("r", encoding="utf-8") as fh:
+            payload = yaml.safe_load(fh)
+    except Exception as exc:
+        log.debug("Could not load stack priors for heuristic routing priors: %s", exc)
+        return _DEGRADED_HEURISTIC_PRIOR_ROLES
+
+    roles = payload.get("roles") if isinstance(payload, dict) else None
+    if not isinstance(roles, dict):
+        return _DEGRADED_HEURISTIC_PRIOR_ROLES
+    live_roles = {
+        str(role)
+        for role, record in roles.items()
+        if isinstance(record, dict) and record.get("deployment_status") == "live_stack"
+    }
+    role_ids = tuple(role for role in _HEURISTIC_PRIOR_ROLE_CANDIDATES if role in live_roles)
+    return role_ids or _DEGRADED_HEURISTIC_PRIOR_ROLES
+
+
 def _heuristic_role_priors(
     prompt: str,
     context: str = "",
@@ -253,12 +288,7 @@ def _heuristic_role_priors(
     Priors are advisory only and should be combined with learned evidence.
     """
     role, _ = _classify_and_route(prompt, context, has_image=has_image)
-    priors: dict[str, float] = {
-        "frontdoor": 0.15,
-        "worker_general": 0.15,
-        "architect_general": 0.15,
-        "architect_coding": 0.15,
-    }
+    priors: dict[str, float] = {role_id: 0.15 for role_id in _live_heuristic_prior_roles()}
     priors[str(role)] = max(priors.get(str(role), 0.0), 0.55)
     if _should_use_direct(prompt, context):
         priors["frontdoor"] = max(priors.get("frontdoor", 0.0), 0.7)

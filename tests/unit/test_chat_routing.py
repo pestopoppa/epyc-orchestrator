@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from src.api.routes.chat_routing import (
     _classify_and_route,
+    _heuristic_role_priors,
     _role_to_task_type,
     _select_mode,
     _should_use_direct,
@@ -160,3 +161,19 @@ class TestRoleToTaskType:
         assert _role_to_task_type("worker_vision") == "vision"
         assert _role_to_task_type("worker_general") == "explore"
         assert _role_to_task_type("frontdoor") == "general"
+
+
+class TestHeuristicRolePriors:
+    """Test lightweight routing priors."""
+
+    @patch("src.classifiers.classify_and_route")
+    def test_excludes_retired_roles(self, mock_classify):
+        mock_classify.return_value = MagicMock(role="frontdoor", strategy="rules")
+
+        priors = _heuristic_role_priors("Hello")
+
+        assert "architect_coding" not in priors
+        assert "frontdoor" in priors
+        assert "worker_general" in priors
+        assert "architect_general" in priors
+        assert abs(sum(priors.values()) - 1.0) < 1e-9
