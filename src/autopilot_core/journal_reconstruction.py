@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -17,6 +18,73 @@ from src.autopilot_core.tier_specs import (
     spec_for,
     task_rate_objectives_from_row,
 )
+
+
+SUPERSESSION_EVENT_TYPE = "supersession"
+
+
+def _trial_id_from_row(row: dict[str, Any]) -> int | None:
+    try:
+        return int(row.get("trial_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_supersession_event(row: dict[str, Any]) -> bool:
+    return row.get("type") == SUPERSESSION_EVENT_TYPE and "trial_id" not in row
+
+
+def _fold_supersession_events(
+    rows: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Apply append-only supersession events as an in-memory view.
+
+    The journal itself remains immutable: event rows specify field overrides for
+    prior trial ids, and reconstruction folds those overrides before building
+    Pareto/frontier views.
+    """
+    raw_rows = list(rows)
+    overrides_by_trial: dict[int, dict[str, Any]] = {}
+    applied_events = 0
+    field_names: set[str] = set()
+
+    for row in raw_rows:
+        if not _is_supersession_event(row):
+            continue
+        fields = row.get("fields")
+        targets = row.get("target_trial_ids")
+        if not isinstance(fields, dict) or not isinstance(targets, list):
+            continue
+        event_applied = False
+        for target in targets:
+            try:
+                trial_id = int(target)
+            except (TypeError, ValueError):
+                continue
+            overrides_by_trial.setdefault(trial_id, {}).update(copy.deepcopy(fields))
+            event_applied = True
+        if event_applied:
+            applied_events += 1
+            field_names.update(str(field) for field in fields)
+
+    folded_rows: list[dict[str, Any]] = []
+    for row in raw_rows:
+        if _is_supersession_event(row):
+            continue
+        trial_id = _trial_id_from_row(row)
+        if trial_id is None or trial_id not in overrides_by_trial:
+            folded_rows.append(row)
+            continue
+        folded = dict(row)
+        folded.update(copy.deepcopy(overrides_by_trial[trial_id]))
+        folded_rows.append(folded)
+
+    meta = {
+        "events_applied": applied_events,
+        "target_trial_ids": sorted(overrides_by_trial),
+        "field_names": sorted(field_names),
+    }
+    return folded_rows, meta
 
 
 def parse_journal_ts(value: Any) -> float | None:
@@ -74,10 +142,11 @@ def latest_journal_run_rows(
         prev_trial_id = trial_id
 
     selected = rows[start_idx:]
+    first_trial = next((row for row in selected if _trial_id_from_row(row) is not None), None)
     meta = {
         "journal_run_start_index": start_idx,
-        "journal_run_start_trial_id": selected[0].get("trial_id") if selected else None,
-        "journal_run_start_ts": selected[0].get("timestamp") if selected else None,
+        "journal_run_start_trial_id": first_trial.get("trial_id") if first_trial else None,
+        "journal_run_start_ts": first_trial.get("timestamp") if first_trial else None,
     }
     return selected, meta
 
@@ -100,6 +169,7 @@ def reconstruct_archive_from_journal_rows(
     run_meta: dict[str, Any] = {}
     if current_run_only:
         selected_rows, run_meta = latest_journal_run_rows(selected_rows)
+    selected_rows, supersession_meta = _fold_supersession_events(selected_rows)
 
     all_entries: list[dict[str, Any]] = []
     frontiers_by_tier: dict[int, list[dict[str, Any]]] = {}
@@ -262,6 +332,7 @@ def reconstruct_archive_from_journal_rows(
             "truncated_above_cap": truncated_cap,
             "max_trial_id_cap": max_trial_id,
         },
+        "supersessions": supersession_meta,
     }
     archive.update(run_meta)
     return archive

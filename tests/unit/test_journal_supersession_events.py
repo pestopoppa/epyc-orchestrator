@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 
@@ -11,6 +12,7 @@ AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 from experiment_journal import ExperimentJournal, JournalEntry
+from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 
 
 def _entry(trial_id: int) -> JournalEntry:
@@ -59,3 +61,38 @@ def test_matching_trial_ids_does_not_mutate_entries(tmp_path: Path) -> None:
 
     assert matched == [2]
     assert [entry.bug_corrupted_by for entry in journal.all_entries()] == ["", ""]
+
+
+def test_reconstruction_folds_supersession_events_without_mutating_trials(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(1))
+    dominant = _entry(2)
+    dominant.quality = 2.0
+    dominant.speed = 99.0
+    journal.record(dominant)
+    journal.append_supersession_event(
+        target_trial_ids=[2],
+        fields={
+            "bug_corrupted_by": "resource_contention",
+            "bug_corrupted_reason": "synthetic contention window",
+        },
+        reason="synthetic contention window",
+        policy_version="supersession-v1",
+        actor="unit-test",
+    )
+    rows = [asdict(entry) for entry in journal.all_entries()]
+    rows.extend(journal.supersession_events())
+
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+
+    assert archive is not None
+    assert [entry["trial_id"] for entry in archive["frontier"]] == [1]
+    assert archive["exclusions"]["bug_corrupted"] == {"count": 1, "max_trial_id": 2}
+    assert archive["supersessions"] == {
+        "events_applied": 1,
+        "target_trial_ids": [2],
+        "field_names": ["bug_corrupted_by", "bug_corrupted_reason"],
+    }
+    assert journal.all_entries()[1].bug_corrupted_by == ""
