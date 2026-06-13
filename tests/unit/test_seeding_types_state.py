@@ -22,6 +22,42 @@ def test_read_registry_timeout_returns_fallback_when_registry_unreadable():
         assert _MOD._read_registry_timeout("benchmark", "seeding_default", 600) == 600
 
 
+def test_read_stack_prior_default_roles_filters_live_seedable_roles(tmp_path: Path):
+    stack_priors = tmp_path / "stack_priors.yaml"
+    stack_priors.write_text(
+        """
+roles:
+  architect_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8083
+  reap_25b_frontdoor:
+    deployment_status: benchmark_or_candidate
+    serving:
+      endpoint: http://localhost:8090
+  toolrunner:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8072
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8072
+""",
+        encoding="utf-8",
+    )
+
+    roles = _MOD._read_stack_prior_default_roles(stack_priors)
+
+    assert roles == ["architect_general", "worker_general"]
+
+
+def test_default_roles_and_architect_roles_exclude_retired_architect_coding():
+    assert "architect_coding" not in _MOD.DEFAULT_ROLES
+    assert _MOD.ARCHITECT_ROLES == {"architect_general"}
+    assert "architect_coding" not in _MOD.ROLE_COST_TIER
+
+
 def test_discover_active_roles_includes_registry_role_timeouts(tmp_path: Path):
     registry_path = tmp_path / "model_registry.yaml"
     registry_path.write_text(
@@ -51,6 +87,7 @@ server_mode:
     by_name = {role["name"]: role for role in roles}
     assert by_name["frontdoor"]["timeout_s"] == 180
     assert by_name["worker_general"]["timeout_s"] == 240
+    assert by_name["worker_general"]["cost_tier"] == 1
     assert "voice_server" not in by_name
 
 

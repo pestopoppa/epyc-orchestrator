@@ -36,6 +36,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 RESEARCH_ROOT = Path(os.environ.get(
     "EPYC_RESEARCH_ROOT", "/mnt/raid0/llm/epyc-inference-research"
 ))
+STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
 EVAL_DIR = RESEARCH_ROOT / "benchmarks" / "results" / "eval"
 SEEN_FILE = EVAL_DIR / "seen_questions.jsonl"
@@ -53,8 +54,40 @@ def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
         timeouts = data.get("runtime_defaults", {}).get("timeouts", {})
         cat_data = timeouts.get(category, {})
         return cat_data.get(key, timeouts.get("default", fallback))
-    except Exception as e:
+    except Exception:
         return fallback
+
+
+def _read_stack_prior_default_roles(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> list[str]:
+    """Read live seeding defaults from generated stack priors.
+
+    This module intentionally avoids project imports, so the generated YAML is
+    the lightest safe interface for keeping CLI defaults aligned with stack
+    changes.
+    """
+    excluded = {"toolrunner", "worker_math", "worker_summarize"}
+    try:
+        with stack_priors_path.open() as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    roles = data.get("roles", {})
+    if not isinstance(roles, dict):
+        return []
+
+    active: list[str] = []
+    for role_name, record in sorted(roles.items()):
+        if role_name in excluded or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict) or not serving.get("endpoint"):
+            continue
+        active.append(str(role_name))
+    return active
 
 
 # ── Orchestrator defaults ─────────────────────────────────────────────
@@ -72,11 +105,11 @@ DEFAULT_SUITES = [
     "thinking", "general", "instruction_precision",
     "vl", "tool_compliance",
 ]
-DEFAULT_ROLES = [
-    "frontdoor", "coder_escalation", "coder_escalation",
-    "architect_general", "architect_coding",
-    "worker_vision", "vision_escalation",
+_DEFAULT_ROLES_FALLBACK = [
+    "frontdoor", "coder_escalation", "worker_general",
+    "architect_general", "worker_vision", "vision_escalation",
 ]
+DEFAULT_ROLES = _read_stack_prior_default_roles() or list(_DEFAULT_ROLES_FALLBACK)
 # NOTE: React mode has been unified into REPL with structured_mode=True.
 # "react" is no longer a separate mode - REPL is the universal superset.
 DEFAULT_MODES = ["direct", "repl"]
@@ -84,7 +117,7 @@ DEFAULT_MODES = ["direct", "repl"]
 
 # ── Role / mode constraints ──────────────────────────────────────────
 
-ARCHITECT_ROLES = {"architect_general", "architect_coding"}
+ARCHITECT_ROLES = {role for role in DEFAULT_ROLES if role.startswith("architect_")} or {"architect_general"}
 ARCHITECT_MODES = {"direct", "delegated"}
 
 VISION_ROLES = {"worker_vision", "vision_escalation"}
@@ -98,14 +131,16 @@ VISION_MODES: dict[str, set[str]] = {
 
 ROLE_COST_TIER: dict[str, int] = {
     "worker_explore": 1,
+    "worker_general": 1,
     "worker_math": 1,
     "worker_vision": 1,
     "frontdoor": 2,
-    "coder_escalation": 2,
-    "vision_escalation": 3,
     "coder_escalation": 3,
+    "toolrunner": 3,
+    "worker_summarize": 3,
+    "vision_escalation": 3,
     "architect_general": 4,
-    "architect_coding": 5,
+    "ingest_long_context": 4,
 }
 
 ESCALATION_REWARD = 0.8
@@ -425,7 +460,7 @@ class _State:
         if self._poll_client is not None:
             try:
                 self._poll_client.close()
-            except Exception as e:
+            except Exception:
                 pass
             self._poll_client = None
 
