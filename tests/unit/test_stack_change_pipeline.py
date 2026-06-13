@@ -10,10 +10,15 @@ import yaml
 from scripts.registry.stack_change_pipeline import (
     PipelineReport,
     PipelineStep,
+    PROMOTION_GATE_TARGETS,
     SIMULATED_FIXTURE_TARGET,
     StackChangePipelineConfig,
     _print_report,
     run_stack_change_pipeline,
+)
+
+PROMOTION_GATE_COMMAND = "promotion_gate: run uv run pytest -q " + " ".join(
+    PROMOTION_GATE_TARGETS
 )
 
 
@@ -338,7 +343,7 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
     }
     assert check_report.acceptance_lines() == [
         "acceptance: no-inference checks passed",
-        f"promotion_gate: run uv run pytest -q {SIMULATED_FIXTURE_TARGET}",
+        PROMOTION_GATE_COMMAND,
     ]
 
 
@@ -374,7 +379,7 @@ def test_acceptance_lines_summarize_unique_hardcoded_surface_warnings() -> None:
         "acceptance: no-inference checks passed",
         "warnings: 5 unique (6 total)",
         "surface_warnings: production_blocker=1, waived_production_blocker=1, legacy_test=1, historical_doc=1",
-        f"promotion_gate: run uv run pytest -q {SIMULATED_FIXTURE_TARGET}",
+        PROMOTION_GATE_COMMAND,
     ]
 
 
@@ -390,7 +395,8 @@ def test_print_report_includes_promotion_gate_for_passing_check(
     output = capsys.readouterr().out
     assert "summary: ok" in output
     assert "acceptance: no-inference checks passed" in output
-    assert f"promotion_gate: run uv run pytest -q {SIMULATED_FIXTURE_TARGET}" in output
+    assert PROMOTION_GATE_COMMAND in output
+    assert SIMULATED_FIXTURE_TARGET in output
 
 
 def test_print_report_blocks_promotion_for_failed_check(

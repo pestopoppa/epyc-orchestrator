@@ -42,6 +42,8 @@ Mode = Literal["check", "update"]
 DESCRIPTOR_DIFF_LIMIT = 12
 MODEL_FIELD_DIFF_LIMIT = 8
 SIMULATED_FIXTURE_TARGET = "tests/unit/test_stack_change_pipeline_simulated_fixtures.py"
+LAUNCH_PARITY_TARGET = "tests/unit/test_build_server_command_helpers.py"
+PROMOTION_GATE_TARGETS = (SIMULATED_FIXTURE_TARGET, LAUNCH_PARITY_TARGET)
 SURFACE_WARNING_ORDER = (
     "production_blocker",
     "waived_production_blocker",
@@ -134,7 +136,7 @@ class PipelineReport:
                     )
             lines.append(
                 "promotion_gate: run uv run pytest -q "
-                f"{SIMULATED_FIXTURE_TARGET}"
+                + " ".join(PROMOTION_GATE_TARGETS)
             )
             return lines
         return [
