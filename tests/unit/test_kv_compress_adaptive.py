@@ -5,8 +5,13 @@ import pytest
 from scripts.autopilot.kv_compress import (
     compute_layer_adaptive_weights,
     LAYER_PROFILES,
+    MODEL_LAYER_COUNT_ALIASES,
     MODEL_LAYER_COUNTS,
+    PRODUCTION_PORTS,
+    _layer_count_for_role,
 )
+
+LEGACY_ARCHITECT_ROLE = "architect" "_coding"
 
 
 class TestComputeLayerAdaptiveWeights:
@@ -70,3 +75,22 @@ class TestComputeLayerAdaptiveWeights:
             w = compute_layer_adaptive_weights(n_layers, "balanced")
             assert len(w) == n_layers
             assert all(v > 0 for v in w)
+
+    def test_live_shared_role_aliases_reuse_current_layer_count(self):
+        """Shared runtimes must not carry stale independent layer counts."""
+        assert _layer_count_for_role("coder_escalation") == MODEL_LAYER_COUNTS["frontdoor"]
+        assert _layer_count_for_role("worker_summarize") == MODEL_LAYER_COUNTS["frontdoor"]
+        assert MODEL_LAYER_COUNT_ALIASES["coder_escalation"] == "frontdoor"
+
+    def test_retired_architect_role_has_no_active_layer_count(self):
+        """Retired roles fall back to uniform KV compression."""
+        assert LEGACY_ARCHITECT_ROLE not in MODEL_LAYER_COUNTS
+        assert LEGACY_ARCHITECT_ROLE not in MODEL_LAYER_COUNT_ALIASES
+        assert _layer_count_for_role(LEGACY_ARCHITECT_ROLE) is None
+
+    def test_production_ports_use_live_role_names(self):
+        assert "coder" not in PRODUCTION_PORTS
+        assert "worker" not in PRODUCTION_PORTS
+        assert LEGACY_ARCHITECT_ROLE not in PRODUCTION_PORTS
+        assert PRODUCTION_PORTS["coder_escalation"] == PRODUCTION_PORTS["frontdoor"]
+        assert PRODUCTION_PORTS["worker_general"] == 8072

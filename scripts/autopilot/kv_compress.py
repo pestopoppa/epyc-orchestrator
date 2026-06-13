@@ -226,8 +226,9 @@ def auto_compress_if_needed(
         port, slot_id, utilization * 100, threshold * 100,
     )
 
-    # Use layer-adaptive compression when role is known and profile specified
-    if role and layer_adaptive_profile and role in MODEL_LAYER_COUNTS:
+    # Use layer-adaptive compression only when the current live role has a
+    # known layer count. Unknown roles fall back to uniform weights.
+    if role and layer_adaptive_profile and _layer_count_for_role(role) is not None:
         result = compress_slot_adaptive(
             port, role, slot_id=slot_id, keep_ratio=keep_ratio,
             profile=layer_adaptive_profile, **kwargs,
@@ -310,15 +311,25 @@ def compute_layer_adaptive_weights(
     return weights
 
 
-# Known model layer counts (attention layers only, from model_registry.yaml)
+# Static fallback layer counts for layer-adaptive KV compression.
+#
+# Keep this table conservative: use it only for current live runtimes whose
+# attention-layer count is known. Unknown or recently swapped roles should fall
+# back to uniform compression until descriptors grow native layer metadata.
 MODEL_LAYER_COUNTS = {
-    "frontdoor": 28,          # Qwen3.5-35B-A3B (28 attention layers)
-    "coder_escalation": 64,   # Qwen2.5-Coder-32B
+    "frontdoor": 28,  # Qwen3.6/Qwen3.5 35B-A3B family
     "architect_general": 64,  # Qwen3.5-122B-A10B
-    "architect_coding": 64,   # REAP-246B
-    "worker_explore": 28,     # Qwen3-Coder-30B-A3B
     "ingest_long_context": 32,  # Qwen3-Next-80B-A3B (SSM layers excluded)
 }
+
+MODEL_LAYER_COUNT_ALIASES = {
+    "coder_escalation": "frontdoor",  # shared Qwen3.6 runtime
+    "worker_summarize": "frontdoor",  # shared Qwen3.6 runtime
+}
+
+
+def _layer_count_for_role(role: str) -> int | None:
+    return MODEL_LAYER_COUNTS.get(MODEL_LAYER_COUNT_ALIASES.get(role, role))
 
 
 def compress_slot_adaptive(
@@ -345,7 +356,7 @@ def compress_slot_adaptive(
     Returns:
         CompressResult with eviction details.
     """
-    n_layers = MODEL_LAYER_COUNTS.get(role)
+    n_layers = _layer_count_for_role(role)
     if n_layers is None:
         log.info("No layer count for role %r, using uniform weights", role)
         return compress_slot(port, slot_id, keep_ratio=keep_ratio, **kwargs)
@@ -364,8 +375,8 @@ def compress_slot_adaptive(
 # Production port assignments (from orchestrator_stack.py)
 PRODUCTION_PORTS = {
     "frontdoor": 8070,
-    "coder": 8070,  # shares server with frontdoor (same Qwen3.6-35B Q8 GGUF)
-    "worker": 8072,
+    "coder_escalation": 8070,  # shares server with frontdoor (same Qwen3.6 Q8 GGUF)
+    "worker_general": 8072,
     "architect_general": 8083,
 }
 

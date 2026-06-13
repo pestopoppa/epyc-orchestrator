@@ -9,6 +9,8 @@ import yaml
 from pathlib import Path
 from typing import Any, Callable
 
+from src.roles import Role
+
 logger = logging.getLogger(__name__)
 
 
@@ -158,7 +160,6 @@ class ToolRegistry:
         "worker_math": {"math", "data"},
         "worker_summarize": {"web", "data", "llm"},
         "architect_general": {"web", "data", "llm"},
-        "architect_coding": {"web", "data", "code", "llm"},
         "toolrunner": {"web", "data", "code", "math", "system", "llm"},  # All tools
     }
 
@@ -171,14 +172,20 @@ class ToolRegistry:
         if not tool:
             return False
 
+        role = self._canonical_role(role)
         category = tool.get("category", "")
         allowed = self.ROLE_PERMISSIONS.get(role, set())
 
         # toolrunner can use all, others need category match
-        if role == "toolrunner":
+        if role == str(Role.TOOLRUNNER):
             return True
 
         return category in allowed
+
+    @staticmethod
+    def _canonical_role(role: str) -> str:
+        parsed = Role.from_string(role)
+        return str(parsed) if parsed is not None else role
 
     def invoke(self, tool_name: str, role: str, **kwargs) -> Any:
         """Invoke a tool with role-based permission check.
@@ -215,8 +222,9 @@ class ToolRegistry:
         if role is None:
             return all_tools
 
+        role = self._canonical_role(role)
         allowed_categories = self.ROLE_PERMISSIONS.get(role, set())
-        if role == "toolrunner":
+        if role == str(Role.TOOLRUNNER):
             return all_tools
 
         return [
