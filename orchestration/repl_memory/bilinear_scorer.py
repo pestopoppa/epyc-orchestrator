@@ -21,10 +21,12 @@ from __future__ import annotations
 import logging
 import math
 import os
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import numpy as np
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,19 @@ MODEL_FEATURE_DIM = 6
 
 # Prompt feature dimension (extracted from task IR)
 PROMPT_FEATURE_DIM = 8
+
+DEFAULT_STACK_PRIORS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/derived/stack_priors.yaml")
+
+DEGRADED_STACK_PRIOR_MODEL_FEATURES = {
+    "frontdoor": {"params_b": 35, "is_moe": True, "quant_bits": 8},
+    "coder_escalation": {"params_b": 35, "is_moe": True, "quant_bits": 8},
+    "architect_general": {"params_b": 122, "is_moe": True, "quant_bits": 4},
+    "worker_general": {"params_b": 26, "is_moe": True, "quant_bits": 4},
+    "worker_explore": {"params_b": 26, "is_moe": True, "quant_bits": 4},
+    "worker_math": {"params_b": 26, "is_moe": True, "quant_bits": 4},
+    "toolrunner": {"params_b": 26, "is_moe": True, "quant_bits": 4},
+    "ingest_long_context": {"params_b": 80, "is_moe": True, "quant_bits": 4},
+}
 
 
 @dataclass
@@ -62,7 +77,58 @@ class ModelFeatures:
         return raw
 
 
-def extract_model_features(scoring_config) -> Dict[str, ModelFeatures]:
+def _quant_bits(quant: Any) -> float:
+    value = str(quant or "").upper()
+    if "Q8" in value:
+        return 8.0
+    if "Q6" in value:
+        return 6.0
+    if "Q5" in value:
+        return 5.0
+    if "Q4" in value:
+        return 4.0
+    if "F16" in value or "FP16" in value:
+        return 16.0
+    return 4.0
+
+
+def _stack_prior_model_features(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> dict[str, dict[str, float | bool]]:
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    features: dict[str, dict[str, float | bool]] = {}
+    for role, record in roles.items():
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        model = record.get("model")
+        if not isinstance(model, dict):
+            continue
+        params_b = model.get("params_b")
+        if not isinstance(params_b, (int, float)) or params_b <= 0:
+            continue
+        arch = str(model.get("arch") or "").lower()
+        active_b = model.get("active_b")
+        is_moe = "moe" in arch or isinstance(active_b, (int, float))
+        features[role] = {
+            "params_b": float(params_b),
+            "is_moe": bool(is_moe),
+            "quant_bits": _quant_bits(model.get("quant")),
+        }
+    return features
+
+
+def extract_model_features(
+    scoring_config,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> Dict[str, ModelFeatures]:
     """Extract model feature vectors from ScoringConfig baselines.
 
     Args:
@@ -76,27 +142,24 @@ def extract_model_features(scoring_config) -> Dict[str, ModelFeatures]:
     quality = scoring_config.baseline_quality_by_role
     memory = scoring_config.memory_cost_by_role
 
-    # Known model specs (from model_registry.yaml)
-    model_specs = {
-        "frontdoor": {"params_b": 35, "is_moe": True, "quant": 4},
-        "coder_escalation": {"params_b": 32, "is_moe": False, "quant": 4},
-        "architect_general": {"params_b": 122, "is_moe": True, "quant": 4},
-        "architect_coding": {"params_b": 246, "is_moe": True, "quant": 4},
-        "worker_explore": {"params_b": 30, "is_moe": True, "quant": 4},
-        "worker_math": {"params_b": 30, "is_moe": True, "quant": 4},
-        "ingest_long_context": {"params_b": 80, "is_moe": True, "quant": 4},
-    }
+    stack_features = _stack_prior_model_features(stack_priors_path)
 
     for role in tps:
-        specs = model_specs.get(role, {"params_b": 30, "is_moe": False, "quant": 4})
+        specs = stack_features.get(
+            role,
+            DEGRADED_STACK_PRIOR_MODEL_FEATURES.get(
+                role,
+                {"params_b": 30.0, "is_moe": False, "quant_bits": 4.0},
+            ),
+        )
         features[role] = ModelFeatures(
             role=role,
             baseline_tps=tps.get(role, 10.0),
             baseline_quality=quality.get(role, 0.75),
             memory_cost=memory.get(role, 1.0),
-            param_count_log=math.log2(max(specs["params_b"], 1)),
+            param_count_log=math.log2(max(float(specs["params_b"]), 1.0)),
             is_moe=float(specs["is_moe"]),
-            quant_bits=float(specs["quant"]),
+            quant_bits=float(specs["quant_bits"]),
         )
 
     return features

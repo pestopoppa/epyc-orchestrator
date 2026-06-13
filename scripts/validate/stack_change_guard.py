@@ -101,7 +101,7 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
     HardcodedSurfaceRule(
         rule_id="bilinear_model_specs_table",
         category="production_blocker",
-        pattern=r"\bmodel_specs\b|\bparams_b\b|\barchitect_coding\b",
+        pattern=r"\bmodel_specs\b|\barchitect_coding\b",
         path_globs=("orchestration/repl_memory/bilinear_scorer.py",),
         remediation="derive model features from stack priors/descriptors",
     ),

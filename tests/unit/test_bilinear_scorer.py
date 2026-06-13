@@ -1,5 +1,7 @@
 """Tests for DAR-4 BilinearScorer."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -42,6 +44,54 @@ class TestModelFeatures:
         assert "architect_general" in features
         assert features["frontdoor"].baseline_tps == 24.3
         assert features["frontdoor"].is_moe == 1.0
+        assert features["frontdoor"].quant_bits == 8.0
+
+    def test_extract_from_stack_priors(self, tmp_path: Path):
+        stack_priors = tmp_path / "stack_priors.yaml"
+        stack_priors.write_text(
+            """
+roles:
+  frontdoor:
+    model:
+      arch: moe-a3b
+      params_b: 35
+      active_b: 3
+      quant: Q8_0
+  worker_general:
+    model:
+      arch: moe-a4b
+      params_b: 26
+      active_b: 4
+      quant: Q4_K_M
+""",
+            encoding="utf-8",
+        )
+        cfg = ScoringConfig(
+            baseline_tps_by_role={"frontdoor": 24.3, "worker_general": 60.7},
+            baseline_quality_by_role={"frontdoor": 0.9, "worker_general": 0.8},
+            memory_cost_by_role={"frontdoor": 1.0, "worker_general": 1.0},
+        )
+
+        features = extract_model_features(cfg, stack_priors_path=stack_priors)
+
+        assert features["frontdoor"].param_count_log == pytest.approx(np.log2(35))
+        assert features["frontdoor"].is_moe == 1.0
+        assert features["frontdoor"].quant_bits == 8.0
+        assert features["worker_general"].param_count_log == pytest.approx(np.log2(26))
+        assert features["worker_general"].quant_bits == 4.0
+
+    def test_extract_model_features_uses_degraded_fallback_when_priors_missing(self, tmp_path: Path):
+        cfg = ScoringConfig(
+            baseline_tps_by_role={"coder_escalation": 24.3},
+            baseline_quality_by_role={"coder_escalation": 0.9},
+            memory_cost_by_role={"coder_escalation": 1.0},
+        )
+
+        features = extract_model_features(cfg, stack_priors_path=tmp_path / "missing.yaml")
+
+        assert features["coder_escalation"].param_count_log == pytest.approx(np.log2(35))
+        assert features["coder_escalation"].is_moe == 1.0
+        assert features["coder_escalation"].quant_bits == 8.0
 
 
 class TestPromptFeatures:
