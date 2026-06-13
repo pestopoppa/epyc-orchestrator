@@ -51,6 +51,9 @@ DEFAULT_MODEL_REGISTRY_PATH = (
 DEFAULT_MODEL_DESCRIPTOR_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "model_descriptors.yaml"
 )
+DEFAULT_STACK_PRIORS_PATH = (
+    Path(__file__).resolve().parents[2] / "orchestration" / "derived" / "stack_priors.yaml"
+)
 
 FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
     "frontdoor": 12.7,
@@ -109,6 +112,12 @@ REGISTRY_MEMORY_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
     "worker": ("worker_explore", "worker_general", "worker_math", "toolrunner"),
 }
 
+STACK_PRIOR_SCORER_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
+    # worker_explore remains a q_scorer action label but shares the live worker
+    # serving/cost priors compiled under worker_general.
+    "worker_general": ("worker_explore",),
+}
+
 
 @dataclass(frozen=True)
 class QScorerPriors:
@@ -117,6 +126,13 @@ class QScorerPriors:
     baseline_tps_by_role: Dict[str, float]
     baseline_quality_by_role: Dict[str, float]
     memory_cost_by_role: Dict[str, float]
+
+
+def _valid_quality(value: Any) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    parsed = float(value)
+    return parsed if 0.0 <= parsed <= 1.0 else None
 
 
 def _coerce_tps(value: Any) -> float | None:
@@ -184,24 +200,97 @@ def _descriptor_overall_quality(descriptor: dict[str, Any]) -> float | None:
     suite_vector = quality.get("suite_vector", {})
     if not isinstance(suite_vector, dict):
         return None
-    value = suite_vector.get("overall")
-    if not isinstance(value, (int, float)):
-        return None
-    parsed = float(value)
-    return parsed if 0.0 <= parsed <= 1.0 else None
+    return _valid_quality(suite_vector.get("overall"))
+
+
+def stack_prior_q_scorer_priors_by_role(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> QScorerPriors:
+    """Return live q_scorer priors from the generated stack-priors contract.
+
+    Local fallback tables remain available for explicit degraded/offline mode.
+    Live scoring should prefer this generated contract so model swaps, role
+    retirements, HOT/WARM tier changes, and shared-server bindings are data-only.
+    """
+    tps_by_role = dict(FALLBACK_BASELINE_TPS_BY_ROLE)
+    quality_by_role = dict(BASELINE_QUALITY_BY_ROLE)
+    memory_by_role = dict(FALLBACK_MEMORY_COST_BY_ROLE)
+
+    try:
+        import yaml
+        from src.registry.stack_priors import validate_stack_priors_contract
+
+        data = yaml.safe_load(stack_priors_path.read_text()) or {}
+        if not isinstance(data, dict):
+            raise ValueError(f"{stack_priors_path} did not parse to a mapping")
+        contract_errors = validate_stack_priors_contract(data)
+        if contract_errors:
+            raise ValueError("; ".join(contract_errors[:3]))
+    except Exception as exc:
+        logger.warning("Using fallback q_scorer priors; stack-priors load failed: %s", exc)
+        return QScorerPriors(
+            baseline_tps_by_role=tps_by_role,
+            baseline_quality_by_role=quality_by_role,
+            memory_cost_by_role=memory_by_role,
+        )
+
+    roles = data.get("roles", {})
+    if not isinstance(roles, dict):
+        return QScorerPriors(
+            baseline_tps_by_role=tps_by_role,
+            baseline_quality_by_role=quality_by_role,
+            memory_cost_by_role=memory_by_role,
+        )
+
+    for role, record in roles.items():
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        priors = record.get("priors", {})
+        if not isinstance(priors, dict):
+            continue
+        target_roles = (role, *STACK_PRIOR_SCORER_ROLE_ALIASES.get(role, ()))
+        tps = _coerce_tps(priors.get("throughput_tps"))
+        if tps is not None:
+            for target_role in target_roles:
+                tps_by_role[target_role] = tps
+        quality = _valid_quality(priors.get("quality_overall"))
+        if quality is not None:
+            quality_by_role[role] = quality
+        memory_cost = priors.get("memory_cost")
+        if isinstance(memory_cost, (int, float)) and float(memory_cost) > 0:
+            for target_role in target_roles:
+                memory_by_role[target_role] = float(memory_cost)
+
+    return QScorerPriors(
+        baseline_tps_by_role=tps_by_role,
+        baseline_quality_by_role=quality_by_role,
+        memory_cost_by_role=memory_by_role,
+    )
 
 
 def descriptor_q_scorer_priors_by_role(
     descriptor_path: Path = DEFAULT_MODEL_DESCRIPTOR_PATH,
     registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
+    stack_priors_path: Path | None = None,
 ) -> QScorerPriors:
     """Return scorer priors over existing roles, skipping ambiguous descriptors.
 
-    Descriptors are used only as an overlay on current registry/default priors.
-    Role-server conflict records are intentionally ignored until launch truth is
-    repaired, so q_scorer does not learn from descriptor rows that disagree with
-    production server bindings.
+    Generated stack priors are the live default contract. Descriptors are used
+    only as a gap-fill overlay for roles already present in the live/default
+    priors. Role-server conflict records are intentionally ignored, so q_scorer
+    does not learn from descriptor rows that disagree with production bindings.
     """
+    if stack_priors_path is None and (
+        descriptor_path == DEFAULT_MODEL_DESCRIPTOR_PATH
+        and registry_path == DEFAULT_MODEL_REGISTRY_PATH
+    ):
+        stack_priors_path = DEFAULT_STACK_PRIORS_PATH
+
+    if stack_priors_path is not None:
+        return stack_prior_q_scorer_priors_by_role(stack_priors_path)
+
     tps_by_role = registry_baseline_tps_by_role(registry_path)
     quality_by_role = dict(BASELINE_QUALITY_BY_ROLE)
     memory_by_role = registry_memory_cost_by_role(registry_path)
@@ -374,18 +463,19 @@ class ScoringConfig:
     # Only applied when answer is correct (incorrect = 0.0, no cost term).
     cost_penalty_lambda: float = 0.15
 
-    # Per-role optimized tokens/second from production benchmarks. Loaded from
-    # orchestration/model_registry.yaml at config construction time, with a
-    # fallback table for offline scripts. Used to normalize cost:
+    # Per-role optimized tokens/second from generated stack priors at config
+    # construction time, with fallback tables for degraded/offline scripts. Used
+    # to normalize cost:
     # expected_elapsed = tokens_generated / baseline_tps.
     baseline_tps_by_role: Dict[str, float] = field(
         default_factory=lambda: descriptor_q_scorer_priors_by_role().baseline_tps_by_role
     )
 
-    # Per-role quality baselines (from RESULTS.md relative benchmark scores).
+    # Per-role quality baselines from generated stack priors, with legacy
+    # benchmark fallbacks for roles whose structured quality prior is still a gap.
     # Used for quality-gap penalty: penalize using expensive model when cheap suffices.
     baseline_quality_by_role: Dict[str, float] = field(
-        default_factory=lambda: dict(BASELINE_QUALITY_BY_ROLE)
+        default_factory=lambda: descriptor_q_scorer_priors_by_role().baseline_quality_by_role
     )
 
     # Per-role memory residency cost. HOT roles normalize to 1.0 and incur no

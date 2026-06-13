@@ -37,6 +37,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from orchestration.repl_memory.q_scorer import (
+    DEFAULT_STACK_PRIORS_PATH,
     FALLBACK_BASELINE_TPS_BY_ROLE,
     FALLBACK_MEMORY_COST_BY_ROLE,
     ScoringConfig,
@@ -44,6 +45,7 @@ from orchestration.repl_memory.q_scorer import (
     descriptor_q_scorer_priors_by_role,
     registry_baseline_tps_by_role,
     registry_memory_cost_by_role,
+    stack_prior_q_scorer_priors_by_role,
 )
 from orchestration.repl_memory.progress_logger import EventType
 
@@ -77,6 +79,67 @@ def _scorer(config: ScoringConfig | None = None) -> QScorer:
     )
 
 
+def _minimal_stack_prior_record(
+    role: str,
+    *,
+    deployment_status: str = "live_stack",
+    throughput_tps: float | None = 42.0,
+    quality_overall: float | None = 0.88,
+    memory_cost: float = 1.0,
+) -> dict[str, Any]:
+    return {
+        "role": role,
+        "deployment_status": deployment_status,
+        "status": "compiled",
+        "model_id": f"{role}-model",
+        "display_name": role,
+        "serving": {
+            "endpoint": "http://localhost:9999",
+            "server_role": role,
+            "binding": "test",
+            "ports": [9999],
+            "slots": 1,
+            "tier": "hot",
+            "binary": "llama.cpp",
+            "binary_dir": None,
+            "numa_policy": "test",
+            "shared_mmap": False,
+        },
+        "priors": {
+            "throughput_tps": throughput_tps,
+            "quality_overall": quality_overall,
+            "memory_cost": memory_cost,
+        },
+        "acceleration": {},
+        "model": {},
+        "evidence": {},
+        "known_gaps": [],
+    }
+
+
+def _write_stack_priors(path: Path, roles: dict[str, dict[str, Any]]) -> Path:
+    import yaml
+
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "stack_priors_version": 1,
+                "contract": {"schema": "epyc.stack_priors", "version": 1},
+                "compiled_at": "2026-06-13T00:00:00Z",
+                "status": "compiled",
+                "coverage_scope": "unit",
+                "precedence_spec": "unit",
+                "source_artifacts": {},
+                "roles": roles,
+                "known_global_gaps": {},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 # ===== ScoringConfig defaults =====
 
 
@@ -95,6 +158,7 @@ class TestScoringConfigDefaults:
             "worker_explore",
             "worker_general",
             "worker_math",
+            "worker_summarize",
             "toolrunner",
             "worker_vision",
             "vision_escalation",
@@ -107,14 +171,62 @@ class TestScoringConfigDefaults:
         assert cfg.baseline_tps_by_role["frontdoor"] == pytest.approx(24.3)
         assert cfg.baseline_tps_by_role["coder_escalation"] == pytest.approx(24.3)
         assert cfg.baseline_tps_by_role["architect_general"] == pytest.approx(12.19)
-        assert cfg.baseline_tps_by_role["ingest_long_context"] == pytest.approx(14.4)
+        assert cfg.baseline_tps_by_role["ingest_long_context"] == pytest.approx(20.8)
         assert cfg.baseline_tps_by_role["worker_explore"] == pytest.approx(60.7)
         assert cfg.baseline_tps_by_role["worker_general"] == pytest.approx(60.7)
         assert cfg.baseline_tps_by_role["worker_math"] == pytest.approx(60.7)
+        assert cfg.baseline_tps_by_role["worker_summarize"] == pytest.approx(24.3)
         assert cfg.baseline_tps_by_role["toolrunner"] == pytest.approx(60.7)
         assert cfg.baseline_tps_by_role["worker_vision"] == pytest.approx(20.0)
         assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(27.6)
         assert "architect_coding" not in cfg.baseline_tps_by_role
+
+    def test_stack_prior_priors_load_live_roles_and_skip_candidates(self, tmp_path):
+        priors_path = _write_stack_priors(
+            tmp_path / "stack_priors.yaml",
+            {
+                "frontdoor": _minimal_stack_prior_record(
+                    "frontdoor",
+                    throughput_tps=31.0,
+                    quality_overall=0.91,
+                    memory_cost=1.0,
+                ),
+                "coder_escalation": _minimal_stack_prior_record(
+                    "coder_escalation",
+                    throughput_tps=31.0,
+                    quality_overall=0.91,
+                    memory_cost=1.0,
+                ),
+                "candidate_arch": _minimal_stack_prior_record(
+                    "candidate_arch",
+                    deployment_status="benchmark_or_candidate",
+                    throughput_tps=99.0,
+                    quality_overall=0.99,
+                    memory_cost=3.0,
+                ),
+            },
+        )
+
+        priors = stack_prior_q_scorer_priors_by_role(priors_path)
+
+        assert priors.baseline_tps_by_role["frontdoor"] == pytest.approx(31.0)
+        assert priors.baseline_tps_by_role["coder_escalation"] == pytest.approx(31.0)
+        assert priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.91)
+        assert priors.memory_cost_by_role["frontdoor"] == pytest.approx(1.0)
+        assert "candidate_arch" not in priors.baseline_tps_by_role
+        retired_role = "architect" + "_coding"
+        assert retired_role not in priors.baseline_tps_by_role
+
+    def test_stack_prior_priors_fall_back_when_artifact_missing(self, tmp_path):
+        missing = tmp_path / "missing_stack_priors.yaml"
+
+        priors = stack_prior_q_scorer_priors_by_role(missing)
+
+        assert priors.baseline_tps_by_role == FALLBACK_BASELINE_TPS_BY_ROLE
+        assert priors.memory_cost_by_role == FALLBACK_MEMORY_COST_BY_ROLE
+
+    def test_default_stack_priors_path_exists(self):
+        assert DEFAULT_STACK_PRIORS_PATH.exists()
 
     def test_baseline_tps_falls_back_when_registry_missing(self, tmp_path):
         missing = tmp_path / "missing.yaml"
