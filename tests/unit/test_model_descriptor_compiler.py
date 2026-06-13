@@ -9,6 +9,7 @@ import yaml
 
 from src.registry.model_descriptors import (
     DescriptorCompileError,
+    _canonical_model_id,
     compile_model_descriptors,
     write_model_descriptors,
 )
@@ -17,6 +18,22 @@ from src.registry.model_descriptors import (
 def _write_yaml(path: Path, data: dict) -> Path:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def test_canonical_model_id_matches_stable_descriptor_policy() -> None:
+    assert _canonical_model_id("Qwen3.6-35B-A3B-Q8_0", "Q8_0") == "qwen3.6-35b-a3b-q8_0"
+    assert (
+        _canonical_model_id("gemma-4-26B-A4B-it-Q4_K_M", "Q4_K_M")
+        == "gemma4-26b-a4b-q4_k_m"
+    )
+    assert (
+        _canonical_model_id("Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf", "Q4_K_M")
+        == "qwen3-next-80b-a3b-q4_k_m"
+    )
+    assert (
+        _canonical_model_id("Qwen2.5-VL-7B-Instruct", "Q4_K_M")
+        == "qwen2.5-vl-7b-q4_k_m"
+    )
 
 
 def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
@@ -101,7 +118,7 @@ def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
     assert compiled["status"] == "compiled"
     assert len(compiled["models"]) == 1
     model = compiled["models"][0]
-    assert model["model_id"] == "qwen3.6-35b-a3b-q8-0"
+    assert model["model_id"] == "qwen3.6-35b-a3b-q8_0"
     assert model["role_bindings"]["roles"] == [
         "coder_escalation",
         "frontdoor",

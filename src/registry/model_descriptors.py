@@ -106,17 +106,22 @@ def _canonical_slug(value: str) -> str:
     value = value.rsplit("/", 1)[-1]
     value = re.sub(r"\.gguf$", "", value, flags=re.IGNORECASE)
     value = re.sub(r"-0+\d+-of-0+\d+$", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"[^A-Za-z0-9.]+", "-", value).strip("-").lower()
+    value = re.sub(r"[^A-Za-z0-9._]+", "-", value).strip("-").lower()
     value = re.sub(r"-+", "-", value)
     return value
 
 
 def _canonical_model_id(name: str, quant: str | None) -> str:
-    slug = _canonical_slug(name)
+    base = name.rsplit("/", 1)[-1]
+    base = re.sub(r"\.gguf$", "", base, flags=re.IGNORECASE)
+    base = re.sub(r"-0+\d+-of-0+\d+$", "", base, flags=re.IGNORECASE)
     if quant:
-        quant_slug = _canonical_slug(quant)
-        if not slug.endswith(quant_slug):
-            slug = f"{slug}-{quant_slug}"
+        base = re.sub(rf"[-_]?{re.escape(quant)}$", "", base, flags=re.IGNORECASE)
+    slug = _canonical_slug(base)
+    slug = re.sub(r"-(instruct|it|assistant)$", "", slug)
+    slug = re.sub(r"^gemma-(\d)", r"gemma\1", slug)
+    if quant:
+        slug = f"{slug}-{_canonical_slug(quant)}"
     return slug
 
 
