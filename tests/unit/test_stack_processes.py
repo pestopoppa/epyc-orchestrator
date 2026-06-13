@@ -36,6 +36,38 @@ def test_scan_known_ports_only_returns_listeners(monkeypatch) -> None:
     assert stack_processes.scan_known_ports([9000, 8000, 9000]) == {8000: [8001]}
 
 
+def test_process_cmdline_parses_proc_tokens(monkeypatch) -> None:
+    class _FakePath:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def read_bytes(self) -> bytes:
+            assert self.path == "/proc/123/cmdline"
+            return b"llama-server\0-m\0/models/current.gguf\0"
+
+    monkeypatch.setattr(stack_processes, "Path", _FakePath)
+
+    assert stack_processes.process_cmdline(123) == [
+        "llama-server",
+        "-m",
+        "/models/current.gguf",
+    ]
+
+
+def test_process_cmdline_returns_empty_when_unavailable(monkeypatch) -> None:
+    class _FakePath:
+        def __init__(self, _path: str) -> None:
+            pass
+
+        def read_bytes(self) -> bytes:
+            raise FileNotFoundError
+
+    monkeypatch.setattr(stack_processes, "Path", _FakePath)
+
+    assert stack_processes.process_cmdline(123) == []
+    assert stack_processes.process_cmdline(-1) == []
+
+
 def test_kill_process_tree_skips_current_process(monkeypatch) -> None:
     killed: list[tuple[int, signal.Signals]] = []
     alive = {222}

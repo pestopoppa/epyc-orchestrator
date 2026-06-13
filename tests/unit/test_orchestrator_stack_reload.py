@@ -142,3 +142,69 @@ def test_scan_known_ports_includes_warm_aux_and_docker(monkeypatch) -> None:
 
     assert stack_commands._scan_known_ports() == {}
     assert captured == [[8000, 8070, 8085, 8088, 8180, 8190, 9000, 9001]]
+
+
+def test_status_attestation_detects_expected_model_basename() -> None:
+    info = stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=123,
+        port=8070,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="frontdoor.log",
+    )
+
+    assert stack_commands._status_attestation(
+        info,
+        alive=True,
+        cmdline=["llama-server", "-m", "/canonical/current.gguf"],
+    ) == "ok"
+
+
+def test_status_attestation_detects_model_drift() -> None:
+    info = stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=123,
+        port=8070,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="frontdoor.log",
+    )
+
+    assert stack_commands._status_attestation(
+        info,
+        alive=True,
+        cmdline=["llama-server", "-m", "/models/stale.gguf"],
+    ) == "model-drift"
+
+
+def test_cmd_status_prints_model_attestation_warning(monkeypatch, capsys) -> None:
+    info = stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=123,
+        port=8070,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="frontdoor.log",
+    )
+    saved: list[dict[str, stack_commands.ProcessInfo]] = []
+
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {"frontdoor": info})
+    monkeypatch.setattr(stack_commands, "save_state", lambda state: saved.append(dict(state)))
+    monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(stack_commands, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "process_cmdline",
+        lambda _pid: ["llama-server", "-m", "/models/stale.gguf"],
+    )
+
+    rc = stack_commands.cmd_status(Namespace())
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ATTEST" in out
+    assert "model-drift" in out
+    assert "expected current.gguf" in out
+    assert "live cmdline has stale.gguf" in out
+    assert saved[-1] == {"frontdoor": info}

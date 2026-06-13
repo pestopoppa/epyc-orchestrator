@@ -156,6 +156,35 @@ def _scan_known_ports() -> dict[int, list[int]]:
     return _stack_processes.scan_known_ports(known_ports)
 
 
+def _attestable_model_path(model_path: str) -> bool:
+    """Return True for concrete GGUF paths whose launch cmdline can be checked."""
+    return model_path.endswith(".gguf") and Path(model_path).is_absolute()
+
+
+def _status_attestation(info: ProcessInfo, alive: bool, cmdline: list[str]) -> str:
+    """Classify whether live process args match persisted stack state."""
+    if info.pid == -1:
+        return "docker"
+    if not alive:
+        return "dead"
+    if info.model_path == "uvicorn":
+        if not cmdline:
+            return "unknown"
+        return "ok" if any("uvicorn" in token for token in cmdline) else "unknown"
+    if not _attestable_model_path(info.model_path):
+        return "n/a"
+    if not cmdline:
+        return "unknown"
+    if info.model_path in cmdline:
+        return "ok"
+    expected_name = Path(info.model_path).name
+    if any(Path(token).name == expected_name for token in cmdline):
+        return "ok"
+    if any(token.endswith(".gguf") for token in cmdline):
+        return "model-drift"
+    return "unknown"
+
+
 def _preserved_process_info(
     role: str,
     port: int,
@@ -1031,14 +1060,16 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 0
 
     print()
-    print(f"{'COMPONENT':<25} {'PORT':<8} {'PID':<10} {'STATUS':<10} {'MODEL'}")
-    print("-" * 80)
+    print(f"{'COMPONENT':<25} {'PORT':<8} {'PID':<10} {'STATUS':<10} {'ATTEST':<12} {'MODEL'}")
+    print("-" * 96)
 
     seen_pids = set()
+    attestation_warnings: list[str] = []
     for name, info in sorted(state.items()):
         if info.pid != -1 and info.pid in seen_pids:
             continue  # Skip duplicates (roles sharing servers)
         seen_pids.add(info.pid)
+        cmdline: list[str] = []
 
         if info.pid == -1:
             # Docker-managed container
@@ -1072,12 +1103,28 @@ def cmd_status(args: argparse.Namespace) -> int:
                     healthy = wait_for_health(info.port, timeout=3)
             status = "healthy" if healthy else ("running" if alive else "dead")
             pid_str = str(info.pid)
+            cmdline = _stack_processes.process_cmdline(info.pid) if alive else []
 
         model = Path(info.model_path).stem if info.model_path != "uvicorn" else "uvicorn"
+        attestation = _status_attestation(info, alive, cmdline)
+        if attestation == "model-drift":
+            expected = Path(info.model_path).name
+            actual_models = ", ".join(Path(token).name for token in cmdline if token.endswith(".gguf"))
+            attestation_warnings.append(
+                f"{name} pid {info.pid} expected {expected}; live cmdline has {actual_models}"
+            )
 
-        print(f"{name:<25} {info.port:<8} {pid_str:<10} {status:<10} {model[:30]}")
+        print(
+            f"{name:<25} {info.port:<8} {pid_str:<10} {status:<10} "
+            f"{attestation:<12} {model[:30]}"
+        )
 
     print()
+    if attestation_warnings:
+        print("Attestation warnings:")
+        for warning in attestation_warnings:
+            print(f"  [!] {warning}")
+        print()
     print(f"State file: {STATE_FILE}")
     save_state(state)
     return 0

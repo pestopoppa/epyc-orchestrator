@@ -58,6 +58,21 @@ def pid_alive(pid: int) -> bool:
         return True
 
 
+def process_cmdline(pid: int) -> list[str]:
+    """Return /proc cmdline tokens for a pid, or [] when unavailable."""
+    if pid <= 0:
+        return []
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except (FileNotFoundError, PermissionError, OSError):
+        return []
+    return [
+        part.decode(errors="replace")
+        for part in raw.split(b"\0")
+        if part
+    ]
+
+
 def child_pids(pid: int, timeout: int = 3) -> list[int]:
     """Return direct child pids for a process."""
     try:
