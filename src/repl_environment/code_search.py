@@ -32,6 +32,7 @@ import logging
 import os
 import shutil
 import subprocess
+import time
 from typing import Any
 
 
@@ -310,6 +311,52 @@ class _CodeSearchMixin:
             output = json.dumps({"results": [], "error": str(e)})
             return self._maybe_wrap_tool_output(output)
 
+    def _record_colgrep_telemetry(
+        self,
+        *,
+        query: str,
+        limit: int,
+        latency_ms: int,
+        fallback: bool,
+        reason: str | None = None,
+        returncode: int | None = None,
+        result_count: int | None = None,
+    ) -> None:
+        """Persist ColGREP timing/fallback telemetry for soak-gate analysis."""
+        event = {
+            "engine": "colgrep",
+            "query": query[:200],
+            "limit": limit,
+            "latency_ms": latency_ms,
+            "fallback": fallback,
+        }
+        if reason:
+            event["fallback_reason"] = reason
+        if returncode is not None:
+            event["returncode"] = returncode
+        if result_count is not None:
+            event["result_count"] = result_count
+
+        telemetry = self.artifacts.setdefault("_code_search_telemetry", [])
+        if isinstance(telemetry, list):
+            telemetry.append(event)
+        else:
+            self.artifacts["_code_search_telemetry"] = [event]
+
+        if fallback:
+            logger.warning(
+                "ColGREP code_search fallback reason=%s latency_ms=%d returncode=%s",
+                reason or "unknown",
+                latency_ms,
+                returncode,
+            )
+        else:
+            logger.info(
+                "ColGREP code_search success latency_ms=%d result_count=%s",
+                latency_ms,
+                result_count,
+            )
+
     def _colgrep_search(self, query: str, limit: int) -> str:
         """Internal: execute code_search via the ColGREP CLI binary.
 
@@ -317,6 +364,7 @@ class _CodeSearchMixin:
         NextPLAID on missing binary, timeout, or non-zero exit so callers
         always get a valid response shape.
         """
+        started = time.perf_counter()
         lock = getattr(self, "_state_lock", None)
         if lock:
             with lock:
@@ -328,6 +376,13 @@ class _CodeSearchMixin:
         proj_path = os.environ.get("REPL_COLGREP_PATH", COLGREP_DEFAULT_PATH)
         if not shutil.which(bin_path) and not os.path.isfile(bin_path):
             logger.warning("ColGREP binary not found at %s, falling back to NextPLAID", bin_path)
+            self._record_colgrep_telemetry(
+                query=query,
+                limit=limit,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                fallback=True,
+                reason="missing_binary",
+            )
             return self._nextplaid_search(query, index="code", limit=limit)
 
         env = {**os.environ, "NEXT_PLAID_FORCE_CPU": "1"}
@@ -360,19 +415,49 @@ class _CodeSearchMixin:
             logger.warning(
                 "ColGREP timed out after %ds, falling back to NextPLAID", COLGREP_TIMEOUT_S
             )
+            self._record_colgrep_telemetry(
+                query=query,
+                limit=limit,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                fallback=True,
+                reason="timeout",
+            )
             return self._nextplaid_search(query, index="code", limit=limit)
         except OSError as e:
             logger.warning("ColGREP subprocess failed: %s, falling back to NextPLAID", e)
+            self._record_colgrep_telemetry(
+                query=query,
+                limit=limit,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                fallback=True,
+                reason="oserror",
+            )
             return self._nextplaid_search(query, index="code", limit=limit)
 
         if proc.returncode != 0:
             logger.warning("ColGREP exit %d: %s", proc.returncode, proc.stderr[:500])
+            self._record_colgrep_telemetry(
+                query=query,
+                limit=limit,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                fallback=True,
+                reason="nonzero_exit",
+                returncode=proc.returncode,
+            )
             return self._nextplaid_search(query, index="code", limit=limit)
 
         try:
             raw = json.loads(proc.stdout) if proc.stdout.strip() else []
         except json.JSONDecodeError as e:
             logger.warning("ColGREP JSON parse failed: %s", e)
+            self._record_colgrep_telemetry(
+                query=query,
+                limit=limit,
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                fallback=True,
+                reason="bad_json",
+                returncode=proc.returncode,
+            )
             return self._nextplaid_search(query, index="code", limit=limit)
 
         results = []
@@ -413,10 +498,32 @@ class _CodeSearchMixin:
             except Exception:
                 logger.debug("Frecency boost failed", exc_info=True)
 
-        response = {"results": results, "index": "code", "query": query, "engine": "colgrep"}
+        latency_ms = round((time.perf_counter() - started) * 1000)
+        self._record_colgrep_telemetry(
+            query=query,
+            limit=limit,
+            latency_ms=latency_ms,
+            fallback=False,
+            returncode=proc.returncode,
+            result_count=len(results),
+        )
+
+        response = {
+            "results": results,
+            "index": "code",
+            "query": query,
+            "engine": "colgrep",
+            "latency_ms": latency_ms,
+        }
         self._exploration_log.add_event(
             "code_search",
-            {"query": query, "index": "code", "engine": "colgrep"},
+            {
+                "query": query,
+                "index": "code",
+                "engine": "colgrep",
+                "latency_ms": latency_ms,
+                "fallback": False,
+            },
             response,
         )
         node_id = self._research_context.add(

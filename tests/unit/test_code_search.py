@@ -555,6 +555,7 @@ class TestColgrepIntegration:
         assert result["index"] == "code"
         assert result["engine"] == "colgrep"
         assert result["query"] == "frecency"
+        assert "latency_ms" in result
         assert len(result["results"]) == 2
         # File path is relativized against REPL_COLGREP_PATH
         assert result["results"][0]["file"] == "repl_environment/file_recency.py"
@@ -563,6 +564,13 @@ class TestColgrepIntegration:
         assert result["results"][0]["unit"] == "function:frecency_score"
         # rawcode unit_type → no "unit" field (matches NextPLAID rawcode behavior)
         assert "unit" not in result["results"][1]
+        telemetry = repl.artifacts["_code_search_telemetry"][-1]
+        assert telemetry["engine"] == "colgrep"
+        assert telemetry["fallback"] is False
+        assert telemetry["result_count"] == 2
+        assert isinstance(telemetry["latency_ms"], int)
+        assert repl._exploration_log.events[-1].args["engine"] == "colgrep"
+        assert repl._exploration_log.events[-1].args["fallback"] is False
 
     def test_colgrep_missing_binary_falls_back(self, repl, monkeypatch):
         """Missing colgrep binary → falls back to NextPLAID, no exception."""
@@ -578,6 +586,10 @@ class TestColgrepIntegration:
         # NextPLAID engine path → no "engine" key (only colgrep sets it)
         assert "engine" not in result
         assert result["index"] == "code"
+        telemetry = repl.artifacts["_code_search_telemetry"][-1]
+        assert telemetry["fallback"] is True
+        assert telemetry["fallback_reason"] == "missing_binary"
+        assert isinstance(telemetry["latency_ms"], int)
 
     def test_colgrep_timeout_falls_back(self, repl, monkeypatch, tmp_path):
         """Subprocess timeout → falls back to NextPLAID."""
@@ -596,6 +608,9 @@ class TestColgrepIntegration:
         output = raw.replace("<<<TOOL_OUTPUT>>>", "").replace("<<<END_TOOL_OUTPUT>>>", "").strip()
         result = json.loads(output)
         assert "engine" not in result  # fell back to NextPLAID
+        telemetry = repl.artifacts["_code_search_telemetry"][-1]
+        assert telemetry["fallback"] is True
+        assert telemetry["fallback_reason"] == "timeout"
 
     def test_colgrep_nonzero_exit_falls_back(self, repl, monkeypatch, tmp_path):
         """Non-zero colgrep exit → falls back to NextPLAID."""
@@ -614,6 +629,10 @@ class TestColgrepIntegration:
         output = raw.replace("<<<TOOL_OUTPUT>>>", "").replace("<<<END_TOOL_OUTPUT>>>", "").strip()
         result = json.loads(output)
         assert "engine" not in result
+        telemetry = repl.artifacts["_code_search_telemetry"][-1]
+        assert telemetry["fallback"] is True
+        assert telemetry["fallback_reason"] == "nonzero_exit"
+        assert telemetry["returncode"] == 2
 
     def test_colgrep_bad_json_falls_back(self, repl, monkeypatch, tmp_path):
         """Malformed colgrep stdout → falls back to NextPLAID."""
@@ -632,6 +651,9 @@ class TestColgrepIntegration:
         output = raw.replace("<<<TOOL_OUTPUT>>>", "").replace("<<<END_TOOL_OUTPUT>>>", "").strip()
         result = json.loads(output)
         assert "engine" not in result
+        telemetry = repl.artifacts["_code_search_telemetry"][-1]
+        assert telemetry["fallback"] is True
+        assert telemetry["fallback_reason"] == "bad_json"
 
     def test_colgrep_doc_search_unaffected(self, repl, monkeypatch):
         """REPL_COLGREP=1 does NOT route doc_search through colgrep (code-only)."""
