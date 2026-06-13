@@ -1,11 +1,11 @@
 descriptor_version: 3
-compiled_at: '2026-06-13T20:40:13Z'
-status: compiled_with_gaps
+compiled_at: '2026-06-13T20:48:07Z'
+status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 2ea28dd
+    repo_commit: 865b2b1
     sha256: 4b83920a5769389262fabfafb4f67f8422cdaeaa5f90bf926905d4a356bd9474
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
@@ -39,6 +39,15 @@ models:
     runtime_aliases:
     - worker
     shared_mmap: true
+    alias_overrides:
+    - role: toolrunner
+      served_by: worker_general
+      ignored_model_id: qwen3-coder-30b-a3b-q4_k_m
+      reason: server_mode.shared_with runtime takes precedence
+    - role: worker_math
+      served_by: worker_general
+      ignored_model_id: qwen2.5-math-7b-q4_k_m
+      reason: server_mode.shared_with runtime takes precedence
   quality:
     suite_vector:
       overall: 0.9
@@ -104,9 +113,7 @@ models:
     - 8282
     - 8382
     server_role: worker
-  known_gaps:
-  - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
-  - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
+  known_gaps: []
 - model_id: qwen2.5-vl-7b-q4_k_m
   display_name: Qwen2.5-VL-7B-Instruct
   family: qwen2.5-vl

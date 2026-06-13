@@ -309,7 +309,15 @@ def test_compile_merges_shared_alias_mismatch_into_runtime_model(tmp_path: Path)
     assert model["serving"]["ports"] == [8072, 8082, 8182, 8282, 8382]
     assert model["speed"]["quarter_48t_tps"] == 60.7
     assert not any(gap.startswith("Role-server conflict:") for gap in model["known_gaps"])
-    assert any("ignored non-live role model metadata qwen2.5-math" in gap for gap in model["known_gaps"])
+    assert not any("ignored non-live role model metadata" in gap for gap in model["known_gaps"])
+    assert model["role_bindings"]["alias_overrides"] == [
+        {
+            "role": "worker_math",
+            "served_by": "worker_general",
+            "ignored_model_id": "qwen2.5-math-7b-q4_k_m",
+            "reason": "server_mode.shared_with runtime takes precedence",
+        }
+    ]
 
 
 def test_compile_refuses_missing_load_bearing_fields(tmp_path: Path) -> None:

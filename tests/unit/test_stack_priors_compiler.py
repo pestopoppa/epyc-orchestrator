@@ -234,6 +234,14 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
                         "roles": ["worker_general", "worker_math", "toolrunner"],
                         "server_roles": ["worker"],
                         "shared_mmap": True,
+                        "alias_overrides": [
+                            {
+                                "role": "worker_math",
+                                "served_by": "worker_general",
+                                "ignored_model_id": "qwen2.5-math-7b-q4_k_m",
+                                "reason": "server_mode.shared_with runtime takes precedence",
+                            }
+                        ],
                     },
                     "quality": {"suite_vector": {"overall": 0.9}, "measured": []},
                     "speed": {"quarter_48t_tps": 60.7, "measured": []},
@@ -242,9 +250,7 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
                         "draft_compat": ["gemma4-26b-a4b-assistant-q8"],
                     },
                     "serving": {"ports": [8072, 8082], "binary": "ik-pr1744"},
-                    "known_gaps": [
-                        "Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m",
-                    ],
+                    "known_gaps": [],
                 }
             ]
         },
@@ -263,6 +269,15 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
         assert record["acceleration"]["spec_type"] == "mtp"
         assert record["priors"]["throughput_tps"] == 60.7
         assert not any(gap.startswith("Role-server conflict:") for gap in record["known_gaps"])
+        assert record["known_gaps"] == []
+        assert record["evidence"]["alias_overrides"] == [
+            {
+                "role": "worker_math",
+                "served_by": "worker_general",
+                "ignored_model_id": "qwen2.5-math-7b-q4_k_m",
+                "reason": "server_mode.shared_with runtime takes precedence",
+            }
+        ]
 
     assert priors["roles"]["worker_general"]["serving"]["ports"] == [
         8072,

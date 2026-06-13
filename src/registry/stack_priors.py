@@ -899,6 +899,9 @@ def _role_record(
                 "spec": str(PRECEDENCE_SPEC),
             },
             "descriptor_server_roles": _descriptor_server_roles(descriptor),
+            "alias_overrides": copy.deepcopy(
+                (descriptor.get("role_bindings") or {}).get("alias_overrides") or []
+            ),
             "quality": copy.deepcopy((descriptor.get("quality") or {}).get("measured", [])),
             "speed": copy.deepcopy((descriptor.get("speed") or {}).get("measured", [])),
         },

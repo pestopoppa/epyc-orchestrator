@@ -48,6 +48,11 @@ APIs that record source evidence and precedence.
   server. Example: `coder_escalation` shares the frontdoor Qwen3.6 Q8 server;
   consumers must not double-count the full model load as separate memory
   pressure.
+- When a `server_mode.shared_with` alias has stale role-local model metadata,
+  generated descriptors must preserve the ignored role metadata under
+  `role_bindings.alias_overrides` and generated stack priors must expose it in
+  `evidence.alias_overrides`. This is provenance for a resolved alias, not a
+  `known_gaps` item.
 - Retired roles are absent from generated live priors unless explicitly marked
   legacy, benchmark-only, or test-only. Example: `architect_coding` must not
   appear in active q_scorer priors, launch manifests, or active routing chains.
@@ -66,6 +71,8 @@ Every generated stack-prior role record must include:
 - tier and derived memory cost
 - throughput prior and quality prior or explicit gap
 - acceleration/serving requirements
+- resolved alias provenance when role-local metadata was ignored in favor of a
+  shared runtime
 - source paths, hashes, and precedence notes
 - known gaps/conflicts copied from source descriptors
 

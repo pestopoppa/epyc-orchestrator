@@ -417,8 +417,10 @@ def test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor(
     model = descriptors["models"][0]
     assert model["role_bindings"]["roles"] == ["toolrunner", "worker_general", "worker_math"]
     assert not any(gap.startswith("Role-server conflict:") for gap in model["known_gaps"])
-    assert any("ignored non-live role model metadata qwen2.5-math" in gap for gap in model["known_gaps"])
-    assert any("ignored non-live role model metadata qwen3-coder" in gap for gap in model["known_gaps"])
+    assert not any("ignored non-live role model metadata" in gap for gap in model["known_gaps"])
+    alias_overrides = model["role_bindings"]["alias_overrides"]
+    ignored_models = {override["ignored_model_id"] for override in alias_overrides}
+    assert ignored_models == {"qwen2.5-math-7b-q4_k_m", "qwen3-coder-30b-a3b-q4_k_m"}
 
     priors = yaml.safe_load(config.stack_priors.read_text(encoding="utf-8"))
     primary_runtime = priors["roles"]["worker_general"]["serving"]["launch"]["runtime"]

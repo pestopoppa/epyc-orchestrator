@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T20:40:14Z'
-status: compiled_with_gaps
+compiled_at: '2026-06-13T20:48:07Z'
+status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: 4b83920a5769389262fabfafb4f67f8422cdaeaa5f90bf926905d4a356bd9474
-    repo_commit: 2ea28dd
+    repo_commit: 865b2b1
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 5954c7fad1de2e26c5478703a68e3fb28c7bd16f6a741993816a501bf5aa429b
-    repo_commit: 2ea28dd
+    sha256: 0f7bd85e321e8dc79769fbfcfb7a248d6d7b134e9d76f89380734c7c9ea0a19b
+    repo_commit: 865b2b1
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: e3f80ad39be0bf0d1ced00105d83f5204849b7bfac0acdff423ed9d21573a2f6
-    repo_commit: 2ea28dd
+    repo_commit: 865b2b1
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: 2ea28dd
+    repo_commit: 865b2b1
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 871b106644c89528419ef3521f190550f194c9d14fd83d3277208a960ea9d828
-    repo_commit: 2ea28dd
+    repo_commit: 865b2b1
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: a13a6f5b6cf6ec4f37be1a42083128f38cfba023dbfc45508149572741325648
-    repo_commit: 2ea28dd
+    repo_commit: 865b2b1
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 2ea28dd
+    repo_commit: 865b2b1
 roles:
   architect_general:
     role: architect_general
@@ -179,6 +179,7 @@ roles:
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - architect_general
+      alias_overrides: []
       quality:
       - date: null
         protocol: registry performance block
@@ -298,6 +299,7 @@ roles:
       descriptor_server_roles:
       - coder_escalation
       - frontdoor
+      alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
@@ -440,6 +442,7 @@ roles:
       descriptor_server_roles:
       - coder_escalation
       - frontdoor
+      alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
@@ -583,6 +586,7 @@ roles:
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - ingest_long_context
+      alias_overrides: []
       quality:
       - date: null
         protocol: registry benchmark_score
@@ -653,6 +657,7 @@ roles:
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - architect_general
+      alias_overrides: []
       quality:
       - date: null
         protocol: registry performance block
@@ -740,6 +745,7 @@ roles:
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - reap_25b
+      alias_overrides: []
       quality:
       - date: '2026-03-24'
         protocol: registry performance block
@@ -762,7 +768,7 @@ roles:
   toolrunner:
     role: toolrunner
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: gemma4-26b-a4b-q4_k_m
     display_name: gemma-4-26B-A4B-it-Q4_K_M
     serving:
@@ -869,6 +875,15 @@ roles:
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - worker
+      alias_overrides:
+      - role: toolrunner
+        served_by: worker_general
+        ignored_model_id: qwen3-coder-30b-a3b-q4_k_m
+        reason: server_mode.shared_with runtime takes precedence
+      - role: worker_math
+        served_by: worker_general
+        ignored_model_id: qwen2.5-math-7b-q4_k_m
+        reason: server_mode.shared_with runtime takes precedence
       quality:
       - date: null
         protocol: registry performance block
@@ -895,9 +910,7 @@ roles:
       - date: null
         protocol: server_mode throughput
         value_tps: 60.7
-    known_gaps:
-    - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
-    - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
+    known_gaps: []
   vision_escalation:
     role: vision_escalation
     deployment_status: live_stack
@@ -1024,6 +1037,7 @@ roles:
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles: []
+      alias_overrides: []
       quality:
       - date: '2026-03-04'
         protocol: registry performance block
@@ -1042,7 +1056,7 @@ roles:
   worker_general:
     role: worker_general
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: gemma4-26b-a4b-q4_k_m
     display_name: gemma-4-26B-A4B-it-Q4_K_M
     serving:
@@ -1170,6 +1184,15 @@ roles:
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - worker
+      alias_overrides:
+      - role: toolrunner
+        served_by: worker_general
+        ignored_model_id: qwen3-coder-30b-a3b-q4_k_m
+        reason: server_mode.shared_with runtime takes precedence
+      - role: worker_math
+        served_by: worker_general
+        ignored_model_id: qwen2.5-math-7b-q4_k_m
+        reason: server_mode.shared_with runtime takes precedence
       quality:
       - date: null
         protocol: registry performance block
@@ -1196,13 +1219,11 @@ roles:
       - date: null
         protocol: server_mode throughput
         value_tps: 60.7
-    known_gaps:
-    - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
-    - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
+    known_gaps: []
   worker_math:
     role: worker_math
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: gemma4-26b-a4b-q4_k_m
     display_name: gemma-4-26B-A4B-it-Q4_K_M
     serving:
@@ -1309,6 +1330,15 @@ roles:
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - worker
+      alias_overrides:
+      - role: toolrunner
+        served_by: worker_general
+        ignored_model_id: qwen3-coder-30b-a3b-q4_k_m
+        reason: server_mode.shared_with runtime takes precedence
+      - role: worker_math
+        served_by: worker_general
+        ignored_model_id: qwen2.5-math-7b-q4_k_m
+        reason: server_mode.shared_with runtime takes precedence
       quality:
       - date: null
         protocol: registry performance block
@@ -1335,9 +1365,7 @@ roles:
       - date: null
         protocol: server_mode throughput
         value_tps: 60.7
-    known_gaps:
-    - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
-    - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
+    known_gaps: []
   worker_summarize:
     role: worker_summarize
     deployment_status: live_stack
@@ -1433,6 +1461,7 @@ roles:
       descriptor_server_roles:
       - coder_escalation
       - frontdoor
+      alias_overrides: []
       quality:
       - date: '2026-05-04'
         protocol: registry benchmark_score
@@ -1552,6 +1581,7 @@ roles:
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles: []
+      alias_overrides: []
       quality:
       - date: '2026-03-04'
         protocol: registry performance block
@@ -1567,13 +1597,4 @@ roles:
         baseline_tps: 15.28
         optimized_tps: 20.0
     known_gaps: []
-known_global_gaps:
-  toolrunner:
-  - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
-  - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
-  worker_general:
-  - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
-  - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
-  worker_math:
-  - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
-  - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
+known_global_gaps: {}

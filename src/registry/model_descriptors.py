@@ -617,6 +617,21 @@ def _merge_descriptor(target: dict[str, Any], incoming: dict[str, Any]) -> None:
         values = incoming["role_bindings"].get(key) or []
         existing = target["role_bindings"].setdefault(key, [])
         target["role_bindings"][key] = sorted(set(existing) | set(values))
+    alias_overrides = incoming["role_bindings"].get("alias_overrides") or []
+    if alias_overrides:
+        existing_overrides = target["role_bindings"].setdefault("alias_overrides", [])
+        merged = {
+            (
+                str(override.get("role")),
+                str(override.get("served_by")),
+                str(override.get("ignored_model_id")),
+            ): override
+            for override in existing_overrides + alias_overrides
+            if isinstance(override, dict)
+        }
+        target["role_bindings"]["alias_overrides"] = [
+            merged[key] for key in sorted(merged)
+        ]
     target["role_bindings"]["shared_mmap"] = target["role_bindings"].get("shared_mmap") or incoming[
         "role_bindings"
     ].get("shared_mmap")
@@ -757,7 +772,7 @@ def compile_model_descriptors(
     for role in sorted(_expanded_active_roles(active_roles, registry)):
         role_cfg = roles.get(role)
         server_role, server_cfg, binding_kind = _server_for_role(role, server_mode)
-        alias_runtime_gap: str | None = None
+        alias_override: dict[str, str] | None = None
         if binding_kind == "shared_with" and isinstance(server_cfg, dict):
             role_model_id = _model_id_from_configs(role_cfg if isinstance(role_cfg, dict) else None)
             server_model_id = _model_id_from_configs(server_cfg)
@@ -769,10 +784,12 @@ def compile_model_descriptors(
                 else:
                     role_cfg = {}
                 primary = str(model_role) if model_role else str(server_role)
-                alias_runtime_gap = (
-                    f"Shared runtime alias {role} is served by {primary}; "
-                    f"ignored non-live role model metadata {role_model_id}"
-                )
+                alias_override = {
+                    "role": role,
+                    "served_by": primary,
+                    "ignored_model_id": role_model_id,
+                    "reason": "server_mode.shared_with runtime takes precedence",
+                }
         if not isinstance(role_cfg, dict) and isinstance(server_cfg, dict):
             model_role = server_cfg.get("model_role")
             role_cfg = roles.get(model_role) if model_role else {}
@@ -789,8 +806,8 @@ def compile_model_descriptors(
         )
         if descriptor is None:
             continue
-        if alias_runtime_gap:
-            descriptor["known_gaps"].append(alias_runtime_gap)
+        if alias_override:
+            descriptor["role_bindings"].setdefault("alias_overrides", []).append(alias_override)
         existing = descriptors.get(descriptor["model_id"])
         if existing:
             _merge_descriptor(existing, descriptor)

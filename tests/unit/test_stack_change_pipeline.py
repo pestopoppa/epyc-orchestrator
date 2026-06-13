@@ -225,10 +225,15 @@ def test_update_merges_shared_alias_mismatch_into_runtime_descriptor(tmp_path: P
     ]
     model = descriptors["models"][0]
     assert model["role_bindings"]["roles"] == ["worker_general", "worker_math"]
-    assert any(
-        "ignored non-live role model metadata qwen2.5-math" in gap
-        for gap in model["known_gaps"]
-    )
+    assert model["role_bindings"]["alias_overrides"] == [
+        {
+            "role": "worker_math",
+            "served_by": "worker_general",
+            "ignored_model_id": "qwen2.5-math-7b-q4_k_m",
+            "reason": "server_mode.shared_with runtime takes precedence",
+        }
+    ]
+    assert not any("ignored non-live role model metadata" in gap for gap in model["known_gaps"])
     assert not any(
         gap.startswith("Role-server conflict:")
         for gap in model["known_gaps"]

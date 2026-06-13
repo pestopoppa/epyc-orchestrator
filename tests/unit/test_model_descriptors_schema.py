@@ -105,5 +105,8 @@ def test_shared_runtime_aliases_do_not_emit_role_server_conflicts() -> None:
     assert {"worker_general", "worker_math", "toolrunner"} <= set(
         worker["role_bindings"]["roles"]
     )
-    assert any("ignored non-live role model metadata qwen2.5-math" in gap for gap in worker["known_gaps"])
-    assert any("ignored non-live role model metadata qwen3-coder" in gap for gap in worker["known_gaps"])
+    assert not any("ignored non-live role model metadata" in gap for gap in worker["known_gaps"])
+    alias_overrides = worker["role_bindings"].get("alias_overrides") or []
+    ignored_models = {override.get("ignored_model_id") for override in alias_overrides}
+    assert "qwen2.5-math-7b-q4_k_m" in ignored_models
+    assert "qwen3-coder-30b-a3b-q4_k_m" in ignored_models
