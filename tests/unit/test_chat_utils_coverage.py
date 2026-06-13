@@ -321,6 +321,7 @@ class TestFormalizeOutput:
 
         assert result == "Reformatted answer"
         mock_primitives.llm_call.assert_called_once()
+        assert mock_primitives.llm_call.call_args.kwargs["role"] == "worker_general"
 
     def test_formalization_empty_result(self):
         """Empty reformatted result returns original."""

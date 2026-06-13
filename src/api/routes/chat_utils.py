@@ -393,7 +393,7 @@ def _formalize_output(
 ) -> str:
     """Reformat an answer to satisfy detected format constraints.
 
-    Uses worker_explore (7B, 44 t/s) for fast reformatting.
+    Uses the live general worker for fast reformatting.
     The answer content is correct — only format needs fixing.
 
     Args:
@@ -409,7 +409,7 @@ def _formalize_output(
     try:
         result = primitives.llm_call(
             formalizer_prompt,
-            role="worker_explore",
+            role="worker_general",
             n_tokens=2000,
             skip_suffix=True,
         )
