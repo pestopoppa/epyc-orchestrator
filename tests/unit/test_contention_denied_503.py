@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import sys
 from pathlib import Path
 
@@ -26,10 +25,13 @@ def test_app_registers_503_handler_for_contention_denied() -> None:
     """The FastAPI app must have an exception handler mapping ContentionDenied → 503."""
     import os
     os.environ["PYTEST_CURRENT_TEST"] = "1"  # disables lifespan
+    from fastapi.exceptions import ResponseValidationError
     from src.api import app
     from src.scheduling.contention_gate import ContentionDenied
     # FastAPI stores handlers in app.exception_handlers keyed by exception class
     assert ContentionDenied in app.exception_handlers
+    assert ResponseValidationError in app.exception_handlers
+    assert Exception in app.exception_handlers
 
 
 def test_503_response_carries_retry_after() -> None:

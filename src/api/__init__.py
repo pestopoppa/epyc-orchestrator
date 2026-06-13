@@ -19,6 +19,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.features import features
@@ -335,6 +336,33 @@ def create_app() -> FastAPI:
                 "retry_after_s": 5,
             },
             headers={"Retry-After": "5"},
+        )
+
+    @app.exception_handler(ResponseValidationError)
+    async def _response_validation_error_handler(request: Request, exc: ResponseValidationError):
+        logger.exception(
+            "Response validation failed for %s %s: %s",
+            request.method,
+            request.url.path,
+            exc.errors(),
+            exc_info=exc,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": "response_validation_error", "detail": "Internal server error"},
+        )
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception):
+        logger.exception(
+            "Unhandled API exception for %s %s",
+            request.method,
+            request.url.path,
+            exc_info=exc,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": "internal_server_error", "detail": "Internal server error"},
         )
 
     return app
