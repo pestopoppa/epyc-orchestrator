@@ -12,6 +12,7 @@ import time
 import uuid
 from typing import AsyncGenerator
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -31,6 +32,7 @@ from src.prompt_builders import (
     extract_code_from_response,
     auto_wrap_final,
 )
+from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
 from src.repl_environment import REPLEnvironment
 from src.roles import Role
 
@@ -51,26 +53,66 @@ def _extract_text(content: str | list) -> str:
         )
     return ""
 
-# Available roles/models
-AVAILABLE_ROLES = [
-    "orchestrator",  # Auto-routing via frontdoor
-    "frontdoor",  # Tier A - Root LM
-    "coder_escalation",  # Tier B - Coder escalation
-    "architect",  # Tier B - Architecture specialist
-    "architect_general",  # Tier B - General architect
-    "architect_coding",  # Tier B - Coding architect
-    "worker",  # Tier C - General worker
-    "worker_general",  # Tier C - General worker
-    "worker_math",  # Tier C - Math worker
-    "worker_vision",  # Tier C - Vision worker
-    "ingest_long_context",  # Tier B - Long context ingestion
-]
+COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
+PREFERRED_ROLE_ORDER = (
+    "frontdoor",
+    "coder_escalation",
+    "architect_general",
+    "worker_general",
+    "worker_math",
+    "worker_vision",
+    "ingest_long_context",
+    "vision_escalation",
+    "worker_summarize",
+    "toolrunner",
+)
+DEGRADED_AVAILABLE_ROLES = (
+    "frontdoor",
+    "coder_escalation",
+    "architect_general",
+    "worker_general",
+    "worker_math",
+    "worker_vision",
+    "ingest_long_context",
+)
+
+
+def _ordered_role_ids(role_ids: list[str]) -> list[str]:
+    role_set = set(role_ids)
+    ordered = [role for role in PREFERRED_ROLE_ORDER if role in role_set]
+    ordered.extend(sorted(role_set.difference(ordered)))
+    return ordered
+
+
+def _live_stack_role_ids() -> list[str]:
+    """Read deployed role IDs from the generated stack-priors contract."""
+    try:
+        with DEFAULT_STACK_PRIORS.open("r", encoding="utf-8") as fh:
+            payload = yaml.safe_load(fh)
+    except Exception as exc:
+        logger.debug("Could not load stack priors for OpenAI models list: %s", exc)
+        return []
+
+    roles = payload.get("roles") if isinstance(payload, dict) else None
+    if not isinstance(roles, dict):
+        return []
+    return _ordered_role_ids([
+        str(role)
+        for role, record in roles.items()
+        if isinstance(record, dict) and record.get("deployment_status") == "live_stack"
+    ])
+
+
+def available_roles() -> list[str]:
+    """Return OpenAI-compatible model IDs from live stack truth plus aliases."""
+    role_ids = _live_stack_role_ids() or list(DEGRADED_AVAILABLE_ROLES)
+    return list(dict.fromkeys([*COMPATIBILITY_MODEL_ALIASES, *role_ids]))
 
 
 @router.get("/models", response_model=OpenAIModelsResponse)
 async def list_models() -> OpenAIModelsResponse:
     """List available models (roles) in OpenAI format."""
-    return OpenAIModelsResponse(data=[OpenAIModelInfo(id=role) for role in AVAILABLE_ROLES])
+    return OpenAIModelsResponse(data=[OpenAIModelInfo(id=role) for role in available_roles()])
 
 
 @router.post("/chat/completions", response_model=None)
@@ -449,7 +491,7 @@ async def openai_chat_completions(
 @router.get("/models/{model_id}")
 async def get_model(model_id: str) -> OpenAIModelInfo:
     """Get info for a specific model."""
-    if model_id not in AVAILABLE_ROLES:
+    if model_id not in available_roles():
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
     return OpenAIModelInfo(id=model_id)

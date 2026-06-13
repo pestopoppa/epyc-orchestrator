@@ -8,8 +8,9 @@ Target: chat.py 53% → 75%+, health.py coverage boost
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -206,3 +207,7 @@ class TestModelsEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, dict)
+        model_ids = {item["id"] for item in data.get("data", [])}
+        assert "architect_coding" not in model_ids
+        assert "frontdoor" in model_ids
+        assert "orchestrator" in model_ids
