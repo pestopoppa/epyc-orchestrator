@@ -2396,6 +2396,36 @@ roles:
     system_prompt_suffix: |
       Summarize tool output briefly. Focus on actionable results.
       Propose next command if appropriate.
+  reap_25b_frontdoor:
+    tier: B
+    description: Benchmark-only REAP-pruned Qwen3-Coder-25B-A3B target; server_mode.reap_25b owns serving truth.
+    model:
+      name: REAP-Qwen3-Coder-25B-A3B-Q4_K_M
+      path: /mnt/raid0/llm/lmstudio/models/bartowski/cerebras_Qwen3-Coder-REAP-25B-A3B-GGUF/cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M.gguf
+      quant: Q4_K_M
+      size_gb: 15
+      architecture: moe
+    candidate_roles:
+    - frontdoor
+    - coder
+    - worker
+    acceleration:
+      type: speculative_decoding
+      draft_role: qwen3-coder-0.75b-q4_0
+      draft_max: 24
+      p_split: 0
+      lookup: true
+    performance:
+      baseline_tps: 39.6
+      optimized_tps: 39.6
+      benchmark_date: 2026-03-24
+    memory:
+      residency: warm
+      pinned: false
+    notes: |
+      Benchmark-port comparison target, not production hot-tier serving.
+      Preserve as descriptor coverage so generated stack artifacts cannot silently
+      drop historical REAP evaluation evidence.
   draft_qwen25_coder:
     tier: D
     description: Default draft for Qwen2.5-Coder family

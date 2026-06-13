@@ -302,3 +302,72 @@ def test_compile_uses_role_endpoint_for_dedicated_vision_role(tmp_path: Path) ->
     assert model["quality"]["suite_vector"]["vision_language"] == 0.9167
     assert "Missing serving port binding" not in model["known_gaps"]
     assert "Missing server_mode binding" not in model["known_gaps"]
+
+
+def test_compile_preserves_benchmark_only_server_model_role(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {
+                "reap_25b": {
+                    "url": "http://localhost:8196",
+                    "port": 8196,
+                    "slots": 1,
+                    "model_role": "reap_25b_frontdoor",
+                    "model": "cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M.gguf",
+                    "model_path": "/models/cerebras_Qwen3-Coder-REAP-25B-A3B-Q4_K_M.gguf",
+                    "memory_gb": 15,
+                    "tier": "warm",
+                    "throughput": 39.6,
+                    "benchmark_date": "2026-03-24",
+                    "acceleration": {
+                        "type": "speculative_decoding",
+                        "draft_max": 24,
+                        "lookup": True,
+                    },
+                }
+            },
+            "roles": {
+                "reap_25b_frontdoor": {
+                    "model": {
+                        "name": "REAP-Qwen3-Coder-25B-A3B-Q4_K_M",
+                        "quant": "Q4_K_M",
+                        "architecture": "moe",
+                        "size_gb": 15,
+                    },
+                    "candidate_roles": ["frontdoor", "coder", "worker"],
+                    "acceleration": {
+                        "type": "speculative_decoding",
+                        "draft_role": "qwen3-coder-0.75b-q4_0",
+                        "draft_max": 24,
+                        "lookup": True,
+                    },
+                    "performance": {
+                        "baseline_tps": 39.6,
+                        "optimized_tps": 39.6,
+                        "benchmark_date": "2026-03-24",
+                    },
+                    "memory": {"residency": "warm", "pinned": False},
+                }
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"frontdoor"},
+        allow_incomplete=True,
+    )
+
+    model = compiled["models"][0]
+    assert model["model_id"] == "reap-qwen3-coder-25b-a3b-q4_k_m"
+    assert model["role_bindings"]["roles"] == ["reap_25b_frontdoor"]
+    assert model["role_bindings"]["server_roles"] == ["reap_25b"]
+    assert model["serving"]["ports"] == [8196]
+    assert model["speed"]["solo_96t_tps"] == 39.6
+    assert model["known_gaps"] == [
+        "Missing enable_thinking compatibility evidence",
+        "Missing quality suite_vector evidence",
+        "Missing structured ctx_max",
+    ]
