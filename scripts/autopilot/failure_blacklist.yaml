@@ -310,3 +310,16 @@ blacklist:
     Blacklisted Configurations {''type'':''numer'
   added: '2026-06-10T22:52:41.781433+00:00'
   source_trial: 747
+- pattern:
+    type: train_routing_models
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft falsely claims
+    train_routing_models has not executed; con'
+  added: '2026-06-12T19:10:04.489379+00:00'
+  source_trial: 781
+- pattern:
+    type: seed_batch
+    n_questions: 17
+  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft falsely claims
+    deep_eval tier 2 is blocked; only tier 0 i'
+  added: '2026-06-12T21:40:14.298698+00:00'
+  source_trial: 787
