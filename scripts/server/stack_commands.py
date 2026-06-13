@@ -147,13 +147,43 @@ def _find_pids_on_port(port: int) -> list[int]:
     return _stack_processes.pids_on_port(port, timeout=5)
 
 
+def _stack_prior_serving_ports(path: Path | None = None) -> set[int]:
+    """Return live model-serving ports from generated stack priors."""
+    priors_path = path or _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
+    try:
+        data = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return set()
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return set()
+
+    ports: set[int] = set()
+    for record in roles.values():
+        if not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        raw_ports = serving.get("ports") if isinstance(serving, dict) else None
+        if not isinstance(raw_ports, list):
+            continue
+        ports.update(port for port in raw_ports if isinstance(port, int))
+    return ports
+
+
 def _scan_known_ports() -> dict[int, list[int]]:
     """Scan all known orchestrator ports for running processes."""
     managed_server_ports = {s["port"] for s in HOT_SERVERS + WARM_SERVERS}
     docker_ports = {int(svc["port"]) for svc in DOCKER_SERVICES if "port" in svc}
     manifest_ports = {int(port) for port in PORT_MAP.values()}
+    stack_prior_ports = _stack_prior_serving_ports()
     known_ports = sorted(
-        managed_server_ports | NUMA_REPLICA_PORTS | docker_ports | manifest_ports
+        managed_server_ports
+        | NUMA_REPLICA_PORTS
+        | docker_ports
+        | manifest_ports
+        | stack_prior_ports
     )
     return _stack_processes.scan_known_ports(known_ports)
 

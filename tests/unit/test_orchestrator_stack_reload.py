@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from pathlib import Path
+
+import yaml
 
 from scripts.server import orchestrator_stack as stack
 from scripts.server import stack_commands
@@ -133,6 +136,7 @@ def test_scan_known_ports_derives_manifest_aux_ports(monkeypatch) -> None:
     monkeypatch.setattr(stack_commands, "WARM_SERVERS", [{"port": 8085}])
     monkeypatch.setattr(stack_commands, "NUMA_REPLICA_PORTS", {8180})
     monkeypatch.setattr(stack_commands, "DOCKER_SERVICES", [{"port": 8088}])
+    monkeypatch.setattr(stack_commands, "_stack_prior_serving_ports", lambda: set())
     monkeypatch.setattr(
         stack_commands,
         "PORT_MAP",
@@ -153,6 +157,53 @@ def test_scan_known_ports_derives_manifest_aux_ports(monkeypatch) -> None:
 
     assert stack_commands._scan_known_ports() == {}
     assert captured == [[8000, 8070, 8085, 8088, 8180, 8190, 9000, 9001, 9010]]
+
+
+def test_stack_prior_serving_ports_only_reads_live_roles(tmp_path: Path) -> None:
+    priors = tmp_path / "stack_priors.yaml"
+    priors.write_text(
+        yaml.safe_dump(
+            {
+                "roles": {
+                    "frontdoor": {
+                        "deployment_status": "live_stack",
+                        "serving": {"ports": [8070, 8080, 8180]},
+                    },
+                    "candidate": {
+                        "deployment_status": "benchmark_or_candidate",
+                        "serving": {"ports": [9999]},
+                    },
+                    "malformed": {
+                        "deployment_status": "live_stack",
+                        "serving": {"ports": ["9000", None]},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert stack_commands._stack_prior_serving_ports(priors) == {8070, 8080, 8180}
+
+
+def test_scan_known_ports_includes_stack_prior_live_ports(monkeypatch) -> None:
+    captured: list[list[int]] = []
+
+    monkeypatch.setattr(stack_commands, "HOT_SERVERS", [{"port": 8070}])
+    monkeypatch.setattr(stack_commands, "WARM_SERVERS", [])
+    monkeypatch.setattr(stack_commands, "NUMA_REPLICA_PORTS", set())
+    monkeypatch.setattr(stack_commands, "DOCKER_SERVICES", [])
+    monkeypatch.setattr(stack_commands, "PORT_MAP", {"orchestrator": 8000})
+    monkeypatch.setattr(stack_commands, "_stack_prior_serving_ports", lambda: {9123})
+
+    def fake_scan(ports):
+        captured.append(list(ports))
+        return {}
+
+    monkeypatch.setattr(stack_commands._stack_processes, "scan_known_ports", fake_scan)
+
+    assert stack_commands._scan_known_ports() == {}
+    assert captured == [[8000, 8070, 9123]]
 
 
 def test_status_attestation_detects_expected_model_basename() -> None:
