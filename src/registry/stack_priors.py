@@ -245,6 +245,7 @@ def _throughput_prior(descriptor: dict[str, Any], server_cfg: dict[str, Any] | N
             "solo_96t_tps",
             "quarter_48t_tps",
             "prefill_tps",
+            "optimized_tps",
             "generation_tps_range",
         ):
             tps = _coerce_tps(speed.get(key))

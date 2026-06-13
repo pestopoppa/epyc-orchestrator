@@ -81,7 +81,7 @@ def test_every_model_has_consumer_ready_sections() -> None:
         assert isinstance(model["role_bindings"].get("roles"), list)
 
 
-def test_at_least_one_descriptor_exposes_role_server_conflict() -> None:
+def test_shared_runtime_aliases_do_not_emit_role_server_conflicts() -> None:
     descriptors = _load_yaml(DESCRIPTOR_PATH)
 
     conflicts = [
@@ -90,7 +90,14 @@ def test_at_least_one_descriptor_exposes_role_server_conflict() -> None:
         if any("server" in gap and "conflict" in gap for gap in model["known_gaps"])
     ]
 
-    assert {model["model_id"] for model in conflicts} >= {
-        "qwen2.5-math-7b-q4_k_m",
-        "qwen3-coder-30b-a3b-q4_k_m",
-    }
+    assert conflicts == []
+    worker = next(
+        model
+        for model in descriptors["models"]
+        if model["model_id"] == "gemma4-26b-a4b-q4_k_m"
+    )
+    assert {"worker_general", "worker_math", "toolrunner"} <= set(
+        worker["role_bindings"]["roles"]
+    )
+    assert any("ignored non-live role model metadata qwen2.5-math" in gap for gap in worker["known_gaps"])
+    assert any("ignored non-live role model metadata qwen3-coder" in gap for gap in worker["known_gaps"])

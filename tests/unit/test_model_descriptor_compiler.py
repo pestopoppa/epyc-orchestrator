@@ -130,6 +130,83 @@ def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
     assert not any("server" in gap or "port" in gap for gap in model["known_gaps"])
 
 
+def test_compile_merges_shared_alias_mismatch_into_runtime_model(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {
+                "worker": {
+                    "url": "http://localhost:8072",
+                    "port": 8072,
+                    "tier": "hot",
+                    "slots": 1,
+                    "model": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+                    "model_role": "worker_general",
+                    "shared_with": ["worker_math"],
+                    "memory_gb": 16,
+                    "throughput": 60.7,
+                    "benchmark_score": "90%",
+                    "numa_instances": 4,
+                    "numa_ports": [8082, 8182, 8282, 8382],
+                    "runtime_requirements": {
+                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
+                    },
+                    "acceleration": {
+                        "type": "speculative_decoding",
+                        "spec_type": "mtp",
+                        "draft_max": 2,
+                    },
+                }
+            },
+            "roles": {
+                "worker_general": {
+                    "model": {
+                        "name": "gemma-4-26B-A4B-it-Q4_K_M",
+                        "quant": "Q4_K_M",
+                        "architecture": "gemma4",
+                        "size_gb": 16,
+                        "ctx_max": 16384,
+                    },
+                    "performance": {"quality_pct": 90, "baseline_tps": 44.7},
+                    "acceleration": {"type": "speculative_decoding", "spec_type": "mtp"},
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
+                "worker_math": {
+                    "model": {
+                        "name": "Qwen2.5-Math-7B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "dense",
+                        "size_gb": 4.4,
+                        "ctx_max": 32768,
+                    },
+                    "performance": {"quality_pct": 88, "baseline_tps": 12.4},
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"worker_general", "worker_math"},
+        allow_incomplete=True,
+    )
+
+    assert [model["model_id"] for model in compiled["models"]] == [
+        "gemma4-26b-a4b-q4_k_m"
+    ]
+    model = compiled["models"][0]
+    assert model["role_bindings"]["roles"] == ["worker_general", "worker_math"]
+    assert model["role_bindings"]["server_roles"] == ["worker"]
+    assert model["serving"]["binary"] == "ik-pr1744"
+    assert model["serving"]["ports"] == [8072, 8082, 8182, 8282, 8382]
+    assert model["speed"]["quarter_48t_tps"] == 60.7
+    assert not any(gap.startswith("Role-server conflict:") for gap in model["known_gaps"])
+    assert any("ignored non-live role model metadata qwen2.5-math" in gap for gap in model["known_gaps"])
+
+
 def test_compile_refuses_missing_load_bearing_fields(tmp_path: Path) -> None:
     registry_path = _write_yaml(
         tmp_path / "model_registry.yaml",

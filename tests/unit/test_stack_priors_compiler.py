@@ -150,6 +150,82 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     assert worker["priors"]["memory_cost"] == 1.0
 
 
+def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "registry.yaml",
+        {
+            "server_mode": {
+                "worker": {
+                    "url": "http://localhost:8072",
+                    "port": 8072,
+                    "tier": "hot",
+                    "slots": 1,
+                    "model_role": "worker_general",
+                    "shared_with": ["worker_math", "toolrunner"],
+                    "throughput": 60.7,
+                    "numa_ports": [8082],
+                }
+            },
+            "roles": {
+                "worker_general": {"memory": {"residency": "hot"}},
+                "worker_math": {"memory": {"residency": "hot"}},
+                "toolrunner": {"memory": {"residency": "hot"}},
+            },
+        },
+    )
+    descriptor_path = _write_yaml(
+        tmp_path / "descriptors.yaml",
+        {
+            "models": [
+                {
+                    "model_id": "gemma4-26b-a4b-q4",
+                    "role_bindings": {
+                        "roles": ["worker_general", "worker_math", "toolrunner"],
+                        "server_roles": ["worker"],
+                        "shared_mmap": True,
+                    },
+                    "quality": {"suite_vector": {"overall": 0.9}, "measured": []},
+                    "speed": {"quarter_48t_tps": 60.7, "measured": []},
+                    "acceleration": {
+                        "spec_type": "mtp",
+                        "draft_compat": ["gemma4-26b-a4b-assistant-q8"],
+                    },
+                    "serving": {"ports": [8072, 8082], "binary": "ik-pr1744"},
+                    "known_gaps": [
+                        "Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m",
+                    ],
+                }
+            ]
+        },
+    )
+
+    priors = compile_stack_priors(
+        registry_path=registry_path,
+        descriptor_path=descriptor_path,
+        active_roles={"worker_general", "worker_math", "toolrunner"},
+        allow_incomplete=True,
+    )
+
+    for role in ("worker_general", "worker_math", "toolrunner"):
+        record = priors["roles"][role]
+        assert record["model_id"] == "gemma4-26b-a4b-q4"
+        assert record["acceleration"]["spec_type"] == "mtp"
+        assert record["priors"]["throughput_tps"] == 60.7
+        assert not any(gap.startswith("Role-server conflict:") for gap in record["known_gaps"])
+
+    assert priors["roles"]["worker_general"]["serving"]["ports"] == [
+        8072,
+        8082,
+        8182,
+        8282,
+        8382,
+    ]
+    assert priors["roles"]["worker_math"]["serving"]["ports"] == [8072, 8082]
+    assert priors["roles"]["toolrunner"]["serving"]["ports"] == [8072, 8082]
+    assert priors["roles"]["worker_math"]["serving"]["binding"] == "server_mode.shared_with"
+    assert priors["roles"]["toolrunner"]["serving"]["binding"] == "server_mode.shared_with"
+
+
 def test_compile_preserves_conflicts_as_gaps_when_allowed(tmp_path: Path) -> None:
     registry_path = _write_yaml(
         tmp_path / "registry.yaml",

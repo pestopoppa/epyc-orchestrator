@@ -41,7 +41,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T18:50:26Z'
+compiled_at: '2026-06-13T19:08:44Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -49,26 +49,26 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: f4db0391e108325e0dff09165ba34f2a8dc95dbf0390c3cee54fe9fb6ac5fcda
-    repo_commit: dc14196
+    repo_commit: '7917535'
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: a4638fd3a9d813ffddc4635be434429ee653e3e3ba6c3642cb08bdb4061bfc43
-    repo_commit: dc14196
+    sha256: 2f3179949da8451602fa08d31cf0738097a06d80e1a0b8925fb085f880248baa
+    repo_commit: '7917535'
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 6caacc84eaf14dd80713e713fedae98843895a7a1b8f8d46cb6c06ff8beb8390
-    repo_commit: dc14196
+    repo_commit: '7917535'
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: dc14196
+    repo_commit: '7917535'
 roles:
   architect_general:
     role: architect_general
     deployment_status: live_stack
     status: compiled_with_gaps
     model_id: qwen3.5-122b-a10b-q4_k_m
-    display_name: Qwen3.5-122B-A10B Q4_K_M
+    display_name: Qwen3.5-122B-A10B
     serving:
       endpoint: http://localhost:8083
       server_role: architect_general
@@ -79,8 +79,8 @@ roles:
       tier: hot
       binary: llama.cpp
       binary_dir: null
-      numa_policy: single_96t_interleave_all
-      shared_mmap: false
+      numa_policy: single_96t
+      shared_mmap: true
       launch:
         entries:
         - port: 8083
@@ -93,26 +93,27 @@ roles:
         - default
     priors:
       throughput_tps: 12.19
-      quality_overall: 0.857
+      quality_overall: null
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
       draft_compat:
-      - qwen3.5-0.8b-q8_0
-      active_experts: 8
+      - draft_qwen35_0_8b_q8_0
       enable_thinking: false
       kv:
         k: null
         v: null
+      draft_max: 24
+      k: 24
+      p_split: 0
       lookup: false
-      spec_decode_status: gated_off_mrope_rollback_bug
     model:
       family: qwen3.5
-      arch: moe-a10b
-      params_b: 122
-      active_b: 10
+      arch: moe_hybrid
+      params_b: 122.0
+      active_b: 10.0
       quant: Q4_K_M
-      mem_gb: 69
+      mem_gb: 69.0
       ctx_max: null
       modalities:
       - text
@@ -124,22 +125,37 @@ roles:
       descriptor_server_roles:
       - architect_general
       quality:
-      - date: '2026-05-04'
-        protocol: canonical Probe B serving recipe
-        value: 2.57/3 architecture quality
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 5.3
+          moe4_baseline_tps: 3.87
+          moe4_spec_tps: 8.21
+          full_spec_tps: 6.08
+          optimized_tps: 6.08
+          speedup: 1.15x
+          spec_acceptance_moe4: 54.8%
+          spec_acceptance_full: 52.7%
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: null
+          optimized_tps: null
+          speedup: null
       speed:
-      - date: '2026-05-04'
-        protocol: numactl interleave plus taskset 0-95 canonical
+      - date: null
+        protocol: server_mode throughput
         value_tps: 12.19
     known_gaps:
-    - roles.architect_general performance block still carries older sweep-era tps values; server_mode has the canonical value.
-    - spec-decoding fields exist in the role record but server launch intentionally gates them off.
+    - Missing overall quality prior
+    - Missing quality suite_vector evidence
+    - Missing structured ctx_max
   coder_escalation:
     role: coder_escalation
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3.6-35b-a3b-q8_0
-    display_name: Qwen3.6-35B-A3B Q8_0
+    display_name: Qwen3.6-35B-A3B-Q8_0
     serving:
       endpoint: http://localhost:8070
       server_role: coder_escalation
@@ -150,7 +166,7 @@ roles:
       tier: hot
       binary: llama.cpp
       binary_dir: null
-      numa_policy: full_96t_primary_plus_4x48t_quarter_instances
+      numa_policy: server_default
       shared_mmap: true
       launch:
         entries:
@@ -165,7 +181,7 @@ roles:
         - default
     priors:
       throughput_tps: 24.3
-      quality_overall: 0.929
+      quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
       spec_type: none
@@ -178,12 +194,12 @@ roles:
       corpus_retrieval: true
     model:
       family: qwen3.6
-      arch: moe-a3b
-      params_b: 35
-      active_b: 3
+      arch: qwen35moe
+      params_b: 35.0
+      active_b: 3.0
       quant: Q8_0
-      mem_gb: 37
-      ctx_max: null
+      mem_gb: 37.0
+      ctx_max: 262144
       modalities:
       - text
     evidence:
@@ -196,21 +212,33 @@ roles:
       - frontdoor
       quality:
       - date: '2026-05-04'
-        protocol: Claude-as-Judge 6-suite canonical
-        value: 170/183
+        protocol: registry benchmark_score
+        value: 170/183 (93%)
+      - date: '2026-05-04'
+        protocol: registry benchmark_score
+        value: 170/183 (92.9%)
+      - date: '2026-05-04'
+        protocol: registry performance block
+        value:
+          baseline_tps: 24.3
+          optimized_tps: 24.3
+          quality_pct: 93
+          general_suite: 30/30 (100%)
+          coder_suite: 29/30 (97%)
+          thinking_suite: 28/30 (93%)
+          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
+          speedup: shares_frontdoor_gguf
       speed:
       - date: '2026-05-04'
-        protocol: canonical recipe plus preflight gate
+        protocol: server_mode throughput
         value_tps: 24.3
-    known_gaps:
-    - ctx_max is not structured in the lean registry.
-    - quarter_48t_tps must be compiled from benchmark artifacts or live launch telemetry.
+    known_gaps: []
   frontdoor:
     role: frontdoor
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3.6-35b-a3b-q8_0
-    display_name: Qwen3.6-35B-A3B Q8_0
+    display_name: Qwen3.6-35B-A3B-Q8_0
     serving:
       endpoint: http://localhost:8070
       server_role: frontdoor
@@ -225,7 +253,7 @@ roles:
       tier: hot
       binary: llama.cpp
       binary_dir: null
-      numa_policy: full_96t_primary_plus_4x48t_quarter_instances
+      numa_policy: server_default
       shared_mmap: true
       launch:
         entries:
@@ -260,7 +288,7 @@ roles:
         - default
     priors:
       throughput_tps: 24.3
-      quality_overall: 0.929
+      quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
       spec_type: none
@@ -273,12 +301,12 @@ roles:
       corpus_retrieval: true
     model:
       family: qwen3.6
-      arch: moe-a3b
-      params_b: 35
-      active_b: 3
+      arch: qwen35moe
+      params_b: 35.0
+      active_b: 3.0
       quant: Q8_0
-      mem_gb: 37
-      ctx_max: null
+      mem_gb: 37.0
+      ctx_max: 262144
       modalities:
       - text
     evidence:
@@ -291,21 +319,33 @@ roles:
       - frontdoor
       quality:
       - date: '2026-05-04'
-        protocol: Claude-as-Judge 6-suite canonical
-        value: 170/183
+        protocol: registry benchmark_score
+        value: 170/183 (93%)
+      - date: '2026-05-04'
+        protocol: registry benchmark_score
+        value: 170/183 (92.9%)
+      - date: '2026-05-04'
+        protocol: registry performance block
+        value:
+          baseline_tps: 24.3
+          optimized_tps: 24.3
+          quality_pct: 93
+          general_suite: 30/30 (100%)
+          coder_suite: 29/30 (97%)
+          thinking_suite: 28/30 (93%)
+          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
+          speedup: shares_frontdoor_gguf
       speed:
       - date: '2026-05-04'
-        protocol: canonical recipe plus preflight gate
+        protocol: server_mode throughput
         value_tps: 24.3
-    known_gaps:
-    - ctx_max is not structured in the lean registry.
-    - quarter_48t_tps must be compiled from benchmark artifacts or live launch telemetry.
+    known_gaps: []
   ingest_long_context:
     role: ingest_long_context
     deployment_status: live_stack
     status: compiled_with_gaps
     model_id: qwen3-next-80b-a3b-q4_k_m
-    display_name: Qwen3-Next-80B-A3B Instruct Q4_K_M
+    display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
       endpoint: http://localhost:8085
       server_role: ingest_long_context
@@ -320,8 +360,8 @@ roles:
       tier: hot
       binary: llama.cpp
       binary_dir: null
-      numa_policy: serial_hot_role
-      shared_mmap: false
+      numa_policy: server_default
+      shared_mmap: true
       launch:
         entries:
         - port: 8085
@@ -355,29 +395,26 @@ roles:
         - default
     priors:
       throughput_tps: 20.8
-      quality_overall: 0.93
+      quality_overall: 0.9259
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
       draft_compat: []
-      active_experts: 4
       enable_thinking: null
       kv:
         k: null
         v: null
-      lookup: false
-      spec_decode_status: forbidden_ssm_hybrid
     model:
       family: qwen3-next
-      arch: ssm-moe-hybrid-a3b
-      params_b: 80
-      active_b: 3
+      arch: ssm_moe_hybrid
+      params_b: 80.0
+      active_b: 3.0
       quant: Q4_K_M
-      mem_gb: 46
+      mem_gb: 45.0
       ctx_max: null
       modalities:
-      - text
       - long_context
+      - text
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
@@ -386,22 +423,100 @@ roles:
       descriptor_server_roles:
       - ingest_long_context
       quality:
-      - date: '2026-05-04'
-        protocol: canonical long_context suite
-        value: 25/27
+      - date: null
+        protocol: registry benchmark_score
+        value: 25/27 (93%) on canonical long_context suite, May-4
       speed:
-      - date: '2026-05-04'
-        protocol: long_context bench around 12K context
-        value_tps_range: 14.4-20.8
+      - date: null
+        protocol: server_mode throughput
+        value_tps: 14.4
     known_gaps:
-    - ctx_max and prefill metrics must be compiled from artifacts.
-    - enable_thinking behavior is template-native and not represented as a clean switch.
+    - Missing enable_thinking compatibility evidence
+    - Missing structured ctx_max
+  qwen35_122b_q4km:
+    role: qwen35_122b_q4km
+    deployment_status: benchmark_or_candidate
+    status: compiled_with_gaps
+    model_id: qwen3.5-122b-a10b-q4_k_m
+    display_name: Qwen3.5-122B-A10B
+    serving:
+      endpoint: http://localhost:8083
+      server_role: architect_general
+      binding: server_mode.model_role
+      ports:
+      - 8083
+      slots: 2
+      tier: hot
+      binary: llama.cpp
+      binary_dir: null
+      numa_policy: single_96t
+      shared_mmap: true
+      launch: {}
+    priors:
+      throughput_tps: 12.19
+      quality_overall: null
+      memory_cost: 1.0
+    acceleration:
+      spec_type: moe_expert_reduction
+      draft_compat:
+      - draft_qwen35_0_8b_q8_0
+      enable_thinking: false
+      kv:
+        k: null
+        v: null
+      draft_max: 24
+      k: 24
+      p_split: 0
+      lookup: false
+    model:
+      family: qwen3.5
+      arch: moe_hybrid
+      params_b: 122.0
+      active_b: 10.0
+      quant: Q4_K_M
+      mem_gb: 69.0
+      ctx_max: null
+      modalities:
+      - text
+    evidence:
+      precedence:
+        serving: server_mode/stack_manifest outrank roles metadata
+        memory_cost: server_mode.tier
+        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+      descriptor_server_roles:
+      - architect_general
+      quality:
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 5.3
+          moe4_baseline_tps: 3.87
+          moe4_spec_tps: 8.21
+          full_spec_tps: 6.08
+          optimized_tps: 6.08
+          speedup: 1.15x
+          spec_acceptance_moe4: 54.8%
+          spec_acceptance_full: 52.7%
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: null
+          optimized_tps: null
+          speedup: null
+      speed:
+      - date: null
+        protocol: server_mode throughput
+        value_tps: 12.19
+    known_gaps:
+    - Missing overall quality prior
+    - Missing quality suite_vector evidence
+    - Missing structured ctx_max
   reap_25b_frontdoor:
     role: reap_25b_frontdoor
     deployment_status: benchmark_or_candidate
     status: compiled_with_gaps
     model_id: reap-qwen3-coder-25b-a3b-q4_k_m
-    display_name: REAP-pruned Qwen3-Coder-25B-A3B Q4_K_M
+    display_name: REAP-Qwen3-Coder-25B-A3B-Q4_K_M
     serving:
       endpoint: http://localhost:8196
       server_role: reap_25b
@@ -412,8 +527,8 @@ roles:
       tier: warm
       binary: llama.cpp
       binary_dir: null
-      numa_policy: benchmark_port_not_production
-      shared_mmap: false
+      numa_policy: server_default
+      shared_mmap: true
       launch: {}
     priors:
       throughput_tps: 39.6
@@ -423,23 +538,24 @@ roles:
       spec_type: draft
       draft_compat:
       - qwen3-coder-0.75b-q4_0
-      draft_max: 24
       enable_thinking: null
       kv:
         k: null
         v: null
+      draft_max: 24
+      p_split: 0
       lookup: true
     model:
-      family: qwen3-coder-reap
-      arch: moe-a3b
-      params_b: 25
-      active_b: 3
+      family: reap-qwen3-coder
+      arch: moe
+      params_b: 25.0
+      active_b: 3.0
       quant: Q4_K_M
-      mem_gb: 15
+      mem_gb: 15.0
       ctx_max: null
       modalities:
-      - text
       - code
+      - text
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
@@ -447,21 +563,28 @@ roles:
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
       descriptor_server_roles:
       - reap_25b
-      quality: []
+      quality:
+      - date: '2026-03-24'
+        protocol: registry performance block
+        value:
+          baseline_tps: 39.6
+          optimized_tps: 39.6
+          benchmark_date: '2026-03-24'
       speed:
       - date: '2026-03-24'
-        protocol: Phase 1 REAP benchmark dm=24 ps=0 linear only
+        protocol: server_mode throughput
         value_tps: 39.6
     known_gaps:
+    - Missing enable_thinking compatibility evidence
     - Missing overall quality prior
-    - Quality suite vector is absent from the lean registry.
-    - Warm benchmark target, not a production hot-tier role.
+    - Missing quality suite_vector evidence
+    - Missing structured ctx_max
   toolrunner:
     role: toolrunner
     deployment_status: live_stack
     status: compiled_with_gaps
-    model_id: qwen3-coder-30b-a3b-q4_k_m
-    display_name: Qwen3-Coder-30B-A3B Instruct Q4_K_M
+    model_id: gemma4-26b-a4b-q4_k_m
+    display_name: gemma-4-26B-A4B-it-Q4_K_M
     serving:
       endpoint: http://localhost:8072
       server_role: worker
@@ -471,10 +594,10 @@ roles:
       - 8082
       slots: 1
       tier: hot
-      binary: llama.cpp
-      binary_dir: null
-      numa_policy: unresolved_role_server_conflict
-      shared_mmap: false
+      binary: ik-pr1744
+      binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
+      numa_policy: 4x48t_quarter_instances
+      shared_mmap: true
       launch:
         entries:
         - port: 8072
@@ -495,52 +618,72 @@ roles:
         - worker_pool
     priors:
       throughput_tps: 60.7
-      quality_overall: 0.87
+      quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: draft
+      spec_type: mtp
       draft_compat:
-      - qwen3-coder-0.75b-q4_0
-      draft_max: 8
-      enable_thinking: null
+      - draft_gemma4_26b_a4b_assistant_q8
+      enable_thinking: false
       kv:
         k: null
         v: null
-      lookup: true
+      draft_max: 2
+      draft_p_min: 0.0
+      lookup: false
+      corpus_retrieval: false
     model:
-      family: qwen3-coder
-      arch: moe-a3b
-      params_b: 30
-      active_b: 3
+      family: gemma4
+      arch: gemma4
+      params_b: 26.0
+      active_b: 4.0
       quant: Q4_K_M
-      mem_gb: 16
-      ctx_max: null
+      mem_gb: 16.0
+      ctx_max: 16384
       modalities:
       - text
-      - code
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
-      descriptor_server_roles: []
+      descriptor_server_roles:
+      - worker
       quality:
       - date: null
-        protocol: registry carried agentic suite
-        value: 26/30
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
       speed:
       - date: null
-        protocol: registry carried baseline
-        value_tps: 43.4
+        protocol: server_mode throughput
+        value_tps: 60.7
     known_gaps:
-    - Measurement dates are missing in structured fields.
-    - 'Role-server conflict: no dedicated server_mode entry; server_mode.worker lists toolrunner as a runtime alias while roles.toolrunner declares this model.'
+    - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
+    - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   vision_escalation:
     role: vision_escalation
     deployment_status: live_stack
     status: compiled_with_gaps
     model_id: qwen3-vl-30b-a3b-q4_k_m
-    display_name: Qwen3-VL-30B-A3B Instruct Q4_K_M
+    display_name: Qwen3-VL-30B-A3B-Instruct
     serving:
       endpoint: http://localhost:8087
       server_role: vision_escalation
@@ -555,7 +698,7 @@ roles:
       tier: hot
       binary: llama.cpp
       binary_dir: null
-      numa_policy: full_plus_4x_quarter_vl_servers
+      numa_policy: role_endpoint_binding
       shared_mmap: false
       launch:
         entries:
@@ -595,22 +738,20 @@ roles:
         - vision
     priors:
       throughput_tps: 27.6
-      quality_overall: 0.92
+      quality_overall: 0.9167
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
       draft_compat: []
-      active_experts: 4
       enable_thinking: null
       kv:
         k: null
         v: null
-      lookup: false
     model:
       family: qwen3-vl
-      arch: qwen3vlmoe-a3b
-      params_b: 30
-      active_b: 3
+      arch: qwen3vlmoe
+      params_b: 30.0
+      active_b: 3.0
       quant: Q4_K_M
       mem_gb: 18.0
       ctx_max: null
@@ -622,25 +763,30 @@ roles:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
-      descriptor_server_roles:
-      - vision_escalation
+      descriptor_server_roles: []
       quality:
       - date: '2026-03-04'
-        protocol: VL score
-        value: 11/12
+        protocol: registry performance block
+        value:
+          baseline_tps: 19.0
+          optimized_tps: 27.6
+          speedup: 1.45x
+          vl_score: 11/12 (92%)
+          benchmark_date: '2026-03-04'
       speed:
       - date: '2026-03-04'
-        protocol: VL benchmark
-        value_tps: 27.6
+        protocol: registry performance block
+        baseline_tps: 19.0
+        optimized_tps: 27.6
     known_gaps:
-    - mmproj path is not represented in a descriptor-native field yet.
-    - server_mode section does not carry the vision_escalation model record.
+    - Missing enable_thinking compatibility evidence
+    - Missing structured ctx_max
   worker_general:
     role: worker_general
     deployment_status: live_stack
     status: compiled_with_gaps
     model_id: gemma4-26b-a4b-q4_k_m
-    display_name: gemma-4-26B-A4B-it Q4_K_M
+    display_name: gemma-4-26B-A4B-it-Q4_K_M
     serving:
       endpoint: http://localhost:8072
       server_role: worker
@@ -700,23 +846,23 @@ roles:
     acceleration:
       spec_type: mtp
       draft_compat:
-      - gemma4-26b-a4b-assistant-q8_0
-      draft_max: 2
-      draft_p_min: 0.0
-      enable_thinking: null
+      - draft_gemma4_26b_a4b_assistant_q8
+      enable_thinking: false
       kv:
         k: null
         v: null
+      draft_max: 2
+      draft_p_min: 0.0
       lookup: false
       corpus_retrieval: false
     model:
       family: gemma4
-      arch: moe-a4b
-      params_b: 26
-      active_b: 4
+      arch: gemma4
+      params_b: 26.0
+      active_b: 4.0
       quant: Q4_K_M
-      mem_gb: 16
-      ctx_max: null
+      mem_gb: 16.0
+      ctx_max: 16384
       modalities:
       - text
     evidence:
@@ -727,22 +873,40 @@ roles:
       descriptor_server_roles:
       - worker
       quality:
-      - date: '2026-05-08'
-        protocol: tool_compliance plus full-suite swap gate
-        value: 90% full suite, 96% tool compliance
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
       speed:
-      - date: '2026-05-08'
-        protocol: MTP-on tool_compliance median
+      - date: null
+        protocol: server_mode throughput
         value_tps: 60.7
     known_gaps:
-    - ctx_max and KV quantization are not structured in the lean registry.
-    - server_mode.worker shares runtime with worker_math and toolrunner, but their role records declare different models.
+    - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
+    - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   worker_math:
     role: worker_math
     deployment_status: live_stack
     status: compiled_with_gaps
-    model_id: qwen2.5-math-7b-q4_k_m
-    display_name: Qwen2.5-Math-7B Instruct Q4_K_M
+    model_id: gemma4-26b-a4b-q4_k_m
+    display_name: gemma-4-26B-A4B-it-Q4_K_M
     serving:
       endpoint: http://localhost:8072
       server_role: worker
@@ -752,10 +916,10 @@ roles:
       - 8082
       slots: 1
       tier: hot
-      binary: llama.cpp
-      binary_dir: null
-      numa_policy: unresolved_role_server_conflict
-      shared_mmap: false
+      binary: ik-pr1744
+      binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
+      numa_policy: 4x48t_quarter_instances
+      shared_mmap: true
       launch:
         entries:
         - port: 8072
@@ -776,50 +940,72 @@ roles:
         - worker_pool
     priors:
       throughput_tps: 60.7
-      quality_overall: null
+      quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: draft
+      spec_type: mtp
       draft_compat:
-      - qwen2.5-0.5b-q8_0
-      draft_max: 8
-      enable_thinking: null
+      - draft_gemma4_26b_a4b_assistant_q8
+      enable_thinking: false
       kv:
         k: null
         v: null
-      lookup: null
+      draft_max: 2
+      draft_p_min: 0.0
+      lookup: false
+      corpus_retrieval: false
     model:
-      family: qwen2.5-math
-      arch: dense
-      params_b: 7
-      active_b: 7
+      family: gemma4
+      arch: gemma4
+      params_b: 26.0
+      active_b: 4.0
       quant: Q4_K_M
-      mem_gb: 4.4
-      ctx_max: null
+      mem_gb: 16.0
+      ctx_max: 16384
       modalities:
       - text
-      - math
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
-      descriptor_server_roles: []
-      quality: []
+      descriptor_server_roles:
+      - worker
+      quality:
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
+      - date: null
+        protocol: registry performance block
+        value:
+          baseline_tps: 44.7
+          optimized_tps: 60.7
+          quality_pct: 90
+          tool_compliance_pct: 96
       speed:
       - date: null
-        protocol: registry carried speculative decoding measurement
-        value_tps: 48.5
+        protocol: server_mode throughput
+        value_tps: 60.7
     known_gaps:
-    - Missing overall quality prior
-    - Quality suite vector is absent from the lean registry.
-    - 'Role-server conflict: no dedicated server_mode entry; config URLs currently point worker_math traffic at worker server ports.'
+    - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
+    - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   worker_summarize:
     role: worker_summarize
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3.6-35b-a3b-q8_0
-    display_name: Qwen3.6-35B-A3B Q8_0
+    display_name: Qwen3.6-35B-A3B-Q8_0
     serving:
       endpoint: http://localhost:8070
       server_role: frontdoor
@@ -830,7 +1016,7 @@ roles:
       tier: hot
       binary: llama.cpp
       binary_dir: null
-      numa_policy: full_96t_primary_plus_4x48t_quarter_instances
+      numa_policy: server_default
       shared_mmap: true
       launch:
         entries:
@@ -845,7 +1031,7 @@ roles:
         - default
     priors:
       throughput_tps: 24.3
-      quality_overall: 0.929
+      quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
       spec_type: none
@@ -858,12 +1044,12 @@ roles:
       corpus_retrieval: true
     model:
       family: qwen3.6
-      arch: moe-a3b
-      params_b: 35
-      active_b: 3
+      arch: qwen35moe
+      params_b: 35.0
+      active_b: 3.0
       quant: Q8_0
-      mem_gb: 37
-      ctx_max: null
+      mem_gb: 37.0
+      ctx_max: 262144
       modalities:
       - text
     evidence:
@@ -876,21 +1062,33 @@ roles:
       - frontdoor
       quality:
       - date: '2026-05-04'
-        protocol: Claude-as-Judge 6-suite canonical
-        value: 170/183
+        protocol: registry benchmark_score
+        value: 170/183 (93%)
+      - date: '2026-05-04'
+        protocol: registry benchmark_score
+        value: 170/183 (92.9%)
+      - date: '2026-05-04'
+        protocol: registry performance block
+        value:
+          baseline_tps: 24.3
+          optimized_tps: 24.3
+          quality_pct: 93
+          general_suite: 30/30 (100%)
+          coder_suite: 29/30 (97%)
+          thinking_suite: 28/30 (93%)
+          long_context: 27/27 (100%) — beats prior worker_summarize on every dimension
+          speedup: shares_frontdoor_gguf
       speed:
       - date: '2026-05-04'
-        protocol: canonical recipe plus preflight gate
+        protocol: server_mode throughput
         value_tps: 24.3
-    known_gaps:
-    - ctx_max is not structured in the lean registry.
-    - quarter_48t_tps must be compiled from benchmark artifacts or live launch telemetry.
+    known_gaps: []
   worker_vision:
     role: worker_vision
     deployment_status: live_stack
     status: compiled_with_gaps
     model_id: qwen2.5-vl-7b-q4_k_m
-    display_name: Qwen2.5-VL-7B Instruct Q4_K_M
+    display_name: Qwen2.5-VL-7B-Instruct
     serving:
       endpoint: http://localhost:8086
       server_role: worker_vision
@@ -901,7 +1099,7 @@ roles:
       tier: hot
       binary: llama.cpp
       binary_dir: null
-      numa_policy: single_vl_server
+      numa_policy: role_endpoint_binding
       shared_mmap: false
       launch:
         entries:
@@ -916,7 +1114,7 @@ roles:
         - vision
     priors:
       throughput_tps: 20.0
-      quality_overall: 0.92
+      quality_overall: 0.9167
       memory_cost: 1.0
     acceleration:
       spec_type: baseline
@@ -925,15 +1123,11 @@ roles:
       kv:
         k: null
         v: null
-      lookup: false
-      disallowed:
-      - speculative_decoding
-      - prompt_lookup
     model:
       family: qwen2.5-vl
-      arch: dense-vlm
-      params_b: 7
-      active_b: 7
+      arch: dense
+      params_b: 7.0
+      active_b: 7.0
       quant: Q4_K_M
       mem_gb: 4.4
       ctx_max: null
@@ -945,52 +1139,53 @@ roles:
         serving: server_mode/stack_manifest outrank roles metadata
         memory_cost: server_mode.tier
         spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
-      descriptor_server_roles:
-      - worker_vision
+      descriptor_server_roles: []
       quality:
       - date: '2026-03-04'
-        protocol: VL score
-        value: 11/12
+        protocol: registry performance block
+        value:
+          baseline_tps: 15.28
+          optimized_tps: 20.0
+          speedup: 1.3x
+          vl_score: 11/12 (92%)
+          benchmark_date: '2026-03-04'
       speed:
       - date: '2026-03-04'
-        protocol: VL benchmark
-        value_tps: 20.0
+        protocol: registry performance block
+        baseline_tps: 15.28
+        optimized_tps: 20.0
     known_gaps:
-    - mmproj path is not represented in a descriptor-native field yet.
-    - server_mode section does not carry the worker_vision model record.
+    - Missing enable_thinking compatibility evidence
+    - Missing structured ctx_max
 known_global_gaps:
   architect_general:
-  - roles.architect_general performance block still carries older sweep-era tps values; server_mode has the canonical value.
-  - spec-decoding fields exist in the role record but server launch intentionally gates them off.
-  coder_escalation:
-  - ctx_max is not structured in the lean registry.
-  - quarter_48t_tps must be compiled from benchmark artifacts or live launch telemetry.
-  frontdoor:
-  - ctx_max is not structured in the lean registry.
-  - quarter_48t_tps must be compiled from benchmark artifacts or live launch telemetry.
+  - Missing overall quality prior
+  - Missing quality suite_vector evidence
+  - Missing structured ctx_max
   ingest_long_context:
-  - ctx_max and prefill metrics must be compiled from artifacts.
-  - enable_thinking behavior is template-native and not represented as a clean switch.
+  - Missing enable_thinking compatibility evidence
+  - Missing structured ctx_max
+  qwen35_122b_q4km:
+  - Missing overall quality prior
+  - Missing quality suite_vector evidence
+  - Missing structured ctx_max
   reap_25b_frontdoor:
+  - Missing enable_thinking compatibility evidence
   - Missing overall quality prior
-  - Quality suite vector is absent from the lean registry.
-  - Warm benchmark target, not a production hot-tier role.
+  - Missing quality suite_vector evidence
+  - Missing structured ctx_max
   toolrunner:
-  - Measurement dates are missing in structured fields.
-  - 'Role-server conflict: no dedicated server_mode entry; server_mode.worker lists toolrunner as a runtime alias while roles.toolrunner declares this model.'
+  - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
+  - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   vision_escalation:
-  - mmproj path is not represented in a descriptor-native field yet.
-  - server_mode section does not carry the vision_escalation model record.
+  - Missing enable_thinking compatibility evidence
+  - Missing structured ctx_max
   worker_general:
-  - ctx_max and KV quantization are not structured in the lean registry.
-  - server_mode.worker shares runtime with worker_math and toolrunner, but their role records declare different models.
+  - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
+  - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   worker_math:
-  - Missing overall quality prior
-  - Quality suite vector is absent from the lean registry.
-  - 'Role-server conflict: no dedicated server_mode entry; config URLs currently point worker_math traffic at worker server ports.'
-  worker_summarize:
-  - ctx_max is not structured in the lean registry.
-  - quarter_48t_tps must be compiled from benchmark artifacts or live launch telemetry.
+  - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
+  - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   worker_vision:
-  - mmproj path is not represented in a descriptor-native field yet.
-  - server_mode section does not carry the worker_vision model record.
+  - Missing enable_thinking compatibility evidence
+  - Missing structured ctx_max

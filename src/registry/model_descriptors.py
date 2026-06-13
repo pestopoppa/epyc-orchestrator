@@ -214,6 +214,14 @@ def _server_for_role(
     return None, None, None
 
 
+def _model_id_from_configs(*configs: dict[str, Any] | None) -> str | None:
+    model_name = _first_model_name(*configs)
+    if not model_name:
+        return None
+    model = _first_model_dict(*configs)
+    return _canonical_model_id(model_name, _quant_from(model_name, model))
+
+
 def _expanded_active_roles(
     active_roles: set[str] | None,
     registry: dict[str, Any],
@@ -713,6 +721,22 @@ def compile_model_descriptors(
     for role in sorted(_expanded_active_roles(active_roles, registry)):
         role_cfg = roles.get(role)
         server_role, server_cfg, binding_kind = _server_for_role(role, server_mode)
+        alias_runtime_gap: str | None = None
+        if binding_kind == "shared_with" and isinstance(server_cfg, dict):
+            role_model_id = _model_id_from_configs(role_cfg if isinstance(role_cfg, dict) else None)
+            server_model_id = _model_id_from_configs(server_cfg)
+            model_role = server_cfg.get("model_role")
+            primary_role_cfg = roles.get(model_role) if model_role else None
+            if role_model_id and server_model_id and role_model_id != server_model_id:
+                if isinstance(primary_role_cfg, dict):
+                    role_cfg = primary_role_cfg
+                else:
+                    role_cfg = {}
+                primary = str(model_role) if model_role else str(server_role)
+                alias_runtime_gap = (
+                    f"Shared runtime alias {role} is served by {primary}; "
+                    f"ignored non-live role model metadata {role_model_id}"
+                )
         if not isinstance(role_cfg, dict) and isinstance(server_cfg, dict):
             model_role = server_cfg.get("model_role")
             role_cfg = roles.get(model_role) if model_role else {}
@@ -729,6 +753,8 @@ def compile_model_descriptors(
         )
         if descriptor is None:
             continue
+        if alias_runtime_gap:
+            descriptor["known_gaps"].append(alias_runtime_gap)
         existing = descriptors.get(descriptor["model_id"])
         if existing:
             _merge_descriptor(existing, descriptor)

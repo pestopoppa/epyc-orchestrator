@@ -127,7 +127,7 @@ def _config(tmp_path: Path, *, mode: str) -> StackChangePipelineConfig:
     )
 
 
-def test_update_refuses_generated_role_server_conflicts(tmp_path: Path) -> None:
+def test_update_merges_shared_alias_mismatch_into_runtime_descriptor(tmp_path: Path) -> None:
     config = _config(tmp_path, mode="update")
     _write_yaml(
         config.lean_registry,
@@ -149,6 +149,18 @@ def test_update_refuses_generated_role_server_conflicts(tmp_path: Path) -> None:
                 }
             },
             "roles": {
+                "worker_general": {
+                    "model": {
+                        "name": "gemma-4-26B-A4B-it-Q4_K_M",
+                        "quant": "Q4_K_M",
+                        "architecture": "gemma4",
+                        "size_gb": 16,
+                        "ctx_max": 16384,
+                    },
+                    "performance": {"quality_pct": 90, "baseline_tps": 44.7},
+                    "acceleration": {"type": "speculative_decoding", "spec_type": "mtp"},
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
                 "worker_math": {
                     "model": {
                         "name": "Qwen2.5-Math-7B-Instruct",
@@ -165,23 +177,58 @@ def test_update_refuses_generated_role_server_conflicts(tmp_path: Path) -> None:
         },
     )
     conflict_config = StackChangePipelineConfig(
-        **{**config.__dict__, "roles": {"worker_math"}}
+        **{**config.__dict__, "roles": {"worker_general", "worker_math"}}
+    )
+    _write_yaml(
+        conflict_config.procedure,
+        {
+            "inputs": [
+                {
+                    "name": "role",
+                    "type": "string",
+                    "validation": {"enum": ["worker_general", "worker_math"]},
+                }
+            ]
+        },
+    )
+    _write_json(
+        conflict_config.schema,
+        {
+            "properties": {
+                "permissions": {
+                    "properties": {
+                        "roles": {
+                            "items": {
+                                "enum": ["worker_general", "worker_math", "admin"],
+                            }
+                        }
+                    }
+                }
+            }
+        },
     )
 
     report = run_stack_change_pipeline(conflict_config)
 
-    assert not report.ok
+    assert report.ok
+    descriptors = yaml.safe_load(conflict_config.descriptors.read_text(encoding="utf-8"))
+    assert [model["model_id"] for model in descriptors["models"]] == [
+        "gemma4-26b-a4b-q4_k_m"
+    ]
+    model = descriptors["models"][0]
+    assert model["role_bindings"]["roles"] == ["worker_general", "worker_math"]
     assert any(
-        "descriptor generated role/server conflict for qwen2.5-math-7b-q4_k_m"
-        in error
-        for error in report.errors
+        "ignored non-live role model metadata qwen2.5-math" in gap
+        for gap in model["known_gaps"]
     )
-    assert not conflict_config.descriptors.exists()
-    assert not conflict_config.stack_priors.exists()
-    assert {step.name: step.status for step in report.steps}["stack_priors"] == "skipped"
+    assert not any(
+        gap.startswith("Role-server conflict:")
+        for gap in model["known_gaps"]
+    )
+    assert conflict_config.stack_priors.exists()
 
 
-def test_check_reports_generated_role_server_conflicts_without_update_hint(
+def test_check_reports_shared_alias_mismatch_without_conflict_error(
     tmp_path: Path,
 ) -> None:
     update_config = _config(tmp_path, mode="update")
@@ -209,6 +256,18 @@ def test_check_reports_generated_role_server_conflicts_without_update_hint(
                 }
             },
             "roles": {
+                "worker_general": {
+                    "model": {
+                        "name": "gemma-4-26B-A4B-it-Q4_K_M",
+                        "quant": "Q4_K_M",
+                        "architecture": "gemma4",
+                        "size_gb": 16,
+                        "ctx_max": 16384,
+                    },
+                    "performance": {"quality_pct": 90, "baseline_tps": 44.7},
+                    "acceleration": {"type": "speculative_decoding", "spec_type": "mtp"},
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
                 "worker_math": {
                     "model": {
                         "name": "Qwen2.5-Math-7B-Instruct",
@@ -225,21 +284,16 @@ def test_check_reports_generated_role_server_conflicts_without_update_hint(
         },
     )
     conflict_config = StackChangePipelineConfig(
-        **{**config.__dict__, "roles": {"worker_math"}}
+        **{**config.__dict__, "roles": {"worker_general", "worker_math"}}
     )
 
     report = run_stack_change_pipeline(conflict_config)
 
     descriptor_step = next(step for step in report.steps if step.name == "descriptors")
     assert not report.ok
-    assert any(
-        "descriptor generated role/server conflict for qwen2.5-math-7b-q4_k_m"
-        in error
-        for error in descriptor_step.errors
-    )
-    assert not any(
-        error.endswith("stack_change_pipeline.py update") for error in descriptor_step.errors
-    )
+    assert any("descriptor artifact is stale" in error for error in descriptor_step.errors)
+    assert any("descriptor update would remove existing model_id" in error for error in descriptor_step.errors)
+    assert not any("descriptor generated role/server conflict" in error for error in descriptor_step.errors)
 
 
 def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> None:
