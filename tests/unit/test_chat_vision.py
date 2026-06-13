@@ -5,6 +5,7 @@ Tests coverage for src/api/routes/chat_vision.py (currently under-tested).
 
 import base64
 import io
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -15,6 +16,9 @@ from src.api.routes.chat_vision import (
     _handle_vision_request,
     _needs_structured_analysis,
     _safe_eval_math,
+    _stack_prior_vl_urls,
+    _vl_url_for_port,
+    _vl_url_for_role,
     _vision_react_mode_answer,
 )
 
@@ -41,6 +45,57 @@ class TestStructuredAnalysisDetection:
         """Test case-insensitive keyword matching."""
         assert _needs_structured_analysis("ANALYZE this DIAGRAM") is True
         assert _needs_structured_analysis("FlowChart") is True
+
+
+class TestVisionServingUrls:
+    """Test generated stack-prior VL endpoint discovery."""
+
+    def test_stack_prior_vl_urls_prefers_live_endpoints(self, tmp_path: Path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  worker_vision:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:9101
+      ports: [9101]
+  vision_escalation:
+    deployment_status: live_stack
+    serving:
+      ports: [9107]
+  stale_vision:
+    deployment_status: benchmark_or_candidate
+    serving:
+      endpoint: http://localhost:9999
+""",
+            encoding="utf-8",
+        )
+
+        assert _stack_prior_vl_urls(priors) == {
+            "worker_vision": "http://localhost:9101",
+            "vision_escalation": "http://localhost:9107",
+        }
+
+    def test_vl_url_for_role_falls_back_to_config_url(self, tmp_path: Path):
+        assert _vl_url_for_role("vision_escalation", tmp_path / "missing.yaml") == (
+            "http://localhost:8087"
+        )
+
+    def test_vl_url_for_port_resolves_generated_endpoint(self, tmp_path: Path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  worker_vision:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://127.0.0.1:9101
+""",
+            encoding="utf-8",
+        )
+
+        assert _vl_url_for_port(9101, priors) == "http://127.0.0.1:9101"
 
 
 class TestSafeEvalMath:

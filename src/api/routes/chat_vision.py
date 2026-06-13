@@ -10,8 +10,11 @@ from __future__ import annotations
 import ast as _ast
 import logging
 import operator as _operator
+from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
+import yaml
 from src.config import get_config as _get_config
 from src.exceptions import ArchiveExtractionError
 from src.prompt_builders import (
@@ -21,6 +24,12 @@ from src.prompt_builders import (
 from src.api.routes.chat_utils import QWEN_STOP
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_STACK_PRIORS_PATH = (
+    Path(__file__).resolve().parents[3] / "orchestration" / "derived" / "stack_priors.yaml"
+)
+_VISION_ROLES = frozenset({"worker_vision", "vision_escalation"})
+_FALLBACK_VL_PORT_BY_ROLE = {"worker_vision": 8086, "vision_escalation": 8087}
 
 if TYPE_CHECKING:
     from src.api.models import ChatRequest
@@ -45,6 +54,79 @@ def _needs_structured_analysis(prompt: str) -> bool:
     return needs_structured_analysis(prompt)
 
 
+def _first_server_url(url: str) -> str:
+    """Normalize a config URL value to one concrete HTTP endpoint."""
+    if url.startswith("full:"):
+        url = url[len("full:"):]
+    return url.split(",")[0].rstrip("/")
+
+
+def _stack_prior_vl_urls(
+    stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
+) -> dict[str, str]:
+    """Return live VL role endpoints from generated stack priors."""
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("Using fallback VL URLs; stack priors load failed: %s", exc)
+        return {}
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    urls: dict[str, str] = {}
+    for role in _VISION_ROLES:
+        record = roles.get(role)
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+        endpoint = serving.get("endpoint")
+        if isinstance(endpoint, str) and endpoint:
+            urls[role] = _first_server_url(endpoint)
+            continue
+        serving_ports = serving.get("ports")
+        if isinstance(serving_ports, list):
+            for port in serving_ports:
+                if isinstance(port, int):
+                    urls[role] = f"http://localhost:{port}"
+                    break
+    return urls
+
+
+def _fallback_vl_url_for_role(role: str) -> str:
+    configured = getattr(_get_config().server_urls, role, "")
+    if isinstance(configured, str) and configured:
+        return _first_server_url(configured)
+    port = _FALLBACK_VL_PORT_BY_ROLE.get(role, 8086)
+    return f"http://localhost:{port}"
+
+
+def _vl_url_for_role(
+    role: str,
+    stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
+) -> str:
+    return _stack_prior_vl_urls(stack_priors_path).get(
+        role,
+        _fallback_vl_url_for_role(role),
+    )
+
+
+def _vl_url_for_port(
+    vl_port: int,
+    stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
+) -> str:
+    for url in _stack_prior_vl_urls(stack_priors_path).values():
+        if urlparse(url).port == vl_port:
+            return url
+    for role, port in _FALLBACK_VL_PORT_BY_ROLE.items():
+        if port == vl_port:
+            return _fallback_vl_url_for_role(role)
+    return f"http://localhost:{vl_port}"
+
 
 async def _handle_vision_request(
     request: "ChatRequest",
@@ -63,8 +145,8 @@ async def _handle_vision_request(
     1. Image + prompt sent directly to VL model
 
     Fallback chain for VL:
-    1. VL worker (port 8086, Qwen2.5-VL-7B, ~15 t/s)
-    2. VL escalation (port 8087, Qwen3-VL-30B-A3B, ~10 t/s)
+    1. VL worker (`worker_vision` from generated stack priors)
+    2. VL escalation (`vision_escalation` from generated stack priors)
     3. Vision pipeline endpoint (legacy subprocess path)
 
     Args:
@@ -72,9 +154,9 @@ async def _handle_vision_request(
         primitives: LLMPrimitives (unused, for interface compat).
         state: Application state.
         task_id: Task ID for logging.
-        force_server: Optional server constraint. "worker_vision" uses only
-            port 8086, "vision_escalation" uses only port 8087. None uses
-            the default fallback chain.
+        force_server: Optional server constraint. "worker_vision" and
+            "vision_escalation" use their generated stack-prior endpoints when
+            available. None uses the default fallback chain.
 
     Returns:
         Answer string from the vision model.
@@ -196,15 +278,14 @@ async def _handle_vision_request(
     }
 
     # Try VL servers — constrained if force_server is set
-    _urls = _get_config().server_urls
     if force_server == "worker_vision":
-        vl_servers = [("worker_vision", _urls.worker_vision)]
+        vl_servers = [("worker_vision", _vl_url_for_role("worker_vision"))]
     elif force_server == "vision_escalation":
-        vl_servers = [("vision_escalation", _urls.vision_escalation)]
+        vl_servers = [("vision_escalation", _vl_url_for_role("vision_escalation"))]
     else:
         vl_servers = [
-            ("worker_vision", _urls.worker_vision),
-            ("vision_escalation", _urls.vision_escalation),
+            ("worker_vision", _vl_url_for_role("worker_vision")),
+            ("vision_escalation", _vl_url_for_role("vision_escalation")),
         ]
 
     last_error = None
@@ -456,13 +537,8 @@ Important rules:
         }
     ]
 
-    # Build VL URL from config server_urls for known ports, fallback to port param
-    _react_urls = _get_config().server_urls
-    _port_to_url = {
-        8086: _react_urls.worker_vision,
-        8087: _react_urls.vision_escalation,
-    }
-    _base = _port_to_url.get(vl_port, f"http://localhost:{vl_port}")
+    # Build VL URL from generated stack-prior serving records for known ports.
+    _base = _vl_url_for_port(vl_port)
     vl_url = f"{_base}/v1/chat/completions"
 
     for turn in range(max_turns):
