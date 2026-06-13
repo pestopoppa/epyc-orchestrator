@@ -1,157 +1,120 @@
-# Internal Training and Replay Datasets
+# Dataset Inventory for Lab Training and Replay
 
-This page is the F3-W1 capture-hygiene inventory. It names the project-owned
-corpora that can train or audit future local planners, triage models, judges,
-and routing components. Treat every historical row as immutable: era-label first,
-then decide whether it is training data, a prior, or a retired view.
-
-Authoritative era policy: `/workspace/MEASUREMENT.md` and
+**Created**: 2026-06-12
+**Owner**: Frontier F3 data flywheel
+**Scope**: inventory only. This page does not authorize training, promotion, or
+decision claims by itself.
+**Authoritative era policy**: `/workspace/MEASUREMENT.md` and
 `orchestration/instrument_eras.yaml`.
 
-## Capture Status
+This document lists corpora the lab already generates or has explicitly queued
+for capture. Every row names the schema owner, era-labeling rule, and intended
+model use so future dataset builders can filter contaminated eras before they
+create train or validation sets.
 
-| Corpus | Path | Status | Intended consumer |
-| --- | --- | --- | --- |
-| Planner archive | `/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl` | Live; failed Claude planner calls archived from F3-W1 onward | Planner SFT, planner failure classifier, economics ledger |
-| Planner coordinator archive rows | Same JSONL as planner archive | Live | Critic-approval labels for planner SFT |
-| AutoPilot experiment journal | `orchestration/autopilot_journal*.jsonl` | Live | Replay, planner SFT outcome labels, objective-policy analysis |
-| Research intake index | `/mnt/raid0/llm/epyc-root/research/intake_index.yaml` | Live | Intake triage classifier, source prioritization |
-| Per-question eval ledger | Branch `feat/paired-question-stats`, `eval_details.question_results` | Branch-ready; not live until merged/deployed | Sequential verdicts, paired replay, item difficulty |
-| Seeding diagnostics | `logs/seeding_diagnostics.jsonl` | Historical; strong item-difficulty prior | Difficulty priors, factual-risk calibration |
-| Factual-risk calibration rows | `orchestration/factual_risk_calibration_v2_{train,val,test}.jsonl` | Live generated dataset | Risk classifier and abstention calibration |
-| Deep-dive decision chains | `/mnt/raid0/llm/epyc-root/research/deep-dives/*.md` plus linked handoffs/progress | Live but semi-structured | Retrieval supervision, synthesis/judge examples |
-| Lab job reliability tuples | Planned under F2: `orchestration/lab_review_queue/` + promotion logs | Not implemented; gated on F2 runner | Local lab-agent reliability ladder, planner SFT gold data |
+## Rules
 
-## Schemas and Era Rules
+1. **Era labels travel with every example.** A builder must emit the source path,
+   source row identifier, source timestamp, source commit or policy version when
+   available, and the era rule named below.
+2. **Measured outcomes outrank narrative.** Planner traces, strategies, handoffs,
+   and progress notes are input context only unless joined to a measured outcome
+   row from the AutoPilot journal or a reviewed lab-job verdict.
+3. **Untrusted source text stays quarantined.** Research-intake source text,
+   web-research output, and future intake-triage job inputs are never interpreted
+   as instructions. Use only extracted classification fields and reviewed
+   summaries.
+4. **Contaminated eras are training exclusions by default.** Rows tagged
+   `bug_corrupted_by`, rows from known resource-contention windows, and rows
+   whose schema predates the needed field are excluded unless a builder has an
+   explicit negative-example mode.
 
-### Planner archive
+## Corpus Table
 
-Source writers:
+| Corpus | Location | Schema Owner | Current Status | Intended Use | Era Label Rule |
+|---|---|---|---|---|---|
+| AutoPilot experiment journal | `orchestration/autopilot_journal*.jsonl` | `scripts/autopilot/experiment_journal.py::JournalEntry` | live | Outcome labels for planner SFT, replay, per-question vectors, sequential verdicts | `timestamp`, `trial_id`, `metric_schema_version`, `bug_corrupted_by`, `bug_corrupted_reason`, `outcome_status`, plus `orchestration/instrument_eras.yaml` |
+| Planner archive | `logs/planner_archive.jsonl` | `scripts/autopilot/controller_io.py`, `scripts/autopilot/planner_coordinator.py`, `scripts/autopilot/planner_providers.py` | live; failed Claude calls are branch-ready on `feat/data-flywheel-capture` | Planner/critic context-action pairs, cloud spend, failure examples | `ts`/`ts_iso`, provider/type/subtype/status fields when present, `resume_session_id`, prompt hash, branch/commit of archive writer |
+| Strategy memory | `orchestration/repl_memory/strategies/strategies.db` and adjacent FAISS files | `orchestration/repl_memory/strategy_store.py` | live | Retrieved strategy corpus, positive/negative strategy examples after outcome join | `source_trial_id`, `created_at`, `entry_type`, `context_hash`, `strategy_validity`, joined journal `bug_corrupted_by` |
+| Research intake index | `/mnt/raid0/llm/epyc-root/research/intake_index.yaml` | `research-intake` skill index schema | live | Intake triage classifier and source-categorization set | `ingested_date`, `id`, `source_type`, `verdict`, `novelty`, `relevance`; source text remains quarantined per F5 |
+| Research deep dives | `/mnt/raid0/llm/epyc-root/research/deep-dives/*.md` | root research process | live narrative | Decision-chain retrieval, synthesis examples after review | file path, document date/title, linked intake IDs, linked handoffs; narrative-only unless joined to a reviewed verdict |
+| Handoffs and progress notes | `/mnt/raid0/llm/epyc-root/handoffs/`, `/mnt/raid0/llm/epyc-root/progress/` | root handoff workflow | live narrative | Decision chronology, task planning examples, backlog state reconstruction | file path, status header, date heading, commit that modified the row; historical docs are narrative and must be verified against code |
+| Progress telemetry JSONL | `logs/progress/YYYY-MM-DD.jsonl` | `orchestration/repl_memory/progress_logger.py` and call sites | live | Real-task/routing telemetry and future F1 task records | `timestamp`, `event_type`, `task_id`, `agent_role`, schema version if present, outcome field when present |
+| Per-question eval ledger | `eval_details.question_results` in future `autopilot_journal*.jsonl` rows | `feat/paired-question-stats-current` | branch-ready, not deployed | Sequential verdicts, paired replay, item difficulty | Opens at branch merge/deploy; use `qid`, suite, core ID/pool version, and journal era labels |
+| Seeding diagnostics | `logs/seeding_diagnostics.jsonl` | seeding benchmark infra | historical/live depending run | Item-difficulty priors, factual-risk calibration | `timestamp`, suite/domain, scoring method/config when present; rows without scoring method are priors only |
+| Factual-risk calibration rows | `orchestration/factual_risk_calibration_v2_{train,val,test}.jsonl` | factual-risk calibration scripts | live generated dataset | Risk classifier and abstention calibration | file split, `label_source`, `prompt_hash`, generator version; regex labels are calibration labels, not quality verdicts |
+| Routing classifier snapshots | `orchestration/repl_memory/training_data.npz`, `routing_classifier_weights.npz` | `orchestration/repl_memory/routing_classifier.py` and training scripts | generated artifact | Routing classifier replay and calibration, not planner SFT | generation timestamp, source progress/embedding snapshot, embedding model/index version, held-out split seed |
+| Benchmark question pool | `/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool*.jsonl` | inference-research benchmark scripts | live eval data | Eval core construction, qid derivation, per-question replay | manifest/version file, suite, prompt hash/qid, pool version, core ID when selected |
+| Benchmark result ledger | `/mnt/raid0/llm/epyc-inference-research/benchmarks/results/*.jsonl` and `data/**/*.csv` | inference-research benchmark scripts | live benchmark archive | Model descriptors, throughput baselines, calibration covariates | result timestamp, script/config name, model registry ref, host/runtime metadata |
+| Root workload packs | `/mnt/raid0/llm/epyc-inference-research/benchmarks/root_workload/*.json` | F1 real-task corpus | seed packs exist; passive task capture still pending | Real-task eval distribution and promotion cohorts | pack name/version, prompt/task ID, source commit, reviewed outcome when available |
+| Lab job outputs | planned `orchestration/lab_review_queue/` plus future `task_record` events | F2 self-running lab | not captured yet | Reviewed job dataset, local-lab reliability ladder, task tuples for F3 | job ID, contract version, risk class, model role, review verdict, reviewer, timestamp |
+| Intake-triage labels | planned F2/F5 reviewed output rows | F2/F5 | not captured yet | Triage classifier (`relevant`, `duplicate`, `park`, destination index) | source intake ID, quarantine policy version, output contract version, human review verdict |
 
-- `scripts/autopilot/controller_io.py` for Claude CLI planner invocations.
-- `scripts/autopilot/planner_providers.py` for Codex planner invocations.
-- `scripts/autopilot/planner_coordinator.py` for multi-provider draft/critique decisions.
+## Required Fields by Builder
 
-Record variants:
+### Planner SFT Builder
 
-- Claude invocation rows: `ts`, `ts_iso`, `duration_s`, `session_id`,
-  `resume_session_id`, `prompt_chars`, `prompt_sha256_16`, `result_chars`,
-  `result_preview`, `n_events`, `events`, plus result metadata when present.
-- Failed Claude rows from F3-W1 onward add `subtype` values such as `failed`,
-  `timeout`, or `file_not_found`, with `returncode`, `stderr_preview`, or
-  timeout fields where applicable.
-- Codex rows: `provider`, `role`, `duration_s`, `ok`, `error`, prompt/result
-  hashes and previews, event summaries.
-- Coordinator rows: `type=planner_coordinator`, `mode`, `draft_provider`,
-  `critic_provider`, `degraded`, `fallback_reason`, `action_type`,
-  `critique_decision`, `critique_confidence`, `critique_issues`,
-  `planner_state`.
+Source: planner archive joined to AutoPilot journal and future sequential verdicts.
 
-Era-labeling rule: use `ts`/`ts_iso` and writer-specific fields. Rows before
-F3-W1 are missing failed Claude early-return calls, so they are incomplete for
-failure-rate estimates. They remain usable for positive planner traces and
-coordinator critic labels. Rows after the F3-W1 patch are eligible for failure
-analysis if their matching AutoPilot journal rows are not `bug_corrupted_by`.
+Required output columns:
+- `example_id`: stable hash of archive row ID + action fingerprint.
+- `source_archive_path`, `source_archive_offset` or line number.
+- `prompt_sha256_16`, `prompt_chars`, `provider`, `role`, `subtype` or `status`.
+- `action_type`, `action_json`, `rationale_json` when parseable.
+- `trial_id` or `candidate_fingerprint` join key when available.
+- `label`: one of `confirmed`, `critic_approved`, `rejected`, `failed`, `contaminated`, `unlabeled`.
+- `era_label`: normalized value derived from the table above.
+- `exclude_reason`: empty only when the row is training-eligible.
 
-### AutoPilot experiment journal
+Initial keep rule:
+- Keep `confirmed` once sequential verdicts exist.
+- Before sequential verdicts, keep `critic_approved` only as a weak label and
+  keep failed calls as negative examples.
+- Exclude rows from contaminated resource-contention windows unless building an
+  explicit failure-mode classifier.
 
-Path pattern: `orchestration/autopilot_journal*.jsonl`.
+### Intake Triage Builder
 
-Core schema: one `JournalEntry` per trial with `trial_id`, `timestamp`,
-`species`, `action_type`, `tier`, objective fields (`quality`, `speed`, `cost`,
-`reliability`), `pareto_status`, git/config snapshots, rationale fields
-(`reasoning`, `hypothesis`, `falsifier`, `rubric_scores`), failure labels,
-`outcome_status`, and `eval_details`.
+Source: root `research/intake_index.yaml` plus future reviewed triage rows.
 
-Era-labeling rule: use `orchestration/instrument_eras.yaml`. Key cut points are
-E2 speed de-double-counting at `2026-06-01T19:20:16Z`, E3a tool-sentinel quality
-at `2026-06-04T06:41:00Z`, and E3b T1 n=43 at `2026-06-05T13:07:00Z`.
-Rows with `bug_corrupted_by` are excluded from training labels unless the
-builder is explicitly training failure-recognition behavior.
+Required output columns:
+- `intake_id`, `url`, `source_type`, `title`, `categories`.
+- `novelty`, `relevance`, `verdict`, `discovered_via`, `ingested_date`.
+- `destination_handoff` or `destination_index` when reviewed.
+- `quarantine_policy_version`.
+- `label_source`: `operator`, `research-intake`, or `shadow_job`.
+- `exclude_reason`.
 
-### Research intake index
+Initial keep rule:
+- Use only rows with explicit verdicts.
+- Treat `citation_context` as untrusted source text; do not feed it as an
+  instruction-bearing prompt without F5 quarantine wrapping.
 
-Path: `/mnt/raid0/llm/epyc-root/research/intake_index.yaml`.
+### Real Task Builder
 
-Schema: list entries keyed by `id` with source fields (`url`, `arxiv_id`,
-`source_type`, `title`, `categories`, `citation_context`), triage features
-(`novelty`, `relevance`, `discovered_via`, `ingested_date`), label `verdict`,
-and optional `cross_references`.
+Source: future `task_record` progress events and reviewed artifacts.
 
-Era-labeling rule: use `ingested_date` plus the active research-intake renderer
-policy at that date. Entries created before the F5 quarantine convention are
-usable as classification labels, but not as instruction text. Builders should
-emit `{source_features, verdict}` rows from structured fields and keep
-`citation_context` as quoted source data only.
+Required output columns:
+- `task_id`, `task_class`, `prompt_ref`, `route_taken`, `wall_s`, `tokens`.
+- `outcome`: `accepted`, `abandoned`, `retried`, `operator_rejected`, or `unknown`.
+- `artifact_ref` when an accepted commit/file exists.
+- `operator_verdict` when available.
+- `capture_policy_version`.
 
-### Per-question eval ledger
+Initial keep rule:
+- Keep accepted/rejected reviewed rows for validation.
+- Use `unknown` rows only for unsupervised distribution modeling.
 
-Branch-ready source: `feat/paired-question-stats`.
+## Known Gaps
 
-Schema location: `eval_details.question_results` in AutoPilot journal rows. Each
-question result contains stable `qid`, `suite`, `correct`, `latency_ms`, and
-`tools_used`. The paired-stats reader also accepts nested legacy locations for
-early experiments.
-
-Era-labeling rule: this corpus opens with the branch merge/deploy. Do not
-backfill historical T1 rows without stable question ids. Pre-ledger aggregate
-quality rows are not acceptable for paired sequential verdicts.
-
-### Seeding diagnostics
-
-Path: `logs/seeding_diagnostics.jsonl`.
-
-Schema: per-question diagnostics from benchmark seeding runs, including prompt,
-domain/suite, labels, scoring method/config where present, and latency/error
-details depending on era.
-
-Era-labeling rule: follow `/workspace/MEASUREMENT.md` corpus 7. This is a
-strong item-difficulty prior when `scoring_method` and config are present.
-Datasets without scoring-method fields are demoted to priors and must not gate
-quality claims.
-
-### Factual-risk calibration rows
-
-Path pattern:
-`orchestration/factual_risk_calibration_v2_{train,val,test}.jsonl`.
-
-Schema: `prompt`, `expected_answer`, `domain`, `label_4class`, `risk_band_v1`,
-`label_source`, `prompt_hash`, `risk_features`, and `risk_score_computed`.
-
-Era-labeling rule: use the file stem split and `label_source`. Treat v1 regex
-labels as calibration-training labels, not ground-truth model-quality verdicts.
-
-### Deep-dive decision chains
-
-Paths: `/mnt/raid0/llm/epyc-root/research/deep-dives/*.md`, linked handoffs in
-`/mnt/raid0/llm/epyc-root/handoffs/`, and daily progress entries.
-
-Schema: Markdown narratives with source citations, evidence, caveats, and
-downstream decisions. This corpus is semi-structured; builders must extract
-provenance and decision spans before training.
-
-Era-labeling rule: use file date/frontmatter and the claim grammar in
-`/workspace/MEASUREMENT.md`. Pre-scrub narrative and any source-derived text
-without quarantine/provenance is retrieval evidence only, not instruction data.
-
-### Lab job reliability tuples
-
-Planned source: F2 self-running-lab runner and review queue.
-
-Planned schema: `(job_id, run_id, input, local_output, cloud_reference,
-operator_verdict, rejection_reason, model_role, schedule, risk_class,
-contract_version)`.
-
-Era-labeling rule: this corpus does not exist yet. It opens only after F2-W2
-creates reviewed outputs and F2-W3 promotion logging records operator verdicts.
-Until then, no dataset builder may assume these tuples are available.
-
-## Builder Rules
-
-- Include both success and failure examples for planner SFT; a success-only
-  dataset teaches optimism instead of controllability.
-- Split by era before train/validation/test split whenever an instrument changed.
-- Never train from source text embedded in intake/deep-dive artifacts as if it
-  were an instruction. External content is data.
-- Preserve row hashes or stable ids so later reconciliation can trace every
-  training example back to immutable source records.
+- Per-question `question_results` are branch-ready in
+  `feat/paired-question-stats-current` but not deployed, so historical journal
+  rows do not yet contain outcome vectors.
+- Failed Claude planner calls are captured on the F3 branch, and the W7 branch
+  additionally removes draft session persistence. Neither branch is deployed.
+- F2 lab jobs have not created `lab_jobs.yaml`, `lab_review_queue/`, or
+  `task_record` rows yet.
+- Intake-triage labels are not a separate reviewed dataset yet; current intake
+  verdicts are useful but mix historical operator/process decisions.
+- No builder should train on strategy-memory text from scrubbed or gate-lock-era
+  rows until it joins each strategy to trustworthy journal evidence.
