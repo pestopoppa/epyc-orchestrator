@@ -6,7 +6,7 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 
 _ROOT = Path(__file__).resolve().parents[2] / "scripts" / "benchmark"
@@ -124,11 +124,6 @@ def test_compute_3way_metadata_includes_cost_web_and_scratchpad_sections():
             "elapsed_seconds": 5.0,
             "generation_ms": 250.0,
         },
-        "architect_coding": {
-            "passed": False,
-            "elapsed_seconds": 9.0,
-            "generation_ms": 900.0,
-        },
     }
     with (
         patch.object(
@@ -161,7 +156,8 @@ def test_compute_3way_metadata_includes_cost_web_and_scratchpad_sections():
         )
 
     assert md["architect_eval"]["best"] == "architect_general"
-    assert md["architect_eval"]["heuristic_would_pick"] == "architect_coding"
+    assert md["architect_eval"]["heuristic_would_pick"] == "architect_general"
+    assert list(md["architect_eval"]["by_role"]) == ["architect_general"]
     assert md["architect_role"] == "architect_general"
     assert md["all_infra"] is False
     assert "web_research_rewards" in md
@@ -359,16 +355,15 @@ def test_evaluate_question_3way_non_vl_happy_path():
     rr_direct = _rr(role="frontdoor", mode="direct", passed=True, error_type="none", elapsed_seconds=2.0)
     rr_repl = _rr(role="frontdoor", mode="repl", passed=False, error_type="none", elapsed_seconds=3.0)
     rr_arch_g = _rr(role="architect_general", mode="delegated", passed=False, error_type="none", elapsed_seconds=4.0)
-    rr_arch_c = _rr(role="architect_coding", mode="delegated", passed=True, error_type="none", elapsed_seconds=5.0)
 
     with (
-        patch.object(_MOD, "ROLE_PORT", {"frontdoor": 8080, "architect_general": 8083, "architect_coding": 8084}),
+        patch.object(_MOD, "ROLE_PORT", {"frontdoor": 8080, "architect_general": 8083}),
         patch.object(_MOD, "_erase_slots"),
         patch.object(_MOD, "_adaptive_timeout_s", return_value=100),
         patch.object(_MOD, "_bump_timeout_from_observed", side_effect=lambda **kw: kw["current_s"]),
         patch.object(_MOD, "_compute_3way_metadata", return_value={"meta": 1}),
         patch.object(_MOD, "score_delegation_chain", return_value={"WORKER": 1.0}),
-        patch.object(_MOD, "_eval_single_config", side_effect=[(rr_direct, {}), (rr_repl, {}), (rr_arch_g, {}), (rr_arch_c, {})]),
+        patch.object(_MOD, "_eval_single_config", side_effect=[(rr_direct, {}), (rr_repl, {}), (rr_arch_g, {})]),
         patch.object(_MOD.logger, "info"),
     ):
         role_results, rewards, metadata = _MOD.evaluate_question_3way(
@@ -387,10 +382,9 @@ def test_evaluate_question_3way_non_vl_happy_path():
     assert "frontdoor:direct" in role_results
     assert "frontdoor:repl" in role_results
     assert "architect_general:delegated" in role_results
-    assert "architect_coding:delegated" in role_results
     assert rewards[_MOD.ACTION_SELF_DIRECT] == 1.0
     assert rewards[_MOD.ACTION_SELF_REPL] == 0.0
-    assert rewards[_MOD.ACTION_ARCHITECT] == 1.0
+    assert rewards[_MOD.ACTION_ARCHITECT] == 0.0
     assert rewards["WORKER"] == 1.0
     assert metadata == {"meta": 1}
 
@@ -402,7 +396,7 @@ def test_evaluate_question_3way_direct_retry_on_5xx_replaces_result():
     rr_arch = _rr(role="architect_general", mode="delegated", passed=True, error_type="none")
 
     with (
-        patch.object(_MOD, "ROLE_PORT", {"frontdoor": 8080, "architect_general": 8083, "architect_coding": 8084}),
+        patch.object(_MOD, "ROLE_PORT", {"frontdoor": 8080, "architect_general": 8083}),
         patch.object(_MOD, "HEAVY_PORTS", {8080}),
         patch.object(_MOD, "_erase_slots"),
         patch.object(_MOD, "_force_erase_and_verify"),
@@ -419,7 +413,6 @@ def test_evaluate_question_3way_direct_retry_on_5xx_replaces_result():
                 (rr_direct_infra, {}),
                 (rr_direct_retry, {}),  # retry direct
                 (rr_repl, {}),
-                (rr_arch, {}),
                 (rr_arch, {}),
             ],
         ),
@@ -556,14 +549,20 @@ def test_compute_3way_metadata_arch_selection_and_none_skips():
             web_research_results=[{"query": "q"}],
         ),
         "architect_general:delegated": _rr(role="architect_general", mode="delegated", passed=True, generation_ms=200.0),
-        "architect_coding:delegated": _rr(role="architect_coding", mode="delegated", passed=True, generation_ms=100.0),
+        "architect_code_specialist:delegated": _rr(
+            role="architect_code_specialist",
+            mode="delegated",
+            passed=True,
+            generation_ms=100.0,
+        ),
         "unused:none": None,
     }
     arch_results = {
         "architect_general": {"passed": True, "elapsed_seconds": 4.0, "generation_ms": 200.0},
-        "architect_coding": {"passed": True, "elapsed_seconds": 5.0, "generation_ms": 100.0},
+        "architect_code_specialist": {"passed": True, "elapsed_seconds": 5.0, "generation_ms": 100.0},
     }
     with (
+        patch.object(_MOD, "_architect_result_order", return_value=["architect_general", "architect_code_specialist"]),
         patch.object(
             _MOD,
             "extract_web_research_telemetry",
@@ -592,7 +591,7 @@ def test_compute_3way_metadata_arch_selection_and_none_skips():
             self_repl_mode="repl",
             arch_mode="delegated",
         )
-    assert md["architect_role"] == "architect_coding"
+    assert md["architect_role"] == "architect_code_specialist"
     assert md["web_research_baseline"]["call_count"] == 1
     assert "web_research_rewards" not in md
 
@@ -605,7 +604,7 @@ def test_compute_3way_metadata_arch_fallback_chooses_first_non_infra():
     }
     arch_results = {
         "architect_general": {"passed": False, "elapsed_seconds": 3.0, "generation_ms": 50.0},
-        "architect_coding": {"passed": None, "elapsed_seconds": 4.0, "generation_ms": 70.0},
+        "architect_code_specialist": {"passed": None, "elapsed_seconds": 4.0, "generation_ms": 70.0},
     }
     md = _MOD._compute_3way_metadata(
         role_results=role_results,

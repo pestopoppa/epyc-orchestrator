@@ -5,10 +5,10 @@ Runs the same code generation prompts with and without corpus injection,
 then uses Claude to judge whether corpus injection degrades output quality.
 
 Usage:
-    python scripts/benchmark/corpus_quality_gate.py --models 7b 32b
-    python scripts/benchmark/corpus_quality_gate.py --models 32b --dry-run
-    python scripts/benchmark/corpus_quality_gate.py --models 7b 32b --results-only
-    python scripts/benchmark/corpus_quality_gate.py --models 7b --mode rag
+    python scripts/benchmark/corpus_quality_gate.py --models frontdoor worker_general
+    python scripts/benchmark/corpus_quality_gate.py --models frontdoor --dry-run
+    python scripts/benchmark/corpus_quality_gate.py --models frontdoor worker_general --results-only
+    python scripts/benchmark/corpus_quality_gate.py --models frontdoor --mode rag
 
 Modes:
   speed (default): Inject snippets silently in ## Reference Code (Phase 2A)
@@ -30,23 +30,72 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
+import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# Model configs
-# NOTE 2026-05-19: these ports/models reflect the pre-2026-05-16 stack and are NOT
-# currently deployed. Script needs a model+port refresh before it can run against
-# the current consolidated layout (frontdoor on 8070, worker_general on 8072,
-# architect_coding removed).
-MODELS = {
-    "7b": {"port": 8082, "name": "Qwen2.5-7B", "role": "worker"},
-    "30b": {"port": 8080, "name": "Qwen3-Coder-30B-A3B", "role": "hot_orchestrator"},
-    "32b": {"port": 8081, "name": "Qwen2.5-Coder-32B", "role": "coder_escalation"},
-    "480b": {"port": 8084, "name": "Qwen3-Coder-480B-A35B", "role": "architect_coding"},
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+
+FALLBACK_MODELS = {
+    "frontdoor": {"port": 8070, "name": "Qwen3.6-35B-A3B Q8_0", "role": "frontdoor"},
+    "worker_general": {"port": 8072, "name": "gemma-4-26B-A4B-it Q4_K_M", "role": "worker_general"},
+    "architect_general": {"port": 8083, "name": "Qwen3.5-122B-A10B Q4_K_M", "role": "architect_general"},
 }
+
+
+def _port_from_role_record(record: dict) -> int | None:
+    serving = record.get("serving")
+    if not isinstance(serving, dict):
+        return None
+
+    endpoint = serving.get("endpoint")
+    if isinstance(endpoint, str):
+        parsed = urlparse(endpoint)
+        if parsed.port:
+            return parsed.port
+
+    ports = serving.get("ports")
+    if isinstance(ports, list):
+        for port in ports:
+            if isinstance(port, int):
+                return port
+    return None
+
+
+def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    models: dict[str, dict] = {}
+    for role, record in roles.items():
+        if not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        port = _port_from_role_record(record)
+        if port is None:
+            continue
+        models[str(role)] = {
+            "port": port,
+            "name": str(record.get("display_name") or record.get("model_id") or role),
+            "role": str(record.get("role") or role),
+        }
+    return models
+
+
+MODELS = _load_live_models() or dict(FALLBACK_MODELS)
 
 # Code generation prompts — novel tasks where corpus could help or hurt
 PROMPTS = [
@@ -277,8 +326,6 @@ def run_generation_pairs(
     Each prompt pair (baseline + corpus) runs sequentially for fair comparison.
     Different prompt pairs can run in parallel when the server has multiple slots.
     """
-    import concurrent.futures
-
     cfg = MODELS[model_key]
     port = cfg["port"]
 

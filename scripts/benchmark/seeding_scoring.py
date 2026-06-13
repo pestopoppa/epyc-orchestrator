@@ -63,7 +63,7 @@ def _classify_error(error_str: str | None) -> str:
 def _is_coding_task(prompt: str) -> bool:
     """Heuristic to determine if a task is coding-related.
 
-    Used to select architect_coding vs architect_general.
+    Used to choose between live architect-like roles when multiple exist.
     """
     coding_indicators = [
         "code", "function", "implement", "debug", "refactor",

@@ -13,7 +13,7 @@ import logging
 import time
 import warnings
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from seeding_types import (
     ARCHITECT_MODES,
@@ -37,8 +37,6 @@ from seeding_checkpoint import (
     record_seen,
 )
 from seeding_infra import (
-    MAX_RECOVERY_ATTEMPTS,
-    _attempt_recovery,
     _check_server_health,
     _wait_for_heavy_models_idle,
 )
@@ -60,6 +58,9 @@ __all__ = [
 ]
 
 logger = logging.getLogger("seed_specialist_routing")
+
+if TYPE_CHECKING:
+    import httpx
 
 
 # ── Combo building ───────────────────────────────────────────────────
@@ -204,7 +205,7 @@ def evaluate_question(
     role_results: dict[str, RoleResult] = {}
     cache_prompt_val = False if skip_cache else None
 
-    SLOW_ROLES = {"architect_general", "architect_coding"}
+    SLOW_ROLES = set(ARCHITECT_ROLES)
     SLOW_ROLE_TIMEOUT = max(timeout, 300)
 
     # 2026-05-22: adaptive dispatch — per-(role,mode) latency tracking +
@@ -693,7 +694,7 @@ def print_stats():
     print(f"Unique questions seen: {len(seen)}")
 
     if all_combo_stats:
-        print(f"\nAggregate accuracy by role x mode:")
+        print("\nAggregate accuracy by role x mode:")
         print(f"  {'Role:Mode':30s} {'Pass':>5s} {'Fail':>5s} {'Err':>4s} {'Acc%':>6s} {'N':>5s} {'>=3?':>4s}")
         print("  " + "-" * 60)
         for key in sorted(all_combo_stats.keys()):

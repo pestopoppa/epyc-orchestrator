@@ -29,6 +29,8 @@ __all__ = [
     "FALLBACK_THROUGHPUT_BY_ROLE",
     "compute_comparative_rewards",
     "detect_escalation_chains",
+    "stack_prior_architect_reward_roles",
+    "stack_prior_throughput_by_role",
     # Phase 4: Binary rewards for faithful probability estimation
     "success_reward",
     "compute_3way_rewards",

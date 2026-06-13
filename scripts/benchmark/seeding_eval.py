@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from seeding_types import (
     ACTION_ARCHITECT,
@@ -38,7 +38,6 @@ from seeding_orchestrator import (
     _erase_slots,
     _force_erase_and_verify,
     _recover_heavy_ports_if_stuck,
-    call_orchestrator_forced,
 )
 from seeding_infra import _wait_for_heavy_models_idle
 from seeding_rewards import (
@@ -48,6 +47,7 @@ from seeding_rewards import (
     compute_scratchpad_rewards,
     score_delegation_chain,
     score_query_strategy,
+    stack_prior_architect_reward_roles,
     success_reward,
 )
 from seeding_telemetry import (
@@ -69,8 +69,41 @@ __all__ = [
 
 logger = logging.getLogger("seed_specialist_routing")
 
+if TYPE_CHECKING:
+    import httpx
+
 _TAP_PATH = "/mnt/raid0/llm/tmp/inference_tap.log"
 _REPL_TAP_PATH = "/mnt/raid0/llm/tmp/repl_tap.log"
+_NON_VL_ARCHITECT_FALLBACK = ("architect_general",)
+
+
+def _non_vl_architect_roles_to_eval() -> list[str]:
+    """Return live text architect roles for 3-way evaluation."""
+    roles = stack_prior_architect_reward_roles()
+    non_vl = sorted(role for role in roles if role.startswith("architect_"))
+    return non_vl or list(_NON_VL_ARCHITECT_FALLBACK)
+
+
+def _architect_result_order(available_roles: Any) -> list[str]:
+    """Order architect results with live stack-prior roles first."""
+    available = [str(role) for role in available_roles]
+    available_set = set(available)
+    live_order = [role for role in _non_vl_architect_roles_to_eval() if role in available_set]
+    return live_order or available
+
+
+def _heuristic_architect_role(prompt: str, available_roles: Any) -> str:
+    """Pick the architect role implied by the coding/general heuristic."""
+    ordered = _architect_result_order(available_roles)
+    if not ordered:
+        return ""
+    if _is_coding_task(prompt):
+        for role in ordered:
+            if "code" in role.lower():
+                return role
+    if "architect_general" in ordered:
+        return "architect_general"
+    return ordered[0]
 
 
 def _seed_role_concurrency_limit(n_roles: int) -> int:
@@ -548,7 +581,9 @@ def _compute_3way_metadata(
 
     # Determine best architect (prefer generation_ms over elapsed)
     best_arch = None
-    for ar, res in arch_results.items():
+    arch_result_order = _architect_result_order(arch_results.keys())
+    for ar in arch_result_order:
+        res = arch_results[ar]
         if res["passed"] is True:
             if best_arch is None:
                 best_arch = ar
@@ -560,16 +595,17 @@ def _compute_3way_metadata(
                 if cur_time < best_time:
                     best_arch = ar
     if best_arch is None:
-        for ar, res in arch_results.items():
+        for ar in arch_result_order:
+            res = arch_results[ar]
             if res["passed"] is not None:
                 best_arch = ar
                 break
 
     metadata["architect_eval"] = {
+        "by_role": {role: arch_results[role] for role in arch_result_order},
         "general": arch_results.get("architect_general"),
-        "coding": arch_results.get("architect_coding"),
         "best": best_arch,
-        "heuristic_would_pick": "architect_coding" if _is_coding_task(prompt) else "architect_general",
+        "heuristic_would_pick": _heuristic_architect_role(prompt, arch_result_order),
     }
     metadata["architect_role"] = best_arch or ""
 
@@ -816,7 +852,7 @@ def evaluate_question_3way(
     if is_vl:
         arch_roles_to_eval = [arch_role]
     else:
-        arch_roles_to_eval = ["architect_general", "architect_coding"]
+        arch_roles_to_eval = _non_vl_architect_roles_to_eval()
 
     arch_results: dict[str, dict[str, Any]] = {}
     arch_mode = "direct" if is_vl else "delegated"
