@@ -18,6 +18,9 @@ import logging
 import random
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+
+import yaml
 
 log = logging.getLogger("autopilot.preflight")
 
@@ -27,6 +30,70 @@ sys.path.insert(0, str(BENCHMARK_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parents[1]))
 
 ORCHESTRATOR_URL = "http://localhost:8000"
+STACK_PRIORS_PATH = SCRIPT_DIR.parents[1] / "orchestration" / "derived" / "stack_priors.yaml"
+FALLBACK_MODEL_SERVER_TARGETS = [
+    ("frontdoor/coder_escalation/worker_summarize", "http://localhost:8070/health"),
+    ("worker_general/worker_math/toolrunner", "http://localhost:8072/health"),
+    ("architect_general", "http://localhost:8083/health"),
+    ("ingest_long_context", "http://localhost:8085/health"),
+    ("worker_vision", "http://localhost:8086/health"),
+    ("vision_escalation", "http://localhost:8087/health"),
+]
+
+
+def _health_url(endpoint: str) -> str | None:
+    parsed = urlparse(endpoint)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}/health"
+
+
+def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str]]:
+    api_health = _health_url(orchestrator_url) or "http://localhost:8000/health"
+    return [("API", api_health), *FALLBACK_MODEL_SERVER_TARGETS]
+
+
+def _model_server_targets(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+    orchestrator_url: str = ORCHESTRATOR_URL,
+) -> list[tuple[str, str]]:
+    """Return health targets from generated stack priors, with degraded fallback."""
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return _fallback_model_server_targets(orchestrator_url)
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return _fallback_model_server_targets(orchestrator_url)
+
+    names_by_health_url: dict[str, list[str]] = {}
+    api_health = _health_url(orchestrator_url) or "http://localhost:8000/health"
+    names_by_health_url[api_health] = ["API"]
+
+    for role_name, record in roles.items():
+        if not isinstance(role_name, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+        endpoint = serving.get("endpoint")
+        if not isinstance(endpoint, str):
+            continue
+        health_url = _health_url(endpoint)
+        if health_url is None:
+            continue
+        names_by_health_url.setdefault(health_url, []).append(role_name)
+
+    if len(names_by_health_url) <= 1:
+        return _fallback_model_server_targets(orchestrator_url)
+    return [
+        ("/".join(sorted(names)), health_url)
+        for health_url, names in sorted(names_by_health_url.items())
+    ]
 
 
 def _header(title: str) -> None:
@@ -42,30 +109,22 @@ def _check(name: str, condition: bool, detail: str = "") -> bool:
     return condition
 
 
-def audit_model_servers() -> bool:
+def audit_model_servers(url: str = ORCHESTRATOR_URL) -> bool:
     """Check all key model servers are healthy."""
     _header("1. Model Server Health")
     import subprocess
 
     all_ok = True
-    ports = {
-        8000: "API",
-        8070: "frontdoor",  # also hosts coder_escalation + worker_summarize (same GGUF)
-        8072: "worker_general",
-        8083: "architect_general",
-        8085: "ingest_long_context",
-        8087: "vision_escalation",
-    }
-    for port, name in ports.items():
+    for name, health_url in _model_server_targets(orchestrator_url=url):
         try:
             r = subprocess.run(
-                ["curl", "-sf", f"http://localhost:{port}/health"],
+                ["curl", "-sf", health_url],
                 capture_output=True, timeout=5,
             )
             ok = r.returncode == 0
         except (subprocess.TimeoutExpired, OSError):
             ok = False
-        all_ok &= _check(f"{name} ({port})", ok)
+        all_ok &= _check(f"{name} ({health_url})", ok)
     return all_ok
 
 
@@ -332,7 +391,7 @@ def main():
     print("╚" + "═" * 58 + "╝")
 
     results = []
-    results.append(("Model Servers", audit_model_servers()))
+    results.append(("Model Servers", audit_model_servers(args.url)))
     results.append(("Web Search", audit_web_search()))
     results.append(("Web Fetch", audit_web_fetch()))
     results.append(("Code Execution", audit_code_execution()))
