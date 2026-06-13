@@ -1,11 +1,12 @@
 """Controller context-budget helpers for AutoPilot (AP-30).
 
-The autopilot controller prompt assembles ~14 sections (program, Pareto
-summary, journal, seeder status, species effectiveness, slot memory,
-budget, suite quality trends, insights, short-term memory, last criticism,
-model signatures, blacklist, plot paths) plus the eval tower's per-trial
-output. Without budgets each section grows monotonically with trial count
-and the prompt eventually crowds out the controller's reasoning budget.
+The autopilot controller prompt assembles ~15 sections (constitution,
+generated system card, Pareto summary, journal, seeder status, species
+effectiveness, slot memory, budget, suite quality trends, insights,
+short-term memory, last criticism, model signatures, blacklist, plot paths)
+plus the eval tower's per-trial output. Without budgets each section grows
+monotonically with trial count and the prompt eventually crowds out the
+controller's reasoning budget.
 
 This module provides the pure-function building blocks for a budget pass
 (intake-415 Context Mode + intake-414 Token Savior progressive disclosure):
@@ -34,11 +35,14 @@ logger = logging.getLogger(__name__)
 _CHARS_PER_TOKEN = 4
 
 # AP-30 per-section budgets (approximate tokens).
-# Total state-section budget: ~6,050 tokens. Plus program (~800), short-term
-# memory (~800), and the eval-tower gate (5KB ≈ 1,250 tokens) keeps the full
-# controller prompt under ~10K tokens — well within any deployable model.
+# Total state-section budget: ~6,450 tokens. Plus compact guidance
+# (constitution + generated card, ~1,200), short-term memory (~800), and the
+# eval-tower gate (5KB ≈ 1,250 tokens) keeps the full controller prompt under
+# ~10K tokens — well within any deployable model.
 SECTION_BUDGETS: dict[str, int] = {
-    "program": 800,
+    "constitution": 800,
+    "system_card": 500,
+    "program": 800,  # Backward-compatible alias for older tests/tools.
     "pareto_summary": 500,
     "journal_summary": 1000,
     "seeder_status": 200,

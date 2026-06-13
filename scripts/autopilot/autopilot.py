@@ -588,15 +588,20 @@ def _autopilot_logging_handlers(
 
 # ── Controller Prompt Template ───────────────────────────────────
 
-PROGRAM_PATH = SCRIPT_DIR / "program.md"
+CONSTITUTION_PATH = SCRIPT_DIR / "constitution.md"
+SYSTEM_CARD_PATH = SCRIPT_DIR / "system_card.md"
 
 CONTROLLER_PROMPT_TEMPLATE = """\
 You are the AutoPilot meta-reasoning controller for an LLM orchestration stack.
 Your job: analyze current system state and propose the SINGLE best next action.
 
-## Program (strategy & constraints — human-editable)
+## Controller Constitution (durable human-authored policy)
 
-{program}
+{constitution}
+
+## Generated System Card (live facts, regenerated from repository state)
+
+{system_card}
 
 ## Current State
 
@@ -731,6 +736,27 @@ candidates against still-open hypotheses:
    "synthesis_note": "<optional one-line on fusion / cleaner model>"}}}}
 ```
 """
+
+
+def _read_guidance_file(path: Path, missing_label: str) -> str:
+    try:
+        return path.read_text()
+    except OSError:
+        return f"({missing_label} not found)"
+
+
+def _render_system_card(state: dict[str, Any] | None = None) -> str:
+    """Render live controller facts, falling back to the checked-in card."""
+    try:
+        from gen_system_card import generate_system_card
+
+        return generate_system_card(ORCH_ROOT, state_override=state)
+    except Exception as exc:
+        fallback = _read_guidance_file(SYSTEM_CARD_PATH, "system_card.md")
+        return (
+            f"{fallback}\n\n"
+            f"[system-card generator unavailable: {type(exc).__name__}: {exc}]"
+        )
 
 
 # ── Exploration block (stagnation-gated creative-prompt fragment) ─
@@ -1713,11 +1739,13 @@ def _run_loop_inner(
                 trial_id=trial_counter,
                 idle_reason="building controller prompt",
             )
-            # Load program.md (human-editable strategy file)
-            try:
-                program_text = PROGRAM_PATH.read_text()
-            except OSError:
-                program_text = "(program.md not found)"
+            # Load split controller guidance (W8): durable human policy plus
+            # generated live system card. program.md remains historical only.
+            constitution_text = _read_guidance_file(
+                CONSTITUTION_PATH,
+                "constitution.md",
+            )
+            system_card_text = _render_system_card(state)
             # B2: Format blacklist for controller. Prompt-budget trim (2026-06-10):
             # the blacklist grows unbounded (auto-appended on failures) and the FULL
             # list is still enforced at dispatch by check_blacklist(); the planner
@@ -1950,7 +1978,8 @@ def _run_loop_inner(
                 stagnation_signal = "unknown"
 
             prompt = CONTROLLER_PROMPT_TEMPLATE.format(
-                program=program_text,
+                constitution=constitution_text,
+                system_card=system_card_text,
                 pareto_summary=archive.summary_text(tier=DEFAULT_FRONTIER_TIER),
                 pareto_geometry=pareto_geometry_text,
                 journal_trustworthiness=journal_trustworthiness_text,
