@@ -30,7 +30,6 @@ from src.registry.model_descriptors import (  # noqa: E402
     DEFAULT_LEAN_REGISTRY,
     DEFAULT_RESEARCH_REGISTRY,
     compile_model_descriptors,
-    write_model_descriptors,
 )
 from src.registry.stack_priors import (  # noqa: E402
     DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
@@ -55,6 +54,7 @@ class StackChangePipelineConfig:
     roles: set[str] | None = None
     allow_known_gaps: bool = False
     compile_incomplete: bool = True
+    allow_descriptor_model_removal: bool = False
 
 
 @dataclass
@@ -126,6 +126,31 @@ def _generated_matches(path: Path, expected: dict[str, Any]) -> bool:
     return _normalise_generated(actual) == _normalise_generated(expected)
 
 
+def _descriptor_model_ids(descriptors: dict[str, Any]) -> set[str]:
+    models = descriptors.get("models")
+    if not isinstance(models, list):
+        return set()
+    return {
+        str(model["model_id"])
+        for model in models
+        if isinstance(model, dict) and isinstance(model.get("model_id"), str)
+    }
+
+
+def _descriptor_removal_errors(path: Path, generated: dict[str, Any]) -> list[str]:
+    if not path.exists():
+        return []
+    current_ids = _descriptor_model_ids(_load_yaml(path))
+    generated_ids = _descriptor_model_ids(generated)
+    removed = sorted(current_ids - generated_ids)
+    if not removed:
+        return []
+    return [
+        "descriptor update would remove existing model_id(s): " + ", ".join(removed),
+        "rerun with --allow-descriptor-model-removal only after an explicit coverage decision",
+    ]
+
+
 def _roles_from_stack_manifest() -> set[str]:
     from scripts.server.stack_manifest import ROLE_LAUNCH_META
 
@@ -166,20 +191,27 @@ def _check_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
             status="ok",
             details=[f"fresh: {config.descriptors}"],
         )
+    removal_errors = _descriptor_removal_errors(config.descriptors, expected)
+    if removal_errors:
+        errors = [
+            f"descriptor artifact is stale: {config.descriptors}",
+            *removal_errors,
+        ]
+    else:
+        errors = [
+            f"descriptor artifact is stale or missing: {config.descriptors}",
+            "run: uv run python scripts/registry/stack_change_pipeline.py update",
+        ]
     return PipelineStep(
         name="descriptors",
         status="stale",
-        errors=[
-            f"descriptor artifact is stale or missing: {config.descriptors}",
-            "run: uv run python scripts/registry/stack_change_pipeline.py update",
-        ],
+        errors=errors,
     )
 
 
 def _update_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
     try:
-        descriptors = write_model_descriptors(
-            config.descriptors,
+        descriptors = compile_model_descriptors(
             lean_registry_path=config.lean_registry,
             research_registry_path=config.research_registry,
             active_roles=_active_roles(config),
@@ -191,6 +223,16 @@ def _update_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
             status="failed",
             errors=[f"descriptor update failed: {exc}"],
         )
+    if not config.allow_descriptor_model_removal:
+        removal_errors = _descriptor_removal_errors(config.descriptors, descriptors)
+        if removal_errors:
+            return PipelineStep(
+                name="descriptors",
+                status="failed",
+                errors=removal_errors,
+            )
+    config.descriptors.parent.mkdir(parents=True, exist_ok=True)
+    config.descriptors.write_text(_dump_yaml(descriptors), encoding="utf-8")
     return PipelineStep(
         name="descriptors",
         status="updated",
@@ -322,9 +364,26 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
         report.steps.append(_check_stack_priors(config))
         report.steps.append(_procedure_enums(config, check=True))
     else:
-        report.steps.append(_update_descriptors(config))
-        report.steps.append(_update_stack_priors(config))
-        report.steps.append(_procedure_enums(config, check=False))
+        descriptor_step = _update_descriptors(config)
+        report.steps.append(descriptor_step)
+        if descriptor_step.ok:
+            report.steps.append(_update_stack_priors(config))
+            report.steps.append(_procedure_enums(config, check=False))
+        else:
+            report.steps.append(
+                PipelineStep(
+                    name="stack_priors",
+                    status="skipped",
+                    warnings=["skipped because descriptor update failed"],
+                )
+            )
+            report.steps.append(
+                PipelineStep(
+                    name="procedure_enums",
+                    status="skipped",
+                    warnings=["skipped because descriptor update failed"],
+                )
+            )
 
     report.steps.append(
         _guard_step("guard", config, strict=False, all_surfaces=False)
@@ -380,6 +439,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Report strict known-gap failures as warnings while the current gap-closure work is active",
     )
+    parser.add_argument(
+        "--allow-descriptor-model-removal",
+        action="store_true",
+        help="Permit update mode to remove model IDs from the descriptor artifact",
+    )
     args = parser.parse_args(argv)
 
     config = StackChangePipelineConfig(
@@ -395,6 +459,7 @@ def main(argv: list[str] | None = None) -> int:
         roles=set(args.roles) if args.roles else None,
         allow_known_gaps=args.allow_known_gaps,
         compile_incomplete=not args.strict_descriptor_compile,
+        allow_descriptor_model_removal=args.allow_descriptor_model_removal,
     )
     report = run_stack_change_pipeline(config)
     _print_report(report)

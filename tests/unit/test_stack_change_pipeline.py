@@ -159,6 +159,54 @@ def test_check_reports_stale_generated_artifact_without_writing(tmp_path: Path) 
     assert config.stack_priors.read_text(encoding="utf-8") == priors_before
 
 
+def test_update_refuses_to_remove_existing_descriptor_model_ids(tmp_path: Path) -> None:
+    config = _config(tmp_path, mode="update")
+    _write_yaml(
+        config.descriptors,
+        {
+            "models": [
+                {
+                    "model_id": "qwen3.6-35b-a3b-q8_0",
+                },
+                {
+                    "model_id": "benchmark-only-reap",
+                },
+            ]
+        },
+    )
+    descriptor_before = config.descriptors.read_text(encoding="utf-8")
+
+    report = run_stack_change_pipeline(config)
+
+    assert not report.ok
+    assert any("benchmark-only-reap" in error for error in report.errors)
+    assert config.descriptors.read_text(encoding="utf-8") == descriptor_before
+    assert not config.stack_priors.exists()
+    assert {step.name: step.status for step in report.steps}["stack_priors"] == "skipped"
+
+
+def test_check_reports_descriptor_model_removal_blocker(tmp_path: Path) -> None:
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    loaded = yaml.safe_load(update_config.descriptors.read_text(encoding="utf-8"))
+    loaded["models"].append({"model_id": "benchmark-only-reap"})
+    _write_yaml(update_config.descriptors, loaded)
+
+    config = StackChangePipelineConfig(
+        **{**update_config.__dict__, "mode": "check"}
+    )
+
+    report = run_stack_change_pipeline(config)
+
+    assert not report.ok
+    descriptor_step = next(step for step in report.steps if step.name == "descriptors")
+    assert any("descriptor artifact is stale:" in error for error in descriptor_step.errors)
+    assert any("benchmark-only-reap" in error for error in descriptor_step.errors)
+    assert not any(
+        error.endswith("stack_change_pipeline.py update") for error in descriptor_step.errors
+    )
+
+
 def test_check_fails_on_stale_procedure_enums(tmp_path: Path) -> None:
     config = _config(tmp_path, mode="update")
     assert run_stack_change_pipeline(config).ok
