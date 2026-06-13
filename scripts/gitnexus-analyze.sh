@@ -10,4 +10,12 @@
 # (see feedback_gitnexus_bloat_protection). Re-run this wrapper, never bare
 # `gitnexus analyze`.
 set -euo pipefail
+
+lock_file="/tmp/gitnexus-$(basename "$(git rev-parse --show-toplevel)")-analyze.lock"
+exec 9>"$lock_file"
+if ! flock -n 9; then
+  echo "gitnexus analyze is already running for this repository; wait for it to finish." >&2
+  exit 75
+fi
+
 exec gitnexus analyze --skip-agents-md --skip-skills "$@"
