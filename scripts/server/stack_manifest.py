@@ -26,10 +26,12 @@ from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _PATHS
 
 PORT_MAP = {
     "frontdoor": 8070,  # Full-speed 1×96t (quarters: 8080, 8180, 8280, 8380)
-    "coder_escalation": 8071,  # Full-speed 1×96t (quarters: 8081, 8181, 8281, 8381)
+    "coder_escalation": 8070,  # Alias -> frontdoor shared Qwen3.6 server
+    "worker_summarize": 8070,  # Alias -> frontdoor shared Qwen3.6 server
     "worker_general": 8072,  # Full-speed 1×96t (quarters: 8082, 8182, 8282, 8382)
     "worker_explore": 8072,  # Alias -> worker_general (legacy name; pre-2026-03-19)
     "worker_math": 8072,  # Shares with worker_general
+    "toolrunner": 8072,  # Shares with worker_general
     "worker_vision": 8086,  # Dedicated VL server
     "vision_escalation": 8087,  # VL escalation (Qwen3-VL-30B MoE)
     "worker_coder": 8102,  # Fast coding worker semantic role (1.5B backend) — DEPRECATED (worker_pool)
@@ -521,6 +523,24 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
     for r in sorted(only_in_registry_hot):
         # Roles that the registry says should be hot but launcher doesn't classify hot
         warnings.append(f"role '{r}' is hot_resident in registry but not in launcher's HOT tier")
+
+    # Cross-check legacy/direct role port hints against computed launch roles.
+    # PORT_MAP is still used by targeted reload/status compatibility paths; it
+    # must agree with ROLE_LAUNCH_META + NUMA_CONFIG for shared aliases.
+    computed_role_ports: dict[str, int] = {}
+    for server in HOT_SERVERS + WARM_SERVERS:
+        port = server.get("port")
+        if not isinstance(port, int):
+            continue
+        for role in server.get("roles", []):
+            computed_role_ports.setdefault(str(role), port)
+    for role, port in PORT_MAP.items():
+        computed_port = computed_role_ports.get(role)
+        if computed_port is not None and port != computed_port:
+            warnings.append(
+                f"role '{role}': PORT_MAP says port {port}, "
+                f"but computed launch roles use port {computed_port}"
+            )
 
     # Cross-check NUMA_CONFIG ports vs registry server_mode ports (where present)
     sm = registry.get("server_mode", {})

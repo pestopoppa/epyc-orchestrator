@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -144,6 +145,61 @@ def test_hot_servers_includes_frontdoor() -> None:
     ports = {s["port"] for s in HOT_SERVERS}
     # frontdoor primary on 8070
     assert 8070 in ports
+
+
+def test_port_map_aliases_match_computed_launch_servers() -> None:
+    from scripts.server.stack_manifest import HOT_SERVERS, PORT_MAP, WARM_SERVERS
+
+    computed_role_ports: dict[str, int] = {}
+    for server in HOT_SERVERS + WARM_SERVERS:
+        for role in server.get("roles", []):
+            computed_role_ports.setdefault(role, server["port"])
+
+    for role in ("coder_escalation", "worker_summarize", "worker_math", "toolrunner"):
+        assert PORT_MAP[role] == computed_role_ports[role]
+
+
+def test_validate_against_registry_checks_port_map_alias_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.server.stack_manifest as manifest
+
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        yaml.safe_dump(
+            {
+                "process_layout": {
+                    "hot_resident": [
+                        "frontdoor",
+                        "coder_escalation",
+                        "worker_summarize",
+                        "worker_general",
+                        "worker_math",
+                        "toolrunner",
+                        "architect_general",
+                        "ingest_long_context",
+                        "worker_vision",
+                        "vision_escalation",
+                    ],
+                    "warm_mmap": [],
+                },
+                "server_mode": {},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    drifted = dict(manifest.PORT_MAP)
+    drifted["coder_escalation"] = 8071
+    monkeypatch.setattr(manifest, "PORT_MAP", drifted)
+
+    warnings = manifest.validate_against_registry(str(registry))
+
+    assert any(
+        "role 'coder_escalation': PORT_MAP says port 8071" in warning
+        for warning in warnings
+    )
 
 
 # ----- validate_model_paths is a callable that returns list[str] -----
