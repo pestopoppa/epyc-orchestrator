@@ -488,6 +488,7 @@ def test_compile_uses_role_endpoint_for_dedicated_vision_role(tmp_path: Path) ->
     model = compiled["models"][0]
     assert model["serving"]["ports"] == [8086]
     assert model["serving"]["numa_policy"] == "role_endpoint_binding"
+    assert model["serving"]["requirements"] == {"mmproj_path": "/models/mmproj.gguf"}
     assert model["modalities"] == ["text", "vision"]
     assert model["quality"]["suite_vector"]["overall"] == 0.9167
     assert model["quality"]["suite_vector"]["vision_language"] == 0.9167

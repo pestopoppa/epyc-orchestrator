@@ -491,6 +491,10 @@ def _serving(
         numa_policy = "server_default"
 
     memory = role_cfg.get("memory") if isinstance(role_cfg, dict) else None
+    model = role_cfg.get("model") if isinstance(role_cfg.get("model"), dict) else {}
+    requirements = {
+        "mmproj_path": str(model["mmproj_path"])
+    } if model.get("mmproj_path") else {}
     return {
         "binary": binary,
         "binary_dir": str(binary_dir) if binary_dir else None,
@@ -498,6 +502,7 @@ def _serving(
         "mlock": bool(memory.get("pinned")) if isinstance(memory, dict) else False,
         "ports": sorted(set(ports)),
         "server_role": server_role,
+        "requirements": requirements,
     }
 
 

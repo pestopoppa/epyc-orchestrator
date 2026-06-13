@@ -76,6 +76,7 @@ def test_every_model_has_consumer_ready_sections() -> None:
         "kv",
     }
     required_serving_fields = {"binary", "numa_policy", "mlock", "ports"}
+    required_serving_fields.add("requirements")
 
     for model in descriptors["models"]:
         assert required_model_fields <= set(model), model["model_id"]
@@ -83,8 +84,24 @@ def test_every_model_has_consumer_ready_sections() -> None:
         assert required_speed_fields <= set(model["speed"]), model["model_id"]
         assert required_accel_fields <= set(model["acceleration"]), model["model_id"]
         assert required_serving_fields <= set(model["serving"]), model["model_id"]
+        assert isinstance(model["serving"]["requirements"], dict)
         assert isinstance(model["known_gaps"], list)
         assert isinstance(model["role_bindings"].get("roles"), list)
+
+
+def test_vision_descriptors_expose_projector_requirements() -> None:
+    descriptors = _load_yaml(DESCRIPTOR_PATH)
+    by_id = {model["model_id"]: model for model in descriptors["models"]}
+
+    worker = by_id["qwen2.5-vl-7b-q4_k_m"]
+    escalation = by_id["qwen3-vl-30b-a3b-q4_k_m"]
+
+    assert worker["serving"]["requirements"]["mmproj_path"].endswith(
+        "Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf"
+    )
+    assert escalation["serving"]["requirements"]["mmproj_path"].endswith(
+        "Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf"
+    )
 
 
 def test_shared_runtime_aliases_do_not_emit_role_server_conflicts() -> None:
