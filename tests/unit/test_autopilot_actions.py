@@ -363,6 +363,44 @@ def test_distill_knowledge_returns_evolution_manager_species() -> None:
     assert species == "evolution_manager"
 
 
+def test_distill_knowledge_uses_superseded_journal_view() -> None:
+    class FakeJournal(_FakeJournal):
+        def all_entries(self):
+            return ["raw"]
+
+        def entries_with_supersessions(self):
+            return ["folded"]
+
+    class FakeEvolutionManager:
+        def __init__(self):
+            self.journal_entries = None
+
+        def distill(self, *, journal_entries, strategy_store, last_n, trial_id):
+            self.journal_entries = journal_entries
+            return {
+                "status": "success",
+                "strategy_store": strategy_store,
+                "last_n": last_n,
+                "trial_id": trial_id,
+            }
+
+    evo = FakeEvolutionManager()
+
+    result, species = actions._action_distill_knowledge(
+        {"type": "distill_knowledge", "last_n": 7},
+        _ctx(
+            evo=evo,
+            strategy_store=object(),
+            journal=FakeJournal(),
+            state={"trial_counter": 42},
+        ),
+    )
+
+    assert species == "evolution_manager"
+    assert result is None
+    assert evo.journal_entries == ["folded"]
+
+
 def test_reset_memories_returns_none_eval() -> None:
     class FakeLab:
         def reset_and_reseed(self, **kw):

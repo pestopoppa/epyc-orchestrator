@@ -711,8 +711,13 @@ def _action_distill_knowledge(action: dict[str, Any], ctx: _ActionContext):
     # Evolution Manager: knowledge distillation (no eval, no system change)
     last_n = action.get("last_n", 10)
     if ctx.evo is not None and ctx.strategy_store is not None:
+        journal_entries = (
+            ctx.journal.entries_with_supersessions()
+            if hasattr(ctx.journal, "entries_with_supersessions")
+            else ctx.journal.all_entries()
+        )
         result = ctx.evo.distill(
-            journal_entries=ctx.journal.all_entries(),
+            journal_entries=journal_entries,
             strategy_store=ctx.strategy_store,
             last_n=last_n,
             trial_id=ctx.state.get("trial_counter", 0),
