@@ -336,9 +336,9 @@ def pair_policy(
         if sr is None or sr.verdict in ("allow", "n/a", ""):
             return PairDecision.ALLOW
         if sr.verdict == "block":
-            # Same-role explicitly blocked (e.g. vision_escalation 4-quarter
-            # anomaly). Background queues; foreground gets degraded-allow with
-            # a metric so the operator knows the gate had to override.
+            # Same-role explicitly blocked. Background queues; foreground gets
+            # degraded-allow with a metric so the operator knows the gate had
+            # to override.
             if traffic_class == TrafficClass.BACKGROUND:
                 return PairDecision.QUEUE
             return PairDecision.DEGRADED_ALLOW
@@ -371,9 +371,6 @@ def pair_policy(
         # to DEGRADED_ALLOW based on SLO budget.
         return PairDecision.QUEUE
     return PairDecision.QUEUE
-
-
-_DEFAULT_HEAVY_ROLES = frozenset({"ingest_long_context", "architect_general"})
 
 
 def nway_policy(

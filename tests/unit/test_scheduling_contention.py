@@ -86,6 +86,39 @@ def test_load_real_matrix(real_matrix_path: Path) -> None:
     assert len(m.unknown_pairs) == 2
 
 
+def test_real_matrix_declares_current_nway_role_classes(real_matrix_path: Path) -> None:
+    """The committed matrix should expose current light/heavy role classes."""
+    m = contention.load_contention_matrix(real_matrix_path)
+
+    assert {
+        "frontdoor",
+        "vision_escalation",
+        "worker_general",
+        "worker_vision",
+    } <= m.light_roles
+    assert {"ingest_long_context", "architect_general"} <= m.heavy_roles
+    assert "worker_fast" not in m.light_roles
+
+
+def test_real_matrix_vision_escalation_same_role_allows(real_matrix_path: Path) -> None:
+    """Certified matrix no longer treats same-role vision_escalation as blocked."""
+    m = contention.load_contention_matrix(real_matrix_path)
+
+    same_role = m.get_same_role("vision_escalation")
+
+    assert same_role is not None
+    assert same_role.verdict == "allow"
+    assert (
+        contention.pair_policy(
+            "vision_escalation",
+            "vision_escalation",
+            contention.TrafficClass.BACKGROUND,
+            matrix=m,
+        )
+        == contention.PairDecision.ALLOW
+    )
+
+
 def test_load_minimal_matrix(minimal_matrix_yaml: Path) -> None:
     m = contention.load_contention_matrix(minimal_matrix_yaml)
     assert m.topology_hash == "TEST_HASH"
