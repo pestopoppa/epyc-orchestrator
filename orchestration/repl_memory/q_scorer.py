@@ -296,8 +296,9 @@ def stack_prior_q_scorer_priors_by_role(
                 tps_sources[target_role] = PRIOR_SOURCE_STACK_PRIORS
         quality = _valid_quality(priors.get("quality_overall"))
         if quality is not None:
-            quality_by_role[role] = quality
-            quality_sources[role] = PRIOR_SOURCE_STACK_PRIORS
+            for target_role in target_roles:
+                quality_by_role[target_role] = quality
+                quality_sources[target_role] = PRIOR_SOURCE_STACK_PRIORS
         memory_cost = priors.get("memory_cost")
         if isinstance(memory_cost, (int, float)) and float(memory_cost) > 0:
             for target_role in target_roles:

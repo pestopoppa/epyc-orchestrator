@@ -215,6 +215,12 @@ class TestScoringConfigDefaults:
                     quality_overall=0.91,
                     memory_cost=1.0,
                 ),
+                "worker_general": _minimal_stack_prior_record(
+                    "worker_general",
+                    throughput_tps=60.0,
+                    quality_overall=0.9,
+                    memory_cost=1.0,
+                ),
                 "candidate_arch": _minimal_stack_prior_record(
                     "candidate_arch",
                     deployment_status="benchmark_or_candidate",
@@ -229,10 +235,14 @@ class TestScoringConfigDefaults:
 
         assert priors.baseline_tps_by_role["frontdoor"] == pytest.approx(31.0)
         assert priors.baseline_tps_by_role["coder_escalation"] == pytest.approx(31.0)
+        assert priors.baseline_tps_by_role["worker_explore"] == pytest.approx(60.0)
         assert priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.91)
+        assert priors.baseline_quality_by_role["worker_explore"] == pytest.approx(0.9)
         assert priors.memory_cost_by_role["frontdoor"] == pytest.approx(1.0)
+        assert priors.memory_cost_by_role["worker_explore"] == pytest.approx(1.0)
         assert priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
         assert priors.baseline_quality_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert priors.baseline_quality_source_by_role["worker_explore"] == PRIOR_SOURCE_STACK_PRIORS
         assert priors.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
         assert priors.degraded_reason is None
         assert "candidate_arch" not in priors.baseline_tps_by_role
@@ -594,7 +604,10 @@ class TestMultiDimensionalCost:
         cfg = ScoringConfig()
         assert "architect_general" in cfg.baseline_quality_by_role
         assert "worker_explore" in cfg.baseline_quality_by_role
-        assert cfg.baseline_quality_by_role["architect_general"] > cfg.baseline_quality_by_role["worker_explore"]
+        assert cfg.baseline_quality_by_role["worker_explore"] == pytest.approx(
+            cfg.baseline_quality_by_role["worker_general"]
+        )
+        assert cfg.baseline_quality_source_by_role["worker_explore"] == PRIOR_SOURCE_STACK_PRIORS
 
     def test_config_has_memory_costs(self):
         cfg = ScoringConfig()
@@ -620,14 +633,14 @@ class TestMultiDimensionalCost:
         assert r == pytest.approx(0.981)
 
     def test_quality_gap_penalty_worker(self):
-        """Worker (quality=0.745) has minimal quality gap penalty."""
+        """Worker action label shares generated worker_general quality."""
         s = _scorer()
         # worker_explore at 60.7 t/s, 607 tokens in 10s -> exactly at expected speed.
         cost = {"tokens_generated": 607, "elapsed_seconds": 10.0, "role": "worker_explore"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
-        # quality_gap = max(0, 0.745 - 0.75) = 0.0 → no quality penalty
+        # quality_gap = 0.9 - 0.75 = 0.15, penalty = 0.10 * 0.15 = 0.015
         # memory_cost = 1.0 (HOT) → no memory penalty
-        assert r == 1.0  # No penalty at all for worker at expected speed
+        assert r == pytest.approx(0.985)
 
     def test_custom_non_hot_memory_cost_penalizes(self):
         """Non-HOT residency still gets a memory penalty when configured."""
