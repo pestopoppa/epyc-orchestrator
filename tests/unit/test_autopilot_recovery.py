@@ -284,6 +284,25 @@ def test_reimport_skips_bug_corrupted_entry(
     assert len(archive._all_entries) == 0
 
 
+def test_reimport_skips_superseded_bug_corrupted_entry(
+    journal: ExperimentJournal, archive: ParetoArchive
+) -> None:
+    journal.record(_make_entry(trial_id=12))
+    journal.append_supersession_event(
+        target_trial_ids=[12],
+        fields={"bug_corrupted_by": "resource_contention"},
+        reason="contention window",
+        policy_version="supersession-v1",
+        actor="unit-test",
+    )
+
+    result = autopilot._maybe_reimport_pareto_from_journal(archive, journal, 12)
+
+    assert result is False
+    assert len(archive._all_entries) == 0
+    assert journal.all_entries()[0].bug_corrupted_by == ""
+
+
 def test_reimport_skips_when_already_in_archive(
     journal: ExperimentJournal, archive: ParetoArchive
 ) -> None:

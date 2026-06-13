@@ -1041,9 +1041,12 @@ def _maybe_reimport_pareto_from_journal(
         call archive.update() — let the dominance check re-classify;
         do NOT preserve the JournalEntry's stale pareto_status.
     """
-    entry = next(
-        (e for e in journal.all_entries() if e.trial_id == trial_id), None
+    entries = (
+        journal.entries_with_supersessions()
+        if hasattr(journal, "entries_with_supersessions")
+        else journal.all_entries()
     )
+    entry = next((e for e in entries if e.trial_id == trial_id), None)
     if entry is None:
         log.info("Pareto re-import: no journal entry for trial %d", trial_id)
         return False
