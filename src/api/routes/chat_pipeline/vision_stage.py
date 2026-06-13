@@ -14,6 +14,10 @@ from __future__ import annotations
 import base64
 import logging
 import time
+from pathlib import Path
+from urllib.parse import urlparse
+
+import yaml
 
 from src.api.models import ChatRequest, ChatResponse
 from src.api.routes.chat_utils import RoutingResult
@@ -22,9 +26,57 @@ from src.api.structured_logging import task_extra
 from src.llm_primitives import LLMPrimitives
 
 _VISION_ROLES = frozenset({"worker_vision", "vision_escalation"})
-_VL_PORT_MAP = {"worker_vision": 8086, "vision_escalation": 8087}
+_DEFAULT_STACK_PRIORS_PATH = (
+    Path(__file__).resolve().parents[4] / "orchestration" / "derived" / "stack_priors.yaml"
+)
+_FALLBACK_VL_PORT_BY_ROLE = {"worker_vision": 8086, "vision_escalation": 8087}
 
 log = logging.getLogger(__name__)
+
+
+def _stack_prior_vl_ports(stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH) -> dict[str, int]:
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        log.warning("Using fallback VL ports; stack priors load failed: %s", exc)
+        return {}
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    ports: dict[str, int] = {}
+    for role in _VISION_ROLES:
+        record = roles.get(role)
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+
+        endpoint = serving.get("endpoint")
+        if isinstance(endpoint, str):
+            parsed_port = urlparse(endpoint).port
+            if parsed_port is not None:
+                ports[role] = parsed_port
+                continue
+
+        serving_ports = serving.get("ports")
+        if isinstance(serving_ports, list):
+            for value in serving_ports:
+                if isinstance(value, int):
+                    ports[role] = value
+                    break
+    return ports
+
+
+def _vl_port_for_role(
+    role: str,
+    stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
+) -> int:
+    ports = _stack_prior_vl_ports(stack_priors_path)
+    return ports.get(role, _FALLBACK_VL_PORT_BY_ROLE.get(role, 8086))
 
 
 async def _execute_vision(
@@ -197,7 +249,7 @@ async def _execute_vision_multimodal(
             except Exception:
                 pass
 
-            vl_port = _VL_PORT_MAP.get(str(initial_role), 8086)
+            vl_port = _vl_port_for_role(str(initial_role))
             answer, tools_used, tools_called = await _vision_react_mode_answer(
                 prompt=request.prompt,
                 image_b64=image_b64,

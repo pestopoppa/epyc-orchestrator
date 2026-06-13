@@ -6,6 +6,7 @@ All tests mock httpx and OCR service — no live servers required.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -56,6 +57,14 @@ class TestVisionConstants:
 def _run_async(coro):
     """Run an async coroutine synchronously for testing."""
     return asyncio.run(coro)
+
+
+def base64_png_1x1() -> str:
+    """Return a tiny valid PNG image for MIME-detection tests."""
+    return (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+        "/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
 
 
 class TestExecuteVisionTool:
@@ -239,6 +248,39 @@ class TestSafeEvalMath:
 class TestExecuteVisionMultimodal:
     """Tests for _execute_vision_multimodal routing."""
 
+    def test_vl_port_for_role_reads_stack_priors(self, tmp_path: Path):
+        """Vision ReAct ports come from generated stack priors when available."""
+        from src.api.routes.chat_pipeline.vision_stage import (
+            _vl_port_for_role,
+        )
+
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  worker_vision:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:9101
+  vision_escalation:
+    deployment_status: live_stack
+    serving:
+      ports: [9107]
+""",
+            encoding="utf-8",
+        )
+
+        assert _vl_port_for_role("worker_vision", priors) == 9101
+        assert _vl_port_for_role("vision_escalation", priors) == 9107
+
+    def test_vl_port_for_role_falls_back_when_stack_priors_missing(self, tmp_path: Path):
+        """Missing generated priors use explicit degraded-mode VL defaults."""
+        from src.api.routes.chat_pipeline.vision_stage import (
+            _vl_port_for_role,
+        )
+
+        assert _vl_port_for_role("vision_escalation", tmp_path / "missing.yaml") == 8087
+
     def test_returns_none_for_non_vision_role(self):
         """Non-vision roles return None (fall through)."""
         from src.api.routes.chat_pipeline.vision_stage import _execute_vision_multimodal
@@ -268,6 +310,47 @@ class TestExecuteVisionMultimodal:
             )
         )
         assert result is None
+
+    @patch("src.api.routes.chat_vision._vision_react_mode_answer", new_callable=AsyncMock)
+    @patch("src.api.routes.chat_pipeline.vision_stage._vl_port_for_role")
+    def test_repl_mode_uses_stack_prior_vl_port(self, mock_port, mock_answer):
+        """REPL mode passes the generated-stack-prior VL port to the tool loop."""
+        from src.api.routes.chat_pipeline.vision_stage import _execute_vision_multimodal
+
+        mock_port.return_value = 9107
+        mock_answer.return_value = ("chart answer", 1, ["describe_image"])
+
+        request = MagicMock()
+        request.image_path = None
+        request.image_base64 = base64_png_1x1()
+        request.prompt = "describe"
+        request.context = ""
+        request.real_mode = True
+        request.force_role = "vision_escalation"
+        routing = MagicMock()
+        routing.task_id = "test-react"
+        routing.routing_strategy = "forced"
+        routing.formalization_applied = False
+        routing.skill_ids = []
+        state = MagicMock()
+        state.progress_logger = None
+
+        result = _run_async(
+            _execute_vision_multimodal(
+                request,
+                routing,
+                MagicMock(),
+                state,
+                0.0,
+                "vision_escalation",
+                "repl",
+            )
+        )
+
+        assert result is not None
+        assert result.answer == "chart answer"
+        mock_port.assert_called_once_with("vision_escalation")
+        assert mock_answer.await_args.kwargs["vl_port"] == 9107
 
     @patch("src.api.routes.chat_vision._handle_vision_request", new_callable=AsyncMock)
     def test_direct_mode_calls_handle_vision(self, mock_handle):
