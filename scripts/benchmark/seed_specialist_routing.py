@@ -107,7 +107,6 @@ from seeding_types import (  # noqa: E402 (additional imports for 3-way routing)
     THREE_WAY_ACTIONS,
 )
 from seeding_rewards import (  # noqa: E402, F401
-    DEFAULT_BASELINE_TPS,
     _inject_escalation_chains_http,
     _inject_rewards_http,
     compute_comparative_rewards,

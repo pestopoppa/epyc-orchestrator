@@ -1,30 +1,32 @@
 """Reward computation, escalation chain detection, and reward injection.
 
-Imports only seeding_types — no other project modules.
+Imports only seeding_types and generated YAML — no other project modules.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from urllib.parse import urlparse
 
+import yaml
+
 from seeding_types import (
+    ACTION_ARCHITECT,
+    ACTION_SELF_DIRECT,
+    ACTION_SELF_REPL,
+    ACTION_WORKER,
     ComparativeResult,
     ESCALATION_REWARD,
     ROLE_COST_TIER,
     RoleResult,
+    STACK_PRIORS_PATH,
     WebResearchTelemetry,
-    # Phase 4: 3-way routing
-    ACTION_SELF_DIRECT,
-    ACTION_SELF_REPL,
-    ACTION_ARCHITECT,
-    ACTION_WORKER,
-    THREE_WAY_COST_TIER,
 )
 
 __all__ = [
-    "DEFAULT_BASELINE_TPS",
+    "FALLBACK_THROUGHPUT_BY_ROLE",
     "compute_comparative_rewards",
     "detect_escalation_chains",
     # Phase 4: Binary rewards for faithful probability estimation
@@ -41,20 +43,123 @@ __all__ = [
     "compute_scratchpad_rewards",
 ]
 
-# Default per-role optimized tokens/second from production benchmarks.
-# Update these when swapping models in the orchestrator stack.
-DEFAULT_BASELINE_TPS: dict[str, float] = {
-    "frontdoor": 18.3,
-    "coder_escalation": 18.3,
-    "coder_escalation": 39.44,
-    "architect_general": 6.75,
-    "architect_coding": 10.3,
-    "ingest_long_context": 6.29,
-    "worker_explore": 27.88,
-    "worker_math": 48.5,
-    "worker_vision": 15.28,
+# Explicit degraded/offline values. Live seeding reads stack_priors.yaml.
+FALLBACK_THROUGHPUT_BY_ROLE: dict[str, float] = {
+    "frontdoor": 24.3,
+    "coder_escalation": 24.3,
+    "worker_summarize": 24.3,
+    "architect_general": 12.19,
+    "ingest_long_context": 20.8,
+    "toolrunner": 60.7,
+    "worker_explore": 60.7,
+    "worker_general": 60.7,
+    "worker_math": 60.7,
+    "worker_vision": 20.0,
     "vision_escalation": 27.6,
 }
+FALLBACK_ARCHITECT_REWARD_ROLES = frozenset({"architect_general", "vision_escalation"})
+THROUGHPUT_CONFIG_KEY = "throughput_by_role"
+LEGACY_THROUGHPUT_CONFIG_KEY = "baseline_" + "tps_by_role"
+STACK_PRIORS_CONFIG_KEY = "stack_priors_path"
+ALLOW_DEGRADED_CONFIG_KEY = "allow_degraded_fallback"
+
+
+def _positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _clean_throughput_mapping(values: Any) -> dict[str, float]:
+    if not isinstance(values, dict):
+        return {}
+    cleaned: dict[str, float] = {}
+    for role, value in values.items():
+        number = _positive_float(value)
+        if number is not None:
+            cleaned[str(role)] = number
+    return cleaned
+
+
+def _read_stack_priors(path: Path | None = None) -> dict[str, Any]:
+    stack_priors_path = path or STACK_PRIORS_PATH
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def stack_prior_throughput_by_role(path: Path | None = None) -> dict[str, float]:
+    """Read live per-role throughput from generated stack priors."""
+    roles = _read_stack_priors(path).get("roles", {})
+    if not isinstance(roles, dict):
+        return {}
+
+    throughput: dict[str, float] = {}
+    for role, record in roles.items():
+        if not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        priors = record.get("priors")
+        if not isinstance(priors, dict):
+            continue
+        value = _positive_float(priors.get("throughput_tps"))
+        if value is not None:
+            throughput[str(role)] = value
+    return throughput
+
+
+def stack_prior_architect_reward_roles(path: Path | None = None) -> set[str]:
+    """Return live roles that map onto the 3-way ARCHITECT action."""
+    roles = _read_stack_priors(path).get("roles", {})
+    if not isinstance(roles, dict):
+        return set()
+
+    architect_roles: set[str] = set()
+    for role, record in roles.items():
+        if not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        role_name = str(role)
+        if role_name.startswith("architect_") or role_name == "vision_escalation":
+            architect_roles.add(role_name)
+    return architect_roles
+
+
+def _throughput_by_role(cost_config: dict[str, Any]) -> dict[str, float]:
+    override = cost_config.get(THROUGHPUT_CONFIG_KEY)
+    if override is None:
+        override = cost_config.get(LEGACY_THROUGHPUT_CONFIG_KEY)
+    cleaned_override = _clean_throughput_mapping(override)
+    if cleaned_override:
+        return cleaned_override
+
+    path_value = cost_config.get(STACK_PRIORS_CONFIG_KEY)
+    stack_priors_path = Path(path_value) if path_value else None
+    live_throughput = stack_prior_throughput_by_role(stack_priors_path)
+    if live_throughput:
+        return live_throughput
+    if cost_config.get(ALLOW_DEGRADED_CONFIG_KEY):
+        return dict(FALLBACK_THROUGHPUT_BY_ROLE)
+    return {}
+
+
+def _architect_reward_roles() -> set[str]:
+    return stack_prior_architect_reward_roles() or set(FALLBACK_ARCHITECT_REWARD_ROLES)
+
+
+def _architect_result_keys(results: dict[str, RoleResult]) -> list[str]:
+    architect_roles = _architect_reward_roles()
+    return [
+        key for key, result in results.items()
+        if result.role in architect_roles or key.split(":", 1)[0] in architect_roles
+    ]
 
 
 def compute_comparative_rewards(
@@ -72,7 +177,7 @@ def compute_comparative_rewards(
     """
     cost_config = cost_config or {}
     lam = cost_config.get("lambda", 0.15)
-    baseline_tps = cost_config.get("baseline_tps_by_role", DEFAULT_BASELINE_TPS)
+    throughput_by_role = _throughput_by_role(cost_config)
 
     rewards: dict[str, float] = {}
     baseline = role_results.get(baseline_key)
@@ -92,7 +197,7 @@ def compute_comparative_rewards(
             rewards[key] = -0.5
         elif result.passed and baseline_passed:
             base = 0.5
-            role_tps = baseline_tps.get(result.role, 0)
+            role_tps = throughput_by_role.get(result.role, 0)
             gen_elapsed = result.generation_ms / 1000.0 if result.generation_ms > 0 else 0
             actual_elapsed = gen_elapsed if gen_elapsed > 0 else result.elapsed_seconds
             if (role_tps > 0 and result.tokens_generated > 0
@@ -183,7 +288,7 @@ def _inject_escalation_chains_http(
             )
             if resp.status_code == 200:
                 injected += 1
-        except Exception as e:
+        except Exception:
             continue
     return injected
 
@@ -217,7 +322,7 @@ def _inject_rewards_http(
             )
             if resp.status_code == 200:
                 injected += 1
-        except Exception as e:
+        except Exception:
             continue
     return injected
 
@@ -270,8 +375,8 @@ def compute_3way_rewards(
     if repl_keys:
         rewards[ACTION_SELF_REPL] = success_reward(results[repl_keys[0]].passed)
 
-    # ARCHITECT — architect_coding, architect_general, or vision_escalation
-    architect_keys = [k for k in results if k.startswith(("architect_coding", "architect_general", "vision_escalation"))]
+    # ARCHITECT — live architect-like roles from stack priors.
+    architect_keys = _architect_result_keys(results)
     if architect_keys:
         # Take best architect result (they have delegation freedom)
         best_architect = max(architect_keys, key=lambda k: int(results[k].passed))
@@ -310,7 +415,7 @@ def score_delegation_chain(
                 rewards[ACTION_WORKER] = success_reward(rr.passed)
 
     # Check ARCHITECT for delegation
-    architect_keys = [k for k in results if k.startswith(("architect_coding", "architect_general", "vision_escalation"))]
+    architect_keys = _architect_result_keys(results)
     for key in architect_keys:
         rr = results[key]
         if getattr(rr, "error_type", "none") == "infrastructure":

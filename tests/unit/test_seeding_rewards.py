@@ -29,6 +29,100 @@ def _rr(**overrides):
     return _MOD.RoleResult(**base)
 
 
+def _write_stack_priors(path: Path, throughput: dict[str, float]) -> Path:
+    role_blocks = []
+    for role, tps in throughput.items():
+        role_blocks.append(
+            f"""
+  {role}:
+    deployment_status: live_stack
+    priors:
+      throughput_tps: {tps}
+"""
+        )
+    role_blocks.append(
+        """
+  architect_coding:
+    deployment_status: retired
+    priors:
+      throughput_tps: 999.0
+"""
+    )
+    path.write_text("roles:\n" + "".join(role_blocks), encoding="utf-8")
+    return path
+
+
+def test_stack_prior_throughput_by_role_loads_live_roles_only(tmp_path: Path):
+    stack_priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {"frontdoor": 10.0, "worker_general": 100.0},
+    )
+
+    throughput = _MOD.stack_prior_throughput_by_role(stack_priors)
+
+    assert throughput == {"frontdoor": 10.0, "worker_general": 100.0}
+    assert "architect_coding" not in throughput
+
+
+def test_compute_comparative_rewards_uses_stack_prior_throughput(tmp_path: Path):
+    stack_priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {"frontdoor": 10.0, "worker_general": 100.0},
+    )
+
+    rewards = _MOD.compute_comparative_rewards(
+        {
+            "frontdoor:direct": _rr(role="frontdoor", passed=True),
+            "worker_general:direct": _rr(
+                role="worker_general",
+                passed=True,
+                generation_ms=2000,
+                tokens_generated=100,
+                elapsed_seconds=2.0,
+            ),
+        },
+        cost_config={"stack_priors_path": stack_priors},
+    )
+
+    assert math.isclose(rewards["worker_general:direct"], 0.35)
+
+
+def test_compute_comparative_rewards_no_stack_priors_fails_closed(tmp_path: Path):
+    rewards = _MOD.compute_comparative_rewards(
+        {
+            "frontdoor:direct": _rr(role="frontdoor", passed=True),
+            "worker_general:direct": _rr(
+                role="worker_general",
+                passed=True,
+                generation_ms=2000,
+                tokens_generated=100,
+                elapsed_seconds=2.0,
+            ),
+        },
+        cost_config={"stack_priors_path": tmp_path / "missing.yaml"},
+    )
+
+    assert rewards["worker_general:direct"] == 0.3
+
+
+def test_compute_comparative_rewards_accepts_legacy_throughput_override():
+    rewards = _MOD.compute_comparative_rewards(
+        {
+            "frontdoor:direct": _rr(role="frontdoor", passed=True),
+            "worker_general:direct": _rr(
+                role="worker_general",
+                passed=True,
+                generation_ms=2000,
+                tokens_generated=100,
+                elapsed_seconds=2.0,
+            ),
+        },
+        cost_config={"baseline_tps_by_role": {"worker_general": 100.0}},
+    )
+
+    assert math.isclose(rewards["worker_general:direct"], 0.35)
+
+
 def test_compute_comparative_rewards_without_baseline_defaults_to_binary_success():
     rewards = _MOD.compute_comparative_rewards(
         {
@@ -139,7 +233,6 @@ def test_success_reward_and_compute_3way_rewards_mapping():
             "frontdoor:direct": _rr(role="frontdoor", mode="direct", passed=True),
             "frontdoor:repl": _rr(role="frontdoor", mode="repl", passed=False),
             "architect_general:delegated": _rr(role="architect_general", mode="delegated", passed=True),
-            "architect_coding:delegated": _rr(role="architect_coding", mode="delegated", passed=False),
         }
     )
     assert rewards[_MOD.ACTION_SELF_DIRECT] == 1.0
@@ -154,6 +247,31 @@ def test_success_reward_and_compute_3way_rewards_mapping():
         }
     )
     assert legacy[_MOD.ACTION_SELF_REPL] == 1.0
+
+
+def test_3way_rewards_ignore_retired_architect_from_stack_priors(tmp_path: Path):
+    stack_priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {"frontdoor": 10.0, "architect_general": 20.0},
+    )
+
+    with patch.object(_MOD, "STACK_PRIORS_PATH", stack_priors):
+        rewards = _MOD.compute_3way_rewards(
+            {
+                "architect_general:delegated": _rr(
+                    role="architect_general",
+                    mode="delegated",
+                    passed=False,
+                ),
+                "architect_coding:delegated": _rr(
+                    role="architect_coding",
+                    mode="delegated",
+                    passed=True,
+                ),
+            }
+        )
+
+    assert rewards[_MOD.ACTION_ARCHITECT] == 0.0
 
 
 def test_has_delegation_and_score_delegation_chain_paths():
