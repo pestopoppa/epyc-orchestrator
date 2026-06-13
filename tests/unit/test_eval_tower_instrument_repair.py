@@ -89,6 +89,39 @@ def test_empty_expected_text_scorer_is_not_scoreable() -> None:
     )
 
 
+def test_code_execution_requires_executable_oracle() -> None:
+    assert not eval_tower._is_scoreable_question(
+        {
+            "id": "code-without-tests",
+            "expected": "def solve",
+            "scoring_method": "code_execution",
+            "scoring_config": {"language": "python"},
+        }
+    )
+    assert not eval_tower._is_scoreable_question(
+        {
+            "id": "commented-asserts",
+            "expected": "",
+            "scoring_method": "code_execution",
+            "scoring_config": {
+                "language": "python",
+                "test_code": "# assert add(1, 2) == 3\n",
+            },
+        }
+    )
+    assert eval_tower._is_scoreable_question(
+        {
+            "id": "stdin-tests",
+            "expected": "",
+            "scoring_method": "code_execution",
+            "scoring_config": {
+                "language": "python",
+                "test_code": "TEST_CASES = [('1\\n', '1\\n')]",
+            },
+        }
+    )
+
+
 def test_sampling_replaces_unscoreable_items_from_same_suite() -> None:
     suite_qs = [
         {

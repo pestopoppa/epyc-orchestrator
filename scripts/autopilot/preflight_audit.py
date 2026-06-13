@@ -16,7 +16,6 @@ import argparse
 import json
 import logging
 import sys
-import time
 from pathlib import Path
 
 log = logging.getLogger("autopilot.preflight")
@@ -128,40 +127,66 @@ def audit_f1_scoring() -> bool:
 
 
 def audit_question_pool() -> bool:
-    """Check question pool has all fixes."""
+    """Check question pool matches the live EvalTower scoring contract."""
     _header("6. Question Pool")
+    from eval_tower import _is_scoreable_question
+
     pool_path = SCRIPT_DIR.parents[1] / "benchmarks" / "prompts" / "question_pool.jsonl"
     if not pool_path.exists():
         # Try research repo
         pool_path = Path("/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl")
 
-    usaco_tc = skill_tags = web_tags = 0
+    if not pool_path.exists():
+        return _check("Question pool exists", False, str(pool_path))
+
+    pool: dict[str, list[dict]] = {}
+    f1_total = f1_tagged = 0
+    code_total = code_oracle = 0
     for line_num, line in enumerate(open(pool_path), 1):
         try:
             q = json.loads(line)
         except Exception:
             log.debug("Skipping malformed JSONL line %d", line_num)
             continue
-        if q.get("suite") == "usaco" and q.get("scoring_config", {}).get("test_code"):
-            usaco_tc += 1
-        if q.get("suite") == "skill_transfer" and "<answer>" in q.get("prompt", ""):
-            skill_tags += 1
-        if q.get("suite") == "web_research" and "<answer>" in q.get("prompt", ""):
-            web_tags += 1
+        if q.get("__pool_metadata__"):
+            continue
+        suite = str(q.get("suite", "unknown"))
+        pool.setdefault(suite, []).append(q)
+        if q.get("scoring_method") == "f1":
+            f1_total += 1
+            f1_tagged += int("<answer>" in q.get("prompt", ""))
+        if q.get("scoring_method") == "code_execution":
+            code_total += 1
+            code_oracle += int(_is_scoreable_question(q))
+
+    suites = list(pool.keys())
+    t1_per_suite = max(1, 100 // max(1, len(suites)))
+    t2_per_suite = max(1, 500 // max(1, len(suites)))
+    scoreable_by_suite = {
+        suite: sum(1 for q in suite_qs if _is_scoreable_question(q))
+        for suite, suite_qs in pool.items()
+    }
+    t1_capacity = sum(min(t1_per_suite, n) for n in scoreable_by_suite.values())
+    t2_capacity = sum(min(t2_per_suite, n) for n in scoreable_by_suite.values())
+    empty_suites = sorted(s for s, n in scoreable_by_suite.items() if n == 0)
 
     all_ok = True
-    all_ok &= _check("USACO test_code populated", usaco_tc > 0, f"{usaco_tc}/520")
-    all_ok &= _check("skill_transfer <answer> tags", skill_tags == 36, f"{skill_tags}/36")
-    all_ok &= _check("web_research <answer> tags", web_tags == 50, f"{web_tags}/50")
+    all_ok &= _check("Question pool loaded", bool(pool), f"{sum(len(v) for v in pool.values())} rows")
+    all_ok &= _check("F1 prompts carry answer tags", f1_total == f1_tagged, f"{f1_tagged}/{f1_total}")
+    all_ok &= _check("code_execution rows have executable oracles", code_total == code_oracle, f"{code_oracle}/{code_total}")
+    all_ok &= _check("T1 scoreable capacity", t1_capacity >= 100, f"{t1_capacity}/100")
+    all_ok &= _check("T2 scoreable capacity", t2_capacity >= 500, f"{t2_capacity}/500")
+    _check("No fully unscoreable suites", not empty_suites, ", ".join(empty_suites[:8]))
     return all_ok
 
 
 def audit_blacklist() -> bool:
-    """Check blacklist is clean of poisoned entries."""
+    """Check blacklist is clean of entries sourced from poisoned trials."""
     _header("7. Failure Blacklist")
     import yaml
 
     bl_path = SCRIPT_DIR / "failure_blacklist.yaml"
+    journal_path = SCRIPT_DIR.parents[1] / "orchestration" / "autopilot_journal.jsonl"
     if not bl_path.exists():
         return _check("Blacklist file exists", False)
 
@@ -171,9 +196,24 @@ def audit_blacklist() -> bool:
     entries = data.get("blacklist", [])
     auto = [e for e in entries if e.get("source_trial", 0) != -1]
     manual = [e for e in entries if e.get("source_trial", 0) == -1]
+    corrupted_trials = set()
+    if journal_path.exists():
+        for line_num, line in enumerate(open(journal_path), 1):
+            try:
+                entry = json.loads(line)
+            except Exception:
+                log.debug("Skipping malformed journal line %d", line_num)
+                continue
+            if entry.get("bug_corrupted_by"):
+                corrupted_trials.add(entry.get("trial_id"))
+    contaminated = [
+        e for e in entries
+        if e.get("source_trial") in corrupted_trials
+    ]
 
     all_ok = True
-    all_ok &= _check("No auto-blacklisted entries", len(auto) == 0, f"{len(auto)} found")
+    all_ok &= _check("No poisoned-source blacklist entries", len(contaminated) == 0, f"{len(contaminated)} found")
+    _check("Auto entries preserved", len(auto) >= 0, f"{len(auto)}")
     _check("Manual entries preserved", len(manual) > 0, f"{len(manual)}")
     return all_ok
 

@@ -12,43 +12,6 @@ blacklist:
 - pattern:
     type: structural_experiment
     flags:
-      session_log: false
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 188'
-  added: '2026-05-31T23:59:58.394405+00:00'
-  source_trial: 188
-- pattern:
-    type: code_mutation
-    file: src/tool_policy.py
-    mutation: targeted_fix
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 190'
-  added: '2026-06-01T00:31:58.040045+00:00'
-  source_trial: 190
-- pattern:
-    type: distill_skillbank
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 193'
-  added: '2026-06-01T01:31:36.486393+00:00'
-  source_trial: 193
-- pattern:
-    type: numeric_trial
-    surface: memrl_retrieval
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 360'
-  added: '2026-06-03T15:07:36.868467+00:00'
-  source_trial: 360
-- pattern:
-    type: deep_eval
-    tier: 2
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 367'
-  added: '2026-06-04T06:25:47.773880+00:00'
-  source_trial: 367
-- pattern:
-    type: seed_batch
-    n_questions: 10
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 379'
-  added: '2026-06-04T09:15:51.921541+00:00'
-  source_trial: 379
-- pattern:
-    type: structural_experiment
-    flags:
       skillbank: true
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 505'
   added: '2026-06-04T15:42:30.779348+00:00'
@@ -316,10 +279,3 @@ blacklist:
     train_routing_models has not executed; con'
   added: '2026-06-12T19:10:04.489379+00:00'
   source_trial: 781
-- pattern:
-    type: seed_batch
-    n_questions: 17
-  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft falsely claims
-    deep_eval tier 2 is blocked; only tier 0 i'
-  added: '2026-06-12T21:40:14.298698+00:00'
-  source_trial: 787

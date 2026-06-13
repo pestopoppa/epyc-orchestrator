@@ -29,12 +29,42 @@ SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 # live trial set is unchanged until a deliberate cutover (see tool_sentinels.yaml).
 TOOL_SENTINEL_PATH = Path(__file__).resolve().parent / "tool_sentinels.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
-_EXPECTED_FREE_SCORERS = {"code_execution", "programmatic"}
+_EXPECTED_FREE_SCORERS = {"programmatic"}
+
+
+def _has_executable_assertion(test_code: str) -> bool:
+    for line in test_code.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("assert ") or stripped.startswith("assert("):
+            return True
+    return False
+
+
+def _has_unittest_case(test_code: str) -> bool:
+    return "unittest.TestCase" in test_code or "(TestCase)" in test_code
+
+
+def _has_code_execution_oracle(q: dict) -> bool:
+    config = q.get("scoring_config") or {}
+    if not isinstance(config, dict):
+        return False
+    test_code = str(config.get("test_code", "") or "").strip()
+    if test_code.startswith("TEST_CASES"):
+        return True
+    if _has_executable_assertion(test_code) or _has_unittest_case(test_code):
+        return True
+    expected = q.get("expected", "")
+    has_expected = expected is not None and str(expected) != ""
+    return bool(config.get("entry_point") and has_expected)
 
 
 def _is_scoreable_question(q: dict) -> bool:
     expected = q.get("expected", "")
     scoring_method = str(q.get("scoring_method", "exact_match"))
+    if scoring_method == "code_execution":
+        return _has_code_execution_oracle(q)
     has_expected = expected is not None and str(expected) != ""
     return has_expected or scoring_method in _EXPECTED_FREE_SCORERS
 

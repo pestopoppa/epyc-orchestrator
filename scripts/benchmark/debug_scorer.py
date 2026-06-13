@@ -261,6 +261,20 @@ def _score_stdin_program(
         return False
 
 
+def _has_executable_assertion(test_code: str) -> bool:
+    for line in test_code.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("assert ") or stripped.startswith("assert("):
+            return True
+    return False
+
+
+def _has_unittest_case(test_code: str) -> bool:
+    return "unittest.TestCase" in test_code or "(TestCase)" in test_code
+
+
 def _score_code_execution(
     answer: str, expected: str, config: dict[str, Any]
 ) -> bool:
@@ -301,13 +315,26 @@ def _score_code_execution(
     _uses_stdin = "input()" in code or "sys.stdin" in code
     _has_test_cases = test_code.strip().startswith("TEST_CASES")
 
-    if _uses_stdin and _has_test_cases:
+    if _has_test_cases:
+        if not _uses_stdin:
+            return False
         return _score_stdin_program(code, test_code, _TYPING_PREAMBLE, timeout)
+
+    has_test_oracle = (
+        _has_executable_assertion(test_code) or _has_unittest_case(test_code)
+    )
+    has_entrypoint_oracle = bool(entry_point and expected)
+    if test_code and not has_test_oracle:
+        return False
+    if not test_code and not has_entrypoint_oracle:
+        return False
 
     # Build full test script
     full_code = _TYPING_PREAMBLE + code
     if test_code:
         full_code += "\n\n" + test_code
+        if _has_unittest_case(test_code) and "unittest.main" not in test_code:
+            full_code += "\n\nif __name__ == '__main__':\n    unittest.main()\n"
     elif entry_point and expected:
         # Simple assertion test
         full_code += f"\n\nassert {entry_point}() == {expected}"
