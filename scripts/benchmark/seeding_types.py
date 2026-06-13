@@ -37,6 +37,9 @@ RESEARCH_ROOT = Path(os.environ.get(
     "EPYC_RESEARCH_ROOT", "/mnt/raid0/llm/epyc-inference-research"
 ))
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+STACK_PRIOR_SEEDING_EXCLUDED_ROLES = frozenset({
+    "toolrunner", "worker_math", "worker_summarize",
+})
 
 EVAL_DIR = RESEARCH_ROOT / "benchmarks" / "results" / "eval"
 SEEN_FILE = EVAL_DIR / "seen_questions.jsonl"
@@ -67,7 +70,6 @@ def _read_stack_prior_default_roles(
     the lightest safe interface for keeping CLI defaults aligned with stack
     changes.
     """
-    excluded = {"toolrunner", "worker_math", "worker_summarize"}
     try:
         with stack_priors_path.open() as f:
             data = yaml.safe_load(f) or {}
@@ -79,7 +81,7 @@ def _read_stack_prior_default_roles(
 
     active: list[str] = []
     for role_name, record in sorted(roles.items()):
-        if role_name in excluded or not isinstance(record, dict):
+        if role_name in STACK_PRIOR_SEEDING_EXCLUDED_ROLES or not isinstance(record, dict):
             continue
         if record.get("deployment_status") != "live_stack":
             continue
@@ -87,6 +89,75 @@ def _read_stack_prior_default_roles(
         if not isinstance(serving, dict) or not serving.get("endpoint"):
             continue
         active.append(str(role_name))
+    return active
+
+
+def _cost_tier_from_stack_priors(role_name: str, record: dict[str, Any]) -> int:
+    priors = record.get("priors")
+    memory_cost = priors.get("memory_cost") if isinstance(priors, dict) else None
+    try:
+        cost = float(memory_cost)
+    except (TypeError, ValueError):
+        return ROLE_COST_TIER.get(role_name, 3)
+    if cost <= 1.0:
+        return ROLE_COST_TIER.get(role_name, 2)
+    if cost <= 2.0:
+        return 3
+    return 4
+
+
+def _read_stack_prior_active_roles(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> list[dict[str, Any]]:
+    """Read active seeding role metadata from generated stack priors."""
+    try:
+        with stack_priors_path.open() as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+
+    roles = data.get("roles", {})
+    if not isinstance(roles, dict):
+        return []
+
+    active: list[dict[str, Any]] = []
+    for role_name, record in sorted(roles.items()):
+        if (
+            role_name in STACK_PRIOR_SEEDING_EXCLUDED_ROLES
+            or role_name in SEEDING_EXCLUDED_ROLES
+            or not isinstance(record, dict)
+        ):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict) or not serving.get("endpoint"):
+            continue
+        ports = serving.get("ports")
+        port = None
+        if isinstance(ports, list):
+            for candidate in ports:
+                if isinstance(candidate, int):
+                    port = candidate
+                    break
+        if port is None:
+            raw_port = serving.get("port") or serving.get("primary_port")
+            if isinstance(raw_port, int):
+                port = raw_port
+        if port is None:
+            continue
+
+        active.append({
+            "name": str(role_name),
+            "registry_key": str(serving.get("server_role") or role_name),
+            "model_role": str(role_name),
+            "port": port,
+            "is_heavy": port in HEAVY_PORTS,
+            "cost_tier": _cost_tier_from_stack_priors(str(role_name), record),
+            "timeout_s": _read_registry_timeout("roles", str(role_name), DEFAULT_TIMEOUT),
+        })
+
+    active.sort(key=lambda r: r["cost_tier"])
     return active
 
 
@@ -232,6 +303,9 @@ def discover_active_roles(
         Sorted by cost_tier (cheapest first for interleaving).
     """
     if registry_path is None:
+        stack_prior_roles = _read_stack_prior_active_roles()
+        if stack_prior_roles:
+            return stack_prior_roles
         registry_path = PROJECT_ROOT / "orchestration" / "model_registry.yaml"
 
     try:

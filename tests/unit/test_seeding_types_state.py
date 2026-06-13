@@ -52,6 +52,88 @@ roles:
     assert roles == ["architect_general", "worker_general"]
 
 
+def test_read_stack_prior_active_roles_includes_live_vision_roles(
+    tmp_path: Path,
+) -> None:
+    stack_priors = tmp_path / "stack_priors.yaml"
+    stack_priors.write_text(
+        """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8070
+      ports: [8070]
+      server_role: frontdoor
+    priors:
+      memory_cost: 1.0
+  toolrunner:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8072
+      ports: [8072]
+      server_role: worker
+    priors:
+      memory_cost: 1.0
+  worker_vision:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8086
+      ports: [8086]
+      server_role: worker_vision
+    priors:
+      memory_cost: 1.0
+  vision_escalation:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8087
+      ports: [8087]
+      server_role: vision_escalation
+    priors:
+      memory_cost: 1.0
+  reap_25b_frontdoor:
+    deployment_status: benchmark_or_candidate
+    serving:
+      endpoint: http://localhost:8090
+      ports: [8090]
+""",
+        encoding="utf-8",
+    )
+
+    roles = _MOD._read_stack_prior_active_roles(stack_priors)
+
+    by_name = {role["name"]: role for role in roles}
+    assert list(by_name) == ["worker_vision", "frontdoor", "vision_escalation"]
+    assert by_name["worker_vision"]["port"] == 8086
+    assert by_name["vision_escalation"]["is_heavy"] is True
+    assert by_name["vision_escalation"]["cost_tier"] == 3
+    assert "toolrunner" not in by_name
+    assert "reap_25b_frontdoor" not in by_name
+
+
+def test_discover_active_roles_prefers_stack_priors_over_registry(
+    tmp_path: Path,
+) -> None:
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text("server_mode: {}\n", encoding="utf-8")
+    stack_prior_roles = [
+        {
+            "name": "worker_vision",
+            "registry_key": "worker_vision",
+            "model_role": "worker_vision",
+            "port": 8086,
+            "is_heavy": False,
+            "cost_tier": 1,
+            "timeout_s": 60,
+        }
+    ]
+
+    with patch.object(_MOD, "_read_stack_prior_active_roles", return_value=stack_prior_roles):
+        assert _MOD.discover_active_roles() == stack_prior_roles
+
+    assert _MOD.discover_active_roles(registry_path=registry_path) == []
+
+
 def test_default_roles_and_architect_roles_exclude_retired_architect_coding():
     assert "architect_coding" not in _MOD.DEFAULT_ROLES
     assert _MOD.ARCHITECT_ROLES == {"architect_general"}
