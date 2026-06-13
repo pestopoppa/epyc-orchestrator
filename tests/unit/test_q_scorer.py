@@ -558,7 +558,12 @@ class TestMultiDimensionalCost:
 
     def test_quality_gap_penalty_architect(self):
         """HOT architect gets quality-gap penalty but no warm-tier memory penalty."""
-        s = _scorer()
+        cfg = ScoringConfig(
+            baseline_tps_by_role={"architect_general": 12.19},
+            baseline_quality_by_role={"architect_general": 0.94},
+            memory_cost_by_role={"architect_general": 1.0},
+        )
+        s = _scorer(cfg)
         # At expected speed, no latency penalty (12.19 t/s registry baseline).
         cost = {"tokens_generated": 1219, "elapsed_seconds": 100.0, "role": "architect_general"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)

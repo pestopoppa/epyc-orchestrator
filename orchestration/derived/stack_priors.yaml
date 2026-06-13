@@ -40,7 +40,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T15:36:34Z'
+compiled_at: '2026-06-13T15:39:51Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -48,11 +48,11 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: 5f7d681d8688f1d6fc02d5abc88ee045ba553bcaf69fe508a0a97eb99c8bf4a1
-    repo_commit: fa6411c
+    repo_commit: cbaceec
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: eb02eda319485e86baa7a51057b7396540fbad37a28e154632a52a4127911ebb
-    repo_commit: fa6411c
+    sha256: a4638fd3a9d813ffddc4635be434429ee653e3e3ba6c3642cb08bdb4061bfc43
+    repo_commit: cbaceec
 roles:
   architect_general:
     role: architect_general
@@ -74,7 +74,7 @@ roles:
       shared_mmap: false
     priors:
       throughput_tps: 12.19
-      quality_overall: null
+      quality_overall: 0.857
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
@@ -113,7 +113,6 @@ roles:
         protocol: numactl interleave plus taskset 0-95 canonical
         value_tps: 12.19
     known_gaps:
-    - Missing overall quality prior
     - roles.architect_general performance block still carries older sweep-era tps values; server_mode has the canonical value.
     - spec-decoding fields exist in the role record but server launch intentionally gates them off.
   coder_escalation:
@@ -264,7 +263,7 @@ roles:
       shared_mmap: false
     priors:
       throughput_tps: 20.8
-      quality_overall: null
+      quality_overall: 0.93
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
@@ -303,7 +302,6 @@ roles:
         protocol: long_context bench around 12K context
         value_tps_range: 14.4-20.8
     known_gaps:
-    - Missing overall quality prior
     - ctx_max and prefill metrics must be compiled from artifacts.
     - enable_thinking behavior is template-native and not represented as a clean switch.
   reap_25b_frontdoor:
@@ -389,7 +387,7 @@ roles:
       shared_mmap: false
     priors:
       throughput_tps: 60.7
-      quality_overall: null
+      quality_overall: 0.87
       memory_cost: 1.0
     acceleration:
       spec_type: draft
@@ -428,7 +426,6 @@ roles:
         value_tps: 43.4
     known_gaps:
     - Measurement dates are missing in structured fields.
-    - Missing overall quality prior
     - 'Role-server conflict: no dedicated server_mode entry; server_mode.worker lists toolrunner as a runtime alias while roles.toolrunner declares this model.'
   vision_escalation:
     role: vision_escalation
@@ -454,7 +451,7 @@ roles:
       shared_mmap: false
     priors:
       throughput_tps: 27.6
-      quality_overall: null
+      quality_overall: 0.92
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
@@ -492,7 +489,6 @@ roles:
         protocol: VL benchmark
         value_tps: 27.6
     known_gaps:
-    - Missing overall quality prior
     - mmproj path is not represented in a descriptor-native field yet.
     - server_mode section does not carry the vision_escalation model record.
   worker_general:
@@ -707,7 +703,7 @@ roles:
       shared_mmap: false
     priors:
       throughput_tps: 20.0
-      quality_overall: null
+      quality_overall: 0.92
       memory_cost: 1.0
     acceleration:
       spec_type: baseline
@@ -747,12 +743,10 @@ roles:
         protocol: VL benchmark
         value_tps: 20.0
     known_gaps:
-    - Missing overall quality prior
     - mmproj path is not represented in a descriptor-native field yet.
     - server_mode section does not carry the worker_vision model record.
 known_global_gaps:
   architect_general:
-  - Missing overall quality prior
   - roles.architect_general performance block still carries older sweep-era tps values; server_mode has the canonical value.
   - spec-decoding fields exist in the role record but server launch intentionally gates them off.
   coder_escalation:
@@ -762,7 +756,6 @@ known_global_gaps:
   - ctx_max is not structured in the lean registry.
   - quarter_48t_tps must be compiled from benchmark artifacts or live launch telemetry.
   ingest_long_context:
-  - Missing overall quality prior
   - ctx_max and prefill metrics must be compiled from artifacts.
   - enable_thinking behavior is template-native and not represented as a clean switch.
   reap_25b_frontdoor:
@@ -771,10 +764,8 @@ known_global_gaps:
   - Warm benchmark target, not a production hot-tier role.
   toolrunner:
   - Measurement dates are missing in structured fields.
-  - Missing overall quality prior
   - 'Role-server conflict: no dedicated server_mode entry; server_mode.worker lists toolrunner as a runtime alias while roles.toolrunner declares this model.'
   vision_escalation:
-  - Missing overall quality prior
   - mmproj path is not represented in a descriptor-native field yet.
   - server_mode section does not carry the vision_escalation model record.
   worker_general:
@@ -788,6 +779,5 @@ known_global_gaps:
   - ctx_max is not structured in the lean registry.
   - quarter_48t_tps must be compiled from benchmark artifacts or live launch telemetry.
   worker_vision:
-  - Missing overall quality prior
   - mmproj path is not represented in a descriptor-native field yet.
   - server_mode section does not carry the worker_vision model record.

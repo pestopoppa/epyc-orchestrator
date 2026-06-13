@@ -141,6 +141,7 @@ models:
       shared_mmap: false
     quality:
       suite_vector:
+        overall: 0.857
         architecture_score: 0.857
         cheap_kill_nothink: 0.60
       source: orchestration/model_registry.yaml roles.architect_general server_mode.architect_general
@@ -191,6 +192,7 @@ models:
       shared_mmap: false
     quality:
       suite_vector:
+        overall: 0.93
         long_context: 0.93
       source: orchestration/model_registry.yaml roles.ingest_long_context server_mode.ingest_long_context
       eval_protocol: MEASUREMENT.md#canonical-quality
@@ -286,6 +288,7 @@ models:
       shared_mmap: false
     quality:
       suite_vector:
+        overall: 0.92
         vision_language: 0.92
       source: orchestration/model_registry.yaml roles.worker_vision src.config.models
       eval_protocol: MEASUREMENT.md#canonical-quality
@@ -334,6 +337,7 @@ models:
       shared_mmap: false
     quality:
       suite_vector:
+        overall: 0.92
         vision_language: 0.92
       source: orchestration/model_registry.yaml roles.vision_escalation src.config.models
       eval_protocol: MEASUREMENT.md#canonical-quality
@@ -383,6 +387,7 @@ models:
       shared_mmap: null
     quality:
       suite_vector:
+        overall: 0.87
         agentic: 0.87
       source: orchestration/model_registry.yaml roles.toolrunner
       eval_protocol: MEASUREMENT.md#canonical-quality
