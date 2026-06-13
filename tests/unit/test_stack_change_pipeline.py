@@ -8,7 +8,9 @@ from pathlib import Path
 import yaml
 
 from scripts.registry.stack_change_pipeline import (
+    SIMULATED_FIXTURE_TARGET,
     StackChangePipelineConfig,
+    _print_report,
     run_stack_change_pipeline,
 )
 
@@ -332,6 +334,46 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "guard_strict",
         "simulated_fixtures",
     }
+    assert check_report.acceptance_lines() == [
+        "acceptance: no-inference checks passed",
+        f"promotion_gate: run uv run pytest -q {SIMULATED_FIXTURE_TARGET}",
+    ]
+
+
+def test_print_report_includes_promotion_gate_for_passing_check(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    assert run_stack_change_pipeline(_config(tmp_path, mode="update")).ok
+    report = run_stack_change_pipeline(_config(tmp_path, mode="check"))
+
+    _print_report(report)
+
+    output = capsys.readouterr().out
+    assert "summary: ok" in output
+    assert "acceptance: no-inference checks passed" in output
+    assert f"promotion_gate: run uv run pytest -q {SIMULATED_FIXTURE_TARGET}" in output
+
+
+def test_print_report_blocks_promotion_for_failed_check(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(config).ok
+    _registry(config.lean_registry, throughput=42.0)
+    check_config = StackChangePipelineConfig(
+        **{**config.__dict__, "mode": "check"}
+    )
+    report = run_stack_change_pipeline(check_config)
+
+    _print_report(report)
+
+    output = capsys.readouterr().out
+    assert not report.ok
+    assert "summary: failed" in output
+    assert "acceptance: blocked" in output
+    assert "promotion_gate: fix " in output
 
 
 def test_check_reports_stale_generated_artifact_without_writing(tmp_path: Path) -> None:

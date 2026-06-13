@@ -89,6 +89,21 @@ class PipelineReport:
     def ok(self) -> bool:
         return not self.errors
 
+    def acceptance_lines(self) -> list[str]:
+        if self.ok:
+            lines = ["acceptance: no-inference checks passed"]
+            if self.warnings:
+                lines.append(f"warnings: {len(self.warnings)}")
+            lines.append(
+                "promotion_gate: run uv run pytest -q "
+                f"{SIMULATED_FIXTURE_TARGET}"
+            )
+            return lines
+        return [
+            "acceptance: blocked",
+            f"promotion_gate: fix {len(self.errors)} error(s) before promotion",
+        ]
+
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as fh:
@@ -563,6 +578,8 @@ def _print_report(report: PipelineReport) -> None:
         for error in step.errors:
             print(f"  error: {error}")
     print(f"summary: {'ok' if report.ok else 'failed'}")
+    for line in report.acceptance_lines():
+        print(line)
 
 
 def main(argv: list[str] | None = None) -> int:
