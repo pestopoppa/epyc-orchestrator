@@ -275,13 +275,14 @@ class TestStackTemplates:
         assert len(fd.quarters) == 4
         assert fd.quarters[0].port == 8080
 
-    def test_architect_has_replicas(self):
+    def test_architect_has_single_full_instance(self):
         from src.config.stack_templates import load_template
         template = load_template("default")
         arch = template.roles["architect_general"]
-        assert arch.full is None
-        assert len(arch.replicas) == 2
-        assert arch.replicas[0].port == 8083
+        assert arch.full is not None
+        assert arch.full.port == 8083
+        assert arch.full.numa == "FULL"
+        assert len(arch.replicas) == 0
 
     def test_validate_default_passes(self):
         from src.config.stack_templates import load_template, validate_template

@@ -39,6 +39,9 @@ DEFAULT_MAX_MLOCK_GB = int(MAX_STACK_RAM_GB * 0.8)  # 744 GB
 DEFAULT_MAX_TOTAL_GB = MAX_STACK_RAM_GB             # 930 GB
 DEFAULT_RESERVE_KV_GB = 100                          # minimum headroom for KV caches
 
+# Roles that must not be represented as launchable stack-template entries.
+RETIRED_DEPLOYABLE_ROLES = frozenset({"architect_coding", "thinking_reasoning"})
+
 
 @dataclass
 class ResourceBudget:
@@ -71,6 +74,7 @@ class RoleConfig:
     quant: str           # Quantization (e.g. "Q4_K_M", "Q6_K")
     tier: str            # HOT, WARM, COLD
     ram_gb: float        # Estimated RAM per instance (mlock'd)
+    alias_to: str = ""    # If set, this role is routed through another role's server
 
     # Instance topology
     full: InstanceConfig | None = None       # Full-speed 96t instance
@@ -171,6 +175,7 @@ def load_template(name: str, templates_dir: Path | None = None) -> StackTemplate
             quant=role_data.get("quant", "Q4_K_M"),
             tier=role_data.get("tier", "HOT"),
             ram_gb=float(role_data.get("ram_gb", 0)),
+            alias_to=str(role_data.get("alias_to", "") or ""),
         )
         # Parse full instance
         if "full" in role_data:
@@ -305,6 +310,27 @@ def validate_template(
 
     # 4. Tier consistency
     for role_name, role in template.roles.items():
+        if role_name in RETIRED_DEPLOYABLE_ROLES:
+            errors.append(
+                f"Retired role '{role_name}' must not appear in stack templates; "
+                "route callers to the live replacement role instead"
+            )
+            continue
+
+        is_alias = bool(role.alias_to) or role.tier.upper() == "ALIAS"
+        if is_alias:
+            if not role.alias_to:
+                errors.append(f"Alias role '{role_name}' must set alias_to")
+            elif role.alias_to == role_name:
+                errors.append(f"Alias role '{role_name}' cannot point to itself")
+            elif role.alias_to not in template.roles:
+                errors.append(
+                    f"Alias role '{role_name}' points to missing target '{role.alias_to}'"
+                )
+            if role.instance_count:
+                errors.append(f"Alias role '{role_name}' must not define launch instances")
+            continue
+
         if role.tier == "HOT" and role.instance_count == 0:
             errors.append(f"Role '{role_name}' is HOT but has no instances defined")
 
@@ -320,6 +346,8 @@ def validate_template(
                 for alias in model.get("aliases", []):
                     known_models.add(alias)
             for role_name, role in template.roles.items():
+                if role.alias_to or role.tier.upper() == "ALIAS":
+                    continue
                 if role.model and role.model not in known_models:
                     warnings.append(
                         f"Role '{role_name}': model '{role.model}' not found in registry"

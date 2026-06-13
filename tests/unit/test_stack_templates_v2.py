@@ -92,6 +92,39 @@ class TestValidatorFineGrained:
         assert result.valid
         assert any("HOT mlock usage high" in w for w in result.warnings)
 
+    def test_alias_role_requires_existing_target(self):
+        roles = {
+            "frontdoor": _make_role(10, "HOT", 8000),
+            "coder_escalation": RoleConfig(
+                model="", quant="", tier="ALIAS", ram_gb=0, alias_to="missing"
+            ),
+        }
+        result = validate_template(_make_template(roles))
+        assert not result.valid
+        assert any("points to missing target" in e for e in result.errors)
+
+    def test_alias_role_must_not_define_instances(self):
+        alias = RoleConfig(
+            model="", quant="", tier="ALIAS", ram_gb=0, alias_to="frontdoor"
+        )
+        alias.full = InstanceConfig(port=8001, numa="NODE0", threads=96)
+        roles = {
+            "frontdoor": _make_role(10, "HOT", 8000),
+            "coder_escalation": alias,
+        }
+        result = validate_template(_make_template(roles))
+        assert not result.valid
+        assert any("must not define launch instances" in e for e in result.errors)
+
+    def test_retired_deployable_role_rejected(self):
+        roles = {
+            "frontdoor": _make_role(10, "HOT", 8000),
+            "architect_coding": _make_role(10, "HOT", 8001),
+        }
+        result = validate_template(_make_template(roles))
+        assert not result.valid
+        assert any("Retired role 'architect_coding'" in e for e in result.errors)
+
 
 class TestDefaultYamlRoundTrip:
     def test_default_yaml_loads_and_validates(self):
@@ -99,6 +132,11 @@ class TestDefaultYamlRoundTrip:
         assert t.name == "default"
         assert "frontdoor" in t.roles
         assert t.resource_budget.max_mlock_gb == 800  # from default.yaml
+        assert t.roles["coder_escalation"].alias_to == "frontdoor"
+        assert t.roles["worker_explore"].alias_to == "worker_general"
+        assert "architect_coding" not in t.roles
+        assert t.roles["architect_general"].instance_count == 1
+        assert t.roles["ingest_long_context"].instance_count == 5
         result = validate_template(t)
         assert result.valid, f"default template should validate: {result.errors}"
 
