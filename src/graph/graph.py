@@ -10,7 +10,6 @@ from __future__ import annotations
 from pydantic_graph import Graph
 
 from src.graph.nodes import (
-    ArchitectCodingNode,
     ArchitectNode,
     CoderEscalationNode,
     CoderNode,
@@ -36,7 +35,6 @@ orchestration_graph: Graph[TaskState, TaskDeps, TaskResult] = Graph(
         CoderEscalationNode,
         IngestNode,
         ArchitectNode,
-        ArchitectCodingNode,
     ],
     name="orchestration",
 )

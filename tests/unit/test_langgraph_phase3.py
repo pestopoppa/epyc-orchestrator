@@ -55,7 +55,6 @@ def _make_ctx(**kwargs) -> SimpleNamespace:
 NODE_PARAMS = [
     ("ingest", "IngestNode", Role.INGEST_LONG_CONTEXT, "langgraph_ingest", "architect"),
     ("architect", "ArchitectNode", Role.ARCHITECT_GENERAL, "langgraph_architect", None),
-    ("architect_coding", "ArchitectCodingNode", Role.ARCHITECT_CODING, "langgraph_architect_coding", None),
     ("worker", "WorkerNode", Role.WORKER_GENERAL, "langgraph_worker", "coder_escalation"),
     ("frontdoor", "FrontdoorNode", Role.FRONTDOOR, "langgraph_frontdoor", "coder_escalation"),
     ("coder", "CoderNode", Role.THINKING_REASONING, "langgraph_coder", "architect"),
@@ -137,7 +136,7 @@ class TestDualRunParity:
         """Both backends should return __end__ on immediate success."""
         from src.graph.langgraph.nodes import (
             frontdoor_node, worker_node, coder_node,
-            coder_escalation_node, ingest_node, architect_node, architect_coding_node,
+            coder_escalation_node, ingest_node, architect_node,
         )
         from src.graph.langgraph.state import task_state_to_lg
 
@@ -145,7 +144,6 @@ class TestDualRunParity:
             "frontdoor": frontdoor_node, "worker": worker_node,
             "coder": coder_node, "coder_escalation": coder_escalation_node,
             "ingest": ingest_node, "architect": architect_node,
-            "architect_coding": architect_coding_node,
         }
         lg_func = lg_funcs[node_name]
 
@@ -169,7 +167,7 @@ class TestDualRunParity:
         """Both backends should return self-loop on retryable error."""
         from src.graph.langgraph.nodes import (
             frontdoor_node, worker_node, coder_node,
-            coder_escalation_node, ingest_node, architect_node, architect_coding_node,
+            coder_escalation_node, ingest_node, architect_node,
         )
         from src.graph.langgraph.state import task_state_to_lg
 
@@ -177,7 +175,6 @@ class TestDualRunParity:
             "frontdoor": frontdoor_node, "worker": worker_node,
             "coder": coder_node, "coder_escalation": coder_escalation_node,
             "ingest": ingest_node, "architect": architect_node,
-            "architect_coding": architect_coding_node,
         }
         lg_func = lg_funcs[node_name]
 
@@ -241,7 +238,7 @@ class TestDualRunParity:
         """Both backends should terminate when max_turns reached."""
         from src.graph.langgraph.nodes import (
             frontdoor_node, worker_node, coder_node,
-            coder_escalation_node, ingest_node, architect_node, architect_coding_node,
+            coder_escalation_node, ingest_node, architect_node,
         )
         from src.graph.langgraph.state import task_state_to_lg
 
@@ -249,7 +246,6 @@ class TestDualRunParity:
             "frontdoor": frontdoor_node, "worker": worker_node,
             "coder": coder_node, "coder_escalation": coder_escalation_node,
             "ingest": ingest_node, "architect": architect_node,
-            "architect_coding": architect_coding_node,
         }
         lg_func = lg_funcs[node_name]
 
@@ -460,7 +456,7 @@ class TestNodeMapping:
 
         expected = {
             "frontdoor", "worker", "coder", "coder_escalation",
-            "ingest", "architect", "architect_coding",
+            "ingest", "architect",
         }
         assert set(_NEXT_NODE_TO_PG.keys()) == expected
 
@@ -469,7 +465,7 @@ class TestNodeMapping:
         from src.graph.nodes import (
             _NEXT_NODE_TO_PG,
             FrontdoorNode, WorkerNode, CoderNode, CoderEscalationNode,
-            IngestNode, ArchitectNode, ArchitectCodingNode,
+            IngestNode, ArchitectNode,
         )
 
         assert _NEXT_NODE_TO_PG["frontdoor"] is FrontdoorNode
@@ -478,4 +474,3 @@ class TestNodeMapping:
         assert _NEXT_NODE_TO_PG["coder_escalation"] is CoderEscalationNode
         assert _NEXT_NODE_TO_PG["ingest"] is IngestNode
         assert _NEXT_NODE_TO_PG["architect"] is ArchitectNode
-        assert _NEXT_NODE_TO_PG["architect_coding"] is ArchitectCodingNode

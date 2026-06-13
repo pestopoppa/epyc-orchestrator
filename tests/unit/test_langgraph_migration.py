@@ -60,7 +60,7 @@ class TestStateConversion:
         state = TaskState(current_role=Role.ARCHITECT_CODING)
         lg = task_state_to_lg(state)
 
-        assert lg["current_role"] == "architect_coding"
+        assert lg["current_role"] == str(Role.ARCHITECT_CODING)
         assert isinstance(lg["current_role"], str)
 
     def test_round_trip_preserves_fields(self):
@@ -124,10 +124,10 @@ class TestEdgeValidation:
     def test_valid_transitions_defined(self):
         from src.graph.langgraph.graph import VALID_TRANSITIONS
 
-        # All 7 nodes present
+        # All 6 active nodes present
         assert set(VALID_TRANSITIONS.keys()) == {
             "frontdoor", "worker", "coder", "coder_escalation",
-            "ingest", "architect", "architect_coding",
+            "ingest", "architect",
         }
 
     def test_valid_transitions_match_pydantic_graph(self):
@@ -150,9 +150,6 @@ class TestEdgeValidation:
 
         # Architect -> {self, END} (terminal)
         assert VALID_TRANSITIONS["architect"] == {"architect", END}
-
-        # ArchitectCoding -> {self, END} (terminal)
-        assert VALID_TRANSITIONS["architect_coding"] == {"architect_coding", END}
 
     def test_invalid_transitions_disjoint(self):
         from src.graph.langgraph.graph import VALID_TRANSITIONS, INVALID_TRANSITIONS
@@ -238,14 +235,14 @@ class TestNodeRouting:
         assert ROLE_TO_LG_NODE["coder_escalation"] == "coder_escalation"
         assert ROLE_TO_LG_NODE["ingest_long_context"] == "ingest"
         assert ROLE_TO_LG_NODE["architect_general"] == "architect"
-        assert ROLE_TO_LG_NODE["architect_coding"] == "architect_coding"
+        assert ROLE_TO_LG_NODE[str(Role.ARCHITECT_CODING)] == "architect"
 
     def test_select_start_lg_node_default(self):
         from src.graph.langgraph.nodes import select_start_lg_node
 
         assert select_start_lg_node("unknown_role") == "frontdoor"
         assert select_start_lg_node("frontdoor") == "frontdoor"
-        assert select_start_lg_node("architect_coding") == "architect_coding"
+        assert select_start_lg_node(str(Role.ARCHITECT_CODING)) == "architect"
 
 
 # ---------------------------------------------------------------------------

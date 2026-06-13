@@ -26,7 +26,6 @@ from src.graph.helpers import (
     _update_workspace_from_turn,
 )
 from src.graph.nodes import (
-    ArchitectCodingNode,
     ArchitectNode,
     CoderEscalationNode,
     CoderNode,
@@ -248,7 +247,7 @@ class TestSelectStartNode:
 
     def test_architect_coding(self):
         node = select_start_node(Role.ARCHITECT_CODING)
-        assert isinstance(node, ArchitectCodingNode)
+        assert isinstance(node, ArchitectNode)
 
     def test_string_role(self):
         node = select_start_node("coder_escalation")

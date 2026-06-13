@@ -85,7 +85,6 @@ def _get_lg_node_map():
             coder_escalation_node,
             ingest_node,
             architect_node,
-            architect_coding_node,
         )
         _LG_NODE_MAP = {
             "frontdoor": frontdoor_node,
@@ -94,7 +93,6 @@ def _get_lg_node_map():
             "coder_escalation": coder_escalation_node,
             "ingest": ingest_node,
             "architect": architect_node,
-            "architect_coding": architect_coding_node,
         }
     return _LG_NODE_MAP
 
@@ -525,8 +523,8 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
 class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     """Escalation coder node for CODER_ESCALATION role.
 
-    Escalates to ArchitectNode. The historical architect_coding role is
-    retained for compatibility, but its servers are intentionally dead.
+    Escalates to ArchitectNode. The retired architect-coding role is
+    retained as a compatibility alias, but its servers are intentionally dead.
     """
 
     async def run(
@@ -816,95 +814,6 @@ class ArchitectNode(BaseNode[TaskState, TaskDeps, TaskResult]):
             state.last_error = ""
         return ArchitectNode()
 
-
-@dataclass
-class ArchitectCodingNode(BaseNode[TaskState, TaskDeps, TaskResult]):
-    """Architect coding node for ARCHITECT_CODING role.
-
-    Terminal — no further escalation.
-    """
-
-    async def run(
-        self, ctx: Ctx
-    ) -> Union["ArchitectCodingNode", End[TaskResult]]:
-        if _get_features().langgraph_architect_coding:
-            return await _run_via_langgraph(ctx, "architect_coding")
-        state = ctx.state
-
-        if state.turns >= state.max_turns:
-            rescued = _rescue_from_last_output(state.last_output)
-            if rescued:
-                log.info("Max-turns rescue (architect_coding): %r", rescued[:100])
-                return _make_end_result(ctx, rescued, True)
-            return _make_end_result(
-                ctx, f"[Max turns ({state.max_turns}) reached]", False
-            )
-
-        budget_reason = _check_budget_exceeded(ctx)
-        if budget_reason:
-            rescued = _rescue_from_last_output(state.last_output)
-            if rescued:
-                log.info("Budget rescue (architect_coding): %s — %r", budget_reason, rescued[:100])
-                return _make_end_result(ctx, rescued, True)
-            return _make_end_result(ctx, f"[{budget_reason}]", False)
-
-        output, error, is_final, artifacts = await _execute_turn(
-            ctx, Role.ARCHITECT_CODING
-        )
-        state.artifacts.update(artifacts)
-
-        if is_final:
-            tool_outputs = artifacts.get("_tool_outputs", [])
-            answer = _resolve_answer(output, tool_outputs)
-            if state.escalation_count > 0:
-                _record_mitigation(ctx, state.role_history[-2] if len(state.role_history) > 1 else "unknown", str(state.current_role))
-            return _make_end_result(ctx, answer, True)
-
-        if error:
-            state.consecutive_failures += 1
-            state.last_error = error
-            state.last_output = output
-            error_cat = _classify_error(error)
-            _record_failure(ctx, error_cat, error)
-
-            if _should_think_harder(ctx, error_cat):
-                state.think_harder_attempted = True
-                state.think_harder_config = _build_think_harder_config(state)
-                log.info("Think-harder triggered at %s (terminal role)", state.current_role)
-                return ArchitectCodingNode()
-
-            if _should_retry(ctx, error_cat):
-                return ArchitectCodingNode()
-
-            _add_evidence(ctx, "explore_fallback", -0.3)
-            return _make_end_result(
-                ctx,
-                f"[FAILED: Terminal role {state.current_role}: {error}]",
-                False,
-            )
-
-        state.consecutive_failures = 0
-        state.last_output = output
-        if state.think_harder_attempted and state.think_harder_succeeded is None:
-            state.think_harder_succeeded = True
-        nudge = artifacts.get("_nudge")
-        if nudge:
-            state.consecutive_nudges += 1
-            state.last_error = nudge
-            if state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
-                log.warning("Max nudges (%d) reached at %s, promoting to error", state.consecutive_nudges, state.current_role)
-                state.consecutive_failures += 1
-                state.consecutive_nudges = 0
-                return _make_end_result(
-                    ctx, _repeated_nudge_failure(state.current_role, nudge), False
-                )
-        else:
-            state.consecutive_failures = 0
-            state.consecutive_nudges = 0
-            state.last_error = ""
-        return ArchitectCodingNode()
-
-
 # ── LangGraph Phase 3: populate next_node → pydantic_graph class mapping ──
 
 _NEXT_NODE_TO_PG.update({
@@ -914,7 +823,6 @@ _NEXT_NODE_TO_PG.update({
     "coder_escalation": CoderEscalationNode,
     "ingest": IngestNode,
     "architect": ArchitectNode,
-    "architect_coding": ArchitectCodingNode,
 })
 
 
@@ -932,7 +840,8 @@ _ROLE_TO_NODE: dict[Role, type] = {
     Role.CODER_ESCALATION: CoderEscalationNode,
     Role.INGEST_LONG_CONTEXT: IngestNode,
     Role.ARCHITECT_GENERAL: ArchitectNode,
-    Role.ARCHITECT_CODING: ArchitectCodingNode,
+    # Compatibility alias for persisted/direct requests using the retired role.
+    Role.ARCHITECT_CODING: ArchitectNode,
 }
 
 

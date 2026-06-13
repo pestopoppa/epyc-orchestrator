@@ -1,6 +1,6 @@
 """LangGraph compiled graph — equivalent topology to pydantic_graph orchestration.
 
-Builds a ``StateGraph[OrchestratorState]`` with the same 7 nodes and edge
+Builds a ``StateGraph[OrchestratorState]`` with the same 6 nodes and edge
 topology as the pydantic_graph ``orchestration_graph``. Conditional edges
 use the ``next_node`` field set by each node function to route.
 
@@ -21,7 +21,6 @@ from langgraph.graph import END, StateGraph
 from src.graph.state import TaskDeps, TaskResult, TaskState
 from src.graph.langgraph.state import OrchestratorState, task_state_to_lg
 from src.graph.langgraph.nodes import (
-    architect_coding_node,
     architect_node,
     coder_escalation_node,
     coder_node,
@@ -56,21 +55,20 @@ def _route_next(state: dict[str, Any]) -> str:
 
 
 def build_orchestration_graph() -> StateGraph:
-    """Build the LangGraph StateGraph with all 7 nodes and conditional edges.
+    """Build the LangGraph StateGraph with all 6 nodes and conditional edges.
 
     Returns:
         Compiled StateGraph ready for ``.ainvoke()`` or ``.astream()``.
     """
     graph = StateGraph(OrchestratorState)
 
-    # Add all 7 nodes
+    # Add all active nodes.
     graph.add_node("frontdoor", frontdoor_node)
     graph.add_node("worker", worker_node)
     graph.add_node("coder", coder_node)
     graph.add_node("coder_escalation", coder_escalation_node)
     graph.add_node("ingest", ingest_node)
     graph.add_node("architect", architect_node)
-    graph.add_node("architect_coding", architect_coding_node)
 
     # All nodes use the same conditional edge router based on next_node
     all_nodes = [
@@ -211,16 +209,14 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "coder_escalation": {"coder_escalation", "architect", END},
     "ingest": {"ingest", "architect", END},
     "architect": {"architect", END},
-    "architect_coding": {"architect_coding", END},
 }
 
 # Invalid transitions — explicitly cannot happen
 INVALID_TRANSITIONS: dict[str, set[str]] = {
-    "frontdoor": {"architect", "architect_coding", "coder", "ingest"},
-    "worker": {"frontdoor", "architect", "architect_coding", "coder", "ingest"},
-    "coder": {"frontdoor", "worker", "coder_escalation", "architect_coding", "ingest"},
-    "coder_escalation": {"frontdoor", "worker", "coder", "architect_coding", "ingest"},
-    "ingest": {"frontdoor", "worker", "coder", "coder_escalation", "architect_coding"},
-    "architect": {"frontdoor", "worker", "coder", "coder_escalation", "architect_coding", "ingest"},
-    "architect_coding": {"frontdoor", "worker", "coder", "coder_escalation", "architect", "ingest"},
+    "frontdoor": {"architect", "coder", "ingest"},
+    "worker": {"frontdoor", "architect", "coder", "ingest"},
+    "coder": {"frontdoor", "worker", "coder_escalation", "ingest"},
+    "coder_escalation": {"frontdoor", "worker", "coder", "ingest"},
+    "ingest": {"frontdoor", "worker", "coder", "coder_escalation"},
+    "architect": {"frontdoor", "worker", "coder", "coder_escalation", "ingest"},
 }

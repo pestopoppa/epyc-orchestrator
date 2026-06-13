@@ -20,7 +20,6 @@ class TestGenerateMermaid:
             "CoderEscalationNode",
             "IngestNode",
             "ArchitectNode",
-            "ArchitectCodingNode",
         ]:
             assert node_name in code, f"Missing node: {node_name}"
 
@@ -57,8 +56,8 @@ class TestGenerateMermaid:
         assert "direction TB" in code_tb
 
     def test_graph_singleton(self):
-        """The orchestration_graph singleton should have 7 nodes."""
-        # The graph is created with 7 node classes
+        """The orchestration_graph singleton should have 6 active nodes."""
+        # The graph is created with 6 active node classes.
         code = generate_mermaid()
         node_names = [
             "FrontdoorNode",
@@ -67,7 +66,7 @@ class TestGenerateMermaid:
             "CoderEscalationNode",
             "IngestNode",
             "ArchitectNode",
-            "ArchitectCodingNode",
         ]
         for name in node_names:
             assert name in code
+        assert "ArchitectCodingNode" not in code

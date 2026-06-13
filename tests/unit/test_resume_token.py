@@ -48,12 +48,12 @@ class TestResumeTokenEncodeDecode:
         """Encoded token should be reasonably compact (<500 bytes)."""
         token = ResumeToken(
             task_id="a" * 36,  # UUID length
-            node_class="ArchitectCodingNode",
-            current_role="architect_coding",
+            node_class="ArchitectNode",
+            current_role=str(Role.ARCHITECT_GENERAL),
             turns=10,
             escalation_count=2,
             consecutive_failures=1,
-            role_history=["frontdoor", "coder_escalation", "architect_general", "architect_coding"],
+            role_history=["frontdoor", "coder_escalation", str(Role.ARCHITECT_GENERAL)],
             last_error="Some error message that is truncated",
         )
         import hashlib

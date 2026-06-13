@@ -12,7 +12,7 @@ State types:
 
 Node classes:
     FrontdoorNode, WorkerNode, CoderNode, CoderEscalationNode,
-    IngestNode, ArchitectNode, ArchitectCodingNode
+    IngestNode, ArchitectNode
 """
 
 from src.graph.graph import (
@@ -22,7 +22,6 @@ from src.graph.graph import (
     run_task,
 )
 from src.graph.nodes import (
-    ArchitectCodingNode,
     ArchitectNode,
     CoderEscalationNode,
     CoderNode,
@@ -57,5 +56,4 @@ __all__ = [
     "CoderEscalationNode",
     "IngestNode",
     "ArchitectNode",
-    "ArchitectCodingNode",
 ]

@@ -7,7 +7,7 @@ control conditional edges.
 
 Node names used in edges:
     "frontdoor", "worker", "coder", "coder_escalation",
-    "ingest", "architect", "architect_coding", "__end__"
+    "ingest", "architect", "__end__"
 """
 
 from __future__ import annotations
@@ -681,76 +681,6 @@ async def architect_node(state: dict[str, Any], config: RunnableConfig) -> dict[
     return _state_update(task_state, "architect", snap)
 
 
-async def architect_coding_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
-    """Architect coding node — terminal. No further escalation."""
-    ctx, task_state, deps, snap = _build_ctx(state, config)
-
-    if task_state.turns >= task_state.max_turns:
-        rescued = _rescue_from_last_output(task_state.last_output)
-        if rescued:
-            return _handle_end(ctx, rescued, True, task_state, snap)
-        return _handle_end(ctx, f"[Max turns ({task_state.max_turns}) reached]", False, task_state, snap)
-
-    budget_reason = _check_budget_exceeded(ctx)
-    if budget_reason:
-        rescued = _rescue_from_last_output(task_state.last_output)
-        if rescued:
-            return _handle_end(ctx, rescued, True, task_state, snap)
-        return _handle_end(ctx, f"[{budget_reason}]", False, task_state, snap)
-
-    output, error, is_final, artifacts = await _execute_turn(ctx, Role.ARCHITECT_CODING)
-    task_state.artifacts.update(artifacts)
-
-    if is_final:
-        tool_outputs = artifacts.get("_tool_outputs", [])
-        answer = _resolve_answer(output, tool_outputs)
-        if task_state.escalation_count > 0:
-            _record_mitigation(ctx, task_state.role_history[-2] if len(task_state.role_history) > 1 else "unknown", str(task_state.current_role))
-        return _handle_end(ctx, answer, True, task_state, snap)
-
-    if error:
-        task_state.consecutive_failures += 1
-        task_state.last_error = error
-        task_state.last_output = output
-        error_cat = _classify_error(error)
-        _record_failure(ctx, error_cat, error)
-
-        if _should_think_harder(ctx, error_cat):
-            task_state.think_harder_attempted = True
-            task_state.think_harder_config = _build_think_harder_config(task_state)
-            return _state_update(task_state, "architect_coding", snap)
-
-        if _should_retry(ctx, error_cat):
-            return _state_update(task_state, "architect_coding", snap)
-
-        _add_evidence(ctx, "explore_fallback", -0.3)
-        return _handle_end(ctx, f"[FAILED: Terminal role {task_state.current_role}: {error}]", False, task_state, snap)
-
-    task_state.consecutive_failures = 0
-    task_state.last_output = output
-    if task_state.think_harder_attempted and task_state.think_harder_succeeded is None:
-        task_state.think_harder_succeeded = True
-    nudge = artifacts.get("_nudge")
-    if nudge:
-        task_state.consecutive_nudges += 1
-        task_state.last_error = nudge
-        if task_state.consecutive_nudges >= MAX_CONSECUTIVE_NUDGES:
-            task_state.consecutive_failures += 1
-            task_state.consecutive_nudges = 0
-            return _handle_end(
-                ctx,
-                _repeated_nudge_failure(task_state.current_role, nudge),
-                False,
-                task_state,
-                snap,
-            )
-    else:
-        task_state.consecutive_failures = 0
-        task_state.consecutive_nudges = 0
-        task_state.last_error = ""
-    return _state_update(task_state, "architect_coding", snap)
-
-
 # ---------------------------------------------------------------------------
 # Node name -> role mapping (for select_start_node equivalent)
 # ---------------------------------------------------------------------------
@@ -766,7 +696,7 @@ ROLE_TO_LG_NODE: dict[str, str] = {
     "coder_escalation": "coder_escalation",
     "ingest_long_context": "ingest",
     "architect_general": "architect",
-    "architect_coding": "architect_coding",
+    str(Role.ARCHITECT_CODING): "architect",
 }
 
 
