@@ -141,6 +141,10 @@ def _active_roles(config: StackChangePipelineConfig) -> set[str]:
     return set(config.roles) if config.roles is not None else _roles_from_stack_manifest()
 
 
+def _stack_prior_roles(config: StackChangePipelineConfig) -> set[str] | None:
+    return set(config.roles) if config.roles is not None else None
+
+
 def _check_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
     try:
         expected = compile_model_descriptors(
@@ -201,7 +205,7 @@ def _check_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
         expected = compile_stack_priors(
             registry_path=config.lean_registry,
             descriptor_path=config.descriptors,
-            active_roles=_active_roles(config),
+            active_roles=_stack_prior_roles(config),
             allow_incomplete=config.compile_incomplete,
         )
     except Exception as exc:  # noqa: BLE001
@@ -233,7 +237,7 @@ def _update_stack_priors(config: StackChangePipelineConfig) -> PipelineStep:
             config.stack_priors,
             registry_path=config.lean_registry,
             descriptor_path=config.descriptors,
-            active_roles=_active_roles(config),
+            active_roles=_stack_prior_roles(config),
             allow_incomplete=config.compile_incomplete,
         )
     except Exception as exc:  # noqa: BLE001
@@ -294,6 +298,8 @@ def _guard_step(
         repo_root=config.repo_root,
         surface_categories=None if all_surfaces else frozenset({"production_blocker"}),
         surface_exceptions_path=config.surface_exceptions,
+        procedure_path=config.procedure,
+        procedure_schema_path=config.schema,
     )
     errors = list(result.errors)
     warnings = list(result.warnings)

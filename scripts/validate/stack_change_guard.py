@@ -199,6 +199,13 @@ def _matches_any(path: Path, patterns: tuple[str, ...]) -> bool:
     return any(fnmatch.fnmatch(rel, pattern) for pattern in patterns)
 
 
+def _display_path(path: Path, repo_root: Path) -> Path:
+    try:
+        return path.relative_to(repo_root)
+    except ValueError:
+        return path
+
+
 def _candidate_paths(repo_root: Path, rule: HardcodedSurfaceRule) -> list[Path]:
     paths: dict[str, Path] = {}
     for pattern in rule.path_globs:
@@ -436,33 +443,49 @@ def validate_procedure_role_enums(
     priors: dict[str, Any],
     *,
     repo_root: Path = REPO_ROOT,
+    procedure_path: Path | None = None,
+    schema_path: Path | None = None,
 ) -> list[str]:
     """Validate generated procedure role enums against stack priors."""
     errors: list[str] = []
-    procedure_path = repo_root / DEFAULT_ADD_MODEL_PROCEDURE.relative_to(REPO_ROOT)
-    if procedure_path.exists():
+    raw_procedure_path = procedure_path
+    if raw_procedure_path is None:
+        resolved_procedure_path = repo_root / DEFAULT_ADD_MODEL_PROCEDURE.relative_to(REPO_ROOT)
+    else:
+        resolved_procedure_path = (
+            raw_procedure_path
+            if raw_procedure_path.is_absolute()
+            else repo_root / raw_procedure_path
+        )
+    if resolved_procedure_path.exists():
         expected = stack_prior_role_choices(priors)
-        actual = _procedure_input_enum(procedure_path, "role")
+        actual = _procedure_input_enum(resolved_procedure_path, "role")
         if actual is None:
-            rel_path = procedure_path.relative_to(repo_root)
+            rel_path = _display_path(resolved_procedure_path, repo_root)
             errors.append(f"procedure role enum missing: {rel_path} input 'role'")
         elif actual != expected:
-            rel_path = procedure_path.relative_to(repo_root)
+            rel_path = _display_path(resolved_procedure_path, repo_root)
             errors.append(
                 f"procedure role enum drift: {rel_path} input 'role' expected {expected} "
                 f"from stack priors, got {actual} "
                 "[run: scripts/registry/sync_procedure_role_enums.py]"
             )
 
-    schema_path = repo_root / DEFAULT_PROCEDURE_SCHEMA.relative_to(REPO_ROOT)
-    if schema_path.exists():
+    raw_schema_path = schema_path
+    if raw_schema_path is None:
+        resolved_schema_path = repo_root / DEFAULT_PROCEDURE_SCHEMA.relative_to(REPO_ROOT)
+    else:
+        resolved_schema_path = (
+            raw_schema_path if raw_schema_path.is_absolute() else repo_root / raw_schema_path
+        )
+    if resolved_schema_path.exists():
         expected_permissions = stack_prior_permission_role_choices(priors)
-        actual_permissions = _procedure_schema_permission_enum(schema_path)
+        actual_permissions = _procedure_schema_permission_enum(resolved_schema_path)
         if actual_permissions is None:
-            rel_path = schema_path.relative_to(repo_root)
+            rel_path = _display_path(resolved_schema_path, repo_root)
             errors.append(f"procedure schema permission enum missing: {rel_path}")
         elif actual_permissions != expected_permissions:
-            rel_path = schema_path.relative_to(repo_root)
+            rel_path = _display_path(resolved_schema_path, repo_root)
             errors.append(
                 f"procedure schema permission enum drift: {rel_path} expected "
                 f"{expected_permissions} from live stack priors plus admin, "
@@ -480,6 +503,8 @@ def validate_stack_priors(
     repo_root: Path = REPO_ROOT,
     surface_categories: frozenset[str] | None = frozenset({"production_blocker"}),
     surface_exceptions_path: Path | None = DEFAULT_SURFACE_EXCEPTIONS,
+    procedure_path: Path | None = None,
+    procedure_schema_path: Path | None = None,
 ) -> GuardResult:
     errors: list[str] = []
     warnings: list[str] = []
@@ -549,7 +574,14 @@ def validate_stack_priors(
         errors.append("known_global_gaps must be a mapping when present")
 
     if scan_surfaces:
-        errors.extend(validate_procedure_role_enums(priors, repo_root=repo_root))
+        errors.extend(
+            validate_procedure_role_enums(
+                priors,
+                repo_root=repo_root,
+                procedure_path=procedure_path,
+                schema_path=procedure_schema_path,
+            )
+        )
         surface_exceptions: list[SurfaceException] = []
         if surface_exceptions_path is not None:
             surface_exceptions, exception_errors = load_surface_exceptions(surface_exceptions_path)
