@@ -96,3 +96,43 @@ def test_reconstruction_folds_supersession_events_without_mutating_trials(
         "field_names": ["bug_corrupted_by", "bug_corrupted_reason"],
     }
     assert journal.all_entries()[1].bug_corrupted_by == ""
+
+
+def test_runtime_prompt_views_fold_supersession_events_without_mutating_trials(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    trusted = _entry(1)
+    trusted.pareto_status = "frontier"
+    trusted.hypothesis = "trusted signal"
+    journal.record(trusted)
+    contaminated = _entry(2)
+    contaminated.pareto_status = "frontier"
+    contaminated.quality = 2.0
+    contaminated.hypothesis = "contaminated signal"
+    journal.record(contaminated)
+    journal.append_supersession_event(
+        target_trial_ids=[2],
+        fields={
+            "bug_corrupted_by": "resource_contention",
+            "bug_corrupted_reason": "synthetic contention window",
+        },
+        reason="synthetic contention window",
+        policy_version="supersession-v1",
+        actor="unit-test",
+    )
+
+    folded = journal.entries_with_supersessions()
+
+    assert journal.all_entries()[1].bug_corrupted_by == ""
+    assert folded[1].bug_corrupted_by == "resource_contention"
+    assert [entry.trial_id for entry in journal.trustworthy_entries()] == [1]
+    assert journal.trustworthiness_score()["corrupted_by"] == {
+        "resource_contention": 1
+    }
+    summary = journal.summary_text()
+    assert "#2 [seeder/seed_batch] CORRUPTED_BY=resource_contention" in summary
+    assert "q=2.000" not in summary
+    insights = journal.insights_text()
+    assert "#1" in insights
+    assert "#2" not in insights

@@ -6,9 +6,10 @@ Append-only with rotation (new file per 1000 trials).
 from __future__ import annotations
 
 import csv
+import copy
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -378,6 +379,50 @@ class ExperimentJournal:
             )
         return events
 
+    def _supersession_overrides_by_trial(self) -> dict[int, dict[str, Any]]:
+        entry_fields = set(JournalEntry.__dataclass_fields__)
+        overrides_by_trial: dict[int, dict[str, Any]] = {}
+        for event in self.supersession_events():
+            fields = event.get("fields")
+            targets = event.get("target_trial_ids")
+            if not isinstance(fields, dict) or not isinstance(targets, list):
+                continue
+            filtered_fields = {
+                str(name): copy.deepcopy(value)
+                for name, value in fields.items()
+                if str(name) in entry_fields
+            }
+            if not filtered_fields:
+                continue
+            for target in targets:
+                try:
+                    trial_id = int(target)
+                except (TypeError, ValueError):
+                    continue
+                overrides_by_trial.setdefault(trial_id, {}).update(
+                    copy.deepcopy(filtered_fields)
+                )
+        return overrides_by_trial
+
+    def entries_with_supersessions(self) -> list[JournalEntry]:
+        """Return trial entries with append-only supersession events folded in.
+
+        This is the runtime read view: persisted trial rows stay immutable, while
+        planner-facing trust and prompt helpers see operator supersession events
+        such as post-hoc resource-contention exclusions.
+        """
+        overrides_by_trial = self._supersession_overrides_by_trial()
+        if not overrides_by_trial:
+            return list(self._entries)
+        entries: list[JournalEntry] = []
+        for entry in self._entries:
+            overrides = overrides_by_trial.get(entry.trial_id)
+            if overrides:
+                entries.append(replace(entry, **copy.deepcopy(overrides)))
+            else:
+                entries.append(entry)
+        return entries
+
     def next_trial_id(self) -> int:
         if not self._entries:
             return 0
@@ -415,9 +460,10 @@ class ExperimentJournal:
     def summary_text(self, last_n: int = 20) -> str:
         """Human-readable summary for LLM controller prompt."""
         s = self.summary()
+        entries = self.entries_with_supersessions()
         eligible_pareto_count = sum(
             1
-            for e in self._entries
+            for e in entries
             if e.pareto_status == "frontier" and e.tier > 0 and not e.bug_corrupted_by
         )
         lines = [
@@ -425,7 +471,7 @@ class ExperimentJournal:
             f"Eligible Pareto frontier size (T1/T2, trustworthy): {eligible_pareto_count}",
             f"Species counts: {s.get('species_counts', {})}",
         ]
-        recent = self.recent(last_n)
+        recent = entries[-last_n:]
         if recent:
             lines.append(f"\nLast {len(recent)} trials:")
             for i, e in enumerate(recent):
@@ -472,7 +518,7 @@ class ExperimentJournal:
 
     def trustworthy_entries(self) -> list[JournalEntry]:
         """All entries whose outcome is NOT marked bug_corrupted_by."""
-        return [e for e in self._entries if not e.bug_corrupted_by]
+        return [e for e in self.entries_with_supersessions() if not e.bug_corrupted_by]
 
     def trustworthiness_score(self) -> dict[str, Any]:
         """Counts of trustworthy vs bug-corrupted entries.
@@ -487,7 +533,8 @@ class ExperimentJournal:
                 "low_signal": bool,  # True when trustworthy < 5
             }
         """
-        total = len(self._entries)
+        entries = self.entries_with_supersessions()
+        total = len(entries)
         if total == 0:
             return {
                 "total": 0, "trustworthy": 0, "corrupted": 0,
@@ -495,7 +542,7 @@ class ExperimentJournal:
             }
         corrupted_by: dict[str, int] = {}
         trustworthy = 0
-        for e in self._entries:
+        for e in entries:
             sha = e.bug_corrupted_by or ""
             if sha:
                 corrupted_by[sha] = corrupted_by.get(sha, 0) + 1
@@ -687,8 +734,9 @@ class ExperimentJournal:
         into species prompts (cross-species fertilization).
         """
         interesting = [
-            e for e in self._entries
+            e for e in self.entries_with_supersessions()
             if e.pareto_status == "frontier" or e.failure_analysis
+            if not e.bug_corrupted_by
         ][-n:]
         if not interesting:
             return "(no insights yet)"
