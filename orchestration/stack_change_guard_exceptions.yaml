@@ -1,0 +1,16 @@
+# Documented stack-change guard exceptions.
+#
+# Keep this file sparse. Each exception must be temporary and specific enough to
+# preserve the guard signal for unrelated model-stack drift.
+#
+# Required fields per entry:
+# - rule_id: hardcoded-surface rule id, e.g. retired_role_in_active_code
+# - category: production_blocker, legacy_test, or historical_doc
+# - path_glob: repository-relative glob for the finding path
+# - classification: degraded_fallback, legacy_test, historical_doc, or intentional_live_exception
+# - owner: accountable person/team/workstream
+# - rationale: why this exception is safer than immediate migration
+# - expires: ISO date YYYY-MM-DD
+# Optional:
+# - line: exact line number for a single-line waiver
+exceptions: []

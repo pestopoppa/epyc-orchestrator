@@ -192,7 +192,7 @@ def test_validate_stack_priors_can_include_surface_warnings(tmp_path: Path) -> N
     active = tmp_path / "scripts" / "benchmark"
     active.mkdir(parents=True)
     (active / "seeding_rewards.py").write_text(
-        'DEFAULT_BASELINE_TPS = {"architect_coding": 10.3}\n',
+        'DEFAULT_BASELINE_TPS = {"frontdoor": 10.3}\n',
         encoding="utf-8",
     )
 
@@ -208,6 +208,76 @@ def test_validate_stack_priors_can_include_surface_warnings(tmp_path: Path) -> N
     assert any("hardcoded_surface.production_blocker" in warning for warning in loose.warnings)
     assert not strict.ok
     assert any("hardcoded_surface.production_blocker" in error for error in strict.errors)
+
+
+def test_validate_stack_priors_keeps_waived_surface_visible_in_strict_mode(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    active = tmp_path / "scripts" / "benchmark"
+    active.mkdir(parents=True)
+    (active / "seeding_rewards.py").write_text(
+        'DEFAULT_BASELINE_TPS = {"frontdoor": 10.3}\n',
+        encoding="utf-8",
+    )
+    exceptions = _write_yaml(
+        tmp_path / "exceptions.yaml",
+        {
+            "exceptions": [
+                {
+                    "rule_id": "seeding_baseline_tps_table",
+                    "category": "production_blocker",
+                    "path_glob": "scripts/benchmark/seeding_rewards.py",
+                    "classification": "degraded_fallback",
+                    "owner": "stack-change-governance",
+                    "rationale": "temporary fixture for strict-mode waiver behavior",
+                    "expires": "2099-01-01",
+                }
+            ]
+        },
+    )
+
+    result = validate_stack_priors(
+        priors,
+        strict=True,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        surface_exceptions_path=exceptions,
+    )
+
+    assert result.ok
+    assert any("hardcoded_surface.waived.production_blocker" in warning for warning in result.warnings)
+
+
+def test_validate_stack_priors_rejects_invalid_surface_exception(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    exceptions = _write_yaml(
+        tmp_path / "exceptions.yaml",
+        {
+            "exceptions": [
+                {
+                    "rule_id": "seeding_baseline_tps_table",
+                    "category": "production_blocker",
+                    "path_glob": "scripts/benchmark/seeding_rewards.py",
+                    "classification": "degraded_fallback",
+                    "rationale": "missing owner should fail",
+                    "expires": "2099-01-01",
+                }
+            ]
+        },
+    )
+
+    result = validate_stack_priors(
+        priors,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        surface_exceptions_path=exceptions,
+    )
+
+    assert not result.ok
+    assert any("missing non-empty 'owner'" in error for error in result.errors)
 
 
 def test_validate_stack_priors_rejects_stale_procedure_role_enum(tmp_path: Path) -> None:

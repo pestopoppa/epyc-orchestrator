@@ -9,6 +9,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -19,11 +20,20 @@ from src.registry.stack_priors import validate_stack_priors_contract
 
 REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
 DEFAULT_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+DEFAULT_SURFACE_EXCEPTIONS = REPO_ROOT / "orchestration" / "stack_change_guard_exceptions.yaml"
 DEFAULT_ADD_MODEL_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_model_to_registry.yaml"
 DEFAULT_PROCEDURE_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"
 RETIRED_LIVE_ROLES = {"architect_coding"}
 SURFACE_SCAN_ALLOW_MARKER = "stack-change-guard: allow"
 SURFACE_SCAN_MAX_FILE_BYTES = 512 * 1024
+SURFACE_EXCEPTION_CLASSIFICATIONS = frozenset(
+    {
+        "degraded_fallback",
+        "legacy_test",
+        "historical_doc",
+        "intentional_live_exception",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +71,31 @@ class SurfaceFinding:
             f"hardcoded_surface.{self.category}.{self.rule_id}: "
             f"{self.path}:{self.line}: {self.snippet} "
             f"[remediation: {self.remediation}]"
+        )
+
+
+@dataclass(frozen=True)
+class SurfaceException:
+    rule_id: str
+    category: str
+    path_glob: str
+    classification: str
+    owner: str
+    rationale: str
+    expires: str
+    line: int | None = None
+
+    def matches(self, finding: SurfaceFinding) -> bool:
+        if self.rule_id != finding.rule_id or self.category != finding.category:
+            return False
+        if self.line is not None and self.line != finding.line:
+            return False
+        return fnmatch.fnmatch(finding.path.as_posix(), self.path_glob)
+
+    def warning_suffix(self) -> str:
+        return (
+            f"classification={self.classification}; owner={self.owner}; "
+            f"expires={self.expires}; rationale={self.rationale}"
         )
 
 
@@ -216,6 +251,114 @@ def scan_hardcoded_surfaces(
     return findings
 
 
+def _surface_exception_from_raw(index: int, raw: Any) -> tuple[SurfaceException | None, list[str]]:
+    errors: list[str] = []
+    prefix = f"surface exception #{index}"
+    if not isinstance(raw, dict):
+        return None, [f"{prefix} is not a mapping"]
+
+    def required_str(field: str) -> str:
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{prefix} missing non-empty {field!r}")
+            return ""
+        return value.strip()
+
+    path_glob = raw.get("path_glob", raw.get("path"))
+    if not isinstance(path_glob, str) or not path_glob.strip():
+        errors.append(f"{prefix} missing non-empty 'path_glob' or 'path'")
+        path_glob = ""
+    else:
+        path_glob = path_glob.strip()
+
+    line_raw = raw.get("line")
+    line: int | None = None
+    if line_raw is not None:
+        if not isinstance(line_raw, int) or line_raw <= 0:
+            errors.append(f"{prefix} line must be a positive integer when present")
+        else:
+            line = line_raw
+
+    classification = required_str("classification")
+    if classification and classification not in SURFACE_EXCEPTION_CLASSIFICATIONS:
+        allowed = ", ".join(sorted(SURFACE_EXCEPTION_CLASSIFICATIONS))
+        errors.append(f"{prefix} classification {classification!r} is not one of: {allowed}")
+
+    expires = required_str("expires")
+    if expires:
+        try:
+            expires_date = date.fromisoformat(expires)
+        except ValueError:
+            errors.append(f"{prefix} expires must be an ISO date YYYY-MM-DD")
+        else:
+            if expires_date < date.today():
+                errors.append(f"{prefix} expired on {expires}")
+
+    exception = SurfaceException(
+        rule_id=required_str("rule_id"),
+        category=required_str("category"),
+        path_glob=path_glob,
+        classification=classification,
+        owner=required_str("owner"),
+        rationale=required_str("rationale"),
+        expires=expires,
+        line=line,
+    )
+    return (None, errors) if errors else (exception, [])
+
+
+def load_surface_exceptions(path: Path = DEFAULT_SURFACE_EXCEPTIONS) -> tuple[list[SurfaceException], list[str]]:
+    """Load documented hardcoded-surface exceptions.
+
+    Exceptions are not silent suppressions. Matching findings remain warnings,
+    but strict mode does not promote them to errors while the metadata is valid.
+    """
+    if not path.exists():
+        return [], []
+    try:
+        loaded = _load_yaml(path)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        return [], [f"failed to load surface exception file {path}: {exc}"]
+    raw_exceptions = loaded.get("exceptions", [])
+    if raw_exceptions is None:
+        return [], []
+    if not isinstance(raw_exceptions, list):
+        return [], [f"surface exception file {path} has non-list 'exceptions'"]
+
+    exceptions: list[SurfaceException] = []
+    errors: list[str] = []
+    for index, raw in enumerate(raw_exceptions, start=1):
+        exception, entry_errors = _surface_exception_from_raw(index, raw)
+        errors.extend(entry_errors)
+        if exception is not None:
+            exceptions.append(exception)
+    return exceptions, errors
+
+
+def _matching_surface_exception(
+    finding: SurfaceFinding,
+    exceptions: list[SurfaceException],
+) -> SurfaceException | None:
+    for exception in exceptions:
+        if exception.matches(finding):
+            return exception
+    return None
+
+
+def _surface_warning_for_finding(
+    finding: SurfaceFinding,
+    exceptions: list[SurfaceException],
+) -> str:
+    exception = _matching_surface_exception(finding, exceptions)
+    if exception is None:
+        return finding.to_warning()
+    return (
+        f"hardcoded_surface.waived.{finding.category}.{finding.rule_id}: "
+        f"{finding.path}:{finding.line}: {finding.snippet} "
+        f"[exception: {exception.warning_suffix()}]"
+    )
+
+
 def stack_prior_role_choices(priors: dict[str, Any]) -> list[str]:
     """Return model role choices that procedure inputs should accept."""
     roles = priors.get("roles")
@@ -328,6 +471,7 @@ def validate_stack_priors(
     scan_surfaces: bool = False,
     repo_root: Path = REPO_ROOT,
     surface_categories: frozenset[str] | None = frozenset({"production_blocker"}),
+    surface_exceptions_path: Path | None = DEFAULT_SURFACE_EXCEPTIONS,
 ) -> GuardResult:
     errors: list[str] = []
     warnings: list[str] = []
@@ -398,12 +542,21 @@ def validate_stack_priors(
 
     if scan_surfaces:
         errors.extend(validate_procedure_role_enums(priors, repo_root=repo_root))
+        surface_exceptions: list[SurfaceException] = []
+        if surface_exceptions_path is not None:
+            surface_exceptions, exception_errors = load_surface_exceptions(surface_exceptions_path)
+            errors.extend(exception_errors)
         for finding in scan_hardcoded_surfaces(repo_root, categories=surface_categories):
-            warnings.append(finding.to_warning())
+            warnings.append(_surface_warning_for_finding(finding, surface_exceptions))
 
     if strict and warnings:
-        errors.extend(f"strict: {warning}" for warning in warnings)
-        warnings = []
+        retained_warnings: list[str] = []
+        for warning in warnings:
+            if warning.startswith("hardcoded_surface.waived."):
+                retained_warnings.append(warning)
+            else:
+                errors.append(f"strict: {warning}")
+        warnings = retained_warnings
 
     return GuardResult(errors=errors, warnings=warnings)
 
@@ -438,6 +591,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=sorted({rule.category for rule in HARDCODED_SURFACE_RULES}),
         help="Surface category to report; defaults to production_blocker",
     )
+    parser.add_argument(
+        "--surface-exceptions",
+        type=Path,
+        default=DEFAULT_SURFACE_EXCEPTIONS,
+        help="YAML file documenting hardcoded-surface exceptions",
+    )
     args = parser.parse_args(argv)
     if args.all_hardcoded_surfaces:
         surface_categories = None
@@ -452,6 +611,7 @@ def main(argv: list[str] | None = None) -> int:
         scan_surfaces=not args.skip_hardcoded_surface_scan,
         repo_root=args.repo_root,
         surface_categories=surface_categories,
+        surface_exceptions_path=args.surface_exceptions,
     )
     if result.errors:
         print(f"FAIL: {len(result.errors)} stack-prior error(s)")
