@@ -266,7 +266,6 @@ class TestRoleTimeouts:
             "coder_escalation",
             "coder_escalation",
             "architect_general",
-            "architect_coding",
         ]
         for role in expected_roles:
             assert role in ROLE_TIMEOUTS, f"Missing timeout for {role}"
@@ -276,7 +275,7 @@ class TestRoleTimeouts:
 
         # Workers get shorter timeouts for faster circuit breaker response
         assert ROLE_TIMEOUTS["worker_explore"] < ROLE_TIMEOUTS["architect_general"]
-        assert ROLE_TIMEOUTS["worker_math"] < ROLE_TIMEOUTS["architect_coding"]
+        assert "architect_coding" not in ROLE_TIMEOUTS
         assert ROLE_TIMEOUTS["worker_explore"] == 60
         assert ROLE_TIMEOUTS["architect_general"] == 600
 

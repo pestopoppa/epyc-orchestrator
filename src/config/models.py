@@ -408,13 +408,6 @@ class ServerURLsConfig:
     # full instance; +184% per-request latency. NUMA_CONFIG[architect_general]
     # has 1 instance @ 8083; the prior :8183 port is dead.
     architect_general: str = "http://localhost:8083"
-    # 2026-05-06: architect_coding role REMOVED (REAP-246B eliminated, 139 GB
-    # freed). Field kept because ~25 modules still reference it (chat_routing,
-    # admission, openai_compat, role enum, parsing_config, langgraph nodes).
-    # URL preserved at the original dead ports so any stray call fails fast
-    # with connect_error rather than silently routing elsewhere. Full purge
-    # of architect_coding is tracked as a separate refactor.
-    architect_coding: str = "http://localhost:8084,http://localhost:8184"
     # 2026-05-24: ingest_long_context upgraded to full+4×quarters following
     # Phase 0.5 quarter-fit bench (Qwen3-Next-80B Q4 = 12.34 t/s @ 48t/quarter,
     # snug at 45 GB GGUF + KV but viable). Solo → full (8085), concurrent → quarters.
@@ -485,9 +478,6 @@ class TimeoutsConfig:
     architect_general: int = field(
         default_factory=lambda: int(_registry_timeout("roles", "architect_general", 600))
     )
-    architect_coding: int = field(
-        default_factory=lambda: int(_registry_timeout("roles", "architect_coding", 600))
-    )
     default_request: int = field(
         default_factory=lambda: int(_registry_timeout("", "default", 600))
     )
@@ -549,7 +539,6 @@ class TimeoutsConfig:
             "vision_escalation": self.vision_escalation,
             "ingest_long_context": self.ingest_long_context,
             "architect_general": self.architect_general,
-            "architect_coding": self.architect_coding,
         }
         return _role_map.get(str(role), self.default_request)
 
@@ -569,7 +558,6 @@ class TimeoutsConfig:
             "vision_escalation": self.vision_escalation,
             "ingest_long_context": self.ingest_long_context,
             "architect_general": self.architect_general,
-            "architect_coding": self.architect_coding,
         }
 
 
@@ -1082,4 +1070,3 @@ class OrchestratorConfigData:
     session_lifecycle: SessionLifecycleConfigData = field(default_factory=SessionLifecycleConfigData)
     health_tracker: HealthTrackerConfigData = field(default_factory=HealthTrackerConfigData)
     external_backends: ExternalBackendsConfig = field(default_factory=ExternalBackendsConfig)
-

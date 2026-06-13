@@ -167,7 +167,6 @@ class TestServerURLsDefaults:
             "worker_fast",
             "worker_summarize",
             "architect_general",
-            "architect_coding",
             "ingest_long_context",
         }
         for role in expected_roles:
@@ -198,18 +197,16 @@ class TestServerURLsDefaults:
         cfg = ServerURLsConfig()
         # Multi-instance roles use "full:" prefix or comma-separated URLs
         assert "http://localhost:8080" in cfg.frontdoor
-        assert "http://localhost:8081" in cfg.coder_escalation
+        assert "http://localhost:8070" in cfg.coder_escalation
         assert "http://localhost:8082" in cfg.worker_explore
-        # Single-instance roles keep simple URLs
+        # Single-instance roles keep simple URLs; quartered roles use full:.
         assert cfg.worker_vision == "http://localhost:8086"
-        assert cfg.vision_escalation == "http://localhost:8087"
-        assert cfg.ingest_long_context == "http://localhost:8085"
+        assert cfg.vision_escalation.startswith("full:http://localhost:8087")
+        assert cfg.ingest_long_context.startswith("full:http://localhost:8085")
         assert cfg.worker_fast == "http://localhost:8102"
-        # Architects use round-robin multi-URL
         assert "http://localhost:8083" in cfg.architect_general
-        assert "http://localhost:8084" in cfg.architect_coding
-        # Worker summarize shares coder instances
-        assert "http://localhost:8081" in cfg.worker_summarize
+        # Worker summarize shares the frontdoor/coder_escalation server.
+        assert "http://localhost:8070" in cfg.worker_summarize
 
 
 # ── TimeoutsConfig defaults match ROLE_TIMEOUTS in chat_utils.py ─────────
@@ -260,7 +257,6 @@ class TestTimeoutsDefaults:
         assert cfg.coder_escalation == 120
         # Architects: long (complex reasoning)
         assert cfg.architect_general == 600
-        assert cfg.architect_coding == 480
         # Backend: unified 600s timeout
         assert cfg.server_request == 600
         assert cfg.server_connect == 5

@@ -271,7 +271,6 @@ class TestServerURLsConfig:
             "worker_fast",
             "worker_summarize",
             "architect_general",
-            "architect_coding",
             "ingest_long_context",
         }
         assert expected_keys == set(d.keys())
@@ -290,9 +289,8 @@ class TestServerURLsConfig:
 
     def test_default_architect_urls(self) -> None:
         cfg = ServerURLsConfig()
-        # Architects use round-robin multi-URL (comma-separated)
         assert "http://localhost:8083" in cfg.architect_general
-        assert "http://localhost:8084" in cfg.architect_coding
+        assert "architect_coding" not in cfg.as_dict()
 
 
 # ============================================================================

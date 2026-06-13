@@ -158,7 +158,6 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         worker_summarize: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
         # 2026-05-04: consolidated to single 1×96t canonical instance (Probe B)
         architect_general: str = "http://localhost:8083"
-        architect_coding: str = "http://localhost:8084,http://localhost:8184"
         # 2026-05-24: ingest_long_context upgraded to full+4×quarters (see stack_numa.py)
         ingest_long_context: str = "full:http://localhost:8085,http://localhost:8185,http://localhost:8285,http://localhost:8385,http://localhost:8485"
         api_url: str = "http://localhost:8000"
@@ -185,7 +184,6 @@ if PYDANTIC_SETTINGS_AVAILABLE:
         vision_escalation: int = _timeout_defaults.vision_escalation
         ingest_long_context: int = _timeout_defaults.ingest_long_context
         architect_general: int = _timeout_defaults.architect_general
-        architect_coding: int = _timeout_defaults.architect_coding
         default_request: int = _timeout_defaults.default_request
         server_request: int = _timeout_defaults.server_request
         server_connect: int = _timeout_defaults.server_connect
@@ -499,10 +497,6 @@ def _load_from_env() -> OrchestratorConfigData:
                 f"{P}TIMEOUTS_ARCHITECT_GENERAL",
                 int(_registry_timeout("roles", "architect_general", 600)),
             ),
-            architect_coding=_env_int(
-                f"{P}TIMEOUTS_ARCHITECT_CODING",
-                int(_registry_timeout("roles", "architect_coding", 600)),
-            ),
             default_request=_env_int(
                 f"{P}TIMEOUTS_DEFAULT_REQUEST",
                 int(_registry_timeout("roles", "default_request", 120)),
@@ -728,7 +722,6 @@ def get_config() -> OrchestratorConfigData:
                 vision_escalation=settings.timeouts.vision_escalation,
                 ingest_long_context=settings.timeouts.ingest_long_context,
                 architect_general=settings.timeouts.architect_general,
-                architect_coding=settings.timeouts.architect_coding,
                 default_request=settings.timeouts.default_request,
                 server_request=settings.timeouts.server_request,
                 server_connect=settings.timeouts.server_connect,
