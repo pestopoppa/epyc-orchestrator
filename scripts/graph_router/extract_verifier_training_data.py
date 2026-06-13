@@ -30,24 +30,30 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.graph_router.action_space import canonical_actions_from_npz, infer_n_actions
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("extract_verifier")
-
-# Match the classifier's n_actions so the one-hot dimension is stable.
-DEFAULT_N_ACTIONS = 8
 
 
 def extract(
     in_path: Path,
     out_path: Path,
     q_threshold: float = 0.5,
-    n_actions: int = DEFAULT_N_ACTIONS,
+    n_actions: int | None = None,
 ) -> dict:
     logger.info("Loading classifier training data from %s", in_path)
     src = np.load(in_path, allow_pickle=True)
     X = src["X"].astype(np.float32)
     y = src["y"].astype(np.int64)
     q_weights = src["q_weights"].astype(np.float32)
+    canonical_actions = canonical_actions_from_npz(src)
+    if n_actions is None:
+        n_actions = infer_n_actions(src, y)
+    if y.size and int(y.max()) >= n_actions:
+        raise SystemExit(
+            f"n_actions={n_actions} cannot encode max action label {int(y.max())}"
+        )
 
     N, D = X.shape
     logger.info("Loaded %d samples, feature_dim=%d", N, D)
@@ -93,6 +99,8 @@ def extract(
         q_weights=q_weights,
         feature_dim=np.int64(D),
         n_actions=np.int64(n_actions),
+        label_map=np.array(list(enumerate(canonical_actions)), dtype=object),
+        canonical_actions=np.array(canonical_actions, dtype=object),
         q_threshold=np.float32(q_threshold),
     )
     logger.info("Saved verifier training data to %s", out_path)
@@ -115,8 +123,8 @@ def main():
                         help="Output verifier NPZ")
     parser.add_argument("--q-threshold", type=float, default=0.5,
                         help="Correctness threshold on q_weights (default 0.5)")
-    parser.add_argument("--n-actions", type=int, default=DEFAULT_N_ACTIONS,
-                        help=f"Action space size for one-hot (default {DEFAULT_N_ACTIONS})")
+    parser.add_argument("--n-actions", type=int, default=None,
+                        help="Action space size for one-hot (default: infer from classifier data)")
     args = parser.parse_args()
 
     extract(

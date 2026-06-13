@@ -27,6 +27,12 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.graph_router.action_space import (
+    DEFAULT_STACK_PRIORS_PATH,
+    load_live_canonical_actions,
+    normalize_action,
+)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -40,84 +46,6 @@ DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "orchestration/repl_memory/training_data.np
 
 # Known task types for one-hot encoding (order matters — must be stable)
 TASK_TYPES = ["code", "chat", "architecture", "ingest", "general"]
-
-# Canonical routing targets (order matters — defines label indices)
-CANONICAL_ACTIONS = [
-    "frontdoor",
-    "architect_general",
-    "architect_coding",
-    "coder_escalation",
-    "worker_explore",
-    # Reserved for future (zero-data today, MLP has 8 outputs)
-    "worker_math",
-    "worker_vision",
-    "ingest_long_context",
-]
-
-# Map raw action strings to canonical routing targets.
-# Escalation entries map to their DESTINATION (the correct initial route).
-# SELF variants map to frontdoor. ARCHITECT/WORKER map to their defaults.
-ACTION_NORMALIZATION: dict[str, str] = {
-    # Clean organic labels
-    "frontdoor": "frontdoor",
-    "architect_general": "architect_general",
-    "architect_coding": "architect_coding",
-    # Identity maps for canonical actions present in live db as raw labels.
-    # Added 2026-05-21 — without these, ~23% of live-db routing memories were
-    # silently dropped during reembed/extract (coder_escalation: 3K rows,
-    # ingest_long_context: 5.6K rows). See learned-routing-controller.md Phase 6.
-    "coder_escalation": "coder_escalation",
-    "ingest_long_context": "ingest_long_context",
-    "worker_explore": "worker_explore",
-    "worker_math": "worker_math",
-    "worker_vision": "worker_vision",
-    # Renamed roles (post-2026-05-09 stack consolidation).
-    "worker_general": "worker_explore",
-    "coder": "architect_coding",
-    # Escalation → destination
-    "escalate:frontdoor->coder_escalation": "coder_escalation",
-    "escalate:worker_general->coder_escalation": "coder_escalation",
-    "escalate:coder_escalation->architect_coding": "architect_coding",
-    # Seeding labels (SELF = frontdoor handles it)
-    "SELF": "frontdoor",
-    "SELF:direct": "frontdoor",
-    "SELF:repl": "frontdoor",
-    # Seeding labels (coarse-grained)
-    "ARCHITECT": "architect_general",
-    "WORKER": "worker_explore",
-}
-
-# Actions to exclude entirely (noise, not routing decisions)
-ACTION_EXCLUDE: set[str] = {
-    "",                    # Empty — "Hello" chat_stream probes (q=1.0, no decision)
-    "frontdoor:repl",      # Seeded exemplars, not organic
-    "frontdoor:direct",
-    "frontdoor:react",
-}
-# Prefix-based exclusions
-ACTION_EXCLUDE_PREFIXES = (
-    "persona:",            # Seeded persona exemplars
-)
-
-
-def normalize_action(raw_action: str) -> str | None:
-    """Map a raw action string to a canonical routing target.
-
-    Returns None if the action should be excluded from training data.
-    """
-    if raw_action in ACTION_EXCLUDE:
-        return None
-    if any(raw_action.startswith(p) for p in ACTION_EXCLUDE_PREFIXES):
-        return None
-    # Multi-line code snippet exemplars (REPL trajectories stored as action)
-    if "\n" in raw_action or "FINAL(" in raw_action:
-        return None
-
-    canonical = ACTION_NORMALIZATION.get(raw_action)
-    if canonical is None:
-        logger.warning("Unknown action '%s' — excluding from training", raw_action[:80])
-    return canonical
-
 
 def task_type_onehot(task_type: str) -> np.ndarray:
     """Encode task_type as one-hot vector."""
@@ -140,6 +68,7 @@ def extract(
     output_path: Path = DEFAULT_OUTPUT_PATH,
     min_updates: int = 0,
     embeddings_file: Path | None = None,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
 ) -> dict:
     """Extract training data from episodic store.
 
@@ -157,9 +86,9 @@ def extract(
     logger.info("=== Training Data Extraction ===")
     t0 = time.time()
 
-    # Build canonical label map (stable ordering from CANONICAL_ACTIONS)
-    action_to_idx = {a: i for i, a in enumerate(CANONICAL_ACTIONS)}
-    label_map = {i: a for i, a in enumerate(CANONICAL_ACTIONS)}
+    canonical_actions = load_live_canonical_actions(stack_priors_path)
+    action_to_idx = {a: i for i, a in enumerate(canonical_actions)}
+    label_map = {i: a for i, a in enumerate(canonical_actions)}
 
     # Build feature matrix and labels with normalization
     X_list = []
@@ -183,7 +112,10 @@ def extract(
         logger.info("Loaded %d pre-embedded memories", total_count)
 
         for i in range(total_count):
-            canonical = str(actions[i])
+            canonical = normalize_action(str(actions[i]))
+            if canonical is None:
+                stats["excluded"] += 1
+                continue
             if canonical not in action_to_idx:
                 stats["unknown"] += 1
                 continue
@@ -285,14 +217,14 @@ def extract(
         y=y,
         q_weights=q_weights,
         label_map=np.array(list(label_map.items()), dtype=object),
-        canonical_actions=np.array(CANONICAL_ACTIONS, dtype=object),
+        canonical_actions=np.array(canonical_actions, dtype=object),
         task_types=np.array(TASK_TYPES, dtype=object),
         extraction_stats=np.array({
             "total_memories": total_count,
             "loaded_memories": total_count,
             "valid_samples": len(X_list),
             "n_actions_with_data": len(set(y_list)),
-            "n_actions_total": len(CANONICAL_ACTIONS),
+            "n_actions_total": len(canonical_actions),
             "feature_dim": X.shape[1],
             "min_updates": min_updates,
             **stats,
@@ -308,7 +240,7 @@ def extract(
         "  Excluded: %d, Unknown: %d, No embedding: %d\n"
         "  Output: %s",
         elapsed, X.shape[0], X.shape[1],
-        len(set(y_list)), len(CANONICAL_ACTIONS),
+        len(set(y_list)), len(canonical_actions),
         stats["excluded"], stats["unknown"], stats["no_embedding"],
         output_path,
     )
@@ -317,7 +249,7 @@ def extract(
         "samples": X.shape[0],
         "features": X.shape[1],
         "actions_with_data": len(set(y_list)),
-        "actions_total": len(CANONICAL_ACTIONS),
+        "actions_total": len(canonical_actions),
         "output": str(output_path),
     }
 
@@ -341,6 +273,10 @@ def main():
         help="Path to pre-computed embeddings .npz (from reembed_episodic_store.py). "
              "Defaults to sessions/reembedded.npz if it exists.",
     )
+    parser.add_argument(
+        "--stack-priors", type=str, default=str(DEFAULT_STACK_PRIORS_PATH),
+        help="Generated stack-priors contract used to derive live action labels",
+    )
     args = parser.parse_args()
 
     result = extract(
@@ -348,6 +284,7 @@ def main():
         output_path=Path(args.output),
         min_updates=args.min_updates,
         embeddings_file=Path(args.embeddings_file) if args.embeddings_file else None,
+        stack_priors_path=Path(args.stack_priors),
     )
     if "error" in result:
         sys.exit(1)

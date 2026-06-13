@@ -38,39 +38,15 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.graph_router.action_space import (
+    canonical_actions_from_npz,
+    infer_n_actions,
+    load_live_canonical_actions,
+    normalize_action,
+)
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("extract_verifier_debiased")
-
-DEFAULT_N_ACTIONS = 8
-
-# Match the label_map indexes from extract_training_data.py (CANONICAL_ACTIONS)
-CANONICAL_ACTIONS = [
-    "frontdoor",
-    "architect_general",
-    "architect_coding",
-    "coder_escalation",
-    "worker_explore",
-    "worker_math",
-    "worker_vision",
-    "ingest_long_context",
-]
-RAW_TO_CANONICAL = {
-    "frontdoor": "frontdoor",
-    "frontdoor:direct": "frontdoor",
-    "frontdoor:repl": "frontdoor",
-    "frontdoor:react": "frontdoor",
-    "architect_general": "architect_general",
-    "architect_coding": "architect_coding",
-    "coder_escalation": "coder_escalation",
-    "WORKER": "worker_explore",
-    "ARCHITECT": "architect_general",
-    "SELF": "frontdoor",
-    "SELF:direct": "frontdoor",
-    "SELF:repl": "frontdoor",
-    "coder": "architect_coding",  # legacy raw label
-    "worker_general": "worker_explore",  # closest canonical match — flagged in notes below
-    "ingest_long_context": "ingest_long_context",
-}
 
 
 def extract(
@@ -78,7 +54,7 @@ def extract(
     backup_db_path: Path,
     classifier_data_path: Path,
     out_path: Path,
-    n_actions: int = DEFAULT_N_ACTIONS,
+    n_actions: int | None = None,
 ) -> dict:
     # ── Load reembedded.npz (IDs + embeddings) ──
     logger.info("Loading reembedded NPZ: %s", reembedded_path)
@@ -93,6 +69,14 @@ def extract(
     X_full = clf_data["X"].astype(np.float32)
     y_full = clf_data["y"].astype(np.int64)
     q_weights = clf_data["q_weights"].astype(np.float32)
+    canonical_actions = canonical_actions_from_npz(clf_data) or load_live_canonical_actions()
+    if n_actions is None:
+        n_actions = infer_n_actions(clf_data, y_full) or len(canonical_actions)
+    if n_actions < len(canonical_actions):
+        raise SystemExit(
+            f"n_actions={n_actions} is smaller than classifier action map "
+            f"({len(canonical_actions)})"
+        )
     if X_full.shape[0] != len(reembedded_ids):
         raise SystemExit(
             f"Row count mismatch: reembedded={len(reembedded_ids)} vs classifier_data={X_full.shape[0]}"
@@ -138,18 +122,17 @@ def extract(
         n_neg, 100 * n_neg / N,
     )
 
-    # ── Recompute canonical action label from raw — bypass y_full's stale mapping ──
-    # The classifier training y_full uses an older mapping which may differ from
-    # the live system's CANONICAL_ACTIONS order. Recompute here to be safe.
+    # ── Recompute canonical action label from raw; do not trust stale y_full. ──
+    action_to_idx = {action: idx for idx, action in enumerate(canonical_actions)}
     action_idx = np.full(N, -1, dtype=np.int64)
     for k, raw in enumerate(raw_actions_arr):
-        canonical = RAW_TO_CANONICAL.get(raw)
+        canonical = normalize_action(str(raw), include_seeded_frontdoor=True)
         if canonical is None:
             continue
-        try:
-            action_idx[k] = CANONICAL_ACTIONS.index(canonical)
-        except ValueError:
+        idx = action_to_idx.get(canonical)
+        if idx is None:
             continue
+        action_idx[k] = idx
 
     valid = action_idx >= 0
     n_invalid = int((~valid).sum())
@@ -186,7 +169,7 @@ def extract(
         rate = correct[m].mean() if m.any() else float("nan")
         logger.info(
             "  [%d] %-22s n=%-7d outcome_rate=%.3f  (Q-rate=%.3f)",
-            a_idx, CANONICAL_ACTIONS[a_idx], int(m.sum()), rate,
+            a_idx, canonical_actions[a_idx], int(m.sum()), rate,
             (q_kept[m] > 0.5).mean() if m.any() else float("nan"),
         )
 
@@ -200,6 +183,8 @@ def extract(
         q_weights=q_kept,
         feature_dim=np.int64(feature_dim),
         n_actions=np.int64(n_actions),
+        label_map=np.array(list(enumerate(canonical_actions)), dtype=object),
+        canonical_actions=np.array(canonical_actions, dtype=object),
         label_source=np.array("outcome (backup-20260415)", dtype=object),
     )
     logger.info("Saved debiased verifier training data to %s", out_path)
@@ -212,7 +197,7 @@ def main():
     parser.add_argument("--backup-db", type=str, required=True)
     parser.add_argument("--classifier-data", type=str, required=True)
     parser.add_argument("--out", type=str, required=True)
-    parser.add_argument("--n-actions", type=int, default=DEFAULT_N_ACTIONS)
+    parser.add_argument("--n-actions", type=int, default=None)
     args = parser.parse_args()
     extract(
         reembedded_path=Path(args.reembedded),
