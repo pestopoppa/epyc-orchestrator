@@ -151,9 +151,9 @@ def _scan_known_ports() -> dict[int, list[int]]:
     """Scan all known orchestrator ports for running processes."""
     managed_server_ports = {s["port"] for s in HOT_SERVERS + WARM_SERVERS}
     docker_ports = {int(svc["port"]) for svc in DOCKER_SERVICES if "port" in svc}
-    native_aux_ports = {8190, 9000, 9001}
+    manifest_ports = {int(port) for port in PORT_MAP.values()}
     known_ports = sorted(
-        managed_server_ports | NUMA_REPLICA_PORTS | docker_ports | native_aux_ports | {8000}
+        managed_server_ports | NUMA_REPLICA_PORTS | docker_ports | manifest_ports
     )
     return _stack_processes.scan_known_ports(known_ports)
 

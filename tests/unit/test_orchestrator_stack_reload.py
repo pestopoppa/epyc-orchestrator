@@ -126,13 +126,24 @@ def test_preserved_process_info_records_listener_pid(monkeypatch) -> None:
     )
 
 
-def test_scan_known_ports_includes_warm_aux_and_docker(monkeypatch) -> None:
+def test_scan_known_ports_derives_manifest_aux_ports(monkeypatch) -> None:
     captured: list[list[int]] = []
 
     monkeypatch.setattr(stack_commands, "HOT_SERVERS", [{"port": 8070}])
     monkeypatch.setattr(stack_commands, "WARM_SERVERS", [{"port": 8085}])
     monkeypatch.setattr(stack_commands, "NUMA_REPLICA_PORTS", {8180})
     monkeypatch.setattr(stack_commands, "DOCKER_SERVICES", [{"port": 8088}])
+    monkeypatch.setattr(
+        stack_commands,
+        "PORT_MAP",
+        {
+            "orchestrator": 8000,
+            "sd_server": 8190,
+            "whisper": 9000,
+            "document_formalizer": 9001,
+            "manifest_only_aux": 9010,
+        },
+    )
 
     def fake_scan(ports):
         captured.append(list(ports))
@@ -141,7 +152,7 @@ def test_scan_known_ports_includes_warm_aux_and_docker(monkeypatch) -> None:
     monkeypatch.setattr(stack_commands._stack_processes, "scan_known_ports", fake_scan)
 
     assert stack_commands._scan_known_ports() == {}
-    assert captured == [[8000, 8070, 8085, 8088, 8180, 8190, 9000, 9001]]
+    assert captured == [[8000, 8070, 8085, 8088, 8180, 8190, 9000, 9001, 9010]]
 
 
 def test_status_attestation_detects_expected_model_basename() -> None:
