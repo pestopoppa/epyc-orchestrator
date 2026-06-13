@@ -52,7 +52,7 @@ from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_sca
 from pareto_archive import ParetoArchive, ParetoEntry
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
 from eval_tower import EvalTower
-from config_applicator import apply_params, health_check
+from config_applicator import health_check
 from meta_optimizer import MetaOptimizer, SpeciesBudget
 from progress_plots import PLOTS_DIR, generate_all_plots
 import peaf
@@ -64,14 +64,7 @@ from self_criticism import SelfCriticism, generate_self_criticism
 from phase_status import AsyncTaskRunner, PhaseTracker
 
 # 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
-from controller_io import (
-    PLANNER_ARCHIVE_PATH,
-    extract_action,
-    extract_rationale,
-    invoke_controller as _invoke_controller_impl,
-    validate_single_variable as _validate_single_variable,
-    _unwrap_action,
-)
+from controller_io import PLANNER_ARCHIVE_PATH, invoke_controller as _invoke_controller_impl
 from planner_coordinator import plan_with_providers, uncritiqued_dispatch_block_reason
 from state_store import (
     append_blacklist as _append_blacklist_impl,
@@ -1231,6 +1224,32 @@ def save_state(state: dict[str, Any]) -> None:
     _save_state_impl(STATE_PATH, state)
 
 
+def _merge_external_control_fields(
+    state: dict[str, Any],
+    disk_state: dict[str, Any] | None = None,
+) -> list[str]:
+    """Preserve operator control fields changed while a trial was in-flight.
+
+    The loop keeps a long-lived in-memory state dict during dispatch/eval. An
+    external ``autopilot.py pause`` writes ``paused=True`` to disk, but the
+    trial-end save path can otherwise overwrite it with stale ``paused=False``.
+    Merge only control-plane fields, never counters or in-flight metadata.
+    """
+    if disk_state is None:
+        try:
+            disk_state = load_state()
+        except Exception as exc:
+            log.warning("Failed to reload control fields before state save: %s", exc)
+            return []
+
+    changed: list[str] = []
+    for key in ("paused", "_in_cache_flush"):
+        if key in disk_state and disk_state.get(key) != state.get(key):
+            state[key] = disk_state[key]
+            changed.append(key)
+    return changed
+
+
 def learning_exclusion_criticism(
     learning_excluded_by: str,
     learning_excluded_reason: str,
@@ -1368,8 +1387,7 @@ def _query_slot_memory() -> str:
 # ── Claude CLI Controller ────────────────────────────────────────
 # Controller invocation, action extraction, and AP-9 single-variable
 # validation moved to controller_io.py (2026-05-22 refactor). Wrapper below
-# preserves the original cwd=ORCH_ROOT semantics; extract_action +
-# _validate_single_variable + _unwrap_action are re-imported up top.
+# preserves the original cwd=ORCH_ROOT semantics.
 
 
 def invoke_controller(
@@ -2845,6 +2863,12 @@ def _run_loop_inner(
         state["quality_history"] = gate.quality_history
         state["quality_history_by_tier"] = gate.quality_history_by_tier
         state["baseline_state"] = gate.baseline.to_state_dict()
+        merged_control = _merge_external_control_fields(state)
+        if merged_control:
+            log.info(
+                "Preserved external control state before trial-end save: %s",
+                ", ".join(merged_control),
+            )
         archive.save(state)
         save_state(state)
 
@@ -2855,6 +2879,12 @@ def _run_loop_inner(
         # startup. By the time we reach here both the journal and the
         # Pareto archive are durable on disk, so it is safe to clear.
         state["in_flight_trial"] = None
+        merged_control = _merge_external_control_fields(state)
+        if merged_control:
+            log.info(
+                "Preserved external control state before in-flight clear: %s",
+                ", ".join(merged_control),
+            )
         save_state(state)
 
         log.info(

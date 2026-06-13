@@ -78,6 +78,41 @@ def _make_entry(
     )
 
 
+def test_merge_external_control_fields_preserves_operator_pause() -> None:
+    state = {
+        "trial_counter": 42,
+        "paused": False,
+        "in_flight_trial": {"trial_id": 41},
+    }
+    disk_state = {
+        "trial_counter": 999,
+        "paused": True,
+        "_in_cache_flush": True,
+        "in_flight_trial": None,
+    }
+
+    changed = autopilot._merge_external_control_fields(state, disk_state)
+
+    assert changed == ["paused", "_in_cache_flush"]
+    assert state["paused"] is True
+    assert state["_in_cache_flush"] is True
+    # Do not merge counters or WAL metadata from disk into the live trial state.
+    assert state["trial_counter"] == 42
+    assert state["in_flight_trial"] == {"trial_id": 41}
+
+
+def test_merge_external_control_fields_noops_without_control_fields() -> None:
+    state = {"trial_counter": 42, "paused": False}
+
+    changed = autopilot._merge_external_control_fields(
+        state,
+        {"trial_counter": 999, "in_flight_trial": None},
+    )
+
+    assert changed == []
+    assert state == {"trial_counter": 42, "paused": False}
+
+
 # ───────── _recover_from_in_flight_trial ──────────
 
 
