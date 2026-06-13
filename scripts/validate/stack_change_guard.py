@@ -201,6 +201,87 @@ def _source_path(priors_path: Path, source: dict[str, Any]) -> Path | None:
     return (priors_path.parent / path).resolve()
 
 
+def _port_from_endpoint(endpoint: Any) -> int | None:
+    if not isinstance(endpoint, str):
+        return None
+    match = re.search(r":(\d+)(?:/|$)", endpoint)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _launch_manifest_targets() -> dict[str, dict[str, Any]]:
+    """Return first live launch port/tier per role from the computed manifest."""
+    try:
+        from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+    except Exception:
+        return {}
+
+    targets: dict[str, dict[str, Any]] = {}
+    for tier, servers in (("hot", HOT_SERVERS), ("warm", WARM_SERVERS)):
+        for server in servers:
+            if not isinstance(server, dict):
+                continue
+            port = server.get("port")
+            if not isinstance(port, int):
+                continue
+            for role in server.get("roles") or []:
+                if isinstance(role, str):
+                    targets.setdefault(role, {"port": port, "tier": tier})
+    return targets
+
+
+def validate_launch_manifest_serving_alignment(
+    priors: dict[str, Any],
+    *,
+    launch_manifest_targets: dict[str, dict[str, Any]] | None = None,
+) -> list[str]:
+    """Validate generated live serving records against current launch roles."""
+    targets = _launch_manifest_targets() if launch_manifest_targets is None else launch_manifest_targets
+    if not targets:
+        return []
+
+    roles = priors.get("roles")
+    if not isinstance(roles, dict):
+        return []
+
+    errors: list[str] = []
+    for role, record in sorted(roles.items()):
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        target = targets.get(role)
+        if target is None:
+            errors.append(f"live role {role!r} is absent from current launch manifest")
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+        target_port = target.get("port")
+        target_tier = target.get("tier")
+        endpoint_port = _port_from_endpoint(serving.get("endpoint"))
+        ports = serving.get("ports")
+        port_set = {port for port in ports if isinstance(port, int)} if isinstance(ports, list) else set()
+        if isinstance(target_port, int):
+            if endpoint_port != target_port:
+                errors.append(
+                    f"role {role!r} serving.endpoint port {endpoint_port!r} "
+                    f"does not match launch manifest port {target_port}"
+                )
+            if target_port not in port_set:
+                errors.append(
+                    f"role {role!r} serving.ports {sorted(port_set)} "
+                    f"does not include launch manifest port {target_port}"
+                )
+        if isinstance(target_tier, str) and serving.get("tier") != target_tier:
+            errors.append(
+                f"role {role!r} serving.tier {serving.get('tier')!r} "
+                f"does not match launch manifest tier {target_tier!r}"
+            )
+    return errors
+
+
 def _matches_any(path: Path, patterns: tuple[str, ...]) -> bool:
     rel = path.as_posix()
     return any(fnmatch.fnmatch(rel, pattern) for pattern in patterns)
@@ -512,6 +593,7 @@ def validate_stack_priors(
     surface_exceptions_path: Path | None = DEFAULT_SURFACE_EXCEPTIONS,
     procedure_path: Path | None = None,
     procedure_schema_path: Path | None = None,
+    launch_manifest_targets: dict[str, dict[str, Any]] | None = None,
 ) -> GuardResult:
     errors: list[str] = []
     warnings: list[str] = []
@@ -520,6 +602,12 @@ def validate_stack_priors(
 
     priors = _load_yaml(priors_path)
     errors.extend(validate_stack_priors_contract(priors))
+    errors.extend(
+        validate_launch_manifest_serving_alignment(
+            priors,
+            launch_manifest_targets=launch_manifest_targets,
+        )
+    )
     roles = priors.get("roles")
     if not isinstance(roles, dict):
         errors.append("stack priors artifact has no mapping-valued roles section")

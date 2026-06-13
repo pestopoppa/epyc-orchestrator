@@ -139,6 +139,38 @@ def test_validate_stack_priors_rejects_hot_memory_penalty(tmp_path: Path) -> Non
     assert any("live HOT role 'frontdoor'" in error for error in result.errors)
 
 
+def test_validate_stack_priors_rejects_launch_manifest_endpoint_drift(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["roles"]["frontdoor"]["serving"]["endpoint"] = "http://localhost:9999"
+    payload["roles"]["frontdoor"]["serving"]["ports"] = [9999]
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={"frontdoor": {"port": 8070, "tier": "hot"}},
+    )
+
+    assert not result.ok
+    assert any("serving.endpoint port 9999" in error for error in result.errors)
+    assert any("does not include launch manifest port 8070" in error for error in result.errors)
+
+
+def test_validate_stack_priors_rejects_launch_manifest_tier_drift(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={"frontdoor": {"port": 8070, "tier": "warm"}},
+    )
+
+    assert not result.ok
+    assert any("serving.tier 'hot'" in error for error in result.errors)
+
+
 def test_validate_stack_priors_strict_fails_on_known_gaps(tmp_path: Path) -> None:
     registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
     descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
