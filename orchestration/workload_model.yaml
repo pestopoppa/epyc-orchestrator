@@ -262,6 +262,78 @@ traffic_profile:
       must add explicit task_record capture before routing or promotion uses
       these proportions as real demand.
 
+traffic_classes:
+  - id: "interactive"
+    display_name: "Interactive Operator Work"
+    expected_volume_share:
+      estimate: 0.55
+      range: [0.45, 0.70]
+      evidence: "2026-06-11 tally: frontdoor/operator work is the majority of non-forced-eval traffic, but exact shares await task_record capture."
+    latency_slo:
+      p50_s: 15
+      p95_s: 60
+      queue_budget_ms_default: 5000
+    throughput_slo:
+      objective: "preserve perceived responsiveness; throughput is secondary"
+      metric: "median accepted operator tasks per hour"
+    serving_class: "foreground_exclusive_or_low_contention"
+    contention_priority: "foreground"
+    consumers:
+      routing: "higher cost weight; prefer reliable roles and bounded queueing"
+      placement: "avoid background eval contention unless explicitly allowed by matrix"
+      autopilot: "not an optimization workload"
+
+  - id: "eval_batch"
+    display_name: "Evaluation Batch"
+    expected_volume_share:
+      estimate: 0.23
+      range: [0.20, 0.30]
+      evidence: "Seed from findings-04 §D: forced-eval traffic around 23%; runtime progress JSONL remains harness-dominated."
+    latency_slo:
+      p50_s: null
+      p95_s: null
+      queue_budget_ms_default: 90000
+    throughput_slo:
+      objective: "maximize valid questions/hour under measurement protocol"
+      metric: "per-question ledger goodput by suite and traffic class"
+    serving_class: "continuous_batch_or_idle_quarters"
+    contention_priority: "background"
+    consumers:
+      routing: "lower latency weight; require metric-direction and baseline era"
+      placement: "eligible for batch-friendly instance sets"
+      autopilot: "self-label eval_tower and seeding traffic as eval_batch"
+
+  - id: "campaign"
+    display_name: "Long-Running Campaign"
+    expected_volume_share:
+      estimate: 0.22
+      range: [0.10, 0.35]
+      evidence: "Residual traffic class for nightshift, bulk campaigns, K-RAG/build jobs, and long-running research automation."
+    latency_slo:
+      p50_s: null
+      p95_s: null
+      queue_budget_ms_default: 300000
+    throughput_slo:
+      objective: "maximize completed campaign units without corrupting foreground or eval measurements"
+      metric: "campaign units/hour plus contention exclusions"
+    serving_class: "scheduled_background"
+    contention_priority: "background_low"
+    consumers:
+      routing: "prefer durable resumability and resource attestation"
+      placement: "run only under explicit contention budget"
+      autopilot: "pause or exclude trials when campaign contention contaminates measurement"
+
+traffic_class_tagging:
+  explicit_field: "workload_class"
+  default: "interactive"
+  inference_rules:
+    - class: "eval_batch"
+      when: "eval_batch_id/concurrency_batch_id present, or source is eval_tower/seeding/benchmark"
+    - class: "campaign"
+      when: "campaign_id present, or source is nightshift/kbrag/research_campaign/autopilot_campaign"
+    - class: "interactive"
+      when: "default for operator-facing /chat traffic"
+
 downstream_contracts:
   passive_capture_w2:
     required_event: "task_record"
