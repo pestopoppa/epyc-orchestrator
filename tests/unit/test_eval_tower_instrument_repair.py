@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import sys
 from pathlib import Path
 
@@ -149,6 +150,47 @@ def test_sampling_replaces_unscoreable_items_from_same_suite() -> None:
     )
 
     assert [q["id"] for q in sample] == ["valid-text", "valid-programmatic"]
+
+
+def test_eval_sample_globally_backfills_when_suite_underfills() -> None:
+    pool = {
+        "usaco": [
+            {
+                "id": "dead-usaco-a",
+                "suite": "usaco",
+                "expected": "",
+                "scoring_method": "code_execution",
+                "scoring_config": {"language": "python"},
+            },
+            {
+                "id": "dead-usaco-b",
+                "suite": "usaco",
+                "expected": "",
+                "scoring_method": "substring",
+            },
+        ],
+        "math": [
+            {
+                "id": f"valid-math-{i}",
+                "suite": "math",
+                "expected": str(i),
+                "scoring_method": "exact_match",
+            }
+            for i in range(6)
+        ],
+    }
+
+    sample = eval_tower._sample_scoreable_eval_questions(
+        pool,
+        n=4,
+        rng=random.Random(7),
+    )
+
+    assert len(sample) == 4
+    assert len({id(q) for q in sample}) == 4
+    assert all(eval_tower._is_scoreable_question(q) for q in sample)
+    assert {q["suite"] for q in sample if "suite" in q}.isdisjoint({"usaco"})
+    assert not {q["id"] for q in sample} & {"dead-usaco-a", "dead-usaco-b"}
 
 
 def test_eval_question_records_chat_response_routed_to(monkeypatch) -> None:

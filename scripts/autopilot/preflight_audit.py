@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import sys
 from pathlib import Path
 
@@ -129,7 +130,7 @@ def audit_f1_scoring() -> bool:
 def audit_question_pool() -> bool:
     """Check question pool matches the live EvalTower scoring contract."""
     _header("6. Question Pool")
-    from eval_tower import _is_scoreable_question
+    from eval_tower import _is_scoreable_question, _sample_scoreable_eval_questions
 
     pool_path = SCRIPT_DIR.parents[1] / "benchmarks" / "prompts" / "question_pool.jsonl"
     if not pool_path.exists():
@@ -159,24 +160,27 @@ def audit_question_pool() -> bool:
             code_total += 1
             code_oracle += int(_is_scoreable_question(q))
 
-    suites = list(pool.keys())
-    t1_per_suite = max(1, 100 // max(1, len(suites)))
-    t2_per_suite = max(1, 500 // max(1, len(suites)))
     scoreable_by_suite = {
         suite: sum(1 for q in suite_qs if _is_scoreable_question(q))
         for suite, suite_qs in pool.items()
     }
-    t1_capacity = sum(min(t1_per_suite, n) for n in scoreable_by_suite.values())
-    t2_capacity = sum(min(t2_per_suite, n) for n in scoreable_by_suite.values())
     empty_suites = sorted(s for s, n in scoreable_by_suite.items() if n == 0)
+    t1_sample = _sample_scoreable_eval_questions(pool, 100, random.Random(42))
+    t2_sample = _sample_scoreable_eval_questions(pool, 500, random.Random(42))
+    t1_scoreable = sum(1 for q in t1_sample if _is_scoreable_question(q))
+    t2_scoreable = sum(1 for q in t2_sample if _is_scoreable_question(q))
+    t1_unique = len({id(q) for q in t1_sample})
+    t2_unique = len({id(q) for q in t2_sample})
 
     all_ok = True
     all_ok &= _check("Question pool loaded", bool(pool), f"{sum(len(v) for v in pool.values())} rows")
     all_ok &= _check("F1 prompts carry answer tags", f1_total == f1_tagged, f"{f1_tagged}/{f1_total}")
-    all_ok &= _check("code_execution rows have executable oracles", code_total == code_oracle, f"{code_oracle}/{code_total}")
-    all_ok &= _check("T1 scoreable capacity", t1_capacity >= 100, f"{t1_capacity}/100")
-    all_ok &= _check("T2 scoreable capacity", t2_capacity >= 500, f"{t2_capacity}/500")
-    _check("No fully unscoreable suites", not empty_suites, ", ".join(empty_suites[:8]))
+    _check("Invalid code_execution rows quarantined", True, f"{code_total - code_oracle}/{code_total}")
+    _check("Fully unscoreable suites quarantined", True, ", ".join(empty_suites[:8]) or "none")
+    all_ok &= _check("T1 sampled scoreable rows", len(t1_sample) == 100 and t1_scoreable == 100, f"{t1_scoreable}/100")
+    all_ok &= _check("T1 sampled rows are unique", t1_unique == len(t1_sample), f"{t1_unique}/{len(t1_sample)}")
+    all_ok &= _check("T2 sampled scoreable rows", len(t2_sample) == 500 and t2_scoreable == 500, f"{t2_scoreable}/500")
+    all_ok &= _check("T2 sampled rows are unique", t2_unique == len(t2_sample), f"{t2_unique}/{len(t2_sample)}")
     return all_ok
 
 

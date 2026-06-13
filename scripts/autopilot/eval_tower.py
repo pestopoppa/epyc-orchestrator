@@ -99,6 +99,49 @@ def _sample_scoreable_questions(
     return [q for q in sample if _is_scoreable_question(q)] + replacements
 
 
+def _sample_scoreable_eval_questions(
+    pool: dict[str, list[dict]],
+    n: int,
+    rng: random.Random,
+) -> list[dict]:
+    if not pool or n <= 0:
+        return []
+
+    suites = list(pool.keys())
+    per_suite = max(1, n // len(suites))
+    questions: list[dict] = []
+    seen: set[int] = set()
+
+    for suite in suites:
+        for q in _sample_scoreable_questions(suite, pool[suite], per_suite, rng):
+            if id(q) in seen or not _is_scoreable_question(q):
+                continue
+            seen.add(id(q))
+            questions.append(q)
+
+    if len(questions) < n:
+        backfill = [
+            q
+            for suite_qs in pool.values()
+            for q in suite_qs
+            if id(q) not in seen and _is_scoreable_question(q)
+        ]
+        rng.shuffle(backfill)
+        needed = n - len(questions)
+        replacements = backfill[:needed]
+        for q in replacements:
+            seen.add(id(q))
+        questions.extend(replacements)
+        log.warning(
+            "Backfilled %d/%d eval question(s) from global scoreable pool",
+            len(replacements),
+            needed,
+        )
+
+    rng.shuffle(questions)
+    return questions[:n]
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, default))
@@ -836,17 +879,8 @@ class EvalTower:
             log.error("No question pool available for T1")
             return EvalResult(tier=1, quality=0, speed=0, cost=0, reliability=0)
 
-        # Stratified sampling: equal questions per suite
-        suites = list(pool.keys())
-        per_suite = max(1, n // len(suites))
         rng = random.Random(seed)
-        questions = []
-        for suite in suites:
-            suite_qs = pool[suite]
-            sample = _sample_scoreable_questions(suite, suite_qs, per_suite, rng)
-            questions.extend(sample)
-        rng.shuffle(questions)
-        questions = questions[:n]
+        questions = _sample_scoreable_eval_questions(pool, n, rng)
         # Tool-use sentinels join the JOURNALED eval (T1) so get_eval_secret /
         # tool_helpfulness telemetry reaches the trial record + planner. Inert
         # ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
@@ -864,16 +898,8 @@ class EvalTower:
             log.error("No question pool available for T2")
             return EvalResult(tier=2, quality=0, speed=0, cost=0, reliability=0)
 
-        suites = list(pool.keys())
-        per_suite = max(1, n // len(suites))
         rng = random.Random(seed)
-        questions = []
-        for suite in suites:
-            suite_qs = pool[suite]
-            sample = _sample_scoreable_questions(suite, suite_qs, per_suite, rng)
-            questions.extend(sample)
-        rng.shuffle(questions)
-        questions = questions[:n]
+        questions = _sample_scoreable_eval_questions(pool, n, rng)
         # Tool-use sentinels also join T2 (the journaled deep eval) for the same
         # reason as T1. Inert ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
         questions = questions + self._load_tool_sentinels()
