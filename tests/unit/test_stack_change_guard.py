@@ -460,6 +460,60 @@ def test_scan_hardcoded_surfaces_flags_retired_launch_env_var(tmp_path: Path) ->
     )
 
 
+def test_scan_hardcoded_surfaces_flags_retired_lean_registry_role(tmp_path: Path) -> None:
+    orchestration = tmp_path / "orchestration"
+    orchestration.mkdir()
+    (orchestration / "model_registry_lean.yaml").write_text(
+        "roles:\n  architect_coding:\n    tier: B\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "retired_role_in_lean_registry"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "orchestration/model_registry_lean.yaml"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_flags_retired_source_access_role(tmp_path: Path) -> None:
+    orchestration = tmp_path / "orchestration"
+    orchestration.mkdir()
+    (orchestration / "source_registry.yaml").write_text(
+        "role_access:\n  architect_coding:\n    enabled: true\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "retired_role_in_source_access"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "orchestration/source_registry.yaml"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_flags_retired_quality_signature_role(tmp_path: Path) -> None:
+    orchestration = tmp_path / "orchestration"
+    orchestration.mkdir()
+    (orchestration / "model_quality_signatures.yaml").write_text(
+        "models:\n  retired:\n    role: architect_coding\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "retired_role_in_quality_signature"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "orchestration/model_quality_signatures.yaml"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_stale_autopilot_program_guidance(tmp_path: Path) -> None:
     autopilot = tmp_path / "scripts" / "autopilot"
     autopilot.mkdir(parents=True)

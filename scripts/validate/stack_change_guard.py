@@ -143,6 +143,27 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="compile procedure role choices from stack priors",
     ),
     HardcodedSurfaceRule(
+        rule_id="retired_role_in_lean_registry",
+        category="production_blocker",
+        pattern=r"\barchitect_coding\b",
+        path_globs=("orchestration/model_registry_lean.yaml",),
+        remediation="route lean code escalation through coder_escalation",
+    ),
+    HardcodedSurfaceRule(
+        rule_id="retired_role_in_source_access",
+        category="production_blocker",
+        pattern=r"\barchitect_coding\b",
+        path_globs=("orchestration/source_registry.yaml",),
+        remediation="remove retired roles from web-source role_access metadata",
+    ),
+    HardcodedSurfaceRule(
+        rule_id="retired_role_in_quality_signature",
+        category="production_blocker",
+        pattern=r"\barchitect_coding\b",
+        path_globs=("orchestration/model_quality_signatures.yaml",),
+        remediation="remove retired model signatures or bind them to current live roles only with fresh evidence",
+    ),
+    HardcodedSurfaceRule(
         rule_id="retired_role_in_tests",
         category="legacy_test",
         pattern=r"\barchitect_coding\b",
