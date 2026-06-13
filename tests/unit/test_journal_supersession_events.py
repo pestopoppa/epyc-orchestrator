@@ -136,3 +136,34 @@ def test_runtime_prompt_views_fold_supersession_events_without_mutating_trials(
     insights = journal.insights_text()
     assert "#1" in insights
     assert "#2" not in insights
+
+
+def test_recent_failures_excludes_superseded_bug_corrupted_by_default(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    trusted = _entry(1)
+    trusted.species = "prompt_forge"
+    trusted.failure_analysis = "trusted failure"
+    journal.record(trusted)
+    contaminated = _entry(2)
+    contaminated.species = "prompt_forge"
+    contaminated.failure_analysis = "contaminated failure"
+    journal.record(contaminated)
+    journal.append_supersession_event(
+        target_trial_ids=[2],
+        fields={"bug_corrupted_by": "resource_contention"},
+        reason="contention window",
+        policy_version="supersession-v1",
+        actor="unit-test",
+    )
+
+    safe = journal.recent_failures(species="prompt_forge", n=5)
+    raw = journal.recent_failures(
+        species="prompt_forge",
+        n=5,
+        exclude_bug_corrupted=False,
+    )
+
+    assert [entry.trial_id for entry in safe] == [1]
+    assert [entry.trial_id for entry in raw] == [1, 2]

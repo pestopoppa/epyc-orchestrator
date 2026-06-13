@@ -687,15 +687,24 @@ class ExperimentJournal:
         return matched
 
     def recent_failures(
-        self, species: str | None = None, n: int = 10
+        self,
+        species: str | None = None,
+        n: int = 10,
+        exclude_bug_corrupted: bool = True,
     ) -> list[JournalEntry]:
         """Return the last n entries with non-empty failure_analysis.
 
         Optionally filter by species name.
         """
+        entries = (
+            self.entries_with_supersessions()
+            if exclude_bug_corrupted
+            else self._entries
+        )
         failed = [
-            e for e in self._entries
+            e for e in entries
             if e.failure_analysis
+            and (not exclude_bug_corrupted or not e.bug_corrupted_by)
             and (species is None or e.species == species)
         ]
         return failed[-n:]
