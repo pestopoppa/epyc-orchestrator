@@ -28,7 +28,7 @@ DEFAULT_STACK_MANIFEST = REPO_ROOT / "scripts" / "server" / "stack_manifest.py"
 DEFAULT_STACK_NUMA = REPO_ROOT / "scripts" / "server" / "stack_numa.py"
 PRECEDENCE_SPEC = REPO_ROOT / "docs" / "reference" / "stack-truth-precedence.md"
 
-STACK_PRIORS_VERSION = 2
+STACK_PRIORS_VERSION = 3
 REQUIRED_TOP_LEVEL_FIELDS = (
     "stack_priors_version",
     "contract",
@@ -60,11 +60,18 @@ REQUIRED_SERVING_FIELDS = (
     "ports",
     "slots",
     "tier",
+    "effective_context_tokens",
     "binary",
     "binary_dir",
     "numa_policy",
     "shared_mmap",
     "launch",
+)
+REQUIRED_LAUNCH_FIELDS = (
+    "entries",
+    "primary_roles",
+    "modes",
+    "requirements",
 )
 REQUIRED_PRIOR_FIELDS = (
     "throughput_tps",
@@ -137,6 +144,7 @@ def stack_priors_contract() -> dict[str, Any]:
         "required_top_level_fields": list(REQUIRED_TOP_LEVEL_FIELDS),
         "required_role_fields": list(REQUIRED_ROLE_FIELDS),
         "required_serving_fields": list(REQUIRED_SERVING_FIELDS),
+        "required_launch_fields": list(REQUIRED_LAUNCH_FIELDS),
         "required_prior_fields": list(REQUIRED_PRIOR_FIELDS),
         "fallback_policy": (
             "Consumers may use local fallback values only as explicit degraded "
@@ -190,6 +198,13 @@ def validate_stack_priors_contract(priors: dict[str, Any]) -> list[str]:
             for field in REQUIRED_SERVING_FIELDS:
                 if field not in serving:
                     errors.append(f"role {role!r} serving is missing field {field!r}")
+            launch = serving.get("launch")
+            if not isinstance(launch, dict):
+                errors.append(f"role {role!r} serving.launch is not a mapping")
+            else:
+                for field in REQUIRED_LAUNCH_FIELDS:
+                    if field not in launch:
+                        errors.append(f"role {role!r} serving.launch is missing field {field!r}")
         priors_block = record.get("priors")
         if not isinstance(priors_block, dict):
             errors.append(f"role {role!r} priors is not a mapping")
@@ -353,7 +368,59 @@ def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any] 
     return entry
 
 
-def _launch_record(entries: list[dict[str, Any]]) -> dict[str, Any]:
+def _launch_requirements_for_meta(
+    meta: dict[str, Any],
+    *,
+    worker_pool_models: dict[str, Any],
+    explore_draft_model: Any,
+    vision_worker_model: Any,
+    vision_worker_mmproj: Any,
+    vision_escalation_model: Any,
+    vision_escalation_mmproj: Any,
+) -> dict[str, str]:
+    requirements: dict[str, str] = {}
+    mode = str(meta.get("mode") or "")
+    if mode == "worker_pool":
+        worker_type = str(meta.get("worker_type") or "")
+        model_path = worker_pool_models.get(worker_type)
+        if model_path:
+            requirements["model_path"] = str(model_path)
+        if worker_type == "explore" and explore_draft_model:
+            requirements["draft_model_path"] = str(explore_draft_model)
+    elif mode == "vision":
+        vision_type = meta.get("vision_type")
+        if vision_type == "worker":
+            requirements["model_path"] = str(vision_worker_model)
+            requirements["mmproj_path"] = str(vision_worker_mmproj)
+        elif vision_type == "escalation":
+            requirements["model_path"] = str(vision_escalation_model)
+            requirements["mmproj_path"] = str(vision_escalation_mmproj)
+    return {key: value for key, value in sorted(requirements.items()) if value}
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _effective_context_for_meta(
+    role: str,
+    meta: dict[str, Any],
+    *,
+    kv_context_sizes: dict[str, Any],
+    default_context_size: Any,
+) -> int | None:
+    return _positive_int(kv_context_sizes.get(role, default_context_size))
+
+
+def _launch_record(
+    entries: list[dict[str, Any]],
+    requirements: dict[str, str] | None = None,
+) -> dict[str, Any]:
     sorted_entries = sorted(
         entries,
         key=lambda entry: (
@@ -374,16 +441,25 @@ def _launch_record(entries: list[dict[str, Any]]) -> dict[str, Any]:
         "modes": sorted(
             {str(entry["mode"]) for entry in sorted_entries if isinstance(entry.get("mode"), str)}
         ),
+        "requirements": copy.deepcopy(requirements or {}),
     }
 
 
 def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     try:
         from scripts.server.stack_manifest import (
+            EXPLORE_DRAFT_MODEL,
+            DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
             HOT_SERVERS,
+            LAUNCH_CONTEXT_TOKENS,
             PORT_MAP,
             ROLE_LAUNCH_META,
+            VISION_ESCALATION_MMPROJ,
+            VISION_ESCALATION_MODEL,
+            VISION_WORKER_MMPROJ,
+            VISION_WORKER_MODEL,
             WARM_SERVERS,
+            WORKER_POOL_MODELS,
         )
     except Exception:
         return {}, {}
@@ -408,6 +484,15 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     for primary, meta in ROLE_LAUNCH_META.items():
         if not isinstance(meta, dict):
             continue
+        launch_requirements = _launch_requirements_for_meta(
+            meta,
+            worker_pool_models=WORKER_POOL_MODELS,
+            explore_draft_model=EXPLORE_DRAFT_MODEL,
+            vision_worker_model=VISION_WORKER_MODEL,
+            vision_worker_mmproj=VISION_WORKER_MMPROJ,
+            vision_escalation_model=VISION_ESCALATION_MODEL,
+            vision_escalation_mmproj=VISION_ESCALATION_MMPROJ,
+        )
         ports = sorted(set(launch_ports_by_role.get(str(primary), [])))
         if ports:
             port = ports[0]
@@ -420,7 +505,16 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
             "port": port,
             "ports": ports or ([port] if isinstance(port, int) else []),
             "url": f"http://localhost:{port}" if isinstance(port, int) else None,
-            "launch": _launch_record(launch_entries_by_role.get(str(primary), [])),
+            "effective_context_tokens": _effective_context_for_meta(
+                str(primary),
+                meta,
+                kv_context_sizes=LAUNCH_CONTEXT_TOKENS,
+                default_context_size=DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
+            ),
+            "launch": _launch_record(
+                launch_entries_by_role.get(str(primary), []),
+                launch_requirements,
+            ),
         }
         shared = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
         if isinstance(shared, list):
@@ -434,7 +528,13 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
                         "port": alias_port,
                         "ports": alias_ports or ([alias_port] if isinstance(alias_port, int) else []),
                         "url": f"http://localhost:{alias_port}" if isinstance(alias_port, int) else None,
-                        "launch": _launch_record(launch_entries_by_role.get(alias, [])),
+                        "effective_context_tokens": roles[str(primary)].get(
+                            "effective_context_tokens"
+                        ),
+                        "launch": _launch_record(
+                            launch_entries_by_role.get(alias, []),
+                            launch_requirements,
+                        ),
                     }
     return aliases, roles
 
@@ -509,6 +609,10 @@ def _serving_record(
         else server_cfg.get("tier")
         if isinstance(server_cfg, dict)
         else None,
+        "effective_context_tokens": launch_cfg.get("effective_context_tokens")
+        if isinstance(launch_cfg, dict)
+        and isinstance(launch_cfg.get("effective_context_tokens"), int)
+        else None,
         "binary": descriptor_serving.get("binary"),
         "binary_dir": descriptor_serving.get("binary_dir"),
         "numa_policy": descriptor_serving.get("numa_policy"),
@@ -517,9 +621,9 @@ def _serving_record(
         )
         if isinstance(descriptor.get("role_bindings"), dict)
         else False,
-        "launch": copy.deepcopy(launch_cfg.get("launch") or {})
+        "launch": copy.deepcopy(launch_cfg.get("launch") or _launch_record([]))
         if isinstance(launch_cfg, dict)
-        else {},
+        else _launch_record([]),
     }
 
 

@@ -107,7 +107,13 @@ def _minimal_stack_prior_record(
             "binary_dir": None,
             "numa_policy": "test",
             "shared_mmap": False,
-            "launch": {},
+            "effective_context_tokens": 32768,
+            "launch": {
+                "entries": [],
+                "primary_roles": [role],
+                "modes": ["test"],
+                "requirements": {},
+            },
         },
         "priors": {
             "throughput_tps": throughput_tps,

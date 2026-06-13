@@ -230,10 +230,20 @@ def _launch_manifest_targets() -> dict[str, dict[str, Any]]:
                 if isinstance(role, str):
                     target = targets.setdefault(
                         role,
-                        {"port": port, "ports": [], "tier": tier, "launch_entries": []},
+                        {
+                            "port": port,
+                            "ports": [],
+                            "tier": tier,
+                            "effective_context_tokens": _effective_context_for_server(server),
+                            "launch_entries": [],
+                            "launch_requirements": {},
+                        },
                     )
                     target["ports"].append(port)
                     target["launch_entries"].append(_launch_entry_for_role(server, role))
+                    target["launch_requirements"].update(
+                        _launch_requirements_for_server(server)
+                    )
     return targets
 
 
@@ -268,6 +278,64 @@ def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any]:
     return entry
 
 
+def _launch_requirements_for_server(server: dict[str, Any]) -> dict[str, str]:
+    try:
+        from scripts.server.stack_manifest import (
+            EXPLORE_DRAFT_MODEL,
+            VISION_ESCALATION_MMPROJ,
+            VISION_ESCALATION_MODEL,
+            VISION_WORKER_MMPROJ,
+            VISION_WORKER_MODEL,
+            WORKER_POOL_MODELS,
+        )
+    except Exception:
+        return {}
+
+    requirements: dict[str, str] = {}
+    mode = _launch_mode_for_server(server)
+    if mode == "worker_pool":
+        worker_type = str(server.get("worker_type") or "")
+        model_path = WORKER_POOL_MODELS.get(worker_type)
+        if model_path:
+            requirements["model_path"] = str(model_path)
+        if worker_type == "explore" and EXPLORE_DRAFT_MODEL:
+            requirements["draft_model_path"] = str(EXPLORE_DRAFT_MODEL)
+    elif mode == "vision":
+        vision_type = server.get("vision_type")
+        if vision_type == "worker":
+            requirements["model_path"] = str(VISION_WORKER_MODEL)
+            requirements["mmproj_path"] = str(VISION_WORKER_MMPROJ)
+        elif vision_type == "escalation":
+            requirements["model_path"] = str(VISION_ESCALATION_MODEL)
+            requirements["mmproj_path"] = str(VISION_ESCALATION_MMPROJ)
+    return {key: value for key, value in sorted(requirements.items()) if value}
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _effective_context_for_server(server: dict[str, Any]) -> int | None:
+    try:
+        from scripts.server.stack_manifest import (
+            DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
+            LAUNCH_CONTEXT_TOKENS,
+        )
+    except Exception:
+        return None
+
+    roles = server.get("roles")
+    role = roles[0] if isinstance(roles, list) and roles and isinstance(roles[0], str) else None
+    if role:
+        return _positive_int(LAUNCH_CONTEXT_TOKENS.get(role, DEFAULT_EFFECTIVE_CONTEXT_TOKENS))
+    return None
+
+
 def _normalized_launch_entries(raw_entries: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_entries, list):
         return []
@@ -296,6 +364,16 @@ def _normalized_launch_entries(raw_entries: Any) -> list[dict[str, Any]]:
             str(entry.get("mode", "")),
         ),
     )
+
+
+def _normalized_launch_requirements(raw_requirements: Any) -> dict[str, str]:
+    if not isinstance(raw_requirements, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, value in raw_requirements.items():
+        if isinstance(key, str) and value not in (None, ""):
+            normalized[key] = str(value)
+    return dict(sorted(normalized.items()))
 
 
 def validate_launch_manifest_serving_alignment(
@@ -327,6 +405,7 @@ def validate_launch_manifest_serving_alignment(
             continue
         target_port = target.get("port")
         target_tier = target.get("tier")
+        target_context = target.get("effective_context_tokens")
         raw_target_ports = target.get("ports")
         target_ports = (
             {port for port in raw_target_ports if isinstance(port, int)}
@@ -334,6 +413,9 @@ def validate_launch_manifest_serving_alignment(
             else set()
         )
         target_launch_entries = _normalized_launch_entries(target.get("launch_entries"))
+        target_launch_requirements = _normalized_launch_requirements(
+            target.get("launch_requirements")
+        )
         endpoint_port = _port_from_endpoint(serving.get("endpoint"))
         ports = serving.get("ports")
         port_set = {port for port in ports if isinstance(port, int)} if isinstance(ports, list) else set()
@@ -366,6 +448,15 @@ def validate_launch_manifest_serving_alignment(
                 f"role {role!r} serving.tier {serving.get('tier')!r} "
                 f"does not match launch manifest tier {target_tier!r}"
             )
+        if (
+            isinstance(target_context, int)
+            and serving.get("effective_context_tokens") != target_context
+        ):
+            errors.append(
+                f"role {role!r} serving.effective_context_tokens "
+                f"{serving.get('effective_context_tokens')!r} does not match "
+                f"launch context {target_context}"
+            )
         if target_launch_entries:
             launch = serving.get("launch")
             actual_entries = (
@@ -377,6 +468,26 @@ def validate_launch_manifest_serving_alignment(
                 errors.append(
                     f"role {role!r} serving.launch.entries do not match "
                     f"launch manifest entries"
+                )
+        if target_launch_requirements:
+            launch = serving.get("launch")
+            actual_requirements = (
+                _normalized_launch_requirements(launch.get("requirements"))
+                if isinstance(launch, dict)
+                else {}
+            )
+            mismatches = {
+                key: {
+                    "expected": expected,
+                    "actual": actual_requirements.get(key),
+                }
+                for key, expected in target_launch_requirements.items()
+                if actual_requirements.get(key) != expected
+            }
+            if mismatches:
+                errors.append(
+                    f"role {role!r} serving.launch.requirements do not match "
+                    f"launch manifest requirements: {json.dumps(mismatches, sort_keys=True)}"
                 )
     return errors
 

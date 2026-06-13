@@ -56,6 +56,7 @@ def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> d
                     "ports": [8070, 8080, 8180, 8280, 8380],
                     "slots": 1,
                     "tier": "hot",
+                    "effective_context_tokens": 32768,
                     "binary": None,
                     "binary_dir": None,
                     "numa_policy": None,
@@ -100,6 +101,7 @@ def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> d
                         ],
                         "primary_roles": ["frontdoor"],
                         "modes": ["default"],
+                        "requirements": {},
                     },
                 },
                 "priors": {
@@ -233,6 +235,28 @@ def test_validate_stack_priors_rejects_launch_manifest_tier_drift(tmp_path: Path
     assert any("serving.tier 'hot'" in error for error in result.errors)
 
 
+def test_validate_stack_priors_rejects_launch_manifest_context_drift(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["roles"]["frontdoor"]["serving"]["effective_context_tokens"] = 8192
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {
+                "port": 8070,
+                "tier": "hot",
+                "effective_context_tokens": 32768,
+            }
+        },
+    )
+
+    assert not result.ok
+    assert any("serving.effective_context_tokens 8192" in error for error in result.errors)
+
+
 def test_validate_stack_priors_rejects_launch_manifest_port_set_drift(
     tmp_path: Path,
 ) -> None:
@@ -286,6 +310,37 @@ def test_validate_stack_priors_rejects_launch_manifest_entry_drift(
 
     assert not result.ok
     assert any("serving.launch.entries do not match" in error for error in result.errors)
+
+
+def test_validate_stack_priors_rejects_launch_manifest_requirement_drift(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["roles"]["frontdoor"]["serving"]["launch"]["requirements"] = {
+        "model_path": "/stale/model.gguf"
+    }
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {
+                "port": 8070,
+                "ports": [8070],
+                "tier": "hot",
+                "launch_requirements": {
+                    "model_path": "/current/model.gguf",
+                    "mmproj_path": "/current/mmproj.gguf",
+                },
+            }
+        },
+    )
+
+    assert not result.ok
+    assert any("serving.launch.requirements do not match" in error for error in result.errors)
+    assert any("mmproj_path" in error for error in result.errors)
 
 
 def test_validate_stack_priors_strict_fails_on_known_gaps(tmp_path: Path) -> None:

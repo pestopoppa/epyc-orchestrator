@@ -226,6 +226,16 @@ VISION_ESCALATION_MMPROJ = str(
     / "lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf"
 )
 
+DEFAULT_EFFECTIVE_CONTEXT_TOKENS = 32768
+LAUNCH_CONTEXT_TOKENS = {
+    "worker_general": 16384,
+    "worker_fast": 16384,
+    "worker_vision": 8192,
+    "vision_escalation": 16384,
+    "architect_general": 16384,
+    "ingest_long_context": 32768,
+}
+
 DEV_MODEL = "Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf"
 DEV_MODEL_PATH = str(_PATHS["models_dir"] / DEV_MODEL)
 

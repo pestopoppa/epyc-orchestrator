@@ -96,12 +96,14 @@ from scripts.server.stack_runtime import (
 from scripts.server.stack_manifest import (
     DEV_MODEL,
     DEV_MODEL_PATH,
+    DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
     DOCKER_SERVICES,
     EMBEDDER_PORTS,
     EMBEDDING_MODEL_PATH,
     EXPLORE_DRAFT_MODEL,
     HOT_ROLES,
     HOT_SERVERS,
+    LAUNCH_CONTEXT_TOKENS,
     NUMA_REPLICA_PORTS,
     ORCHESTRATOR_PROFILES,
     PORT_MAP,
@@ -322,7 +324,7 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
             "-np",
             "1",
             "-c",
-            "16384",
+            str(LAUNCH_CONTEXT_TOKENS["vision_escalation"]),
             "-t",
             thread_count,
             "--flash-attn",
@@ -343,7 +345,7 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
         "-np",
         "2",
         "-c",
-        "8192",
+        str(LAUNCH_CONTEXT_TOKENS["worker_vision"]),
         "-t",
         thread_count,
         "--flash-attn",
@@ -388,7 +390,7 @@ def _build_worker_fast_command(port: int, model_path: str) -> list[str]:
         "-np",
         "4",  # 4 parallel slots (consolidated from 2×2)
         "-c",
-        "16384",  # 4K per slot
+        str(LAUNCH_CONTEXT_TOKENS["worker_fast"]),  # 4K per slot
         "-t",
         "16",  # 16 threads for small model
         "--flash-attn",
@@ -451,7 +453,7 @@ def _build_worker_explore_command(
         "-np",
         "1",
         "-c",
-        "16384",  # match research-registry max_context; 8192 causes MTP buffer mismatches
+        str(LAUNCH_CONTEXT_TOKENS["worker_general"]),  # match research-registry max_context; 8192 causes MTP buffer mismatches
         # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
         # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
         # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
@@ -506,8 +508,8 @@ _NO_SPEC_DECODE = {"architect_general"}
 # q4_0 / q4_0 = 71% KV savings but 71% prefill regression on pure-attn. OK for hybrid (SSM amortizes).
 # --kv-hadamard: production binary rebuilt with Hadamard support (commit b51c905ec, 2026-03-28).
 _KV_CONTEXT_SIZES = {
-    "architect_general": "16384",  # 122B MoE hybrid → ~16GB KV
-    "ingest_long_context": "32768",  # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
+    "architect_general": str(LAUNCH_CONTEXT_TOKENS["architect_general"]),  # 122B MoE hybrid → ~16GB KV
+    "ingest_long_context": str(LAUNCH_CONTEXT_TOKENS["ingest_long_context"]),  # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
 }
 _KV_QUANT_CONFIGS = {
     # 2026-05-06: frontdoor + coder_escalation now share Qwen3.6-35B-A3B Q8 GGUF
@@ -664,7 +666,7 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
     role_name = role_config.name
     parallel_slots = "1" if role_name in SERIAL_ROLES else "2"
     thread_count = _resolve_thread_count(role_name, numa_instance)
-    context_size = _KV_CONTEXT_SIZES.get(role_name, "32768")
+    context_size = _KV_CONTEXT_SIZES.get(role_name, str(DEFAULT_EFFECTIVE_CONTEXT_TOKENS))
     binary = _resolve_binary_for_role(role_name)
 
     # -ub 8192: matches the canonical-bench single-instance recipe

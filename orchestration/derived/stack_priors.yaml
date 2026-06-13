@@ -1,7 +1,7 @@
-stack_priors_version: 2
+stack_priors_version: 3
 contract:
   schema: epyc.stack_priors
-  version: 2
+  version: 3
   required_top_level_fields:
   - stack_priors_version
   - contract
@@ -31,17 +31,23 @@ contract:
   - ports
   - slots
   - tier
+  - effective_context_tokens
   - binary
   - binary_dir
   - numa_policy
   - shared_mmap
   - launch
+  required_launch_fields:
+  - entries
+  - primary_roles
+  - modes
+  - requirements
   required_prior_fields:
   - throughput_tps
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T19:08:44Z'
+compiled_at: '2026-06-13T19:24:49Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -49,19 +55,19 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: f4db0391e108325e0dff09165ba34f2a8dc95dbf0390c3cee54fe9fb6ac5fcda
-    repo_commit: '7917535'
+    repo_commit: a7b72a9
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 2f3179949da8451602fa08d31cf0738097a06d80e1a0b8925fb085f880248baa
-    repo_commit: '7917535'
+    sha256: 0ef01ae69873a1211262bb8c41c77e85c0ab6baf7e0be82efa7fda8efc2dade5
+    repo_commit: a7b72a9
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: 6caacc84eaf14dd80713e713fedae98843895a7a1b8f8d46cb6c06ff8beb8390
-    repo_commit: '7917535'
+    sha256: b77d8bf093a9783bd3d1cb47c869a12be2cd3c3f37647b03e1d1eacecbd1b676
+    repo_commit: a7b72a9
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: '7917535'
+    repo_commit: a7b72a9
 roles:
   architect_general:
     role: architect_general
@@ -77,6 +83,7 @@ roles:
       - 8083
       slots: 2
       tier: hot
+      effective_context_tokens: 16384
       binary: llama.cpp
       binary_dir: null
       numa_policy: single_96t
@@ -91,6 +98,7 @@ roles:
         - architect_general
         modes:
         - default
+        requirements: {}
     priors:
       throughput_tps: 12.19
       quality_overall: null
@@ -164,6 +172,7 @@ roles:
       - 8070
       slots: 1
       tier: hot
+      effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
       numa_policy: server_default
@@ -179,6 +188,7 @@ roles:
         - frontdoor
         modes:
         - default
+        requirements: {}
     priors:
       throughput_tps: 24.3
       quality_overall: 0.93
@@ -251,6 +261,7 @@ roles:
       - 8380
       slots: 2
       tier: hot
+      effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
       numa_policy: server_default
@@ -286,6 +297,7 @@ roles:
         - frontdoor
         modes:
         - default
+        requirements: {}
     priors:
       throughput_tps: 24.3
       quality_overall: 0.93
@@ -358,6 +370,7 @@ roles:
       - 8485
       slots: 1
       tier: hot
+      effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
       numa_policy: server_default
@@ -393,6 +406,7 @@ roles:
         - ingest_long_context
         modes:
         - default
+        requirements: {}
     priors:
       throughput_tps: 20.8
       quality_overall: 0.9259
@@ -447,11 +461,16 @@ roles:
       - 8083
       slots: 2
       tier: hot
+      effective_context_tokens: null
       binary: llama.cpp
       binary_dir: null
       numa_policy: single_96t
       shared_mmap: true
-      launch: {}
+      launch:
+        entries: []
+        primary_roles: []
+        modes: []
+        requirements: {}
     priors:
       throughput_tps: 12.19
       quality_overall: null
@@ -525,11 +544,16 @@ roles:
       - 8196
       slots: 1
       tier: warm
+      effective_context_tokens: null
       binary: llama.cpp
       binary_dir: null
       numa_policy: server_default
       shared_mmap: true
-      launch: {}
+      launch:
+        entries: []
+        primary_roles: []
+        modes: []
+        requirements: {}
     priors:
       throughput_tps: 39.6
       quality_overall: null
@@ -594,6 +618,7 @@ roles:
       - 8082
       slots: 1
       tier: hot
+      effective_context_tokens: 16384
       binary: ik-pr1744
       binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
       numa_policy: 4x48t_quarter_instances
@@ -616,6 +641,9 @@ roles:
         - worker_general
         modes:
         - worker_pool
+        requirements:
+          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf
     priors:
       throughput_tps: 60.7
       quality_overall: 0.9
@@ -696,6 +724,7 @@ roles:
       - 8487
       slots: null
       tier: hot
+      effective_context_tokens: 16384
       binary: llama.cpp
       binary_dir: null
       numa_policy: role_endpoint_binding
@@ -736,6 +765,9 @@ roles:
         - vision_escalation
         modes:
         - vision
+        requirements:
+          mmproj_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf
+          model_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf
     priors:
       throughput_tps: 27.6
       quality_overall: 0.9167
@@ -799,6 +831,7 @@ roles:
       - 8382
       slots: 1
       tier: hot
+      effective_context_tokens: 16384
       binary: ik-pr1744
       binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
       numa_policy: 4x48t_quarter_instances
@@ -839,6 +872,9 @@ roles:
         - worker_general
         modes:
         - worker_pool
+        requirements:
+          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf
     priors:
       throughput_tps: 60.7
       quality_overall: 0.9
@@ -916,6 +952,7 @@ roles:
       - 8082
       slots: 1
       tier: hot
+      effective_context_tokens: 16384
       binary: ik-pr1744
       binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
       numa_policy: 4x48t_quarter_instances
@@ -938,6 +975,9 @@ roles:
         - worker_general
         modes:
         - worker_pool
+        requirements:
+          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf
     priors:
       throughput_tps: 60.7
       quality_overall: 0.9
@@ -1014,6 +1054,7 @@ roles:
       - 8070
       slots: 2
       tier: hot
+      effective_context_tokens: 32768
       binary: llama.cpp
       binary_dir: null
       numa_policy: server_default
@@ -1029,6 +1070,7 @@ roles:
         - frontdoor
         modes:
         - default
+        requirements: {}
     priors:
       throughput_tps: 24.3
       quality_overall: 0.93
@@ -1097,6 +1139,7 @@ roles:
       - 8086
       slots: null
       tier: hot
+      effective_context_tokens: 8192
       binary: llama.cpp
       binary_dir: null
       numa_policy: role_endpoint_binding
@@ -1112,6 +1155,9 @@ roles:
         - worker_vision
         modes:
         - vision
+        requirements:
+          mmproj_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf
+          model_path: /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf
     priors:
       throughput_tps: 20.0
       quality_overall: 0.9167

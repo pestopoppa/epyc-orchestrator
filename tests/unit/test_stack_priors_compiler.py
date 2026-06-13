@@ -144,8 +144,15 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     assert worker["serving"]["server_role"] == "worker"
     assert worker["serving"]["binding"] == "server_mode.model_role"
     assert worker["serving"]["ports"] == [8072, 8082, 8182, 8282, 8382]
+    assert worker["serving"]["effective_context_tokens"] == 16384
     assert worker["serving"]["launch"]["primary_roles"] == ["worker_general"]
     assert worker["serving"]["launch"]["modes"] == ["worker_pool"]
+    assert worker["serving"]["launch"]["requirements"]["model_path"].endswith(
+        "gemma-4-26B-A4B-it-Q4_K_M.gguf"
+    )
+    assert worker["serving"]["launch"]["requirements"]["draft_model_path"].endswith(
+        "gemma-4-26B-A4B-it-assistant-Q8_0.gguf"
+    )
     assert worker["priors"]["throughput_tps"] == 60.7
     assert worker["priors"]["memory_cost"] == 1.0
 
@@ -222,8 +229,13 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
     ]
     assert priors["roles"]["worker_math"]["serving"]["ports"] == [8072, 8082]
     assert priors["roles"]["toolrunner"]["serving"]["ports"] == [8072, 8082]
+    assert priors["roles"]["worker_math"]["serving"]["effective_context_tokens"] == 16384
+    assert priors["roles"]["toolrunner"]["serving"]["effective_context_tokens"] == 16384
     assert priors["roles"]["worker_math"]["serving"]["binding"] == "server_mode.shared_with"
     assert priors["roles"]["toolrunner"]["serving"]["binding"] == "server_mode.shared_with"
+    assert priors["roles"]["worker_math"]["serving"]["launch"]["requirements"] == (
+        priors["roles"]["worker_general"]["serving"]["launch"]["requirements"]
+    )
 
 
 def test_compile_preserves_conflicts_as_gaps_when_allowed(tmp_path: Path) -> None:
@@ -297,6 +309,7 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     assert role["deployment_status"] == "live_stack"
     assert role["serving"]["binding"] == "stack_manifest.role"
     assert role["serving"]["endpoint"] == "http://localhost:8086"
+    assert role["serving"]["effective_context_tokens"] == 8192
     assert role["serving"]["launch"]["entries"] == [
         {
             "port": 8086,
@@ -306,6 +319,12 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
             "vision_type": "worker",
         }
     ]
+    assert role["serving"]["launch"]["requirements"]["model_path"].endswith(
+        "Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf"
+    )
+    assert role["serving"]["launch"]["requirements"]["mmproj_path"].endswith(
+        "mmproj-model-f16.gguf"
+    )
     assert role["priors"]["memory_cost"] == 1.0
 
 
