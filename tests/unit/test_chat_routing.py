@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from src.api.routes.chat_routing import (
     _classify_and_route,
+    _role_to_task_type,
     _select_mode,
     _should_use_direct,
 )
@@ -146,3 +147,16 @@ class TestClassifyAndRoute:
         mock_classify.return_value = mock_result
         _classify_and_route("Describe this", has_image=True)
         mock_classify.assert_called_once_with("Describe this", "", True)
+
+
+class TestRoleToTaskType:
+    """Test role-to-task-type mapping for binding lookup."""
+
+    def test_maps_live_roles(self):
+        assert _role_to_task_type("coder_escalation") == "code"
+        assert _role_to_task_type("architect_general") == "reasoning"
+        assert _role_to_task_type("ingest_long_context") == "ingest"
+        assert _role_to_task_type("worker_math") == "math"
+        assert _role_to_task_type("worker_vision") == "vision"
+        assert _role_to_task_type("worker_general") == "explore"
+        assert _role_to_task_type("frontdoor") == "general"

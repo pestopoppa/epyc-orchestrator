@@ -228,7 +228,7 @@ def _classify_and_route(
 
 def _role_to_task_type(role: str) -> str:
     """Map a role name to a task type for binding lookup."""
-    if "coder" in role or "architect_coding" in role:
+    if "coder" in role:
         return "code"
     if "ingest" in role:
         return "ingest"
