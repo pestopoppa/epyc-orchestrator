@@ -233,6 +233,43 @@ def _descriptor_removal_errors(path: Path, generated: dict[str, Any]) -> list[st
     ]
 
 
+def _descriptor_policy_errors(generated: dict[str, Any]) -> list[str]:
+    models = generated.get("models")
+    if not isinstance(models, list):
+        return []
+
+    errors: list[str] = []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        gaps = model.get("known_gaps")
+        if not isinstance(gaps, list):
+            continue
+        conflicts = [
+            str(gap)
+            for gap in gaps
+            if isinstance(gap, str) and gap.startswith("Role-server conflict:")
+        ]
+        if not conflicts:
+            continue
+        bindings = model.get("role_bindings")
+        roles = (
+            sorted(str(role) for role in bindings.get("roles", []) if isinstance(role, str))
+            if isinstance(bindings, dict)
+            else []
+        )
+        role_text = f" roles={','.join(roles)}" if roles else ""
+        errors.append(
+            f"descriptor generated role/server conflict for {model.get('model_id')}{role_text}: "
+            + "; ".join(conflicts)
+        )
+    if errors:
+        errors.append(
+            "fix descriptor compiler/source registry before updating descriptor artifacts"
+        )
+    return errors
+
+
 def _roles_from_stack_manifest() -> set[str]:
     from scripts.server.stack_manifest import ROLE_LAUNCH_META
 
@@ -268,17 +305,26 @@ def _check_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
         )
 
     if _generated_matches(config.descriptors, expected):
+        policy_errors = _descriptor_policy_errors(expected)
+        if policy_errors:
+            return PipelineStep(
+                name="descriptors",
+                status="failed",
+                errors=policy_errors,
+            )
         return PipelineStep(
             name="descriptors",
             status="ok",
             details=[f"fresh: {config.descriptors}"],
         )
     removal_errors = _descriptor_removal_errors(config.descriptors, expected)
+    policy_errors = _descriptor_policy_errors(expected)
     drift_details = _descriptor_drift_details(config.descriptors, expected)
-    if removal_errors:
+    if removal_errors or policy_errors:
         errors = [
             f"descriptor artifact is stale: {config.descriptors}",
             *removal_errors,
+            *policy_errors,
         ]
     else:
         errors = [
@@ -306,6 +352,13 @@ def _update_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
             name="descriptors",
             status="failed",
             errors=[f"descriptor update failed: {exc}"],
+        )
+    policy_errors = _descriptor_policy_errors(descriptors)
+    if policy_errors:
+        return PipelineStep(
+            name="descriptors",
+            status="failed",
+            errors=policy_errors,
         )
     if not config.allow_descriptor_model_removal:
         removal_errors = _descriptor_removal_errors(config.descriptors, descriptors)

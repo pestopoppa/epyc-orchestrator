@@ -127,6 +127,121 @@ def _config(tmp_path: Path, *, mode: str) -> StackChangePipelineConfig:
     )
 
 
+def test_update_refuses_generated_role_server_conflicts(tmp_path: Path) -> None:
+    config = _config(tmp_path, mode="update")
+    _write_yaml(
+        config.lean_registry,
+        {
+            "server_mode": {
+                "worker": {
+                    "url": "http://localhost:8072",
+                    "port": 8072,
+                    "tier": "hot",
+                    "slots": 1,
+                    "model": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+                    "model_role": "worker_general",
+                    "shared_with": ["worker_math"],
+                    "memory_gb": 16,
+                    "throughput": 60.7,
+                    "benchmark_score": "90%",
+                    "numa_instances": 4,
+                    "numa_ports": [8082, 8182, 8282, 8382],
+                }
+            },
+            "roles": {
+                "worker_math": {
+                    "model": {
+                        "name": "Qwen2.5-Math-7B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "dense",
+                        "size_gb": 4.4,
+                        "ctx_max": 32768,
+                    },
+                    "performance": {"quality_pct": 88, "baseline_tps": 12.4},
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True, "residency": "hot"},
+                }
+            },
+        },
+    )
+    conflict_config = StackChangePipelineConfig(
+        **{**config.__dict__, "roles": {"worker_math"}}
+    )
+
+    report = run_stack_change_pipeline(conflict_config)
+
+    assert not report.ok
+    assert any(
+        "descriptor generated role/server conflict for qwen2.5-math-7b-q4_k_m"
+        in error
+        for error in report.errors
+    )
+    assert not conflict_config.descriptors.exists()
+    assert not conflict_config.stack_priors.exists()
+    assert {step.name: step.status for step in report.steps}["stack_priors"] == "skipped"
+
+
+def test_check_reports_generated_role_server_conflicts_without_update_hint(
+    tmp_path: Path,
+) -> None:
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    config = StackChangePipelineConfig(
+        **{**update_config.__dict__, "mode": "check"}
+    )
+    _write_yaml(
+        config.lean_registry,
+        {
+            "server_mode": {
+                "worker": {
+                    "url": "http://localhost:8072",
+                    "port": 8072,
+                    "tier": "hot",
+                    "slots": 1,
+                    "model": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
+                    "model_role": "worker_general",
+                    "shared_with": ["worker_math"],
+                    "memory_gb": 16,
+                    "throughput": 60.7,
+                    "benchmark_score": "90%",
+                    "numa_instances": 4,
+                    "numa_ports": [8082, 8182, 8282, 8382],
+                }
+            },
+            "roles": {
+                "worker_math": {
+                    "model": {
+                        "name": "Qwen2.5-Math-7B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "dense",
+                        "size_gb": 4.4,
+                        "ctx_max": 32768,
+                    },
+                    "performance": {"quality_pct": 88, "baseline_tps": 12.4},
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True, "residency": "hot"},
+                }
+            },
+        },
+    )
+    conflict_config = StackChangePipelineConfig(
+        **{**config.__dict__, "roles": {"worker_math"}}
+    )
+
+    report = run_stack_change_pipeline(conflict_config)
+
+    descriptor_step = next(step for step in report.steps if step.name == "descriptors")
+    assert not report.ok
+    assert any(
+        "descriptor generated role/server conflict for qwen2.5-math-7b-q4_k_m"
+        in error
+        for error in descriptor_step.errors
+    )
+    assert not any(
+        error.endswith("stack_change_pipeline.py update") for error in descriptor_step.errors
+    )
+
+
 def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> None:
     update_report = run_stack_change_pipeline(_config(tmp_path, mode="update"))
     check_report = run_stack_change_pipeline(_config(tmp_path, mode="check"))
