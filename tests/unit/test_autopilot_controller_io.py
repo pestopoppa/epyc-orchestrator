@@ -264,16 +264,15 @@ def test_validate_prompt_mutation_requires_file() -> None:
 
 
 def test_validate_prompt_mutation_rejects_multi_file() -> None:
-    err = controller_io.validate_single_variable(
-        {"type": "prompt_mutation", "file": "a.md,b.md"}
-    )
+    err = controller_io.validate_single_variable({"type": "prompt_mutation", "file": "a.md,b.md"})
     assert err and "multiple files" in err
 
 
 def test_validate_prompt_mutation_accepts_single_file() -> None:
-    assert controller_io.validate_single_variable(
-        {"type": "prompt_mutation", "file": "frontdoor.md"}
-    ) is None
+    assert (
+        controller_io.validate_single_variable({"type": "prompt_mutation", "file": "frontdoor.md"})
+        is None
+    )
 
 
 def test_validate_code_mutation_requires_file() -> None:
@@ -289,9 +288,12 @@ def test_validate_structural_experiment_blocks_multi_flag() -> None:
 
 
 def test_validate_structural_experiment_accepts_single_flag() -> None:
-    assert controller_io.validate_single_variable(
-        {"type": "structural_experiment", "flags": {"a": True}}
-    ) is None
+    assert (
+        controller_io.validate_single_variable(
+            {"type": "structural_experiment", "flags": {"a": True}}
+        )
+        is None
+    )
 
 
 def test_validate_numeric_trial_blocks_multi_param() -> None:
@@ -303,9 +305,7 @@ def test_validate_numeric_trial_blocks_multi_param() -> None:
 
 def test_validate_numeric_trial_accepts_empty_params_for_optuna() -> None:
     # Empty params = Optuna will suggest; exempt from single-variable rule
-    assert controller_io.validate_single_variable(
-        {"type": "numeric_trial", "params": {}}
-    ) is None
+    assert controller_io.validate_single_variable({"type": "numeric_trial", "params": {}}) is None
 
 
 def test_validate_numeric_trial_rejects_unknown_surface() -> None:
@@ -345,18 +345,21 @@ def test_validate_gepa_rejects_unbounded_max_evals() -> None:
 
 
 def test_validate_slot_compact_schema_matches_handler() -> None:
-    assert controller_io.validate_single_variable(
-        {
-            "type": "slot_compact",
-            "port": 8070,
-            "slot_id": 0,
-            "keep_ratio": 0.3,
-            "scorer": "expected_attention",
-            "keep_first": 5,
-            "n_future": 128,
-            "use_covariance": True,
-        }
-    ) is None
+    assert (
+        controller_io.validate_single_variable(
+            {
+                "type": "slot_compact",
+                "port": 8070,
+                "slot_id": 0,
+                "keep_ratio": 0.3,
+                "scorer": "expected_attention",
+                "keep_first": 5,
+                "n_future": 128,
+                "use_covariance": True,
+            }
+        )
+        is None
+    )
 
     err = controller_io.validate_single_variable(
         {
@@ -409,9 +412,7 @@ def test_validate_deep_eval_rejects_ignored_schema_fields() -> None:
 
 
 def test_validate_deep_eval_requires_valid_tier() -> None:
-    assert controller_io.validate_single_variable(
-        {"type": "deep_eval", "tier": 2}
-    ) is None
+    assert controller_io.validate_single_variable({"type": "deep_eval", "tier": 2}) is None
     assert controller_io.validate_single_variable({"type": "deep_eval"})
     assert controller_io.validate_single_variable({"type": "deep_eval", "tier": 3})
     assert controller_io.validate_single_variable({"type": "deep_eval", "tier": "2"})
