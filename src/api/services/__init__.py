@@ -20,7 +20,7 @@ from src.roles import Role
 # Migrated from deleted src/api/services/orchestrator.py facade
 ESCALATION_ROLES: dict[Role, Role] = {
     Role.WORKER_GENERAL: Role.CODER_ESCALATION,
-    Role.CODER_ESCALATION: Role.ARCHITECT_CODING,
+    Role.CODER_ESCALATION: Role.ARCHITECT_GENERAL,
     Role.FRONTDOOR: Role.CODER_ESCALATION,
     Role.INGEST_LONG_CONTEXT: Role.ARCHITECT_GENERAL,
 }

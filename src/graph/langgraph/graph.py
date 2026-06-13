@@ -208,7 +208,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "frontdoor": {"frontdoor", "coder_escalation", "worker", END},
     "worker": {"worker", "coder_escalation", END},
     "coder": {"coder", "architect", END},
-    "coder_escalation": {"coder_escalation", END},
+    "coder_escalation": {"coder_escalation", "architect", END},
     "ingest": {"ingest", "architect", END},
     "architect": {"architect", END},
     "architect_coding": {"architect_coding", END},
@@ -216,11 +216,11 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
 
 # Invalid transitions — explicitly cannot happen
 INVALID_TRANSITIONS: dict[str, set[str]] = {
-    "frontdoor": {"architect", "coder", "ingest"},
-    "worker": {"frontdoor", "architect", "coder", "ingest"},
-    "coder": {"frontdoor", "worker", "coder_escalation", "ingest"},
-    "coder_escalation": {"frontdoor", "worker", "coder", "architect", "ingest"},
-    "ingest": {"frontdoor", "worker", "coder", "coder_escalation"},
-    "architect": {"frontdoor", "worker", "coder", "coder_escalation", "ingest"},
+    "frontdoor": {"architect", "architect_coding", "coder", "ingest"},
+    "worker": {"frontdoor", "architect", "architect_coding", "coder", "ingest"},
+    "coder": {"frontdoor", "worker", "coder_escalation", "architect_coding", "ingest"},
+    "coder_escalation": {"frontdoor", "worker", "coder", "architect_coding", "ingest"},
+    "ingest": {"frontdoor", "worker", "coder", "coder_escalation", "architect_coding"},
+    "architect": {"frontdoor", "worker", "coder", "coder_escalation", "architect_coding", "ingest"},
     "architect_coding": {"frontdoor", "worker", "coder", "coder_escalation", "architect", "ingest"},
 }

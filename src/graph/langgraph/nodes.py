@@ -20,7 +20,7 @@ from langchain_core.runnables import RunnableConfig
 
 from src.escalation import ErrorCategory
 from src.roles import Role
-from src.graph.state import TaskDeps, TaskResult, TaskState
+from src.graph.state import TaskDeps, TaskState
 from src.graph.helpers import (
     MAX_CONSECUTIVE_NUDGES,
     _add_evidence,
@@ -436,7 +436,7 @@ async def coder_node(state: dict[str, Any], config: RunnableConfig) -> dict[str,
 
 
 async def coder_escalation_node(state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
-    """Coder escalation node. Escalates to architect_coding."""
+    """Coder escalation node. Escalates to live architect_general."""
     ctx, task_state, deps, snap = _build_ctx(state, config)
 
     if task_state.turns >= task_state.max_turns:
@@ -473,26 +473,26 @@ async def coder_escalation_node(state: dict[str, Any], config: RunnableConfig) -
             task_state.escalation_count += 1
             task_state.consecutive_failures = 0
             from_role = str(task_state.current_role)
-            _record_escalation_role(task_state, Role.ARCHITECT_CODING)
-            _log_escalation(ctx, from_role, str(Role.ARCHITECT_CODING), f"Early abort: {error[:100]}")
-            return _state_update(task_state, "architect_coding", snap)
+            _record_escalation_role(task_state, Role.ARCHITECT_GENERAL)
+            _log_escalation(ctx, from_role, str(Role.ARCHITECT_GENERAL), f"Early abort: {error[:100]}")
+            return _state_update(task_state, "architect", snap)
 
         if _should_think_harder(ctx, error_cat):
             task_state.think_harder_attempted = True
             task_state.think_harder_config = _build_think_harder_config(task_state)
             return _state_update(task_state, "coder_escalation", snap)
 
-        if _should_escalate(ctx, error_cat, Role.ARCHITECT_CODING):
+        if _should_escalate(ctx, error_cat, Role.ARCHITECT_GENERAL):
             if task_state.think_harder_attempted:
                 task_state.think_harder_succeeded = False
             task_state.escalation_count += 1
             task_state.consecutive_failures = 0
             task_state.think_harder_attempted = False
             from_role = str(task_state.current_role)
-            _record_escalation_role(task_state, Role.ARCHITECT_CODING)
-            _log_escalation(ctx, from_role, str(Role.ARCHITECT_CODING),
+            _record_escalation_role(task_state, Role.ARCHITECT_GENERAL)
+            _log_escalation(ctx, from_role, str(Role.ARCHITECT_GENERAL),
                             f"Escalating after {task_state.consecutive_failures} failures")
-            return _state_update(task_state, "architect_coding", snap)
+            return _state_update(task_state, "architect", snap)
 
         if _should_retry(ctx, error_cat):
             return _state_update(task_state, "coder_escalation", snap)

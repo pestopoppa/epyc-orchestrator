@@ -327,16 +327,16 @@ class TestRoleEscalation:
         delegator = ProactiveDelegator(registry, primitives)
 
         escalated = delegator._escalate_role("coder_escalation")
-        assert escalated == "architect_coding"
+        assert escalated == "architect_general"
 
-    def test_escalate_role_architect_to_coding(self):
-        """Test architect escalation."""
+    def test_escalate_role_architect_terminal(self):
+        """Test architect escalation stays on live architect role."""
         registry = Mock()
         primitives = Mock()
         delegator = ProactiveDelegator(registry, primitives)
 
         escalated = delegator._escalate_role("architect_general")
-        assert escalated == "architect_coding"
+        assert escalated == "architect_general"
 
 
 class TestAggregationService:

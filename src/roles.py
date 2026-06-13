@@ -24,7 +24,7 @@ Usage:
         role = Role("coder_escalation")
 
     # Get escalation target
-    target = Role.CODER_ESCALATION.escalates_to()  # Role.ARCHITECT_CODING
+    target = Role.CODER_ESCALATION.escalates_to()  # Role.ARCHITECT_GENERAL
 """
 
 from __future__ import annotations
@@ -116,10 +116,10 @@ class Role(str, Enum):
     """
 
     ARCHITECT_CODING = "architect_coding"
-    """Ultimate coding escalation target.
+    """Retired coding escalation target retained for compatibility.
 
-    Used for the most complex coding challenges that defeat other specialists.
-    Typically uses largest available model (Qwen3-Coder-480B).
+    This role remains valid for old state, direct force-role requests, and
+    serialized diagnostics, but it is no longer used by automatic escalation.
     """
 
     THINKING_REASONING = "thinking_reasoning"
@@ -287,8 +287,9 @@ _ESCALATION_MAP: dict[Role, Role] = {
     Role.TOOLRUNNER: Role.CODER_ESCALATION,
     # Frontdoor escalates to coder
     Role.FRONTDOOR: Role.CODER_ESCALATION,
-    # Coder escalates to architect
-    Role.CODER_ESCALATION: Role.ARCHITECT_CODING,
+    # Coder escalates to live architect role. architect_coding is retained as a
+    # compatibility role only; its historical server ports are intentionally dead.
+    Role.CODER_ESCALATION: Role.ARCHITECT_GENERAL,
     Role.THINKING_REASONING: Role.ARCHITECT_GENERAL,
     # Ingest escalates to architect
     Role.INGEST_LONG_CONTEXT: Role.ARCHITECT_GENERAL,
@@ -300,7 +301,7 @@ _ESCALATION_MAP: dict[Role, Role] = {
 # Role -> Fallback alternatives (infrastructure failure, NOT task escalation)
 # Used when model_fallback feature is enabled and primary backend is circuit-open.
 _FALLBACK_MAP: dict[Role, list[Role]] = {
-    Role.ARCHITECT_GENERAL: [Role.ARCHITECT_CODING, Role.CODER_ESCALATION],
+    Role.ARCHITECT_GENERAL: [Role.CODER_ESCALATION],
     Role.ARCHITECT_CODING: [Role.ARCHITECT_GENERAL, Role.CODER_ESCALATION],
     Role.CODER_ESCALATION: [Role.FRONTDOOR],
     Role.WORKER_MATH: [Role.WORKER_GENERAL],
@@ -360,7 +361,7 @@ def get_escalation_chain(role: Role | str) -> list[Role]:
 
     Example:
         >>> get_escalation_chain(Role.WORKER_GENERAL)
-        [Role.WORKER_GENERAL, Role.CODER_ESCALATION, Role.ARCHITECT_CODING]
+        [Role.WORKER_GENERAL, Role.CODER_ESCALATION, Role.ARCHITECT_GENERAL]
     """
     if isinstance(role, str):
         role = Role.from_string(role)

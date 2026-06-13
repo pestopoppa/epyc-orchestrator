@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.graph.state import TaskDeps, TaskResult, TaskState
+from src.graph.state import TaskDeps, TaskState
 from src.roles import Role
 
 
@@ -59,7 +59,7 @@ NODE_PARAMS = [
     ("worker", "WorkerNode", Role.WORKER_GENERAL, "langgraph_worker", "coder_escalation"),
     ("frontdoor", "FrontdoorNode", Role.FRONTDOOR, "langgraph_frontdoor", "coder_escalation"),
     ("coder", "CoderNode", Role.THINKING_REASONING, "langgraph_coder", "architect"),
-    ("coder_escalation", "CoderEscalationNode", Role.CODER_ESCALATION, "langgraph_coder_escalation", "architect_coding"),
+    ("coder_escalation", "CoderEscalationNode", Role.CODER_ESCALATION, "langgraph_coder_escalation", "architect"),
 ]
 
 
@@ -363,7 +363,6 @@ class TestRunViaLanggraph:
     async def test_state_conversion_roundtrip(self):
         """State should survive the TaskState → LG → TaskState round-trip."""
         from src.graph.nodes import _run_via_langgraph
-        from src.graph.langgraph.state import task_state_to_lg
 
         ctx = _make_ctx(
             current_role=Role.FRONTDOOR,

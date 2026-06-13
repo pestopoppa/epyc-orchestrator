@@ -102,7 +102,7 @@ class TestEscalationChain:
 
     def test_coder_escalates_to_architect(self):
         """Test coder roles escalate to architect."""
-        assert Role.CODER_ESCALATION.escalates_to() == Role.ARCHITECT_CODING
+        assert Role.CODER_ESCALATION.escalates_to() == Role.ARCHITECT_GENERAL
 
     def test_ingest_escalates_to_architect(self):
         """Test ingest escalates to architect."""
@@ -150,7 +150,7 @@ class TestGetEscalationChain:
         assert len(chain) == 3
         assert chain[0] == Role.WORKER_GENERAL
         assert chain[1] == Role.CODER_ESCALATION
-        assert chain[2] == Role.ARCHITECT_CODING
+        assert chain[2] == Role.ARCHITECT_GENERAL
 
     def test_frontdoor_escalation_chain(self):
         """Test escalation chain from frontdoor."""
@@ -158,14 +158,14 @@ class TestGetEscalationChain:
         assert len(chain) == 3
         assert chain[0] == Role.FRONTDOOR
         assert chain[1] == Role.CODER_ESCALATION
-        assert chain[2] == Role.ARCHITECT_CODING
+        assert chain[2] == Role.ARCHITECT_GENERAL
 
     def test_coder_escalation_chain(self):
         """Test escalation chain from coder."""
         chain = get_escalation_chain(Role.CODER_ESCALATION)
         assert len(chain) == 2
         assert chain[0] == Role.CODER_ESCALATION
-        assert chain[1] == Role.ARCHITECT_CODING
+        assert chain[1] == Role.ARCHITECT_GENERAL
 
     def test_architect_escalation_chain(self):
         """Test escalation chain from architect (terminal)."""

@@ -442,8 +442,8 @@ class ProactiveDelegator:
             "worker_general": "coder_escalation",
             "worker_math": "coder_escalation",
             "worker_vision": "coder_escalation",
-            "coder_escalation": "architect_coding",
+            "coder_escalation": "architect_general",
             "frontdoor": "coder_escalation",
-            "architect_general": "architect_coding",
+            "architect_general": "architect_general",
         }
         return escalation_map.get(current_role, "architect_general")

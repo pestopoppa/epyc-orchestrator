@@ -11,10 +11,9 @@ Tests cover:
 from __future__ import annotations
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
-from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-from src.graph.state import TaskDeps, TaskResult, TaskState, GraphConfig
+from src.graph.state import TaskDeps, TaskResult, TaskState
 from src.roles import Role
 
 
@@ -143,8 +142,8 @@ class TestEdgeValidation:
         # Coder -> {self, architect, END}
         assert VALID_TRANSITIONS["coder"] == {"coder", "architect", END}
 
-        # CoderEscalation -> {self, architect_coding, END}
-        assert VALID_TRANSITIONS["coder_escalation"] == {"coder_escalation", "architect_coding", END}
+        # CoderEscalation -> {self, architect, END}
+        assert VALID_TRANSITIONS["coder_escalation"] == {"coder_escalation", "architect", END}
 
         # Ingest -> {self, architect, END}
         assert VALID_TRANSITIONS["ingest"] == {"ingest", "architect", END}
@@ -169,7 +168,6 @@ class TestEdgeValidation:
         for node in VALID_TRANSITIONS:
             valid = VALID_TRANSITIONS[node]
             invalid = INVALID_TRANSITIONS.get(node, set())
-            covered = valid | invalid | {node}  # self is always in valid
             # Every other node should be in either valid or invalid
             other_nodes = all_nodes - {node}
             for target in other_nodes:

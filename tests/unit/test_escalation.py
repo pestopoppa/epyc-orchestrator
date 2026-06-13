@@ -259,7 +259,7 @@ class TestEscalationPolicy:
         assert len(path) == 3
         assert path[0] == Role.WORKER_GENERAL
         assert path[1] == Role.CODER_ESCALATION
-        assert path[2] == Role.ARCHITECT_CODING
+        assert path[2] == Role.ARCHITECT_GENERAL
 
 
 class TestThinkHarder:

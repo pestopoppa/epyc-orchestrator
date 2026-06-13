@@ -31,8 +31,6 @@ from src.graph.state import (
 from src.graph.langgraph.state import (
     APPEND_FIELDS,
     lg_to_task_state,
-    snapshot_append_lengths,
-    state_update_delta,
     task_state_to_lg,
 )
 
@@ -118,7 +116,6 @@ async def _run_via_langgraph(ctx, node_name: str):
 
     # Convert TaskState → LangGraph state dict
     lg_state = task_state_to_lg(ctx.state)
-    snap = snapshot_append_lengths(lg_state)
 
     # Save originals for append-reducer fields before LG call.
     # LG nodes return deltas (trimmed by state_update_delta), so we must
@@ -528,12 +525,13 @@ class CoderNode(BaseNode[TaskState, TaskDeps, TaskResult]):
 class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
     """Escalation coder node for CODER_ESCALATION role.
 
-    Escalates to ArchitectCodingNode (parallel coding chain).
+    Escalates to ArchitectNode. The historical architect_coding role is
+    retained for compatibility, but its servers are intentionally dead.
     """
 
     async def run(
         self, ctx: Ctx
-    ) -> Union["CoderEscalationNode", "ArchitectCodingNode", End[TaskResult]]:
+    ) -> Union["CoderEscalationNode", "ArchitectNode", End[TaskResult]]:
         if _get_features().langgraph_coder_escalation:
             return await _run_via_langgraph(ctx, "coder_escalation")
         state = ctx.state
@@ -576,9 +574,9 @@ class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 state.escalation_count += 1
                 state.consecutive_failures = 0
                 from_role = str(state.current_role)
-                _record_escalation_role(state, Role.ARCHITECT_CODING)
-                _log_escalation(ctx, from_role, str(Role.ARCHITECT_CODING), f"Early abort: {error[:100]}")
-                return ArchitectCodingNode()
+                _record_escalation_role(state, Role.ARCHITECT_GENERAL)
+                _log_escalation(ctx, from_role, str(Role.ARCHITECT_GENERAL), f"Early abort: {error[:100]}")
+                return ArchitectNode()
 
             if _should_think_harder(ctx, error_cat):
                 state.think_harder_attempted = True
@@ -586,19 +584,19 @@ class CoderEscalationNode(BaseNode[TaskState, TaskDeps, TaskResult]):
                 log.info("Think-harder triggered at %s", state.current_role)
                 return CoderEscalationNode()
 
-            if _should_escalate(ctx, error_cat, Role.ARCHITECT_CODING):
+            if _should_escalate(ctx, error_cat, Role.ARCHITECT_GENERAL):
                 if state.think_harder_attempted:
                     state.think_harder_succeeded = False
                 state.escalation_count += 1
                 state.consecutive_failures = 0
                 state.think_harder_attempted = False
                 from_role = str(state.current_role)
-                _record_escalation_role(state, Role.ARCHITECT_CODING)
+                _record_escalation_role(state, Role.ARCHITECT_GENERAL)
                 _log_escalation(
-                    ctx, from_role, str(Role.ARCHITECT_CODING),
+                    ctx, from_role, str(Role.ARCHITECT_GENERAL),
                     f"Escalating after {state.consecutive_failures} failures",
                 )
-                return ArchitectCodingNode()
+                return ArchitectNode()
 
             if _should_retry(ctx, error_cat):
                 return CoderEscalationNode()

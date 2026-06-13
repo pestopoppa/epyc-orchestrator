@@ -31,8 +31,8 @@ class TestGenerateMermaid:
         assert "FrontdoorNode --> CoderEscalationNode" in code
         # WorkerNode -> CoderEscalationNode (workers escalate to coder_escalation)
         assert "WorkerNode --> CoderEscalationNode" in code
-        # CoderEscalationNode -> ArchitectCodingNode
-        assert "CoderEscalationNode --> ArchitectCodingNode" in code
+        # CoderEscalationNode -> ArchitectNode
+        assert "CoderEscalationNode --> ArchitectNode" in code
         # IngestNode -> ArchitectNode
         assert "IngestNode --> ArchitectNode" in code
 
