@@ -117,6 +117,10 @@ STACK_PRIOR_SCORER_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
     # serving/cost priors compiled under worker_general.
     "worker_general": ("worker_explore",),
 }
+PRIOR_SOURCE_STACK_PRIORS = "stack_priors"
+PRIOR_SOURCE_MODEL_DESCRIPTORS = "model_descriptors"
+PRIOR_SOURCE_REGISTRY = "registry"
+PRIOR_SOURCE_DEGRADED_FALLBACK = "degraded_fallback"
 
 
 @dataclass(frozen=True)
@@ -126,6 +130,40 @@ class QScorerPriors:
     baseline_tps_by_role: Dict[str, float]
     baseline_quality_by_role: Dict[str, float]
     memory_cost_by_role: Dict[str, float]
+    baseline_tps_source_by_role: Dict[str, str] = field(default_factory=dict)
+    baseline_quality_source_by_role: Dict[str, str] = field(default_factory=dict)
+    memory_cost_source_by_role: Dict[str, str] = field(default_factory=dict)
+    degraded_reason: str | None = None
+
+    @property
+    def uses_degraded_fallback(self) -> bool:
+        """Whether any scorer prior value came from a degraded fallback table."""
+        sources = (
+            *self.baseline_tps_source_by_role.values(),
+            *self.baseline_quality_source_by_role.values(),
+            *self.memory_cost_source_by_role.values(),
+        )
+        return any(source == PRIOR_SOURCE_DEGRADED_FALLBACK for source in sources)
+
+
+def _fallback_q_scorer_priors(*, degraded_reason: str | None = None) -> QScorerPriors:
+    return QScorerPriors(
+        baseline_tps_by_role=dict(FALLBACK_BASELINE_TPS_BY_ROLE),
+        baseline_quality_by_role=dict(BASELINE_QUALITY_BY_ROLE),
+        memory_cost_by_role=dict(FALLBACK_MEMORY_COST_BY_ROLE),
+        baseline_tps_source_by_role={
+            role: PRIOR_SOURCE_DEGRADED_FALLBACK
+            for role in FALLBACK_BASELINE_TPS_BY_ROLE
+        },
+        baseline_quality_source_by_role={
+            role: PRIOR_SOURCE_DEGRADED_FALLBACK for role in BASELINE_QUALITY_BY_ROLE
+        },
+        memory_cost_source_by_role={
+            role: PRIOR_SOURCE_DEGRADED_FALLBACK
+            for role in FALLBACK_MEMORY_COST_BY_ROLE
+        },
+        degraded_reason=degraded_reason,
+    )
 
 
 def _valid_quality(value: Any) -> float | None:
@@ -212,9 +250,13 @@ def stack_prior_q_scorer_priors_by_role(
     Live scoring should prefer this generated contract so model swaps, role
     retirements, HOT/WARM tier changes, and shared-server bindings are data-only.
     """
-    tps_by_role = dict(FALLBACK_BASELINE_TPS_BY_ROLE)
-    quality_by_role = dict(BASELINE_QUALITY_BY_ROLE)
-    memory_by_role = dict(FALLBACK_MEMORY_COST_BY_ROLE)
+    fallback_priors = _fallback_q_scorer_priors()
+    tps_by_role = dict(fallback_priors.baseline_tps_by_role)
+    quality_by_role = dict(fallback_priors.baseline_quality_by_role)
+    memory_by_role = dict(fallback_priors.memory_cost_by_role)
+    tps_sources = dict(fallback_priors.baseline_tps_source_by_role)
+    quality_sources = dict(fallback_priors.baseline_quality_source_by_role)
+    memory_sources = dict(fallback_priors.memory_cost_source_by_role)
 
     try:
         import yaml
@@ -228,18 +270,14 @@ def stack_prior_q_scorer_priors_by_role(
             raise ValueError("; ".join(contract_errors[:3]))
     except Exception as exc:
         logger.warning("Using fallback q_scorer priors; stack-priors load failed: %s", exc)
-        return QScorerPriors(
-            baseline_tps_by_role=tps_by_role,
-            baseline_quality_by_role=quality_by_role,
-            memory_cost_by_role=memory_by_role,
+        return _fallback_q_scorer_priors(
+            degraded_reason=f"stack-priors load failed: {exc}"
         )
 
     roles = data.get("roles", {})
     if not isinstance(roles, dict):
-        return QScorerPriors(
-            baseline_tps_by_role=tps_by_role,
-            baseline_quality_by_role=quality_by_role,
-            memory_cost_by_role=memory_by_role,
+        return _fallback_q_scorer_priors(
+            degraded_reason="stack-priors roles section is not a mapping"
         )
 
     for role, record in roles.items():
@@ -255,18 +293,24 @@ def stack_prior_q_scorer_priors_by_role(
         if tps is not None:
             for target_role in target_roles:
                 tps_by_role[target_role] = tps
+                tps_sources[target_role] = PRIOR_SOURCE_STACK_PRIORS
         quality = _valid_quality(priors.get("quality_overall"))
         if quality is not None:
             quality_by_role[role] = quality
+            quality_sources[role] = PRIOR_SOURCE_STACK_PRIORS
         memory_cost = priors.get("memory_cost")
         if isinstance(memory_cost, (int, float)) and float(memory_cost) > 0:
             for target_role in target_roles:
                 memory_by_role[target_role] = float(memory_cost)
+                memory_sources[target_role] = PRIOR_SOURCE_STACK_PRIORS
 
     return QScorerPriors(
         baseline_tps_by_role=tps_by_role,
         baseline_quality_by_role=quality_by_role,
         memory_cost_by_role=memory_by_role,
+        baseline_tps_source_by_role=tps_sources,
+        baseline_quality_source_by_role=quality_sources,
+        memory_cost_source_by_role=memory_sources,
     )
 
 
@@ -294,6 +338,11 @@ def descriptor_q_scorer_priors_by_role(
     tps_by_role = registry_baseline_tps_by_role(registry_path)
     quality_by_role = dict(BASELINE_QUALITY_BY_ROLE)
     memory_by_role = registry_memory_cost_by_role(registry_path)
+    tps_sources = {role: PRIOR_SOURCE_REGISTRY for role in tps_by_role}
+    quality_sources = {
+        role: PRIOR_SOURCE_DEGRADED_FALLBACK for role in quality_by_role
+    }
+    memory_sources = {role: PRIOR_SOURCE_REGISTRY for role in memory_by_role}
 
     known_tps_roles = set(tps_by_role)
     known_quality_roles = set(quality_by_role)
@@ -315,13 +364,18 @@ def descriptor_q_scorer_priors_by_role(
                 continue
             if tps is not None and role in known_tps_roles:
                 tps_by_role[role] = tps
+                tps_sources[role] = PRIOR_SOURCE_MODEL_DESCRIPTORS
             if quality is not None and role in known_quality_roles:
                 quality_by_role[role] = quality
+                quality_sources[role] = PRIOR_SOURCE_MODEL_DESCRIPTORS
 
     return QScorerPriors(
         baseline_tps_by_role=tps_by_role,
         baseline_quality_by_role=quality_by_role,
         memory_cost_by_role=memory_by_role,
+        baseline_tps_source_by_role=tps_sources,
+        baseline_quality_source_by_role=quality_sources,
+        memory_cost_source_by_role=memory_sources,
     )
 
 
@@ -470,6 +524,9 @@ class ScoringConfig:
     baseline_tps_by_role: Dict[str, float] = field(
         default_factory=lambda: descriptor_q_scorer_priors_by_role().baseline_tps_by_role
     )
+    baseline_tps_source_by_role: Dict[str, str] = field(
+        default_factory=lambda: descriptor_q_scorer_priors_by_role().baseline_tps_source_by_role
+    )
 
     # Per-role quality baselines from generated stack priors, with legacy
     # benchmark fallbacks for roles whose structured quality prior is still a gap.
@@ -477,11 +534,20 @@ class ScoringConfig:
     baseline_quality_by_role: Dict[str, float] = field(
         default_factory=lambda: descriptor_q_scorer_priors_by_role().baseline_quality_by_role
     )
+    baseline_quality_source_by_role: Dict[str, str] = field(
+        default_factory=lambda: descriptor_q_scorer_priors_by_role().baseline_quality_source_by_role
+    )
 
     # Per-role memory residency cost. HOT roles normalize to 1.0 and incur no
     # warm-tier penalty; non-HOT roles load from the registry when present.
     memory_cost_by_role: Dict[str, float] = field(
         default_factory=lambda: descriptor_q_scorer_priors_by_role().memory_cost_by_role
+    )
+    memory_cost_source_by_role: Dict[str, str] = field(
+        default_factory=lambda: descriptor_q_scorer_priors_by_role().memory_cost_source_by_role
+    )
+    prior_degraded_reason: Optional[str] = field(
+        default_factory=lambda: descriptor_q_scorer_priors_by_role().degraded_reason
     )
 
     # Multi-dimensional cost weights (tunable).

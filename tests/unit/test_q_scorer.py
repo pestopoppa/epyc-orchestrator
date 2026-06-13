@@ -40,6 +40,8 @@ from orchestration.repl_memory.q_scorer import (
     DEFAULT_STACK_PRIORS_PATH,
     FALLBACK_BASELINE_TPS_BY_ROLE,
     FALLBACK_MEMORY_COST_BY_ROLE,
+    PRIOR_SOURCE_DEGRADED_FALLBACK,
+    PRIOR_SOURCE_STACK_PRIORS,
     ScoringConfig,
     QScorer,
     descriptor_q_scorer_priors_by_role,
@@ -181,6 +183,13 @@ class TestScoringConfigDefaults:
         assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(27.6)
         assert "architect_coding" not in cfg.baseline_tps_by_role
 
+    def test_default_config_exposes_stack_prior_sources(self):
+        cfg = ScoringConfig()
+
+        assert cfg.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert cfg.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert cfg.prior_degraded_reason is None
+
     def test_stack_prior_priors_load_live_roles_and_skip_candidates(self, tmp_path):
         priors_path = _write_stack_priors(
             tmp_path / "stack_priors.yaml",
@@ -213,9 +222,36 @@ class TestScoringConfigDefaults:
         assert priors.baseline_tps_by_role["coder_escalation"] == pytest.approx(31.0)
         assert priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.91)
         assert priors.memory_cost_by_role["frontdoor"] == pytest.approx(1.0)
+        assert priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert priors.baseline_quality_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert priors.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert priors.degraded_reason is None
         assert "candidate_arch" not in priors.baseline_tps_by_role
         retired_role = "architect" + "_coding"
         assert retired_role not in priors.baseline_tps_by_role
+
+    def test_stack_prior_priors_keep_missing_live_fields_visible_as_fallback(self, tmp_path):
+        priors_path = _write_stack_priors(
+            tmp_path / "stack_priors.yaml",
+            {
+                "frontdoor": _minimal_stack_prior_record(
+                    "frontdoor",
+                    throughput_tps=None,
+                    quality_overall=0.91,
+                    memory_cost=1.0,
+                ),
+            },
+        )
+
+        priors = stack_prior_q_scorer_priors_by_role(priors_path)
+
+        assert priors.baseline_tps_by_role["frontdoor"] == pytest.approx(
+            FALLBACK_BASELINE_TPS_BY_ROLE["frontdoor"]
+        )
+        assert priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_DEGRADED_FALLBACK
+        assert priors.baseline_quality_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert priors.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
+        assert priors.uses_degraded_fallback is True
 
     def test_stack_prior_priors_fall_back_when_artifact_missing(self, tmp_path):
         missing = tmp_path / "missing_stack_priors.yaml"
@@ -224,6 +260,9 @@ class TestScoringConfigDefaults:
 
         assert priors.baseline_tps_by_role == FALLBACK_BASELINE_TPS_BY_ROLE
         assert priors.memory_cost_by_role == FALLBACK_MEMORY_COST_BY_ROLE
+        assert priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_DEGRADED_FALLBACK
+        assert priors.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_DEGRADED_FALLBACK
+        assert priors.degraded_reason is not None
 
     def test_default_stack_priors_path_exists(self):
         assert DEFAULT_STACK_PRIORS_PATH.exists()
