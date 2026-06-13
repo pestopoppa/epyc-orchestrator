@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T20:34:55Z'
+compiled_at: '2026-06-13T20:40:14Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 4dc4430193703945ed3df9ec5fdbc5d53f817dfee535dfb2650f271bd22a3c45
-    repo_commit: b8477b0
+    sha256: 4b83920a5769389262fabfafb4f67f8422cdaeaa5f90bf926905d4a356bd9474
+    repo_commit: 2ea28dd
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 28baf10479c5e23d805004c2604ec098fa4afa04455084b8d9095c7d20d68ddf
-    repo_commit: b8477b0
+    sha256: 5954c7fad1de2e26c5478703a68e3fb28c7bd16f6a741993816a501bf5aa429b
+    repo_commit: 2ea28dd
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: e3f80ad39be0bf0d1ced00105d83f5204849b7bfac0acdff423ed9d21573a2f6
-    repo_commit: b8477b0
+    repo_commit: 2ea28dd
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: b8477b0
+    repo_commit: 2ea28dd
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 871b106644c89528419ef3521f190550f194c9d14fd83d3277208a960ea9d828
-    repo_commit: b8477b0
+    repo_commit: 2ea28dd
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: a13a6f5b6cf6ec4f37be1a42083128f38cfba023dbfc45508149572741325648
-    repo_commit: b8477b0
+    repo_commit: 2ea28dd
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: b8477b0
+    repo_commit: 2ea28dd
 roles:
   architect_general:
     role: architect_general
@@ -152,6 +152,9 @@ roles:
       draft_compat:
       - draft_qwen35_0_8b_q8_0
       enable_thinking: false
+      thinking_control:
+        mode: toggle_off
+        source: chat_template_kwargs.enable_thinking
       kv:
         k: null
         v: null
@@ -269,6 +272,9 @@ roles:
       spec_type: none
       draft_compat: []
       enable_thinking: false
+      thinking_control:
+        mode: toggle_off
+        source: model.disable_thinking
       kv:
         k: q8_0
         v: q8_0
@@ -408,6 +414,9 @@ roles:
       spec_type: none
       draft_compat: []
       enable_thinking: false
+      thinking_control:
+        mode: toggle_off
+        source: model.disable_thinking
       kv:
         k: q8_0
         v: q8_0
@@ -457,7 +466,7 @@ roles:
   ingest_long_context:
     role: ingest_long_context
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3-next-80b-a3b-q4_k_m
     display_name: Qwen3-Next-80B-A3B-Instruct
     serving:
@@ -548,6 +557,11 @@ roles:
       spec_type: moe_expert_reduction
       draft_compat: []
       enable_thinking: null
+      thinking_control:
+        mode: template_ignores_enable_thinking
+        effective_mode: native
+        evidence_strength: direct_registry_note
+        evidence: Current Qwen3-Next GGUF template ignores chat_template_kwargs.enable_thinking; preserve native behavior.
       kv:
         k: null
         v: null
@@ -577,8 +591,7 @@ roles:
       - date: null
         protocol: server_mode throughput
         value_tps: 14.4
-    known_gaps:
-    - Missing enable_thinking compatibility evidence
+    known_gaps: []
   qwen35_122b_q4km:
     role: qwen35_122b_q4km
     deployment_status: benchmark_or_candidate
@@ -613,6 +626,9 @@ roles:
       draft_compat:
       - draft_qwen35_0_8b_q8_0
       enable_thinking: false
+      thinking_control:
+        mode: toggle_off
+        source: chat_template_kwargs.enable_thinking
       kv:
         k: null
         v: null
@@ -664,7 +680,7 @@ roles:
   reap_25b_frontdoor:
     role: reap_25b_frontdoor
     deployment_status: benchmark_or_candidate
-    status: compiled_with_gaps
+    status: compiled
     model_id: reap-qwen3-coder-25b-a3b-q4_k_m
     display_name: REAP-Qwen3-Coder-25B-A3B-Q4_K_M
     serving:
@@ -695,6 +711,11 @@ roles:
       draft_compat:
       - qwen3-coder-0.75b-q4_0
       enable_thinking: null
+      thinking_control:
+        mode: family_inferred_no_think_tags
+        effective_mode: native_no_think_tags
+        evidence_strength: family_inferred
+        evidence: REAP-25B is pruned from Qwen3-Coder-30B-A3B; research registry notes Qwen3-Coder does not use think tags.
       kv:
         k: null
         v: null
@@ -737,8 +758,7 @@ roles:
       - date: '2026-03-24'
         protocol: server_mode throughput
         value_tps: 39.6
-    known_gaps:
-    - Missing enable_thinking compatibility evidence
+    known_gaps: []
   toolrunner:
     role: toolrunner
     deployment_status: live_stack
@@ -822,6 +842,9 @@ roles:
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
+      thinking_control:
+        mode: reasoning_off
+        source: reasoning
       kv:
         k: null
         v: null
@@ -878,7 +901,7 @@ roles:
   vision_escalation:
     role: vision_escalation
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3-vl-30b-a3b-q4_k_m
     display_name: Qwen3-VL-30B-A3B-Instruct
     serving:
@@ -976,6 +999,11 @@ roles:
       spec_type: moe_expert_reduction
       draft_compat: []
       enable_thinking: null
+      thinking_control:
+        mode: native_no_thinking_toggle
+        effective_mode: native_no_think_tags
+        evidence_strength: model_family_inferred
+        evidence: Qwen3-VL-30B-A3B-Instruct is tracked separately from Qwen3-VL thinking models; no role toggle is declared.
       kv:
         k: null
         v: null
@@ -1010,8 +1038,7 @@ roles:
         protocol: registry performance block
         baseline_tps: 19.0
         optimized_tps: 27.6
-    known_gaps:
-    - Missing enable_thinking compatibility evidence
+    known_gaps: []
   worker_general:
     role: worker_general
     deployment_status: live_stack
@@ -1116,6 +1143,9 @@ roles:
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
+      thinking_control:
+        mode: reasoning_off
+        source: reasoning
       kv:
         k: null
         v: null
@@ -1252,6 +1282,9 @@ roles:
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
+      thinking_control:
+        mode: reasoning_off
+        source: reasoning
       kv:
         k: null
         v: null
@@ -1374,6 +1407,9 @@ roles:
       spec_type: none
       draft_compat: []
       enable_thinking: false
+      thinking_control:
+        mode: toggle_off
+        source: model.disable_thinking
       kv:
         k: q8_0
         v: q8_0
@@ -1423,7 +1459,7 @@ roles:
   worker_vision:
     role: worker_vision
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen2.5-vl-7b-q4_k_m
     display_name: Qwen2.5-VL-7B-Instruct
     serving:
@@ -1491,6 +1527,11 @@ roles:
       spec_type: baseline
       draft_compat: []
       enable_thinking: null
+      thinking_control:
+        mode: native_no_thinking_toggle
+        effective_mode: native_no_think_tags
+        evidence_strength: model_family_inferred
+        evidence: Qwen2.5-VL Instruct predates Qwen3 thinking controls; multimodal role has no chat-template thinking toggle.
       kv:
         k: null
         v: null
@@ -1525,23 +1566,14 @@ roles:
         protocol: registry performance block
         baseline_tps: 15.28
         optimized_tps: 20.0
-    known_gaps:
-    - Missing enable_thinking compatibility evidence
+    known_gaps: []
 known_global_gaps:
-  ingest_long_context:
-  - Missing enable_thinking compatibility evidence
-  reap_25b_frontdoor:
-  - Missing enable_thinking compatibility evidence
   toolrunner:
   - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
   - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
-  vision_escalation:
-  - Missing enable_thinking compatibility evidence
   worker_general:
   - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
   - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   worker_math:
   - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
   - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
-  worker_vision:
-  - Missing enable_thinking compatibility evidence

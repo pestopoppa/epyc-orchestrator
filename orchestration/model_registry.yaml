@@ -535,6 +535,11 @@ server_mode:
     # budgets, but should be treated as directional rather than a clean
     # thinking-off ablation. Trade-off: per-task wall time can stay high
     # (~50-150s), so route only accuracy-critical or genuinely long-context work.
+    thinking_control:
+      mode: template_ignores_enable_thinking
+      effective_mode: native
+      evidence_strength: direct_registry_note
+      evidence: "Current Qwen3-Next GGUF template ignores chat_template_kwargs.enable_thinking; preserve native behavior."
     description: Accuracy-critical + long-context router specialist - SSM+MoE hybrid linear attention (NO speculation!)
     # Phase 3 compliance gate (2026-05-07): medium passes; aggressive fails procedure (89% baseline).
     # Compliance pinned at 0.933 across all 4 levels, recall 0.93-1.00. Source:
@@ -2241,6 +2246,11 @@ roles:
       size_gb: 4.4
       architecture: dense
       ctx_max: 128000  # GGUF metadata: qwen2vl.context_length
+    thinking_control:
+      mode: native_no_thinking_toggle
+      effective_mode: native_no_think_tags
+      evidence_strength: model_family_inferred
+      evidence: "Qwen2.5-VL Instruct predates Qwen3 thinking controls; multimodal role has no chat-template thinking toggle."
     candidate_roles:
     - vision
     - agentic_vision  # Only model that supports tool calls
@@ -2280,6 +2290,11 @@ roles:
       size_gb: 18.0
       architecture: qwen3vlmoe
       ctx_max: 262144  # GGUF metadata: qwen3vlmoe.context_length
+    thinking_control:
+      mode: native_no_thinking_toggle
+      effective_mode: native_no_think_tags
+      evidence_strength: model_family_inferred
+      evidence: "Qwen3-VL-30B-A3B-Instruct is tracked separately from Qwen3-VL thinking models; no role toggle is declared."
     candidate_roles:
     - vision
     acceleration:
@@ -2411,6 +2426,11 @@ roles:
       size_gb: 15
       architecture: moe
       ctx_max: 262144  # GGUF metadata: qwen3moe.context_length
+    thinking_control:
+      mode: family_inferred_no_think_tags
+      effective_mode: native_no_think_tags
+      evidence_strength: family_inferred
+      evidence: "REAP-25B is pruned from Qwen3-Coder-30B-A3B; research registry notes Qwen3-Coder does not use think tags."
     candidate_roles:
     - frontdoor
     - coder

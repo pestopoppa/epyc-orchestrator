@@ -383,20 +383,53 @@ def _acceleration(
             draft_compat.append(_canonical_slug(str(value)))
 
     enable_thinking = None
+    thinking_control = None
+    for source in _enrichment_sources(role_cfg, server_cfg, enrichment_records):
+        for candidate in (source.get("model") if isinstance(source, dict) else None, source):
+            if not isinstance(candidate, dict):
+                continue
+            raw_control = candidate.get("thinking_control")
+            if isinstance(raw_control, str):
+                thinking_control = {"mode": raw_control}
+                break
+            if isinstance(raw_control, dict) and raw_control.get("mode"):
+                thinking_control = {
+                    str(key): _coerce_scalar(value) for key, value in raw_control.items()
+                }
+                break
+        if thinking_control:
+            break
+
     for source in _enrichment_sources(role_cfg, server_cfg, enrichment_records):
         chat_kwargs = source.get("chat_template_kwargs") if isinstance(source, dict) else None
         if isinstance(chat_kwargs, dict) and "enable_thinking" in chat_kwargs:
             enable_thinking = bool(chat_kwargs["enable_thinking"])
+            thinking_control = {
+                "mode": "toggle_on" if enable_thinking else "toggle_off",
+                "source": "chat_template_kwargs.enable_thinking",
+            }
             break
         model = source.get("model") if isinstance(source, dict) else None
         if isinstance(model, dict) and model.get("disable_thinking") is True:
             enable_thinking = False
+            thinking_control = {
+                "mode": "toggle_off",
+                "source": "model.disable_thinking",
+            }
             break
         if source.get("disable_thinking") is True:
             enable_thinking = False
+            thinking_control = {
+                "mode": "toggle_off",
+                "source": "disable_thinking",
+            }
             break
         if source.get("reasoning") == "off":
             enable_thinking = False
+            thinking_control = {
+                "mode": "reasoning_off",
+                "source": "reasoning",
+            }
             break
 
     kv = server_cfg.get("kv_quant") if isinstance(server_cfg, dict) else None
@@ -407,6 +440,7 @@ def _acceleration(
         "spec_type": spec_type,
         "draft_compat": sorted(set(draft_compat)),
         "enable_thinking": enable_thinking,
+        "thinking_control": thinking_control,
         "kv": kv,
     }
     for key in ("draft_max", "draft_p_min", "k", "p_split", "lookup", "corpus_retrieval"):
@@ -608,7 +642,9 @@ def _descriptor_gaps(descriptor: dict[str, Any]) -> list[str]:
     if descriptor["serving"]["numa_policy"] == "unresolved_no_server_binding":
         gaps.append("Missing server_mode binding")
     if descriptor["acceleration"]["enable_thinking"] is None:
-        gaps.append("Missing enable_thinking compatibility evidence")
+        thinking_control = descriptor["acceleration"].get("thinking_control")
+        if not isinstance(thinking_control, dict) or not thinking_control.get("mode"):
+            gaps.append("Missing enable_thinking compatibility evidence")
     if descriptor["ctx_max"] is None:
         gaps.append("Missing structured ctx_max")
     return gaps

@@ -68,7 +68,13 @@ def test_every_model_has_consumer_ready_sections() -> None:
     }
     required_quality_fields = {"suite_vector", "source", "eval_protocol", "measured"}
     required_speed_fields = {"solo_96t_tps", "quarter_48t_tps", "prefill_tps", "source"}
-    required_accel_fields = {"spec_type", "draft_compat", "enable_thinking", "kv"}
+    required_accel_fields = {
+        "spec_type",
+        "draft_compat",
+        "enable_thinking",
+        "thinking_control",
+        "kv",
+    }
     required_serving_fields = {"binary", "numa_policy", "mlock", "ports"}
 
     for model in descriptors["models"]:

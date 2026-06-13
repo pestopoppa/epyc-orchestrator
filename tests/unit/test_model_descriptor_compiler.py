@@ -177,6 +177,64 @@ def test_compile_projects_quality_score_as_overall_quality(tmp_path: Path) -> No
     assert compiled["status"] == "compiled"
 
 
+def test_compile_accepts_structured_thinking_control_evidence(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {
+                "ingest_long_context": {
+                    "port": 8085,
+                    "model": "Qwen3-Next-80B-A3B-Q4_K_M.gguf",
+                    "model_role": "ingest_long_context",
+                    "memory_gb": 45,
+                    "throughput": 14.4,
+                    "thinking_control": {
+                        "mode": "template_ignores_enable_thinking",
+                        "effective_mode": "native",
+                        "evidence": "registry note: current GGUF template ignores enable_thinking",
+                    },
+                }
+            },
+            "roles": {
+                "ingest_long_context": {
+                    "model": {
+                        "name": "Qwen3-Next-80B-A3B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "ssm_moe_hybrid",
+                        "size_gb": 45,
+                        "ctx_max": 262144,
+                    },
+                    "performance": {
+                        "long_context_quality": "25/27 (93%)",
+                        "baseline_tps": 10.12,
+                    },
+                    "acceleration": {
+                        "type": "moe_expert_reduction",
+                        "experts": 4,
+                    },
+                    "memory": {"residency": "hot", "pinned": True},
+                }
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"ingest_long_context"},
+    )
+
+    model = compiled["models"][0]
+    assert model["acceleration"]["enable_thinking"] is None
+    assert model["acceleration"]["thinking_control"] == {
+        "mode": "template_ignores_enable_thinking",
+        "effective_mode": "native",
+        "evidence": "registry note: current GGUF template ignores enable_thinking",
+    }
+    assert "Missing enable_thinking compatibility evidence" not in model["known_gaps"]
+    assert compiled["status"] == "compiled"
+
+
 def test_compile_merges_shared_alias_mismatch_into_runtime_model(tmp_path: Path) -> None:
     registry_path = _write_yaml(
         tmp_path / "model_registry.yaml",
