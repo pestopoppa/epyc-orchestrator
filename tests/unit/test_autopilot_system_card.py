@@ -80,6 +80,24 @@ roles:
     acceleration:
       spec_type: draft
       draft_max: 2
+  worker_vision:
+    role: worker_vision
+    deployment_status: live_stack
+    status: compiled
+    display_name: vision-prior.gguf
+    serving:
+      ports: [8086]
+      endpoint: http://localhost:8086
+      tier: hot
+      binding: stack_manifest.role
+      launch:
+        requirements:
+          model_path: /models/vision-prior.gguf
+          mmproj_path: /models/mmproj-model-f16.gguf
+    priors:
+      throughput_tps: 20.0
+    acceleration:
+      spec_type: baseline
   candidate_only:
     role: candidate_only
     deployment_status: benchmark_or_candidate
@@ -121,6 +139,8 @@ def test_system_card_uses_stack_priors_not_registry_or_removed_role(tmp_path: Pa
     assert "Source: orchestration/derived/stack_priors.yaml" in card
     assert "| frontdoor | 8070, 8080 | frontdoor-prior.gguf |" in card
     assert "| worker_general | 8072 | worker-prior.gguf |" in card
+    assert "| worker_vision | 8086 | vision-prior.gguf |" in card
+    assert "mmproj=mmproj-model-f16.gguf" in card
     assert "worker.gguf" not in card
     assert "candidate.gguf" not in card
     assert f"| {LEGACY_ARCHITECT_ROLE} |" not in card

@@ -107,6 +107,19 @@ def _format_acceleration(config: Any) -> str:
     return accel_type if not details else f"{accel_type} ({', '.join(details)})"
 
 
+def _format_launch_requirements(requirements: Any) -> str:
+    if not isinstance(requirements, dict):
+        return "none"
+    parts: list[str] = []
+    mmproj_path = requirements.get("mmproj_path")
+    if mmproj_path:
+        parts.append(f"mmproj={Path(str(mmproj_path)).name}")
+    draft_path = requirements.get("draft_model_path")
+    if draft_path:
+        parts.append(f"draft={Path(str(draft_path)).name}")
+    return ", ".join(parts) if parts else "none"
+
+
 def _stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
     roles = stack_priors.get("roles")
     if not isinstance(roles, dict):
@@ -126,6 +139,7 @@ def _stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
                 port_values.append(endpoint_port)
         if not port_values:
             continue
+        launch = serving.get("launch") if isinstance(serving.get("launch"), dict) else {}
         description = (
             f"{_clean(record.get('deployment_status'), 32)}; "
             f"binding={_clean(serving.get('binding'), 48)}; "
@@ -140,6 +154,7 @@ def _stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
                     _clean(record.get("display_name") or record.get("model_id") or "unknown", 44),
                     _clean(serving.get("tier") or "n/a", 12),
                     _clean(_format_acceleration(record.get("acceleration")), 48),
+                    _clean(_format_launch_requirements(launch.get("requirements")), 48),
                     _clean(_format_number(priors.get("throughput_tps")), 18),
                     _clean(description, 96),
                 ]
@@ -200,6 +215,7 @@ def _registry_role_rows(registry: dict[str, Any]) -> list[str]:
                     _clean(model, 44),
                     _clean(tier, 12),
                     _clean(accel, 48),
+                    "none",
                     _clean(throughput, 18),
                     _clean(description, 96),
                 ]
@@ -364,8 +380,8 @@ def generate_system_card(
     if role_rows:
         lines.extend(
             [
-                "| Role | Port | Model | Tier | Acceleration | Throughput | Description |",
-                "|---|---:|---|---|---|---:|---|",
+                "| Role | Port | Model | Tier | Acceleration | Requirements | Throughput | Description |",
+                "|---|---:|---|---|---|---|---:|---|",
                 *role_rows,
             ]
         )
