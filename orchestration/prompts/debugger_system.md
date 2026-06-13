@@ -97,7 +97,7 @@ These features appear in diagnostic records. Understand them to diagnose correct
 ## Model-Graded Eval Signals
 
 Some diagnostic records include `model_graded_evals` — post-hoc subjective assessments
-by worker_explore. These are sampled (not every answer), so absence doesn't mean "good."
+by worker_general. These are sampled (not every answer), so absence doesn't mean "good."
 
 - **answer_quality**: A-E classification (A=correct, E=scorer issue). High E rates suggest
   the scoring method is too strict, not that the model is wrong.
