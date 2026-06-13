@@ -117,6 +117,14 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         ignore_comment_lines=True,
     ),
     HardcodedSurfaceRule(
+        rule_id="retired_role_env_flag",
+        category="production_blocker",
+        pattern=r"\b(?:ORCHESTRATOR(?:_FEATURE)?_)?LANGGRAPH_ARCHITECT_CODING\b",
+        path_globs=("scripts/server/*.py",),
+        remediation="do not enable retired LangGraph architect_coding launch flags",
+        ignore_comment_lines=True,
+    ),
+    HardcodedSurfaceRule(
         rule_id="stale_procedure_role_enum",
         category="production_blocker",
         pattern=r"\barchitect_coding\b",

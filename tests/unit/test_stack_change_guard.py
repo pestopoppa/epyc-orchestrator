@@ -185,6 +185,24 @@ def test_scan_hardcoded_surfaces_classifies_curated_surfaces(tmp_path: Path) -> 
     assert any(finding.path.as_posix() == "scripts/benchmark/seeding_types.py" for finding in findings)
 
 
+def test_scan_hardcoded_surfaces_flags_retired_launch_env_var(tmp_path: Path) -> None:
+    server = tmp_path / "scripts" / "server"
+    server.mkdir(parents=True)
+    (server / "orchestrator_stack.py").write_text(
+        'env["ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"] = "1"\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "retired_role_env_flag"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/server/orchestrator_stack.py"
+        for finding in findings
+    )
+
+
 def test_validate_stack_priors_can_include_surface_warnings(tmp_path: Path) -> None:
     registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
     descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
