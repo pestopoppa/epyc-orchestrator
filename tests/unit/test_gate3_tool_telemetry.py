@@ -14,6 +14,8 @@ if str(_AP) not in sys.path:
     sys.path.insert(0, str(_AP))
 
 from gate3_tool_telemetry import (  # noqa: E402
+    _gate_request_timeout,
+    _gate_skip_soft,
     check_get_eval_secret_contract,
     check_isolation,
     classify_web_research,
@@ -87,3 +89,31 @@ def test_web_research_not_routed_is_inconclusive():
 def test_web_research_request_error_is_infra():
     status, _ = classify_web_research({"error": "500 Server Error"})
     assert status == "INFRA_FAIL"
+
+
+def test_gate_request_timeout_defaults_and_clamps(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_GATE3_REQUEST_TIMEOUT_S", raising=False)
+    assert _gate_request_timeout(270) == 270
+
+    monkeypatch.setenv("AUTOPILOT_GATE3_REQUEST_TIMEOUT_S", "120")
+    assert _gate_request_timeout(270) == 120
+
+    monkeypatch.setenv("AUTOPILOT_GATE3_REQUEST_TIMEOUT_S", "999")
+    assert _gate_request_timeout(270) == 270
+
+    monkeypatch.setenv("AUTOPILOT_GATE3_REQUEST_TIMEOUT_S", "bad")
+    assert _gate_request_timeout(270) == 270
+
+
+def test_gate_skip_soft_parses_truthy_values(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_GATE3_SKIP_SOFT", raising=False)
+    assert _gate_skip_soft() is False
+
+    monkeypatch.setenv("AUTOPILOT_GATE3_SKIP_SOFT", "1")
+    assert _gate_skip_soft() is True
+
+    monkeypatch.setenv("AUTOPILOT_GATE3_SKIP_SOFT", "yes")
+    assert _gate_skip_soft() is True
+
+    monkeypatch.setenv("AUTOPILOT_GATE3_SKIP_SOFT", "false")
+    assert _gate_skip_soft() is False

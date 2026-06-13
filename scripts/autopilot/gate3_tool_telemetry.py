@@ -37,6 +37,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 _ORCH_ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +47,34 @@ sys.path.insert(0, str(_ORCH_ROOT / "scripts" / "autopilot"))
 
 ORCHESTRATOR_URL = "http://localhost:8000"
 _MIN_GET_EVAL_SECRET = 3
+
+
+def _gate_request_timeout(default_timeout: int) -> int:
+    """Per-request live gate timeout.
+
+    Defaults to the EvalTower timeout to preserve deployed behavior, while letting
+    launch operators bound diagnostics with AUTOPILOT_GATE3_REQUEST_TIMEOUT_S.
+    """
+    raw = os.environ.get("AUTOPILOT_GATE3_REQUEST_TIMEOUT_S")
+    if not raw:
+        return default_timeout
+    try:
+        return max(1, min(default_timeout, int(raw)))
+    except (TypeError, ValueError):
+        return default_timeout
+
+
+def _gate_skip_soft() -> bool:
+    return os.environ.get("AUTOPILOT_GATE3_SKIP_SOFT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _print(line: str = "") -> None:
+    print(line, flush=True)
 
 
 # ── pure telemetry-contract helpers (unit-tested, no inference) ──────────────
@@ -186,26 +215,56 @@ def _run_live() -> int:
     from seeding_orchestrator import call_orchestrator_forced
     import httpx
 
-    print("=== gate-3: tool-telemetry contract (separate from model-quality) ===")
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
+    _print("=== gate-3: tool-telemetry contract (separate from model-quality) ===")
     env_ok, env_lines = check_env()
     for ln in env_lines:
-        print(" ", ln)
+        _print(" " + ln)
 
     tower = EvalTower()
+    request_timeout = _gate_request_timeout(tower.timeout)
+    skip_soft = _gate_skip_soft()
+    _print(f"  gate request timeout: {request_timeout}s (EvalTower default={tower.timeout}s)")
+    _print(f"  soft web_research probe: {'SKIP' if skip_soft else 'RUN'}")
     sentinels = tower._load_tool_sentinels()
     if not sentinels:
-        print("FATAL: no tool sentinels loaded (AUTOPILOT_TOOL_SENTINELS unset or file missing)")
+        _print("FATAL: no tool sentinels loaded (AUTOPILOT_TOOL_SENTINELS unset or file missing)")
         return 2
 
+    def _call(label: str, prompt: str, force_mode: str) -> dict:
+        _print(f"  -> {label}: start force_mode={force_mode!r}")
+        start = time.monotonic()
+        resp = call_orchestrator_forced(
+            prompt=prompt,
+            force_role="",
+            force_mode=force_mode,
+            url=ORCHESTRATOR_URL,
+            timeout=request_timeout,
+            client=client,
+        )
+        elapsed = time.monotonic() - start
+        if resp.get("error"):
+            _print(f"  <- {label}: {elapsed:.1f}s ERROR={resp.get('error')}")
+        else:
+            _print(
+                f"  <- {label}: {elapsed:.1f}s "
+                f"tools_called={resp.get('tools_called')} used={resp.get('tools_used')}"
+            )
+        return resp
+
     responses: list[dict] = []
-    with httpx.Client(timeout=tower.timeout) as client:
+    with httpx.Client(timeout=request_timeout) as client:
         for q in sentinels:
-            resp = call_orchestrator_forced(
-                prompt=q["prompt"], force_role="", force_mode=q.get("force_mode", "repl"),
-                url=ORCHESTRATOR_URL, timeout=tower.timeout, client=client,
+            resp = _call(
+                label=q["id"],
+                prompt=q["prompt"],
+                force_mode=q.get("force_mode", "repl"),
             )
             responses.append(resp)
-            print(f"  {q['id']}: tools_called={resp.get('tools_called')} used={resp.get('tools_used')}")
 
         # Isolation: a no-tool request AFTER the batch (shared registry is warm).
         # force_mode="repl" is REQUIRED — the cross-request pollution bug lived in
@@ -213,31 +272,39 @@ def _run_live() -> int:
         # could route to a non-REPL mode and false-pass). Forcing the mode also
         # disables cheap-first (via request.force_mode), guaranteeing the request
         # reaches the REPL executor where _invoked_tools is read.
-        iso_resp = call_orchestrator_forced(
+        iso_resp = _call(
+            label="isolation_no_tool",
             prompt="Reply with only the number 4. Do not use any tools.",
-            force_role="", force_mode="repl", url=ORCHESTRATOR_URL, timeout=tower.timeout, client=client,
+            force_mode="repl",
         )
 
-        # Soft structured-output probe (web_research; infra-bucketed).
-        wr_resp = call_orchestrator_forced(
-            prompt="Use the web_research tool to look up a current fact, then summarize it briefly.",
-            force_role="", force_mode="repl", url=ORCHESTRATOR_URL, timeout=tower.timeout, client=client,
-        )
+        if skip_soft:
+            wr_resp = {"skipped": True}
+        else:
+            # Soft structured-output probe (web_research; infra-bucketed).
+            wr_resp = _call(
+                label="soft_web_research",
+                prompt="Use the web_research tool to look up a current fact, then summarize it briefly.",
+                force_mode="repl",
+            )
 
     ges_ok, ges_lines = check_get_eval_secret_contract(responses)
     iso_ok, iso_lines = check_isolation(iso_resp)
-    wr_status, wr_lines = classify_web_research(wr_resp)
+    if wr_resp.get("skipped"):
+        wr_status, wr_lines = "SKIPPED", ["AUTOPILOT_GATE3_SKIP_SOFT enabled"]
+    else:
+        wr_status, wr_lines = classify_web_research(wr_resp)
 
-    print("\n--- HARD telemetry contract ---")
+    _print("\n--- HARD telemetry contract ---")
     for ln in env_lines + ges_lines + iso_lines:
-        print(" ", ln)
-    print(f"  tool_name_counts={tool_name_counts(responses)}")
+        _print(" " + ln)
+    _print(f"  tool_name_counts={tool_name_counts(responses)}")
 
-    print("\n--- SOFT structured-output probe (web_research; non-fatal) ---")
-    print(f"  [{wr_status}] " + "; ".join(wr_lines))
+    _print("\n--- SOFT structured-output probe (web_research; non-fatal) ---")
+    _print(f"  [{wr_status}] " + "; ".join(wr_lines))
 
     hard_ok = env_ok and ges_ok and iso_ok
-    print(f"\nGATE3_HARD: {'PASS' if hard_ok else 'FAIL'}   WEB_RESEARCH: {wr_status}")
+    _print(f"\nGATE3_HARD: {'PASS' if hard_ok else 'FAIL'}   WEB_RESEARCH: {wr_status}")
     return 0 if hard_ok else 1
 
 
