@@ -38,6 +38,8 @@ from src.registry.stack_priors import (  # noqa: E402
 )
 
 Mode = Literal["check", "update"]
+DESCRIPTOR_DIFF_LIMIT = 12
+MODEL_FIELD_DIFF_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,86 @@ def _descriptor_model_ids(descriptors: dict[str, Any]) -> set[str]:
     }
 
 
+def _descriptor_models_by_id(descriptors: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    models = descriptors.get("models")
+    if not isinstance(models, list):
+        return {}
+    by_id: dict[str, dict[str, Any]] = {}
+    for model in models:
+        if not isinstance(model, dict) or not isinstance(model.get("model_id"), str):
+            continue
+        by_id[str(model["model_id"])] = model
+    return by_id
+
+
+def _format_limited(values: list[str], *, limit: int = DESCRIPTOR_DIFF_LIMIT) -> str:
+    shown = values[:limit]
+    suffix = f" (+{len(values) - limit} more)" if len(values) > limit else ""
+    return ", ".join(shown) + suffix
+
+
+def _diff_paths(current: Any, expected: Any, *, prefix: str = "") -> list[str]:
+    if current == expected:
+        return []
+    if isinstance(current, dict) and isinstance(expected, dict):
+        paths: list[str] = []
+        for key in sorted(set(current) | set(expected), key=str):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key not in current:
+                paths.append(f"{path} added")
+            elif key not in expected:
+                paths.append(f"{path} removed")
+            else:
+                paths.extend(_diff_paths(current[key], expected[key], prefix=path))
+        return paths
+    if isinstance(current, list) and isinstance(expected, list):
+        if len(current) != len(expected):
+            return [f"{prefix} length {len(current)} -> {len(expected)}"]
+        return [prefix or "<root>"]
+    return [prefix or "<root>"]
+
+
+def _descriptor_drift_details(path: Path, generated: dict[str, Any]) -> list[str]:
+    if not path.exists():
+        return []
+
+    current = _normalise_generated(_load_yaml(path))
+    expected = _normalise_generated(generated)
+    current_models = _descriptor_models_by_id(current)
+    expected_models = _descriptor_models_by_id(expected)
+    current_ids = set(current_models)
+    expected_ids = set(expected_models)
+
+    details: list[str] = []
+    added = sorted(expected_ids - current_ids)
+    removed = sorted(current_ids - expected_ids)
+    if added:
+        details.append(f"descriptor generated adds model_id(s): {_format_limited(added)}")
+    if removed:
+        details.append(f"descriptor generated removes model_id(s): {_format_limited(removed)}")
+
+    for model_id in sorted(current_ids & expected_ids):
+        field_paths = _diff_paths(current_models[model_id], expected_models[model_id])
+        if field_paths:
+            details.append(
+                f"descriptor changed {model_id}: "
+                f"{_format_limited(field_paths, limit=MODEL_FIELD_DIFF_LIMIT)}"
+            )
+            if len(details) >= DESCRIPTOR_DIFF_LIMIT:
+                break
+
+    current_top = {key: value for key, value in current.items() if key != "models"}
+    expected_top = {key: value for key, value in expected.items() if key != "models"}
+    top_paths = _diff_paths(current_top, expected_top)
+    if top_paths and len(details) < DESCRIPTOR_DIFF_LIMIT:
+        details.append(
+            "descriptor top-level drift: "
+            f"{_format_limited(top_paths, limit=MODEL_FIELD_DIFF_LIMIT)}"
+        )
+
+    return details
+
+
 def _descriptor_removal_errors(path: Path, generated: dict[str, Any]) -> list[str]:
     if not path.exists():
         return []
@@ -192,6 +274,7 @@ def _check_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
             details=[f"fresh: {config.descriptors}"],
         )
     removal_errors = _descriptor_removal_errors(config.descriptors, expected)
+    drift_details = _descriptor_drift_details(config.descriptors, expected)
     if removal_errors:
         errors = [
             f"descriptor artifact is stale: {config.descriptors}",
@@ -206,6 +289,7 @@ def _check_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
         name="descriptors",
         status="stale",
         errors=errors,
+        details=drift_details,
     )
 
 
