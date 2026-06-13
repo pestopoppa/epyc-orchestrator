@@ -25,6 +25,10 @@ def _sha(path: Path) -> str:
 
 
 def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> dict:
+    stack_manifest = registry.parent / "stack_manifest.py"
+    stack_manifest.write_text("ROLE_LAUNCH_META = {}\n", encoding="utf-8")
+    stack_numa = registry.parent / "stack_numa.py"
+    stack_numa.write_text("NUMA_CONFIG = {}\n", encoding="utf-8")
     return {
         "stack_priors_version": STACK_PRIORS_VERSION,
         "contract": stack_priors_contract(),
@@ -35,6 +39,8 @@ def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> d
         "source_artifacts": {
             "registry": {"path": str(registry), "sha256": _sha(registry)},
             "descriptors": {"path": str(descriptors), "sha256": _sha(descriptors)},
+            "stack_manifest": {"path": str(stack_manifest), "sha256": _sha(stack_manifest)},
+            "stack_numa": {"path": str(stack_numa), "sha256": _sha(stack_numa)},
         },
         "roles": {
             "frontdoor": {
@@ -91,6 +97,21 @@ def test_validate_stack_priors_rejects_stale_source_hash(tmp_path: Path) -> None
 
     assert not result.ok
     assert any("hash mismatch" in error for error in result.errors)
+
+
+def test_validate_stack_priors_rejects_stale_stack_manifest_hash(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    (tmp_path / "stack_manifest.py").write_text(
+        "ROLE_LAUNCH_META = {'frontdoor': {'tier': 'warm'}}\n",
+        encoding="utf-8",
+    )
+
+    result = validate_stack_priors(priors)
+
+    assert not result.ok
+    assert any("source_artifacts.stack_manifest hash mismatch" in error for error in result.errors)
 
 
 def test_validate_stack_priors_rejects_retired_live_role(tmp_path: Path) -> None:

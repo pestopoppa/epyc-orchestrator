@@ -40,7 +40,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T16:34:08Z'
+compiled_at: '2026-06-13T18:04:18Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -48,11 +48,19 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: f4db0391e108325e0dff09165ba34f2a8dc95dbf0390c3cee54fe9fb6ac5fcda
-    repo_commit: fbef837
+    repo_commit: 312b28e
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
     sha256: a4638fd3a9d813ffddc4635be434429ee653e3e3ba6c3642cb08bdb4061bfc43
-    repo_commit: fbef837
+    repo_commit: 312b28e
+  stack_manifest:
+    path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
+    sha256: 6caacc84eaf14dd80713e713fedae98843895a7a1b8f8d46cb6c06ff8beb8390
+    repo_commit: 312b28e
+  stack_numa:
+    path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
+    sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
+    repo_commit: 312b28e
 roles:
   architect_general:
     role: architect_general

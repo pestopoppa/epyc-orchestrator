@@ -88,6 +88,12 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     assert priors["status"] == "compiled"
     assert priors["stack_priors_version"] == STACK_PRIORS_VERSION
     assert priors["contract"]["schema"] == "epyc.stack_priors"
+    assert sorted(priors["source_artifacts"]) == [
+        "descriptors",
+        "registry",
+        "stack_manifest",
+        "stack_numa",
+    ]
     assert validate_stack_priors_contract(priors) == []
     assert frontdoor["priors"]["memory_cost"] == 1.0
     assert frontdoor["evidence"]["precedence"]["memory_cost"] == "server_mode.tier"

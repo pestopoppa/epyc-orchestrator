@@ -24,6 +24,7 @@ DEFAULT_SURFACE_EXCEPTIONS = REPO_ROOT / "orchestration" / "stack_change_guard_e
 DEFAULT_ADD_MODEL_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_model_to_registry.yaml"
 DEFAULT_PROCEDURE_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"
 RETIRED_LIVE_ROLES = {"architect_coding"}
+REQUIRED_SOURCE_ARTIFACTS = ("registry", "descriptors", "stack_manifest", "stack_numa")
 SURFACE_SCAN_ALLOW_MARKER = "stack-change-guard: allow"
 SURFACE_SCAN_MAX_FILE_BYTES = 512 * 1024
 SURFACE_EXCEPTION_CLASSIFICATIONS = frozenset(
@@ -618,7 +619,7 @@ def validate_stack_priors(
         errors.append("stack priors artifact has no source_artifacts section")
         sources = {}
 
-    for label in ("registry", "descriptors"):
+    for label in REQUIRED_SOURCE_ARTIFACTS:
         source = sources.get(label)
         if not isinstance(source, dict):
             errors.append(f"missing source_artifacts.{label}")

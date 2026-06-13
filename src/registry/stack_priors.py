@@ -24,6 +24,8 @@ REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
 DEFAULT_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
 DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+DEFAULT_STACK_MANIFEST = REPO_ROOT / "scripts" / "server" / "stack_manifest.py"
+DEFAULT_STACK_NUMA = REPO_ROOT / "scripts" / "server" / "stack_numa.py"
 PRECEDENCE_SPEC = REPO_ROOT / "docs" / "reference" / "stack-truth-precedence.md"
 
 STACK_PRIORS_VERSION = 1
@@ -535,6 +537,8 @@ def compile_stack_priors(
         "source_artifacts": {
             "registry": _source_metadata(registry_path),
             "descriptors": _source_metadata(descriptor_path),
+            "stack_manifest": _source_metadata(DEFAULT_STACK_MANIFEST),
+            "stack_numa": _source_metadata(DEFAULT_STACK_NUMA),
         },
         "roles": role_records,
         "known_global_gaps": {
