@@ -193,6 +193,7 @@ def test_allow_incomplete_records_known_gaps_and_writes(tmp_path: Path) -> None:
     loaded = yaml.safe_load(output.read_text(encoding="utf-8"))
     assert compiled["status"] == "compiled_with_gaps"
     assert loaded["models"][0]["known_gaps"]
+    assert loaded["models"][0]["modalities"] == ["math", "text"]
     assert "worker_math" in loaded["models"][0]["role_bindings"]["roles"]
 
 
@@ -304,6 +305,51 @@ def test_compile_uses_role_endpoint_for_dedicated_vision_role(tmp_path: Path) ->
     assert "Missing server_mode binding" not in model["known_gaps"]
 
 
+def test_compile_marks_qwen_next_as_long_context_modality(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {
+                "ingest_long_context": {
+                    "port": 8085,
+                    "model": "Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+                    "model_role": "ingest_long_context",
+                    "throughput": 14.4,
+                    "benchmark_score": "25/27 (93%)",
+                }
+            },
+            "roles": {
+                "ingest_long_context": {
+                    "model": {
+                        "name": "Qwen3-Next-80B-A3B-Instruct",
+                        "path": "lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",
+                        "quant": "Q4_K_M",
+                        "architecture": "ssm_moe_hybrid",
+                        "size_gb": 45,
+                    },
+                    "candidate_roles": ["ingest", "summarization", "architect"],
+                    "performance": {
+                        "long_context_quality": "25/27 (93%) on canonical long_context suite",
+                    },
+                    "memory": {"pinned": True},
+                }
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"ingest_long_context"},
+        allow_incomplete=True,
+    )
+
+    model = compiled["models"][0]
+    assert model["model_id"] == "qwen3-next-80b-a3b-q4_k_m"
+    assert model["modalities"] == ["long_context", "text"]
+    assert model["quality"]["suite_vector"]["long_context"] == 0.9259
+
+
 def test_compile_preserves_benchmark_only_server_model_role(tmp_path: Path) -> None:
     registry_path = _write_yaml(
         tmp_path / "model_registry.yaml",
@@ -362,6 +408,7 @@ def test_compile_preserves_benchmark_only_server_model_role(tmp_path: Path) -> N
 
     model = compiled["models"][0]
     assert model["model_id"] == "reap-qwen3-coder-25b-a3b-q4_k_m"
+    assert model["modalities"] == ["code", "text"]
     assert model["role_bindings"]["roles"] == ["reap_25b_frontdoor"]
     assert model["role_bindings"]["server_roles"] == ["reap_25b"]
     assert model["serving"]["ports"] == [8196]

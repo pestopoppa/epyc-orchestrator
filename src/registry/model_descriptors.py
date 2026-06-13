@@ -501,8 +501,17 @@ def _first_context_value(
 
 def _descriptor_modalities(model: dict[str, Any], role_cfg: dict[str, Any]) -> list[str]:
     modalities = {"text"}
+    model_names = " ".join(
+        str(model.get(key) or "") for key in ("name", "path", "huggingface_id")
+    ).lower()
     if model.get("mmproj_path"):
         modalities.add("vision")
+    if "coder" in model_names:
+        modalities.add("code")
+    if "math" in model_names:
+        modalities.add("math")
+    if "qwen3-next" in model_names or "long-context" in model_names:
+        modalities.add("long_context")
     candidate_roles = role_cfg.get("candidate_roles") if isinstance(role_cfg, dict) else None
     if isinstance(candidate_roles, list) and any("vision" in str(role) for role in candidate_roles):
         modalities.add("vision")
