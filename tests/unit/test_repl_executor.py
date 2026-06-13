@@ -1267,7 +1267,7 @@ class TestToolOutputsInAnswer:
             mock_repl._get_read_only_tools = MagicMock(return_value=set())
             mock_repl.log_exploration_completed = MagicMock()
             mock_repl.tool_registry = MagicMock()
-            mock_repl.tool_registry.get_invocation_log.return_value = [
+            mock_repl._invoked_tools = [
                 SimpleNamespace(
                     tool_name="read_file",
                     elapsed_ms=10.0,

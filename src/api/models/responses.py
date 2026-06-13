@@ -2,9 +2,34 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+def _json_safe_nonfinite(value: Any) -> Any:
+    """Replace non-finite floats that Starlette cannot JSON-render."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else 0.0
+    if isinstance(value, BaseModel):
+        _sanitize_model_nonfinite(value)
+        return value
+    if isinstance(value, dict):
+        return {key: _json_safe_nonfinite(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe_nonfinite(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_json_safe_nonfinite(item) for item in value)
+    return value
+
+
+def _sanitize_model_nonfinite(model: BaseModel) -> None:
+    for field in model.__class__.model_fields:
+        current = getattr(model, field)
+        safe = _json_safe_nonfinite(current)
+        if safe is not current:
+            setattr(model, field, safe)
 
 
 class ToolTiming(BaseModel):
@@ -172,6 +197,11 @@ class ChatResponse(BaseModel):
         default_factory=list,
         description="Model-extracted semantic insights from session scratchpad (turn, category, insight, confidence)",
     )
+
+    @model_validator(mode="after")
+    def normalize_nonfinite_floats(self) -> "ChatResponse":
+        _sanitize_model_nonfinite(self)
+        return self
 
 
 class HealthResponse(BaseModel):

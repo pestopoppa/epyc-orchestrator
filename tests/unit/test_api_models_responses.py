@@ -2,6 +2,7 @@
 """Unit tests for API response models."""
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -167,6 +168,36 @@ class TestChatResponse:
         )
         assert len(resp.tool_chains) == 1
         assert resp.tool_chains[0]["chain_id"] == "ch_123"
+
+    def test_nonfinite_floats_are_json_safe(self):
+        resp = self._minimal(
+            elapsed_seconds=float("inf"),
+            prompt_eval_ms=float("inf"),
+            generation_ms=float("-inf"),
+            predicted_tps=float("inf"),
+            http_overhead_ms=float("nan"),
+            think_harder_expected_roi=float("inf"),
+            cache_affinity_bonus=float("-inf"),
+            cost_dimensions={"latency": float("inf")},
+            tool_timings=[ToolTiming(tool_name="web_research", elapsed_ms=float("inf"))],
+            delegation_events=[
+                DelegationEvent(
+                    from_role="frontdoor",
+                    to_role="architect_general",
+                    elapsed_ms=float("nan"),
+                )
+            ],
+            tool_chains=[{"chain_id": "ch_1", "elapsed_ms": float("inf")}],
+        )
+
+        payload = resp.model_dump(mode="json")
+
+        json.dumps(payload, allow_nan=False)
+        assert payload["predicted_tps"] == 0.0
+        assert payload["cost_dimensions"]["latency"] == 0.0
+        assert payload["tool_timings"][0]["elapsed_ms"] == 0.0
+        assert payload["delegation_events"][0]["elapsed_ms"] == 0.0
+        assert payload["tool_chains"][0]["elapsed_ms"] == 0.0
 
     def test_required_fields_missing(self):
         with pytest.raises(ValidationError):
