@@ -34,21 +34,105 @@ logging.basicConfig(
 logger = logging.getLogger("train_graph_router")
 
 DEFAULT_WEIGHTS_PATH = PROJECT_ROOT / "orchestration/repl_memory/graph_router_weights.npz"
+DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration/derived/stack_priors.yaml"
 
-# Model fleet from model_registry.yaml
-MODEL_FLEET = [
-    {"role_id": "frontdoor", "description": "Qwen3-Coder-30B-A3B front door orchestrator, interactive chat, MoE6+spec+lookup 47 t/s", "port": 8080, "tps": 47.0, "tier": "HOT", "gb": 20.0},
-    {"role_id": "coder_escalation", "description": "Qwen2.5-Coder-32B code generation escalation specialist, spec+lookup 39 t/s", "port": 8081, "tps": 39.0, "tier": "HOT", "gb": 20.0},
-    {"role_id": "worker_general", "description": "Qwen2.5-7B general purpose worker, explore summarize, spec+lookup 50 t/s", "port": 8082, "tps": 50.0, "tier": "HOT", "gb": 8.0},
-    {"role_id": "architect_general", "description": "Qwen3-235B-A22B general architecture specialist, system design, full+spec 6.1 t/s", "port": 8083, "tps": 6.1, "tier": "WARM", "gb": 133.0},
-    {"role_id": "architect_coding", "description": "Qwen3-Coder-480B-A35B coding architecture specialist, complex code design, full+spec 9.0 t/s", "port": 8084, "tps": 9.0, "tier": "WARM", "gb": 271.0},
-    {"role_id": "ingest_long_context", "description": "Qwen3-Next-80B-A3B long context ingestion specialist, SSM no spec, 6.3 t/s", "port": 8085, "tps": 6.3, "tier": "WARM", "gb": 46.0},
+# Degraded/offline fallback only. Live training loads from stack_priors.yaml so
+# role retirements, shared ports, memory tier changes, and throughput updates are
+# data-only stack changes.
+DEGRADED_MODEL_FLEET = [
+    {"role_id": "frontdoor", "description": "Qwen3.6-35B-A3B Q8 frontdoor; shared HOT server; 24.3 t/s", "port": 8070, "tps": 24.3, "tier": "HOT", "gb": 37.0},
+    {"role_id": "coder_escalation", "description": "Qwen3.6-35B-A3B Q8 coder escalation; shares frontdoor HOT server; 24.3 t/s", "port": 8070, "tps": 24.3, "tier": "HOT", "gb": 37.0},
+    {"role_id": "worker_general", "description": "gemma-4-26B-A4B Q4 worker_general; HOT worker server with MTP; 60.7 t/s", "port": 8072, "tps": 60.7, "tier": "HOT", "gb": 16.0},
+    {"role_id": "worker_math", "description": "Qwen2.5-Math-7B math worker; HOT worker alias; 60.7 t/s serving prior", "port": 8072, "tps": 60.7, "tier": "HOT", "gb": 4.4},
+    {"role_id": "toolrunner", "description": "Qwen3-Coder-30B toolrunner; HOT worker alias; 60.7 t/s serving prior", "port": 8072, "tps": 60.7, "tier": "HOT", "gb": 16.0},
+    {"role_id": "architect_general", "description": "Qwen3.5-122B-A10B architect_general; HOT architect server; 12.19 t/s", "port": 8083, "tps": 12.19, "tier": "HOT", "gb": 69.0},
+    {"role_id": "ingest_long_context", "description": "Qwen3-Next-80B-A3B long-context ingest; HOT SSM-hybrid server; 20.8 t/s prior", "port": 8085, "tps": 20.8, "tier": "HOT", "gb": 46.0},
+    {"role_id": "worker_vision", "description": "Qwen2.5-VL-7B vision worker; HOT dedicated VL server; 20.0 t/s", "port": 8086, "tps": 20.0, "tier": "HOT", "gb": 4.4},
+    {"role_id": "vision_escalation", "description": "Qwen3-VL-30B-A3B vision escalation; HOT VL server; 27.6 t/s", "port": 8087, "tps": 27.6, "tier": "HOT", "gb": 18.0},
 ]
 
 
-def populate_llm_roles(graph, embedder):
+def _coerce_float(value, default: float) -> float:
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+        return parsed if parsed > 0 else default
+    return default
+
+
+def _coerce_port(ports) -> int:
+    if isinstance(ports, list):
+        for port in ports:
+            if isinstance(port, int):
+                return port
+    return 0
+
+
+def _role_description(role: str, record: dict) -> str:
+    model = record.get("model") if isinstance(record.get("model"), dict) else {}
+    serving = record.get("serving") if isinstance(record.get("serving"), dict) else {}
+    priors = record.get("priors") if isinstance(record.get("priors"), dict) else {}
+    pieces = [
+        str(record.get("display_name") or record.get("model_id") or role),
+        f"role={role}",
+    ]
+    server_role = serving.get("server_role")
+    if server_role:
+        pieces.append(f"server={server_role}")
+    modalities = model.get("modalities")
+    if isinstance(modalities, list) and modalities:
+        pieces.append("modalities=" + ",".join(str(item) for item in modalities))
+    throughput = priors.get("throughput_tps")
+    if isinstance(throughput, (int, float)):
+        pieces.append(f"{float(throughput):g} t/s")
+    return "; ".join(pieces)
+
+
+def load_model_fleet(stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH) -> list[dict]:
+    """Load live GraphRouter model nodes from the generated stack-priors contract."""
+    try:
+        import yaml
+
+        data = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        logger.warning("Using degraded GraphRouter model fleet; stack priors unavailable: %s", exc)
+        return list(DEGRADED_MODEL_FLEET)
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        logger.warning("Using degraded GraphRouter model fleet; stack priors roles field is invalid")
+        return list(DEGRADED_MODEL_FLEET)
+
+    fleet: list[dict] = []
+    for role, record in sorted(roles.items()):
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+
+        serving = record.get("serving") if isinstance(record.get("serving"), dict) else {}
+        priors = record.get("priors") if isinstance(record.get("priors"), dict) else {}
+        model = record.get("model") if isinstance(record.get("model"), dict) else {}
+        fleet.append(
+            {
+                "role_id": role,
+                "description": _role_description(role, record),
+                "port": _coerce_port(serving.get("ports")),
+                "tps": _coerce_float(priors.get("throughput_tps"), 0.0),
+                "tier": str(serving.get("tier") or "unknown").upper(),
+                "gb": _coerce_float(model.get("mem_gb"), 0.0),
+            }
+        )
+
+    if not fleet:
+        logger.warning("Using degraded GraphRouter model fleet; no live stack roles found")
+        return list(DEGRADED_MODEL_FLEET)
+    return fleet
+
+
+def populate_llm_roles(graph, embedder, model_fleet: list[dict] | None = None):
     """Populate LLMRole nodes from model fleet definition."""
-    for model in MODEL_FLEET:
+    fleet = model_fleet if model_fleet is not None else load_model_fleet()
+    for model in fleet:
         emb = embedder.embed_text(model["description"])
         graph.add_llm_role(
             role_id=model["role_id"],
@@ -59,7 +143,7 @@ def populate_llm_roles(graph, embedder):
             tier=model["tier"],
             gb=model["gb"],
         )
-    logger.info("Populated %d LLM role nodes", len(MODEL_FLEET))
+    logger.info("Populated %d LLM role nodes", len(fleet))
 
 
 def build_training_data(graph):
