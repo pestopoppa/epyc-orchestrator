@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +48,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_REGISTRY_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
 )
+DEFAULT_MODEL_DESCRIPTOR_PATH = (
+    Path(__file__).resolve().parents[2] / "orchestration" / "model_descriptors.yaml"
+)
 
 FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
     "frontdoor": 12.7,
@@ -62,6 +64,26 @@ FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
     "toolrunner": 50.0,
     "worker_vision": 15.28,
     "vision_escalation": 27.6,
+}
+
+BASELINE_QUALITY_BY_ROLE: Dict[str, float] = {
+    "frontdoor": 0.895,
+    "coder_escalation": 0.915,
+    "architect_general": 0.94,
+    "architect_coding": 0.885,
+    "worker_explore": 0.745,
+    "worker_math": 0.85,
+    "worker_vision": 0.81,
+}
+
+MEMORY_COST_BY_ROLE: Dict[str, float] = {
+    "frontdoor": 1.0,          # 19GB, HOT
+    "coder_escalation": 1.05,  # 20GB, HOT
+    "worker_explore": 0.5,     # 4.4GB, HOT
+    "worker_math": 0.5,        # 4.4GB, HOT
+    "architect_general": 3.0,  # 133GB, WARM (mmap load penalty)
+    "architect_coding": 3.5,   # 139GB, WARM (REAP-246B, was 5.0 for 480B@271GB)
+    "ingest_long_context": 1.5,  # 46GB, WARM
 }
 
 SERVER_MODE_TPS_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
@@ -79,6 +101,15 @@ ROLE_PERFORMANCE_TPS_FALLBACKS: Dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class QScorerPriors:
+    """Descriptor-aware scorer priors with registry-backed fallbacks."""
+
+    baseline_tps_by_role: Dict[str, float]
+    baseline_quality_by_role: Dict[str, float]
+    memory_cost_by_role: Dict[str, float]
+
+
 def _coerce_tps(value: Any) -> float | None:
     """Return a numeric t/s value from registry scalars or lower-bound ranges."""
     if isinstance(value, (int, float)):
@@ -90,6 +121,110 @@ def _coerce_tps(value: Any) -> float | None:
             parsed = float(match.group(0))
             return parsed if parsed > 0 else None
     return None
+
+
+def _load_model_descriptors(descriptor_path: Path) -> list[dict[str, Any]]:
+    try:
+        import yaml
+
+        data = yaml.safe_load(descriptor_path.read_text()) or {}
+    except Exception as exc:
+        logger.warning("Using registry q_scorer priors; descriptor load failed: %s", exc)
+        return []
+
+    models = data.get("models", [])
+    if not isinstance(models, list):
+        logger.warning(
+            "Using registry q_scorer priors; descriptor models field is %s",
+            type(models).__name__,
+        )
+        return []
+    return [model for model in models if isinstance(model, dict)]
+
+
+def _descriptor_has_role_server_conflict(descriptor: dict[str, Any]) -> bool:
+    serving = descriptor.get("serving", {})
+    if isinstance(serving, dict) and serving.get("numa_policy") == "unresolved_role_server_conflict":
+        return True
+
+    gaps = descriptor.get("known_gaps", [])
+    if not isinstance(gaps, list):
+        return False
+    return any("role-server conflict" in str(gap).lower() for gap in gaps)
+
+
+def _descriptor_speed_tps(descriptor: dict[str, Any]) -> float | None:
+    speed = descriptor.get("speed", {})
+    if not isinstance(speed, dict):
+        return None
+
+    candidates = [
+        _coerce_tps(speed.get("solo_96t_tps")),
+        _coerce_tps(speed.get("quarter_48t_tps")),
+        _coerce_tps(speed.get("prefill_tps")),
+        _coerce_tps(speed.get("generation_tps_range")),
+    ]
+    positive = [candidate for candidate in candidates if candidate is not None]
+    return max(positive) if positive else None
+
+
+def _descriptor_overall_quality(descriptor: dict[str, Any]) -> float | None:
+    quality = descriptor.get("quality", {})
+    if not isinstance(quality, dict):
+        return None
+    suite_vector = quality.get("suite_vector", {})
+    if not isinstance(suite_vector, dict):
+        return None
+    value = suite_vector.get("overall")
+    if not isinstance(value, (int, float)):
+        return None
+    parsed = float(value)
+    return parsed if 0.0 <= parsed <= 1.0 else None
+
+
+def descriptor_q_scorer_priors_by_role(
+    descriptor_path: Path = DEFAULT_MODEL_DESCRIPTOR_PATH,
+    registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
+) -> QScorerPriors:
+    """Return scorer priors over existing roles, skipping ambiguous descriptors.
+
+    Descriptors are used only as an overlay on current registry/default priors.
+    Role-server conflict records are intentionally ignored until launch truth is
+    repaired, so q_scorer does not learn from descriptor rows that disagree with
+    production server bindings.
+    """
+    tps_by_role = registry_baseline_tps_by_role(registry_path)
+    quality_by_role = dict(BASELINE_QUALITY_BY_ROLE)
+    memory_by_role = dict(MEMORY_COST_BY_ROLE)
+
+    known_tps_roles = set(tps_by_role)
+    known_quality_roles = set(quality_by_role)
+    for descriptor in _load_model_descriptors(descriptor_path):
+        if _descriptor_has_role_server_conflict(descriptor):
+            continue
+
+        role_bindings = descriptor.get("role_bindings", {})
+        if not isinstance(role_bindings, dict):
+            continue
+        roles = role_bindings.get("roles", [])
+        if not isinstance(roles, list):
+            continue
+
+        tps = _descriptor_speed_tps(descriptor)
+        quality = _descriptor_overall_quality(descriptor)
+        for role in roles:
+            if not isinstance(role, str):
+                continue
+            if tps is not None and role in known_tps_roles:
+                tps_by_role[role] = tps
+            if quality is not None and role in known_quality_roles:
+                quality_by_role[role] = quality
+
+    return QScorerPriors(
+        baseline_tps_by_role=tps_by_role,
+        baseline_quality_by_role=quality_by_role,
+        memory_cost_by_role=memory_by_role,
+    )
 
 
 def _performance_tps(role_record: dict[str, Any]) -> float | None:
@@ -176,32 +311,18 @@ class ScoringConfig:
     # fallback table for offline scripts. Used to normalize cost:
     # expected_elapsed = tokens_generated / baseline_tps.
     baseline_tps_by_role: Dict[str, float] = field(
-        default_factory=registry_baseline_tps_by_role
+        default_factory=lambda: descriptor_q_scorer_priors_by_role().baseline_tps_by_role
     )
 
     # Per-role quality baselines (from RESULTS.md relative benchmark scores).
     # Used for quality-gap penalty: penalize using expensive model when cheap suffices.
-    baseline_quality_by_role: Dict[str, float] = field(default_factory=lambda: {
-        "frontdoor": 0.895,
-        "coder_escalation": 0.915,
-        "architect_general": 0.94,
-        "architect_coding": 0.885,
-        "worker_explore": 0.745,
-        "worker_math": 0.85,
-        "worker_vision": 0.81,
-    })
+    baseline_quality_by_role: Dict[str, float] = field(
+        default_factory=lambda: dict(BASELINE_QUALITY_BY_ROLE)
+    )
 
     # Per-role memory tier cost (normalized: 1.0 = HOT baseline ~20GB).
     # WARM tier models incur mmap load penalty and higher memory pressure.
-    memory_cost_by_role: Dict[str, float] = field(default_factory=lambda: {
-        "frontdoor": 1.0,         # 19GB, HOT
-        "coder_escalation": 1.05, # 20GB, HOT
-        "worker_explore": 0.5,    # 4.4GB, HOT
-        "worker_math": 0.5,       # 4.4GB, HOT
-        "architect_general": 3.0,  # 133GB, WARM (mmap load penalty)
-        "architect_coding": 3.5,   # 139GB, WARM (REAP-246B, was 5.0 for 480B@271GB)
-        "ingest_long_context": 1.5, # 46GB, WARM
-    })
+    memory_cost_by_role: Dict[str, float] = field(default_factory=lambda: dict(MEMORY_COST_BY_ROLE))
 
     # Multi-dimensional cost weights (tunable).
     # cost_lambda_latency is the existing cost_penalty_lambda.

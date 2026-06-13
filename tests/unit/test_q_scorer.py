@@ -40,6 +40,7 @@ from orchestration.repl_memory.q_scorer import (
     FALLBACK_BASELINE_TPS_BY_ROLE,
     ScoringConfig,
     QScorer,
+    descriptor_q_scorer_priors_by_role,
     registry_baseline_tps_by_role,
 )
 from orchestration.repl_memory.progress_logger import EventType
@@ -118,6 +119,91 @@ class TestScoringConfigDefaults:
         missing = tmp_path / "missing.yaml"
 
         assert registry_baseline_tps_by_role(missing) == FALLBACK_BASELINE_TPS_BY_ROLE
+
+    def test_descriptor_priors_overlay_clean_existing_roles(self, tmp_path):
+        descriptor_path = tmp_path / "model_descriptors.yaml"
+        descriptor_path.write_text(
+            """
+models:
+  - model_id: clean-frontdoor
+    role_bindings:
+      roles: [frontdoor, not_a_q_scorer_role]
+    quality:
+      suite_vector:
+        overall: 0.91
+        agentic: 0.99
+    speed:
+      solo_96t_tps: 31.5
+    serving:
+      numa_policy: clean
+    known_gaps: []
+""".strip()
+        )
+
+        priors = descriptor_q_scorer_priors_by_role(
+            descriptor_path=descriptor_path,
+            registry_path=tmp_path / "missing_registry.yaml",
+        )
+
+        assert priors.baseline_tps_by_role["frontdoor"] == pytest.approx(31.5)
+        assert priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.91)
+        assert "not_a_q_scorer_role" not in priors.baseline_tps_by_role
+        assert "not_a_q_scorer_role" not in priors.baseline_quality_by_role
+
+    def test_descriptor_priors_skip_role_server_conflicts(self, tmp_path):
+        registry_path = tmp_path / "model_registry.yaml"
+        registry_path.write_text(
+            """
+server_mode:
+  worker:
+    throughput: 60.7
+roles: {}
+""".strip()
+        )
+        descriptor_path = tmp_path / "model_descriptors.yaml"
+        descriptor_path.write_text(
+            """
+models:
+  - model_id: conflicted-worker-math
+    role_bindings:
+      roles: [worker_math]
+    quality:
+      suite_vector:
+        overall: 0.99
+    speed:
+      quarter_48t_tps: 99.0
+    serving:
+      numa_policy: unresolved_role_server_conflict
+    known_gaps:
+      - "Role-server conflict: server_mode.worker points elsewhere."
+""".strip()
+        )
+
+        priors = descriptor_q_scorer_priors_by_role(
+            descriptor_path=descriptor_path,
+            registry_path=registry_path,
+        )
+
+        assert priors.baseline_tps_by_role["worker_math"] == pytest.approx(60.7)
+        assert priors.baseline_quality_by_role["worker_math"] == pytest.approx(0.85)
+
+    def test_descriptor_priors_fall_back_when_descriptor_missing(self, tmp_path):
+        registry_path = tmp_path / "model_registry.yaml"
+        registry_path.write_text(
+            """
+server_mode:
+  frontdoor:
+    throughput: 24.3
+roles: {}
+""".strip()
+        )
+
+        priors = descriptor_q_scorer_priors_by_role(
+            descriptor_path=tmp_path / "missing_descriptors.yaml",
+            registry_path=registry_path,
+        )
+
+        assert priors.baseline_tps_by_role["frontdoor"] == pytest.approx(24.3)
 
     def test_baseline_tps_values_positive(self):
         cfg = ScoringConfig()
