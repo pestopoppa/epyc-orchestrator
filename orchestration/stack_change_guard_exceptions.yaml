@@ -13,4 +13,20 @@
 # - expires: ISO date YYYY-MM-DD
 # Optional:
 # - line: exact line number for a single-line waiver
-exceptions: []
+exceptions:
+  - rule_id: retired_role_in_active_code
+    category: production_blocker
+    path_glob: src/api/routes/chat_pipeline/routing_decision.py
+    line: 24
+    classification: intentional_live_exception
+    owner: stack-change-governance
+    rationale: legacy external ingress label is normalized to architect_general before runtime lookup
+    expires: "2026-07-31"
+  - rule_id: retired_role_in_active_code
+    category: production_blocker
+    path_glob: src/config/stack_templates.py
+    line: 43
+    classification: intentional_live_exception
+    owner: stack-change-governance
+    rationale: retired-role denylist prevents architect_coding and thinking_reasoning from becoming deployable stack-template roles
+    expires: "2026-07-31"
