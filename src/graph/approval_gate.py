@@ -89,7 +89,7 @@ class AutoApproveCallback:
 
 
 # High-cost roles that trigger approval (architect tier)
-_HIGH_COST_ROLES = {"architect_general", "architect_coding"}
+_HIGH_COST_ROLES = {"architect_general"}
 
 
 def should_halt(
