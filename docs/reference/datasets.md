@@ -47,10 +47,19 @@ create train or validation sets.
 | Benchmark question pool | `/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool*.jsonl` | inference-research benchmark scripts | live eval data | Eval core construction, qid derivation, per-question replay | manifest/version file, suite, prompt hash/qid, pool version, core ID when selected |
 | Benchmark result ledger | `/mnt/raid0/llm/epyc-inference-research/benchmarks/results/*.jsonl` and `data/**/*.csv` | inference-research benchmark scripts | live benchmark archive | Model descriptors, throughput baselines, calibration covariates | result timestamp, script/config name, model registry ref, host/runtime metadata |
 | Root workload packs | `/mnt/raid0/llm/epyc-inference-research/benchmarks/root_workload/*.json` | F1 real-task corpus | seed packs exist; passive task capture still pending | Real-task eval distribution and promotion cohorts | pack name/version, prompt/task ID, source commit, reviewed outcome when available |
-| Lab job outputs | planned `orchestration/lab_review_queue/` plus future `task_record` events | F2 self-running lab | not captured yet | Reviewed job dataset, local-lab reliability ladder, task tuples for F3 | job ID, contract version, risk class, model role, review verdict, reviewer, timestamp |
+| Lab job outputs | planned `orchestration/lab_review_queue/` plus future `task_record` events | F2 self-running lab | branch-ready on `feat/lab-reliability-ladder`, not deployed | Reviewed job dataset, local-lab reliability ladder, task tuples for F3 | job ID, contract version, risk class, model role, review verdict, reviewer, timestamp |
 | Intake-triage labels | planned F2/F5 reviewed output rows | F2/F5 | not captured yet | Triage classifier (`relevant`, `duplicate`, `park`, destination index) | source intake ID, quarantine policy version, output contract version, human review verdict |
 
 ## Required Fields by Builder
+
+Implemented builder scaffolds live in `scripts/datasets/` on
+`feat/data-flywheel-builders`:
+
+- `build_planner_sft.py`: planner archive -> `planner_sft_example.v1`
+  JSONL plus `dataset_builder_manifest.v1`.
+- `build_triage_set.py`: intake index -> `intake_triage_example.v1`
+  JSONL plus `dataset_builder_manifest.v1`; source text/citation context remains
+  quarantined and is not emitted.
 
 ### Planner SFT Builder
 
@@ -112,8 +121,9 @@ Initial keep rule:
   rows do not yet contain outcome vectors.
 - Failed Claude planner calls are captured on the F3 branch, and the W7 branch
   additionally removes draft session persistence. Neither branch is deployed.
-- F2 lab jobs have not created `lab_jobs.yaml`, `lab_review_queue/`, or
-  `task_record` rows yet.
+- F2 lab jobs, review queue, verdict recorder, and shadow-batch wrapper are
+  branch-ready on `feat/lab-reliability-ladder` but not deployed; real reviewed
+  `lab_gold_tuple.v1` rows do not exist yet.
 - Intake-triage labels are not a separate reviewed dataset yet; current intake
   verdicts are useful but mix historical operator/process decisions.
 - No builder should train on strategy-memory text from scrubbed or gate-lock-era
