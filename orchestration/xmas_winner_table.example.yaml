@@ -1,0 +1,33 @@
+version: xmas-v1
+fallback_role: frontdoor
+cells:
+  math:
+    solve: architect_general
+    verify: architect_general
+    plan: architect_general
+    refine: worker_general
+    extract: worker_general
+  code:
+    solve: coder_escalation
+    verify: coder_escalation
+    plan: architect_general
+    refine: coder_escalation
+    extract: worker_general
+  knowledge:
+    solve: frontdoor
+    verify: frontdoor
+    plan: frontdoor
+    refine: worker_general
+    extract: worker_general
+  long_context:
+    solve: ingest_long_context
+    verify: ingest_long_context
+    plan: ingest_long_context
+    refine: worker_general
+    extract: ingest_long_context
+  reasoning:
+    solve: frontdoor
+    verify: architect_general
+    plan: architect_general
+    refine: worker_general
+    extract: worker_general
