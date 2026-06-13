@@ -7,7 +7,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
 
 
@@ -154,6 +153,39 @@ def test_load_model_signatures_parses_yaml(tmp_path) -> None:
     assert out["gemma-4-26B"]["max_throughput_tps"] == 76.5
 
 
+def test_load_model_signatures_prefers_model_descriptors(tmp_path) -> None:
+    legacy = tmp_path / "sigs.yaml"
+    legacy.write_text(yaml.dump({"models": {
+        "legacy": {"role": "old", "max_throughput_tps": 1.0},
+    }}))
+    descriptors = tmp_path / "model_descriptors.yaml"
+    descriptors.write_text(yaml.dump({
+        "descriptor_version": 3,
+        "compiled_at": "2026-06-12T20:24:22Z",
+        "models": [
+            {
+                "model_id": "qwen3.6-35b-a3b-q8_0",
+                "display_name": "Qwen3.6 35B",
+                "role_bindings": {"roles": ["frontdoor", "coder_escalation"]},
+                "quality": {"suite_vector": {"coder": 0.97, "math": 0.84}},
+                "speed": {"solo_96t_tps": 24.3, "quarter_48t_tps": 60.7},
+                "known_gaps": ["ctx_max is missing"],
+            },
+        ],
+    }))
+
+    out = state_store.load_model_signatures(legacy, descriptors_path=descriptors)
+
+    assert "legacy" not in out
+    assert out["__metadata__"]["compiled_at"] == "2026-06-12T20:24:22Z"
+    sig = out["Qwen3.6 35B"]
+    assert sig["model_id"] == "qwen3.6-35b-a3b-q8_0"
+    assert sig["role"] == "frontdoor, coder_escalation"
+    assert sig["max_throughput_tps"] == 60.7
+    assert sig["per_suite"]["coder"] == "97%"
+    assert sig["known_gaps"] == ["ctx_max is missing"]
+
+
 def test_format_model_signatures_empty_dict_message() -> None:
     out = state_store.format_model_signatures({})
     assert "no model signatures available" in out
@@ -174,3 +206,26 @@ def test_format_model_signatures_table_format() -> None:
     # Top suite should be coder (96%), bottom should be general (78%)
     assert "coder (96%)" in out
     assert "general (78%)" in out
+
+
+def test_format_model_signatures_includes_descriptor_metadata_and_gaps() -> None:
+    sigs = {
+        "__metadata__": {
+            "source": "orchestration/model_descriptors.yaml",
+            "compiled_at": "2026-06-12T20:24:22Z",
+            "descriptor_version": 3,
+        },
+        "Qwen3.6 35B": {
+            "model_id": "qwen3.6-35b-a3b-q8_0",
+            "role": "frontdoor",
+            "max_throughput_tps": 24.3,
+            "per_suite": {"coder": "97%"},
+            "known_gaps": ["ctx_max is missing"],
+        },
+    }
+    out = state_store.format_model_signatures(sigs)
+    assert "compiled_at=2026-06-12T20:24:22Z" in out
+    assert "descriptor_version=3" in out
+    assert "qwen3.6-35b-a3b-q8_0" in out
+    assert "coder (97%)" in out
+    assert "ctx_max is missing" in out

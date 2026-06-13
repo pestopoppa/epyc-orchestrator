@@ -1015,6 +1015,7 @@ def _build_exploration_block(
 # BLACKLIST_PATH, and the model-quality-signatures path.
 
 _MODEL_SIGNATURES_PATH = ORCH_ROOT / "orchestration" / "model_quality_signatures.yaml"
+_MODEL_DESCRIPTORS_PATH = ORCH_ROOT / "orchestration" / "model_descriptors.yaml"
 
 
 def _maybe_reimport_pareto_from_journal(
@@ -1333,8 +1334,8 @@ def load_blacklist() -> list[dict[str, Any]]:
 
 
 def load_model_signatures() -> dict[str, Any]:
-    """Load model quality signatures from YAML."""
-    return _load_model_signatures_impl(_MODEL_SIGNATURES_PATH)
+    """Load descriptor-backed model signatures for planner context."""
+    return _load_model_signatures_impl(_MODEL_SIGNATURES_PATH, _MODEL_DESCRIPTORS_PATH)
 
 
 def append_blacklist(action: dict[str, Any], trial_id: int, reason: str) -> None:

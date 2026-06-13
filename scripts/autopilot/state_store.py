@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,8 +117,126 @@ def load_blacklist(blacklist_path: Path) -> list[dict[str, Any]]:
         return []
 
 
-def load_model_signatures(signatures_path: Path) -> dict[str, Any]:
-    """Load model quality signatures from YAML at `signatures_path`."""
+def _score_percent(value: Any) -> float:
+    """Return a sortable percent-like score from descriptor or legacy values."""
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number * 100.0 if 0.0 <= number <= 1.0 else number
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.endswith("%"):
+            try:
+                return float(stripped[:-1])
+            except ValueError:
+                return 0.0
+        try:
+            number = float(stripped)
+            return number * 100.0 if 0.0 <= number <= 1.0 else number
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _format_suite_score(value: Any) -> str:
+    score = _score_percent(value)
+    if not score:
+        return str(value)
+    return f"{score:.0f}%"
+
+
+def _coerce_positive_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if number > 0 else None
+    if isinstance(value, str):
+        match = re.search(r"\d+(?:\.\d+)?", value)
+        if match:
+            number = float(match.group(0))
+            return number if number > 0 else None
+    return None
+
+
+def _descriptor_speed(speed: dict[str, Any]) -> float:
+    candidates: list[float] = []
+    for key in (
+        "solo_96t_tps",
+        "quarter_48t_tps",
+        "prefill_tps",
+        "generation_tps_range",
+    ):
+        value = _coerce_positive_float(speed.get(key))
+        if value is not None:
+            candidates.append(value)
+    return max(candidates) if candidates else 0.0
+
+
+def _descriptor_signatures(data: dict[str, Any]) -> dict[str, Any]:
+    models = data.get("models")
+    if not isinstance(models, list):
+        return {}
+
+    signatures: dict[str, Any] = {
+        "__metadata__": {
+            "source": "orchestration/model_descriptors.yaml",
+            "compiled_at": data.get("compiled_at"),
+            "descriptor_version": data.get("descriptor_version"),
+        }
+    }
+    for descriptor in models:
+        if not isinstance(descriptor, dict):
+            continue
+        model_id = str(descriptor.get("model_id") or descriptor.get("display_name") or "")
+        if not model_id:
+            continue
+        display_name = str(descriptor.get("display_name") or model_id)
+        role_bindings = descriptor.get("role_bindings") or {}
+        roles = role_bindings.get("roles") if isinstance(role_bindings, dict) else []
+        if not isinstance(roles, list):
+            roles = []
+        role_text = ", ".join(str(role) for role in roles) if roles else "unbound"
+        quality = descriptor.get("quality") or {}
+        suite_vector = quality.get("suite_vector") if isinstance(quality, dict) else {}
+        if not isinstance(suite_vector, dict):
+            suite_vector = {}
+        speed = descriptor.get("speed") or {}
+        if not isinstance(speed, dict):
+            speed = {}
+        gaps = descriptor.get("known_gaps") or []
+        if not isinstance(gaps, list):
+            gaps = []
+
+        signatures[display_name] = {
+            "model_id": model_id,
+            "role": role_text,
+            "roles": [str(role) for role in roles],
+            "max_throughput_tps": _descriptor_speed(speed),
+            "per_suite": {
+                str(suite): _format_suite_score(score)
+                for suite, score in suite_vector.items()
+            },
+            "known_gaps": [str(gap) for gap in gaps[:3]],
+            "compiled_at": data.get("compiled_at"),
+            "descriptor_version": data.get("descriptor_version"),
+        }
+
+    return signatures if len(signatures) > 1 else {}
+
+
+def load_model_signatures(
+    signatures_path: Path,
+    descriptors_path: Path | None = None,
+) -> dict[str, Any]:
+    """Load descriptor-backed model signatures, falling back to legacy YAML."""
+    if descriptors_path is not None and descriptors_path.exists():
+        try:
+            descriptor_data = yaml.safe_load(descriptors_path.read_text()) or {}
+            if isinstance(descriptor_data, dict):
+                descriptor_signatures = _descriptor_signatures(descriptor_data)
+                if descriptor_signatures:
+                    return descriptor_signatures
+        except (yaml.YAMLError, OSError, ValueError) as e:
+            log.warning("Could not load model descriptors: %s", e)
+
     if not signatures_path.exists():
         return {}
     try:
@@ -130,23 +249,50 @@ def load_model_signatures(signatures_path: Path) -> dict[str, Any]:
 
 def format_model_signatures(signatures: dict[str, Any]) -> str:
     """Format model signatures as a markdown table for the controller prompt."""
-    if not signatures:
+    metadata = signatures.get("__metadata__") if isinstance(signatures, dict) else None
+    model_items = [
+        (model_name, sig)
+        for model_name, sig in sorted(signatures.items())
+        if model_name != "__metadata__" and isinstance(sig, dict)
+    ]
+    if not model_items:
         return "  (no model signatures available)"
 
-    lines = ["| Model | Role | Speed (t/s) | Strengths | Weaknesses |"]
+    lines: list[str] = []
+    if isinstance(metadata, dict):
+        parts = [f"source={metadata.get('source', 'unknown')}"]
+        if metadata.get("compiled_at"):
+            parts.append(f"compiled_at={metadata['compiled_at']}")
+        if metadata.get("descriptor_version") is not None:
+            parts.append(f"descriptor_version={metadata['descriptor_version']}")
+        lines.append("_" + "; ".join(parts) + "_")
+        lines.append("")
+
+    lines.append("| Model | Role | Speed (t/s) | Strengths | Weaknesses/Gaps |")
     lines.append("|-------|------|------------|-----------|------------|")
 
-    for model_name, sig in sorted(signatures.items()):
+    for model_name, sig in model_items:
         role = sig.get("role", "unknown")
         speed = sig.get("max_throughput_tps", 0)
         per_suite = sig.get("per_suite", {})
 
         # Find top 2 suites (highest scores) and bottom 2 (lowest)
-        sorted_suites = sorted(per_suite.items(), key=lambda x: int(x[1].rstrip("%")), reverse=True)
+        sorted_suites = sorted(
+            per_suite.items(), key=lambda item: _score_percent(item[1]), reverse=True
+        )
         strengths = ", ".join(f"{s[0]} ({s[1]})" for s in sorted_suites[:2])
         weaknesses = ", ".join(f"{s[0]} ({s[1]})" for s in sorted_suites[-2:])
+        gaps = sig.get("known_gaps") or []
+        if len(sorted_suites) <= 2 and gaps:
+            weaknesses = "; ".join(str(gap) for gap in gaps[:2])
+        if not strengths:
+            strengths = "(no suite vector)"
+        if not weaknesses:
+            weaknesses = "(none)"
 
-        short_name = "-".join(model_name.split("-")[0:3])  # first 3 parts for brevity
+        model_id = sig.get("model_id")
+        name_key = str(model_id or model_name)
+        short_name = name_key if model_id else "-".join(name_key.split("-")[0:4])
 
         lines.append(f"| {short_name} | {role} | {speed:.1f} | {strengths} | {weaknesses} |")
 
