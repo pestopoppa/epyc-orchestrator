@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 # Helper modules (extracted earlier in the refactor)
 from scripts.server import stack_checkpoint as _stack_checkpoint
 from scripts.server import stack_processes as _stack_processes
@@ -161,8 +163,55 @@ def _attestable_model_path(model_path: str) -> bool:
     return model_path.endswith(".gguf") and Path(model_path).is_absolute()
 
 
-def _status_attestation(info: ProcessInfo, alive: bool, cmdline: list[str]) -> str:
-    """Classify whether live process args match persisted stack state."""
+def _cmdline_flag_values(cmdline: list[str], *flags: str) -> list[str]:
+    values: list[str] = []
+    flag_set = set(flags)
+    for idx, token in enumerate(cmdline):
+        if token in flag_set and idx + 1 < len(cmdline):
+            values.append(cmdline[idx + 1])
+            continue
+        for flag in flags:
+            prefix = flag + "="
+            if token.startswith(prefix):
+                values.append(token[len(prefix):])
+    return values
+
+
+def _cmdline_has_path(cmdline: list[str], expected_path: str) -> bool:
+    expected_name = Path(expected_path).name
+    return expected_path in cmdline or any(Path(token).name == expected_name for token in cmdline)
+
+
+def _stack_prior_launch_requirements(path: Path | None = None) -> dict[str, dict[str, str]]:
+    priors_path = path or _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
+    try:
+        data = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    requirements_by_role: dict[str, dict[str, str]] = {}
+    for role, record in roles.items():
+        if not isinstance(record, dict):
+            continue
+        serving = record.get("serving")
+        launch = serving.get("launch") if isinstance(serving, dict) else None
+        requirements = launch.get("requirements") if isinstance(launch, dict) else None
+        if not isinstance(requirements, dict):
+            continue
+        cleaned = {
+            str(key): str(value)
+            for key, value in requirements.items()
+            if value is not None
+        }
+        if cleaned:
+            requirements_by_role[str(role)] = cleaned
+    return requirements_by_role
+
+
+def _model_path_attestation(info: ProcessInfo, alive: bool, cmdline: list[str]) -> str:
     if info.pid == -1:
         return "docker"
     if not alive:
@@ -183,6 +232,27 @@ def _status_attestation(info: ProcessInfo, alive: bool, cmdline: list[str]) -> s
     if any(token.endswith(".gguf") for token in cmdline):
         return "model-drift"
     return "unknown"
+
+
+def _status_attestation(
+    info: ProcessInfo,
+    alive: bool,
+    cmdline: list[str],
+    launch_requirements: dict[str, str] | None = None,
+) -> str:
+    """Classify whether live process args match persisted/generated stack state."""
+    base = _model_path_attestation(info, alive, cmdline)
+    if base in {"docker", "dead", "model-drift"}:
+        return base
+
+    expected_mmproj = (launch_requirements or {}).get("mmproj_path")
+    if not expected_mmproj:
+        return base
+    if not cmdline:
+        return "unknown"
+    if _cmdline_has_path(cmdline, expected_mmproj):
+        return "ok" if base == "n/a" else base
+    return "mmproj-drift"
 
 
 def _preserved_process_info(
@@ -1065,6 +1135,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     seen_pids = set()
     attestation_warnings: list[str] = []
+    launch_requirements_by_role = _stack_prior_launch_requirements()
     for name, info in sorted(state.items()):
         if info.pid != -1 and info.pid in seen_pids:
             continue  # Skip duplicates (roles sharing servers)
@@ -1106,12 +1177,25 @@ def cmd_status(args: argparse.Namespace) -> int:
             cmdline = _stack_processes.process_cmdline(info.pid) if alive else []
 
         model = Path(info.model_path).stem if info.model_path != "uvicorn" else "uvicorn"
-        attestation = _status_attestation(info, alive, cmdline)
+        launch_requirements = (
+            launch_requirements_by_role.get(info.role)
+            or launch_requirements_by_role.get(name)
+            or {}
+        )
+        attestation = _status_attestation(info, alive, cmdline, launch_requirements)
         if attestation == "model-drift":
             expected = Path(info.model_path).name
             actual_models = ", ".join(Path(token).name for token in cmdline if token.endswith(".gguf"))
             attestation_warnings.append(
                 f"{name} pid {info.pid} expected {expected}; live cmdline has {actual_models}"
+            )
+        elif attestation == "mmproj-drift":
+            expected = Path(str(launch_requirements.get("mmproj_path") or "")).name
+            actual_mmproj = ", ".join(
+                Path(token).name for token in _cmdline_flag_values(cmdline, "--mmproj")
+            ) or "no --mmproj"
+            attestation_warnings.append(
+                f"{name} pid {info.pid} expected mmproj {expected}; live cmdline has {actual_mmproj}"
             )
 
         print(

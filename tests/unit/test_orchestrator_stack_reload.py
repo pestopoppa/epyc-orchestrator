@@ -178,6 +178,54 @@ def test_status_attestation_detects_model_drift() -> None:
     ) == "model-drift"
 
 
+def test_status_attestation_detects_expected_mmproj_basename() -> None:
+    info = stack_commands.ProcessInfo(
+        role="worker_vision",
+        pid=123,
+        port=8086,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="vision.log",
+    )
+
+    assert stack_commands._status_attestation(
+        info,
+        alive=True,
+        cmdline=[
+            "llama-server",
+            "-m",
+            "/models/current.gguf",
+            "--mmproj",
+            "/canonical/mmproj-model-f16.gguf",
+        ],
+        launch_requirements={"mmproj_path": "/models/mmproj-model-f16.gguf"},
+    ) == "ok"
+
+
+def test_status_attestation_detects_mmproj_drift() -> None:
+    info = stack_commands.ProcessInfo(
+        role="worker_vision",
+        pid=123,
+        port=8086,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="vision.log",
+    )
+
+    assert stack_commands._status_attestation(
+        info,
+        alive=True,
+        cmdline=[
+            "llama-server",
+            "-m",
+            "/models/current.gguf",
+            "--mmproj",
+            "/models/stale-mmproj.gguf",
+        ],
+        launch_requirements={"mmproj_path": "/models/current-mmproj.gguf"},
+    ) == "mmproj-drift"
+
+
 def test_cmd_status_prints_model_attestation_warning(monkeypatch, capsys) -> None:
     info = stack_commands.ProcessInfo(
         role="frontdoor",
@@ -208,3 +256,45 @@ def test_cmd_status_prints_model_attestation_warning(monkeypatch, capsys) -> Non
     assert "expected current.gguf" in out
     assert "live cmdline has stale.gguf" in out
     assert saved[-1] == {"frontdoor": info}
+
+
+def test_cmd_status_prints_mmproj_attestation_warning(monkeypatch, capsys) -> None:
+    info = stack_commands.ProcessInfo(
+        role="worker_vision",
+        pid=123,
+        port=8086,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="vision.log",
+    )
+    saved: list[dict[str, stack_commands.ProcessInfo]] = []
+
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {"server_8086": info})
+    monkeypatch.setattr(stack_commands, "save_state", lambda state: saved.append(dict(state)))
+    monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(stack_commands, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "process_cmdline",
+        lambda _pid: [
+            "llama-server",
+            "-m",
+            "/models/current.gguf",
+            "--mmproj",
+            "/models/stale-mmproj.gguf",
+        ],
+    )
+    monkeypatch.setattr(
+        stack_commands,
+        "_stack_prior_launch_requirements",
+        lambda: {"worker_vision": {"mmproj_path": "/models/current-mmproj.gguf"}},
+    )
+
+    rc = stack_commands.cmd_status(Namespace())
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "mmproj-drift" in out
+    assert "expected mmproj current-mmproj.gguf" in out
+    assert "live cmdline has stale-mmproj.gguf" in out
+    assert saved[-1] == {"server_8086": info}
