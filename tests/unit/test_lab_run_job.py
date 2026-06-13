@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+import json
+from argparse import Namespace
+from pathlib import Path
+
+import pytest
+import yaml
+
+from scripts.lab import run_job
+
+
+def _write_jobs_file(path: Path, *, enabled: bool = False, gated: bool = False) -> None:
+    job = {
+        "job_id": "sample_shadow",
+        "title": "Sample shadow job",
+        "stage": "shadow",
+        "enabled": enabled,
+        "risk": "write_reviewed",
+        "model_role": "worker_explore",
+        "input_spec": {
+            "sources": [{"repo": "epyc-orchestrator", "path": "docs/source.md"}],
+            "context_budget_tokens": 100,
+            "forbidden_actions": ["edit_directly"],
+        },
+        "output_contract": {
+            "format": "json",
+            "json_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["job_id", "run_id", "generated_at", "summary", "items"],
+                "properties": {
+                    "job_id": {"const": "sample_shadow"},
+                    "run_id": {"type": "string"},
+                    "generated_at": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "items": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
+    }
+    if gated:
+        job["gates"] = ["frontier-f5-intake-injection-hardening"]
+    doc = {
+        "version": 1,
+        "schema_version": "lab_jobs.v1",
+        "policy": {
+            "review_queue": "orchestration/lab_review_queue/",
+            "direct_repo_writes_allowed": False,
+            "default_stage": "shadow",
+        },
+        "jobs": [job],
+    }
+    path.write_text(yaml.safe_dump(doc, sort_keys=False))
+
+
+def _args(tmp_path: Path, jobs_file: Path, **overrides) -> Namespace:
+    values = {
+        "job_id": "sample_shadow",
+        "jobs_file": str(jobs_file),
+        "repo_root": str(tmp_path),
+        "queue_dir": str(tmp_path / "queue"),
+        "repo_map": [f"epyc-orchestrator={tmp_path}"],
+        "allow_disabled": True,
+        "allow_gated": False,
+        "run_id": "sample-run",
+        "max_context_chars": 1000,
+        "dry_run_stub": True,
+        "response_fixture": None,
+        "execute_chat": False,
+        "api_url": "http://127.0.0.1:8000",
+        "timeout_s": 1.0,
+        "print_output": False,
+    }
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def test_dry_run_stub_writes_review_artifacts(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "source.md").write_text("# source\nEvidence.\n")
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file)
+
+    result = run_job.run_from_args(_args(tmp_path, jobs_file))
+
+    output = json.loads(result.output_path.read_text())
+    assert output["job_id"] == "sample_shadow"
+    assert output["run_id"] == "sample-run"
+    task_record = json.loads(result.task_record_path.read_text())
+    assert task_record["record_type"] == "task_record"
+    assert task_record["invocation_mode"] == "dry_run_contract_stub"
+    assert task_record["validation"]["output_contract"] == "passed"
+    assert "source.md" in (result.output_path.parent / "prompt.txt").read_text()
+    rows = [json.loads(line) for line in result.task_record_log.read_text().splitlines()]
+    assert rows[-1]["run_id"] == "sample-run"
+
+
+def test_disabled_job_requires_explicit_allow_disabled(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "source.md").write_text("source")
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file, enabled=False)
+
+    with pytest.raises(run_job.LabRunnerError, match="disabled"):
+        run_job.run_from_args(_args(tmp_path, jobs_file, allow_disabled=False))
+
+
+def test_gated_job_requires_explicit_allow_gated(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "source.md").write_text("source")
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file, enabled=True, gated=True)
+
+    with pytest.raises(run_job.LabRunnerError, match="gated"):
+        run_job.run_from_args(_args(tmp_path, jobs_file, allow_disabled=False))
+
+
+def test_response_fixture_must_satisfy_contract(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "source.md").write_text("source")
+    jobs_file = tmp_path / "lab_jobs.yaml"
+    _write_jobs_file(jobs_file, enabled=True)
+
+    bad_fixture = tmp_path / "bad.json"
+    bad_fixture.write_text(json.dumps({"job_id": "sample_shadow"}))
+    args = _args(
+        tmp_path,
+        jobs_file,
+        allow_disabled=False,
+        dry_run_stub=False,
+        response_fixture=str(bad_fixture),
+    )
+
+    with pytest.raises(run_job.LabRunnerError, match="output contract failed"):
+        run_job.run_from_args(args)
