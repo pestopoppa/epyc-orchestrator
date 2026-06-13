@@ -10,16 +10,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
+from typing import TYPE_CHECKING
 
-from src.constants import (
-    DELEGATION_BRIEF_KEY_LEN,
-    DELEGATION_MAX_SAME_TARGET,
-    DELEGATION_MAX_TOTAL_TOKENS,
-)
-from src.env_parsing import env_int as _env_int
-from src.exceptions import InferenceError
+if TYPE_CHECKING:
+    from src.llm_primitives import LLMPrimitives
 
 from .chat_delegation_config import _VALID_DELEGATE_ROLES, _delegation_config
 
@@ -132,7 +127,7 @@ def _parse_architect_decision(response: str) -> dict:
         # Try to find D| or I| at the start of any line
         toon_match = re.search(r"^([DI]\|.*)$", text, re.MULTILINE)
         if toon_match:
-            logger.info(
+            log.info(
                 "[architect-parse] recovered D|/I| from mid-response (stripped %d chars of preamble)",
                 toon_match.start(),
             )
@@ -263,16 +258,13 @@ def _parse_architect_decision(response: str) -> dict:
 # Full budget for computation turns (code execution in mini-REPL)
 _ARCHITECT_TOKEN_BUDGET: dict[str, int] = {
     "architect_general": 768,
-    "architect_coding": 512,
 }
 
 # Tight budget for the routing decision (D|answer or I|brief:...|to:role).
-# architect_coding uses <think> tags so 500 visible tokens suffices.
 # architect_general (Qwen3-235B) reasons in plain text, exhausting 500 tokens
 # before emitting D|.  Give it 1500 so ~1000 goes to reasoning + 500 to answer.
 _ARCHITECT_DECISION_BUDGET: dict[str, int] = {
     "architect_general": 512,
-    "architect_coding": 192,
 }
 
 

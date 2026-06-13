@@ -218,15 +218,13 @@ class TestConstants:
 
     def test_architect_token_budget_values(self):
         assert _ARCHITECT_TOKEN_BUDGET["architect_general"] == 768
-        assert _ARCHITECT_TOKEN_BUDGET["architect_coding"] == 512
 
     def test_architect_decision_budget_values(self):
         assert _ARCHITECT_DECISION_BUDGET["architect_general"] == 512
-        assert _ARCHITECT_DECISION_BUDGET["architect_coding"] == 192
 
     def test_budgets_have_expected_keys(self):
-        assert set(_ARCHITECT_TOKEN_BUDGET.keys()) == {"architect_general", "architect_coding"}
-        assert set(_ARCHITECT_DECISION_BUDGET.keys()) == {"architect_general", "architect_coding"}
+        assert set(_ARCHITECT_TOKEN_BUDGET.keys()) == {"architect_general"}
+        assert set(_ARCHITECT_DECISION_BUDGET.keys()) == {"architect_general"}
 
 
 # ── Loop Guards ──────────────────────────────────────────────────────────
