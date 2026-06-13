@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -41,6 +42,12 @@ Mode = Literal["check", "update"]
 DESCRIPTOR_DIFF_LIMIT = 12
 MODEL_FIELD_DIFF_LIMIT = 8
 SIMULATED_FIXTURE_TARGET = "tests/unit/test_stack_change_pipeline_simulated_fixtures.py"
+SURFACE_WARNING_ORDER = (
+    "production_blocker",
+    "waived_production_blocker",
+    "legacy_test",
+    "historical_doc",
+)
 
 
 @dataclass(frozen=True)
@@ -89,11 +96,42 @@ class PipelineReport:
     def ok(self) -> bool:
         return not self.errors
 
+    @property
+    def unique_warnings(self) -> list[str]:
+        return sorted(set(self.warnings))
+
+    def hardcoded_surface_warning_counts(self) -> dict[str, int]:
+        counts: Counter[str] = Counter()
+        for warning in self.unique_warnings:
+            bucket = _hardcoded_surface_warning_bucket(warning)
+            if bucket is not None:
+                counts[bucket] += 1
+        return dict(counts)
+
     def acceptance_lines(self) -> list[str]:
         if self.ok:
             lines = ["acceptance: no-inference checks passed"]
             if self.warnings:
-                lines.append(f"warnings: {len(self.warnings)}")
+                lines.append(
+                    f"warnings: {len(self.unique_warnings)} unique "
+                    f"({len(self.warnings)} total)"
+                )
+                surface_counts = self.hardcoded_surface_warning_counts()
+                if surface_counts:
+                    ordered_keys = [
+                        key
+                        for key in SURFACE_WARNING_ORDER
+                        if key in surface_counts
+                    ]
+                    ordered_keys.extend(
+                        sorted(set(surface_counts) - set(ordered_keys))
+                    )
+                    lines.append(
+                        "surface_warnings: "
+                        + ", ".join(
+                            f"{key}={surface_counts[key]}" for key in ordered_keys
+                        )
+                    )
             lines.append(
                 "promotion_gate: run uv run pytest -q "
                 f"{SIMULATED_FIXTURE_TARGET}"
@@ -103,6 +141,19 @@ class PipelineReport:
             "acceptance: blocked",
             f"promotion_gate: fix {len(self.errors)} error(s) before promotion",
         ]
+
+
+def _hardcoded_surface_warning_bucket(warning: str) -> str | None:
+    prefix = "hardcoded_surface."
+    if not warning.startswith(prefix):
+        return None
+    suffix = warning[len(prefix):]
+    parts = suffix.split(".", 3)
+    if not parts:
+        return None
+    if parts[0] == "waived" and len(parts) >= 2:
+        return f"waived_{parts[1]}"
+    return parts[0]
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

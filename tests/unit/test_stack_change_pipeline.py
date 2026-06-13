@@ -8,6 +8,8 @@ from pathlib import Path
 import yaml
 
 from scripts.registry.stack_change_pipeline import (
+    PipelineReport,
+    PipelineStep,
     SIMULATED_FIXTURE_TARGET,
     StackChangePipelineConfig,
     _print_report,
@@ -336,6 +338,42 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
     }
     assert check_report.acceptance_lines() == [
         "acceptance: no-inference checks passed",
+        f"promotion_gate: run uv run pytest -q {SIMULATED_FIXTURE_TARGET}",
+    ]
+
+
+def test_acceptance_lines_summarize_unique_hardcoded_surface_warnings() -> None:
+    duplicate_warning = (
+        "hardcoded_surface.production_blocker.retired_role_in_active_code: "
+        "src/example.py:1: retired_role"
+    )
+    report = PipelineReport(
+        steps=[
+            PipelineStep(
+                name="guard",
+                status="warnings",
+                warnings=[
+                    duplicate_warning,
+                    duplicate_warning,
+                    "hardcoded_surface.waived.production_blocker.retired_role_in_active_code: src/example.py:2",
+                    "hardcoded_surface.legacy_test.retired_role_in_tests: tests/example.py:3",
+                    "hardcoded_surface.historical_doc.retired_role_in_operator_docs: docs/example.md:4",
+                    "role 'example' has 1 known gap(s)",
+                ],
+            )
+        ]
+    )
+
+    assert report.hardcoded_surface_warning_counts() == {
+        "production_blocker": 1,
+        "waived_production_blocker": 1,
+        "legacy_test": 1,
+        "historical_doc": 1,
+    }
+    assert report.acceptance_lines() == [
+        "acceptance: no-inference checks passed",
+        "warnings: 5 unique (6 total)",
+        "surface_warnings: production_blocker=1, waived_production_blocker=1, legacy_test=1, historical_doc=1",
         f"promotion_gate: run uv run pytest -q {SIMULATED_FIXTURE_TARGET}",
     ]
 
