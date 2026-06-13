@@ -20,6 +20,20 @@ _TIER_COST_WEIGHTS: dict[str, float] = {
     "D": 0.2,
 }
 
+_INGRESS_ROLE_ALIASES = {
+    "coder": "coder_escalation",
+    "worker_coder": "worker_general",
+    "worker_code": "worker_general",
+    "worker_fast": "worker_general",
+}
+
+
+def normalize_ingress_role(role: object) -> object:
+    """Normalize externally supplied role labels before config lookup."""
+    if not isinstance(role, str):
+        return role
+    return _INGRESS_ROLE_ALIASES.get(role, role)
+
 
 def assess_factual_risk(prompt: str, role: str, task_id: str) -> tuple[float, str]:
     """Return factual-risk score and band, falling back to no-risk on failure."""
@@ -58,11 +72,12 @@ def select_initial_route(
     """Select initial route before risk veto and telemetry enrichment."""
     skill_context = ""
     if use_mock:
-        return [request.role or Role.FRONTDOOR], "mock", skill_context
+        role = normalize_ingress_role(request.role) if request.role else Role.FRONTDOOR
+        return [role], "mock", skill_context
     if request.force_role:
-        return [request.force_role], "forced", skill_context
+        return [normalize_ingress_role(request.force_role)], "forced", skill_context
     if request.role and request.role not in ("", "frontdoor"):
-        return [request.role], "explicit", skill_context
+        return [normalize_ingress_role(request.role)], "explicit", skill_context
     if request.image_path or request.image_base64:
         return ["worker_vision"], "vision_input", skill_context
     if state.hybrid_router and request.real_mode:

@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
 
-from .chat_delegation_config import _VALID_DELEGATE_ROLES, _delegation_config
+from .chat_delegation_config import (
+    _VALID_DELEGATE_ROLES,
+    _delegation_config,
+    _normalize_delegate_role,
+)
 
 log = logging.getLogger(__name__)
 
@@ -192,7 +196,7 @@ def _parse_architect_decision(response: str) -> dict:
                 fields[key.strip().lower()] = val.strip()
 
         brief = fields.get("brief", parts_str)
-        delegate_to = fields.get("to", "coder_escalation")
+        delegate_to = _normalize_delegate_role(fields.get("to", "coder_escalation"))
         delegate_mode = fields.get("mode", "react")
 
         # Clamp to valid role
@@ -222,7 +226,9 @@ def _parse_architect_decision(response: str) -> dict:
         if isinstance(obj, dict):
             mode = obj.get("mode", "direct")
             if mode == "investigate":
-                delegate_to = obj.get("delegate_to", obj.get("to", "coder_escalation"))
+                delegate_to = _normalize_delegate_role(
+                    obj.get("delegate_to", obj.get("to", "coder_escalation"))
+                )
                 if delegate_to not in _VALID_DELEGATE_ROLES:
                     delegate_to = "coder_escalation"
                 delegate_mode = obj.get("delegate_mode", obj.get("mode_detail", "react"))

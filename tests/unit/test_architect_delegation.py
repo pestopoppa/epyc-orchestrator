@@ -50,14 +50,14 @@ class TestParseArchitectDecision:
         assert result["delegate_to"] == "coder_escalation"
         assert result["delegate_mode"] == "repl"
 
-    def test_toon_investigate_worker_coder_role(self):
+    def test_toon_investigate_worker_coder_role_normalized(self):
         from src.api.routes.chat_delegation import _parse_architect_decision
 
         result = _parse_architect_decision(
             "I|brief:split into parallel file tasks|to:worker_coder|mode:repl"
         )
         assert result["mode"] == "investigate"
-        assert result["delegate_to"] == "worker_coder"
+        assert result["delegate_to"] == "coder_escalation"
         assert result["delegate_mode"] == "repl"
 
     def test_json_direct(self):
@@ -81,7 +81,7 @@ class TestParseArchitectDecision:
         result = _parse_architect_decision(payload)
         assert result["mode"] == "investigate"
         assert result["brief"] == "Search for X"
-        assert result["delegate_to"] == "worker_explore"
+        assert result["delegate_to"] == "worker_general"
 
     def test_markdown_wrapped_json(self):
         from src.api.routes.chat_delegation import _parse_architect_decision
@@ -218,7 +218,16 @@ class TestArchitectDelegatedAnswer:
             side_effect=lambda *a, **kw: next(decision_iter),
         ), patch(
             "src.api.routes.chat_delegation._run_specialist_loop",
-            return_value=("File contents: error handling at line 42", 2, ["code_search"], [], False, False, {}),
+            return_value=(
+                "File contents: error handling at line 42",
+                2,
+                ["code_search"],
+                [],
+                False,
+                False,
+                {},
+                [],
+            ),
         ):
             answer, stats = _architect_delegated_answer(
                 question="Where is error handling?",
@@ -350,7 +359,7 @@ class TestArchitectDelegatedAnswer:
             return_value=("I|brief:Draft the implementation|to:coder_escalation|mode:repl", 1, 0),
         ), patch(
             "src.api.routes.chat_delegation._run_specialist_loop",
-            return_value=(specialist_doc, 0, [], [], False, True, {}),
+            return_value=(specialist_doc, 0, [], [], False, True, {}, []),
         ):
             answer, stats = _architect_delegated_answer(
                 question="Write a hello function",
@@ -483,7 +492,16 @@ class TestDelegationTokenCaps:
             return_value=("I|brief:investigate|to:coder_escalation", 1, 0),
         ), patch(
             "src.api.routes.chat_delegation._run_specialist_loop",
-            return_value=("[Delegation timeout after 2 turn(s), 45.0s]", 0, [], [], True, False, {}),
+            return_value=(
+                "[Delegation timeout after 2 turn(s), 45.0s]",
+                0,
+                [],
+                [],
+                True,
+                False,
+                {},
+                [],
+            ),
         ):
             answer, stats = _architect_delegated_answer(
                 question="q",
@@ -544,7 +562,16 @@ class RateLimiter:
             with patch("src.prompt_builders.extract_code_from_response", return_value=raw), patch(
                 "src.prompt_builders.auto_wrap_final", return_value=raw
             ):
-                report, _tools, _called, _timings, timed_out, report_rescued, _infer = _run_specialist_loop(
+                (
+                    report,
+                    _tools,
+                    _called,
+                    _timings,
+                    timed_out,
+                    report_rescued,
+                    _infer,
+                    _repl_errors,
+                ) = _run_specialist_loop(
                     question="q",
                     context="",
                     brief="b",
@@ -578,7 +605,16 @@ class RateLimiter:
             mock_repl.tool_registry = None
             mock_repl_cls.return_value = mock_repl
 
-            report, _tools, _called, _timings, timed_out, report_rescued, _infer = _run_specialist_loop(
+            (
+                report,
+                _tools,
+                _called,
+                _timings,
+                timed_out,
+                report_rescued,
+                _infer,
+                _repl_errors,
+            ) = _run_specialist_loop(
                 question="q",
                 context="",
                 brief="b",
@@ -604,7 +640,16 @@ class RateLimiter:
             mock_repl.tool_registry = None
             mock_repl_cls.return_value = mock_repl
 
-            report, _tools, _called, _timings, timed_out, report_rescued, _infer = _run_specialist_loop(
+            (
+                report,
+                _tools,
+                _called,
+                _timings,
+                timed_out,
+                report_rescued,
+                _infer,
+                _repl_errors,
+            ) = _run_specialist_loop(
                 question="q",
                 context="",
                 brief="b",
@@ -641,7 +686,7 @@ class RateLimiter:
             side_effect=lambda *a, **kw: next(decisions),
         ), patch(
             "src.api.routes.chat_delegation._run_specialist_loop",
-            return_value=("specialist report body", 0, [], [], False, True, {}),
+            return_value=("specialist report body", 0, [], [], False, True, {}, []),
         ), patch(
             "src.delegation_cache.get_delegation_cache",
             return_value=mock_cache,

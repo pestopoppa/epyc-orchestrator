@@ -65,7 +65,7 @@ class TestResolveRoleAlias:
         repl = REPLEnvironment(context="test")
 
         # Test directly via the method
-        assert repl._resolve_role_alias("researcher_agent") == "worker_explore"
+        assert repl._resolve_role_alias("researcher_agent") == "worker_general"
         assert repl._resolve_role_alias("coder_agent") == "coder_escalation"
         assert repl._resolve_role_alias("reviewer_agent") == "architect_general"
 
@@ -81,13 +81,17 @@ class TestResolveRoleAlias:
         repl = REPLEnvironment(context="test")
 
         assert repl._resolve_role_alias("coder_escalation") == "coder_escalation"
-        assert repl._resolve_role_alias("worker_explore") == "worker_explore"
-        assert repl._resolve_role_alias("worker_coder") == "worker_coder"
+        assert repl._resolve_role_alias("worker_general") == "worker_general"
+        assert repl._resolve_role_alias("worker_math") == "worker_math"
 
-    def test_worker_code_alias_maps_to_worker_coder(self):
-        """Legacy worker_code should normalize to worker_coder."""
+    def test_legacy_worker_aliases_map_to_live_roles(self):
+        """Legacy worker aliases should normalize to live stack roles."""
         repl = REPLEnvironment(context="test")
-        assert repl._resolve_role_alias("worker_code") == "worker_coder"
+
+        assert repl._resolve_role_alias("worker_code") == "coder_escalation"
+        assert repl._resolve_role_alias("worker_coder") == "coder_escalation"
+        assert repl._resolve_role_alias("worker_explore") == "worker_general"
+        assert repl._resolve_role_alias("worker_fast") == "worker_general"
 
 
 class TestEscalate:
@@ -304,9 +308,9 @@ class TestDelegate:
         result = repl.execute("delegate('task', 'researcher_agent')")
 
         assert result.error is None
-        # Should call with resolved role (worker_explore)
+        # Should call with resolved role (worker_general)
         call_args = mock_llm.llm_call.call_args
-        assert call_args[1]["role"] == "worker_explore"
+        assert call_args[1]["role"] == "worker_general"
 
     def test_delegate_workers_can_delegate(self):
         """Test workers can delegate to other workers (no tier restriction)."""

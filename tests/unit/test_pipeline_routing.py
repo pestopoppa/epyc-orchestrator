@@ -15,7 +15,7 @@ from src.api.routes.chat_pipeline.routing import (
     _preprocess,
     _route_request,
 )
-from src.api.routes.chat_pipeline.routing_decision import routing_meta
+from src.api.routes.chat_pipeline.routing_decision import normalize_ingress_role, routing_meta
 from src.api.routes.chat_utils import RoutingResult
 from src.roles import Role
 
@@ -50,6 +50,19 @@ class TestRouteRequest:
         assert result.routing_strategy == "mock"
         assert "coder_escalation" in [str(r) for r in result.routing_decision]
 
+    def test_mock_mode_normalizes_legacy_explicit_role(self):
+        """Mock-mode explicit roles should use the same ingress aliases as real mode."""
+        request = ChatRequest(prompt="test", mock_mode=True, real_mode=False, role="coder")
+        state = MagicMock()
+        state.hybrid_router = None
+        state.failure_graph = None
+        state.progress_logger = None
+
+        result = _route_request(request, state)
+
+        assert result.routing_strategy == "mock"
+        assert result.routing_decision == ["coder_escalation"]
+
     def test_force_role_overrides_routing(self):
         """force_role bypasses all routing logic."""
         request = ChatRequest(prompt="test", real_mode=True, force_role="architect_general")
@@ -65,9 +78,36 @@ class TestRouteRequest:
         # hybrid_router should NOT be called
         state.hybrid_router.route.assert_not_called()
 
+    def test_force_role_normalizes_legacy_ingress_alias(self):
+        """force_role should not route legacy labels into stale config endpoints."""
+        request = ChatRequest(prompt="test", real_mode=True, force_role="worker_fast")
+        state = MagicMock()
+        state.hybrid_router = MagicMock()
+        state.failure_graph = None
+        state.progress_logger = None
+
+        result = _route_request(request, state)
+
+        assert result.routing_strategy == "forced"
+        assert result.routing_decision == ["worker_general"]
+        state.hybrid_router.route.assert_not_called()
+
     def test_explicit_role_routes_directly(self):
         """Explicit role (non-frontdoor) routes directly."""
         request = ChatRequest(prompt="test", real_mode=True, role="coder_escalation")
+        state = MagicMock()
+        state.hybrid_router = None
+        state.failure_graph = None
+        state.progress_logger = None
+
+        result = _route_request(request, state)
+
+        assert result.routing_strategy == "explicit"
+        assert result.routing_decision == ["coder_escalation"]
+
+    def test_explicit_role_normalizes_coder_alias(self):
+        """Explicit coder ingress should route to live coder_escalation."""
+        request = ChatRequest(prompt="test", real_mode=True, role="coder")
         state = MagicMock()
         state.hybrid_router = None
         state.failure_graph = None
@@ -259,6 +299,14 @@ class TestRouteRequest:
             _route_request(request, state)
 
         mock_init.assert_called_once_with(state)
+
+
+def test_normalize_ingress_role_legacy_aliases() -> None:
+    assert normalize_ingress_role("coder") == "coder_escalation"
+    assert normalize_ingress_role("worker_coder") == "worker_general"
+    assert normalize_ingress_role("worker_code") == "worker_general"
+    assert normalize_ingress_role("worker_fast") == "worker_general"
+    assert normalize_ingress_role("architect_general") == "architect_general"
 
 
 class TestPreprocess:

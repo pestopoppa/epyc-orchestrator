@@ -215,13 +215,10 @@ class _RoutingMixin:
 
         # Workers that Tier A/B can delegate to
         WORKER_ROLES = [
-            "worker_explore",
             "worker_general",
             "worker_math",
             "worker_summarize",
             "worker_vision",
-            "worker_coder",
-            "worker_fast",
         ]
 
         delegate_targets: list[str] = []
@@ -357,8 +354,8 @@ class _RoutingMixin:
 
     # Role alias mapping: model-generated role names -> actual backend roles
     _ROLE_ALIASES: dict[str, str] = {
-        "researcher_agent": "worker_explore",
-        "researcher": "worker_explore",
+        "researcher_agent": "worker_general",
+        "researcher": "worker_general",
         "coder_agent": "coder_escalation",
         "reviewer_agent": "architect_general",
         "reviewer": "architect_general",
@@ -366,10 +363,10 @@ class _RoutingMixin:
         "vision_agent": "worker_vision",
         "summarizer_agent": "worker_summarize",
         "summarizer": "worker_summarize",
-        "worker_general": "worker_explore",
-        # Coding worker aliases for parallel file-level implementation bursts.
-        # worker_coder is the public semantic role; runtime points it to fast worker backend.
-        "worker_code": "worker_coder",
+        "worker_coder": "coder_escalation",
+        "worker_code": "coder_escalation",
+        "worker_explore": "worker_general",
+        "worker_fast": "worker_general",
     }
 
     def _resolve_role_alias(self, role: str) -> str:
@@ -385,13 +382,10 @@ class _RoutingMixin:
 
     # Roles that can be delegation targets (any role can delegate to these)
     _DELEGATABLE_ROLES: frozenset[str] = frozenset({
-        "worker_explore",
         "worker_math",
         "worker_general",
         "worker_summarize",
         "worker_vision",
-        "worker_coder",
-        "worker_fast",
         "vision_escalation",
         "coder_escalation",
     })
@@ -434,7 +428,7 @@ class _RoutingMixin:
 
         Args:
             brief: What to do (becomes the worker's prompt).
-            to: Target role (worker_explore, worker_math, coder_escalation, etc.).
+            to: Target role (worker_general, worker_math, coder_escalation, etc.).
             parallel: If True, spawn multiple workers for list items in brief.
             reason: Why this role was chosen (helps MemRL learn).
             persona: Optional persona overlay.
@@ -449,13 +443,13 @@ class _RoutingMixin:
             # Parallel delegation (brief should contain parseable work items)
             results = delegate(
                 "Apply rename to these files: [a.py, b.py, c.py]",
-                to="worker_explore",
+                to="worker_general",
                 parallel=True,
             )
         """
         self._exploration_calls += 1
 
-        # Resolve role aliases (e.g., "researcher_agent" -> "worker_explore")
+        # Resolve role aliases (e.g., "researcher_agent" -> "worker_general")
         target_role = self._resolve_role_alias(to)
 
         # Check if target can receive delegations

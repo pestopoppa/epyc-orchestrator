@@ -17,15 +17,29 @@ from src.env_parsing import env_int as _env_int
 _VALID_DELEGATE_ROLES = frozenset(
     {
         "coder_escalation",
-        "worker_coder",
         "worker_summarize",
-        "worker_explore",
         "worker_general",
         "worker_math",
         "worker_vision",
         "vision_escalation",
     }
 )
+
+_DELEGATE_ROLE_ALIASES = {
+    "worker_coder": "coder_escalation",
+    "worker_code": "coder_escalation",
+    "worker_explore": "worker_general",
+    "worker_fast": "worker_general",
+    "researcher_agent": "worker_general",
+    "researcher": "worker_general",
+}
+
+
+def _normalize_delegate_role(role: object) -> str:
+    """Normalize legacy/model-generated delegate labels to live stack roles."""
+    if not isinstance(role, str):
+        return "coder_escalation"
+    return _DELEGATE_ROLE_ALIASES.get(role, role)
 
 
 # Thread-local delegation depth counter to detect re-entrance

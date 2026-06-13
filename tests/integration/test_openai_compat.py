@@ -195,11 +195,28 @@ class TestChatCompletionsNonStreaming:
             "model": "orchestrator",
             "messages": [{"role": "user", "content": "Test"}],
             "x_orchestrator_role": "coder",
+            "x_show_routing": True,
         }
 
         response = client.post("/v1/chat/completions", json=request)
 
         assert response.status_code == 200
+        data = response.json()
+        assert data["x_orchestrator_metadata"]["role"] == "coder_escalation"
+
+    def test_chat_completions_model_role_alias_normalized(self, client):
+        """Legacy model role aliases should normalize before backend lookup."""
+        request = {
+            "model": "worker_fast",
+            "messages": [{"role": "user", "content": "Test"}],
+            "x_show_routing": True,
+        }
+
+        response = client.post("/v1/chat/completions", json=request)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["x_orchestrator_metadata"]["role"] == "worker_general"
 
     def test_chat_completions_with_x_show_routing(self, client):
         """Test routing metadata via x_show_routing."""

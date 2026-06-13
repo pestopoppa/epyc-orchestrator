@@ -187,7 +187,16 @@ class TestParseArchitectDecision:
         result = _parse_architect_decision(json.dumps(obj))
         assert result["mode"] == "investigate"
         assert result["brief"] == "analyze logs"
-        assert result["delegate_to"] == "worker_explore"
+        assert result["delegate_to"] == "worker_general"
+
+    def test_legacy_worker_aliases_normalize_to_live_roles(self):
+        explore = _parse_architect_decision("I|brief:check logs|to:worker_explore")
+        fast = _parse_architect_decision("I|brief:check logs|to:worker_fast")
+        coder = _parse_architect_decision("I|brief:patch bug|to:worker_coder")
+
+        assert explore["delegate_to"] == "worker_general"
+        assert fast["delegate_to"] == "worker_general"
+        assert coder["delegate_to"] == "coder_escalation"
 
     def test_empty_string(self):
         result = _parse_architect_decision("")
@@ -206,9 +215,7 @@ class TestConstants:
     def test_valid_delegate_roles(self):
         expected = {
             "coder_escalation",
-            "worker_coder",
             "worker_summarize",
-            "worker_explore",
             "worker_general",
             "worker_math",
             "worker_vision",

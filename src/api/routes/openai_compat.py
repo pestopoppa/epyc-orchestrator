@@ -26,6 +26,7 @@ from src.api.models import (
     OpenAIModelsResponse,
     OpenAIUsage,
 )
+from src.api.routes.chat_pipeline.routing_decision import normalize_ingress_role
 from src.api.state import AppState
 from src.prompt_builders import (
     build_root_lm_prompt,
@@ -188,6 +189,7 @@ async def openai_chat_completions(
         role = Role.FRONTDOOR
     else:
         role = request.model
+    role = normalize_ingress_role(role)
 
     # Escalation cap and REPL disable flags — pass through to metadata
     max_escalation = request.x_max_escalation

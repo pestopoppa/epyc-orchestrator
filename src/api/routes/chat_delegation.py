@@ -41,6 +41,7 @@ from .chat_delegation_config import (
     _delegation_local,
     _delegation_specialist_turn_token_cap,
     _get_delegation_depth,
+    _normalize_delegate_role,
 )
 from .chat_delegation_decision import (
     _apply_decision_guards,
@@ -307,11 +308,12 @@ def _run_specialist_loop(
     primitives: "LLMPrimitives",
     tool_registry: "Any | None",
     time_budget_s: float | None = None,
-) -> tuple[str, int, list[str], list[dict], bool, bool, dict[str, Any]]:
+) -> tuple[str, int, list[str], list[dict], bool, bool, dict[str, Any], list[dict]]:
     """Run specialist delegation execution loop (Phase B).
 
     Returns:
-        (report, tool_invocations, tools_called, tool_timings)
+        (report, tool_invocations, tools_called, tool_timings, timed_out,
+        report_rescued, inference_metadata, repl_turn_errors)
     """
     from src.prompt_builders import (
         build_root_lm_prompt,
