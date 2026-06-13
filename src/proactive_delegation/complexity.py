@@ -26,9 +26,10 @@ ARCHITECT_TRIGGERS = [
     "create a spec",
 ]
 
-# Thinking escalation triggers - force thinking model for DEEP REASONING
-# Equivalent to Claude Code's "ultrathink" - routes to thinking_reasoning role
-# Use when you need more thorough analysis, not task decomposition
+# Thinking escalation triggers - request architect-grade DEEP REASONING.
+# Equivalent to Claude Code's "ultrathink"; the retired dedicated-thinking role
+# now falls through to architect_general.
+# Use when you need more thorough analysis, not task decomposition.
 THINKING_TRIGGERS = [
     "/think",  # Explicit command
     "ultrathink",  # Claude Code compatibility
@@ -64,10 +65,10 @@ def has_architect_trigger(objective: str) -> bool:
 
 
 def has_thinking_trigger(objective: str) -> bool:
-    """Check if objective requests thinking model for deep reasoning.
+    """Check if objective requests architect-grade deep reasoning.
 
-    Equivalent to Claude Code's "ultrathink" - escalates to thinking_reasoning
-    role which uses a model optimized for chain-of-thought reasoning.
+    Equivalent to Claude Code's "ultrathink"; the retired dedicated-thinking
+    role now falls through to architect_general.
     """
     objective_lower = objective.lower()
     return any(trigger.lower() in objective_lower for trigger in THINKING_TRIGGERS)
@@ -109,7 +110,7 @@ def classify_task_complexity(objective: str) -> tuple[TaskComplexity, Complexity
     if signals.thinking_requested:
         signals.question_type = "thinking_requested"
         # Don't return early - continue to assess complexity normally
-        # The thinking_requested flag tells the router to use thinking model
+        # The thinking_requested flag tells the router to use architect-grade reasoning.
 
     # Trivial indicators (answer directly)
     trivial_patterns = [

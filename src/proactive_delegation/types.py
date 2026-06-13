@@ -64,7 +64,7 @@ class ComplexitySignals:
     question_type: str = "unknown"  # factual, how-to, implementation, design, architect_requested, thinking_requested
     estimated_files: int = 0
     # Escalation flags (orthogonal to complexity)
-    thinking_requested: bool = False  # /think, ultrathink -> use thinking_reasoning model
+    thinking_requested: bool = False  # /think, ultrathink -> architect-grade reasoning
     architect_requested: bool = False  # /architect, /plan -> use architect for planning
 
 

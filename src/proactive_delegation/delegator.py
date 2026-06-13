@@ -79,7 +79,7 @@ class ProactiveDelegator:
         Returns:
             (complexity, action, signals, confidence) where:
             - action: "direct", "repl", "specialist", or "architect"
-            - signals.thinking_requested: True if should use thinking model
+            - signals.thinking_requested: True if should use architect-grade reasoning
             - confidence: 0.0-1.0 from MemRL (1.0 if no MemRL)
         """
         complexity, signals = classify_task_complexity(objective)
@@ -100,7 +100,7 @@ class ProactiveDelegator:
                     complexity = TaskComplexity.COMPLEX
                     confidence = 0.8  # High confidence from learned routing
 
-                # If learned routing suggests thinking model
+                # If learned routing suggests deep reasoning
                 elif strategy == "learned" and any("thinking" in r for r in roles):
                     signals.thinking_requested = True
                     confidence = 0.8
@@ -129,9 +129,9 @@ class ProactiveDelegator:
         signals: ComplexitySignals,
     ) -> str:
         """Get the target role based on action and escalation flags."""
-        # Thinking escalation overrides default role for the action
+        # The retired dedicated-thinking role falls through to architect_general.
         if signals.thinking_requested:
-            return "thinking_reasoning"
+            return "architect_general"
 
         role_map = {
             "direct": "frontdoor",

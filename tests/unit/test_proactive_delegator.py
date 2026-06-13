@@ -134,7 +134,7 @@ class TestTargetRoleSelection:
     """Test target role selection."""
 
     def test_get_target_role_with_thinking_signal(self):
-        """Test role selection with thinking escalation."""
+        """Test role selection with deep-reasoning escalation."""
         registry = Mock()
         primitives = Mock()
         delegator = ProactiveDelegator(registry, primitives)
@@ -142,7 +142,21 @@ class TestTargetRoleSelection:
         signals = ComplexitySignals(thinking_requested=True)
         role = delegator.get_target_role("specialist", signals)
 
-        assert role == "thinking_reasoning"
+        assert role == "architect_general"
+
+    def test_thinking_trigger_routes_to_live_architect_role(self):
+        """Test /think-style prompts avoid the retired dedicated-thinking role."""
+        registry = Mock()
+        primitives = Mock()
+        delegator = ProactiveDelegator(registry, primitives)
+
+        _complexity, action, signals, _confidence = delegator.route_by_complexity(
+            "/think analyze the failure mode carefully"
+        )
+        role = delegator.get_target_role(action, signals)
+
+        assert signals.thinking_requested is True
+        assert role == "architect_general"
 
     def test_get_target_role_direct(self):
         """Test role for direct action."""
