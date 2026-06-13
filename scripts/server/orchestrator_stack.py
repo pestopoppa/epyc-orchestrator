@@ -104,7 +104,9 @@ from scripts.server.stack_manifest import (
     HOT_ROLES,
     HOT_SERVERS,
     LAUNCH_CONTEXT_TOKENS,
+    LAUNCH_KV_QUANT_CONFIGS,
     NUMA_REPLICA_PORTS,
+    NO_SPEC_DECODE_ROLES,
     ORCHESTRATOR_PROFILES,
     PORT_MAP,
     ROLE_LAUNCH_META,
@@ -114,6 +116,12 @@ from scripts.server.stack_manifest import (
     VISION_WORKER_MMPROJ,
     VISION_WORKER_MODEL,
     WARM_SERVERS,
+    WORKER_MTP_DRAFT_MAX,
+    WORKER_MTP_DRAFT_P_MIN,
+    WORKER_MTP_KV_TYPES,
+    WORKER_MTP_SPEC_TYPE,
+    WORKER_MTP_THREADS_DRAFT,
+    WORKER_MTP_UBATCH_TOKENS,
     WORKER_POOL_MODELS,
     _build_servers_from_classification,
     _filter_by_numa_mode,
@@ -421,18 +429,18 @@ def _build_worker_explore_command(
         "-md",
         EXPLORE_DRAFT_MODEL,  # MTP draft (gemma4 assistant Q8)
         "--spec-type",
-        "mtp",  # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
+        WORKER_MTP_SPEC_TYPE,  # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
         # Without this, -md is treated as standard spec decode and
         # MTP-arch draft tensors are loaded but never assigned to a
         # backend buffer → "tensor buffer not set" assertion.
         "--draft-max",
-        "2",  # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
+        str(WORKER_MTP_DRAFT_MAX),  # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
         "--draft-p-min",
-        "0.0",  # greedy: accept top-1 drafts, verifier rejects mismatches
+        str(WORKER_MTP_DRAFT_P_MIN),  # greedy: accept top-1 drafts, verifier rejects mismatches
         "--threads-draft",
-        "16",  # dedicate 16 threads to small 4-layer drafter
+        str(WORKER_MTP_THREADS_DRAFT),  # dedicate 16 threads to small 4-layer drafter
         "-ub",
-        "512",  # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
+        str(WORKER_MTP_UBATCH_TOKENS),  # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
         "--no-mmap",  # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
         "--reasoning",
         "off",  # disable gemma4 thinking-channel (output otherwise lands in
@@ -463,9 +471,9 @@ def _build_worker_explore_command(
         # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
         # allocation. f16 default left some MTP tensor buffers uninitialized.
         "-ctk",
-        "q8_0",
+        WORKER_MTP_KV_TYPES[0],
         "-ctv",
-        "q8_0",
+        WORKER_MTP_KV_TYPES[1],
         "--flash-attn",
         "on",
     ]
@@ -498,7 +506,7 @@ def _build_dev_command(port: int) -> list[str]:
 
 # Use v2 binary for roles with v3 spec decode bug (Qwen2.5 architecture).
 # Currently empty (was {"coder_escalation"}); kept here for clarity of intent.
-_NO_SPEC_DECODE = {"architect_general"}
+_NO_SPEC_DECODE = NO_SPEC_DECODE_ROLES
 
 # Role-specific KV cache budgets and quantization.
 # Phase 0 benchmarks (2026-03-25): generation speed neutral, memory savings significant at 65K+.
@@ -511,14 +519,7 @@ _KV_CONTEXT_SIZES = {
     "architect_general": str(LAUNCH_CONTEXT_TOKENS["architect_general"]),  # 122B MoE hybrid → ~16GB KV
     "ingest_long_context": str(LAUNCH_CONTEXT_TOKENS["ingest_long_context"]),  # 80B SSM, needs long context (Stage 1 of three_stage_summarization)
 }
-_KV_QUANT_CONFIGS = {
-    # 2026-05-06: frontdoor + coder_escalation now share Qwen3.6-35B-A3B Q8 GGUF
-    # (qwen35moe MoE-attention, NOT SSM hybrid). Per registry kv_quant {q8_0/q8_0}.
-    "frontdoor": ("q8_0", "q8_0"),  # Qwen3.6-35B-A3B Q8: q8_0 K/V (Qwen trained bf16)
-    "coder_escalation": ("q8_0", "q8_0"),  # same model as frontdoor
-    "architect_general": ("q4_0", "f16"),  # pure attention: q4_0 K (4x), f16 V (zero prefill cost)
-    "ingest_long_context": ("q4_0", "q4_0"),  # SSM-hybrid, long context, max compression
-}
+_KV_QUANT_CONFIGS = LAUNCH_KV_QUANT_CONFIGS
 
 
 def _resolve_thread_count(role_name: str, numa_instance: int = 0) -> str:

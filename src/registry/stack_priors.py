@@ -26,9 +26,12 @@ DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_STACK_MANIFEST = REPO_ROOT / "scripts" / "server" / "stack_manifest.py"
 DEFAULT_STACK_NUMA = REPO_ROOT / "scripts" / "server" / "stack_numa.py"
+DEFAULT_ORCHESTRATOR_STACK = REPO_ROOT / "scripts" / "server" / "orchestrator_stack.py"
+DEFAULT_STACK_PATHS = REPO_ROOT / "scripts" / "server" / "stack_paths.py"
+DEFAULT_STACK_RUNTIME = REPO_ROOT / "scripts" / "server" / "stack_runtime.py"
 PRECEDENCE_SPEC = REPO_ROOT / "docs" / "reference" / "stack-truth-precedence.md"
 
-STACK_PRIORS_VERSION = 3
+STACK_PRIORS_VERSION = 4
 REQUIRED_TOP_LEVEL_FIELDS = (
     "stack_priors_version",
     "contract",
@@ -72,6 +75,7 @@ REQUIRED_LAUNCH_FIELDS = (
     "primary_roles",
     "modes",
     "requirements",
+    "runtime",
 )
 REQUIRED_PRIOR_FIELDS = (
     "throughput_tps",
@@ -420,6 +424,7 @@ def _effective_context_for_meta(
 def _launch_record(
     entries: list[dict[str, Any]],
     requirements: dict[str, str] | None = None,
+    runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     sorted_entries = sorted(
         entries,
@@ -442,6 +447,7 @@ def _launch_record(
             {str(entry["mode"]) for entry in sorted_entries if isinstance(entry.get("mode"), str)}
         ),
         "requirements": copy.deepcopy(requirements or {}),
+        "runtime": copy.deepcopy(runtime or {}),
     }
 
 
@@ -539,6 +545,191 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     return aliases, roles
 
 
+def _first_string(values: Any) -> str | None:
+    if not isinstance(values, list):
+        return None
+    for value in values:
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def _first_launch_entry_value(launch: dict[str, Any], field: str) -> str | None:
+    entries = launch.get("entries")
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if isinstance(entry, dict) and isinstance(entry.get(field), str):
+            return str(entry[field])
+    return None
+
+
+def _runtime_requirements(server_cfg: dict[str, Any] | None) -> tuple[str | None, list[str]]:
+    if not isinstance(server_cfg, dict):
+        return None, []
+    runtime = server_cfg.get("runtime_requirements")
+    if not isinstance(runtime, dict):
+        return None, []
+    binary_dir = runtime.get("binary_dir") if isinstance(runtime.get("binary_dir"), str) else None
+    raw_ld = runtime.get("ld_library_path")
+    ld_paths = [str(path) for path in raw_ld if isinstance(path, str)] if isinstance(raw_ld, list) else []
+    return binary_dir, ld_paths
+
+
+def _effective_acceleration(
+    role_cfg: dict[str, Any] | None,
+    server_cfg: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if isinstance(server_cfg, dict) and isinstance(server_cfg.get("acceleration"), dict):
+        return copy.deepcopy(server_cfg["acceleration"])
+    if isinstance(role_cfg, dict) and isinstance(role_cfg.get("acceleration"), dict):
+        return copy.deepcopy(role_cfg["acceleration"])
+    return {}
+
+
+def _override_kv_args(acceleration: dict[str, Any]) -> list[str]:
+    if acceleration.get("type") != "moe_expert_reduction":
+        return []
+    override_key = acceleration.get("override_key")
+    experts = acceleration.get("experts")
+    if not isinstance(override_key, str) or not isinstance(experts, int):
+        return []
+    return [f"{override_key}=int:{experts}"]
+
+
+def _launch_runtime_record(
+    role: str,
+    descriptor: dict[str, Any],
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    launch_cfg: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(launch_cfg, dict):
+        return {}
+    launch = launch_cfg.get("launch")
+    if not isinstance(launch, dict):
+        return {}
+
+    try:
+        from scripts.server.stack_manifest import (
+            DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
+            DEFAULT_UBATCH_TOKENS,
+            LAUNCH_KV_QUANT_CONFIGS,
+            NO_SPEC_DECODE_ROLES,
+            SERIAL_ROLES,
+            WORKER_MTP_DRAFT_MAX,
+            WORKER_MTP_DRAFT_P_MIN,
+            WORKER_MTP_SPEC_TYPE,
+            WORKER_MTP_THREADS_DRAFT,
+            WORKER_MTP_UBATCH_TOKENS,
+        )
+        from scripts.server.stack_numa import MLOCK_ROLES
+        from scripts.server.stack_paths import LLAMA_SERVER, LLAMA_SERVER_V2, SLOT_SAVE_DIR, _V2_ROLES
+    except Exception:
+        return {}
+
+    descriptor_serving = descriptor.get("serving") if isinstance(descriptor.get("serving"), dict) else {}
+    primary_role = _first_string(launch.get("primary_roles")) or role
+    mode = _first_string(launch.get("modes")) or "default"
+    worker_type = _first_launch_entry_value(launch, "worker_type")
+    vision_type = _first_launch_entry_value(launch, "vision_type")
+    requirements = launch.get("requirements") if isinstance(launch.get("requirements"), dict) else {}
+    acceleration = _effective_acceleration(role_cfg, server_cfg)
+    binary_dir, ld_paths = _runtime_requirements(server_cfg)
+
+    binary_path = str(Path(binary_dir) / "llama-server") if binary_dir else str(LLAMA_SERVER)
+    binary_family = (
+        str(descriptor_serving.get("binary"))
+        if isinstance(descriptor_serving.get("binary"), str)
+        else "llama.cpp-v2"
+        if primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists()
+        else "llama.cpp"
+    )
+    if not binary_dir and primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists():
+        binary_path = str(LLAMA_SERVER_V2)
+
+    if mode == "worker_pool":
+        slots = 4 if worker_type == "fast" else 1
+    elif mode == "vision":
+        slots = 1 if vision_type == "escalation" else 2
+    elif mode == "embedding":
+        slots = 4
+    else:
+        slots = 1 if primary_role in SERIAL_ROLES else 2
+
+    kv_types = LAUNCH_KV_QUANT_CONFIGS.get(primary_role) or LAUNCH_KV_QUANT_CONFIGS.get(role)
+    override_kv = ["qwen3vlmoe.expert_used_count=int:4"] if vision_type == "escalation" else []
+    override_kv.extend(_override_kv_args(acceleration))
+    override_kv = sorted(set(override_kv))
+
+    spec: dict[str, Any] = {
+        "enabled": False,
+        "type": None,
+        "disabled_by": None,
+        "draft_model_path": None,
+        "draft_max": None,
+        "draft_p_min": None,
+        "threads_draft": None,
+    }
+    if mode == "worker_pool" and worker_type == "explore":
+        spec.update(
+            {
+                "enabled": True,
+                "type": WORKER_MTP_SPEC_TYPE,
+                "draft_model_path": str(requirements.get("draft_model_path"))
+                if requirements.get("draft_model_path")
+                else None,
+                "draft_max": WORKER_MTP_DRAFT_MAX,
+                "draft_p_min": WORKER_MTP_DRAFT_P_MIN,
+                "threads_draft": WORKER_MTP_THREADS_DRAFT,
+            }
+        )
+    elif primary_role in NO_SPEC_DECODE_ROLES and (
+        acceleration.get("draft_role")
+        or acceleration.get("draft_max")
+        or acceleration.get("n_layer_exit_draft")
+    ):
+        spec["disabled_by"] = "no_spec_decode"
+
+    context_tokens = launch_cfg.get("effective_context_tokens")
+    if not isinstance(context_tokens, int):
+        context_tokens = DEFAULT_EFFECTIVE_CONTEXT_TOKENS
+
+    return {
+        "binary_family": binary_family,
+        "binary_path": binary_path,
+        "binary_dir": binary_dir,
+        "ld_library_path": ld_paths,
+        "env_policy": "binary_override_strip_ggml" if binary_dir else "canonical",
+        "kmp_blocktime": 10 if binary_dir else None,
+        "cache": {
+            "context_tokens": context_tokens,
+            "slots": slots,
+            "ubatch": WORKER_MTP_UBATCH_TOKENS
+            if mode == "worker_pool" and worker_type == "explore"
+            else DEFAULT_UBATCH_TOKENS
+            if mode == "default"
+            else None,
+            "kv_type_k": kv_types[0] if kv_types else None,
+            "kv_type_v": kv_types[1] if kv_types else None,
+            "kv_hadamard": bool(primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists()),
+            "no_mmap": bool(mode == "worker_pool" and worker_type == "explore"),
+            "mlock": bool(mode == "default" and primary_role in MLOCK_ROLES),
+            "slot_save_path": str(SLOT_SAVE_DIR / primary_role) if mode == "default" else None,
+        },
+        "flags": {
+            "flash_attn": True,
+            "jinja": bool(
+                (mode == "default" and primary_role != "architect_general")
+                or (mode == "worker_pool" and worker_type == "explore")
+            ),
+            "reasoning": "off" if mode == "worker_pool" and worker_type == "explore" else None,
+            "override_kv": override_kv,
+            "spec": spec,
+        },
+    }
+
+
 def _role_memory_cost(
     role: str,
     role_cfg: dict[str, Any] | None,
@@ -562,7 +753,9 @@ def _role_memory_cost(
 
 
 def _serving_record(
+    role: str,
     descriptor: dict[str, Any],
+    role_cfg: dict[str, Any] | None,
     server_role: str | None,
     server_cfg: dict[str, Any] | None,
     binding: str,
@@ -594,6 +787,19 @@ def _serving_record(
     else:
         slots = None
 
+    launch_record = (
+        copy.deepcopy(launch_cfg.get("launch") or _launch_record([]))
+        if isinstance(launch_cfg, dict)
+        else _launch_record([])
+    )
+    launch_record["runtime"] = _launch_runtime_record(
+        role,
+        descriptor,
+        server_cfg,
+        role_cfg,
+        launch_cfg,
+    )
+
     return {
         "endpoint": server_cfg.get("url")
         if isinstance(server_cfg, dict)
@@ -621,9 +827,7 @@ def _serving_record(
         )
         if isinstance(descriptor.get("role_bindings"), dict)
         else False,
-        "launch": copy.deepcopy(launch_cfg.get("launch") or _launch_record([]))
-        if isinstance(launch_cfg, dict)
-        else _launch_record([]),
+        "launch": launch_record,
     }
 
 
@@ -663,7 +867,15 @@ def _role_record(
         "status": "compiled_with_gaps" if gaps else "compiled",
         "model_id": descriptor.get("model_id"),
         "display_name": descriptor.get("display_name"),
-        "serving": _serving_record(descriptor, server_role, server_cfg, binding, launch_cfg),
+        "serving": _serving_record(
+            role,
+            descriptor,
+            role_cfg,
+            server_role,
+            server_cfg,
+            binding,
+            launch_cfg,
+        ),
         "priors": {
             "throughput_tps": throughput,
             "quality_overall": quality,
@@ -757,6 +969,9 @@ def compile_stack_priors(
             "descriptors": _source_metadata(descriptor_path),
             "stack_manifest": _source_metadata(DEFAULT_STACK_MANIFEST),
             "stack_numa": _source_metadata(DEFAULT_STACK_NUMA),
+            "orchestrator_stack": _source_metadata(DEFAULT_ORCHESTRATOR_STACK),
+            "stack_paths": _source_metadata(DEFAULT_STACK_PATHS),
+            "stack_runtime": _source_metadata(DEFAULT_STACK_RUNTIME),
         },
         "roles": role_records,
         "known_global_gaps": {

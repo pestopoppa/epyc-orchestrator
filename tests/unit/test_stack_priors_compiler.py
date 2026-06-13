@@ -90,13 +90,26 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     assert priors["contract"]["schema"] == "epyc.stack_priors"
     assert sorted(priors["source_artifacts"]) == [
         "descriptors",
+        "orchestrator_stack",
         "registry",
         "stack_manifest",
         "stack_numa",
+        "stack_paths",
+        "stack_runtime",
     ]
     assert validate_stack_priors_contract(priors) == []
     assert frontdoor["priors"]["memory_cost"] == 1.0
     assert frontdoor["evidence"]["precedence"]["memory_cost"] == "server_mode.tier"
+    frontdoor_runtime = frontdoor["serving"]["launch"]["runtime"]
+    assert frontdoor_runtime["binary_family"] == "llama.cpp"
+    assert frontdoor_runtime["cache"]["slots"] == 1
+    assert frontdoor_runtime["cache"]["ubatch"] == 8192
+    assert frontdoor_runtime["cache"]["kv_type_k"] == "q8_0"
+    assert frontdoor_runtime["cache"]["kv_type_v"] == "q8_0"
+    assert frontdoor_runtime["cache"]["mlock"] is True
+    assert frontdoor_runtime["cache"]["slot_save_path"].endswith("/kv_slots/frontdoor")
+    assert frontdoor_runtime["flags"]["jinja"] is True
+    assert frontdoor_runtime["flags"]["spec"]["enabled"] is False
     assert coder["serving"]["endpoint"] == "http://localhost:8070"
     assert coder["serving"]["shared_mmap"] is True
 
@@ -112,6 +125,13 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
                     "tier": "hot",
                     "model_role": "worker_general",
                     "throughput": "60.7",
+                    "runtime_requirements": {
+                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
+                        "ld_library_path": [
+                            "/mnt/raid0/llm/ik_llama.cpp/build/src",
+                            "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
+                        ],
+                    },
                 }
             },
             "roles": {"worker_general": {"memory": {"residency": "warm"}}},
@@ -153,6 +173,30 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     assert worker["serving"]["launch"]["requirements"]["draft_model_path"].endswith(
         "gemma-4-26B-A4B-it-assistant-Q8_0.gguf"
     )
+    runtime = worker["serving"]["launch"]["runtime"]
+    assert runtime["binary_family"] == "ik-pr1744"
+    assert runtime["binary_path"].endswith("/ik_llama.cpp/build/bin/llama-server")
+    assert runtime["binary_dir"] == "/mnt/raid0/llm/ik_llama.cpp/build/bin"
+    assert runtime["ld_library_path"] == [
+        "/mnt/raid0/llm/ik_llama.cpp/build/src",
+        "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
+    ]
+    assert runtime["env_policy"] == "binary_override_strip_ggml"
+    assert runtime["kmp_blocktime"] == 10
+    assert runtime["cache"]["context_tokens"] == 16384
+    assert runtime["cache"]["slots"] == 1
+    assert runtime["cache"]["ubatch"] == 512
+    assert runtime["cache"]["kv_type_k"] == "q8_0"
+    assert runtime["cache"]["kv_type_v"] == "q8_0"
+    assert runtime["cache"]["no_mmap"] is True
+    assert runtime["cache"]["mlock"] is False
+    assert runtime["flags"]["jinja"] is True
+    assert runtime["flags"]["reasoning"] == "off"
+    assert runtime["flags"]["spec"]["enabled"] is True
+    assert runtime["flags"]["spec"]["type"] == "mtp"
+    assert runtime["flags"]["spec"]["draft_max"] == 2
+    assert runtime["flags"]["spec"]["draft_p_min"] == 0.0
+    assert runtime["flags"]["spec"]["threads_draft"] == 16
     assert worker["priors"]["throughput_tps"] == 60.7
     assert worker["priors"]["memory_cost"] == 1.0
 
@@ -235,6 +279,9 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
     assert priors["roles"]["toolrunner"]["serving"]["binding"] == "server_mode.shared_with"
     assert priors["roles"]["worker_math"]["serving"]["launch"]["requirements"] == (
         priors["roles"]["worker_general"]["serving"]["launch"]["requirements"]
+    )
+    assert priors["roles"]["worker_math"]["serving"]["launch"]["runtime"] == (
+        priors["roles"]["worker_general"]["serving"]["launch"]["runtime"]
     )
 
 
@@ -325,6 +372,14 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     assert role["serving"]["launch"]["requirements"]["mmproj_path"].endswith(
         "mmproj-model-f16.gguf"
     )
+    runtime = role["serving"]["launch"]["runtime"]
+    assert runtime["binary_family"] == "llama.cpp"
+    assert runtime["cache"]["slots"] == 2
+    assert runtime["cache"]["ubatch"] is None
+    assert runtime["cache"]["mlock"] is False
+    assert runtime["flags"]["flash_attn"] is True
+    assert runtime["flags"]["jinja"] is False
+    assert runtime["flags"]["spec"]["enabled"] is False
     assert role["priors"]["memory_cost"] == 1.0
 
 

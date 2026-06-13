@@ -479,6 +479,8 @@ def _guard_step(
         surface_exceptions_path=config.surface_exceptions,
         procedure_path=config.procedure,
         procedure_schema_path=config.schema,
+        registry_path=config.lean_registry,
+        descriptor_path=config.descriptors,
     )
     errors = list(result.errors)
     warnings = list(result.warnings)

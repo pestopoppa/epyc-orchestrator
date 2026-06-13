@@ -144,6 +144,14 @@ def test_update_merges_shared_alias_mismatch_into_runtime_descriptor(tmp_path: P
                     "memory_gb": 16,
                     "throughput": 60.7,
                     "benchmark_score": "90%",
+                    "runtime_requirements": {
+                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
+                        "ld_library_path": [
+                            "/mnt/raid0/llm/ik_llama.cpp/build/src",
+                            "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
+                            "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+                        ],
+                    },
                     "numa_instances": 4,
                     "numa_ports": [8082, 8182, 8282, 8382],
                 }
@@ -251,6 +259,14 @@ def test_check_reports_shared_alias_mismatch_without_conflict_error(
                     "memory_gb": 16,
                     "throughput": 60.7,
                     "benchmark_score": "90%",
+                    "runtime_requirements": {
+                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
+                        "ld_library_path": [
+                            "/mnt/raid0/llm/ik_llama.cpp/build/src",
+                            "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
+                            "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+                        ],
+                    },
                     "numa_instances": 4,
                     "numa_ports": [8082, 8182, 8282, 8382],
                 }

@@ -29,6 +29,12 @@ def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> d
     stack_manifest.write_text("ROLE_LAUNCH_META = {}\n", encoding="utf-8")
     stack_numa = registry.parent / "stack_numa.py"
     stack_numa.write_text("NUMA_CONFIG = {}\n", encoding="utf-8")
+    orchestrator_stack = registry.parent / "orchestrator_stack.py"
+    orchestrator_stack.write_text("# launcher\n", encoding="utf-8")
+    stack_paths = registry.parent / "stack_paths.py"
+    stack_paths.write_text("# paths\n", encoding="utf-8")
+    stack_runtime = registry.parent / "stack_runtime.py"
+    stack_runtime.write_text("# runtime\n", encoding="utf-8")
     return {
         "stack_priors_version": STACK_PRIORS_VERSION,
         "contract": stack_priors_contract(),
@@ -41,6 +47,12 @@ def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> d
             "descriptors": {"path": str(descriptors), "sha256": _sha(descriptors)},
             "stack_manifest": {"path": str(stack_manifest), "sha256": _sha(stack_manifest)},
             "stack_numa": {"path": str(stack_numa), "sha256": _sha(stack_numa)},
+            "orchestrator_stack": {
+                "path": str(orchestrator_stack),
+                "sha256": _sha(orchestrator_stack),
+            },
+            "stack_paths": {"path": str(stack_paths), "sha256": _sha(stack_paths)},
+            "stack_runtime": {"path": str(stack_runtime), "sha256": _sha(stack_runtime)},
         },
         "roles": {
             "frontdoor": {
@@ -102,6 +114,7 @@ def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> d
                         "primary_roles": ["frontdoor"],
                         "modes": ["default"],
                         "requirements": {},
+                        "runtime": {},
                     },
                 },
                 "priors": {
@@ -124,7 +137,10 @@ def test_validate_stack_priors_accepts_fresh_live_artifact(tmp_path: Path) -> No
     descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
     priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
 
-    result = validate_stack_priors(priors)
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={"frontdoor": {"port": 8070, "tier": "hot"}},
+    )
 
     assert result.ok
     assert result.warnings == []
@@ -343,6 +359,42 @@ def test_validate_stack_priors_rejects_launch_manifest_requirement_drift(
     assert any("mmproj_path" in error for error in result.errors)
 
 
+def test_validate_stack_priors_rejects_launch_manifest_runtime_drift(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["roles"]["frontdoor"]["serving"]["launch"]["runtime"] = {
+        "binary_family": "llama.cpp",
+        "binary_path": "/stale/llama-server",
+        "cache": {"kv_type_k": "q8_0", "kv_type_v": "q8_0", "slots": 1},
+        "flags": {"spec": {"enabled": False}},
+    }
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {
+                "port": 8070,
+                "ports": [8070],
+                "tier": "hot",
+                "launch_runtime": {
+                    "binary_family": "llama.cpp",
+                    "binary_path": "/current/llama-server",
+                    "cache": {"kv_type_k": "q8_0", "kv_type_v": "q8_0", "slots": 1},
+                    "flags": {"spec": {"enabled": False}},
+                },
+            }
+        },
+    )
+
+    assert not result.ok
+    assert any("serving.launch.runtime does not match" in error for error in result.errors)
+    assert any("/current/llama-server" in error for error in result.errors)
+
+
 def test_validate_stack_priors_strict_fails_on_known_gaps(tmp_path: Path) -> None:
     registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
     descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
@@ -351,8 +403,9 @@ def test_validate_stack_priors_strict_fails_on_known_gaps(tmp_path: Path) -> Non
     payload["known_global_gaps"] = {"frontdoor": ["missing ctx"]}
     priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
 
-    loose = validate_stack_priors(priors)
-    strict = validate_stack_priors(priors, strict=True)
+    launch_targets = {"frontdoor": {"port": 8070, "tier": "hot"}}
+    loose = validate_stack_priors(priors, launch_manifest_targets=launch_targets)
+    strict = validate_stack_priors(priors, strict=True, launch_manifest_targets=launch_targets)
 
     assert loose.ok
     assert loose.warnings
@@ -460,12 +513,19 @@ def test_validate_stack_priors_can_include_surface_warnings(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    loose = validate_stack_priors(priors, scan_surfaces=True, repo_root=tmp_path)
+    launch_targets = {"frontdoor": {"port": 8070, "tier": "hot"}}
+    loose = validate_stack_priors(
+        priors,
+        scan_surfaces=True,
+        repo_root=tmp_path,
+        launch_manifest_targets=launch_targets,
+    )
     strict = validate_stack_priors(
         priors,
         strict=True,
         scan_surfaces=True,
         repo_root=tmp_path,
+        launch_manifest_targets=launch_targets,
     )
 
     assert loose.ok
@@ -507,6 +567,7 @@ def test_validate_stack_priors_keeps_waived_surface_visible_in_strict_mode(tmp_p
         scan_surfaces=True,
         repo_root=tmp_path,
         surface_exceptions_path=exceptions,
+        launch_manifest_targets={"frontdoor": {"port": 8070, "tier": "hot"}},
     )
 
     assert result.ok

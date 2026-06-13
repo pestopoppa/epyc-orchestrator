@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts.server.stack_numa import NUMA_CONFIG
-from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _PATHS
+from scripts.server.stack_paths import LLAMA_MATH_TOOLS, _V2_ROLES, _PATHS
 
 
 # =============================================================================
@@ -235,6 +235,30 @@ LAUNCH_CONTEXT_TOKENS = {
     "architect_general": 16384,
     "ingest_long_context": 32768,
 }
+
+DEFAULT_UBATCH_TOKENS = 8192
+WORKER_MTP_UBATCH_TOKENS = 512
+WORKER_MTP_SPEC_TYPE = "mtp"
+WORKER_MTP_DRAFT_MAX = 2
+WORKER_MTP_DRAFT_P_MIN = 0.0
+WORKER_MTP_THREADS_DRAFT = 16
+WORKER_MTP_KV_TYPES = ("q8_0", "q8_0")
+
+# Effective launcher KV settings. Descriptors may preserve broader model
+# capability metadata; this table witnesses the actual llama-server CLI path.
+LAUNCH_KV_QUANT_CONFIGS = {
+    "frontdoor": ("q8_0", "q8_0"),
+    "coder_escalation": ("q8_0", "q8_0"),
+    "worker_summarize": ("q8_0", "q8_0"),
+    "worker_general": WORKER_MTP_KV_TYPES,
+    "worker_explore": WORKER_MTP_KV_TYPES,
+    "worker_math": WORKER_MTP_KV_TYPES,
+    "toolrunner": WORKER_MTP_KV_TYPES,
+    "architect_general": ("q4_0", "f16"),
+    "ingest_long_context": ("q4_0", "q4_0"),
+}
+NO_SPEC_DECODE_ROLES = {"architect_general"}
+KV_HADAMARD_ROLES = set(_V2_ROLES)
 
 DEV_MODEL = "Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf"
 DEV_MODEL_PATH = str(_PATHS["models_dir"] / DEV_MODEL)

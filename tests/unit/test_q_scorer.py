@@ -113,6 +113,7 @@ def _minimal_stack_prior_record(
                 "primary_roles": [role],
                 "modes": ["test"],
                 "requirements": {},
+                "runtime": {},
             },
         },
         "priors": {

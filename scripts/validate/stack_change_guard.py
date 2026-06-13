@@ -15,16 +15,26 @@ from typing import Any
 
 import yaml
 
-from src.registry.stack_priors import validate_stack_priors_contract
+from src.registry.stack_priors import _launch_runtime_record, validate_stack_priors_contract
 
 
 REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+DEFAULT_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
+DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_SURFACE_EXCEPTIONS = REPO_ROOT / "orchestration" / "stack_change_guard_exceptions.yaml"
 DEFAULT_ADD_MODEL_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_model_to_registry.yaml"
 DEFAULT_PROCEDURE_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"
 RETIRED_LIVE_ROLES = {"architect_coding"}
-REQUIRED_SOURCE_ARTIFACTS = ("registry", "descriptors", "stack_manifest", "stack_numa")
+REQUIRED_SOURCE_ARTIFACTS = (
+    "registry",
+    "descriptors",
+    "stack_manifest",
+    "stack_numa",
+    "orchestrator_stack",
+    "stack_paths",
+    "stack_runtime",
+)
 SURFACE_SCAN_ALLOW_MARKER = "stack-change-guard: allow"
 SURFACE_SCAN_MAX_FILE_BYTES = 512 * 1024
 SURFACE_EXCEPTION_CLASSIFICATIONS = frozenset(
@@ -211,12 +221,93 @@ def _port_from_endpoint(endpoint: Any) -> int | None:
     return int(match.group(1))
 
 
-def _launch_manifest_targets() -> dict[str, dict[str, Any]]:
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    try:
+        return _load_yaml(path)
+    except Exception:
+        return {}
+
+
+def _descriptor_by_role(descriptors: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    by_role: dict[str, dict[str, Any]] = {}
+    models = descriptors.get("models")
+    if not isinstance(models, list):
+        return by_role
+    for descriptor in models:
+        if not isinstance(descriptor, dict):
+            continue
+        role_bindings = descriptor.get("role_bindings")
+        if not isinstance(role_bindings, dict):
+            continue
+        roles = role_bindings.get("roles")
+        if not isinstance(roles, list):
+            continue
+        for role in roles:
+            if isinstance(role, str):
+                by_role[role] = descriptor
+    return by_role
+
+
+def _server_cfg_for_role(role: str, server_mode: dict[str, Any]) -> dict[str, Any] | None:
+    direct = server_mode.get(role)
+    if isinstance(direct, dict):
+        return direct
+    for cfg in server_mode.values():
+        if not isinstance(cfg, dict):
+            continue
+        if cfg.get("model_role") == role:
+            return cfg
+        shared_with = cfg.get("shared_with")
+        if isinstance(shared_with, list) and role in shared_with:
+            return cfg
+    return None
+
+
+def _launch_cfg_from_target(target: dict[str, Any]) -> dict[str, Any]:
+    entries = target.get("launch_entries")
+    launch_entries = entries if isinstance(entries, list) else []
+    return {
+        "effective_context_tokens": target.get("effective_context_tokens"),
+        "launch": {
+            "entries": launch_entries,
+            "primary_roles": sorted(
+                {
+                    str(entry["primary_role"])
+                    for entry in launch_entries
+                    if isinstance(entry, dict) and isinstance(entry.get("primary_role"), str)
+                }
+            ),
+            "modes": sorted(
+                {
+                    str(entry["mode"])
+                    for entry in launch_entries
+                    if isinstance(entry, dict) and isinstance(entry.get("mode"), str)
+                }
+            ),
+            "requirements": target.get("launch_requirements")
+            if isinstance(target.get("launch_requirements"), dict)
+            else {},
+        },
+    }
+
+
+def _launch_manifest_targets(
+    *,
+    registry_path: Path = DEFAULT_REGISTRY,
+    descriptor_path: Path = DEFAULT_DESCRIPTORS,
+) -> dict[str, dict[str, Any]]:
     """Return live launch ports/tier per role from the computed manifest."""
     try:
         from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
     except Exception:
         return {}
+
+    registry = _load_yaml_mapping(registry_path)
+    registry_roles = registry.get("roles") if isinstance(registry.get("roles"), dict) else {}
+    server_mode = (
+        registry.get("server_mode") if isinstance(registry.get("server_mode"), dict) else {}
+    )
+    descriptor_roles = _descriptor_by_role(_load_yaml_mapping(descriptor_path))
 
     targets: dict[str, dict[str, Any]] = {}
     for tier, servers in (("hot", HOT_SERVERS), ("warm", WARM_SERVERS)):
@@ -244,6 +335,17 @@ def _launch_manifest_targets() -> dict[str, dict[str, Any]]:
                     target["launch_requirements"].update(
                         _launch_requirements_for_server(server)
                     )
+    for role, target in targets.items():
+        descriptor = descriptor_roles.get(role) or {}
+        role_cfg = registry_roles.get(role) if isinstance(registry_roles.get(role), dict) else None
+        server_cfg = _server_cfg_for_role(role, server_mode)
+        target["launch_runtime"] = _launch_runtime_record(
+            role,
+            descriptor,
+            server_cfg,
+            role_cfg,
+            _launch_cfg_from_target(target),
+        )
     return targets
 
 
@@ -376,13 +478,36 @@ def _normalized_launch_requirements(raw_requirements: Any) -> dict[str, str]:
     return dict(sorted(normalized.items()))
 
 
+def _normalized_jsonish(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _normalized_jsonish(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_normalized_jsonish(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _normalized_launch_runtime(raw_runtime: Any) -> dict[str, Any]:
+    if not isinstance(raw_runtime, dict):
+        return {}
+    normalized = _normalized_jsonish(raw_runtime)
+    return normalized if isinstance(normalized, dict) else {}
+
+
 def validate_launch_manifest_serving_alignment(
     priors: dict[str, Any],
     *,
     launch_manifest_targets: dict[str, dict[str, Any]] | None = None,
+    registry_path: Path = DEFAULT_REGISTRY,
+    descriptor_path: Path = DEFAULT_DESCRIPTORS,
 ) -> list[str]:
     """Validate generated live serving records against current launch roles."""
-    targets = _launch_manifest_targets() if launch_manifest_targets is None else launch_manifest_targets
+    targets = (
+        _launch_manifest_targets(registry_path=registry_path, descriptor_path=descriptor_path)
+        if launch_manifest_targets is None
+        else launch_manifest_targets
+    )
     if not targets:
         return []
 
@@ -416,6 +541,7 @@ def validate_launch_manifest_serving_alignment(
         target_launch_requirements = _normalized_launch_requirements(
             target.get("launch_requirements")
         )
+        target_launch_runtime = _normalized_launch_runtime(target.get("launch_runtime"))
         endpoint_port = _port_from_endpoint(serving.get("endpoint"))
         ports = serving.get("ports")
         port_set = {port for port in ports if isinstance(port, int)} if isinstance(ports, list) else set()
@@ -488,6 +614,19 @@ def validate_launch_manifest_serving_alignment(
                 errors.append(
                     f"role {role!r} serving.launch.requirements do not match "
                     f"launch manifest requirements: {json.dumps(mismatches, sort_keys=True)}"
+                )
+        if target_launch_runtime:
+            launch = serving.get("launch")
+            actual_runtime = (
+                _normalized_launch_runtime(launch.get("runtime"))
+                if isinstance(launch, dict)
+                else {}
+            )
+            if actual_runtime != target_launch_runtime:
+                errors.append(
+                    f"role {role!r} serving.launch.runtime does not match "
+                    "launch manifest runtime: "
+                    f"{json.dumps({'expected': target_launch_runtime, 'actual': actual_runtime}, sort_keys=True)}"
                 )
     return errors
 
@@ -804,6 +943,8 @@ def validate_stack_priors(
     procedure_path: Path | None = None,
     procedure_schema_path: Path | None = None,
     launch_manifest_targets: dict[str, dict[str, Any]] | None = None,
+    registry_path: Path = DEFAULT_REGISTRY,
+    descriptor_path: Path = DEFAULT_DESCRIPTORS,
 ) -> GuardResult:
     errors: list[str] = []
     warnings: list[str] = []
@@ -816,6 +957,8 @@ def validate_stack_priors(
         validate_launch_manifest_serving_alignment(
             priors,
             launch_manifest_targets=launch_manifest_targets,
+            registry_path=registry_path,
+            descriptor_path=descriptor_path,
         )
     )
     roles = priors.get("roles")
