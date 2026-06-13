@@ -50,6 +50,7 @@ from orchestration.repl_memory.q_scorer import (
     stack_prior_q_scorer_priors_by_role,
 )
 from orchestration.repl_memory.progress_logger import EventType
+from src.registry.stack_priors import STACK_PRIORS_VERSION, stack_priors_contract
 
 
 def _make_outcome(outcome: str = "success") -> _FakeEntry:
@@ -106,6 +107,7 @@ def _minimal_stack_prior_record(
             "binary_dir": None,
             "numa_policy": "test",
             "shared_mmap": False,
+            "launch": {},
         },
         "priors": {
             "throughput_tps": throughput_tps,
@@ -125,8 +127,8 @@ def _write_stack_priors(path: Path, roles: dict[str, dict[str, Any]]) -> Path:
     path.write_text(
         yaml.safe_dump(
             {
-                "stack_priors_version": 1,
-                "contract": {"schema": "epyc.stack_priors", "version": 1},
+                "stack_priors_version": STACK_PRIORS_VERSION,
+                "contract": stack_priors_contract(),
                 "compiled_at": "2026-06-13T00:00:00Z",
                 "status": "compiled",
                 "coverage_scope": "unit",

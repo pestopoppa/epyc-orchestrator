@@ -1,7 +1,7 @@
-stack_priors_version: 1
+stack_priors_version: 2
 contract:
   schema: epyc.stack_priors
-  version: 1
+  version: 2
   required_top_level_fields:
   - stack_priors_version
   - contract
@@ -35,12 +35,13 @@ contract:
   - binary_dir
   - numa_policy
   - shared_mmap
+  - launch
   required_prior_fields:
   - throughput_tps
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T18:36:48Z'
+compiled_at: '2026-06-13T18:50:26Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -48,19 +49,19 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: f4db0391e108325e0dff09165ba34f2a8dc95dbf0390c3cee54fe9fb6ac5fcda
-    repo_commit: 4ca702d
+    repo_commit: dc14196
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
     sha256: a4638fd3a9d813ffddc4635be434429ee653e3e3ba6c3642cb08bdb4061bfc43
-    repo_commit: 4ca702d
+    repo_commit: dc14196
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 6caacc84eaf14dd80713e713fedae98843895a7a1b8f8d46cb6c06ff8beb8390
-    repo_commit: 4ca702d
+    repo_commit: dc14196
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: 4ca702d
+    repo_commit: dc14196
 roles:
   architect_general:
     role: architect_general
@@ -80,6 +81,16 @@ roles:
       binary_dir: null
       numa_policy: single_96t_interleave_all
       shared_mmap: false
+      launch:
+        entries:
+        - port: 8083
+          primary_role: architect_general
+          mode: default
+          alias: false
+        primary_roles:
+        - architect_general
+        modes:
+        - default
     priors:
       throughput_tps: 12.19
       quality_overall: 0.857
@@ -141,6 +152,17 @@ roles:
       binary_dir: null
       numa_policy: full_96t_primary_plus_4x48t_quarter_instances
       shared_mmap: true
+      launch:
+        entries:
+        - port: 8070
+          primary_role: frontdoor
+          mode: default
+          alias: true
+          numa_instance: 0
+        primary_roles:
+        - frontdoor
+        modes:
+        - default
     priors:
       throughput_tps: 24.3
       quality_overall: 0.929
@@ -205,6 +227,37 @@ roles:
       binary_dir: null
       numa_policy: full_96t_primary_plus_4x48t_quarter_instances
       shared_mmap: true
+      launch:
+        entries:
+        - port: 8070
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 0
+        - port: 8080
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 1
+        - port: 8180
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 2
+        - port: 8280
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 3
+        - port: 8380
+          primary_role: frontdoor
+          mode: default
+          alias: false
+          numa_instance: 4
+        primary_roles:
+        - frontdoor
+        modes:
+        - default
     priors:
       throughput_tps: 24.3
       quality_overall: 0.929
@@ -269,6 +322,37 @@ roles:
       binary_dir: null
       numa_policy: serial_hot_role
       shared_mmap: false
+      launch:
+        entries:
+        - port: 8085
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 0
+        - port: 8185
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 1
+        - port: 8285
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 2
+        - port: 8385
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 3
+        - port: 8485
+          primary_role: ingest_long_context
+          mode: default
+          alias: false
+          numa_instance: 4
+        primary_roles:
+        - ingest_long_context
+        modes:
+        - default
     priors:
       throughput_tps: 20.8
       quality_overall: 0.93
@@ -330,6 +414,7 @@ roles:
       binary_dir: null
       numa_policy: benchmark_port_not_production
       shared_mmap: false
+      launch: {}
     priors:
       throughput_tps: 39.6
       quality_overall: null
@@ -390,6 +475,24 @@ roles:
       binary_dir: null
       numa_policy: unresolved_role_server_conflict
       shared_mmap: false
+      launch:
+        entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          worker_type: explore
+        - port: 8082
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 1
+          worker_type: explore
+        primary_roles:
+        - worker_general
+        modes:
+        - worker_pool
     priors:
       throughput_tps: 60.7
       quality_overall: 0.87
@@ -454,6 +557,42 @@ roles:
       binary_dir: null
       numa_policy: full_plus_4x_quarter_vl_servers
       shared_mmap: false
+      launch:
+        entries:
+        - port: 8087
+          primary_role: vision_escalation
+          mode: vision
+          alias: false
+          numa_instance: 0
+          vision_type: escalation
+        - port: 8187
+          primary_role: vision_escalation
+          mode: vision
+          alias: false
+          numa_instance: 1
+          vision_type: escalation
+        - port: 8287
+          primary_role: vision_escalation
+          mode: vision
+          alias: false
+          numa_instance: 2
+          vision_type: escalation
+        - port: 8387
+          primary_role: vision_escalation
+          mode: vision
+          alias: false
+          numa_instance: 3
+          vision_type: escalation
+        - port: 8487
+          primary_role: vision_escalation
+          mode: vision
+          alias: false
+          numa_instance: 4
+          vision_type: escalation
+        primary_roles:
+        - vision_escalation
+        modes:
+        - vision
     priors:
       throughput_tps: 27.6
       quality_overall: 0.92
@@ -518,6 +657,42 @@ roles:
       binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
       numa_policy: 4x48t_quarter_instances
       shared_mmap: true
+      launch:
+        entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 0
+          worker_type: explore
+        - port: 8082
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 1
+          worker_type: explore
+        - port: 8182
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 2
+          worker_type: explore
+        - port: 8282
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 3
+          worker_type: explore
+        - port: 8382
+          primary_role: worker_general
+          mode: worker_pool
+          alias: false
+          numa_instance: 4
+          worker_type: explore
+        primary_roles:
+        - worker_general
+        modes:
+        - worker_pool
     priors:
       throughput_tps: 60.7
       quality_overall: 0.9
@@ -581,6 +756,24 @@ roles:
       binary_dir: null
       numa_policy: unresolved_role_server_conflict
       shared_mmap: false
+      launch:
+        entries:
+        - port: 8072
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 0
+          worker_type: explore
+        - port: 8082
+          primary_role: worker_general
+          mode: worker_pool
+          alias: true
+          numa_instance: 1
+          worker_type: explore
+        primary_roles:
+        - worker_general
+        modes:
+        - worker_pool
     priors:
       throughput_tps: 60.7
       quality_overall: null
@@ -639,6 +832,17 @@ roles:
       binary_dir: null
       numa_policy: full_96t_primary_plus_4x48t_quarter_instances
       shared_mmap: true
+      launch:
+        entries:
+        - port: 8070
+          primary_role: frontdoor
+          mode: default
+          alias: true
+          numa_instance: 0
+        primary_roles:
+        - frontdoor
+        modes:
+        - default
     priors:
       throughput_tps: 24.3
       quality_overall: 0.929
@@ -699,6 +903,17 @@ roles:
       binary_dir: null
       numa_policy: single_vl_server
       shared_mmap: false
+      launch:
+        entries:
+        - port: 8086
+          primary_role: worker_vision
+          mode: vision
+          alias: false
+          vision_type: worker
+        primary_roles:
+        - worker_vision
+        modes:
+        - vision
     priors:
       throughput_tps: 20.0
       quality_overall: 0.92

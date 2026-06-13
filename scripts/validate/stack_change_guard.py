@@ -228,9 +228,74 @@ def _launch_manifest_targets() -> dict[str, dict[str, Any]]:
                 continue
             for role in server.get("roles") or []:
                 if isinstance(role, str):
-                    target = targets.setdefault(role, {"port": port, "ports": [], "tier": tier})
+                    target = targets.setdefault(
+                        role,
+                        {"port": port, "ports": [], "tier": tier, "launch_entries": []},
+                    )
                     target["ports"].append(port)
+                    target["launch_entries"].append(_launch_entry_for_role(server, role))
     return targets
+
+
+def _launch_mode_for_server(server: dict[str, Any]) -> str:
+    if server.get("worker_pool"):
+        return "worker_pool"
+    if server.get("vision"):
+        return "vision"
+    if server.get("embedding"):
+        return "embedding"
+    return "default"
+
+
+def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any]:
+    roles = server.get("roles")
+    primary_role = roles[0] if isinstance(roles, list) and roles and isinstance(roles[0], str) else role
+    entry: dict[str, Any] = {
+        "port": server["port"],
+        "primary_role": primary_role,
+        "mode": _launch_mode_for_server(server),
+        "alias": role != primary_role,
+    }
+    numa_instance = server.get("numa_instance")
+    if isinstance(numa_instance, int):
+        entry["numa_instance"] = numa_instance
+    worker_type = server.get("worker_type")
+    if isinstance(worker_type, str):
+        entry["worker_type"] = worker_type
+    vision_type = server.get("vision_type")
+    if isinstance(vision_type, str):
+        entry["vision_type"] = vision_type
+    return entry
+
+
+def _normalized_launch_entries(raw_entries: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_entries, list):
+        return []
+    entries: list[dict[str, Any]] = []
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, dict):
+            continue
+        entry: dict[str, Any] = {}
+        for field in (
+            "port",
+            "primary_role",
+            "mode",
+            "alias",
+            "numa_instance",
+            "worker_type",
+            "vision_type",
+        ):
+            if field in raw_entry:
+                entry[field] = raw_entry[field]
+        entries.append(entry)
+    return sorted(
+        entries,
+        key=lambda entry: (
+            entry.get("port", -1),
+            str(entry.get("primary_role", "")),
+            str(entry.get("mode", "")),
+        ),
+    )
 
 
 def validate_launch_manifest_serving_alignment(
@@ -268,6 +333,7 @@ def validate_launch_manifest_serving_alignment(
             if isinstance(raw_target_ports, list)
             else set()
         )
+        target_launch_entries = _normalized_launch_entries(target.get("launch_entries"))
         endpoint_port = _port_from_endpoint(serving.get("endpoint"))
         ports = serving.get("ports")
         port_set = {port for port in ports if isinstance(port, int)} if isinstance(ports, list) else set()
@@ -300,6 +366,18 @@ def validate_launch_manifest_serving_alignment(
                 f"role {role!r} serving.tier {serving.get('tier')!r} "
                 f"does not match launch manifest tier {target_tier!r}"
             )
+        if target_launch_entries:
+            launch = serving.get("launch")
+            actual_entries = (
+                _normalized_launch_entries(launch.get("entries"))
+                if isinstance(launch, dict)
+                else []
+            )
+            if actual_entries != target_launch_entries:
+                errors.append(
+                    f"role {role!r} serving.launch.entries do not match "
+                    f"launch manifest entries"
+                )
     return errors
 
 

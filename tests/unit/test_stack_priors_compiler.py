@@ -144,6 +144,8 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     assert worker["serving"]["server_role"] == "worker"
     assert worker["serving"]["binding"] == "server_mode.model_role"
     assert worker["serving"]["ports"] == [8072, 8082, 8182, 8282, 8382]
+    assert worker["serving"]["launch"]["primary_roles"] == ["worker_general"]
+    assert worker["serving"]["launch"]["modes"] == ["worker_pool"]
     assert worker["priors"]["throughput_tps"] == 60.7
     assert worker["priors"]["memory_cost"] == 1.0
 
@@ -183,6 +185,8 @@ def test_compile_preserves_conflicts_as_gaps_when_allowed(tmp_path: Path) -> Non
     assert "Role-server conflict: stale worker server binding" in role["known_gaps"]
     assert role["serving"]["binding"] == "stack_manifest.alias->stack_manifest.role"
     assert role["serving"]["ports"] == [8072, 8082]
+    assert role["serving"]["launch"]["entries"][0]["alias"] is True
+    assert role["serving"]["launch"]["entries"][0]["primary_role"] == "worker_general"
 
 
 def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) -> None:
@@ -217,6 +221,15 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     assert role["deployment_status"] == "live_stack"
     assert role["serving"]["binding"] == "stack_manifest.role"
     assert role["serving"]["endpoint"] == "http://localhost:8086"
+    assert role["serving"]["launch"]["entries"] == [
+        {
+            "port": 8086,
+            "primary_role": "worker_vision",
+            "mode": "vision",
+            "alias": False,
+            "vision_type": "worker",
+        }
+    ]
     assert role["priors"]["memory_cost"] == 1.0
 
 

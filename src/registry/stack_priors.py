@@ -28,7 +28,7 @@ DEFAULT_STACK_MANIFEST = REPO_ROOT / "scripts" / "server" / "stack_manifest.py"
 DEFAULT_STACK_NUMA = REPO_ROOT / "scripts" / "server" / "stack_numa.py"
 PRECEDENCE_SPEC = REPO_ROOT / "docs" / "reference" / "stack-truth-precedence.md"
 
-STACK_PRIORS_VERSION = 1
+STACK_PRIORS_VERSION = 2
 REQUIRED_TOP_LEVEL_FIELDS = (
     "stack_priors_version",
     "contract",
@@ -64,6 +64,7 @@ REQUIRED_SERVING_FIELDS = (
     "binary_dir",
     "numa_policy",
     "shared_mmap",
+    "launch",
 )
 REQUIRED_PRIOR_FIELDS = (
     "throughput_tps",
@@ -317,6 +318,64 @@ def _server_for_role(
     return None, None, "unresolved"
 
 
+def _launch_mode_for_server(server: dict[str, Any]) -> str:
+    if server.get("worker_pool"):
+        return "worker_pool"
+    if server.get("vision"):
+        return "vision"
+    if server.get("embedding"):
+        return "embedding"
+    return "default"
+
+
+def _launch_entry_for_role(server: dict[str, Any], role: str) -> dict[str, Any] | None:
+    port = server.get("port")
+    roles = server.get("roles")
+    if not isinstance(port, int) or not isinstance(roles, list) or not roles:
+        return None
+    primary_role = roles[0] if isinstance(roles[0], str) else role
+    entry: dict[str, Any] = {
+        "port": port,
+        "primary_role": primary_role,
+        "mode": _launch_mode_for_server(server),
+        "alias": role != primary_role,
+    }
+    numa_instance = server.get("numa_instance")
+    if isinstance(numa_instance, int):
+        entry["numa_instance"] = numa_instance
+    worker_type = server.get("worker_type")
+    if isinstance(worker_type, str):
+        entry["worker_type"] = worker_type
+    vision_type = server.get("vision_type")
+    if isinstance(vision_type, str):
+        entry["vision_type"] = vision_type
+    return entry
+
+
+def _launch_record(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    sorted_entries = sorted(
+        entries,
+        key=lambda entry: (
+            entry.get("port", -1),
+            str(entry.get("primary_role", "")),
+            str(entry.get("mode", "")),
+        ),
+    )
+    return {
+        "entries": sorted_entries,
+        "primary_roles": sorted(
+            {
+                str(entry["primary_role"])
+                for entry in sorted_entries
+                if isinstance(entry.get("primary_role"), str)
+            }
+        ),
+        "modes": sorted(
+            {str(entry["mode"]) for entry in sorted_entries if isinstance(entry.get("mode"), str)}
+        ),
+    }
+
+
 def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     try:
         from scripts.server.stack_manifest import (
@@ -329,6 +388,7 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
         return {}, {}
 
     launch_ports_by_role: dict[str, list[int]] = {}
+    launch_entries_by_role: dict[str, list[dict[str, Any]]] = {}
     for server in HOT_SERVERS + WARM_SERVERS:
         if not isinstance(server, dict):
             continue
@@ -338,6 +398,9 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
         for role in server.get("roles") or []:
             if isinstance(role, str):
                 launch_ports_by_role.setdefault(role, []).append(port)
+                launch_entry = _launch_entry_for_role(server, role)
+                if launch_entry is not None:
+                    launch_entries_by_role.setdefault(role, []).append(launch_entry)
 
     aliases: dict[str, str] = {}
     roles: dict[str, dict[str, Any]] = {}
@@ -356,6 +419,7 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
             "port": port,
             "ports": ports or ([port] if isinstance(port, int) else []),
             "url": f"http://localhost:{port}" if isinstance(port, int) else None,
+            "launch": _launch_record(launch_entries_by_role.get(str(primary), [])),
         }
         shared = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
         if isinstance(shared, list):
@@ -369,6 +433,7 @@ def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
                         "port": alias_port,
                         "ports": alias_ports or ([alias_port] if isinstance(alias_port, int) else []),
                         "url": f"http://localhost:{alias_port}" if isinstance(alias_port, int) else None,
+                        "launch": _launch_record(launch_entries_by_role.get(alias, [])),
                     }
     return aliases, roles
 
@@ -451,6 +516,9 @@ def _serving_record(
         )
         if isinstance(descriptor.get("role_bindings"), dict)
         else False,
+        "launch": copy.deepcopy(launch_cfg.get("launch") or {})
+        if isinstance(launch_cfg, dict)
+        else {},
     }
 
 

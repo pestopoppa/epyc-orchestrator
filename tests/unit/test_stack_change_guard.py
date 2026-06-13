@@ -60,6 +60,47 @@ def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> d
                     "binary_dir": None,
                     "numa_policy": None,
                     "shared_mmap": False,
+                    "launch": {
+                        "entries": [
+                            {
+                                "port": 8070,
+                                "primary_role": "frontdoor",
+                                "mode": "default",
+                                "alias": False,
+                                "numa_instance": 0,
+                            },
+                            {
+                                "port": 8080,
+                                "primary_role": "frontdoor",
+                                "mode": "default",
+                                "alias": False,
+                                "numa_instance": 1,
+                            },
+                            {
+                                "port": 8180,
+                                "primary_role": "frontdoor",
+                                "mode": "default",
+                                "alias": False,
+                                "numa_instance": 2,
+                            },
+                            {
+                                "port": 8280,
+                                "primary_role": "frontdoor",
+                                "mode": "default",
+                                "alias": False,
+                                "numa_instance": 3,
+                            },
+                            {
+                                "port": 8380,
+                                "primary_role": "frontdoor",
+                                "mode": "default",
+                                "alias": False,
+                                "numa_instance": 4,
+                            },
+                        ],
+                        "primary_roles": ["frontdoor"],
+                        "modes": ["default"],
+                    },
                 },
                 "priors": {
                     "throughput_tps": 24.3,
@@ -211,6 +252,40 @@ def test_validate_stack_priors_rejects_launch_manifest_port_set_drift(
     assert not result.ok
     assert any("missing launch manifest port(s) [8080]" in error for error in result.errors)
     assert any("include non-launch port(s) [9999]" in error for error in result.errors)
+
+
+def test_validate_stack_priors_rejects_launch_manifest_entry_drift(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["roles"]["frontdoor"]["serving"]["launch"]["entries"] = [
+        {"port": 8070, "primary_role": "frontdoor", "mode": "worker_pool", "alias": False}
+    ]
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {
+                "port": 8070,
+                "ports": [8070],
+                "tier": "hot",
+                "launch_entries": [
+                    {
+                        "port": 8070,
+                        "primary_role": "frontdoor",
+                        "mode": "default",
+                        "alias": False,
+                    }
+                ],
+            }
+        },
+    )
+
+    assert not result.ok
+    assert any("serving.launch.entries do not match" in error for error in result.errors)
 
 
 def test_validate_stack_priors_strict_fails_on_known_gaps(tmp_path: Path) -> None:
