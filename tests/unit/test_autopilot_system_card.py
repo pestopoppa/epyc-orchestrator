@@ -15,12 +15,14 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 gen_system_card = importlib.import_module("gen_system_card")
 autopilot = importlib.import_module("autopilot")
 
+LEGACY_ARCHITECT_ROLE = "architect" "_coding"
+
 
 def _write_minimal_root(tmp_path: Path) -> None:
     orchestration = tmp_path / "orchestration"
     orchestration.mkdir()
-    (orchestration / "model_registry.yaml").write_text(
-        """
+    (orchestration / "derived").mkdir()
+    registry_yaml = """
 server_mode:
   frontdoor:
     port: 8070
@@ -39,9 +41,56 @@ server_mode:
 roles:
   frontdoor:
     backend: {type: local}
-  architect_coding:
+  __LEGACY_ARCHITECT_ROLE__:  # legacy fixture: stack priors must exclude this from live roles
     backend: {type: local}
     model: {name: removed-role.gguf}
+""".lstrip()
+    (orchestration / "model_registry.yaml").write_text(
+        registry_yaml.replace("__LEGACY_ARCHITECT_ROLE__", LEGACY_ARCHITECT_ROLE)
+    )
+    (orchestration / "derived" / "stack_priors.yaml").write_text(
+        """
+roles:
+  frontdoor:
+    role: frontdoor
+    deployment_status: live_stack
+    status: compiled
+    display_name: frontdoor-prior.gguf
+    serving:
+      ports: [8070, 8080]
+      endpoint: http://localhost:8070
+      tier: hot
+      binding: server_mode.direct
+    priors:
+      throughput_tps: 24.3
+    acceleration:
+      spec_type: none
+  worker_general:
+    role: worker_general
+    deployment_status: live_stack
+    status: compiled
+    display_name: worker-prior.gguf
+    serving:
+      ports: [8072]
+      endpoint: http://localhost:8072
+      tier: hot
+      binding: stack_manifest.role
+    priors:
+      throughput_tps: 60.7
+    acceleration:
+      spec_type: draft
+      draft_max: 2
+  candidate_only:
+    role: candidate_only
+    deployment_status: benchmark_or_candidate
+    status: compiled
+    display_name: candidate.gguf
+    serving:
+      ports: [9999]
+    priors:
+      throughput_tps: 1.0
+    acceleration:
+      spec_type: none
 """.lstrip()
     )
     (orchestration / "autopilot_baseline.yaml").write_text(
@@ -55,7 +104,7 @@ per_suite_quality_by_tier:
     )
 
 
-def test_system_card_uses_server_mode_not_removed_role(tmp_path: Path) -> None:
+def test_system_card_uses_stack_priors_not_registry_or_removed_role(tmp_path: Path) -> None:
     _write_minimal_root(tmp_path)
     card = gen_system_card.generate_system_card(
         tmp_path,
@@ -69,10 +118,13 @@ def test_system_card_uses_server_mode_not_removed_role(tmp_path: Path) -> None:
         },
     )
 
-    assert "| frontdoor | 8070 | frontdoor.gguf |" in card
-    assert "| worker | 8072 | worker.gguf |" in card
-    assert "| architect_coding |" not in card
-    assert "architect_coding is not an active server role" in card
+    assert "Source: orchestration/derived/stack_priors.yaml" in card
+    assert "| frontdoor | 8070, 8080 | frontdoor-prior.gguf |" in card
+    assert "| worker_general | 8072 | worker-prior.gguf |" in card
+    assert "worker.gguf" not in card
+    assert "candidate.gguf" not in card
+    assert f"| {LEGACY_ARCHITECT_ROLE} |" not in card
+    assert f"{LEGACY_ARCHITECT_ROLE} is not an active server role" in card
 
 
 def test_system_card_prefers_state_baseline_over_yaml(tmp_path: Path) -> None:

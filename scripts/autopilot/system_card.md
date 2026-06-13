@@ -6,22 +6,26 @@ Do not hand-edit this file; edit the source registries or constitution.
 ## Runtime State
 
 - paused: true
-- trial_counter: 788
-- pause_reason: manual_freeze_contested_inference_window_2026-06-12: K-RAG build + BGE repair caused infra skips/timeouts during trial 788; resume only in uncontested inference window
-- in_flight_trial: 788 (seed_batch)
-- last_invalid_reason: critic rejected: Draft action is invalid: seed_batch n_questions=8 is outside the documented 10-50 range.; Draft over-attributes #787 to memory-residency/dirty-page contention d...
+- trial_counter: 805
 
 ## Active Model-Serving Roles
 
+- Source: orchestration/derived/stack_priors.yaml
+
 | Role | Port | Model | Tier | Acceleration | Throughput | Description |
 |---|---:|---|---|---|---:|---|
-| architect_general | 8083 | Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-... | hot | moe_expert_reduction (experts=8, lookup=false... | 12.19 | System architecture - Qwen3.5-122B-A10B MoE (quality 2.57/3, -64GB vs 235B) |
-| coder_escalation | 8070 | Qwen_Qwen3.6-35B-A3B-Q8_0.gguf | hot | none (lookup=false) | 24.3 | Coding escalation - Qwen3.6-35B-A3B Q8 (May-6 swap; shares GGUF with frontdoor; 97% coder vs... |
-| frontdoor | 8070 | Qwen_Qwen3.6-35B-A3B-Q8_0.gguf | hot | none (lookup=false) | 24.3 | Root LM - Qwen3.6-35B-A3B Q8 (quality 93%, May-4 Claude-as-Judge 170/183) |
-| ingest_long_context | 8085 | Qwen3-Next-80B-A3B-Q4_K_M.gguf | hot | moe_expert_reduction (experts=4) | 14.4-20.8 | Accuracy-critical + long-context router specialist - SSM+MoE hybrid linear attention (NO spec... |
-| worker | 8072 | gemma-4-26B-A4B-it-Q4_K_M.gguf | hot | speculative_decoding (lookup=false, draft_max... | 60.7 | Try-cheap-first worker - gemma4-26B-A4B Q4_K_M MTP (swapped 2026-05-08 from Qwen3-Coder-30B-A... |
+| architect_general | 8083 | Qwen3.5-122B-A10B | hot | moe_expert_reduction (lookup=false, draft_max... | 12.19 | live_stack; binding=server_mode.direct; status=compiled |
+| coder_escalation | 8070 | Qwen3.6-35B-A3B-Q8_0 | hot | none (lookup=false) | 24.3 | live_stack; binding=server_mode.direct; status=compiled |
+| frontdoor | 8070, 8080, 8180, 8280, 8380 | Qwen3.6-35B-A3B-Q8_0 | hot | none (lookup=false) | 24.3 | live_stack; binding=server_mode.direct; status=compiled |
+| ingest_long_context | 8085, 8185, 8285, 8385, 8485 | Qwen3-Next-80B-A3B-Instruct | hot | moe_expert_reduction | 20.8 | live_stack; binding=server_mode.direct; status=compiled |
+| toolrunner | 8072, 8082 | gemma-4-26B-A4B-it-Q4_K_M | hot | mtp (lookup=false, draft_max=2) | 60.7 | live_stack; binding=server_mode.shared_with; status=compiled |
+| vision_escalation | 8087, 8187, 8287, 8387, 8487 | Qwen3-VL-30B-A3B-Instruct | hot | moe_expert_reduction | 27.6 | live_stack; binding=stack_manifest.role; status=compiled |
+| worker_general | 8072, 8082, 8182, 8282, 8382 | gemma-4-26B-A4B-it-Q4_K_M | hot | mtp (lookup=false, draft_max=2) | 60.7 | live_stack; binding=server_mode.model_role; status=compiled |
+| worker_math | 8072, 8082 | gemma-4-26B-A4B-it-Q4_K_M | hot | mtp (lookup=false, draft_max=2) | 60.7 | live_stack; binding=server_mode.shared_with; status=compiled |
+| worker_summarize | 8070 | Qwen3.6-35B-A3B-Q8_0 | hot | none (lookup=false) | 24.3 | live_stack; binding=stack_manifest.alias->server_mode.direct; status=compiled |
+| worker_vision | 8086 | Qwen2.5-VL-7B-Instruct | hot | baseline | 20 | live_stack; binding=stack_manifest.role; status=compiled |
 
-- architect_coding is not an active server role in server_mode; do not target it as a live role or port.
+- architect_coding is not an active server role in stack priors; do not target it as a live role or port.
 
 ## Evaluation Instrument
 

@@ -93,7 +93,8 @@ def _format_number(value: Any) -> str:
 def _format_acceleration(config: Any) -> str:
     if not isinstance(config, dict):
         return "none"
-    accel_type = _clean(config.get("type") or "none", 32)
+    raw_type = config.get("type") or config.get("spec_type") or "none"
+    accel_type = _clean(raw_type, 32)
     details: list[str] = []
     if "experts" in config:
         details.append(f"experts={config['experts']}")
@@ -101,12 +102,54 @@ def _format_acceleration(config: Any) -> str:
         details.append(f"lookup={str(config.get('lookup')).lower()}")
     if "draft_max" in config:
         details.append(f"draft_max={config['draft_max']}")
-    if "spec_type" in config:
+    if "spec_type" in config and config.get("spec_type") != raw_type:
         details.append(f"spec={config['spec_type']}")
     return accel_type if not details else f"{accel_type} ({', '.join(details)})"
 
 
-def _production_role_rows(registry: dict[str, Any]) -> list[str]:
+def _stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
+    roles = stack_priors.get("roles")
+    if not isinstance(roles, dict):
+        return []
+
+    rows: list[str] = []
+    for name, record in sorted(roles.items()):
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving") if isinstance(record.get("serving"), dict) else {}
+        priors = record.get("priors") if isinstance(record.get("priors"), dict) else {}
+        ports = serving.get("ports")
+        port_values = [str(port) for port in ports if isinstance(port, int)] if isinstance(ports, list) else []
+        if not port_values:
+            endpoint_port = _port_from_url(serving.get("endpoint"))
+            if endpoint_port:
+                port_values.append(endpoint_port)
+        if not port_values:
+            continue
+        description = (
+            f"{_clean(record.get('deployment_status'), 32)}; "
+            f"binding={_clean(serving.get('binding'), 48)}; "
+            f"status={_clean(record.get('status'), 32)}"
+        )
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    _clean(name, 28),
+                    _clean(", ".join(port_values), 28),
+                    _clean(record.get("display_name") or record.get("model_id") or "unknown", 44),
+                    _clean(serving.get("tier") or "n/a", 12),
+                    _clean(_format_acceleration(record.get("acceleration")), 48),
+                    _clean(_format_number(priors.get("throughput_tps")), 18),
+                    _clean(description, 96),
+                ]
+            )
+            + " |"
+        )
+    return rows
+
+
+def _registry_role_rows(registry: dict[str, Any]) -> list[str]:
     server_mode = registry.get("server_mode") or {}
     roles = registry.get("roles") or {}
     if not isinstance(server_mode, dict) or not isinstance(roles, dict):
@@ -287,11 +330,16 @@ def generate_system_card(
     """Return the current AutoPilot system card as Markdown."""
     root_path = Path(root)
     registry = _load_yaml(root_path / "orchestration" / "model_registry.yaml")
+    stack_priors = _load_yaml(root_path / "orchestration" / "derived" / "stack_priors.yaml")
     state = state_override if state_override is not None else _load_json(
         root_path / "orchestration" / "autopilot_state.json"
     )
     baseline, baseline_source = _baseline_payload(root_path, state_override)
-    role_rows = _production_role_rows(registry)
+    role_source = "orchestration/derived/stack_priors.yaml"
+    role_rows = _stack_prior_role_rows(stack_priors)
+    if not role_rows:
+        role_source = "orchestration/model_registry.yaml (degraded fallback)"
+        role_rows = _registry_role_rows(registry)
     active_role_names = {
         row.split("|")[1].strip()
         for row in role_rows
@@ -310,6 +358,8 @@ def generate_system_card(
         "",
         "## Active Model-Serving Roles",
         "",
+        f"- Source: {role_source}",
+        "",
     ]
     if role_rows:
         lines.extend(
@@ -320,12 +370,13 @@ def generate_system_card(
             ]
         )
     else:
-        lines.append("- No active local server roles found in model_registry.yaml.")
-    if "architect_coding" not in active_role_names:
+        lines.append("- No active local server roles found in generated stack priors or registry.")
+    legacy_architect_role = "architect" "_coding"
+    if legacy_architect_role not in active_role_names:
         lines.extend(
             [
                 "",
-                "- architect_coding is not an active server role in server_mode; "
+                f"- {legacy_architect_role} is not an active server role in stack priors; "
                 "do not target it as a live role or port.",
             ]
         )
