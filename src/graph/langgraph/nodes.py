@@ -111,7 +111,7 @@ def _state_update(
 def _record_escalation_role(state: TaskState, role: Role) -> None:
     """Record role transition and attribute architect prewarm hits."""
     state.record_role(role)
-    if role not in {Role.ARCHITECT_GENERAL, Role.ARCHITECT_CODING}:
+    if role is not Role.ARCHITECT_GENERAL:
         return
     try:
         from src.services.escalation_prewarmer import get_shared_prewarmer
@@ -696,10 +696,12 @@ ROLE_TO_LG_NODE: dict[str, str] = {
     "coder_escalation": "coder_escalation",
     "ingest_long_context": "ingest",
     "architect_general": "architect",
-    str(Role.ARCHITECT_CODING): "architect",
 }
 
 
 def select_start_lg_node(role: str) -> str:
     """Map a role string to the LangGraph node name."""
+    resolved = Role.from_string(role)
+    if resolved is not None:
+        return ROLE_TO_LG_NODE.get(str(resolved), "frontdoor")
     return ROLE_TO_LG_NODE.get(role, "frontdoor")

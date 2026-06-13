@@ -249,6 +249,10 @@ class TestSelectStartNode:
         node = select_start_node(Role.ARCHITECT_CODING)
         assert isinstance(node, ArchitectNode)
 
+    def test_legacy_architect_coding_string(self):
+        node = select_start_node("architect_coding")
+        assert isinstance(node, ArchitectNode)
+
     def test_string_role(self):
         node = select_start_node("coder_escalation")
         assert isinstance(node, CoderEscalationNode)

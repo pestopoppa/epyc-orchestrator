@@ -71,10 +71,6 @@ _ROLE_PROMPT_FALLBACKS = {
         "You are a system architect. You handle complex problems that require "
         "deep reasoning and coordination across multiple domains."
     ),
-    Role.ARCHITECT_CODING: (
-        "You are a principal engineer with expertise in complex codebases. "
-        "You solve the hardest coding problems and design critical systems."
-    ),
     Role.INGEST_LONG_CONTEXT: (
         "You are a document analysis specialist. Process and synthesize "
         "information from long documents while maintaining accuracy."

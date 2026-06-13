@@ -243,6 +243,7 @@ class TestNodeRouting:
         assert select_start_lg_node("unknown_role") == "frontdoor"
         assert select_start_lg_node("frontdoor") == "frontdoor"
         assert select_start_lg_node(str(Role.ARCHITECT_CODING)) == "architect"
+        assert select_start_lg_node("architect_coding") == "architect"
 
 
 # ---------------------------------------------------------------------------

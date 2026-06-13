@@ -172,7 +172,7 @@ async def _run_via_langgraph(ctx, node_name: str):
 def _record_escalation_role(state: TaskState, role: Role) -> None:
     """Record role transition and attribute architect prewarm hits."""
     state.record_role(role)
-    if role not in {Role.ARCHITECT_GENERAL, Role.ARCHITECT_CODING}:
+    if role is not Role.ARCHITECT_GENERAL:
         return
     try:
         from src.services.escalation_prewarmer import get_shared_prewarmer
@@ -840,8 +840,6 @@ _ROLE_TO_NODE: dict[Role, type] = {
     Role.CODER_ESCALATION: CoderEscalationNode,
     Role.INGEST_LONG_CONTEXT: IngestNode,
     Role.ARCHITECT_GENERAL: ArchitectNode,
-    # Compatibility alias for persisted/direct requests using the retired role.
-    Role.ARCHITECT_CODING: ArchitectNode,
 }
 
 

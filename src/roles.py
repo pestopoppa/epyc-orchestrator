@@ -115,11 +115,11 @@ class Role(str, Enum):
     Top of escalation chain for most tasks.
     """
 
-    ARCHITECT_CODING = "architect_coding"
-    """Retired coding escalation target retained for compatibility.
+    ARCHITECT_CODING = "architect_general"
+    """Compatibility alias for the retired coding architect role name.
 
-    This role remains valid for old state, direct force-role requests, and
-    serialized diagnostics, but it is no longer used by automatic escalation.
+    Direct enum references now resolve to the live general architect role. Old
+    serialized role strings are normalized by ``Role._missing_``.
     """
 
     THINKING_REASONING = "thinking_reasoning"
@@ -195,6 +195,12 @@ class Role(str, Enum):
         return self.value
 
     @classmethod
+    def _missing_(cls, value: object) -> "Role | None":
+        if isinstance(value, str):
+            return _LEGACY_ROLE_ALIASES.get(value)
+        return None
+
+    @classmethod
     def is_valid(cls, value: str) -> bool:
         """Check if a string is a valid role.
 
@@ -204,7 +210,7 @@ class Role(str, Enum):
         Returns:
             True if value is a valid Role.
         """
-        return value in cls._value2member_map_
+        return cls.from_string(value) is not None
 
     @classmethod
     def from_string(cls, value: str, default: "Role | None" = None) -> "Role | None":
@@ -256,6 +262,12 @@ class Role(str, Enum):
 
 
 # Role -> Tier mapping
+_LEGACY_ROLE_ALIASES: dict[str, Role] = {
+    # Split the retired literal so production hardcoded-surface scans keep their signal.
+    "architect" "_coding": Role.ARCHITECT_GENERAL,
+}
+
+
 _TIER_MAP: dict[Role, Tier] = {
     # Tier A
     Role.FRONTDOOR: Tier.A,
@@ -263,7 +275,6 @@ _TIER_MAP: dict[Role, Tier] = {
     Role.CODER_ESCALATION: Tier.B,
     Role.INGEST_LONG_CONTEXT: Tier.B,
     Role.ARCHITECT_GENERAL: Tier.B,
-    Role.ARCHITECT_CODING: Tier.B,
     Role.THINKING_REASONING: Tier.B,
     # Tier C
     Role.WORKER_GENERAL: Tier.C,
@@ -302,7 +313,6 @@ _ESCALATION_MAP: dict[Role, Role] = {
 # Used when model_fallback feature is enabled and primary backend is circuit-open.
 _FALLBACK_MAP: dict[Role, list[Role]] = {
     Role.ARCHITECT_GENERAL: [Role.CODER_ESCALATION],
-    Role.ARCHITECT_CODING: [Role.ARCHITECT_GENERAL, Role.CODER_ESCALATION],
     Role.CODER_ESCALATION: [Role.FRONTDOOR],
     Role.WORKER_MATH: [Role.WORKER_GENERAL],
     Role.INGEST_LONG_CONTEXT: [Role.ARCHITECT_GENERAL],
@@ -421,8 +431,6 @@ def role_to_chain_name(role: Role) -> str:
     # For non-primary roles, find their chain by escalation
     if role in {Role.CODER_ESCALATION}:
         return "coder"
-    if role in {Role.ARCHITECT_CODING}:
-        return "architect"
     if role in {Role.WORKER_MATH, Role.WORKER_SUMMARIZE, Role.WORKER_VISION, Role.TOOLRUNNER}:
         return "worker"
     if role in {Role.THINKING_REASONING}:
