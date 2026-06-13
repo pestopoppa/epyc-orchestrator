@@ -31,7 +31,6 @@ HEAVY_ROLES = {
     "frontdoor",
     "coder_escalation",
     "architect_general",
-    "architect_coding",
     "ingest_long_context",
     "vision_escalation",
 }

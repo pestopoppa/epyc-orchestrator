@@ -54,7 +54,6 @@ class TestStreamPolicy:
         monkeypatch.setenv("INFERENCE_TAP_STREAM_MODE", "safe")
         assert should_stream_role("frontdoor") is True
         assert should_stream_role("architect_general") is False
-        assert should_stream_role("architect_coding") is False
         assert should_stream_role("vision_escalation") is True
         assert should_stream_role("ingest_long_context") is True
 

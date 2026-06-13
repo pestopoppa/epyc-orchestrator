@@ -46,7 +46,7 @@ def test_acquire_lock_aborts_on_cancel_check(monkeypatch, tmp_path):
             lock_mod._acquire_lock_with_timeout(
                 fh.fileno(),
                 lock_mod.fcntl.LOCK_EX,
-                role="architect_coding",
+                role="architect_general",
                 mode="exclusive",
                 lock_file=tmp_path / "heavy_model.lock",
                 timeout_s=180.0,
@@ -71,7 +71,7 @@ def test_acquire_lock_aborts_on_request_deadline(monkeypatch, tmp_path):
             lock_mod._acquire_lock_with_timeout(
                 fh.fileno(),
                 lock_mod.fcntl.LOCK_EX,
-                role="architect_coding",
+                role="architect_general",
                 mode="exclusive",
                 lock_file=tmp_path / "heavy_model.lock",
                 timeout_s=180.0,

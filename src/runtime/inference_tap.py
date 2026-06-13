@@ -82,7 +82,7 @@ _sentinel_cache: tuple[str, float] = ("", 0.0)
 # Roles that have shown the strongest contention/timeout behavior under
 # long-held locks. In "safe" tap mode these stay on non-stream inference.
 _HEAVY_STREAM_ROLES: frozenset[str] = frozenset(
-    {"architect_general", "architect_coding"}
+    {"architect_general"}
 )
 
 
