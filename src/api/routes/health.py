@@ -3,9 +3,11 @@
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
+import yaml
 
 from src.api.dependencies import dep_health_tracker
 from src.api.health_tracker import BackendHealthTracker
@@ -15,6 +17,10 @@ from src.observability import classify_exception
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_DEFAULT_STACK_PRIORS_PATH = (
+    Path(__file__).resolve().parents[3] / "orchestration" / "derived" / "stack_priors.yaml"
+)
+_FALLBACK_CORE_ROLES = ("frontdoor", "architect_general")
 
 # Cache knowledge tool status at module load to avoid repeated import checks
 _knowledge_tools_status: dict[str, Any] | None = None
@@ -112,37 +118,91 @@ async def _probe_backend(url: str, timeout: float = 2.0) -> dict[str, Any]:
     }
 
 
-async def _probe_core_backends() -> dict[str, Any]:
-    """Probe core backend roles for liveness."""
+def _first_backend_url(url: str) -> str:
+    """Normalize a config/stack URL value to one concrete HTTP endpoint."""
+    if url.startswith("full:"):
+        url = url[len("full:") :]
+    return url.split(",")[0].rstrip("/")
+
+
+def _stack_prior_backend_urls(
+    stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
+) -> dict[str, str]:
+    """Return live backend probe targets from generated stack priors."""
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.warning("Using fallback health probes; stack priors load failed: %s", exc)
+        return {}
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    roles_by_url: dict[str, list[str]] = {}
+    for role, record in roles.items():
+        if not isinstance(role, str):
+            continue
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+
+        endpoint = serving.get("endpoint")
+        url = _first_backend_url(endpoint) if isinstance(endpoint, str) and endpoint else ""
+        if not url:
+            serving_ports = serving.get("ports")
+            if isinstance(serving_ports, list):
+                for port in serving_ports:
+                    if isinstance(port, int):
+                        url = f"http://localhost:{port}"
+                        break
+        if url:
+            roles_by_url.setdefault(url, []).append(role)
+
+    return {
+        "/".join(sorted(role_names)): url
+        for url, role_names in sorted(roles_by_url.items(), key=lambda item: item[0])
+    }
+
+
+def _fallback_backend_urls() -> dict[str, str]:
     server_urls = get_config().server_urls.as_dict()
     # Post-2026-05-09 consolidation: coder_escalation + worker_summarize share
     # frontdoor's llama-server (same GGUF, same process at :8070), so probing
     # frontdoor covers them. architect_coding was eliminated 2026-05-06.
     # See orchestrator_stack.py:378 (shared_with_first_n) and progress 2026-05-06.
-    core_roles = ["frontdoor", "architect_general"]
+    probes: dict[str, str] = {}
+    for role in _FALLBACK_CORE_ROLES:
+        url = server_urls.get(role)
+        if isinstance(url, str) and url:
+            probes[role] = _first_backend_url(url)
+    return probes
+
+
+async def _probe_core_backends(
+    stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
+) -> dict[str, Any]:
+    """Probe live backend roles for liveness."""
+    backend_urls = _stack_prior_backend_urls(stack_priors_path) or _fallback_backend_urls()
     probes: dict[str, Any] = {}
     tasks = []
     role_list = []
-    for role in core_roles:
-        url = server_urls.get(role)
-        if url:
-            # Strip "full:" prefix used by ConcurrencyAwareBackend and
-            # take only the first URL from comma-separated lists.
-            if url.startswith("full:"):
-                url = url[len("full:"):]
-            url = url.split(",")[0]
-            role_list.append(role)
-            tasks.append(_probe_backend(url))
+    for role, url in backend_urls.items():
+        role_list.append((role, url))
+        tasks.append(_probe_backend(url))
     if not tasks:
         return probes
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    for role, result in zip(role_list, results):
+    for (role, url), result in zip(role_list, results):
         if isinstance(result, Exception):
             reason, detail = classify_exception(result)
             probes[role] = {
                 "ok": False,
                 "latency_ms": None,
-                "url": server_urls.get(role),
+                "url": url,
                 "status_code": None,
                 "failure_reason": reason,
                 "failure_detail": detail,
