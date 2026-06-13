@@ -319,30 +319,56 @@ def _server_for_role(
 
 def _stack_manifest_info() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     try:
-        from scripts.server.stack_manifest import PORT_MAP, ROLE_LAUNCH_META
+        from scripts.server.stack_manifest import (
+            HOT_SERVERS,
+            PORT_MAP,
+            ROLE_LAUNCH_META,
+            WARM_SERVERS,
+        )
     except Exception:
         return {}, {}
+
+    launch_ports_by_role: dict[str, list[int]] = {}
+    for server in HOT_SERVERS + WARM_SERVERS:
+        if not isinstance(server, dict):
+            continue
+        port = server.get("port")
+        if not isinstance(port, int):
+            continue
+        for role in server.get("roles") or []:
+            if isinstance(role, str):
+                launch_ports_by_role.setdefault(role, []).append(port)
 
     aliases: dict[str, str] = {}
     roles: dict[str, dict[str, Any]] = {}
     for primary, meta in ROLE_LAUNCH_META.items():
         if not isinstance(meta, dict):
             continue
-        port = meta.get("port") if meta.get("no_numa") else PORT_MAP.get(primary)
+        ports = sorted(set(launch_ports_by_role.get(str(primary), [])))
+        if ports:
+            port = ports[0]
+        elif meta.get("no_numa"):
+            port = meta.get("port")
+        else:
+            port = PORT_MAP.get(primary)
         roles[str(primary)] = {
             "tier": meta.get("tier"),
             "port": port,
+            "ports": ports or ([port] if isinstance(port, int) else []),
             "url": f"http://localhost:{port}" if isinstance(port, int) else None,
         }
         shared = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
         if isinstance(shared, list):
             for alias in shared:
                 if isinstance(alias, str):
+                    alias_ports = sorted(set(launch_ports_by_role.get(alias, [])))
+                    alias_port = alias_ports[0] if alias_ports else port
                     aliases[alias] = str(primary)
                     roles[alias] = {
                         "tier": meta.get("tier"),
-                        "port": port,
-                        "url": f"http://localhost:{port}" if isinstance(port, int) else None,
+                        "port": alias_port,
+                        "ports": alias_ports or ([alias_port] if isinstance(alias_port, int) else []),
+                        "url": f"http://localhost:{alias_port}" if isinstance(alias_port, int) else None,
                     }
     return aliases, roles
 
@@ -374,31 +400,49 @@ def _serving_record(
     server_role: str | None,
     server_cfg: dict[str, Any] | None,
     binding: str,
+    launch_cfg: dict[str, Any] | None,
 ) -> dict[str, Any]:
     serving = descriptor.get("serving")
     descriptor_serving = serving if isinstance(serving, dict) else {}
     ports: set[int] = set()
-    for value in descriptor_serving.get("ports") or []:
-        if isinstance(value, int):
-            ports.add(value)
+    launch_ports = (
+        [port for port in launch_cfg.get("ports", []) if isinstance(port, int)]
+        if isinstance(launch_cfg, dict)
+        else []
+    )
+    if launch_ports:
+        ports.update(launch_ports)
+    else:
+        for value in descriptor_serving.get("ports") or []:
+            if isinstance(value, int):
+                ports.add(value)
     if isinstance(server_cfg, dict):
-        port = server_cfg.get("port")
-        if isinstance(port, int):
-            ports.add(port)
-        numa_ports = server_cfg.get("numa_ports")
-        if isinstance(numa_ports, list):
-            ports.update(port for port in numa_ports if isinstance(port, int))
         slots = server_cfg.get("slots")
+        if not launch_ports:
+            port = server_cfg.get("port")
+            if isinstance(port, int):
+                ports.add(port)
+            numa_ports = server_cfg.get("numa_ports")
+            if isinstance(numa_ports, list):
+                ports.update(port for port in numa_ports if isinstance(port, int))
     else:
         slots = None
 
     return {
-        "endpoint": server_cfg.get("url") if isinstance(server_cfg, dict) else None,
+        "endpoint": server_cfg.get("url")
+        if isinstance(server_cfg, dict)
+        else launch_cfg.get("url")
+        if isinstance(launch_cfg, dict)
+        else None,
         "server_role": server_role,
         "binding": binding,
         "ports": sorted(ports),
         "slots": slots if isinstance(slots, int) and slots > 0 else None,
-        "tier": server_cfg.get("tier") if isinstance(server_cfg, dict) else None,
+        "tier": launch_cfg.get("tier")
+        if isinstance(launch_cfg, dict) and launch_cfg.get("tier") is not None
+        else server_cfg.get("tier")
+        if isinstance(server_cfg, dict)
+        else None,
         "binary": descriptor_serving.get("binary"),
         "binary_dir": descriptor_serving.get("binary_dir"),
         "numa_policy": descriptor_serving.get("numa_policy"),
@@ -424,6 +468,7 @@ def _role_record(
     server_role, server_cfg, binding = _server_for_role(
         role, server_mode, stack_aliases, stack_roles
     )
+    launch_cfg = stack_roles.get(role)
     memory_cost, memory_source, memory_gaps = _role_memory_cost(role, role_cfg, server_cfg)
     known_gaps = [str(gap) for gap in descriptor.get("known_gaps") or []]
     gaps = list(dict.fromkeys(known_gaps + memory_gaps))
@@ -445,7 +490,7 @@ def _role_record(
         "status": "compiled_with_gaps" if gaps else "compiled",
         "model_id": descriptor.get("model_id"),
         "display_name": descriptor.get("display_name"),
-        "serving": _serving_record(descriptor, server_role, server_cfg, binding),
+        "serving": _serving_record(descriptor, server_role, server_cfg, binding, launch_cfg),
         "priors": {
             "throughput_tps": throughput,
             "quality_overall": quality,

@@ -53,7 +53,7 @@ def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> d
                     "endpoint": "http://localhost:8070",
                     "server_role": "frontdoor",
                     "binding": "server_mode.direct",
-                    "ports": [8070],
+                    "ports": [8070, 8080, 8180, 8280, 8380],
                     "slots": 1,
                     "tier": "hot",
                     "binary": None,
@@ -190,6 +190,27 @@ def test_validate_stack_priors_rejects_launch_manifest_tier_drift(tmp_path: Path
 
     assert not result.ok
     assert any("serving.tier 'hot'" in error for error in result.errors)
+
+
+def test_validate_stack_priors_rejects_launch_manifest_port_set_drift(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["roles"]["frontdoor"]["serving"]["ports"] = [8070, 9999]
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {"port": 8070, "ports": [8070, 8080], "tier": "hot"}
+        },
+    )
+
+    assert not result.ok
+    assert any("missing launch manifest port(s) [8080]" in error for error in result.errors)
+    assert any("include non-launch port(s) [9999]" in error for error in result.errors)
 
 
 def test_validate_stack_priors_strict_fails_on_known_gaps(tmp_path: Path) -> None:

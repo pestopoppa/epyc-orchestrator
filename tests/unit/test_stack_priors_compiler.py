@@ -143,6 +143,7 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     worker = priors["roles"]["worker_general"]
     assert worker["serving"]["server_role"] == "worker"
     assert worker["serving"]["binding"] == "server_mode.model_role"
+    assert worker["serving"]["ports"] == [8072, 8082, 8182, 8282, 8382]
     assert worker["priors"]["throughput_tps"] == 60.7
     assert worker["priors"]["memory_cost"] == 1.0
 
@@ -181,6 +182,7 @@ def test_compile_preserves_conflicts_as_gaps_when_allowed(tmp_path: Path) -> Non
     assert role["status"] == "compiled_with_gaps"
     assert "Role-server conflict: stale worker server binding" in role["known_gaps"]
     assert role["serving"]["binding"] == "stack_manifest.alias->stack_manifest.role"
+    assert role["serving"]["ports"] == [8072, 8082]
 
 
 def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) -> None:

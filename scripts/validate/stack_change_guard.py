@@ -212,7 +212,7 @@ def _port_from_endpoint(endpoint: Any) -> int | None:
 
 
 def _launch_manifest_targets() -> dict[str, dict[str, Any]]:
-    """Return first live launch port/tier per role from the computed manifest."""
+    """Return live launch ports/tier per role from the computed manifest."""
     try:
         from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
     except Exception:
@@ -228,7 +228,8 @@ def _launch_manifest_targets() -> dict[str, dict[str, Any]]:
                 continue
             for role in server.get("roles") or []:
                 if isinstance(role, str):
-                    targets.setdefault(role, {"port": port, "tier": tier})
+                    target = targets.setdefault(role, {"port": port, "ports": [], "tier": tier})
+                    target["ports"].append(port)
     return targets
 
 
@@ -261,6 +262,12 @@ def validate_launch_manifest_serving_alignment(
             continue
         target_port = target.get("port")
         target_tier = target.get("tier")
+        raw_target_ports = target.get("ports")
+        target_ports = (
+            {port for port in raw_target_ports if isinstance(port, int)}
+            if isinstance(raw_target_ports, list)
+            else set()
+        )
         endpoint_port = _port_from_endpoint(serving.get("endpoint"))
         ports = serving.get("ports")
         port_set = {port for port in ports if isinstance(port, int)} if isinstance(ports, list) else set()
@@ -274,6 +281,19 @@ def validate_launch_manifest_serving_alignment(
                 errors.append(
                     f"role {role!r} serving.ports {sorted(port_set)} "
                     f"does not include launch manifest port {target_port}"
+                )
+        if target_ports:
+            missing_ports = sorted(target_ports - port_set)
+            extra_ports = sorted(port_set - target_ports)
+            if missing_ports:
+                errors.append(
+                    f"role {role!r} serving.ports {sorted(port_set)} "
+                    f"missing launch manifest port(s) {missing_ports}"
+                )
+            if extra_ports:
+                errors.append(
+                    f"role {role!r} serving.ports {sorted(port_set)} "
+                    f"include non-launch port(s) {extra_ports}"
                 )
         if isinstance(target_tier, str) and serving.get("tier") != target_tier:
             errors.append(
