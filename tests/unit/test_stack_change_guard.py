@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import yaml
@@ -166,3 +167,59 @@ def test_validate_stack_priors_can_include_surface_warnings(tmp_path: Path) -> N
     assert any("hardcoded_surface.production_blocker" in warning for warning in loose.warnings)
     assert not strict.ok
     assert any("hardcoded_surface.production_blocker" in error for error in strict.errors)
+
+
+def test_validate_stack_priors_rejects_stale_procedure_role_enum(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    procedure_dir = tmp_path / "orchestration" / "procedures"
+    procedure_dir.mkdir(parents=True)
+    _write_yaml(
+        procedure_dir / "add_model_to_registry.yaml",
+        {
+            "inputs": [
+                {
+                    "name": "role",
+                    "type": "string",
+                    "description": "Role assignment",
+                    "validation": {"enum": ["frontdoor", "architect_coding"]},
+                }
+            ]
+        },
+    )
+
+    result = validate_stack_priors(priors, scan_surfaces=True, repo_root=tmp_path)
+
+    assert not result.ok
+    assert any("procedure role enum drift" in error for error in result.errors)
+
+
+def test_validate_stack_priors_rejects_stale_procedure_schema_role_enum(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+    orchestration_dir = tmp_path / "orchestration"
+    orchestration_dir.mkdir()
+    schema = {
+        "properties": {
+            "permissions": {
+                "properties": {
+                    "roles": {
+                        "items": {
+                            "enum": ["frontdoor", "architect_coding", "admin"],
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (orchestration_dir / "procedure.schema.json").write_text(
+        json.dumps(schema),
+        encoding="utf-8",
+    )
+
+    result = validate_stack_priors(priors, scan_surfaces=True, repo_root=tmp_path)
+
+    assert not result.ok
+    assert any("procedure schema permission enum drift" in error for error in result.errors)

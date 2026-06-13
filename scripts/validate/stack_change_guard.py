@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,8 @@ import yaml
 
 REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
 DEFAULT_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+DEFAULT_ADD_MODEL_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_model_to_registry.yaml"
+DEFAULT_PROCEDURE_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"
 RETIRED_LIVE_ROLES = {"architect_coding"}
 SURFACE_SCAN_ALLOW_MARKER = "stack-change-guard: allow"
 SURFACE_SCAN_MAX_FILE_BYTES = 512 * 1024
@@ -211,6 +214,111 @@ def scan_hardcoded_surfaces(
     return findings
 
 
+def stack_prior_role_choices(priors: dict[str, Any]) -> list[str]:
+    """Return model role choices that procedure inputs should accept."""
+    roles = priors.get("roles")
+    if not isinstance(roles, dict):
+        return []
+
+    choices: list[str] = []
+    for role, record in roles.items():
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if role in RETIRED_LIVE_ROLES:
+            continue
+        if record.get("deployment_status") == "retired":
+            continue
+        choices.append(role)
+    return sorted(choices)
+
+
+def stack_prior_permission_role_choices(priors: dict[str, Any]) -> list[str]:
+    """Return live executor roles accepted by the procedure schema."""
+    roles = priors.get("roles")
+    if not isinstance(roles, dict):
+        return []
+
+    choices: list[str] = []
+    for role, record in roles.items():
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if role in RETIRED_LIVE_ROLES:
+            continue
+        if record.get("deployment_status") == "live_stack":
+            choices.append(role)
+    return sorted(choices) + ["admin"]
+
+
+def _procedure_input_enum(procedure_path: Path, input_name: str) -> list[str] | None:
+    procedure = _load_yaml(procedure_path)
+    inputs = procedure.get("inputs")
+    if not isinstance(inputs, list):
+        return None
+    for raw_input in inputs:
+        if not isinstance(raw_input, dict) or raw_input.get("name") != input_name:
+            continue
+        validation = raw_input.get("validation")
+        if not isinstance(validation, dict):
+            return None
+        enum = validation.get("enum")
+        if not isinstance(enum, list):
+            return None
+        return [str(item) for item in enum if isinstance(item, str)]
+    return None
+
+
+def _procedure_schema_permission_enum(schema_path: Path) -> list[str] | None:
+    with schema_path.open("r", encoding="utf-8") as fh:
+        schema = json.load(fh)
+    try:
+        enum = schema["properties"]["permissions"]["properties"]["roles"]["items"]["enum"]
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(enum, list):
+        return None
+    return [str(item) for item in enum if isinstance(item, str)]
+
+
+def validate_procedure_role_enums(
+    priors: dict[str, Any],
+    *,
+    repo_root: Path = REPO_ROOT,
+) -> list[str]:
+    """Validate generated procedure role enums against stack priors."""
+    errors: list[str] = []
+    procedure_path = repo_root / DEFAULT_ADD_MODEL_PROCEDURE.relative_to(REPO_ROOT)
+    if procedure_path.exists():
+        expected = stack_prior_role_choices(priors)
+        actual = _procedure_input_enum(procedure_path, "role")
+        if actual is None:
+            rel_path = procedure_path.relative_to(repo_root)
+            errors.append(f"procedure role enum missing: {rel_path} input 'role'")
+        elif actual != expected:
+            rel_path = procedure_path.relative_to(repo_root)
+            errors.append(
+                f"procedure role enum drift: {rel_path} input 'role' expected {expected} "
+                f"from stack priors, got {actual} "
+                "[run: scripts/registry/sync_procedure_role_enums.py]"
+            )
+
+    schema_path = repo_root / DEFAULT_PROCEDURE_SCHEMA.relative_to(REPO_ROOT)
+    if schema_path.exists():
+        expected_permissions = stack_prior_permission_role_choices(priors)
+        actual_permissions = _procedure_schema_permission_enum(schema_path)
+        if actual_permissions is None:
+            rel_path = schema_path.relative_to(repo_root)
+            errors.append(f"procedure schema permission enum missing: {rel_path}")
+        elif actual_permissions != expected_permissions:
+            rel_path = schema_path.relative_to(repo_root)
+            errors.append(
+                f"procedure schema permission enum drift: {rel_path} expected "
+                f"{expected_permissions} from live stack priors plus admin, "
+                f"got {actual_permissions} "
+                "[run: scripts/registry/sync_procedure_role_enums.py]"
+            )
+    return errors
+
+
 def validate_stack_priors(
     priors_path: Path = DEFAULT_PRIORS,
     *,
@@ -286,6 +394,7 @@ def validate_stack_priors(
         errors.append("known_global_gaps must be a mapping when present")
 
     if scan_surfaces:
+        errors.extend(validate_procedure_role_enums(priors, repo_root=repo_root))
         for finding in scan_hardcoded_surfaces(repo_root, categories=surface_categories):
             warnings.append(finding.to_warning())
 
