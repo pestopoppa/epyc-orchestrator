@@ -31,6 +31,7 @@ __all__ = [
     "detect_escalation_chains",
     "stack_prior_architect_reward_roles",
     "stack_prior_throughput_by_role",
+    "throughput_prior_provenance",
     # Phase 4: Binary rewards for faithful probability estimation
     "success_reward",
     "compute_3way_rewards",
@@ -64,6 +65,11 @@ THROUGHPUT_CONFIG_KEY = "throughput_by_role"
 LEGACY_THROUGHPUT_CONFIG_KEY = "baseline_" + "tps_by_role"
 STACK_PRIORS_CONFIG_KEY = "stack_priors_path"
 ALLOW_DEGRADED_CONFIG_KEY = "allow_degraded_fallback"
+PRIOR_SOURCE_CONFIG_OVERRIDE = "config_override"
+PRIOR_SOURCE_LEGACY_CONFIG_OVERRIDE = "legacy_config_override"
+PRIOR_SOURCE_STACK_PRIORS = "stack_priors"
+PRIOR_SOURCE_DEGRADED_FALLBACK = "degraded_fallback"
+PRIOR_SOURCE_MISSING = "missing"
 
 
 def _positive_float(value: Any) -> float | None:
@@ -134,22 +140,69 @@ def stack_prior_architect_reward_roles(path: Path | None = None) -> set[str]:
     return architect_roles
 
 
-def _throughput_by_role(cost_config: dict[str, Any]) -> dict[str, float]:
+def _throughput_provenance(
+    source: str,
+    throughput: dict[str, float],
+    *,
+    stack_priors_path: Path | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "source": source,
+        "roles": sorted(throughput),
+        "role_count": len(throughput),
+        "stack_priors_path": str(stack_priors_path) if stack_priors_path else None,
+        "uses_degraded_fallback": source == PRIOR_SOURCE_DEGRADED_FALLBACK,
+        "reason": reason,
+    }
+
+
+def _resolve_throughput_by_role(
+    cost_config: dict[str, Any],
+) -> tuple[dict[str, float], dict[str, Any]]:
     override = cost_config.get(THROUGHPUT_CONFIG_KEY)
+    override_source = PRIOR_SOURCE_CONFIG_OVERRIDE
     if override is None:
         override = cost_config.get(LEGACY_THROUGHPUT_CONFIG_KEY)
+        override_source = PRIOR_SOURCE_LEGACY_CONFIG_OVERRIDE
     cleaned_override = _clean_throughput_mapping(override)
     if cleaned_override:
-        return cleaned_override
+        return cleaned_override, _throughput_provenance(override_source, cleaned_override)
 
     path_value = cost_config.get(STACK_PRIORS_CONFIG_KEY)
     stack_priors_path = Path(path_value) if path_value else None
     live_throughput = stack_prior_throughput_by_role(stack_priors_path)
     if live_throughput:
-        return live_throughput
+        return live_throughput, _throughput_provenance(
+            PRIOR_SOURCE_STACK_PRIORS,
+            live_throughput,
+            stack_priors_path=stack_priors_path or STACK_PRIORS_PATH,
+        )
     if cost_config.get(ALLOW_DEGRADED_CONFIG_KEY):
-        return dict(FALLBACK_THROUGHPUT_BY_ROLE)
-    return {}
+        fallback = dict(FALLBACK_THROUGHPUT_BY_ROLE)
+        return fallback, _throughput_provenance(
+            PRIOR_SOURCE_DEGRADED_FALLBACK,
+            fallback,
+            stack_priors_path=stack_priors_path or STACK_PRIORS_PATH,
+            reason="stack_priors_missing_or_no_live_throughput",
+        )
+    return {}, _throughput_provenance(
+        PRIOR_SOURCE_MISSING,
+        {},
+        stack_priors_path=stack_priors_path or STACK_PRIORS_PATH,
+        reason="no_override_and_no_live_stack_priors",
+    )
+
+
+def _throughput_by_role(cost_config: dict[str, Any]) -> dict[str, float]:
+    throughput, _provenance = _resolve_throughput_by_role(cost_config)
+    return throughput
+
+
+def throughput_prior_provenance(cost_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Describe the throughput-prior source used by comparative rewards."""
+    _throughput, provenance = _resolve_throughput_by_role(cost_config or {})
+    return provenance
 
 
 def _architect_reward_roles() -> set[str]:

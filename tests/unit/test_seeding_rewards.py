@@ -85,9 +85,16 @@ def test_compute_comparative_rewards_uses_stack_prior_throughput(tmp_path: Path)
     )
 
     assert math.isclose(rewards["worker_general:direct"], 0.35)
+    provenance = _MOD.throughput_prior_provenance({"stack_priors_path": stack_priors})
+    assert provenance["source"] == _MOD.PRIOR_SOURCE_STACK_PRIORS
+    assert provenance["roles"] == ["frontdoor", "worker_general"]
+    assert provenance["role_count"] == 2
+    assert provenance["stack_priors_path"] == str(stack_priors)
+    assert provenance["uses_degraded_fallback"] is False
 
 
 def test_compute_comparative_rewards_no_stack_priors_fails_closed(tmp_path: Path):
+    missing = tmp_path / "missing.yaml"
     rewards = _MOD.compute_comparative_rewards(
         {
             "frontdoor:direct": _rr(role="frontdoor", passed=True),
@@ -99,10 +106,17 @@ def test_compute_comparative_rewards_no_stack_priors_fails_closed(tmp_path: Path
                 elapsed_seconds=2.0,
             ),
         },
-        cost_config={"stack_priors_path": tmp_path / "missing.yaml"},
+        cost_config={"stack_priors_path": missing},
     )
 
     assert rewards["worker_general:direct"] == 0.3
+    provenance = _MOD.throughput_prior_provenance({"stack_priors_path": missing})
+    assert provenance["source"] == _MOD.PRIOR_SOURCE_MISSING
+    assert provenance["roles"] == []
+    assert provenance["role_count"] == 0
+    assert provenance["stack_priors_path"] == str(missing)
+    assert provenance["uses_degraded_fallback"] is False
+    assert provenance["reason"] == "no_override_and_no_live_stack_priors"
 
 
 def test_compute_comparative_rewards_accepts_legacy_throughput_override():
@@ -121,6 +135,49 @@ def test_compute_comparative_rewards_accepts_legacy_throughput_override():
     )
 
     assert math.isclose(rewards["worker_general:direct"], 0.35)
+    provenance = _MOD.throughput_prior_provenance(
+        {"baseline_tps_by_role": {"worker_general": 100.0}},
+    )
+    assert provenance["source"] == _MOD.PRIOR_SOURCE_LEGACY_CONFIG_OVERRIDE
+    assert provenance["roles"] == ["worker_general"]
+
+
+def test_throughput_prior_provenance_prefers_explicit_override(tmp_path: Path):
+    stack_priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {"frontdoor": 10.0},
+    )
+
+    provenance = _MOD.throughput_prior_provenance(
+        {
+            "throughput_by_role": {"worker_general": 100.0, "bad": -1},
+            "baseline_tps_by_role": {"frontdoor": 10.0},
+            "stack_priors_path": stack_priors,
+        },
+    )
+
+    assert provenance["source"] == _MOD.PRIOR_SOURCE_CONFIG_OVERRIDE
+    assert provenance["roles"] == ["worker_general"]
+    assert provenance["role_count"] == 1
+    assert provenance["stack_priors_path"] is None
+
+
+def test_throughput_prior_provenance_marks_degraded_fallback(tmp_path: Path):
+    missing = tmp_path / "missing.yaml"
+
+    provenance = _MOD.throughput_prior_provenance(
+        {
+            "stack_priors_path": missing,
+            "allow_degraded_fallback": True,
+        },
+    )
+
+    assert provenance["source"] == _MOD.PRIOR_SOURCE_DEGRADED_FALLBACK
+    assert provenance["role_count"] == len(_MOD.FALLBACK_THROUGHPUT_BY_ROLE)
+    assert "frontdoor" in provenance["roles"]
+    assert provenance["stack_priors_path"] == str(missing)
+    assert provenance["uses_degraded_fallback"] is True
+    assert provenance["reason"] == "stack_priors_missing_or_no_live_throughput"
 
 
 def test_compute_comparative_rewards_without_baseline_defaults_to_binary_success():
