@@ -108,8 +108,8 @@ def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
         "worker_summarize",
     ]
     assert model["role_bindings"]["server_roles"] == ["coder_escalation", "frontdoor"]
-    assert model["quality"]["suite_vector"]["quality"] == 0.93
-    assert model["quality"]["suite_vector"]["coder_suite"] == 0.9667
+    assert model["quality"]["suite_vector"]["overall"] == 0.93
+    assert model["quality"]["suite_vector"]["coder"] == 0.9667
     assert not any("server" in gap or "port" in gap for gap in model["known_gaps"])
 
 
@@ -281,5 +281,7 @@ def test_compile_uses_role_endpoint_for_dedicated_vision_role(tmp_path: Path) ->
     assert model["serving"]["ports"] == [8086]
     assert model["serving"]["numa_policy"] == "role_endpoint_binding"
     assert model["modalities"] == ["text", "vision"]
+    assert model["quality"]["suite_vector"]["overall"] == 0.9167
+    assert model["quality"]["suite_vector"]["vision_language"] == 0.9167
     assert "Missing serving port binding" not in model["known_gaps"]
     assert "Missing server_mode binding" not in model["known_gaps"]

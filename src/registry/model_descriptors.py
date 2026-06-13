@@ -258,7 +258,21 @@ def _quality(role_cfg: dict[str, Any], server_cfg: dict[str, Any] | None) -> dic
             elif key.endswith("_suite") or key == "long_context":
                 score = _score_fraction(value)
             if score is not None:
-                suite_vector[key.replace("_pct", "")] = score
+                suite_key = key
+                if key in {"quality_pct", "quality_score"}:
+                    suite_key = "overall"
+                elif key == "vl_score":
+                    suite_key = "vision_language"
+                elif key == "long_context_quality":
+                    suite_key = "long_context"
+                elif key.endswith("_suite"):
+                    suite_key = key.removesuffix("_suite")
+                elif key.endswith("_pct"):
+                    suite_key = key.removesuffix("_pct")
+
+                suite_vector[suite_key] = score
+                if key in {"long_context_quality", "vl_score"} and "overall" not in suite_vector:
+                    suite_vector["overall"] = score
 
     if isinstance(server_cfg, dict):
         benchmark_score = _score_fraction(server_cfg.get("benchmark_score"))
