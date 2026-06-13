@@ -4,7 +4,7 @@
 # the synthesis is coherent or rambling/contradictory.
 
 eval_type: cot_classify
-judge_role: worker_explore
+judge_role: worker_general
 judge_mode: direct
 
 trigger:

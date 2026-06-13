@@ -1,8 +1,8 @@
 """Model-graded subjective evaluations for pipeline diagnostics.
 
 Loads grading specs from orchestration/grading_specs/*.yaml, evaluates
-trigger conditions against diagnostic records, and calls worker_explore
-via call_orchestrator_forced() for CoT classification.
+trigger conditions against diagnostic records, and calls the live general
+worker via call_orchestrator_forced() for CoT classification.
 
 This module runs post-hoc during seeding analysis (not inline during
 live orchestration), keeping grading decoupled from the hot path.
@@ -118,7 +118,7 @@ def grade_answer(
     orchestrator_url: str = "http://localhost:8000",
     timeout: int = 120,
 ) -> dict[str, Any] | None:
-    """Grade an answer using the specified eval spec via worker_explore.
+    """Grade an answer using the specified eval spec via the general worker.
 
     Calls call_orchestrator_forced() from the seeding pipeline context.
 
@@ -139,7 +139,7 @@ def grade_answer(
         return None
 
     prompt = _format_prompt(spec, diagnostic)
-    judge_role = spec.get("judge_role", "worker_explore")
+    judge_role = spec.get("judge_role", "worker_general")
     judge_mode = spec.get("judge_mode", "direct")
 
     try:
