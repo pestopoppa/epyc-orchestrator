@@ -14,6 +14,7 @@ handler signatures pack the autopilot's many species/state objects into an
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +61,7 @@ if TYPE_CHECKING:
     from orchestration.repl_memory.strategy_store import StrategyStore
 
 log = logging.getLogger("autopilot")
+_SKILL_EFFICACY_GATE_ENV = "AUTOPILOT_SKILL_EFFICACY_GATE"
 
 
 @dataclass
@@ -325,6 +327,64 @@ def _simplicity_check(
     return True, None
 
 
+def _env_flag_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _skill_efficacy_without_result(ctx: _ActionContext) -> EvalResult | None:
+    """Run the no-artifact arm for K-SKILL-1 when its gate is explicitly enabled."""
+    if not _env_flag_enabled(_SKILL_EFFICACY_GATE_ENV):
+        return None
+    return ctx.tower.hybrid_eval()
+
+
+def _skill_efficacy_accepts(
+    *,
+    without_result: EvalResult | None,
+    with_result: EvalResult,
+    artifact_kind: str,
+    target: str,
+    mutation_type: str,
+) -> bool:
+    """Default-off EV-10a accept-path hook.
+
+    ``without_result`` is the pre-mutation no-artifact arm; ``with_result`` is the
+    post-mutation arm. When the env flag is off, ``without_result`` is ``None`` and
+    this helper is a no-op.
+    """
+    if without_result is None:
+        return True
+
+    from skill_efficacy import evaluate_skill_efficacy
+
+    verdict = evaluate_skill_efficacy(
+        without_result.per_suite_quality,
+        with_result.per_suite_quality,
+    )
+    detail = {
+        "enabled": True,
+        "artifact_kind": artifact_kind,
+        "target": target,
+        "mutation_type": mutation_type,
+        "accept": verdict.accept,
+        "aggregate_delta": verdict.aggregate_delta,
+        "per_suite_delta": verdict.per_suite_delta,
+        "regressed_suites": verdict.regressed_suites,
+        "reason": verdict.reason,
+        "without_per_suite_quality": dict(without_result.per_suite_quality),
+        "with_per_suite_quality": dict(with_result.per_suite_quality),
+    }
+    with_result.details["skill_efficacy"] = detail
+    if not verdict.accept:
+        log.warning(
+            "Skill efficacy gate rejected %s mutation on %s: %s",
+            artifact_kind,
+            target,
+            verdict.reason,
+        )
+    return verdict.accept
+
+
 def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     target = action.get("file", "frontdoor.md")
     mutation_type = action.get("mutation", "targeted_fix")
@@ -342,6 +402,7 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     except FileNotFoundError:
         log.warning("Prompt file not found: %s (may have been removed in refactoring)", target)
         return None, "prompt_forge"
+    skill_without = _skill_efficacy_without_result(ctx)
     ctx.forge.apply_mutation(mutation)
     eval_result = ctx.tower.hybrid_eval()
 
@@ -360,6 +421,16 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         ctx.forge.revert_mutation(mutation)
         if deficiency == "shrinkage":
             ctx.state["_dispatch_deficiency"] = "shrinkage"  # AP-14
+        return eval_result, "prompt_forge"
+
+    if not _skill_efficacy_accepts(
+        without_result=skill_without,
+        with_result=eval_result,
+        artifact_kind="prompt",
+        target=target,
+        mutation_type=mutation_type,
+    ):
+        ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
     # AP-7: Prompt change accepted — invalidate stale Optuna trials
@@ -393,6 +464,7 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         eval_result = ctx.tower.hybrid_eval()
         return eval_result, "prompt_forge"
 
+    skill_without = _skill_efficacy_without_result(ctx)
     ctx.forge.apply_mutation(mutation)
     eval_result = ctx.tower.hybrid_eval()
 
@@ -411,6 +483,16 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         ctx.forge.revert_mutation(mutation)
         if deficiency == "shrinkage":
             ctx.state["_dispatch_deficiency"] = "shrinkage"
+        return eval_result, "prompt_forge"
+
+    if not _skill_efficacy_accepts(
+        without_result=skill_without,
+        with_result=eval_result,
+        artifact_kind="prompt",
+        target=target,
+        mutation_type="gepa",
+    ):
+        ctx.forge.revert_mutation(mutation)
         return eval_result, "prompt_forge"
 
     ctx.swarm.mark_epoch(f"gepa_optimize:{target}")
@@ -440,6 +522,7 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
         log.warning("Code mutation failed syntax validation, skipping")
         return None, "prompt_forge"
 
+    skill_without = _skill_efficacy_without_result(ctx)
     ctx.forge.apply_code_mutation(mutation)
     eval_result = ctx.tower.hybrid_eval()
 
@@ -457,6 +540,16 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
         ctx.forge.revert_code_mutation(mutation)
         if deficiency == "shrinkage":
             ctx.state["_dispatch_deficiency"] = "shrinkage"  # AP-14
+        return eval_result, "prompt_forge"
+
+    if not _skill_efficacy_accepts(
+        without_result=skill_without,
+        with_result=eval_result,
+        artifact_kind="code",
+        target=target,
+        mutation_type=mutation_type,
+    ):
+        ctx.forge.revert_code_mutation(mutation)
         return eval_result, "prompt_forge"
 
     ctx.swarm.mark_epoch(f"code_mutation:{target}/{mutation_type}")

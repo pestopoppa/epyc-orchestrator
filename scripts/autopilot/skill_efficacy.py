@@ -25,10 +25,12 @@ EV-10b (surrogate_proxy_reward / surrogate_feedback / require_cross_family): the
   The LLM that authors the assertions is NOT called here; the caller injects the
   assertion outcomes (same convention as scripts/autopilot/verbalized_sampling.py).
 
-WIRING IS DEFERRED (sidecar pattern, matching AP-29/30/31): these functions are not yet
-  called from the live autopilot accept-path. The intended hook is
-  scripts/autopilot/species/prompt_forge.py `apply_mutation_isolated` -> ctx.accept(),
-  to be added at the next AR-3 restart so a running campaign is not perturbed.
+LIVE WIRING (default-off, matching AP-29/30/31 sidecar discipline): the decision
+  function is called from scripts/autopilot/actions.py after prompt/code mutation
+  safety + simplicity checks and before final epoch acceptance. When
+  AUTOPILOT_SKILL_EFFICACY_GATE is enabled, the action handler runs a pre-mutation
+  no-artifact eval arm, compares it to the post-mutation arm per suite, and reverts
+  the mutation if this gate rejects. With the flag unset, behavior is unchanged.
 
 FLAG-ISOLATION CONTRACT (verified 2026-05-27, binding for the wiring agent):
   EV-10a's gate and BSV-2's behavior-signature accept gate (src/behavior_signature.py)

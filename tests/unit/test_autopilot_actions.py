@@ -175,6 +175,185 @@ def test_deep_eval_handler_calls_tower_evaluate_with_tier() -> None:
     assert tower.calls == [3]
 
 
+def _eval_result(
+    *,
+    quality: float = 1.0,
+    per_suite_quality: dict[str, float] | None = None,
+) -> actions.EvalResult:
+    return actions.EvalResult(
+        tier=1,
+        quality=quality,
+        speed=10.0,
+        cost=0.0,
+        reliability=1.0,
+        per_suite_quality=per_suite_quality or {},
+    )
+
+
+class _AlwaysPassGate:
+    def check(self, result):
+        return True
+
+
+class _FakeJournal:
+    def recent_failures(self, *, species, n):
+        return []
+
+    def insights_text(self, n):
+        return "(no insights yet)"
+
+    def recent(self, n):
+        return []
+
+
+class _FakeSwarm:
+    def __init__(self):
+        self.epochs: list[str] = []
+
+    def mark_epoch(self, epoch):
+        self.epochs.append(epoch)
+
+
+class _QueuedTower:
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = 0
+
+    def hybrid_eval(self):
+        self.calls += 1
+        return self.results.pop(0)
+
+
+def test_prompt_mutation_skill_gate_default_off_single_eval(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
+
+    class FakeForge:
+        def __init__(self):
+            self.applied = 0
+            self.reverted = 0
+
+        def propose_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="new",
+            )
+
+        def apply_mutation(self, mutation):
+            self.applied += 1
+
+        def revert_mutation(self, mutation):
+            self.reverted += 1
+
+    tower = _QueuedTower([_eval_result(per_suite_quality={"math": 1.1})])
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+    result, species = actions._action_prompt_mutation(
+        {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=swarm, journal=_FakeJournal()),
+    )
+
+    assert species == "prompt_forge"
+    assert result.details.get("skill_efficacy") is None
+    assert tower.calls == 1
+    assert forge.applied == 1
+    assert forge.reverted == 0
+    assert swarm.epochs == ["prompt_mutation:frontdoor.md/targeted_fix"]
+
+
+def test_prompt_mutation_skill_gate_rejects_per_suite_regression(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_SKILL_EFFICACY_GATE", "1")
+
+    class FakeForge:
+        def __init__(self):
+            self.reverted = 0
+
+        def propose_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="new",
+            )
+
+        def apply_mutation(self, mutation):
+            pass
+
+        def revert_mutation(self, mutation):
+            self.reverted += 1
+
+    tower = _QueuedTower(
+        [
+            _eval_result(per_suite_quality={"math": 1.0, "web": 1.0}),
+            _eval_result(per_suite_quality={"math": 2.5, "web": 0.0}),
+        ]
+    )
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+    result, species = actions._action_prompt_mutation(
+        {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=swarm, journal=_FakeJournal()),
+    )
+
+    assert species == "prompt_forge"
+    assert tower.calls == 2
+    assert forge.reverted == 1
+    assert swarm.epochs == []
+    detail = result.details["skill_efficacy"]
+    assert detail["accept"] is False
+    assert detail["artifact_kind"] == "prompt"
+    assert detail["regressed_suites"] == [("web", -1.0)]
+
+
+def test_code_mutation_skill_gate_accepts_clean_gain(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_SKILL_EFFICACY_GATE", "true")
+
+    class FakeForge:
+        def __init__(self):
+            self.reverted = 0
+
+        def propose_code_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="new",
+                syntax_valid=True,
+            )
+
+        def apply_code_mutation(self, mutation):
+            pass
+
+        def revert_code_mutation(self, mutation):
+            self.reverted += 1
+
+    tower = _QueuedTower(
+        [
+            _eval_result(per_suite_quality={"math": 1.0, "web": 1.0}),
+            _eval_result(per_suite_quality={"math": 1.2, "web": 1.1}),
+        ]
+    )
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+    result, species = actions._action_code_mutation(
+        {"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=swarm, journal=_FakeJournal()),
+    )
+
+    assert species == "prompt_forge"
+    assert tower.calls == 2
+    assert forge.reverted == 0
+    assert swarm.epochs == ["code_mutation:src/escalation.py/targeted_fix"]
+    detail = result.details["skill_efficacy"]
+    assert detail["accept"] is True
+    assert detail["artifact_kind"] == "code"
+    assert detail["aggregate_delta"] == pytest.approx(0.15)
+
+
 def test_distill_knowledge_returns_evolution_manager_species() -> None:
     """Without evo/strategy_store, distill_knowledge logs warning and returns None."""
     result, species = actions._action_distill_knowledge(
