@@ -349,7 +349,7 @@ def test_pipeline_report_names_simulated_fixture_target(tmp_path: Path) -> None:
 
     report = run_stack_change_pipeline(config)
 
-    step = report.steps[-1]
+    step = next(step for step in report.steps if step.name == "simulated_fixtures")
     assert step.name == "simulated_fixtures"
     assert step.status == "reference"
     assert SIMULATED_FIXTURE_TARGET in step.details[0]

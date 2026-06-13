@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import yaml
 
+from scripts.registry import stack_change_pipeline as pipeline
 from scripts.registry.stack_change_pipeline import (
     PipelineReport,
     PipelineStep,
@@ -340,7 +342,11 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "guard_all_surfaces",
         "guard_strict",
         "simulated_fixtures",
+        "promotion_gate",
     }
+    promotion_step = next(step for step in check_report.steps if step.name == "promotion_gate")
+    assert promotion_step.status == "reference"
+    assert any(PROMOTION_GATE_COMMAND.removeprefix("promotion_gate: run ") in detail for detail in promotion_step.details)
     assert check_report.acceptance_lines() == [
         "acceptance: no-inference checks passed",
         PROMOTION_GATE_COMMAND,
@@ -418,6 +424,39 @@ def test_print_report_blocks_promotion_for_failed_check(
     assert "summary: failed" in output
     assert "acceptance: blocked" in output
     assert "promotion_gate: fix " in output
+
+
+def test_run_promotion_gate_executes_combined_no_inference_targets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        if cmd[:4] != ["uv", "run", "pytest", "-q"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs["cwd"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="53 passed\n", stderr="")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    config = StackChangePipelineConfig(
+        **{
+            **update_config.__dict__,
+            "run_promotion_gate": True,
+            "mode": "check",
+        }
+    )
+    report = run_stack_change_pipeline(config)
+    promotion_step = next(step for step in report.steps if step.name == "promotion_gate")
+
+    assert report.ok
+    assert captured["cmd"] == ["uv", "run", "pytest", "-q", *PROMOTION_GATE_TARGETS]
+    assert captured["cwd"] == tmp_path
+    assert promotion_step.status == "ok"
+    assert any("53 passed" in detail for detail in promotion_step.details)
 
 
 def test_check_reports_stale_generated_artifact_without_writing(tmp_path: Path) -> None:

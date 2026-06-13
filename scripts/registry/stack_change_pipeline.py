@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -67,6 +68,7 @@ class StackChangePipelineConfig:
     allow_known_gaps: bool = False
     compile_incomplete: bool = True
     allow_descriptor_model_removal: bool = False
+    run_promotion_gate: bool = False
 
 
 @dataclass
@@ -565,6 +567,61 @@ def _guard_step(
     return PipelineStep(name=name, status=status, errors=errors, warnings=warnings)
 
 
+def _promotion_gate_command() -> list[str]:
+    return ["uv", "run", "pytest", "-q", *PROMOTION_GATE_TARGETS]
+
+
+def _clip_output(text: str, *, max_chars: int = 2000) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def _promotion_gate_step(config: StackChangePipelineConfig, *, prior_ok: bool) -> PipelineStep:
+    command = _promotion_gate_command()
+    command_text = " ".join(command)
+    if not config.run_promotion_gate:
+        return PipelineStep(
+            name="promotion_gate",
+            status="reference",
+            details=[f"no-inference promotion target: {command_text}"],
+        )
+    if not prior_ok:
+        return PipelineStep(
+            name="promotion_gate",
+            status="skipped",
+            warnings=["skipped because earlier stack-change checks failed"],
+        )
+    try:
+        result = subprocess.run(
+            command,
+            cwd=config.repo_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        return PipelineStep(
+            name="promotion_gate",
+            status="failed",
+            errors=[f"promotion gate failed to launch: {exc}"],
+            details=[f"command: {command_text}"],
+        )
+    details = [f"command: {command_text}"]
+    if result.stdout:
+        details.append("stdout:\n" + _clip_output(result.stdout.rstrip()))
+    if result.stderr:
+        details.append("stderr:\n" + _clip_output(result.stderr.rstrip()))
+    if result.returncode == 0:
+        return PipelineStep(name="promotion_gate", status="ok", details=details)
+    return PipelineStep(
+        name="promotion_gate",
+        status="failed",
+        errors=[f"promotion gate exited {result.returncode}"],
+        details=details,
+    )
+
+
 def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineReport:
     report = PipelineReport()
     if config.mode == "check":
@@ -618,6 +675,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
             ],
         )
     )
+    report.steps.append(_promotion_gate_step(config, prior_ok=report.ok))
     return report
 
 
@@ -664,6 +722,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Permit update mode to remove model IDs from the descriptor artifact",
     )
+    parser.add_argument(
+        "--run-promotion-gate",
+        action="store_true",
+        help="Run the no-inference pytest promotion gate after checks pass",
+    )
     args = parser.parse_args(argv)
 
     config = StackChangePipelineConfig(
@@ -680,6 +743,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_known_gaps=args.allow_known_gaps,
         compile_incomplete=not args.strict_descriptor_compile,
         allow_descriptor_model_removal=args.allow_descriptor_model_removal,
+        run_promotion_gate=args.run_promotion_gate,
     )
     report = run_stack_change_pipeline(config)
     _print_report(report)
