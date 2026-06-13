@@ -40,6 +40,7 @@ from src.registry.stack_priors import (  # noqa: E402
 Mode = Literal["check", "update"]
 DESCRIPTOR_DIFF_LIMIT = 12
 MODEL_FIELD_DIFF_LIMIT = 8
+SIMULATED_FIXTURE_TARGET = "tests/unit/test_stack_change_pipeline_simulated_fixtures.py"
 
 
 @dataclass(frozen=True)
@@ -537,6 +538,16 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
             strict=True,
             all_surfaces=False,
             allow_known_gaps=config.allow_known_gaps,
+        )
+    )
+    report.steps.append(
+        PipelineStep(
+            name="simulated_fixtures",
+            status="reference",
+            details=[
+                "data-only stack-change fixture target: "
+                f"uv run pytest -q {SIMULATED_FIXTURE_TARGET}"
+            ],
         )
     )
     return report

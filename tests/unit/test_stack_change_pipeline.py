@@ -325,6 +325,7 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "guard",
         "guard_all_surfaces",
         "guard_strict",
+        "simulated_fixtures",
     }
 
 
