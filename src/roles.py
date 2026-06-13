@@ -77,7 +77,7 @@ class Role(str, Enum):
 
     Role naming convention:
     - {tier}_{function}: e.g., worker_math, coder_escalation
-    - Specific variants: e.g., architect_general vs architect_coding
+    - Specific variants: e.g., architect_general, ingest_long_context
     """
 
     # =========================================================================
