@@ -1,0 +1,452 @@
+version: 1
+schema_version: lab_jobs.v1
+created: "2026-06-12"
+owner: frontier-f2-self-running-lab
+status: shadow_inventory_only
+
+policy:
+  review_queue: orchestration/lab_review_queue/
+  direct_repo_writes_allowed: false
+  default_stage: shadow
+  allowed_risks:
+    - read_only
+    - write_reviewed
+    - write_auto
+  runtime_class: background
+  max_context_tokens_default: 24000
+  notes:
+    - Jobs produce structured reports or drafts only.
+    - No job may edit handoffs, indices, lab_jobs.yaml, or trust-boundary files directly.
+    - Intake-touching jobs require the F5 quarantine policy before any run outside shadow.
+
+jobs:
+  - job_id: handoff_freshness_lint
+    title: Handoff freshness and index hygiene lint
+    stage: shadow
+    enabled: false
+    risk: read_only
+    model_role: worker_explore
+    schedule:
+      type: nightly
+      cadence: daily
+      window: off_peak
+      max_runtime_s: 900
+    reference_skill: none
+    input_spec:
+      sources:
+        - repo: epyc-root
+          path: handoffs/active/master-handoff-index.md
+        - repo: epyc-root
+          path: handoffs/active/
+        - repo: epyc-root
+          path: progress/
+      context_budget_tokens: 16000
+      required_checks:
+        - stale_active_handoff_over_14d_without_gate
+        - unchecked_completed_task
+        - missing_reporting_section
+        - index_row_without_owner_handoff
+      forbidden_actions:
+        - modify_index
+        - move_handoff
+        - close_handoff
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: false
+        required:
+          - job_id
+          - run_id
+          - generated_at
+          - summary
+          - findings
+          - proposed_review_items
+        properties:
+          job_id:
+            const: handoff_freshness_lint
+          run_id:
+            type: string
+          generated_at:
+            type: string
+          summary:
+            type: string
+          findings:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              required: [severity, file, issue, evidence]
+              properties:
+                severity:
+                  enum: [low, medium, high]
+                file:
+                  type: string
+                issue:
+                  type: string
+                evidence:
+                  type: string
+          proposed_review_items:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              required: [action, target, rationale]
+              properties:
+                action:
+                  enum: [inspect, update, archive_candidate, unblock_question]
+                target:
+                  type: string
+                rationale:
+                  type: string
+
+  - job_id: attestation_watch
+    title: Attestation drift watch
+    stage: shadow
+    enabled: false
+    risk: read_only
+    model_role: verifier
+    schedule:
+      type: nightly
+      cadence: daily
+      window: off_peak
+      max_runtime_s: 600
+    reference_skill: none
+    input_spec:
+      sources:
+        - repo: epyc-orchestrator
+          path: orchestration/
+        - repo: epyc-root
+          path: progress/
+      context_budget_tokens: 12000
+      compare_against: previous_attestation_snapshot
+      required_checks:
+        - production_flag_drift
+        - model_registry_drift
+        - worker_heterogeneity
+        - missing_snapshot
+      forbidden_actions:
+        - change_flags
+        - restart_services
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: false
+        required:
+          - job_id
+          - run_id
+          - generated_at
+          - drift_detected
+          - drift_items
+          - recommended_operator_checks
+        properties:
+          job_id:
+            const: attestation_watch
+          run_id:
+            type: string
+          generated_at:
+            type: string
+          drift_detected:
+            type: boolean
+          drift_items:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              required: [surface, previous, current, risk]
+              properties:
+                surface:
+                  type: string
+                previous:
+                  type: string
+                current:
+                  type: string
+                risk:
+                  enum: [low, medium, high]
+          recommended_operator_checks:
+            type: array
+            items:
+              type: string
+
+  - job_id: daily_digest_skeleton
+    title: Daily digest skeleton
+    stage: shadow
+    enabled: false
+    risk: write_reviewed
+    model_role: worker_explore
+    schedule:
+      type: nightly
+      cadence: daily
+      window: off_peak
+      max_runtime_s: 900
+    reference_skill: wrap-up
+    input_spec:
+      sources:
+        - repo: epyc-root
+          path: progress/
+        - repo: epyc-root
+          path: handoffs/active/
+        - repo: epyc-orchestrator
+          path: orchestration/autopilot_journal*.jsonl
+      context_budget_tokens: 20000
+      output_destination: orchestration/lab_review_queue/
+      forbidden_actions:
+        - edit_progress_directly
+        - commit_changes
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: false
+        required:
+          - job_id
+          - run_id
+          - generated_at
+          - digest_markdown
+          - source_refs
+          - open_questions
+        properties:
+          job_id:
+            const: daily_digest_skeleton
+          run_id:
+            type: string
+          generated_at:
+            type: string
+          digest_markdown:
+            type: string
+          source_refs:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              required: [path, note]
+              properties:
+                path:
+                  type: string
+                note:
+                  type: string
+          open_questions:
+            type: array
+            items:
+              type: string
+  - job_id: intake_triage_shadow
+    title: Research intake triage shadow labels
+    stage: shadow
+    enabled: false
+    risk: write_reviewed
+    model_role: worker_explore
+    schedule:
+      type: manual_or_nightly
+      cadence: daily
+      window: off_peak
+      max_runtime_s: 1200
+    reference_skill: research-intake
+    gates:
+      - frontier-f5-intake-injection-hardening
+    input_spec:
+      sources:
+        - repo: epyc-root
+          path: research/intake_index.yaml
+      context_budget_tokens: 18000
+      quarantine_required: true
+      output_destination: orchestration/lab_review_queue/
+      forbidden_actions:
+        - edit_intake_index
+        - create_handoff
+        - copy_source_instructions_unquoted
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: false
+        required:
+          - job_id
+          - run_id
+          - generated_at
+          - triage_rows
+          - quarantine_policy_version
+        properties:
+          job_id:
+            const: intake_triage_shadow
+          run_id:
+            type: string
+          generated_at:
+            type: string
+          quarantine_policy_version:
+            type: string
+          triage_rows:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              required:
+                - intake_id
+                - label
+                - destination
+                - confidence
+                - rationale
+              properties:
+                intake_id:
+                  type: string
+                label:
+                  enum: [relevant, duplicate, park, reject]
+                destination:
+                  type: string
+                confidence:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                rationale:
+                  type: string
+
+  - job_id: claims_grammar_check
+    title: Claims grammar checker
+    stage: shadow
+    enabled: false
+    risk: read_only
+    model_role: verifier
+    schedule:
+      type: nightly
+      cadence: daily
+      window: off_peak
+      max_runtime_s: 900
+    reference_skill: none
+    input_spec:
+      sources:
+        - repo: epyc-root
+          path: MEASUREMENT.md
+        - repo: epyc-root
+          path: handoffs/active/
+        - repo: epyc-root
+          path: progress/
+      context_budget_tokens: 16000
+      required_checks:
+        - numeric_claim_without_protocol
+        - missing_policy_version
+        - stale_historical_claim_presented_as_current
+      forbidden_actions:
+        - edit_claim
+        - mark_claim_valid
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: false
+        required:
+          - job_id
+          - run_id
+          - generated_at
+          - violations
+          - clean_files
+        properties:
+          job_id:
+            const: claims_grammar_check
+          run_id:
+            type: string
+          generated_at:
+            type: string
+          violations:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              required: [path, claim, missing, suggested_fix]
+              properties:
+                path:
+                  type: string
+                claim:
+                  type: string
+                missing:
+                  type: array
+                  items:
+                    enum: [protocol_id, date, sample_size, policy_version, source_ref]
+                suggested_fix:
+                  type: string
+          clean_files:
+            type: array
+            items:
+              type: string
+
+  - job_id: deep_dive_draft_shadow
+    title: Deep-dive drafting shadow job
+    stage: shadow
+    enabled: false
+    risk: write_reviewed
+    model_role: architect_general
+    schedule:
+      type: manual
+      cadence: on_demand
+      window: off_peak
+      max_runtime_s: 1800
+    reference_skill: research-intake
+    gates:
+      - frontier-f5-intake-injection-hardening
+      - reviewed_intake_triage_accept_rate
+    input_spec:
+      sources:
+        - repo: epyc-root
+          path: research/intake_index.yaml
+        - repo: epyc-root
+          path: research/deep-dives/
+        - repo: epyc-root
+          path: handoffs/active/
+      context_budget_tokens: 24000
+      output_destination: orchestration/lab_review_queue/
+      forbidden_actions:
+        - write_deep_dive_directly
+        - edit_handoff_directly
+        - cite_unquarantined_source_as_instruction
+    output_contract:
+      format: json
+      json_schema:
+        type: object
+        additionalProperties: false
+        required:
+          - job_id
+          - run_id
+          - generated_at
+          - draft_title
+          - outline
+          - evidence_refs
+          - recommended_disposition
+          - open_questions
+        properties:
+          job_id:
+            const: deep_dive_draft_shadow
+          run_id:
+            type: string
+          generated_at:
+            type: string
+          draft_title:
+            type: string
+          outline:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              required: [heading, bullets]
+              properties:
+                heading:
+                  type: string
+                bullets:
+                  type: array
+                  items:
+                    type: string
+          evidence_refs:
+            type: array
+            items:
+              type: object
+              additionalProperties: false
+              required: [source, relevance]
+              properties:
+                source:
+                  type: string
+                relevance:
+                  type: string
+          recommended_disposition:
+            enum: [deep_dive, handoff_stub_review, park, reject]
+          open_questions:
+            type: array
+            items:
+              type: string
