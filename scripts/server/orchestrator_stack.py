@@ -1113,6 +1113,15 @@ PRODUCTION_FEATURE_WAVE_OVERRIDES: dict[str, bool] = {
     "routing_classifier": False,
 }
 
+LANGGRAPH_PHASE3_LIVE_ENV_VARS: tuple[str, ...] = (
+    "ORCHESTRATOR_LANGGRAPH_INGEST",
+    "ORCHESTRATOR_LANGGRAPH_WORKER",
+    "ORCHESTRATOR_LANGGRAPH_FRONTDOOR",
+    "ORCHESTRATOR_LANGGRAPH_CODER",
+    "ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION",
+    "ORCHESTRATOR_LANGGRAPH_ARCHITECT",
+)
+
 
 def _production_feature_env() -> dict[str, str]:
     """Complete, attestable ORCHESTRATOR_FEATURE_* block for API workers."""
@@ -1203,14 +1212,10 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     env["ORCHESTRATOR_RESUME_TOKENS"] = "1"
     env["ORCHESTRATOR_SIDE_EFFECT_TRACKING"] = "1"
     env["ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT"] = "1"
-    # LangGraph Phase 3: per-node migration (infrastructure validated by 48 unit tests)
-    env["ORCHESTRATOR_LANGGRAPH_INGEST"] = "1"
-    env["ORCHESTRATOR_LANGGRAPH_WORKER"] = "1"
-    env["ORCHESTRATOR_LANGGRAPH_FRONTDOOR"] = "1"
-    env["ORCHESTRATOR_LANGGRAPH_CODER"] = "1"
-    env["ORCHESTRATOR_LANGGRAPH_CODER_ESCALATION"] = "1"
-    env["ORCHESTRATOR_LANGGRAPH_ARCHITECT"] = "1"
-    env["ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING"] = "1"
+    # LangGraph Phase 3: per-node migration for live roles only.
+    # The retired architect_coding role is intentionally not enabled here.
+    for key in LANGGRAPH_PHASE3_LIVE_ENV_VARS:
+        env[key] = "1"
     _apply_orchestrator_profile(env, profile)
     # Bound inference-lock waits by default to avoid multi-minute silent stalls
     # during iterative debugging / seeding runs. Bumped from 45s → 180s 2026-05-21

@@ -88,9 +88,20 @@ def test_stack_production_feature_env_is_complete_and_wave_gated() -> None:
     assert env["ORCHESTRATOR_FEATURE_PARALLEL_EXECUTION"] == "0"
     assert env["ORCHESTRATOR_FEATURE_UNIFIED_STREAMING"] == "0"
     assert env["ORCHESTRATOR_FEATURE_ROUTING_CLASSIFIER"] == "0"
+    assert env["ORCHESTRATOR_FEATURE_LANGGRAPH_ARCHITECT_CODING"] == "0"
     assert "ORCHESTRATOR_REPL" not in env
+    assert "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING" not in env
     for spec in feature_module._FEATURE_REGISTRY:
         assert f"ORCHESTRATOR_FEATURE_{spec.env_var}" in env
+
+
+def test_stack_live_langgraph_env_excludes_retired_architect_coding() -> None:
+    assert "ORCHESTRATOR_LANGGRAPH_ARCHITECT" in (
+        orchestrator_stack.LANGGRAPH_PHASE3_LIVE_ENV_VARS
+    )
+    assert "ORCHESTRATOR_LANGGRAPH_ARCHITECT_CODING" not in (
+        orchestrator_stack.LANGGRAPH_PHASE3_LIVE_ENV_VARS
+    )
 
 
 def test_structural_lab_uses_attest_for_current_flags(monkeypatch) -> None:
