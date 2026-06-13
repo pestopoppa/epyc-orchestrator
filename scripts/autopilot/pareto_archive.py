@@ -510,8 +510,9 @@ class ParetoArchive:
           is P17.BT-2: a strictly cheaper and weaker signal that runs
           purely off recorded objectives.
 
-        Intended to be called when the controller detects hypervolume
-        stagnation (see `_build_exploration_block` in autopilot.py).
+        Available as an offline diagnostic for hypervolume stagnation. The
+        live planner prompt no longer injects this signal because J13 found
+        the prompt hint cosmetic/non-certifying.
 
         Why this is still useful:
           Hypervolume scalarization collapses four axes into one number
@@ -553,8 +554,7 @@ class ParetoArchive:
           - `warnings` — diagnostics from the BT fit (cycles, dominance skew, etc.)
           - `converged` — whether the BT iteration converged
           - `iterations` — Zermelo iteration count
-          - `note` — short status string suitable for logging into the
-            stagnation handler's signal text
+          - `note` — short status string suitable for diagnostics/logging
 
         Returns an empty dict (with `note` set) when the frontier has <2
         entries — BT is undefined on a singleton.

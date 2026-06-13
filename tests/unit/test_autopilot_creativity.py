@@ -248,6 +248,7 @@ def test_rich_fragment_when_hv_slope_below_eps(tmp_path: Path) -> None:
     )
     assert "STAGNATING" in block
     assert "candidate actions" in block
+    assert "BT tiebreak" not in block
     assert "hv_slope_10" in signal
 
 

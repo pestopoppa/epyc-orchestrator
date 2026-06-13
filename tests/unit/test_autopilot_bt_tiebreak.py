@@ -1,11 +1,9 @@
 """Tests for the ParetoArchive.bt_tiebreak_topk method (AP-38).
 
-AP-38 wires the shared Bradley-Terry module into the stagnation handler by
-aggregating top-K Pareto frontier entries via axis-wise pairwise comparison.
-These tests verify the aggregation path itself; the actual stagnation-handler
-integration in autopilot.py is exercised by existing autopilot integration
-tests (the new template field has a fallback path so the prompt build does
-not crash if BT data is unavailable).
+AP-38 added a zero-inference Bradley-Terry diagnostic that aggregates top-K
+Pareto frontier entries via axis-wise pairwise comparison. J13 later removed
+the cosmetic live-planner prompt hint, so these tests cover the offline
+aggregation helper itself rather than prompt integration.
 """
 
 from __future__ import annotations
