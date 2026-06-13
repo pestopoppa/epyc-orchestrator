@@ -471,6 +471,43 @@ def test_last_invalid_feedback_surfaces_repeats_after_clear() -> None:
     assert "4×" in text
 
 
+def test_prior_planner_decision_digest_summarizes_bounded_archive(tmp_path) -> None:
+    archive = tmp_path / "planner_archive.jsonl"
+    archive.write_text(
+        "\n".join(
+            [
+                '{"type":"planner_coordinator","action_type":"seed_batch",'
+                '"draft_provider":"claude","critic_provider":"codex",'
+                '"critique_decision":"approve","degraded":false}',
+                '{"type":"planner_provider_call","provider":"claude","role":"draft",'
+                '"status":"timeout","ok":false,"error":"timeout after 600s"}',
+                '{"type":"planner_coordinator","action_type":"numeric_trial",'
+                '"draft_provider":"claude","critic_provider":"codex",'
+                '"critique_decision":"unavailable","degraded":true,'
+                '"fallback_reason":"critic timeout",'
+                '"critique_issues":["review unavailable"]}',
+            ]
+        )
+        + "\n"
+    )
+
+    text = autopilot._build_prior_planner_decision_digest(archive, limit=2)
+
+    assert "seed_batch" not in text
+    assert "timeout after 600s" in text
+    assert "numeric_trial" in text
+    assert "fallback=critic timeout" in text
+
+
+def test_prior_planner_decision_digest_handles_missing_archive(tmp_path) -> None:
+    text = autopilot._build_prior_planner_decision_digest(
+        tmp_path / "missing.jsonl",
+        limit=2,
+    )
+
+    assert "none yet" in text
+
+
 # ----- draft_critique: rejected-draft feedback (req #3) -----
 
 

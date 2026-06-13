@@ -124,6 +124,36 @@ def test_primary_failure_falls_back_to_secondary() -> None:
     assert len(codex.calls) == 1
 
 
+def test_nonresumable_primary_clears_persisted_session_id() -> None:
+    action = {"type": "seed_batch", "n_questions": 10}
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(
+                provider="claude",
+                role="draft",
+                ok=True,
+                text=_action_text(action),
+                session_id="new-session",
+            )
+        ],
+        supports_resume=False,
+    )
+    codex = FakeProvider("codex", [])
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id="old-session",
+        planner_state={},
+        settings=PlannerSettings(mode="single"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.action == action
+    assert decision.session_id is None
+    assert claude.calls[0]["session_id"] is None
+
+
 def test_shadow_critique_does_not_apply_revision() -> None:
     original = {"type": "code_mutation", "file": "src/escalation.py"}
     revised = {"type": "seed_batch", "n_questions": 10}

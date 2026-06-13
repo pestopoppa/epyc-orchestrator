@@ -61,7 +61,7 @@ class ClaudePlannerProvider:
     """
 
     name = "claude"
-    supports_resume = True
+    supports_resume = False
 
     def __init__(self, invoke_fn: Any | None = None) -> None:
         self._invoke_fn = invoke_fn or _invoke_claude_controller
@@ -77,7 +77,7 @@ class ClaudePlannerProvider:
     ) -> PlannerProviderResult:
         start = time.time()
         try:
-            resume_id = session_id if role == "draft" else None
+            resume_id = session_id if role == "draft" and self.supports_resume else None
             text, next_session_id = self._invoke_fn(
                 prompt,
                 session_id=resume_id,
@@ -85,11 +85,14 @@ class ClaudePlannerProvider:
                 cwd=cwd,
             )
             ok = bool((text or "").strip())
+            stored_session_id = (
+                next_session_id if role == "draft" and self.supports_resume else None
+            )
             return PlannerProviderResult(
                 provider=self.name,
                 role=role,
                 text=text or "",
-                session_id=next_session_id,
+                session_id=stored_session_id,
                 ok=ok,
                 error="" if ok else "empty response",
                 duration_s=time.time() - start,
@@ -99,7 +102,7 @@ class ClaudePlannerProvider:
             return PlannerProviderResult(
                 provider=self.name,
                 role=role,
-                session_id=session_id,
+                session_id=session_id if self.supports_resume else None,
                 ok=False,
                 error=str(exc),
                 duration_s=time.time() - start,

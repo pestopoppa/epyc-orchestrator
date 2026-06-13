@@ -286,6 +286,37 @@ def invoke_controller(
     archive_meta: dict[str, Any] = {}
     session_start_ts = time.time()
 
+    def _archive_controller_call(
+        *,
+        status: str,
+        ok: bool,
+        error: str = "",
+    ) -> None:
+        import hashlib
+
+        _append_planner_archive({
+            "ts": session_start_ts,
+            "ts_iso": datetime.fromtimestamp(session_start_ts).isoformat(
+                timespec="seconds"
+            ),
+            "type": "planner_provider_call",
+            "provider": "claude",
+            "role": "draft",
+            "status": status,
+            "ok": ok,
+            "error": error,
+            "duration_s": time.time() - session_start_ts,
+            "session_id": final_session_id,
+            "resume_session_id": session_id,
+            "prompt_chars": len(prompt),
+            "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "result_chars": len(result_text),
+            "result_preview": (result_text or "")[:500],
+            "n_events": len(archive_events),
+            "events": archive_events[-200:],
+            **archive_meta,
+        })
+
     def _drain_stdout(p: subprocess.Popen):
         """Read p.stdout line-by-line; tee each line to tap; capture result."""
         nonlocal result_text, final_session_id
@@ -345,6 +376,11 @@ def invoke_controller(
                     tap.flush()
                 except Exception:
                     pass
+            _archive_controller_call(
+                status="timeout",
+                ok=False,
+                error=f"timeout after {timeout}s",
+            )
             return "", session_id
 
         reader_thread.join(timeout=5)
@@ -390,7 +426,17 @@ def invoke_controller(
                     "exists / expired); next trial will start a fresh conversation",
                     (session_id or "")[:12],
                 )
+                _archive_controller_call(
+                    status="stale_session",
+                    ok=False,
+                    error=stderr[:1000],
+                )
                 return "", None
+            _archive_controller_call(
+                status="process_failed",
+                ok=False,
+                error=stderr[:1000],
+            )
             return "", session_id
 
         if tap is not None:
@@ -401,26 +447,17 @@ def invoke_controller(
                 pass
 
         # Archive write (persistent JSONL, survives /tmp wipe)
-        import hashlib
-        _append_planner_archive({
-            "ts": session_start_ts,
-            "ts_iso": datetime.fromtimestamp(session_start_ts).isoformat(timespec="seconds"),
-            "duration_s": time.time() - session_start_ts,
-            "session_id": final_session_id,
-            "resume_session_id": session_id,
-            "prompt_chars": len(prompt),
-            "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-            "result_chars": len(result_text),
-            "result_preview": (result_text or "")[:500],
-            "n_events": len(archive_events),
-            "events": archive_events[-200:],  # last 200 events, prevents megabyte lines
-            **archive_meta,
-        })
+        _archive_controller_call(status="success", ok=True)
 
         return result_text, final_session_id
 
     except FileNotFoundError:
         log.error("Claude CLI not found")
+        _archive_controller_call(
+            status="missing_cli",
+            ok=False,
+            error="Claude CLI not found",
+        )
         return "", session_id
     finally:
         if tap is not None:

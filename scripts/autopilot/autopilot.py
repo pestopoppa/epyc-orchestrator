@@ -26,6 +26,7 @@ Environment flags:
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import fcntl
 import json
 import logging
@@ -64,6 +65,7 @@ from phase_status import AsyncTaskRunner, PhaseTracker
 
 # 2026-05-22 Tranche-5 refactor — extracted modules. Public names re-imported below.
 from controller_io import (
+    PLANNER_ARCHIVE_PATH,
     extract_action,
     extract_rationale,
     invoke_controller as _invoke_controller_impl,
@@ -139,6 +141,9 @@ BLACKLIST_PATH = SCRIPT_DIR / "failure_blacklist.yaml"
 # by check_blacklist()). Keeps the unbounded-growth blacklist from dominating the
 # ~80KB prompt. Operator-tunable.
 BLACKLIST_RENDER_CAP = int(os.environ.get("AUTOPILOT_BLACKLIST_RENDER_CAP", "18"))
+PRIOR_DECISION_DIGEST_CAP = int(
+    os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "8")
+)
 ORCHESTRATOR_URL = "http://localhost:8000"
 
 # 2026-05-23 constrained-creativity planner knobs (gated on stagnation).
@@ -359,6 +364,70 @@ def _build_last_invalid_feedback(state: dict[str, Any]) -> str:
         "dependency flag in its own trial first) or choose a different action."
     )
     return _repeated_block(lines)
+
+
+def _build_prior_planner_decision_digest(
+    archive_path: Path = PLANNER_ARCHIVE_PATH,
+    *,
+    limit: int = PRIOR_DECISION_DIGEST_CAP,
+) -> str:
+    """Render bounded planner continuity from archive records, not chat resume."""
+    if limit <= 0:
+        return "  (disabled by AUTOPILOT_PRIOR_DECISION_DIGEST_CAP)"
+    if not archive_path.exists():
+        return "  (none yet — planner archive has no prior decisions)"
+
+    try:
+        tail: deque[str] = deque(maxlen=max(limit * 6, limit))
+        with open(archive_path) as fh:
+            for line in fh:
+                if line.strip():
+                    tail.append(line)
+    except Exception as exc:
+        return f"  (prior decision digest unavailable: {exc})"
+
+    rows: list[str] = []
+    for raw in reversed(tail):
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        if record.get("type") == "planner_coordinator":
+            critique = record.get("critique_decision") or "none"
+            degraded = "degraded" if record.get("degraded") else "clean"
+            fallback = str(record.get("fallback_reason") or "").strip()
+            issues = record.get("critique_issues") or []
+            issue_text = ""
+            if isinstance(issues, list) and issues:
+                issue_text = " issues=" + "; ".join(str(i)[:80] for i in issues[:2])
+            line = (
+                f"  - action={record.get('action_type') or '?'} "
+                f"draft={record.get('draft_provider') or '?'} "
+                f"critic={record.get('critic_provider') or 'none'} "
+                f"verdict={critique} status={degraded}"
+            )
+            if fallback:
+                line += f" fallback={fallback[:120]}"
+            rows.append(line + issue_text)
+        elif record.get("type") == "planner_provider_call" and not record.get("ok", True):
+            line = (
+                f"  - provider={record.get('provider') or '?'} "
+                f"role={record.get('role') or '?'} "
+                f"status={record.get('status') or 'failed'}"
+            )
+            error = str(record.get("error") or "").strip()
+            if error:
+                line += f" error={error[:120]}"
+            rows.append(line)
+
+        if len(rows) >= limit:
+            break
+
+    if not rows:
+        return "  (none yet — no coordinator decisions in planner archive tail)"
+    rows.reverse()
+    return "\n".join(rows)
 
 
 def _record_skip_trial(
@@ -582,6 +651,9 @@ Stagnation signal: {stagnation_signal}
 
 ### Short-Term Memory (accumulated learnings this session)
 {short_term_memory}
+
+### Prior Planner Decisions (bounded archive digest — replaces chat-session resume)
+{prior_planner_decisions}
 
 ### Self-Criticism from Last Trial
 {last_criticism}
@@ -1900,6 +1972,7 @@ def _run_loop_inner(
                 stagnation_signal=stagnation_signal,
                 exploration_block=exploration_block,
                 short_term_memory=memory.to_text(),  # AP-22
+                prior_planner_decisions=_build_prior_planner_decision_digest(),
                 last_criticism=last_criticism_text,  # AP-23
                 model_signatures=model_signatures_text,
                 blacklist_text=blacklist_text,

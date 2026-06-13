@@ -6,8 +6,6 @@ import importlib
 import sys
 from pathlib import Path
 
-import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
@@ -311,3 +309,36 @@ def test_unwrap_action_empty_list_none() -> None:
 
 def test_unwrap_action_dict_without_type_none() -> None:
     assert controller_io._unwrap_action({"no_type": True}) is None
+
+
+def test_invoke_controller_archives_timeout_before_return(monkeypatch) -> None:
+    records = []
+
+    class FakeTimeoutProcess:
+        stdout = iter(())
+        stderr = None
+
+        def wait(self, timeout):
+            raise controller_io.subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(controller_io.subprocess, "Popen", lambda *a, **k: FakeTimeoutProcess())
+    monkeypatch.setattr(controller_io, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(controller_io, "_append_planner_archive", records.append)
+
+    text, session_id = controller_io.invoke_controller(
+        "prompt",
+        session_id="old-session",
+        timeout=1,
+    )
+
+    assert text == ""
+    assert session_id == "old-session"
+    assert len(records) == 1
+    assert records[0]["type"] == "planner_provider_call"
+    assert records[0]["provider"] == "claude"
+    assert records[0]["status"] == "timeout"
+    assert records[0]["ok"] is False
+    assert records[0]["resume_session_id"] == "old-session"

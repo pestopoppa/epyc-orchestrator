@@ -6,6 +6,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,6 +15,37 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 planner_providers = importlib.import_module("planner_providers")
+
+
+def test_claude_provider_does_not_resume_or_persist_session_by_default(tmp_path) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_invoke(prompt, *, session_id=None, timeout=300, cwd=None):
+        captured["prompt"] = prompt
+        captured["session_id"] = session_id
+        captured["timeout"] = timeout
+        captured["cwd"] = cwd
+        return "ok", "new-session"
+
+    provider = planner_providers.ClaudePlannerProvider(invoke_fn=fake_invoke)
+
+    assert provider.supports_resume is False
+    result = provider.invoke(
+        "prompt",
+        role="draft",
+        session_id="old-session",
+        timeout=7,
+        cwd=tmp_path,
+    )
+
+    assert result.ok is True
+    assert result.session_id is None
+    assert captured == {
+        "prompt": "prompt",
+        "session_id": None,
+        "timeout": 7,
+        "cwd": tmp_path,
+    }
 
 
 def test_parse_codex_jsonl_agent_message() -> None:

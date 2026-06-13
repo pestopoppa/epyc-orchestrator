@@ -148,7 +148,7 @@ def plan_with_providers(
     """Draft a canonical planner action with optional secondary critique."""
     settings = settings or load_planner_settings_from_env()
     planner_state = planner_state if planner_state is not None else {}
-    session_update = session_id
+    session_update = None
 
     primary_name = _normalize_provider(settings.primary)
     critic_name = _normalize_provider(settings.critic)
@@ -162,14 +162,15 @@ def plan_with_providers(
         fallback_reason = f"{primary_name} circuit open"
 
     draft_provider = provider_factory(draft_provider_name)
+    draft_resume_id = session_id if draft_provider.supports_resume else None
     draft = draft_provider.invoke(
         prompt,
         role="draft",
-        session_id=session_id if draft_provider.supports_resume else None,
+        session_id=draft_resume_id,
         timeout=timeout,
         cwd=cwd,
     )
-    if draft.provider == "claude":
+    if draft_provider.supports_resume:
         session_update = draft.session_id
 
     action = extract_action(draft.text)
@@ -192,10 +193,11 @@ def plan_with_providers(
                 timeout=timeout,
                 cwd=cwd,
             )
-            if fallback.provider == "claude":
-                session_update = fallback.session_id
             fallback_action = extract_action(fallback.text)
             if _draft_is_usable(fallback, fallback_action):
+                session_update = (
+                    fallback.session_id if fallback_provider.supports_resume else None
+                )
                 fallback_reason = (
                     fallback_reason
                     or f"{draft.provider} draft failed: {draft_unusable}"
