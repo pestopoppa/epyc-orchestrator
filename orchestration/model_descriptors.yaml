@@ -1,12 +1,12 @@
 descriptor_version: 3
-compiled_at: '2026-06-13T20:29:35Z'
+compiled_at: '2026-06-13T20:34:55Z'
 status: compiled_with_gaps
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 837829f
-    sha256: d20a08b2777dcae1534acefa2a332e294cf0e8d1e332b7e49dcc9fc9735d5c03
+    repo_commit: b8477b0
+    sha256: 4dc4430193703945ed3df9ec5fdbc5d53f817dfee535dfb2650f271bd22a3c45
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
     repo_commit: b5e123f
@@ -458,13 +458,27 @@ models:
     runtime_aliases: []
     shared_mmap: true
   quality:
-    suite_vector: {}
+    suite_vector:
+      overall: 0.6011
+      thinking: 0.4667
+      general: 0.7
+      math: 0.4333
+      agentic: 0.8667
+      coder: 0.6
+      instruction_precision: 0.5455
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
     - date: '2026-03-24'
       protocol: registry performance block
       value:
+        quality_score: 110/183 (60%)
+        thinking_suite: 14/30 (47%)
+        general_suite: 21/30 (70%)
+        math_suite: 13/30 (43%)
+        agentic_suite: 26/30 (87%)
+        coder_suite: 18/30 (60%)
+        instruction_precision_suite: 18/33 (55%)
         baseline_tps: 39.6
         optimized_tps: 39.6
         benchmark_date: '2026-03-24'
@@ -499,4 +513,3 @@ models:
     server_role: reap_25b
   known_gaps:
   - Missing enable_thinking compatibility evidence
-  - Missing quality suite_vector evidence

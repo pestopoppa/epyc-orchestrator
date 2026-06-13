@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T20:29:35Z'
+compiled_at: '2026-06-13T20:34:55Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: d20a08b2777dcae1534acefa2a332e294cf0e8d1e332b7e49dcc9fc9735d5c03
-    repo_commit: 837829f
+    sha256: 4dc4430193703945ed3df9ec5fdbc5d53f817dfee535dfb2650f271bd22a3c45
+    repo_commit: b8477b0
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: a1ef72742fb2d1c9931ad7825edfc19d84f44d23061242f6e38a3d4fd0b09d7f
-    repo_commit: 837829f
+    sha256: 28baf10479c5e23d805004c2604ec098fa4afa04455084b8d9095c7d20d68ddf
+    repo_commit: b8477b0
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: e3f80ad39be0bf0d1ced00105d83f5204849b7bfac0acdff423ed9d21573a2f6
-    repo_commit: 837829f
+    repo_commit: b8477b0
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: 837829f
+    repo_commit: b8477b0
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 871b106644c89528419ef3521f190550f194c9d14fd83d3277208a960ea9d828
-    repo_commit: 837829f
+    repo_commit: b8477b0
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: a13a6f5b6cf6ec4f37be1a42083128f38cfba023dbfc45508149572741325648
-    repo_commit: 837829f
+    repo_commit: b8477b0
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 837829f
+    repo_commit: b8477b0
 roles:
   architect_general:
     role: architect_general
@@ -688,7 +688,7 @@ roles:
         runtime: {}
     priors:
       throughput_tps: 39.6
-      quality_overall: null
+      quality_overall: 0.6011
       memory_cost: 2.0
     acceleration:
       spec_type: draft
@@ -723,6 +723,13 @@ roles:
       - date: '2026-03-24'
         protocol: registry performance block
         value:
+          quality_score: 110/183 (60%)
+          thinking_suite: 14/30 (47%)
+          general_suite: 21/30 (70%)
+          math_suite: 13/30 (43%)
+          agentic_suite: 26/30 (87%)
+          coder_suite: 18/30 (60%)
+          instruction_precision_suite: 18/33 (55%)
           baseline_tps: 39.6
           optimized_tps: 39.6
           benchmark_date: '2026-03-24'
@@ -732,8 +739,6 @@ roles:
         value_tps: 39.6
     known_gaps:
     - Missing enable_thinking compatibility evidence
-    - Missing overall quality prior
-    - Missing quality suite_vector evidence
   toolrunner:
     role: toolrunner
     deployment_status: live_stack
@@ -1527,8 +1532,6 @@ known_global_gaps:
   - Missing enable_thinking compatibility evidence
   reap_25b_frontdoor:
   - Missing enable_thinking compatibility evidence
-  - Missing overall quality prior
-  - Missing quality suite_vector evidence
   toolrunner:
   - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
   - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m

@@ -2422,6 +2422,13 @@ roles:
       p_split: 0
       lookup: true
     performance:
+      quality_score: "110/183 (60%)"  # Claude-as-Judge raw score, 2026-03-24 REAP-25B 256-token eval
+      thinking_suite: "14/30 (47%)"
+      general_suite: "21/30 (70%)"
+      math_suite: "13/30 (43%)"
+      agentic_suite: "26/30 (87%)"
+      coder_suite: "18/30 (60%)"
+      instruction_precision_suite: "18/33 (55%)"
       baseline_tps: 39.6
       optimized_tps: 39.6
       benchmark_date: 2026-03-24
