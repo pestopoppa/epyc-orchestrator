@@ -85,23 +85,6 @@ models:
       instruction_precision: 77%  # excellent format control
       long_context: 74%  # good summarization with reasoning
 
-  Qwen3-Coder-REAP-246B-A35B-Q4_K_M:
-    role: architect_coding
-    max_throughput_tps: 8.0
-    quality_baseline_score: 2.35 / 3.0
-    notes: "Pure MoE (50% pruned), spec decode viable. Hardest coding target."
-    per_suite:
-      math: 78%          # strong mathematical reasoning
-      coder: 84%         # exceptional code generation (best-in-stack)
-      gpqa: 72%          # strong science reasoning
-      agentic: 66%       # good tool use
-      general: 74%       # strong general
-      thinking: 75%      # good reasoning (no hybrid overhead)
-      hotpotqa: 77%      # excellent multi-hop
-      simpleqa: 76%      # strong factual
-      instruction_precision: 75%  # excellent format control
-      long_context: 70%  # good summarization
-
 # ─────────────────────────────────────────────────────────────────────
 # METADATA
 # ─────────────────────────────────────────────────────────────────────

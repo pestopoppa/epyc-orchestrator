@@ -43,7 +43,7 @@ def _normalize_delegate_role(role: object) -> str:
 
 
 # Thread-local delegation depth counter to detect re-entrance
-# (specialist escalating back to architect_coding starts a fresh loop counter)
+# (specialist escalating back to the architect starts a fresh loop counter)
 _delegation_local = threading.local()
 
 

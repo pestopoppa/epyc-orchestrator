@@ -249,10 +249,6 @@ role_access:
     enabled: true
     allowed_categories: [coding, research, general]
 
-  architect_coding:
-    enabled: true
-    allowed_categories: [coding, llm_specific]
-
   formalizer:
     enabled: true
     allowed_categories: [coding, research]
