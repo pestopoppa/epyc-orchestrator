@@ -15,6 +15,36 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../lib/env.sh"
 
 STACK_PY="$SCRIPT_DIR/orchestrator_stack.py"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+print_manifest_summary() {
+  local tier="${1:-hot}"
+  PYTHONPATH="$REPO_ROOT" python3 - "$tier" <<'PY'
+import sys
+
+from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+
+tier = sys.argv[1]
+servers = HOT_SERVERS if tier == "hot" else WARM_SERVERS
+
+seen: set[tuple[str, ...]] = set()
+for server in servers:
+    roles = tuple(server.get("roles") or ())
+    if not roles or roles in seen:
+        continue
+    seen.add(roles)
+    port = server.get("port")
+    flags: list[str] = []
+    if server.get("worker_pool"):
+        flags.append(f"worker_pool:{server.get('worker_type')}")
+    if server.get("vision"):
+        flags.append(f"vision:{server.get('vision_type')}")
+    if server.get("embedding"):
+        flags.append("embedding")
+    suffix = f" ({', '.join(flags)})" if flags else ""
+    print(f"  - {', '.join(roles)} ({port}){suffix}")
+PY
+}
 
 # Validate script exists
 if [[ ! -f "$STACK_PY" ]]; then
@@ -32,41 +62,31 @@ echo ""
 
 case "$MODE" in
   --full)
-    echo "Mode: FULL production stack (~535GB)"
+    echo "Mode: FULL production stack (manifest-defined HOT tier)"
     echo ""
-    echo "Components:"
-    echo "  - frontdoor (8080): Qwen3-Coder-30B-A3B, MoE6, 18 t/s"
-    echo "  - coder_escalation (8081): Qwen2.5-Coder-32B + spec + lookup, 39 t/s"
-    echo "  - worker_explore (8082): Qwen2.5-7B-Instruct + spec + lookup, 44 t/s"
-    echo "  - architect_general (8083): Qwen3-235B-A22B, MoE4, 6.75 t/s"
-    echo "  - architect_coding (8084): Qwen3-Coder-480B-A35B, MoE3, 10.3 t/s"
-    echo "  - ingest_long_context (8085): Qwen3-Next-80B-A3B, MoE4, 6.3 t/s"
-    echo "  - worker_vision (8086): Qwen2.5-VL-7B + mmproj, ~15 t/s"
-    echo "  - vision_escalation (8087): Qwen3-VL-30B-A3B + mmproj, MoE4, ~10 t/s"
-    echo "  - embedder (8090): BGE-large-en-v1.5 (1024-dim) [fanout 8090-8095]"
-    echo "  - orchestrator (8000): uvicorn API"
-    echo "  - document_formalizer (9001): LightOnOCR-2-1B"
+    echo "HOT launch groups:"
+    print_manifest_summary hot
     echo ""
     python3 "$STACK_PY" start
     ;;
   --minimal)
-    echo "Mode: MINIMAL stack (~45GB)"
+    echo "Mode: MINIMAL legacy alias (manifest-defined HOT tier only)"
     echo ""
-    echo "Components:"
-    echo "  - frontdoor (8080): Qwen3-Coder-30B-A3B"
-    echo "  - coder_escalation (8081): Qwen2.5-Coder-32B + spec + lookup"
-    echo "  - worker_explore (8082): Qwen2.5-7B-Instruct + spec"
-    echo "  - embedder (8090): BGE-large-en-v1.5 (1024-dim) [fanout 8090-8095]"
+    echo "HOT launch groups:"
+    print_manifest_summary hot
     echo ""
-    echo "WARNING: Architects excluded - for testing/development only"
+    echo "NOTE: The stack manager no longer exposes a separate core-only tier."
     echo ""
     python3 "$STACK_PY" start --hot-only
     ;;
   --with-burst)
-    echo "Mode: FULL + burst worker (~515GB)"
+    echo "Mode: FULL + burst worker"
     echo ""
-    echo "Additional burst capacity:"
-    echo "  - worker_fast (8102): Qwen2.5-Coder-1.5B, 4 slots, 60 t/s"
+    echo "HOT launch groups:"
+    print_manifest_summary hot
+    echo ""
+    echo "WARM launch groups requested:"
+    print_manifest_summary warm
     echo ""
     python3 "$STACK_PY" start --include-warm worker_fast
     ;;
@@ -93,23 +113,17 @@ case "$MODE" in
     echo "Usage: $0 [--full | --minimal | --with-burst | --dev | --status | --stop]"
     echo ""
     echo "Modes:"
-    echo "  --full (default)  Full HOT tier + architects (~535GB, 47% RAM)"
-    echo "  --minimal         Core tier only, no architects (~45GB)"
-    echo "  --with-burst      Full + fast workers for burst capacity (~515GB)"
+    echo "  --full (default)  Manifest-defined HOT tier"
+    echo "  --minimal         Legacy alias for HOT tier only, launched via --hot-only"
+    echo "  --with-burst      HOT tier + manifest-defined warm burst worker"
     echo "  --dev             Single 0.5B model for testing"
     echo ""
     echo "Commands:"
     echo "  --status          Show current stack status"
     echo "  --stop            Stop all running components"
     echo ""
-    echo "RAM breakdown (full mode):"
-    echo "  - Base tier: ~45GB"
-    echo "  - architect_general (235B): ~140GB"
-    echo "  - architect_coding (480B): ~280GB"
-    echo "  - ingest_long_context (80B): ~45GB"
-    echo "  - worker_vision (7B VL): ~6GB"
-    echo "  - vision_escalation (30B VL MoE): ~19GB"
-    echo "  - Total: ~535GB (47% of 1130GB)"
+    echo "Launch inventory comes from scripts/server/stack_manifest.py."
+    echo "Use --status after launch for live processes, ports, and residency."
     exit 0
     ;;
   *)
