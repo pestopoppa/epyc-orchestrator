@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.registry.stack_priors import StackPriorsCompileError, compile_stack_priors
+from src.registry.stack_priors import (
+    STACK_PRIORS_VERSION,
+    StackPriorsCompileError,
+    compile_stack_priors,
+    validate_stack_priors_contract,
+)
 
 
 def _write_yaml(path: Path, data: dict) -> Path:
@@ -81,6 +86,9 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     frontdoor = priors["roles"]["frontdoor"]
     coder = priors["roles"]["coder_escalation"]
     assert priors["status"] == "compiled"
+    assert priors["stack_priors_version"] == STACK_PRIORS_VERSION
+    assert priors["contract"]["schema"] == "epyc.stack_priors"
+    assert validate_stack_priors_contract(priors) == []
     assert frontdoor["priors"]["memory_cost"] == 1.0
     assert frontdoor["evidence"]["precedence"]["memory_cost"] == "server_mode.tier"
     assert coder["serving"]["endpoint"] == "http://localhost:8070"

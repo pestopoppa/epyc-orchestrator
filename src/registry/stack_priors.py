@@ -26,6 +26,49 @@ DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 PRECEDENCE_SPEC = REPO_ROOT / "docs" / "reference" / "stack-truth-precedence.md"
 
+STACK_PRIORS_VERSION = 1
+REQUIRED_TOP_LEVEL_FIELDS = (
+    "stack_priors_version",
+    "contract",
+    "compiled_at",
+    "status",
+    "coverage_scope",
+    "precedence_spec",
+    "source_artifacts",
+    "roles",
+    "known_global_gaps",
+)
+REQUIRED_ROLE_FIELDS = (
+    "role",
+    "deployment_status",
+    "status",
+    "model_id",
+    "display_name",
+    "serving",
+    "priors",
+    "acceleration",
+    "model",
+    "evidence",
+    "known_gaps",
+)
+REQUIRED_SERVING_FIELDS = (
+    "endpoint",
+    "server_role",
+    "binding",
+    "ports",
+    "slots",
+    "tier",
+    "binary",
+    "binary_dir",
+    "numa_policy",
+    "shared_mmap",
+)
+REQUIRED_PRIOR_FIELDS = (
+    "throughput_tps",
+    "quality_overall",
+    "memory_cost",
+)
+
 RESIDENCY_COST = {"hot": 1.0, "warm": 2.0, "cold": 3.0}
 
 
@@ -81,6 +124,80 @@ def _source_metadata(path: Path) -> dict[str, Any]:
         "sha256": _sha256(path),
         "repo_commit": _repo_commit(path),
     }
+
+
+def stack_priors_contract() -> dict[str, Any]:
+    """Return the versioned consumer contract embedded in generated priors."""
+    return {
+        "schema": "epyc.stack_priors",
+        "version": STACK_PRIORS_VERSION,
+        "required_top_level_fields": list(REQUIRED_TOP_LEVEL_FIELDS),
+        "required_role_fields": list(REQUIRED_ROLE_FIELDS),
+        "required_serving_fields": list(REQUIRED_SERVING_FIELDS),
+        "required_prior_fields": list(REQUIRED_PRIOR_FIELDS),
+        "fallback_policy": (
+            "Consumers may use local fallback values only as explicit degraded "
+            "mode when this generated contract is missing or invalid."
+        ),
+    }
+
+
+def validate_stack_priors_contract(priors: dict[str, Any]) -> list[str]:
+    """Validate the generated stack-priors consumer contract shape.
+
+    This intentionally checks structure, not semantic freshness. Source hashes,
+    retired live roles, and strict known-gap policy remain in stack_change_guard.
+    """
+    errors: list[str] = []
+    if priors.get("stack_priors_version") != STACK_PRIORS_VERSION:
+        errors.append(
+            f"stack_priors_version must be {STACK_PRIORS_VERSION}, "
+            f"got {priors.get('stack_priors_version')!r}"
+        )
+
+    for field in REQUIRED_TOP_LEVEL_FIELDS:
+        if field not in priors:
+            errors.append(f"missing top-level stack-prior field: {field}")
+
+    contract = priors.get("contract")
+    if not isinstance(contract, dict):
+        errors.append("stack priors artifact has no mapping-valued contract section")
+    elif contract.get("version") != STACK_PRIORS_VERSION:
+        errors.append(
+            f"stack-prior contract version must be {STACK_PRIORS_VERSION}, "
+            f"got {contract.get('version')!r}"
+        )
+
+    roles = priors.get("roles")
+    if not isinstance(roles, dict):
+        errors.append("stack priors artifact has no mapping-valued roles section")
+        return errors
+
+    for role, record in sorted(roles.items()):
+        if not isinstance(record, dict):
+            errors.append(f"role {role!r} record is not a mapping")
+            continue
+        for field in REQUIRED_ROLE_FIELDS:
+            if field not in record:
+                errors.append(f"role {role!r} is missing contract field {field!r}")
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            errors.append(f"role {role!r} serving is not a mapping")
+        else:
+            for field in REQUIRED_SERVING_FIELDS:
+                if field not in serving:
+                    errors.append(f"role {role!r} serving is missing field {field!r}")
+        priors_block = record.get("priors")
+        if not isinstance(priors_block, dict):
+            errors.append(f"role {role!r} priors is not a mapping")
+        else:
+            for field in REQUIRED_PRIOR_FIELDS:
+                if field not in priors_block:
+                    errors.append(f"role {role!r} priors is missing field {field!r}")
+        known_gaps = record.get("known_gaps")
+        if not isinstance(known_gaps, list):
+            errors.append(f"role {role!r} known_gaps must be a list")
+    return errors
 
 
 def _coerce_tps(value: Any) -> float | None:
@@ -407,7 +524,8 @@ def compile_stack_priors(
         raise StackPriorsCompileError(gaps_by_role)
 
     return {
-        "stack_priors_version": 1,
+        "stack_priors_version": STACK_PRIORS_VERSION,
+        "contract": stack_priors_contract(),
         "compiled_at": _timestamp(),
         "status": "compiled_with_gaps" if gaps_by_role else "compiled",
         "coverage_scope": "descriptor_role_bindings"

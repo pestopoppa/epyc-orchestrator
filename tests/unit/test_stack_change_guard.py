@@ -12,6 +12,7 @@ from scripts.validate.stack_change_guard import (
     scan_hardcoded_surfaces,
     validate_stack_priors,
 )
+from src.registry.stack_priors import STACK_PRIORS_VERSION, stack_priors_contract
 
 
 def _write_yaml(path: Path, data: dict) -> Path:
@@ -25,16 +26,43 @@ def _sha(path: Path) -> str:
 
 def _priors(registry: Path, descriptors: Path, *, memory_cost: float = 1.0) -> dict:
     return {
+        "stack_priors_version": STACK_PRIORS_VERSION,
+        "contract": stack_priors_contract(),
+        "compiled_at": "2026-06-13T00:00:00Z",
+        "status": "compiled",
+        "coverage_scope": "test",
+        "precedence_spec": "docs/reference/stack-truth-precedence.md",
         "source_artifacts": {
             "registry": {"path": str(registry), "sha256": _sha(registry)},
             "descriptors": {"path": str(descriptors), "sha256": _sha(descriptors)},
         },
         "roles": {
             "frontdoor": {
+                "role": "frontdoor",
                 "deployment_status": "live_stack",
+                "status": "compiled",
                 "model_id": "qwen",
-                "serving": {"endpoint": "http://localhost:8070", "tier": "hot"},
-                "priors": {"memory_cost": memory_cost},
+                "display_name": "Qwen",
+                "serving": {
+                    "endpoint": "http://localhost:8070",
+                    "server_role": "frontdoor",
+                    "binding": "server_mode.direct",
+                    "ports": [8070],
+                    "slots": 1,
+                    "tier": "hot",
+                    "binary": None,
+                    "binary_dir": None,
+                    "numa_policy": None,
+                    "shared_mmap": False,
+                },
+                "priors": {
+                    "throughput_tps": 24.3,
+                    "quality_overall": 0.9,
+                    "memory_cost": memory_cost,
+                },
+                "acceleration": {},
+                "model": {},
+                "evidence": {},
                 "known_gaps": [],
             }
         },
@@ -82,6 +110,19 @@ def test_validate_stack_priors_rejects_retired_live_role(tmp_path: Path) -> None
 
     assert not result.ok
     assert "retired role 'architect_coding' appears as live_stack" in result.errors
+
+
+def test_validate_stack_priors_rejects_missing_contract(tmp_path: Path) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload.pop("contract")
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    result = validate_stack_priors(priors)
+
+    assert not result.ok
+    assert "missing top-level stack-prior field: contract" in result.errors
 
 
 def test_validate_stack_priors_rejects_hot_memory_penalty(tmp_path: Path) -> None:

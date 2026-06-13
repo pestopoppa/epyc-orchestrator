@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from src.registry.stack_priors import validate_stack_priors_contract
+
 
 REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
 DEFAULT_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
@@ -333,6 +335,7 @@ def validate_stack_priors(
         return GuardResult(errors=[f"missing stack priors artifact: {priors_path}"], warnings=[])
 
     priors = _load_yaml(priors_path)
+    errors.extend(validate_stack_priors_contract(priors))
     roles = priors.get("roles")
     if not isinstance(roles, dict):
         errors.append("stack priors artifact has no mapping-valued roles section")
