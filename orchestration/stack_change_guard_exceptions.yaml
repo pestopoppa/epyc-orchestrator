@@ -13,4 +13,15 @@
 # - expires: ISO date YYYY-MM-DD
 # Optional:
 # - line: exact line number for a single-line waiver
-exceptions: []
+exceptions:
+  - rule_id: retired_role_in_active_code
+    category: production_blocker
+    path_glob: src/roles.py
+    line: 118
+    classification: intentional_live_exception
+    owner: stack-change-governance
+    rationale: >
+      Temporary compatibility enum for persisted state, force_role requests, and
+      direct callers while retired architect-coding behavior aliases to the live
+      architect role. Remove after compatibility callers are audited or migrated.
+    expires: "2026-07-31"
