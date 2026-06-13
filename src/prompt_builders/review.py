@@ -55,9 +55,9 @@ Rules:
   NEVER delegate factual questions to ANY role — specialists cannot look up facts. Answer directly.
 - For quick math: compute in REPL, then D|answer
 - For code/algorithms/implementation: I|brief:<your design>|to:coder_escalation
-- For parallel coding subtasks or file-split implementation: I|brief:<task split>|to:worker_coder
-- For investigation/search: I|brief:<plan>|to:worker_explore
-- Valid roles: coder_escalation, worker_coder, worker_explore, worker_general, worker_math, worker_summarize, worker_vision, vision_escalation
+- For parallel coding subtasks or file-split implementation: I|brief:<task split>|to:coder_escalation
+- For investigation/search: I|brief:<plan>|to:worker_general
+- Valid roles: coder_escalation, worker_general, worker_math, worker_summarize, worker_vision, vision_escalation
 
 CRITICAL: Output the decision line ONLY. Stop generating after D|answer or I|brief:...|to:role. Do NOT explain your reasoning, justify your choice, or add any text after the decision.
 {context_section}

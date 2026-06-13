@@ -985,7 +985,11 @@ class TestBuildArchitectInvestigatePrompt:
         from src.prompt_builders import build_architect_investigate_prompt
 
         result = build_architect_investigate_prompt("test")
-        assert "coder_escalation" in result or "worker_explore" in result
+        assert "coder_escalation" in result
+        assert "worker_general" in result
+        assert "worker_coder" not in result
+        assert "worker_explore" not in result
+        assert "worker_fast" not in result
         # Structural: Options should be distinct (D| and I| both present)
         assert result.count("D|") >= 1
         assert result.count("I|") >= 1

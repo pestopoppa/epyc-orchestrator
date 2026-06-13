@@ -66,7 +66,7 @@ I|brief:implement binary search tree with delete operation|to:coder_escalation|m
 
 Delegate exploration:
 ```
-I|brief:search for recent papers on speculative decoding|to:worker_explore
+I|brief:search for recent papers on speculative decoding|to:worker_general
 ```
 
 == WRONG (do NOT do these) ==
