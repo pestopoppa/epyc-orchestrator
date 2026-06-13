@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T19:53:43Z'
+compiled_at: '2026-06-13T20:21:20Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: f4db0391e108325e0dff09165ba34f2a8dc95dbf0390c3cee54fe9fb6ac5fcda
-    repo_commit: a001017
+    sha256: b8724c7dc067b7c2832a4f401e3937d14a3327cec57ebb57684d9eb5a47e19d4
+    repo_commit: fb0fd6d
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 3d4d46eaf9cae29d8ca98be034d7aa5cfa703d175b043dfd854d23c87cd3cded
-    repo_commit: a001017
+    sha256: 829ddcb85e1004b94846afa3a478163f630d413a0565dd83020b0cb1907e25b2
+    repo_commit: fb0fd6d
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: e3f80ad39be0bf0d1ced00105d83f5204849b7bfac0acdff423ed9d21573a2f6
-    repo_commit: a001017
+    repo_commit: fb0fd6d
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: a001017
+    repo_commit: fb0fd6d
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 871b106644c89528419ef3521f190550f194c9d14fd83d3277208a960ea9d828
-    repo_commit: a001017
+    repo_commit: fb0fd6d
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: a13a6f5b6cf6ec4f37be1a42083128f38cfba023dbfc45508149572741325648
-    repo_commit: a001017
+    repo_commit: fb0fd6d
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: a001017
+    repo_commit: fb0fd6d
 roles:
   architect_general:
     role: architect_general
@@ -145,7 +145,7 @@ roles:
               threads_draft: null
     priors:
       throughput_tps: 12.19
-      quality_overall: null
+      quality_overall: 0.8567
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
@@ -180,6 +180,7 @@ roles:
       - date: null
         protocol: registry performance block
         value:
+          quality_score: 2.57/3
           baseline_tps: 5.3
           moe4_baseline_tps: 3.87
           moe4_spec_tps: 8.21
@@ -199,8 +200,6 @@ roles:
         protocol: server_mode throughput
         value_tps: 12.19
     known_gaps:
-    - Missing overall quality prior
-    - Missing quality suite_vector evidence
     - Missing structured ctx_max
   coder_escalation:
     role: coder_escalation
@@ -609,7 +608,7 @@ roles:
         runtime: {}
     priors:
       throughput_tps: 12.19
-      quality_overall: null
+      quality_overall: 0.8567
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
@@ -644,6 +643,7 @@ roles:
       - date: null
         protocol: registry performance block
         value:
+          quality_score: 2.57/3
           baseline_tps: 5.3
           moe4_baseline_tps: 3.87
           moe4_spec_tps: 8.21
@@ -663,8 +663,6 @@ roles:
         protocol: server_mode throughput
         value_tps: 12.19
     known_gaps:
-    - Missing overall quality prior
-    - Missing quality suite_vector evidence
     - Missing structured ctx_max
   reap_25b_frontdoor:
     role: reap_25b_frontdoor
@@ -1532,15 +1530,11 @@ roles:
     - Missing structured ctx_max
 known_global_gaps:
   architect_general:
-  - Missing overall quality prior
-  - Missing quality suite_vector evidence
   - Missing structured ctx_max
   ingest_long_context:
   - Missing enable_thinking compatibility evidence
   - Missing structured ctx_max
   qwen35_122b_q4km:
-  - Missing overall quality prior
-  - Missing quality suite_vector evidence
   - Missing structured ctx_max
   reap_25b_frontdoor:
   - Missing enable_thinking compatibility evidence

@@ -127,7 +127,54 @@ def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
     assert model["role_bindings"]["server_roles"] == ["coder_escalation", "frontdoor"]
     assert model["quality"]["suite_vector"]["overall"] == 0.93
     assert model["quality"]["suite_vector"]["coder"] == 0.9667
+    assert model["quality"]["suite_vector"]["long_context"] == 1.0
     assert not any("server" in gap or "port" in gap for gap in model["known_gaps"])
+
+
+def test_compile_projects_quality_score_as_overall_quality(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {
+                "architect_general": {
+                    "port": 8083,
+                    "model": "Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",
+                    "model_role": "architect_general",
+                    "throughput": 12.19,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                }
+            },
+            "roles": {
+                "architect_general": {
+                    "model": {
+                        "name": "Qwen3.5-122B-A10B",
+                        "quant": "Q4_K_M",
+                        "architecture": "qwen35moe",
+                        "size_gb": 69,
+                        "ctx_max": 16384,
+                    },
+                    "performance": {"quality_score": "2.57/3", "baseline_tps": 5.3},
+                    "acceleration": {
+                        "type": "moe_expert_reduction",
+                        "override_key": "qwen35moe.expert_used_count",
+                        "experts": 8,
+                    },
+                    "memory": {"pinned": True},
+                },
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"architect_general"},
+    )
+
+    model = compiled["models"][0]
+    assert model["quality"]["suite_vector"]["overall"] == 0.8567
+    assert model["quality"]["measured"][0]["value"]["quality_score"] == "2.57/3"
+    assert compiled["status"] == "compiled"
 
 
 def test_compile_merges_shared_alias_mismatch_into_runtime_model(tmp_path: Path) -> None:

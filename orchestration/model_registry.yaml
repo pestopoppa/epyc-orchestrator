@@ -1098,6 +1098,7 @@ roles:
         Swapped from 235B (133GB) to 122B (69GB) — saves 128GB across 2 instances.
       benchmarked: 2026-02-13
     performance:
+      quality_score: "2.57/3"  # 2026-03-19 architecture eval; structured from description for descriptor projection
       baseline_tps: 5.30
       moe4_baseline_tps: 3.87
       moe4_spec_tps: 8.21
