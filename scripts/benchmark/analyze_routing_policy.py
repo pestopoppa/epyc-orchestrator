@@ -20,15 +20,50 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import yaml
+
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+FALLBACK_SPECIALIST_ROLES = frozenset({
+    "architect_general",
+    "coder_escalation",
+    "ingest_long_context",
+    "vision_escalation",
+})
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _live_specialist_roles(stack_priors_path: Path = STACK_PRIORS_PATH) -> set[str]:
+    """Return live non-worker specialist roles from generated stack priors."""
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return set(FALLBACK_SPECIALIST_ROLES)
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return set(FALLBACK_SPECIALIST_ROLES)
+
+    specialists: set[str] = set()
+    for role_name, record in roles.items():
+        if not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        role = str(role_name)
+        if role == "frontdoor" or role == "toolrunner" or role.startswith("worker_"):
+            continue
+        specialists.add(role)
+
+    return specialists or set(FALLBACK_SPECIALIST_ROLES)
 
 
 def analyze_routing_policy(
@@ -157,7 +192,7 @@ def analyze_routing_policy(
             print(f"    {action:35s}  n={n:4d}  Q={mean_q:.3f}{marker}{below_threshold}")
 
     # Specialist utilization summary
-    specialist_roles = {"coder_escalation", "coder_escalation", "architect_general", "architect_coding"}
+    specialist_roles = _live_specialist_roles()
     specialist_wins = 0
     total_suites = len(policy)
 
