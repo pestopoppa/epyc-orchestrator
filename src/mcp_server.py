@@ -373,7 +373,6 @@ def _post_chat(payload: dict) -> dict:
 
     Returns parsed JSON response dict, or a dict with 'error' key on failure.
     """
-    import time
     import urllib.request
     import urllib.error
 
@@ -454,7 +453,7 @@ def orchestrator_chat(
     Args:
         prompt: The user's prompt or question.
         context: Additional context to include.
-        force_role: Force a specific role (e.g., "architect_coding", "frontdoor").
+        force_role: Force a specific role (e.g., "architect_general", "frontdoor").
                     Empty string uses automatic routing.
         force_mode: Force a mode ("direct", "repl", "delegated").
                     Empty string uses automatic selection.

@@ -18,9 +18,9 @@ Usage:
 
     router = BindingRouter()
     router.add(RoutingBinding("code", "coder_escalation", BindingPriority.DEFAULT))
-    router.add(RoutingBinding("code", "architect_coding", BindingPriority.USER_PREF))
+    router.add(RoutingBinding("code", "architect_general", BindingPriority.USER_PREF))
 
-    resolved = router.resolve("code")  # Returns "architect_coding" (higher priority)
+    resolved = router.resolve("code")  # Returns "architect_general" (higher priority)
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ class RoutingBinding:
     """A single routing override entry."""
 
     task_type: str  # e.g., "code", "ingest", "explore"
-    role: str  # e.g., "coder_escalation", "architect_coding"
+    role: str  # e.g., "coder_escalation", "architect_general"
     priority: BindingPriority = BindingPriority.DEFAULT
     source: str = ""  # Human-readable source description
     active: bool = True

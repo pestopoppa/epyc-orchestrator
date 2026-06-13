@@ -30,7 +30,7 @@ class OpenAIChatRequest(BaseModel):
     x_orchestrator_role: str | None = Field(
         default=None,
         description="Force specific orchestrator role, bypassing frontdoor routing. "
-        "Values: any role from /v1/models (e.g. 'architect_coding', 'worker_math').",
+        "Values: any role from /v1/models (e.g. 'architect_general', 'worker_math').",
     )
     x_max_escalation: str | None = Field(
         default=None,
