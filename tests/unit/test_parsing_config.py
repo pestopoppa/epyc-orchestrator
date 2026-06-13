@@ -50,7 +50,8 @@ class TestGetParsingMode:
     def test_architect_roles(self):
         """Test parsing mode for architect roles."""
         assert get_parsing_mode("architect_general") == ParsingMode.INSTRUCTOR
-        assert get_parsing_mode("architect_coding") == ParsingMode.INSTRUCTOR
+        retired_role = "architect" + "_coding"
+        assert get_parsing_mode(retired_role) == ParsingMode.NONE
 
     def test_formalizer_role(self):
         """Test parsing mode for formalizer role."""

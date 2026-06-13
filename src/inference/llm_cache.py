@@ -15,7 +15,7 @@ Design decisions:
 Highest value targets (slowest models):
 - architect_general (6.75 t/s)
 - ingest_long_context (6.3 t/s)
-- architect_coding (10.3 t/s)
+- vision_escalation (27.6 t/s)
 
 Usage:
     from src.llm_cache import ContentAddressableCache

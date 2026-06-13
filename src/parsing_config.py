@@ -36,7 +36,6 @@ PARSING_CONFIG: dict[str, ParsingMode] = {
     "formalizer": ParsingMode.GBNF,  # 8B model, ensure compliance
     "coder_escalation": ParsingMode.INSTRUCTOR,
     "architect_general": ParsingMode.INSTRUCTOR,
-    "architect_coding": ParsingMode.INSTRUCTOR,
     "ingest_long_context": ParsingMode.NONE,  # Returns summaries
     "thinking_reasoning": ParsingMode.NONE,  # Returns reasoning chains
     # Tier C - Workers, mostly plain text
