@@ -269,12 +269,16 @@ def _serving_record(
         numa_ports = server_cfg.get("numa_ports")
         if isinstance(numa_ports, list):
             ports.update(port for port in numa_ports if isinstance(port, int))
+        slots = server_cfg.get("slots")
+    else:
+        slots = None
 
     return {
         "endpoint": server_cfg.get("url") if isinstance(server_cfg, dict) else None,
         "server_role": server_role,
         "binding": binding,
         "ports": sorted(ports),
+        "slots": slots if isinstance(slots, int) and slots > 0 else None,
         "tier": server_cfg.get("tier") if isinstance(server_cfg, dict) else None,
         "binary": descriptor_serving.get("binary"),
         "binary_dir": descriptor_serving.get("binary_dir"),

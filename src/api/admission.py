@@ -40,27 +40,80 @@ Usage:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import threading
 import time
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
-# Default concurrency limits per backend URL.
-# Aligned with llama-server slot counts per concurrent_sweep_20260219 results.
-# Rule: admission limit = server slots (no wasted KV cache on idle slots).
-DEFAULT_LIMITS: dict[str, int] = {
-    "http://localhost:8080": 2,   # frontdoor (30B MoE) — sweep: optimal at 2
-    "http://localhost:8081": 1,   # coder_escalation (32B) — sweep: p95 1.98x at 2, serial only
-    "http://localhost:8082": 1,   # worker_explore (7B) — sweep: all concurrent levels rejected on p95
-    "http://localhost:8083": 1,   # architect_general (235B) — SERIAL
-    "http://localhost:8084": 1,   # architect_coding (REAP-246B, was 480B) — SERIAL
-    "http://localhost:8085": 1,   # ingest_long_context (80B SSM) — SERIAL
-    "http://localhost:8086": 2,   # worker_vision (7B VL) — not swept, keep as-is
-    "http://localhost:8087": 1,   # vision_escalation (30B VL MoE) — SERIAL
-    "http://localhost:8102": 4,   # worker_fast (1.5B, 4 slots) — not swept, keep as-is
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+
+# Degraded fallback only. Normal defaults are generated from stack priors.
+FALLBACK_LIMITS: dict[str, int] = {
+    "http://localhost:8070": 2,
+    "http://localhost:8072": 1,
+    "http://localhost:8080": 2,
+    "http://localhost:8082": 1,
+    "http://localhost:8083": 2,
+    "http://localhost:8085": 1,
+    "http://localhost:8086": 2,
+    "http://localhost:8087": 1,
 }
 
 # Embedding servers (8090-8095) are not gated — they're lightweight.
+
+
+def _merge_limit(limits: dict[str, int], url: str, slots: int) -> None:
+    if not url or slots <= 0:
+        return
+    limits[url] = max(slots, limits.get(url, 0))
+
+
+def _limits_from_stack_priors(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
+    with path.open("r", encoding="utf-8") as fh:
+        loaded = yaml.safe_load(fh)
+    roles = loaded.get("roles") if isinstance(loaded, dict) else None
+    if not isinstance(roles, dict):
+        return {}
+
+    limits: dict[str, int] = {}
+    for record in roles.values():
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+        slots = serving.get("slots")
+        if not isinstance(slots, int) or slots <= 0:
+            continue
+        endpoint = serving.get("endpoint")
+        if isinstance(endpoint, str):
+            _merge_limit(limits, endpoint, slots)
+        ports = serving.get("ports")
+        if isinstance(ports, list):
+            for port in ports:
+                if isinstance(port, int):
+                    _merge_limit(limits, f"http://localhost:{port}", slots)
+    return limits
+
+
+def _load_default_limits(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
+    defaults = dict(FALLBACK_LIMITS)
+    try:
+        limits = _limits_from_stack_priors(path)
+    except (OSError, yaml.YAMLError, AttributeError, TypeError):
+        logger.warning("Falling back to static admission limits", exc_info=True)
+        return defaults
+    for url, slots in limits.items():
+        _merge_limit(defaults, url, slots)
+    return defaults
+
+
+DEFAULT_LIMITS: dict[str, int] = _load_default_limits()
 
 
 class AdmissionController:

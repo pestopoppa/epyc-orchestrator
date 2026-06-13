@@ -1,8 +1,11 @@
 """Tests for AdmissionController per-backend concurrency limiter."""
 
+from pathlib import Path
 import threading
 
-from src.api.admission import AdmissionController
+import yaml
+
+from src.api.admission import AdmissionController, _limits_from_stack_priors
 
 
 class TestAdmissionController:
@@ -40,12 +43,58 @@ class TestAdmissionController:
 
     def test_from_defaults_creates_controller(self):
         ctrl = AdmissionController.from_defaults()
-        # Architect backends should have limit=1
         status = ctrl.get_status()
-        assert status["http://localhost:8083"]["limit"] == 1
-        assert status["http://localhost:8084"]["limit"] == 1
-        # Worker backend limit follows concurrent sweep defaults (serialized).
+        assert "http://localhost:8084" not in status
+        assert status["http://localhost:8070"]["limit"] == 2
+        assert status["http://localhost:8080"]["limit"] == 2
+        assert status["http://localhost:8083"]["limit"] == 2
         assert status["http://localhost:8082"]["limit"] == 1
+        assert status["http://localhost:8086"]["limit"] == 2
+        assert status["http://localhost:8087"]["limit"] == 1
+
+    def test_limits_from_stack_priors_includes_shared_replica_ports(self, tmp_path: Path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            yaml.safe_dump(
+                {
+                    "roles": {
+                        "frontdoor": {
+                            "deployment_status": "live_stack",
+                            "serving": {
+                                "endpoint": "http://localhost:8070",
+                                "ports": [8070, 8080, 8180],
+                                "slots": 2,
+                            },
+                        },
+                        "coder_escalation": {
+                            "deployment_status": "live_stack",
+                            "serving": {
+                                "endpoint": "http://localhost:8070",
+                                "ports": [8070, 8080, 8180],
+                                "slots": 1,
+                            },
+                        },
+                        "retired": {
+                            "deployment_status": "benchmark_or_candidate",
+                            "serving": {
+                                "endpoint": "http://localhost:8084",
+                                "ports": [8084],
+                                "slots": 1,
+                            },
+                        },
+                    }
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        limits = _limits_from_stack_priors(priors)
+
+        assert limits["http://localhost:8070"] == 2
+        assert limits["http://localhost:8080"] == 2
+        assert limits["http://localhost:8180"] == 2
+        assert "http://localhost:8084" not in limits
 
     def test_thread_safety(self):
         """Concurrent acquire/release should not corrupt state."""
