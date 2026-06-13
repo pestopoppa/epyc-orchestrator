@@ -104,7 +104,7 @@ async def _execute_proactive(
     # Avoid double-entry: if architect was already selected by routing, let
     # _execute_delegated() handle it (sequential TOON delegation path)
     initial_role = routing.routing_decision[0] if routing.routing_decision else "frontdoor"
-    if str(initial_role) in ("architect_general", "architect_coding"):
+    if str(initial_role) == "architect_general":
         return None
 
     log.info(
