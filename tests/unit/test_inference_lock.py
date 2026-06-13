@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from types import SimpleNamespace
+
+import yaml
 
 from src import inference_lock as lock_mod
 
@@ -9,6 +12,11 @@ from src import inference_lock as lock_mod
 def _patch_config_tmp(monkeypatch, tmp_path):
     cfg = SimpleNamespace(paths=SimpleNamespace(tmp_dir=tmp_path))
     monkeypatch.setattr(lock_mod, "get_config", lambda: cfg)
+
+
+def _write_stack_priors(path: Path, roles: dict) -> Path:
+    path.write_text(yaml.safe_dump({"roles": roles}), encoding="utf-8")
+    return path
 
 
 def test_default_heavy_role_uses_heavy_lock(monkeypatch, tmp_path):
@@ -34,6 +42,89 @@ def test_embedder_lock_filename_override(monkeypatch, tmp_path):
 
     path = lock_mod._lock_path("embedder_2")
     assert path == tmp_path / "custom_embed.lock"
+
+
+def test_lock_roles_derive_from_live_stack_priors(tmp_path):
+    priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {
+            "frontdoor": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": ["default"], "entries": []}},
+            },
+            "worker_general": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": ["worker_pool"], "entries": []}},
+            },
+            "worker_math": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": [], "entries": [{"mode": "worker_pool"}]}},
+            },
+            "toolrunner": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": ["worker_pool"], "entries": []}},
+            },
+            "worker_vision": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"entries": [{"vision_type": "worker"}]}},
+            },
+            "worker_summarize": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": ["default"], "entries": []}},
+            },
+            "candidate_worker": {
+                "deployment_status": "benchmark_or_candidate",
+                "serving": {"launch": {"modes": ["worker_pool"], "entries": []}},
+            },
+        },
+    )
+
+    roles = lock_mod._lock_roles_from_stack_priors(priors)
+
+    assert roles is not None
+    heavy, light = roles
+    assert {"worker_general", "worker_math", "toolrunner", "worker_vision"} <= light
+    assert {"frontdoor", "worker_summarize"} <= heavy
+    assert "worker_fast" not in light
+    assert "candidate_worker" not in light
+
+
+def test_lock_roles_missing_or_invalid_stack_priors_fails_closed(tmp_path):
+    assert lock_mod._lock_roles_from_stack_priors(tmp_path / "missing.yaml") is None
+
+    invalid = tmp_path / "invalid.yaml"
+    invalid.write_text("roles: [", encoding="utf-8")
+
+    assert lock_mod._lock_roles_from_stack_priors(invalid) is None
+
+
+def test_is_heavy_role_uses_derived_sets_and_unknowns_fail_closed(monkeypatch):
+    monkeypatch.setattr(lock_mod, "HEAVY_ROLES", frozenset({"frontdoor"}))
+    monkeypatch.setattr(lock_mod, "LIGHT_ROLES", frozenset({"worker_general"}))
+
+    assert lock_mod._is_heavy_role("frontdoor") is True
+    assert lock_mod._is_heavy_role("worker_general") is False
+    assert lock_mod._is_heavy_role("worker_fast") is True
+
+
+def test_inference_lock_respects_explicit_shared_override(monkeypatch, tmp_path):
+    _patch_config_tmp(monkeypatch, tmp_path)
+    captured = []
+
+    def _capture_lock(*_args, **kwargs):
+        lock_type = kwargs["lock_type"] if "lock_type" in kwargs else _args[1]
+        captured.append((lock_type, kwargs["mode"]))
+        return 0.0
+
+    monkeypatch.setattr(lock_mod, "_acquire_lock_with_timeout", _capture_lock)
+
+    with lock_mod.inference_lock("frontdoor", shared=True, max_hold_s=0):
+        pass
+    with lock_mod.inference_lock("worker_general", shared=False, max_hold_s=0):
+        pass
+
+    assert captured[0] == (lock_mod.fcntl.LOCK_SH, "shared")
+    assert captured[1] == (lock_mod.fcntl.LOCK_EX, "exclusive")
 
 
 def test_acquire_lock_aborts_on_cancel_check(monkeypatch, tmp_path):

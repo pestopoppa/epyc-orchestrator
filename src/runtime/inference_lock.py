@@ -16,10 +16,13 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+
+import yaml
 
 from src.config import get_config
 from src.env_parsing import env_float as _env_float
+from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
 
 log = logging.getLogger(__name__)
 
@@ -27,20 +30,97 @@ log = logging.getLogger(__name__)
 _SLOT_ERASE_CAPABILITY: dict[int, str | None | bool] = {}
 
 
-HEAVY_ROLES = {
+_LEGACY_HEAVY_ROLES = frozenset({
     "frontdoor",
     "coder_escalation",
     "architect_general",
     "ingest_long_context",
     "vision_escalation",
-}
+})
 
-LIGHT_ROLES = {
+_LEGACY_LIGHT_ROLES = frozenset({
     "worker_explore",
     "worker_math",
     "worker_fast",
     "worker_vision",
-}
+})
+
+
+def _launch_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
+    serving = record.get("serving")
+    if not isinstance(serving, dict):
+        return []
+    launch = serving.get("launch")
+    if not isinstance(launch, dict):
+        return []
+    entries = launch.get("entries")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _launch_modes(record: dict[str, Any]) -> set[str]:
+    serving = record.get("serving")
+    if not isinstance(serving, dict):
+        return set()
+    launch = serving.get("launch")
+    if not isinstance(launch, dict):
+        return set()
+    modes = launch.get("modes")
+    if not isinstance(modes, list):
+        return set()
+    return {mode for mode in modes if isinstance(mode, str)}
+
+
+def _is_stack_prior_shared_role(record: dict[str, Any]) -> bool:
+    """Return True for live stack roles that should use the shared lock."""
+    if "worker_pool" in _launch_modes(record):
+        return True
+    for entry in _launch_entries(record):
+        if entry.get("mode") == "worker_pool":
+            return True
+        if entry.get("vision_type") == "worker":
+            return True
+    return False
+
+
+def _lock_roles_from_stack_priors(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Derive exclusive/shared lock roles from the generated live stack priors."""
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return None
+
+    heavy: set[str] = set()
+    light: set[str] = set()
+    for role, record in roles.items():
+        if not isinstance(role, str):
+            continue
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        if _is_stack_prior_shared_role(record):
+            light.add(role)
+        else:
+            heavy.add(role)
+
+    if not heavy and not light:
+        return None
+    return frozenset(heavy), frozenset(light)
+
+
+_DERIVED_LOCK_ROLES = _lock_roles_from_stack_priors()
+if _DERIVED_LOCK_ROLES is None:
+    HEAVY_ROLES = _LEGACY_HEAVY_ROLES
+    LIGHT_ROLES = _LEGACY_LIGHT_ROLES
+else:
+    HEAVY_ROLES, LIGHT_ROLES = _DERIVED_LOCK_ROLES
 
 # Embedders use shared lock; identify by role or context where possible.
 
