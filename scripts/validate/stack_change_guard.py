@@ -167,6 +167,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         path_globs=("src/cli_orch.py",),
         remediation="derive status probes from stack priors or stack manifest API",
     ),
+    HardcodedSurfaceRule(
+        rule_id="stale_autopilot_program_stack_guidance",
+        category="production_blocker",
+        pattern=r"\b(?:8071|8084|architect_coding|512GB)\b|\bTarget ports\b|\bWARM tier demotion\b",
+        path_globs=("scripts/autopilot/program.md",),
+        remediation="derive AutoPilot operator endpoints and tier guidance from stack priors/system card",
+    ),
 )
 
 

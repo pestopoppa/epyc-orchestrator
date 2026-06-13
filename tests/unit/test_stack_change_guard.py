@@ -203,6 +203,48 @@ def test_scan_hardcoded_surfaces_flags_retired_launch_env_var(tmp_path: Path) ->
     )
 
 
+def test_scan_hardcoded_surfaces_flags_stale_autopilot_program_guidance(tmp_path: Path) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    autopilot.mkdir(parents=True)
+    (autopilot / "program.md").write_text(
+        """
+**Target ports**:
+- coder: 8071
+- architect_coding: 8084
+- NOTE: Entire stack fits in HOT tier with mlock on 512GB RAM. WARM tier demotion is unnecessary.
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "stale_autopilot_program_stack_guidance"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/autopilot/program.md"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_allows_stack_prior_autopilot_program_guidance(tmp_path: Path) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    autopilot.mkdir(parents=True)
+    (autopilot / "program.md").write_text(
+        """
+**Target endpoints**: derive live primary endpoints from `orchestration/derived/stack_priors.yaml`.
+Tier demotion is not an open exploration surface by default.
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert not any(
+        finding.rule_id == "stale_autopilot_program_stack_guidance"
+        for finding in findings
+    )
+
+
 def test_validate_stack_priors_can_include_surface_warnings(tmp_path: Path) -> None:
     registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
     descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
