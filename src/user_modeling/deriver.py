@@ -3,9 +3,9 @@
 Reviews completed session logs and extracts durable preferences, corrections,
 and workflow patterns. Extracted facts are persisted via ProfileStore.
 
-In production, runs as a post-session background task using worker_explore
-(Qwen2.5-7B) as the auxiliary LLM. In tests, can be called synchronously
-with a mock LLM.
+In production, runs as a post-session background task using the live general
+worker as the auxiliary LLM. In tests, can be called synchronously with a mock
+LLM.
 
 Cherry-picked from Hermes Agent's Honcho Deriver/Dreamer pattern.
 """
@@ -93,7 +93,8 @@ def derive_preferences(
     """Extract and persist user preferences from a session transcript.
 
     If ``llm_call`` is None, only parses pre-formatted text (for testing).
-    In production, pass ``primitives.llm_call`` with role="worker_explore".
+    In production, pass ``primitives.llm_call``; this helper uses
+    ``worker_general`` for the background extraction call.
 
     Args:
         store: ProfileStore to persist facts to.
@@ -107,7 +108,7 @@ def derive_preferences(
     if llm_call is not None:
         prompt = _DERIVE_PROMPT.format(transcript=transcript[:8000])
         try:
-            raw_output = llm_call(prompt, role="worker_explore")
+            raw_output = llm_call(prompt, role="worker_general")
         except Exception as exc:
             logger.warning("Deriver LLM call failed: %s", exc)
             return DeriverResult(facts_extracted=[], facts_added=0, facts_rejected=0)

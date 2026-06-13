@@ -129,6 +129,20 @@ PREF [format] Use markdown tables not ASCII art
         profile = store.get_profile("u")
         assert profile.entry_count == 2
 
+    def test_derive_preferences_llm_uses_live_worker_role(self, store):
+        calls = []
+
+        def llm_call(prompt: str, role: str) -> str:
+            calls.append({"prompt": prompt, "role": role})
+            return "PREF [workflow] Show benchmark throughput after runs"
+
+        result = derive_preferences(store, "u", "User asked for TPS details.", llm_call=llm_call)
+
+        assert result.facts_added == 1
+        assert calls
+        assert calls[0]["role"] == "worker_general"
+        assert "User asked for TPS details." in calls[0]["prompt"]
+
 
 # ---------------------------------------------------------------------------
 # Tool Functions
