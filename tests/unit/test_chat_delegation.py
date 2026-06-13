@@ -20,6 +20,7 @@ from src.api.routes.chat_delegation_decision import (
     _ARCHITECT_TOKEN_BUDGET,
     _ARCHITECT_DECISION_BUDGET,
 )
+from src.api.routes.chat_delegation_reports import _build_compact_specialist_prompt
 from src.constants import (
     DELEGATION_BRIEF_KEY_LEN,
     DELEGATION_MAX_SAME_TARGET,
@@ -232,6 +233,53 @@ class TestConstants:
     def test_budgets_have_expected_keys(self):
         assert set(_ARCHITECT_TOKEN_BUDGET.keys()) == {"architect_general"}
         assert set(_ARCHITECT_DECISION_BUDGET.keys()) == {"architect_general"}
+
+
+# ── Specialist Prompt Preambles ─────────────────────────────────────────
+
+
+class TestSpecialistPromptPreambles:
+    def test_legacy_worker_coder_prompt_uses_live_coder_role(self):
+        prompt = _build_compact_specialist_prompt(
+            "worker_coder",
+            "Fix this bug",
+            "Patch the failing branch",
+            0,
+            "",
+            "",
+        )
+
+        assert prompt.startswith("You are coder_escalation.")
+        assert "delegated coding task" in prompt
+        assert "worker_coder" not in prompt
+
+    def test_legacy_worker_explore_prompt_uses_live_general_role(self):
+        prompt = _build_compact_specialist_prompt(
+            "worker_explore",
+            "Check this behavior",
+            "Inspect logs",
+            0,
+            "",
+            "",
+        )
+
+        assert prompt.startswith("You are worker_general.")
+        assert "web_search(query)" in prompt
+        assert "worker_explore" not in prompt
+
+    def test_legacy_worker_fast_prompt_uses_live_general_role(self):
+        prompt = _build_compact_specialist_prompt(
+            "worker_fast",
+            "Check this behavior",
+            "Inspect logs",
+            0,
+            "",
+            "",
+        )
+
+        assert prompt.startswith("You are worker_general.")
+        assert "web_search(query)" in prompt
+        assert "worker_fast" not in prompt
 
 
 # ── Loop Guards ──────────────────────────────────────────────────────────

@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, Any
 
 from src.delegation_reports import store_report
 
-from .chat_delegation_config import DelegationConfig, _delegation_config
+from .chat_delegation_config import (
+    DelegationConfig,
+    _delegation_config,
+    _normalize_delegate_role,
+)
 
 if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
@@ -54,8 +58,8 @@ def _to_report_handle_text(handle: dict[str, str], summary: str) -> str:
     )
 
 
-_CODER_ROLES = frozenset({"coder_escalation", "worker_coder", "coder_primary"})
-_SEARCH_ROLES = frozenset({"worker_explore", "worker_fast", "worker_general"})
+_CODER_ROLES = frozenset({"coder_escalation"})
+_SEARCH_ROLES = frozenset({"worker_general"})
 
 _CODER_PREAMBLE = "You are {role}. Execute the delegated coding task quickly.\n\n"
 
@@ -82,23 +86,24 @@ def _build_compact_specialist_prompt(
     last_error: str,
 ) -> str:
     """Compact specialist prompt for delegated mode to reduce prefill cost."""
+    delegate_role = _normalize_delegate_role(delegate_to)
     # Load role-specific instructions if available (hot-swap)
     role_instructions = ""
     try:
         from src.prompt_builders.resolver import resolve_prompt
-        role_text = resolve_prompt(delegate_to, "", subdir="roles")
+        role_text = resolve_prompt(delegate_role, "", subdir="roles")
         if role_text:
             role_instructions = role_text.strip() + "\n\n"
     except Exception:
         pass
 
     # Role-appropriate preamble
-    if delegate_to in _CODER_ROLES:
-        preamble = _CODER_PREAMBLE.format(role=delegate_to)
-    elif delegate_to in _SEARCH_ROLES:
-        preamble = _SEARCH_PREAMBLE.format(role=delegate_to)
+    if delegate_role in _CODER_ROLES:
+        preamble = _CODER_PREAMBLE.format(role=delegate_role)
+    elif delegate_role in _SEARCH_ROLES:
+        preamble = _SEARCH_PREAMBLE.format(role=delegate_role)
     else:
-        preamble = _DEFAULT_PREAMBLE.format(role=delegate_to)
+        preamble = _DEFAULT_PREAMBLE.format(role=delegate_role)
 
     prompt = (
         f"{preamble}"
@@ -184,4 +189,3 @@ def _compress_report_for_loop(
         return _maybe_summarize_specialist_report(text, question, primitives), None
     summary = _maybe_summarize_specialist_report(text, question, primitives, force=True)
     return _to_report_handle_text(handle, summary), handle
-
