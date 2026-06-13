@@ -3,12 +3,121 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from scripts.server import orchestrator_stack as oss
+
+
+def _stack_prior_role(role: str) -> dict[str, Any]:
+    priors_path = oss._PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
+    payload = yaml.safe_load(priors_path.read_text(encoding="utf-8"))
+    role_record = payload["roles"][role]
+    assert isinstance(role_record, dict)
+    return role_record
+
+
+def _flag_value(cmd: list[str], flag: str) -> str | None:
+    if flag not in cmd:
+        return None
+    idx = cmd.index(flag)
+    if idx + 1 >= len(cmd):
+        return None
+    return cmd[idx + 1]
+
+
+def _all_flag_values(cmd: list[str], flag: str) -> list[str]:
+    values: list[str] = []
+    for idx, value in enumerate(cmd):
+        if value == flag and idx + 1 < len(cmd):
+            values.append(cmd[idx + 1])
+    return values
+
+
+def _optional_int(value: str | None) -> int | None:
+    return int(value) if value is not None else None
+
+
+def _optional_float(value: str | None) -> float | None:
+    return float(value) if value is not None else None
+
+
+def _command_runtime_signature(cmd: list[str]) -> dict[str, Any]:
+    spec_enabled = "-md" in cmd and "--spec-type" in cmd
+    return {
+        "binary_path": cmd[0],
+        "cache": {
+            "context_tokens": _optional_int(_flag_value(cmd, "-c")),
+            "slots": _optional_int(_flag_value(cmd, "-np")),
+            "ubatch": _optional_int(_flag_value(cmd, "-ub")),
+            "kv_type_k": _flag_value(cmd, "-ctk"),
+            "kv_type_v": _flag_value(cmd, "-ctv"),
+            "no_mmap": "--no-mmap" in cmd,
+            "mlock": "--mlock" in cmd,
+            "slot_save_path": _flag_value(cmd, "--slot-save-path"),
+        },
+        "flags": {
+            "flash_attn": _flag_value(cmd, "--flash-attn") == "on",
+            "jinja": "--jinja" in cmd,
+            "reasoning": _flag_value(cmd, "--reasoning"),
+            "override_kv": sorted(_all_flag_values(cmd, "--override-kv")),
+            "spec": {
+                "enabled": spec_enabled,
+                "type": _flag_value(cmd, "--spec-type") if spec_enabled else None,
+                "draft_model_path": _flag_value(cmd, "-md") if spec_enabled else None,
+                "draft_max": (
+                    _optional_int(_flag_value(cmd, "--draft-max")) if spec_enabled else None
+                ),
+                "draft_p_min": (
+                    _optional_float(_flag_value(cmd, "--draft-p-min"))
+                    if spec_enabled
+                    else None
+                ),
+                "threads_draft": (
+                    _optional_int(_flag_value(cmd, "--threads-draft"))
+                    if spec_enabled
+                    else None
+                ),
+            },
+        },
+    }
+
+
+def _stack_prior_runtime_signature(runtime: dict[str, Any]) -> dict[str, Any]:
+    cache = runtime["cache"]
+    flags = runtime["flags"]
+    spec = flags["spec"]
+    return {
+        "binary_path": runtime["binary_path"],
+        "cache": {
+            "context_tokens": cache["context_tokens"],
+            "slots": cache["slots"],
+            "ubatch": cache["ubatch"],
+            "kv_type_k": cache["kv_type_k"],
+            "kv_type_v": cache["kv_type_v"],
+            "no_mmap": cache["no_mmap"],
+            "mlock": cache["mlock"],
+            "slot_save_path": cache["slot_save_path"],
+        },
+        "flags": {
+            "flash_attn": flags["flash_attn"],
+            "jinja": flags["jinja"],
+            "reasoning": flags["reasoning"],
+            "override_kv": sorted(flags["override_kv"]),
+            "spec": {
+                "enabled": spec["enabled"],
+                "type": spec["type"],
+                "draft_model_path": spec["draft_model_path"],
+                "draft_max": spec["draft_max"],
+                "draft_p_min": spec["draft_p_min"],
+                "threads_draft": spec["threads_draft"],
+            },
+        },
+    }
 
 
 def _assert_detached_popen(popen) -> None:
@@ -38,6 +147,30 @@ def test_build_vision_command_worker_uses_small_model() -> None:
     assert oss.VISION_WORKER_MMPROJ in cmd
     assert cmd[cmd.index("-c") + 1] == "8192"
     assert cmd[cmd.index("-t") + 1] == "24"
+
+
+@pytest.mark.parametrize(
+    ("role", "port", "vision_type"),
+    [
+        ("worker_vision", 8086, "worker"),
+        ("vision_escalation", 8087, "escalation"),
+    ],
+)
+def test_build_vision_command_matches_stack_prior_launch_witness(
+    role: str,
+    port: int,
+    vision_type: str,
+) -> None:
+    role_record = _stack_prior_role(role)
+    launch = role_record["serving"]["launch"]
+    requirements = launch["requirements"]
+    runtime = launch["runtime"]
+
+    cmd = oss._build_vision_command(port=port, vision_type=vision_type)
+
+    assert _flag_value(cmd, "-m") == requirements["model_path"]
+    assert _flag_value(cmd, "--mmproj") == requirements["mmproj_path"]
+    assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
 def test_build_embedding_command_enables_embeddings_and_cls_pool() -> None:
@@ -77,6 +210,23 @@ def test_build_worker_explore_command_engages_mtp_path() -> None:
     assert "--no-mmap" in cmd
     assert "--jinja" in cmd
     assert cmd[cmd.index("--reasoning") + 1] == "off"
+
+
+def test_build_worker_explore_command_matches_stack_prior_launch_witness() -> None:
+    role_record = _stack_prior_role("worker_general")
+    launch = role_record["serving"]["launch"]
+    requirements = launch["requirements"]
+    runtime = launch["runtime"]
+
+    cmd = oss._build_worker_explore_command(
+        port=8072,
+        model_path=requirements["model_path"],
+        binary_override=runtime["binary_path"],
+    )
+
+    assert _flag_value(cmd, "-m") == requirements["model_path"]
+    assert _flag_value(cmd, "-md") == requirements["draft_model_path"]
+    assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
 def test_build_worker_explore_command_uses_binary_override_when_set() -> None:
