@@ -236,7 +236,7 @@ def _runtime_state_lines(state: dict[str, Any]) -> list[str]:
         f"- trial_counter: {state.get('trial_counter', 'unknown')}",
     ]
     pause_reason = state.get("pause_reason")
-    if pause_reason:
+    if state.get("paused") and pause_reason:
         lines.append(f"- pause_reason: {_clean(pause_reason, 180)}")
     in_flight = state.get("in_flight_trial")
     if isinstance(in_flight, dict):

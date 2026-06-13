@@ -92,6 +92,21 @@ def test_system_card_prefers_state_baseline_over_yaml(tmp_path: Path) -> None:
     assert "quality baseline 0.5" not in card
 
 
+def test_system_card_hides_stale_pause_reason_when_unpaused(tmp_path: Path) -> None:
+    _write_minimal_root(tmp_path)
+    card = gen_system_card.generate_system_card(
+        tmp_path,
+        state_override={
+            "paused": False,
+            "pause_reason": "old contested-window reason",
+            "trial_counter": 99,
+        },
+    )
+
+    assert "- paused: false" in card
+    assert "old contested-window reason" not in card
+
+
 def test_controller_template_uses_constitution_and_system_card() -> None:
     assert "{program}" not in autopilot.CONTROLLER_PROMPT_TEMPLATE
     assert "{constitution}" in autopilot.CONTROLLER_PROMPT_TEMPLATE

@@ -8,11 +8,9 @@ from __future__ import annotations
 import csv
 import json
 import re
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +86,8 @@ TSV_COLUMNS = [
     "git_tag",
     "reasoning_hash",
 ]
+
+SUPERSESSION_EVENT_TYPE = "supersession"
 
 
 def has_legacy_scale_failure_analysis(text: str) -> bool:
@@ -193,6 +193,26 @@ class JournalEntry:
     stagnation_signal: str = ""
 
 
+@dataclass
+class SupersessionEvent:
+    """Append-only ledger event superseding fields on prior trial rows.
+
+    This is the Phase-3 event-sourcing bridge: new tooling can append a durable
+    intent record without rewriting historical trial rows. Runtime consumers can
+    fold these events later; until then the legacy scrub path remains available.
+    """
+
+    target_trial_ids: list[int]
+    fields: dict[str, Any]
+    reason: str
+    policy_version: str
+    actor: str
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    type: str = SUPERSESSION_EVENT_TYPE
+
+
 class ExperimentJournal:
     """Append-only experiment log with TSV (human-readable) + JSONL (machine-readable)."""
 
@@ -200,6 +220,7 @@ class ExperimentJournal:
         self.journal_dir = journal_dir or DEFAULT_JOURNAL_DIR
         self.journal_dir.mkdir(parents=True, exist_ok=True)
         self._entries: list[JournalEntry] = []
+        self._ledger_events_by_batch: dict[int, list[dict[str, Any]]] = {}
         self._load_existing()
 
     # ── persistence ──────────────────────────────────────────────
@@ -230,6 +251,9 @@ class ExperimentJournal:
                     if not line:
                         continue
                     data = json.loads(line)
+                    if data.get("type") and "trial_id" not in data:
+                        self._ledger_events_by_batch.setdefault(batch, []).append(data)
+                        continue
                     entry = JournalEntry(
                         trial_id=data["trial_id"],
                         timestamp=data["timestamp"],
@@ -305,6 +329,32 @@ class ExperimentJournal:
 
         self._entries.append(entry)
 
+    def append_supersession_event(
+        self,
+        *,
+        target_trial_ids: list[int],
+        fields: dict[str, Any],
+        reason: str,
+        policy_version: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Append a supersession event row to JSONL without mutating trials."""
+        event = asdict(
+            SupersessionEvent(
+                target_trial_ids=target_trial_ids,
+                fields=fields,
+                reason=reason,
+                policy_version=policy_version,
+                actor=actor,
+            )
+        )
+        batch = self._current_batch()
+        jsonl = self._jsonl_path(batch)
+        with open(jsonl, "a") as f:
+            f.write(json.dumps(event, default=str) + "\n")
+        self._ledger_events_by_batch.setdefault(batch, []).append(event)
+        return event
+
     # ── queries ──────────────────────────────────────────────────
 
     def recent(self, n: int = 20) -> list[JournalEntry]:
@@ -316,6 +366,17 @@ class ExperimentJournal:
 
     def count(self) -> int:
         return len(self._entries)
+
+    def supersession_events(self) -> list[dict[str, Any]]:
+        """Return loaded append-only supersession event rows."""
+        events: list[dict[str, Any]] = []
+        for batch in sorted(self._ledger_events_by_batch):
+            events.extend(
+                event
+                for event in self._ledger_events_by_batch[batch]
+                if event.get("type") == SUPERSESSION_EVENT_TYPE
+            )
+        return events
 
     def next_trial_id(self) -> int:
         if not self._entries:
@@ -555,6 +616,28 @@ class ExperimentJournal:
             e.bug_corrupted_reason = (reason or "")[:200]
             tagged.append(e.trial_id)
         return len(tagged), tagged
+
+    def matching_trial_ids(
+        self,
+        *,
+        trial_id_min: int | None = None,
+        trial_id_max: int | None = None,
+        timestamp_min: str | None = None,
+        timestamp_max: str | None = None,
+    ) -> list[int]:
+        """Trial IDs matching the scrub filter without mutating entries."""
+        matched: list[int] = []
+        for e in self._entries:
+            if trial_id_min is not None and e.trial_id < trial_id_min:
+                continue
+            if trial_id_max is not None and e.trial_id > trial_id_max:
+                continue
+            if timestamp_min is not None and (e.timestamp or "") < timestamp_min:
+                continue
+            if timestamp_max is not None and (e.timestamp or "") > timestamp_max:
+                continue
+            matched.append(e.trial_id)
+        return matched
 
     def recent_failures(
         self, species: str | None = None, n: int = 10

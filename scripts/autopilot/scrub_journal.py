@@ -124,8 +124,10 @@ def _rewrite_all(journal: ExperimentJournal) -> list[tuple[Path, Path | None]]:
     by_batch: dict[int, list[JournalEntry]] = {}
     for e in journal._entries:
         by_batch.setdefault(e.trial_id // MAX_TRIALS_PER_FILE, []).append(e)
+    events_by_batch = getattr(journal, "_ledger_events_by_batch", {})
 
-    for batch, entries in sorted(by_batch.items()):
+    for batch in sorted(set(by_batch) | set(events_by_batch)):
+        entries = by_batch.get(batch, [])
         jsonl = journal._jsonl_path(batch)
         tsv = journal._tsv_path(batch)
         # Backups
@@ -135,6 +137,8 @@ def _rewrite_all(journal: ExperimentJournal) -> list[tuple[Path, Path | None]]:
         with open(jsonl, "w") as f:
             for e in entries:
                 f.write(json.dumps(asdict(e), default=str) + "\n")
+            for event in events_by_batch.get(batch, []):
+                f.write(json.dumps(event, default=str) + "\n")
         # Rewrite TSV (header + rows)
         with open(tsv, "w", newline="") as f:
             w = csv.writer(f, delimiter="\t")
@@ -171,6 +175,8 @@ def main() -> int:
                     help="override journal directory (default: orchestration/)")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would be tagged without writing")
+    ap.add_argument("--append-event", action="store_true",
+                    help="append a supersession event instead of rewriting trial rows")
     ap.add_argument("--force-while-autopilot-alive", action="store_true",
                     help="skip the autopilot-running safety guard (rarely needed)")
     args = ap.parse_args()
@@ -203,14 +209,27 @@ def main() -> int:
     journal = ExperimentJournal(journal_dir=args.journal_dir)
     n_before_trustworthy = journal.trustworthiness_score()["trustworthy"]
 
-    n_tagged, tagged_ids = journal.apply_scrub(
-        commit_sha=args.commit_sha,
-        reason=args.reason,
-        trial_id_min=args.trial_id_min,
-        trial_id_max=args.trial_id_max,
-        timestamp_min=args.since,
-        timestamp_max=args.until,
-    )
+    fields = {
+        "bug_corrupted_by": args.commit_sha,
+        "bug_corrupted_reason": (args.reason or "")[:200],
+    }
+    if args.append_event:
+        tagged_ids = journal.matching_trial_ids(
+            trial_id_min=args.trial_id_min,
+            trial_id_max=args.trial_id_max,
+            timestamp_min=args.since,
+            timestamp_max=args.until,
+        )
+        n_tagged = len(tagged_ids)
+    else:
+        n_tagged, tagged_ids = journal.apply_scrub(
+            commit_sha=args.commit_sha,
+            reason=args.reason,
+            trial_id_min=args.trial_id_min,
+            trial_id_max=args.trial_id_max,
+            timestamp_min=args.since,
+            timestamp_max=args.until,
+        )
 
     score = journal.trustworthiness_score()
     print(f"Filter:                  commit_sha={args.commit_sha!r} reason={args.reason!r}")
@@ -225,17 +244,42 @@ def main() -> int:
         print(f"  trial_ids: {ids_preview}")
     print()
     print(f"Before scrub: trustworthy={n_before_trustworthy}")
-    print(f"After  scrub: trustworthy={score['trustworthy']}  corrupted={score['corrupted']}  ratio={score['ratio']:.2%}")
+    if args.append_event:
+        print(
+            "After  scrub: unchanged (append-event mode does not rewrite trial rows)"
+        )
+    else:
+        print(f"After  scrub: trustworthy={score['trustworthy']}  corrupted={score['corrupted']}  ratio={score['ratio']:.2%}")
     if score["corrupted_by"]:
         print(f"Corrupted-by breakdown: {score['corrupted_by']}")
 
     if args.dry_run:
         print()
-        print("DRY-RUN — no files written. Re-run without --dry-run to apply.")
+        if args.append_event:
+            print("DRY-RUN — no files written. Re-run without --dry-run to append event.")
+        else:
+            print("DRY-RUN — no files written. Re-run without --dry-run to apply.")
         return 0
 
     if n_tagged == 0:
         print("Nothing to tag — exiting without rewriting files.")
+        return 0
+
+    if args.append_event:
+        event = journal.append_supersession_event(
+            target_trial_ids=tagged_ids,
+            fields=fields,
+            reason=args.reason,
+            policy_version="supersession-v1",
+            actor="scrub_journal.py",
+        )
+        print()
+        print("Appended supersession event:")
+        print(f"  type: {event['type']}")
+        print(f"  target_trial_ids: {len(tagged_ids)}")
+        print(f"  fields: {fields}")
+        print()
+        print("Legacy trial rows were not rewritten.")
         return 0
 
     written = _rewrite_all(journal)

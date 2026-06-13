@@ -3064,6 +3064,7 @@ def cmd_pause(args: argparse.Namespace) -> None:
 def cmd_resume(args: argparse.Namespace) -> None:
     state = load_state()
     state["paused"] = False
+    state.pop("pause_reason", None)
     save_state(state)
     print("AutoPilot resumed")
 
