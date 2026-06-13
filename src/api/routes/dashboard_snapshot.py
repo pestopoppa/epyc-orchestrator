@@ -34,7 +34,6 @@ INFLIGHT_MAX_AGE_DEFAULT_S = 300.0
 INFLIGHT_MAX_AGE_BY_ROLE_S: dict[str, float] = {
     "ingest_long_context": 1800.0,   # long-context ingest, ~0.5 t/s
     "architect_general": 900.0,      # long reasoning, ~0.4 t/s
-    "architect_coding": 900.0,
     "coder_escalation": 900.0,
 }
 
