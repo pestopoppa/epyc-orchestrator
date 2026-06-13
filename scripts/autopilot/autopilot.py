@@ -1220,7 +1220,13 @@ def load_state() -> dict[str, Any]:
     return _load_state_impl(STATE_PATH, _default_state)
 
 
+def _normalize_state_before_save(state: dict[str, Any]) -> None:
+    if not state.get("paused"):
+        state.pop("pause_reason", None)
+
+
 def save_state(state: dict[str, Any]) -> None:
+    _normalize_state_before_save(state)
     _save_state_impl(STATE_PATH, state)
 
 

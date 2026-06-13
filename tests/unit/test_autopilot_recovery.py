@@ -113,6 +113,37 @@ def test_merge_external_control_fields_noops_without_control_fields() -> None:
     assert state == {"trial_counter": 42, "paused": False}
 
 
+def test_save_state_drops_pause_reason_when_unpaused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(autopilot, "STATE_PATH", tmp_path / "state.json")
+    state = {
+        "trial_counter": 42,
+        "paused": False,
+        "pause_reason": "stale quarantine reason",
+    }
+
+    autopilot.save_state(state)
+
+    assert "pause_reason" not in state
+    assert "pause_reason" not in autopilot.load_state()
+
+
+def test_save_state_preserves_pause_reason_when_paused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(autopilot, "STATE_PATH", tmp_path / "state.json")
+    state = {
+        "trial_counter": 42,
+        "paused": True,
+        "pause_reason": "operator pause",
+    }
+
+    autopilot.save_state(state)
+
+    assert autopilot.load_state()["pause_reason"] == "operator pause"
+
+
 # ───────── _recover_from_in_flight_trial ──────────
 
 
