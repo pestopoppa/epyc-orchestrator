@@ -21,6 +21,7 @@ _TIER_COST_WEIGHTS: dict[str, float] = {
 }
 
 _INGRESS_ROLE_ALIASES = {
+    "architect_coding": "architect_general",
     "coder": "coder_escalation",
     "worker_coder": "worker_general",
     "worker_code": "worker_general",
