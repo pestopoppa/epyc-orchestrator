@@ -202,6 +202,52 @@ def test_validate_against_registry_checks_port_map_alias_drift(
     )
 
 
+def test_validate_against_registry_checks_server_mode_shared_alias_drift(
+    tmp_path: Path,
+) -> None:
+    from scripts.server.stack_manifest import validate_against_registry
+
+    registry = tmp_path / "registry.yaml"
+    registry.write_text(
+        yaml.safe_dump(
+            {
+                "process_layout": {
+                    "hot_resident": [
+                        "frontdoor",
+                        "coder_escalation",
+                        "worker_summarize",
+                        "worker_general",
+                        "worker_math",
+                        "toolrunner",
+                        "architect_general",
+                        "ingest_long_context",
+                        "worker_vision",
+                        "vision_escalation",
+                    ],
+                    "warm_mmap": [],
+                },
+                "server_mode": {
+                    "worker": {
+                        "port": 8082,
+                        "model_role": "worker_general",
+                        "shared_with": ["worker_math", "toolrunner"],
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    warnings = validate_against_registry(str(registry))
+
+    assert any(
+        "role 'worker': registry server_mode says port 8082 for launch role 'worker_math'"
+        in warning
+        for warning in warnings
+    )
+
+
 # ----- validate_model_paths is a callable that returns list[str] -----
 
 

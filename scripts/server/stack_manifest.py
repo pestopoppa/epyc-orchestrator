@@ -565,6 +565,22 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
                     f"role '{role}': registry server_mode says port {reg_port}, "
                     f"but launcher ROLE_LAUNCH_META says port {meta.get('port')}"
                 )
+            if not meta:
+                covered_roles = {str(role)}
+                model_role = srv.get("model_role")
+                if isinstance(model_role, str):
+                    covered_roles.add(model_role)
+                shared_with = srv.get("shared_with")
+                if isinstance(shared_with, list):
+                    covered_roles.update(str(item) for item in shared_with if isinstance(item, str))
+                for covered_role in sorted(covered_roles):
+                    computed_port = computed_role_ports.get(covered_role)
+                    if computed_port is not None and reg_port != computed_port:
+                        warnings.append(
+                            f"role '{role}': registry server_mode says port {reg_port} "
+                            f"for launch role '{covered_role}', "
+                            f"but computed launch roles use port {computed_port}"
+                        )
     return warnings
 
 
