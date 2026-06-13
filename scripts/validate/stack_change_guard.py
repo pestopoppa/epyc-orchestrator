@@ -185,6 +185,18 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         path_globs=("scripts/autopilot/program.md",),
         remediation="derive AutoPilot operator endpoints and tier guidance from stack priors/system card",
     ),
+    HardcodedSurfaceRule(
+        rule_id="stale_launch_wrapper_static_inventory",
+        category="production_blocker",
+        pattern=(
+            r"\b(?:8084|architect_coding|Qwen3-Coder-480B|535GB|512GB)\b|"
+            r"\bRAM breakdown\b|\bFull HOT tier \+ architects\b|"
+            r"\bCore tier only, no architects\b"
+        ),
+        path_globs=("scripts/server/*.sh",),
+        remediation="derive launcher summaries from stack_manifest/stack priors, not static model/RAM tables",
+        ignore_comment_lines=True,
+    ),
 )
 
 

@@ -502,6 +502,48 @@ Tier demotion is not an open exploration surface by default.
     )
 
 
+def test_scan_hardcoded_surfaces_flags_stale_launch_wrapper_inventory(tmp_path: Path) -> None:
+    server = tmp_path / "scripts" / "server"
+    server.mkdir(parents=True)
+    (server / "launch_production.sh").write_text(
+        """
+echo "  - architect_coding (8084): Qwen3-Coder-480B-A35B"
+echo "RAM breakdown (full mode):"
+echo "  - Total: ~535GB"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "stale_launch_wrapper_static_inventory"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/server/launch_production.sh"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_allows_manifest_derived_launch_wrapper(tmp_path: Path) -> None:
+    server = tmp_path / "scripts" / "server"
+    server.mkdir(parents=True)
+    (server / "launch_production.sh").write_text(
+        """
+echo "Mode: FULL production stack (manifest-defined HOT tier)"
+echo "Launch inventory comes from scripts/server/stack_manifest.py."
+echo "Use --status after launch for live processes, ports, and residency."
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert not any(
+        finding.rule_id == "stale_launch_wrapper_static_inventory"
+        for finding in findings
+    )
+
+
 def test_validate_stack_priors_can_include_surface_warnings(tmp_path: Path) -> None:
     registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
     descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
