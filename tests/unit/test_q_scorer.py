@@ -38,10 +38,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from orchestration.repl_memory.q_scorer import (
     FALLBACK_BASELINE_TPS_BY_ROLE,
+    FALLBACK_MEMORY_COST_BY_ROLE,
     ScoringConfig,
     QScorer,
     descriptor_q_scorer_priors_by_role,
     registry_baseline_tps_by_role,
+    registry_memory_cost_by_role,
 )
 from orchestration.repl_memory.progress_logger import EventType
 
@@ -89,7 +91,6 @@ class TestScoringConfigDefaults:
             "frontdoor",
             "coder_escalation",
             "architect_general",
-            "architect_coding",
             "ingest_long_context",
             "worker_explore",
             "worker_general",
@@ -113,12 +114,59 @@ class TestScoringConfigDefaults:
         assert cfg.baseline_tps_by_role["toolrunner"] == pytest.approx(60.7)
         assert cfg.baseline_tps_by_role["worker_vision"] == pytest.approx(20.0)
         assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(27.6)
-        assert cfg.baseline_tps_by_role["architect_coding"] == pytest.approx(8.0)
+        assert "architect_coding" not in cfg.baseline_tps_by_role
 
     def test_baseline_tps_falls_back_when_registry_missing(self, tmp_path):
         missing = tmp_path / "missing.yaml"
 
         assert registry_baseline_tps_by_role(missing) == FALLBACK_BASELINE_TPS_BY_ROLE
+
+    def test_memory_cost_falls_back_when_registry_missing(self, tmp_path):
+        missing = tmp_path / "missing.yaml"
+
+        assert registry_memory_cost_by_role(missing) == FALLBACK_MEMORY_COST_BY_ROLE
+
+    def test_memory_cost_loads_current_hot_registry_roles(self, tmp_path):
+        registry_path = tmp_path / "model_registry.yaml"
+        registry_path.write_text(
+            """
+server_mode:
+  frontdoor:
+    tier: hot
+  coder_escalation:
+    tier: hot
+  architect_general:
+    tier: hot
+  ingest_long_context:
+    tier: hot
+  worker:
+    tier: hot
+roles:
+  worker_vision:
+    memory:
+      residency: hot
+  vision_escalation:
+    memory:
+      residency: hot
+""".strip()
+        )
+
+        costs = registry_memory_cost_by_role(registry_path)
+
+        for role in (
+            "frontdoor",
+            "coder_escalation",
+            "architect_general",
+            "ingest_long_context",
+            "worker_explore",
+            "worker_general",
+            "worker_math",
+            "toolrunner",
+            "worker_vision",
+            "vision_escalation",
+        ):
+            assert costs[role] == pytest.approx(1.0)
+        assert "architect_coding" not in costs
 
     def test_descriptor_priors_overlay_clean_existing_roles(self, tmp_path):
         descriptor_path = tmp_path / "model_descriptors.yaml"
@@ -390,20 +438,21 @@ class TestMultiDimensionalCost:
 
     def test_config_has_memory_costs(self):
         cfg = ScoringConfig()
-        assert cfg.memory_cost_by_role["worker_explore"] < 1.0  # Small model
-        assert cfg.memory_cost_by_role["architect_general"] > 1.0  # WARM tier
+        assert cfg.memory_cost_by_role["frontdoor"] == pytest.approx(1.0)
+        assert cfg.memory_cost_by_role["coder_escalation"] == pytest.approx(1.0)
+        assert cfg.memory_cost_by_role["architect_general"] == pytest.approx(1.0)
+        assert cfg.memory_cost_by_role["ingest_long_context"] == pytest.approx(1.0)
+        assert "architect_coding" not in cfg.memory_cost_by_role
 
     def test_quality_gap_penalty_architect(self):
-        """Architect (quality=0.94) gets penalized for quality gap above 0.75 baseline."""
+        """HOT architect gets quality-gap penalty but no warm-tier memory penalty."""
         s = _scorer()
         # At expected speed, no latency penalty (12.19 t/s registry baseline).
         cost = {"tokens_generated": 1219, "elapsed_seconds": 100.0, "role": "architect_general"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         # quality_gap = 0.94 - 0.75 = 0.19, penalty = 0.10 * 0.19 = 0.019
-        # memory_cost = 3.0, penalty = 0.05 * (3.0 - 1.0) = 0.10
-        # total = 1.0 - 0.019 - 0.10 = 0.881
-        assert r < 1.0  # Should be penalized
-        assert r > 0.8  # But not too much
+        # memory_cost = 1.0 (HOT), no memory penalty.
+        assert r == pytest.approx(0.981)
 
     def test_quality_gap_penalty_worker(self):
         """Worker (quality=0.745) has minimal quality gap penalty."""
@@ -412,18 +461,23 @@ class TestMultiDimensionalCost:
         cost = {"tokens_generated": 607, "elapsed_seconds": 10.0, "role": "worker_explore"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
         # quality_gap = max(0, 0.745 - 0.75) = 0.0 → no quality penalty
-        # memory_cost = 0.5 < 1.0 → no memory penalty
+        # memory_cost = 1.0 (HOT) → no memory penalty
         assert r == 1.0  # No penalty at all for worker at expected speed
 
-    def test_memory_tier_penalty_warm(self):
-        """WARM tier models (architect) get memory penalty."""
-        cfg = ScoringConfig(cost_penalty_lambda=0.0, cost_lambda_quality_gap=0.0)
+    def test_custom_non_hot_memory_cost_penalizes(self):
+        """Non-HOT residency still gets a memory penalty when configured."""
+        cfg = ScoringConfig(
+            baseline_tps_by_role={"external_warm": 10.0},
+            memory_cost_by_role={"external_warm": 2.0},
+            cost_penalty_lambda=0.0,
+            cost_lambda_quality_gap=0.0,
+        )
         s = _scorer(cfg)
         # Isolate memory penalty only (zero out other dimensions)
-        cost = {"tokens_generated": 1219, "elapsed_seconds": 100.0, "role": "architect_general"}
+        cost = {"tokens_generated": 100, "elapsed_seconds": 10.0, "role": "external_warm"}
         r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=cost)
-        # memory_cost = 3.0, penalty = 0.05 * (3.0 - 1.0) = 0.10
-        assert r == pytest.approx(0.9)
+        # memory_cost = 2.0, penalty = 0.05 * (2.0 - 1.0) = 0.05
+        assert r == pytest.approx(0.95)
 
     def test_memory_tier_no_penalty_hot(self):
         """HOT tier models (worker) have no memory penalty."""
@@ -437,10 +491,10 @@ class TestMultiDimensionalCost:
         """Worker on simple task should get higher reward than architect."""
         s = _scorer()
         # Worker at expected speed, correct
-        worker_cost = {"tokens_generated": 279, "elapsed_seconds": 10.0, "role": "worker_explore"}
+        worker_cost = {"tokens_generated": 607, "elapsed_seconds": 10.0, "role": "worker_explore"}
         worker_r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=worker_cost)
 
-        # Architect at expected speed, correct — but quality gap + memory penalty
+        # Architect slower than expected, correct — plus quality-gap penalty
         arch_cost = {"tokens_generated": 675, "elapsed_seconds": 100.0, "role": "architect_general"}
         arch_r = s._compute_reward(_make_outcome("success"), [], [], cost_metrics=arch_cost)
 

@@ -56,7 +56,6 @@ FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
     "frontdoor": 12.7,
     "coder_escalation": 10.8,
     "architect_general": 4.3,
-    "architect_coding": 8.0,
     "ingest_long_context": 12.0,
     "worker_explore": 50.0,
     "worker_general": 50.0,
@@ -70,20 +69,22 @@ BASELINE_QUALITY_BY_ROLE: Dict[str, float] = {
     "frontdoor": 0.895,
     "coder_escalation": 0.915,
     "architect_general": 0.94,
-    "architect_coding": 0.885,
     "worker_explore": 0.745,
     "worker_math": 0.85,
     "worker_vision": 0.81,
 }
 
-MEMORY_COST_BY_ROLE: Dict[str, float] = {
-    "frontdoor": 1.0,          # 19GB, HOT
-    "coder_escalation": 1.05,  # 20GB, HOT
-    "worker_explore": 0.5,     # 4.4GB, HOT
-    "worker_math": 0.5,        # 4.4GB, HOT
-    "architect_general": 3.0,  # 133GB, WARM (mmap load penalty)
-    "architect_coding": 3.5,   # 139GB, WARM (REAP-246B, was 5.0 for 480B@271GB)
-    "ingest_long_context": 1.5,  # 46GB, WARM
+FALLBACK_MEMORY_COST_BY_ROLE: Dict[str, float] = {
+    "frontdoor": 1.0,
+    "coder_escalation": 1.0,
+    "architect_general": 1.0,
+    "ingest_long_context": 1.0,
+    "worker_explore": 1.0,
+    "worker_general": 1.0,
+    "worker_math": 1.0,
+    "toolrunner": 1.0,
+    "worker_vision": 1.0,
+    "vision_escalation": 1.0,
 }
 
 SERVER_MODE_TPS_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
@@ -98,6 +99,14 @@ SERVER_MODE_TPS_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
 ROLE_PERFORMANCE_TPS_FALLBACKS: Dict[str, str] = {
     "worker_vision": "worker_vision",
     "vision_escalation": "vision_escalation",
+}
+
+REGISTRY_MEMORY_ROLE_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "frontdoor": ("frontdoor",),
+    "coder_escalation": ("coder_escalation",),
+    "architect_general": ("architect_general",),
+    "ingest_long_context": ("ingest_long_context",),
+    "worker": ("worker_explore", "worker_general", "worker_math", "toolrunner"),
 }
 
 
@@ -195,7 +204,7 @@ def descriptor_q_scorer_priors_by_role(
     """
     tps_by_role = registry_baseline_tps_by_role(registry_path)
     quality_by_role = dict(BASELINE_QUALITY_BY_ROLE)
-    memory_by_role = dict(MEMORY_COST_BY_ROLE)
+    memory_by_role = registry_memory_cost_by_role(registry_path)
 
     known_tps_roles = set(tps_by_role)
     known_quality_roles = set(quality_by_role)
@@ -225,6 +234,19 @@ def descriptor_q_scorer_priors_by_role(
         baseline_quality_by_role=quality_by_role,
         memory_cost_by_role=memory_by_role,
     )
+
+
+def _residency_memory_cost(residency: Any) -> float | None:
+    if not isinstance(residency, str):
+        return None
+    normalized = residency.strip().lower()
+    if normalized == "hot":
+        return 1.0
+    if normalized == "warm":
+        return 2.0
+    if normalized == "cold":
+        return 3.0
+    return None
 
 
 def _performance_tps(role_record: dict[str, Any]) -> float | None:
@@ -279,6 +301,52 @@ def registry_baseline_tps_by_role(
     return baselines
 
 
+def registry_memory_cost_by_role(
+    registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
+) -> Dict[str, float]:
+    """Load per-role memory-residency costs from the live registry.
+
+    Values are tier costs, not raw model-size costs. HOT roles normalize to
+    1.0, so they do not trigger the warm-tier reward penalty. Retired roles
+    absent from live server/role records are intentionally not synthesized.
+    """
+    costs = dict(FALLBACK_MEMORY_COST_BY_ROLE)
+    try:
+        import yaml
+
+        data = yaml.safe_load(registry_path.read_text()) or {}
+    except Exception as exc:
+        logger.warning("Using fallback q_scorer memory costs; registry load failed: %s", exc)
+        return costs
+
+    roles = data.get("roles", {})
+    if isinstance(roles, dict):
+        known_roles = set(costs)
+        for role, record in roles.items():
+            if role not in known_roles or not isinstance(record, dict):
+                continue
+            memory = record.get("memory", {})
+            if not isinstance(memory, dict):
+                continue
+            cost = _residency_memory_cost(memory.get("residency"))
+            if cost is not None:
+                costs[role] = cost
+
+    server_mode = data.get("server_mode", {})
+    if isinstance(server_mode, dict):
+        for server_key, target_roles in REGISTRY_MEMORY_ROLE_ALIASES.items():
+            record = server_mode.get(server_key, {})
+            if not isinstance(record, dict):
+                continue
+            cost = _residency_memory_cost(record.get("tier"))
+            if cost is None:
+                continue
+            for role in target_roles:
+                costs[role] = cost
+
+    return costs
+
+
 @dataclass
 class ScoringConfig:
     """Configuration for Q-scoring."""
@@ -320,14 +388,16 @@ class ScoringConfig:
         default_factory=lambda: dict(BASELINE_QUALITY_BY_ROLE)
     )
 
-    # Per-role memory tier cost (normalized: 1.0 = HOT baseline ~20GB).
-    # WARM tier models incur mmap load penalty and higher memory pressure.
-    memory_cost_by_role: Dict[str, float] = field(default_factory=lambda: dict(MEMORY_COST_BY_ROLE))
+    # Per-role memory residency cost. HOT roles normalize to 1.0 and incur no
+    # warm-tier penalty; non-HOT roles load from the registry when present.
+    memory_cost_by_role: Dict[str, float] = field(
+        default_factory=lambda: descriptor_q_scorer_priors_by_role().memory_cost_by_role
+    )
 
     # Multi-dimensional cost weights (tunable).
     # cost_lambda_latency is the existing cost_penalty_lambda.
     cost_lambda_quality_gap: float = 0.10  # Penalize using higher-quality model than needed
-    cost_lambda_memory: float = 0.05       # Penalize WARM tier when HOT sufficient
+    cost_lambda_memory: float = 0.05       # Penalize non-HOT residency when HOT sufficient
 
     # Delegation/teacher attribution shaping.
     delegation_misattribution_penalty: float = 0.10
