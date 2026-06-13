@@ -66,7 +66,7 @@ Rules for touching model registry or stack config:
 2. **Never change acceleration flags** — these are already optimized per-model from benchmark data (tree speculation NOT viable on hybrids, lookup disabled on Qwen3.5 due to segfault, REAP expert counts tuned per-model)
 3. **Timeouts and token caps** in model_registry.yaml ARE safe to tune — these are routing parameters, not infrastructure
 4. **If swapping a model for a role**: restart ONLY that role's server process, NOT the entire stack. Use `config_applicator.restart_role(role_name)` to minimize downtime.
-5. **Instance counts and mlock tiers** are already optimized — entire stack fits in HOT tier with mlock. Do not explore WARM tier demotions.
+5. **Instance counts and mlock tiers** are already optimized for the current host. Read live hot/warm status from `orchestration/derived/stack_priors.yaml` and the generated system card; do not explore tier demotions unless a current evidence handoff or human operator explicitly opens that surface.
 
 ### Git Safety Protocol (MANDATORY for all changes)
 
@@ -240,7 +240,7 @@ curl -X POST "http://localhost:8070/slots/0?action=compact" \
   -d '{"keep_ratio": 0.5, "scorer": "expected_attention", "keep_first": 4}'
 
 # Aggressive with deep-layer emphasis (for coder role)
-curl -X POST "http://localhost:8071/slots/0?action=compact" \
+curl -X POST "http://localhost:${PORT}/slots/0?action=compact" \
   -H "Content-Type: application/json" \
   -d '{"keep_ratio": 0.3, "keep_first": 8, "layer_weights": [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.5,1.5,1.5,2.0,2.0,2.0,2.5,3.0]}'
 ```
@@ -254,12 +254,21 @@ curl -X POST "http://localhost:8071/slots/0?action=compact" \
 
 **PPL gate** (Qwen3.5-35B-A3B at 50% eviction): ratio = 1.096 (<1.10 threshold).
 
-**Target ports** (primary instances only — quarter instances share no state):
-- frontdoor: 8070
-- coder: 8071
-- worker: 8072
-- architect_general: 8083
-- architect_coding: 8084
+**Target endpoints**: derive live primary endpoints from the generated stack-priors contract before issuing compaction requests. Do not copy endpoint tables from historical docs, and do not target retired roles or dead ports.
+
+```bash
+uv run python - <<'PY'
+import yaml
+data = yaml.safe_load(open("orchestration/derived/stack_priors.yaml")) or {}
+for role, record in sorted((data.get("roles") or {}).items()):
+    if record.get("deployment_status") != "live_stack":
+        continue
+    serving = record.get("serving") or {}
+    endpoint = serving.get("endpoint")
+    if endpoint:
+        print(f"{role}: {endpoint}")
+PY
+```
 
 **NumericSwarm integration**: Treat `keep_ratio` as a continuous parameter and `layer_weights` as a per-role vector. Evaluate quality post-compact via `tower.hybrid_eval()`. The 4D Pareto archive (quality × speed × -cost × reliability) captures the compression/quality tradeoff naturally — speed improves with compression (fewer KV entries = less memory bandwidth), quality may degrade.
 
@@ -269,7 +278,7 @@ curl -X POST "http://localhost:8071/slots/0?action=compact" \
 - Instance counts per role (currently optimized for NUMA 4-way)
 - NUMA quarter assignments (currently optimal)
 - Acceleration flag combinations (already tuned per-model from isolated benchmarks)
-- **NOTE**: Entire stack fits in HOT tier with mlock on 512GB RAM. WARM tier demotion is unnecessary and should not be explored. Acceleration flags are the product of extensive isolated benchmarking — do not change without reading the benchmark data in `epyc-inference-research/data/`.
+- **NOTE**: The active stack topology is compiled into `orchestration/derived/stack_priors.yaml` and summarized in the generated controller system card. Tier demotion is not an open exploration surface by default. Acceleration flags are the product of extensive isolated benchmarking — do not change without reading the benchmark data in `epyc-inference-research/data/`.
 
 ### Tier 6: StructuralLab Memory Mutations (hot-swap, NIB2-41 / intake-414 Token Savior)
 
