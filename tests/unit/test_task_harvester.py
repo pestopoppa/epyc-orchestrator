@@ -59,6 +59,7 @@ def _args(tmp_path: Path, **overrides) -> Namespace:
         "limit": 0,
         "include_open": False,
         "exclude_synthetic_like": False,
+        "dedupe_prompt": False,
         "omit_prompt_text": False,
     }
     values.update(overrides)
@@ -184,3 +185,46 @@ def test_harvest_lab_task_records_normalizes_shadow_record(tmp_path: Path) -> No
     assert rows[0]["outcome"] == "success"
     assert rows[0]["training_eligible"] is False
     assert rows[0]["eligibility_reasons"] == ["dry_run"]
+
+
+def test_dedupe_prompt_collapses_forced_multi_role_attempts(tmp_path: Path) -> None:
+    _workload_model(tmp_path / "workload_model.yaml")
+    rows = []
+    for task_id, role, offset in [
+        ("chat-a", "frontdoor", 1),
+        ("chat-b", "worker_general", 2),
+    ]:
+        rows.extend(
+            [
+                _row(
+                    "task_started",
+                    task_id,
+                    f"2026-06-12T00:00:0{offset}+00:00",
+                    {
+                        "task_type": "chat",
+                        "objective": "Run benchmark replay and produce a measurement report",
+                    },
+                ),
+                _row(
+                    "routing_decision",
+                    task_id,
+                    f"2026-06-12T00:00:0{offset}+00:00",
+                    {"routing": [role], "strategy": "forced"},
+                ),
+                _row("task_completed", task_id, f"2026-06-12T00:00:1{offset}+00:00"),
+            ]
+        )
+    _write_jsonl(tmp_path / "progress" / "2026-06-12.jsonl", rows)
+
+    result = harvest_tasks.run(_args(tmp_path, dedupe_prompt=True))
+
+    records = _read_jsonl(Path(result["output"]))
+    manifest = json.loads(Path(result["manifest"]).read_text())
+    assert len(records) == 1
+    assert records[0]["duplicate_count"] == 2
+    assert records[0]["duplicate_task_ids"] == ["chat-a", "chat-b"]
+    assert [attempt["route_taken"] for attempt in records[0]["route_attempts"]] == [
+        ["frontdoor"],
+        ["worker_general"],
+    ]
+    assert manifest["counts"]["duplicates_collapsed"] == 1

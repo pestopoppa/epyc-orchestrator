@@ -506,6 +506,50 @@ def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
     return count
 
 
+def _prompt_dedupe_key(row: dict[str, Any]) -> tuple[str, str]:
+    prompt_ref = row.get("prompt_ref") if isinstance(row.get("prompt_ref"), dict) else {}
+    sha = prompt_ref.get("sha256")
+    if sha:
+        return (str(row.get("source") or ""), str(sha))
+    return (str(row.get("source") or ""), str(row.get("task_id") or ""))
+
+
+def collapse_duplicate_prompts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse repeated prompt attempts while preserving route/outcome evidence."""
+    grouped: OrderedDict[tuple[str, str], dict[str, Any]] = OrderedDict()
+    for row in rows:
+        key = _prompt_dedupe_key(row)
+        existing = grouped.get(key)
+        attempt = {
+            "task_id": row.get("task_id"),
+            "route_taken": row.get("route_taken") or [],
+            "route_strategy": row.get("route_strategy"),
+            "outcome": row.get("outcome"),
+            "wall_s": row.get("wall_s"),
+            "started_at": (row.get("timestamps") or {}).get("started_at")
+            if isinstance(row.get("timestamps"), dict)
+            else None,
+        }
+        if existing is None:
+            kept = dict(row)
+            kept["duplicate_count"] = 1
+            kept["duplicate_task_ids"] = [row.get("task_id")]
+            kept["route_attempts"] = [attempt]
+            kept["duplicate_outcomes"] = {str(row.get("outcome") or "unknown"): 1}
+            grouped[key] = kept
+            continue
+        existing["duplicate_count"] += 1
+        existing["duplicate_task_ids"].append(row.get("task_id"))
+        existing["route_attempts"].append(attempt)
+        outcome = str(row.get("outcome") or "unknown")
+        existing["duplicate_outcomes"][outcome] = existing["duplicate_outcomes"].get(outcome, 0) + 1
+        if isinstance(row.get("source_refs"), list):
+            refs = existing.setdefault("source_refs", [])
+            refs.extend(row["source_refs"])
+            existing["source_refs"] = refs[:16]
+    return list(grouped.values())
+
+
 def write_manifest(
     path: Path,
     *,
@@ -530,6 +574,7 @@ def write_manifest(
             "training_eligible": sum(1 for row in rows if row.get("training_eligible")),
             "synthetic_like": sum(1 for row in rows if row.get("synthetic_like")),
             "taxonomy_class": sum(1 for row in rows if row.get("class_is_taxonomy")),
+            "duplicates_collapsed": sum(int(row.get("duplicate_count") or 1) - 1 for row in rows),
         },
         "sources": {"progress": progress_meta, "lab": lab_meta},
         "options": options,
@@ -563,6 +608,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     rows.sort(key=lambda row: ((row.get("timestamps") or {}).get("started_at") or "", row.get("task_id") or ""))
     if args.exclude_synthetic_like:
         rows = [row for row in rows if not row.get("synthetic_like")]
+    if args.dedupe_prompt:
+        rows = collapse_duplicate_prompts(rows)
     if args.limit and args.limit > 0:
         rows = rows[: args.limit]
     written = write_jsonl(output, rows)
@@ -573,6 +620,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "end_date": args.end_date,
         "include_open": args.include_open,
         "exclude_synthetic_like": args.exclude_synthetic_like,
+        "dedupe_prompt": args.dedupe_prompt,
         "omit_prompt_text": args.omit_prompt_text,
         "limit": args.limit,
         "lab_task_records": args.lab_task_records,
@@ -601,6 +649,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--include-open", action="store_true")
     parser.add_argument("--exclude-synthetic-like", action="store_true")
+    parser.add_argument("--dedupe-prompt", action="store_true")
     parser.add_argument("--omit-prompt-text", action="store_true")
     return parser
 
