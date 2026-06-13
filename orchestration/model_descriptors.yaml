@@ -1,12 +1,12 @@
 descriptor_version: 3
-compiled_at: '2026-06-13T20:21:20Z'
+compiled_at: '2026-06-13T20:29:35Z'
 status: compiled_with_gaps
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: fb0fd6d
-    sha256: b8724c7dc067b7c2832a4f401e3937d14a3327cec57ebb57684d9eb5a47e19d4
+    repo_commit: 837829f
+    sha256: d20a08b2777dcae1534acefa2a332e294cf0e8d1e332b7e49dcc9fc9735d5c03
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
     repo_commit: b5e123f
@@ -112,7 +112,7 @@ models:
   active_b: 7.0
   quant: Q4_K_M
   mem_gb: 4.4
-  ctx_max: null
+  ctx_max: 128000
   modalities:
   - text
   - vision
@@ -165,7 +165,6 @@ models:
     server_role: null
   known_gaps:
   - Missing enable_thinking compatibility evidence
-  - Missing structured ctx_max
 - model_id: qwen3-next-80b-a3b-q4_k_m
   display_name: Qwen3-Next-80B-A3B-Instruct
   family: qwen3-next
@@ -174,7 +173,7 @@ models:
   active_b: 3.0
   quant: Q4_K_M
   mem_gb: 45.0
-  ctx_max: null
+  ctx_max: 262144
   modalities:
   - long_context
   - text
@@ -222,7 +221,6 @@ models:
     server_role: ingest_long_context
   known_gaps:
   - Missing enable_thinking compatibility evidence
-  - Missing structured ctx_max
 - model_id: qwen3-vl-30b-a3b-q4_k_m
   display_name: Qwen3-VL-30B-A3B-Instruct
   family: qwen3-vl
@@ -231,7 +229,7 @@ models:
   active_b: 3.0
   quant: Q4_K_M
   mem_gb: 18.0
-  ctx_max: null
+  ctx_max: 262144
   modalities:
   - text
   - vision
@@ -284,7 +282,6 @@ models:
     server_role: null
   known_gaps:
   - Missing enable_thinking compatibility evidence
-  - Missing structured ctx_max
 - model_id: qwen3.5-122b-a10b-q4_k_m
   display_name: Qwen3.5-122B-A10B
   family: qwen3.5
@@ -293,7 +290,7 @@ models:
   active_b: 10.0
   quant: Q4_K_M
   mem_gb: 69.0
-  ctx_max: null
+  ctx_max: 262144
   modalities:
   - text
   role_bindings:
@@ -358,8 +355,7 @@ models:
     ports:
     - 8083
     server_role: architect_general
-  known_gaps:
-  - Missing structured ctx_max
+  known_gaps: []
 - model_id: qwen3.6-35b-a3b-q8_0
   display_name: Qwen3.6-35B-A3B-Q8_0
   family: qwen3.6
@@ -450,7 +446,7 @@ models:
   active_b: 3.0
   quant: Q4_K_M
   mem_gb: 15.0
-  ctx_max: null
+  ctx_max: 262144
   modalities:
   - code
   - text
@@ -504,4 +500,3 @@ models:
   known_gaps:
   - Missing enable_thinking compatibility evidence
   - Missing quality suite_vector evidence
-  - Missing structured ctx_max

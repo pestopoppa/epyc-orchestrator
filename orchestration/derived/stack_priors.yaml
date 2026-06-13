@@ -48,44 +48,44 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-13T20:21:20Z'
+compiled_at: '2026-06-13T20:29:35Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: b8724c7dc067b7c2832a4f401e3937d14a3327cec57ebb57684d9eb5a47e19d4
-    repo_commit: fb0fd6d
+    sha256: d20a08b2777dcae1534acefa2a332e294cf0e8d1e332b7e49dcc9fc9735d5c03
+    repo_commit: 837829f
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 829ddcb85e1004b94846afa3a478163f630d413a0565dd83020b0cb1907e25b2
-    repo_commit: fb0fd6d
+    sha256: a1ef72742fb2d1c9931ad7825edfc19d84f44d23061242f6e38a3d4fd0b09d7f
+    repo_commit: 837829f
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: e3f80ad39be0bf0d1ced00105d83f5204849b7bfac0acdff423ed9d21573a2f6
-    repo_commit: fb0fd6d
+    repo_commit: 837829f
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: fb0fd6d
+    repo_commit: 837829f
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 871b106644c89528419ef3521f190550f194c9d14fd83d3277208a960ea9d828
-    repo_commit: fb0fd6d
+    repo_commit: 837829f
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: a13a6f5b6cf6ec4f37be1a42083128f38cfba023dbfc45508149572741325648
-    repo_commit: fb0fd6d
+    repo_commit: 837829f
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: fb0fd6d
+    repo_commit: 837829f
 roles:
   architect_general:
     role: architect_general
     deployment_status: live_stack
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3.5-122b-a10b-q4_k_m
     display_name: Qwen3.5-122B-A10B
     serving:
@@ -166,7 +166,7 @@ roles:
       active_b: 10.0
       quant: Q4_K_M
       mem_gb: 69.0
-      ctx_max: null
+      ctx_max: 262144
       modalities:
       - text
     evidence:
@@ -199,8 +199,7 @@ roles:
       - date: null
         protocol: server_mode throughput
         value_tps: 12.19
-    known_gaps:
-    - Missing structured ctx_max
+    known_gaps: []
   coder_escalation:
     role: coder_escalation
     deployment_status: live_stack
@@ -559,7 +558,7 @@ roles:
       active_b: 3.0
       quant: Q4_K_M
       mem_gb: 45.0
-      ctx_max: null
+      ctx_max: 262144
       modalities:
       - long_context
       - text
@@ -580,11 +579,10 @@ roles:
         value_tps: 14.4
     known_gaps:
     - Missing enable_thinking compatibility evidence
-    - Missing structured ctx_max
   qwen35_122b_q4km:
     role: qwen35_122b_q4km
     deployment_status: benchmark_or_candidate
-    status: compiled_with_gaps
+    status: compiled
     model_id: qwen3.5-122b-a10b-q4_k_m
     display_name: Qwen3.5-122B-A10B
     serving:
@@ -629,7 +627,7 @@ roles:
       active_b: 10.0
       quant: Q4_K_M
       mem_gb: 69.0
-      ctx_max: null
+      ctx_max: 262144
       modalities:
       - text
     evidence:
@@ -662,8 +660,7 @@ roles:
       - date: null
         protocol: server_mode throughput
         value_tps: 12.19
-    known_gaps:
-    - Missing structured ctx_max
+    known_gaps: []
   reap_25b_frontdoor:
     role: reap_25b_frontdoor
     deployment_status: benchmark_or_candidate
@@ -711,7 +708,7 @@ roles:
       active_b: 3.0
       quant: Q4_K_M
       mem_gb: 15.0
-      ctx_max: null
+      ctx_max: 262144
       modalities:
       - code
       - text
@@ -737,7 +734,6 @@ roles:
     - Missing enable_thinking compatibility evidence
     - Missing overall quality prior
     - Missing quality suite_vector evidence
-    - Missing structured ctx_max
   toolrunner:
     role: toolrunner
     deployment_status: live_stack
@@ -985,7 +981,7 @@ roles:
       active_b: 3.0
       quant: Q4_K_M
       mem_gb: 18.0
-      ctx_max: null
+      ctx_max: 262144
       modalities:
       - text
       - vision
@@ -1011,7 +1007,6 @@ roles:
         optimized_tps: 27.6
     known_gaps:
     - Missing enable_thinking compatibility evidence
-    - Missing structured ctx_max
   worker_general:
     role: worker_general
     deployment_status: live_stack
@@ -1501,7 +1496,7 @@ roles:
       active_b: 7.0
       quant: Q4_K_M
       mem_gb: 4.4
-      ctx_max: null
+      ctx_max: 128000
       modalities:
       - text
       - vision
@@ -1527,26 +1522,18 @@ roles:
         optimized_tps: 20.0
     known_gaps:
     - Missing enable_thinking compatibility evidence
-    - Missing structured ctx_max
 known_global_gaps:
-  architect_general:
-  - Missing structured ctx_max
   ingest_long_context:
   - Missing enable_thinking compatibility evidence
-  - Missing structured ctx_max
-  qwen35_122b_q4km:
-  - Missing structured ctx_max
   reap_25b_frontdoor:
   - Missing enable_thinking compatibility evidence
   - Missing overall quality prior
   - Missing quality suite_vector evidence
-  - Missing structured ctx_max
   toolrunner:
   - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
   - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   vision_escalation:
   - Missing enable_thinking compatibility evidence
-  - Missing structured ctx_max
   worker_general:
   - Shared runtime alias toolrunner is served by worker_general; ignored non-live role model metadata qwen3-coder-30b-a3b-q4_k_m
   - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
@@ -1555,4 +1542,3 @@ known_global_gaps:
   - Shared runtime alias worker_math is served by worker_general; ignored non-live role model metadata qwen2.5-math-7b-q4_k_m
   worker_vision:
   - Missing enable_thinking compatibility evidence
-  - Missing structured ctx_max
