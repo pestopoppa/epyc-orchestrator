@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-import httpx
+import yaml
 
 from src.constants import TASK_IR_OBJECTIVE_LEN
 
@@ -20,8 +21,16 @@ from src.api.routes.chat_utils import (
     TWO_STAGE_CONFIG,
     LONG_CONTEXT_CONFIG,
 )
+from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
 
 log = logging.getLogger(__name__)
+_SUMMARIZATION_WORKER_ROLE_PREFERENCE = (
+    "worker_summarize",
+    "worker_general",
+    "worker_math",
+    "toolrunner",
+)
+_DEGRADED_SUMMARIZATION_WORKER_ROLE = "worker_summarize"
 
 if TYPE_CHECKING:
     from src.api.state import AppState
@@ -79,12 +88,39 @@ def _should_use_two_stage(
     return context_chars > threshold_chars
 
 
+def _summarization_worker_role(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> str:
+    """Select the live stack worker role for chunk digests."""
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        log.debug("Using degraded summarization worker role; stack priors unavailable: %s", exc)
+        return _DEGRADED_SUMMARIZATION_WORKER_ROLE
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return _DEGRADED_SUMMARIZATION_WORKER_ROLE
+
+    live_roles = {
+        str(role)
+        for role, record in roles.items()
+        if isinstance(record, dict) and record.get("deployment_status") == "live_stack"
+    }
+    for role in _SUMMARIZATION_WORKER_ROLE_PREFERENCE:
+        if role in live_roles:
+            return role
+    return _DEGRADED_SUMMARIZATION_WORKER_ROLE
+
+
 async def _run_two_stage_summarization(
     prompt: str,
     context: str,
     primitives: "LLMPrimitives",
     state: "AppState",
     task_id: str,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
 ) -> tuple[str, dict]:
     """Run two-stage context processing pipeline.
 
@@ -150,18 +186,8 @@ async def _run_two_stage_summarization(
         )
         worker_prompts.append(worker_prompt)
 
-    # Dispatch to workers in parallel via llm_batch
-    # Prefer worker_fast (1.5B, port 8102, 4 slots) for speed, but this is
-    # WARM tier and may not be running. Fall back to worker_explore (7B, 8082).
-    worker_role = "worker_fast"
-    try:
-        async with httpx.AsyncClient(timeout=2) as client:
-            resp = await client.get("http://localhost:8102/health")
-        if resp.status_code != 200:
-            worker_role = "worker_explore"
-    except Exception as exc:
-        log.debug("worker_fast health check failed, using worker_explore: %s", exc)
-        worker_role = "worker_explore"
+    # Dispatch chunk digests to the live stack's summarization worker.
+    worker_role = _summarization_worker_role(stack_priors_path)
     stats["worker_role"] = worker_role
 
     try:
@@ -170,9 +196,8 @@ async def _run_two_stage_summarization(
         log.warning(
             "llm_batch failed for role=%s, falling back to sequential: %s", worker_role, exc
         )
-        # Fallback: sequential calls with worker_explore (always HOT)
-        worker_role = "worker_explore"
-        stats["worker_role"] = worker_role
+        # Batch dispatch can fail independently of the selected role; retry
+        # sequentially through the same stack-prior-selected worker.
         digests = []
         for wp in worker_prompts:
             try:

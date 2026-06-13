@@ -5,15 +5,27 @@ Focuses on: summarization detection, two-stage context processing,
 chunking strategies, worker dispatch, synthesis.
 """
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import yaml
 
 from src.api.routes.chat_summarization import (
     _is_summarization_task,
     _run_two_stage_summarization,
     _should_use_two_stage,
+    _summarization_worker_role,
 )
+
+
+def _write_stack_priors(path: Path, roles: dict) -> Path:
+    path.write_text(yaml.safe_dump({"roles": roles}, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def _role(status: str = "live_stack") -> dict:
+    return {"deployment_status": status, "serving": {"endpoint": "http://localhost:8070"}}
 
 
 # ── Summarization Task Detection ─────────────────────────────────────────
@@ -155,6 +167,36 @@ class TestShouldUseTwoStage:
                 assert result is True
 
 
+class TestSummarizationWorkerRole:
+    """Test live stack-prior summarization worker selection."""
+
+    def test_prefers_live_worker_summarize(self, tmp_path: Path):
+        priors = _write_stack_priors(
+            tmp_path / "stack_priors.yaml",
+            {
+                "worker_general": _role(),
+                "worker_summarize": _role(),
+                "worker_fast": _role(status="benchmark_or_candidate"),
+            },
+        )
+
+        assert _summarization_worker_role(priors) == "worker_summarize"
+
+    def test_falls_back_to_live_worker_general(self, tmp_path: Path):
+        priors = _write_stack_priors(
+            tmp_path / "stack_priors.yaml",
+            {
+                "worker_general": _role(),
+                "worker_fast": _role(status="benchmark_or_candidate"),
+            },
+        )
+
+        assert _summarization_worker_role(priors) == "worker_general"
+
+    def test_missing_artifact_uses_degraded_summarization_role(self, tmp_path: Path):
+        assert _summarization_worker_role(tmp_path / "missing.yaml") == "worker_summarize"
+
+
 # ── Two-Stage Pipeline Execution ─────────────────────────────────────────
 
 
@@ -174,7 +216,7 @@ class TestTwoStagePipelineExecution:
         mock_state = MagicMock()
         mock_state.progress_logger = MagicMock()
 
-        # Mock worker_fast health check to fail (use worker_explore)
+        # The live stack selects worker_summarize from generated stack priors.
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
@@ -196,10 +238,10 @@ class TestTwoStagePipelineExecution:
             assert stats["chunks"] >= 2
             assert "stage1_time_ms" in stats
             assert "stage2_time_ms" in stats
-            assert stats["worker_role"] == "worker_explore"
+            assert stats["worker_role"] == "worker_summarize"
             assert stats["synthesis_role"] == "frontdoor"
             assert stats["producer_role"] == "frontdoor"
-            assert stats["role_history"] == ["worker_explore", "frontdoor"]
+            assert stats["role_history"] == ["worker_summarize", "frontdoor"]
             mock_primitives.llm_batch.assert_called_once()
             mock_primitives.llm_call.assert_called_once()
 
@@ -217,7 +259,7 @@ class TestTwoStagePipelineExecution:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
             mock_response = MagicMock()
-            mock_response.status_code = 200  # Worker_fast available
+            mock_response.status_code = 200
             mock_client.get.return_value = mock_response
             mock_client_class.return_value = mock_client
 
@@ -235,7 +277,7 @@ class TestTwoStagePipelineExecution:
 
     @pytest.mark.asyncio
     async def test_run_two_stage_worker_role_selection(self):
-        """Test that worker_fast is preferred when available."""
+        """Test that live worker_summarize is selected from stack priors."""
         mock_primitives = MagicMock()
         mock_primitives.llm_batch.return_value = ["Digest"]
         mock_primitives.llm_call.return_value = "Answer"
@@ -243,12 +285,11 @@ class TestTwoStagePipelineExecution:
         mock_state = MagicMock()
         mock_state.progress_logger = None
 
-        # Mock successful health check for worker_fast
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
             mock_response = MagicMock()
-            mock_response.status_code = 200  # Success
+            mock_response.status_code = 200
             mock_client.get.return_value = mock_response
             mock_client_class.return_value = mock_client
 
@@ -260,15 +301,15 @@ class TestTwoStagePipelineExecution:
                 task_id="test-789",
             )
 
-            # Verify worker_fast was used
+            # Verify worker_summarize was used
             call_args = mock_primitives.llm_batch.call_args
-            assert call_args[1]["role"] == "worker_fast"
-            assert stats["worker_role"] == "worker_fast"
-            assert stats["role_history"] == ["worker_fast", "frontdoor"]
+            assert call_args[1]["role"] == "worker_summarize"
+            assert stats["worker_role"] == "worker_summarize"
+            assert stats["role_history"] == ["worker_summarize", "frontdoor"]
 
     @pytest.mark.asyncio
     async def test_run_two_stage_worker_fallback(self):
-        """Test fallback to worker_explore when worker_fast unavailable."""
+        """Test stack-prior role selection is independent of endpoint health."""
         mock_primitives = MagicMock()
         mock_primitives.llm_batch.return_value = ["Digest"]
         mock_primitives.llm_call.return_value = "Answer"
@@ -276,7 +317,6 @@ class TestTwoStagePipelineExecution:
         mock_state = MagicMock()
         mock_state.progress_logger = None
 
-        # Mock failed health check
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
@@ -291,11 +331,11 @@ class TestTwoStagePipelineExecution:
                 task_id="test-abc",
             )
 
-            # Verify fallback to worker_explore
+            # The retired worker_fast health probe no longer controls routing.
             call_args = mock_primitives.llm_batch.call_args
-            assert call_args[1]["role"] == "worker_explore"
-            assert stats["worker_role"] == "worker_explore"
-            assert stats["role_history"] == ["worker_explore", "frontdoor"]
+            assert call_args[1]["role"] == "worker_summarize"
+            assert stats["worker_role"] == "worker_summarize"
+            assert stats["role_history"] == ["worker_summarize", "frontdoor"]
 
     @pytest.mark.asyncio
     async def test_run_two_stage_batch_failure_fallback(self):
@@ -331,9 +371,9 @@ class TestTwoStagePipelineExecution:
             # Should have called llm_call 3 times (2 workers + 1 synthesis)
             assert mock_primitives.llm_call.call_count == 3
             assert answer == "Final synthesis"
-            assert stats["worker_role"] == "worker_explore"
+            assert stats["worker_role"] == "worker_summarize"
             assert stats["producer_role"] == "frontdoor"
-            assert stats["role_history"] == ["worker_explore", "frontdoor"]
+            assert stats["role_history"] == ["worker_summarize", "frontdoor"]
 
     @pytest.mark.asyncio
     async def test_run_two_stage_sequential_worker_failure(self):
@@ -497,8 +537,8 @@ class TestTwoStagePipelineExecution:
             assert "Digest 1" in answer
             assert "Digest 2" in answer
             assert "Worker findings:" in answer
-            assert stats["producer_role"] == "worker_fast"
-            assert stats["role_history"] == ["worker_fast"]
+            assert stats["producer_role"] == "worker_summarize"
+            assert stats["role_history"] == ["worker_summarize"]
 
     @pytest.mark.asyncio
     async def test_run_two_stage_progress_logging(self):
