@@ -35,7 +35,6 @@ runtime_defaults:
       vision_escalation: 120
       ingest_long_context: 300
       architect_general: 600
-      architect_coding: 600
 
     server:
       request: 600
@@ -167,17 +166,6 @@ roles:
       n_tokens: -1
       temperature: 0.3
 
-  architect_coding:
-    tier: B
-    description: Coding architecture specialist
-    acceleration:
-      type: speculative_decoding
-      draft_role: draft_qwen3_coder_0_75b
-      k: 16
-    generation_defaults:
-      n_tokens: -1
-      temperature: 0.3
-
   # Draft models (tier D — used by speculative decoding)
   draft_qwen3_coder_0_75b:
     tier: D
@@ -240,7 +228,6 @@ escalation_chains:
     chain:
     - frontdoor
     - coder_escalation
-    - architect_coding
     triggers:
     - error_categories:
       - timeout
@@ -248,7 +235,7 @@ escalation_chains:
       - internal_error
     - output_too_short: 50
     - explicit_request: true
-    max_escalations: 2
+    max_escalations: 1
   general:
     description: General task escalation path
     chain:
@@ -269,16 +256,16 @@ routing_hints:
 - if: task_type == 'code'
   use:
   - coder_escalation
-  escalate_to: architect_coding
+  escalate_to: coder_escalation
 - if: task_type == 'code' and 'refactor' in objective
   use:
   - coder_escalation
   - worker_general
-  escalate_to: architect_coding
+  escalate_to: coder_escalation
 - if: task_type == 'code' and escalation.triggered
   use:
   - coder_escalation
-  escalate_to: architect_coding
+  escalate_to: coder_escalation
 - if: task_type == 'ingest'
   use:
   - ingest_long_context
@@ -309,4 +296,4 @@ routing_hints:
   - architect_general
 - if: escalation.max_level == 'B3' and task_type == 'code'
   use:
-  - architect_coding
+  - coder_escalation

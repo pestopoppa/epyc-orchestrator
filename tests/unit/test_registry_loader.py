@@ -157,6 +157,24 @@ class TestRegistryLoaderBasic:
         with pytest.raises(RegistryError, match="No roles defined"):
             RegistryLoader(registry_path)
 
+    def test_committed_lean_registry_excludes_retired_architect_coding(self):
+        """Lean registry routes code escalation to the live coder role."""
+        repo_root = Path(__file__).resolve().parents[2]
+        registry_path = repo_root / "orchestration" / "model_registry_lean.yaml"
+
+        loader = RegistryLoader(registry_path, validate_paths=False)
+
+        assert "architect_coding" not in loader.roles
+        assert loader.get_timeout("architect_coding") == loader.get_timeout("default")
+        assert loader.get_escalation_chain("coder").chain == [
+            "frontdoor",
+            "coder_escalation",
+        ]
+        assert all(
+            "architect_coding" not in hint.use
+            for hint in loader.routing_hints
+        )
+
 
 class TestRoleAccess:
     """Tests for role access methods."""
@@ -367,10 +385,11 @@ class TestProductionRegistry:
         assert "frontdoor" in loader.roles
         assert "coder_escalation" in loader.roles
 
-    def test_production_coder_has_acceleration(self):
-        """Test coder_escalation has acceleration config."""
+    def test_production_coder_uses_current_baseline_acceleration(self):
+        """Test coder_escalation matches the current shared-frontdoor baseline."""
         loader = RegistryLoader(validate_paths=True)
 
         role = loader.get_role("coder_escalation")
         assert role.acceleration is not None
-        assert role.acceleration.type in ("speculative_decoding", "moe_expert_reduction")
+        assert role.acceleration.type == "none"
+        assert role.acceleration.lookup is False
