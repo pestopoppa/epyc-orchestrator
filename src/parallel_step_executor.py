@@ -20,7 +20,12 @@ import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, TYPE_CHECKING
+
+import yaml
+
+from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
 
 if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
@@ -33,12 +38,36 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Roles that map to WARM burst worker (8102, 4 slots) — can genuinely overlap
-BURST_WORKER_ROLES = frozenset(
-    {
-        "worker_fast",
-    }
-)
+
+def _live_burst_worker_roles(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> frozenset[str]:
+    """Return live worker roles that stack priors mark as WARM burst-safe."""
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        logger.debug("No stack-prior burst-worker roles available: %s", exc)
+        return frozenset()
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return frozenset()
+
+    burst_roles: set[str] = set()
+    for role, record in roles.items():
+        if not isinstance(role, str) or not role.startswith("worker_"):
+            continue
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict) or serving.get("tier") != "warm":
+            continue
+        burst_roles.add(role)
+    return frozenset(burst_roles)
+
+
+BURST_WORKER_ROLES = _live_burst_worker_roles()
 
 
 # ── Wave Computation ─────────────────────────────────────────────────────
@@ -212,6 +241,7 @@ class StepExecutor:
         review_service: Optional architect review for quality gating.
         iteration_context: Optional iteration tracker (for review loops).
         max_burst_concurrent: Max concurrent burst worker calls per wave.
+        burst_worker_roles: Stack-prior-derived roles safe for same-wave burst.
         step_outputs: Accumulated outputs keyed by step_id.
     """
 
@@ -220,6 +250,7 @@ class StepExecutor:
     iteration_context: IterationContext | None = None
     hybrid_router: Any | None = None
     max_burst_concurrent: int = 2
+    burst_worker_roles: frozenset[str] = field(default_factory=_live_burst_worker_roles)
     step_outputs: dict[str, str] = field(default_factory=dict)
 
     async def execute_plan(
@@ -301,7 +332,7 @@ class StepExecutor:
                 continue
 
             role = role_mapping.get(step.get("actor", "worker"), "worker_general")
-            if role in BURST_WORKER_ROLES:
+            if role in self.burst_worker_roles:
                 burst_steps.append(step)
             else:
                 sequential_steps.append(step)
@@ -319,7 +350,7 @@ class StepExecutor:
             sem = asyncio.Semaphore(self.max_burst_concurrent)
 
             async def _bounded_execute(s: dict[str, Any]) -> SubtaskResult:
-                r = role_mapping.get(s.get("actor", "worker"), "worker_fast")
+                r = role_mapping.get(s.get("actor", "worker"), "worker_general")
                 async with sem:
                     return await self._execute_step(task_ir, s, r)
 
@@ -333,7 +364,7 @@ class StepExecutor:
                     results.append(
                         SubtaskResult(
                             subtask_id=step["id"],
-                            role="worker_fast",
+                            role=role_mapping.get(step.get("actor", "worker"), "worker_general"),
                             output="",
                             success=False,
                             error=str(result),

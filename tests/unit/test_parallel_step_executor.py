@@ -8,13 +8,16 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from src.parallel_step_executor import (
     StepExecutor,
     compute_waves,
+    _live_burst_worker_roles,
 )
 
 
@@ -151,6 +154,38 @@ def _make_mock_primitives(responses: dict[str, str] | None = None):
     return mock
 
 
+def _write_stack_priors(path: Path, roles: dict) -> Path:
+    path.write_text(yaml.safe_dump({"roles": roles}, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def _role(*, status: str = "live_stack", tier: str = "hot") -> dict:
+    return {
+        "deployment_status": status,
+        "serving": {"tier": tier},
+    }
+
+
+class TestBurstWorkerRoles:
+    """Stack-prior-derived burst worker role selection."""
+
+    def test_live_burst_worker_roles_reads_live_warm_workers_only(self, tmp_path: Path):
+        priors = _write_stack_priors(
+            tmp_path / "stack_priors.yaml",
+            {
+                "worker_general": _role(tier="hot"),
+                "worker_batch": _role(tier="warm"),
+                "candidate_worker": _role(status="benchmark_or_candidate", tier="warm"),
+                "architect_general": _role(tier="warm"),
+            },
+        )
+
+        assert _live_burst_worker_roles(priors) == frozenset({"worker_batch"})
+
+    def test_live_burst_worker_roles_fails_closed_when_missing(self, tmp_path: Path):
+        assert _live_burst_worker_roles(tmp_path / "missing.yaml") == frozenset()
+
+
 class TestStepExecutor:
     """StepExecutor wave-ordered execution."""
 
@@ -226,7 +261,7 @@ class TestStepExecutor:
         """Steps targeting burst workers run concurrently."""
         call_times = []
 
-        def slow_llm_call(prompt, role="worker_fast", n_tokens=1024, **kw):
+        def slow_llm_call(prompt, role="worker_general", n_tokens=1024, **kw):
             import time
 
             call_times.append(time.monotonic())
@@ -235,7 +270,11 @@ class TestStepExecutor:
 
         primitives = MagicMock()
         primitives.llm_call = slow_llm_call
-        executor = StepExecutor(primitives=primitives, max_burst_concurrent=2)
+        executor = StepExecutor(
+            primitives=primitives,
+            max_burst_concurrent=2,
+            burst_worker_roles=frozenset({"worker_general"}),
+        )
 
         steps = [
             {"id": "S1", "action": "burst a", "actor": "burst"},
@@ -245,7 +284,7 @@ class TestStepExecutor:
         results = await executor.execute_plan(
             {"objective": "test"},
             waves,
-            {"burst": "worker_fast"},
+            {"burst": "worker_general"},
         )
 
         assert len(results) == 2
@@ -330,7 +369,10 @@ class TestStepExecutor:
     async def test_mixed_burst_and_sequential_wave(self):
         """Wave with both burst and non-burst steps handles both."""
         primitives = _make_mock_primitives()
-        executor = StepExecutor(primitives=primitives)
+        executor = StepExecutor(
+            primitives=primitives,
+            burst_worker_roles=frozenset({"worker_general"}),
+        )
 
         steps = [
             {"id": "S1", "action": "sequential", "actor": "coder"},
@@ -340,7 +382,7 @@ class TestStepExecutor:
         results = await executor.execute_plan(
             {"objective": "test"},
             waves,
-            {"coder": "coder_escalation", "fast": "worker_fast"},
+            {"coder": "coder_escalation", "fast": "worker_general"},
         )
 
         assert len(results) == 2
