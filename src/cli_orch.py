@@ -22,8 +22,59 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+
+import yaml
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_STACK_PRIORS_PATH = Path(__file__).parent.parent / "orchestration" / "derived" / "stack_priors.yaml"
+FALLBACK_STATUS_TARGETS = [
+    ("frontdoor/coder_escalation", 8070),
+    ("worker_general", 8072),
+    ("architect_general", 8083),
+    ("ingest_long_context", 8085),
+    ("worker_vision", 8086),
+    ("vision_escalation", 8087),
+]
+
+
+def _stack_status_targets(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> list[tuple[str, int]]:
+    try:
+        with stack_priors_path.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return list(FALLBACK_STATUS_TARGETS)
+
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return list(FALLBACK_STATUS_TARGETS)
+
+    names_by_port: dict[int, list[str]] = {}
+    for role, record in roles.items():
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+        endpoint = serving.get("endpoint")
+        if not isinstance(endpoint, str):
+            continue
+        parsed = urlparse(endpoint)
+        if parsed.port is None:
+            continue
+        names_by_port.setdefault(parsed.port, []).append(role)
+
+    if not names_by_port:
+        return list(FALLBACK_STATUS_TARGETS)
+    return [
+        ("/".join(sorted(names)), port)
+        for port, names in sorted(names_by_port.items())
+    ]
 
 
 def main() -> int:
@@ -121,19 +172,8 @@ def cmd_status() -> int:
     except (urllib.error.URLError, TimeoutError):
         print("  Orchestrator API:  \033[90m○ Offline\033[0m")
 
-    # Check llama-server ports
-    ports = [8080, 8081, 8082, 8083, 8084, 8085]
-    port_names = {
-        8080: "frontdoor",
-        8081: "coder_escalation",
-        8082: "worker",
-        8083: "architect_general",
-        8084: "architect_coding",
-        8085: "ingest",
-    }
-
-    for port in ports:
-        name = port_names.get(port, str(port))
+    # Check llama-server ports from generated stack priors.
+    for name, port in _stack_status_targets():
         try:
             with urllib.request.urlopen(f"http://localhost:{port}/health", timeout=2) as resp:
                 if resp.status == 200:
