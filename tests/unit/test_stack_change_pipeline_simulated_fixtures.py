@@ -416,6 +416,13 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
         assert priors["roles"][role]["priors"]["throughput_tps"] == 18.5
         assert priors["roles"][role]["priors"]["quality_overall"] == pytest.approx(0.874)
 
+    operator_summary = config.operator_summary.read_text(encoding="utf-8")
+    assert "Source: `orchestration/derived/stack_priors.yaml`" in operator_summary
+    for role in roles:
+        assert f"| {role}" in operator_summary
+        assert priors["roles"][role]["display_name"] in operator_summary
+    assert "Qwen_Qwen3.6-35B-A3B-Q8_0" not in operator_summary
+
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
     assert q_priors.baseline_tps_by_role["frontdoor"] == 18.5
     assert q_priors.baseline_tps_by_role["coder_escalation"] == 18.5
