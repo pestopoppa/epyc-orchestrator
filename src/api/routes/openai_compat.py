@@ -72,8 +72,11 @@ DEGRADED_AVAILABLE_ROLES = (
     "architect_general",
     "worker_general",
     "worker_math",
+    "toolrunner",
     "worker_vision",
     "ingest_long_context",
+    "vision_escalation",
+    "worker_summarize",
 )
 
 
