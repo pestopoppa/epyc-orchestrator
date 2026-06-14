@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 import sys
 from pathlib import Path
@@ -265,3 +266,226 @@ def test_t0_sentinel_suites_are_namespaced_without_mutating_source(monkeypatch) 
     }
     assert sentinels[0]["suite"] == "general"
     assert sentinels[1]["suite"] == "math"
+
+
+def test_eval_t1_uses_designed_core_when_enabled(tmp_path, monkeypatch) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    rows = [
+        {"__core_metadata__": True, "core_id": "core_v2", "source": "unit"},
+        {
+            "id": "core-a",
+            "suite": "math",
+            "prompt": "2+2?",
+            "expected": "4",
+            "scoring_method": "exact_match",
+        },
+        {
+            "id": "core-b",
+            "suite": "coder",
+            "prompt": "Return x",
+            "expected": "x",
+            "scoring_method": "exact_match",
+        },
+    ]
+    core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+
+    captured = {}
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        captured["ids"] = [q["id"] for q in questions]
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=True,
+                tokens_generated=1,
+                elapsed_s=1.0,
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+
+    result = EvalTower().eval_t1(n=999, seed=123)
+
+    assert captured["ids"] == ["core-a", "core-b"]
+    assert result.core_id == "core_v2"
+    assert result.n_questions == 2
+    assert result.details["core_selection"] == "designed_core"
+    assert result.details["core_metadata"]["source"] == "unit"
+    assert result.details["requested_n"] == 999
+    assert result.details["base_core_questions"] == 2
+
+
+def test_eval_t1_missing_designed_core_fails_closed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(tmp_path / "missing.jsonl"))
+
+    result = EvalTower().eval_t1(n=50, seed=42)
+
+    assert result.core_id == "core_v2"
+    assert result.quality == 0
+    assert result.reliability == 0
+    assert result.details["core_selection"] == "designed_core"
+    assert result.details["core_path"] == str(tmp_path / "missing.jsonl")
+    assert "not found" in result.details["core_error"]
+
+
+def test_eval_t1_core_path_without_core_id_fails_closed(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_T1_CORE_ID", raising=False)
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(tmp_path / "core_v2.jsonl"))
+
+    result = EvalTower().eval_t1(n=50, seed=42)
+
+    assert result.quality == 0
+    assert result.reliability == 0
+    assert result.details["core_selection"] == "designed_core"
+    assert "requires AUTOPILOT_T1_CORE_ID" in result.details["core_error"]
+
+
+def test_eval_t1_designed_core_rejects_metadata_mismatch(tmp_path, monkeypatch) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    rows = [
+        {"__core_metadata__": True, "core_id": "wrong_core"},
+        {
+            "id": "core-a",
+            "suite": "math",
+            "prompt": "2+2?",
+            "expected": "4",
+            "scoring_method": "exact_match",
+        },
+    ]
+    core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+
+    result = EvalTower().eval_t1(n=50, seed=42)
+
+    assert result.core_id == "core_v2"
+    assert result.quality == 0
+    assert result.reliability == 0
+    assert "does not match requested" in result.details["core_error"]
+
+
+def test_eval_t1_designed_core_rejects_unscoreable_rows(tmp_path, monkeypatch) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    rows = [
+        {"__core_metadata__": True, "core_id": "core_v2"},
+        {
+            "id": "dead-core-row",
+            "suite": "general",
+            "prompt": "Write anything.",
+            "expected": "",
+            "scoring_method": "substring",
+        },
+    ]
+    core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+
+    result = EvalTower().eval_t1(n=50, seed=42)
+
+    assert result.core_id == "core_v2"
+    assert result.quality == 0
+    assert result.reliability == 0
+    assert "unscoreable" in result.details["core_error"]
+
+
+def test_eval_t1_designed_core_can_reference_question_pool_ids(tmp_path, monkeypatch) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    rows = [
+        {"__core_metadata__": True, "core_id": "core_v2"},
+        {"id": "math/q-from-pool"},
+    ]
+    core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    tower = EvalTower()
+    tower._pool = {
+        "math": [
+            {
+                "id": "q-from-pool",
+                "suite": "math",
+                "prompt": "3+4?",
+                "expected": "7",
+                "scoring_method": "exact_match",
+            }
+        ]
+    }
+
+    captured = {}
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        captured["ids"] = [q["id"] for q in questions]
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=True,
+                tokens_generated=1,
+                elapsed_s=1.0,
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+
+    result = tower.eval_t1()
+
+    assert captured["ids"] == ["q-from-pool"]
+    assert result.core_id == "core_v2"
+    assert result.details["base_core_questions"] == 1
+
+
+def test_eval_t1_legacy_sampling_records_core_id(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_T1_CORE_ID", raising=False)
+    monkeypatch.delenv("AUTOPILOT_T1_CORE_PATH", raising=False)
+    tower = EvalTower()
+    tower._pool = {
+        "math": [
+            {
+                "id": "legacy-math",
+                "suite": "math",
+                "prompt": "1+1?",
+                "expected": "2",
+                "scoring_method": "exact_match",
+            }
+        ],
+        "coder": [
+            {
+                "id": "legacy-coder",
+                "suite": "coder",
+                "prompt": "Return x",
+                "expected": "x",
+                "scoring_method": "exact_match",
+            }
+        ],
+    }
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=True,
+                tokens_generated=1,
+                elapsed_s=1.0,
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+
+    result = tower.eval_t1(n=2, seed=42)
+
+    assert result.core_id == "legacy_pool_seed_42_n2"
+    assert result.details["core_selection"] == "legacy_pool_seed"
+    assert result.details["base_core_questions"] == 2

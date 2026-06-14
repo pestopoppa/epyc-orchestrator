@@ -187,6 +187,7 @@ class EvalResult:
     # Per-question paired-design ledger vector, journaled in JSONL only. Each
     # item is compact: {qid, suite, correct, latency_ms, tools_used}.
     question_results: list[dict[str, Any]] = field(default_factory=list)
+    core_id: str = ""  # Versioned paired-core identity for instrument-era tracking.
     details: dict[str, Any] = field(default_factory=dict)
     # HLE-4 observe-only metrics. The authoritative record schema lives in
     # src/trace/harness_schema.py; these fields only carry per-trial payloads
@@ -286,6 +287,8 @@ class EvalResult:
             f"METRIC reliability: {self.reliability:.4f}",
             f"METRIC n_questions: {self.n_questions}",
         ]
+        if self.core_id:
+            lines.append(f"METRIC core_id: {self.core_id}")
         for suite, q in sorted(self.per_suite_quality.items()):
             lines.append(f"METRIC suite_{suite}: {q:.4f}")
         for role, frac in sorted(self.routing_distribution.items()):

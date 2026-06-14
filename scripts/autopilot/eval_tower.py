@@ -6,6 +6,7 @@ Training set (debug suites) is kept separate from validation set (HF benchmarks)
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
@@ -14,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 import hashlib
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import httpx
 import yaml
@@ -30,6 +31,7 @@ SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 TOOL_SENTINEL_PATH = Path(__file__).resolve().parent / "tool_sentinels.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
 _EXPECTED_FREE_SCORERS = {"programmatic"}
+_CORE_METADATA_KEY = "__core_metadata__"
 
 
 def _has_executable_assertion(test_code: str) -> bool:
@@ -216,6 +218,8 @@ sys.path.insert(0, str(_orch_root))
 from seeding_orchestrator import call_orchestrator_forced  # noqa: E402
 from seeding_scoring import score_answer_deterministic  # noqa: E402
 
+DEFAULT_CORE_DIR = _orch_root / "benchmarks" / "prompts"
+
 # Branching density: intake-378 deep-dive (arxiv:2604.01702).
 # High branching (>0.30 Propose step ratio) = unproductive exploration.
 import re as _re
@@ -341,6 +345,7 @@ class EvalTower:
         self._sentinel_path = sentinel_path or SENTINEL_PATH
         self._sentinels: list[dict] | None = None
         self._pool = None
+        self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
         self.on_question = on_question
 
     # ── sentinel questions (T0) ──────────────────────────────────
@@ -410,6 +415,107 @@ class EvalTower:
             log.warning("Could not load question pool: %s", e)
             self._pool = {}
         return self._pool
+
+    def _core_path(self, core_id: str) -> Path:
+        override = os.environ.get("AUTOPILOT_T1_CORE_PATH", "").strip()
+        if override:
+            return Path(override)
+        return DEFAULT_CORE_DIR / f"{core_id}.jsonl"
+
+    def _load_designed_core(self, core_id: str) -> tuple[list[dict], dict[str, Any], Path]:
+        """Load a fixed, designed T1 core.
+
+        JSONL rows may be full question records or id-only references into the
+        question pool. The metadata row is optional:
+        {"__core_metadata__": true, "core_id": "core_v2", ...}
+        """
+        path = self._core_path(core_id)
+        cache_key = f"{core_id}\0{path}"
+        if cache_key in self._core_cache:
+            return self._core_cache[cache_key]
+        if not path.exists():
+            raise FileNotFoundError(f"T1 core file not found: {path}")
+
+        items: list[tuple[str, dict[str, Any] | str]] = []
+        metadata: dict[str, Any] = {}
+        with open(path) as handle:
+            for line_no, line in enumerate(handle, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"{path}:{line_no}: invalid JSONL row") from exc
+                if not isinstance(obj, dict):
+                    raise ValueError(f"{path}:{line_no}: core row must be a JSON object")
+                if obj.get(_CORE_METADATA_KEY):
+                    metadata = obj
+                    continue
+                if obj.get("prompt") and obj.get("suite"):
+                    items.append(("question", obj))
+                    continue
+                qid = obj.get("id") or obj.get("question_id")
+                if qid:
+                    items.append(("id", str(qid)))
+                    continue
+                raise ValueError(
+                    f"{path}:{line_no}: core row must be metadata, a full question, or an id reference"
+                )
+
+        if not items:
+            raise ValueError(f"{path}: designed core contains no questions")
+
+        lookup: dict[str, dict[str, Any]] = {}
+        if any(kind == "id" for kind, _ in items):
+            pool = self._load_pool()
+            if not pool:
+                raise ValueError(f"{path}: question pool unavailable for id references")
+            for suite_qs in pool.values():
+                for question in suite_qs:
+                    qid = str(question.get("id", "")).strip()
+                    if not qid:
+                        continue
+                    lookup.setdefault(qid, question)
+                    suite = str(question.get("suite", "")).strip()
+                    if suite:
+                        lookup.setdefault(f"{suite}/{qid}", question)
+
+        questions: list[dict] = []
+        missing_ids: list[str] = []
+        for kind, value in items:
+            if kind == "question":
+                questions.append(value)
+                continue
+            qid = str(value)
+            bare_id = qid.split("/", 1)[1] if "/" in qid else qid
+            question = lookup.get(qid) or lookup.get(bare_id)
+            if question is None:
+                missing_ids.append(qid)
+                continue
+            questions.append(question)
+
+        if missing_ids:
+            raise ValueError(
+                f"{path}: {len(missing_ids)} core question id(s) not found: {missing_ids[:5]}"
+            )
+
+        unscoreable = [q.get("id", "") for q in questions if not _is_scoreable_question(q)]
+        if unscoreable:
+            raise ValueError(
+                f"{path}: designed core contains {len(unscoreable)} unscoreable item(s): "
+                f"{unscoreable[:5]}"
+            )
+
+        core_meta_id = str(metadata.get("core_id", core_id))
+        if core_meta_id != core_id:
+            raise ValueError(
+                f"{path}: metadata core_id={core_meta_id!r} does not match requested {core_id!r}"
+            )
+
+        loaded = (questions, metadata, path)
+        self._core_cache[cache_key] = loaded
+        return loaded
 
     # ── single question evaluation ───────────────────────────────
 
@@ -874,22 +980,82 @@ class EvalTower:
 
     def eval_t1(self, n: int = 100, seed: int = 42) -> EvalResult:
         """Tier 1: 100 stratified questions from benchmark pool, ~5min."""
-        pool = self._load_pool()
-        if not pool:
-            log.error("No question pool available for T1")
-            return EvalResult(tier=1, quality=0, speed=0, cost=0, reliability=0)
+        configured_core_id = os.environ.get("AUTOPILOT_T1_CORE_ID", "").strip()
+        configured_core_path = os.environ.get("AUTOPILOT_T1_CORE_PATH", "").strip()
+        core_metadata: dict[str, Any] = {}
+        core_path = ""
+        core_selection = "legacy_pool_seed"
 
-        rng = random.Random(seed)
-        questions = _sample_scoreable_eval_questions(pool, n, rng)
+        if configured_core_path and not configured_core_id:
+            error = "AUTOPILOT_T1_CORE_PATH requires AUTOPILOT_T1_CORE_ID"
+            log.error("T1 designed core misconfigured: %s", error)
+            return EvalResult(
+                tier=1,
+                quality=0,
+                speed=0,
+                cost=0,
+                reliability=0,
+                details={
+                    "core_selection": "designed_core",
+                    "core_path": configured_core_path,
+                    "core_error": error,
+                },
+            )
+
+        if configured_core_id:
+            core_path = str(self._core_path(configured_core_id))
+            try:
+                questions, core_metadata, core_file = self._load_designed_core(configured_core_id)
+                core_path = str(core_file)
+                core_selection = "designed_core"
+            except Exception as exc:  # noqa: BLE001
+                log.error("T1 designed core load failed: %s", exc)
+                return EvalResult(
+                    tier=1,
+                    quality=0,
+                    speed=0,
+                    cost=0,
+                    reliability=0,
+                    core_id=configured_core_id,
+                    details={
+                        "core_id": configured_core_id,
+                        "core_selection": "designed_core",
+                        "core_path": core_path,
+                        "core_error": str(exc),
+                    },
+                )
+            core_id = configured_core_id
+        else:
+            pool = self._load_pool()
+            if not pool:
+                log.error("No question pool available for T1")
+                return EvalResult(tier=1, quality=0, speed=0, cost=0, reliability=0)
+            rng = random.Random(seed)
+            questions = _sample_scoreable_eval_questions(pool, n, rng)
+            core_id = f"legacy_pool_seed_{seed}_n{n}"
+
         # Tool-use sentinels join the JOURNALED eval (T1) so get_eval_secret /
         # tool_helpfulness telemetry reaches the trial record + planner. Inert
         # ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
+        base_core_questions = len(questions)
         questions = questions + self._load_tool_sentinels()
 
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=10, label="T1")
 
-        return self._aggregate(results, tier=1)
+        result = self._aggregate(results, tier=1)
+        result.core_id = core_id
+        result.details.update(
+            {
+                "core_id": core_id,
+                "core_selection": core_selection,
+                "core_path": core_path,
+                "core_metadata": core_metadata,
+                "requested_n": n,
+                "base_core_questions": base_core_questions,
+            }
+        )
+        return result
 
     def eval_t2(self, n: int = 500, seed: int = 42) -> EvalResult:
         """Tier 2: 500+ full benchmark, ~30min."""

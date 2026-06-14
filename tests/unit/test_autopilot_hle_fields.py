@@ -21,6 +21,7 @@ def test_eval_result_carries_hle_observe_only_fields() -> None:
         speed=20.0,
         cost=0.2,
         reliability=0.95,
+        core_id="core_v2",
         metric_schema_version=1,
         harness_metrics={
             "execution_fidelity": {
@@ -39,8 +40,22 @@ def test_eval_result_carries_hle_observe_only_fields() -> None:
     )
 
     assert result.metric_schema_version == 1
+    assert result.core_id == "core_v2"
     assert result.harness_metrics["execution_fidelity"]["score"] == 0.8
     assert result.oracle_adequacy["sentinel_python"]["deterministic"] is True
+
+
+def test_eval_result_grep_lines_emit_core_id() -> None:
+    result = EvalResult(
+        tier=1,
+        quality=0.75,
+        speed=20.0,
+        cost=0.2,
+        reliability=0.95,
+        core_id="core_v2",
+    )
+
+    assert "METRIC core_id: core_v2" in result.to_grep_lines()
 
 
 def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
