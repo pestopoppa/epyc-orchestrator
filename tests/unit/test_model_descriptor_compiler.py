@@ -76,6 +76,8 @@ def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
                         "architecture": "qwen35moe",
                         "size_gb": 37,
                         "ctx_max": 131072,
+                        "n_layer": 64,
+                        "attention_layers": 16,
                     },
                     "performance": {"quality_pct": 93, "baseline_tps": 24.3},
                     "acceleration": {"type": "none", "lookup": False},
@@ -128,6 +130,11 @@ def test_compile_merges_same_model_roles(tmp_path: Path) -> None:
     assert model["quality"]["suite_vector"]["overall"] == 0.93
     assert model["quality"]["suite_vector"]["coder"] == 0.9667
     assert model["quality"]["suite_vector"]["long_context"] == 1.0
+    assert model["architecture"] == {
+        "n_layers": 64,
+        "attention_layers": 16,
+        "source": "registry.model",
+    }
     assert not any("server" in gap or "port" in gap for gap in model["known_gaps"])
 
 

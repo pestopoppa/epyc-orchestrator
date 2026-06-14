@@ -86,6 +86,19 @@ def _as_float(value: Any) -> float | None:
     return None
 
 
+def _as_positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            parsed = int(stripped)
+            return parsed if parsed > 0 else None
+    return None
+
+
 def _score_fraction(value: Any) -> float | None:
     if value is None:
         return None
@@ -546,6 +559,24 @@ def _first_context_value(
     return None
 
 
+def _model_architecture_metadata(model: dict[str, Any]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    for source_key, target_key in (
+        ("n_layers", "n_layers"),
+        ("n_layer", "n_layers"),
+        ("num_hidden_layers", "n_layers"),
+        ("block_count", "n_layers"),
+        ("attention_layers", "attention_layers"),
+        ("n_attention_layers", "attention_layers"),
+    ):
+        parsed = _as_positive_int(model.get(source_key))
+        if parsed is not None:
+            metadata.setdefault(target_key, parsed)
+    if metadata:
+        metadata["source"] = "registry.model"
+    return metadata
+
+
 def _descriptor_modalities(model: dict[str, Any], role_cfg: dict[str, Any]) -> list[str]:
     modalities = {"text"}
     model_names = " ".join(
@@ -644,6 +675,18 @@ def _merge_descriptor(target: dict[str, Any], incoming: dict[str, Any]) -> None:
     target["quality"]["measured"].extend(incoming["quality"]["measured"])
     if not target["speed"]["measured"]:
         target["speed"] = incoming["speed"]
+    target_architecture = target.get("architecture")
+    incoming_architecture = incoming.get("architecture")
+    if not isinstance(target_architecture, dict) and isinstance(incoming_architecture, dict):
+        target["architecture"] = dict(incoming_architecture)
+    elif isinstance(target_architecture, dict) and isinstance(incoming_architecture, dict):
+        target_architecture.update(
+            {
+                key: value
+                for key, value in incoming_architecture.items()
+                if value is not None and key not in target_architecture
+            }
+        )
     for key in ("ports",):
         target["serving"][key] = sorted(
             set(target["serving"].get(key) or []) | set(incoming["serving"].get(key) or [])
@@ -712,6 +755,7 @@ def _descriptor_for_role(
                 "Role-server conflict: role model metadata does not match the shared runtime server model"
             )
 
+    architecture = _model_architecture_metadata(model)
     descriptor = {
         "model_id": model_id,
         "display_name": str(model.get("name") or model_name),
@@ -735,6 +779,8 @@ def _descriptor_for_role(
         "serving": _serving(role_cfg, server_role, server_cfg),
         "known_gaps": known_gaps,
     }
+    if architecture:
+        descriptor["architecture"] = architecture
     descriptor["known_gaps"].extend(_descriptor_gaps(descriptor))
     return descriptor
 

@@ -9,6 +9,7 @@ from scripts.autopilot.kv_compress import (
     production_ports,
     production_ports_from_stack_priors,
     _layer_count_for_role,
+    _stack_prior_layer_count_for_role,
 )
 
 LEGACY_ARCHITECT_ROLE = "architect" "_coding"
@@ -87,6 +88,39 @@ class TestComputeLayerAdaptiveWeights:
         assert LEGACY_ARCHITECT_ROLE not in MODEL_LAYER_COUNTS
         assert LEGACY_ARCHITECT_ROLE not in MODEL_LAYER_COUNT_ALIASES
         assert _layer_count_for_role(LEGACY_ARCHITECT_ROLE) is None
+
+    def test_layer_count_prefers_stack_prior_metadata(self, tmp_path):
+        """Stack priors are the canonical path for live model architecture metadata."""
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    model:
+      n_layers: 64
+      attention_layers: 16
+""".lstrip(),
+            encoding="utf-8",
+        )
+
+        assert _stack_prior_layer_count_for_role("frontdoor", priors) == 16
+        assert _layer_count_for_role("frontdoor", priors) == 16
+
+    def test_layer_count_falls_back_when_stack_prior_metadata_missing(self, tmp_path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    model: {}
+""".lstrip(),
+            encoding="utf-8",
+        )
+
+        assert _stack_prior_layer_count_for_role("frontdoor", priors) is None
+        assert _layer_count_for_role("frontdoor", priors) == MODEL_LAYER_COUNTS["frontdoor"]
 
     def test_production_ports_use_live_role_names(self):
         assert "coder" not in PRODUCTION_PORTS

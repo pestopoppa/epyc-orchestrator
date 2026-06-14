@@ -117,6 +117,7 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
                     "quant": "Q8_0",
                     "mem_gb": 37,
                     "ctx_max": 131072,
+                    "architecture": {"n_layers": 64, "attention_layers": 16},
                     "modalities": ["text"],
                     "role_bindings": {
                         "roles": ["frontdoor", "coder_escalation"],
@@ -159,6 +160,8 @@ def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path
     assert validate_stack_priors_contract(priors) == []
     assert frontdoor["priors"]["memory_cost"] == 1.0
     assert frontdoor["evidence"]["precedence"]["memory_cost"] == "server_mode.tier"
+    assert frontdoor["model"]["n_layers"] == 64
+    assert frontdoor["model"]["attention_layers"] == 16
     frontdoor_runtime = frontdoor["serving"]["launch"]["runtime"]
     assert frontdoor_runtime["binary_family"] == "llama.cpp"
     assert frontdoor_runtime["cache"]["slots"] == 1

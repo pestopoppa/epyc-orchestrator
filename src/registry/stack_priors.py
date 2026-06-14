@@ -948,6 +948,21 @@ def _role_record(
         gaps.append("Missing overall quality prior")
     if server_cfg is None:
         gaps.append("Missing live server binding")
+    architecture = descriptor.get("architecture")
+    architecture = architecture if isinstance(architecture, dict) else {}
+    model_record = {
+        "family": descriptor.get("family"),
+        "arch": descriptor.get("arch"),
+        "params_b": descriptor.get("params_b"),
+        "active_b": descriptor.get("active_b"),
+        "quant": descriptor.get("quant"),
+        "mem_gb": descriptor.get("mem_gb"),
+        "ctx_max": descriptor.get("ctx_max"),
+        "modalities": copy.deepcopy(descriptor.get("modalities") or []),
+    }
+    for key in ("n_layers", "attention_layers"):
+        if architecture.get(key) is not None:
+            model_record[key] = architecture[key]
 
     return {
         "role": role,
@@ -972,16 +987,7 @@ def _role_record(
             "memory_cost": memory_cost,
         },
         "acceleration": copy.deepcopy(descriptor.get("acceleration") or {}),
-        "model": {
-            "family": descriptor.get("family"),
-            "arch": descriptor.get("arch"),
-            "params_b": descriptor.get("params_b"),
-            "active_b": descriptor.get("active_b"),
-            "quant": descriptor.get("quant"),
-            "mem_gb": descriptor.get("mem_gb"),
-            "ctx_max": descriptor.get("ctx_max"),
-            "modalities": copy.deepcopy(descriptor.get("modalities") or []),
-        },
+        "model": model_record,
         "evidence": {
             "precedence": {
                 "serving": "server_mode/stack_manifest outrank roles metadata",

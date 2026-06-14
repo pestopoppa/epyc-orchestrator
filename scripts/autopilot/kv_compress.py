@@ -337,8 +337,44 @@ MODEL_LAYER_COUNT_ALIASES = {
 }
 
 
-def _layer_count_for_role(role: str) -> int | None:
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _stack_prior_layer_count_for_role(
+    role: str,
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> int | None:
+    record = live_stack_role_records(stack_priors_path).get(role)
+    if not isinstance(record, dict):
+        return None
+    model = record.get("model")
+    if not isinstance(model, dict):
+        return None
+    for key in ("attention_layers", "n_layers"):
+        parsed = _positive_int(model.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _fallback_layer_count_for_role(role: str) -> int | None:
     return MODEL_LAYER_COUNTS.get(MODEL_LAYER_COUNT_ALIASES.get(role, role))
+
+
+def _layer_count_for_role(
+    role: str,
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> int | None:
+    stack_prior_count = _stack_prior_layer_count_for_role(role, stack_priors_path)
+    return stack_prior_count or _fallback_layer_count_for_role(role)
 
 
 def compress_slot_adaptive(
