@@ -28,6 +28,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
+
 try:
     import fcntl
 except Exception:  # pragma: no cover - non-POSIX fallback
@@ -45,8 +49,10 @@ _ENV_STREAM_MODE = "INFERENCE_TAP_STREAM_MODE"
 # rotate transparently creates a new file.
 _ENV_EVENTS_MAX_MB = "INFERENCE_TAP_EVENTS_MAX_MB"
 _ENV_EVENTS_KEEP = "INFERENCE_TAP_EVENTS_KEEP"
+_ENV_SAFE_NON_STREAM_MIN_MEM_GB = "INFERENCE_TAP_SAFE_NON_STREAM_MIN_MEM_GB"
 _DEFAULT_EVENTS_MAX_MB = 512
 _DEFAULT_EVENTS_KEEP = 3
+_DEFAULT_SAFE_NON_STREAM_MIN_MEM_GB = 64.0
 
 # Sentinel file written by the TUI so that API workers (separate processes)
 # can discover the tap path without needing the env var.
@@ -79,10 +85,60 @@ _TOPOLOGY_HASH_CACHE: str | None = None
 # so 5-second staleness is fine and avoids per-request I/O.
 _sentinel_cache: tuple[str, float] = ("", 0.0)
 
-# Roles that have shown the strongest contention/timeout behavior under
-# long-held locks. In "safe" tap mode these stay on non-stream inference.
-_HEAVY_STREAM_ROLES: frozenset[str] = frozenset(
-    {"architect_general"}
+# Fallback only: normally safe-mode non-stream roles come from stack-prior
+# model.mem_gb so stack changes do not require editing this module.
+_LEGACY_SAFE_NON_STREAM_ROLES: frozenset[str] = frozenset({"architect_general"})
+
+
+def _safe_non_stream_min_mem_gb() -> float:
+    raw = os.environ.get(
+        _ENV_SAFE_NON_STREAM_MIN_MEM_GB,
+        str(_DEFAULT_SAFE_NON_STREAM_MIN_MEM_GB),
+    )
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _DEFAULT_SAFE_NON_STREAM_MIN_MEM_GB
+
+
+def _safe_non_stream_roles_from_stack_priors(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> frozenset[str] | None:
+    """Derive tap safe-mode non-stream roles from generated stack-prior memory."""
+    try:
+        data = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    roles = data.get("roles")
+    if not isinstance(roles, dict):
+        return None
+
+    min_mem_gb = _safe_non_stream_min_mem_gb()
+    derived: set[str] = set()
+    saw_live_memory = False
+    for role, record in roles.items():
+        if not isinstance(role, str):
+            continue
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        model = record.get("model")
+        mem_gb = model.get("mem_gb") if isinstance(model, dict) else None
+        if not isinstance(mem_gb, int | float):
+            continue
+        saw_live_memory = True
+        if float(mem_gb) >= min_mem_gb:
+            derived.add(role)
+
+    if not saw_live_memory:
+        return None
+    return frozenset(derived)
+
+
+_DERIVED_SAFE_NON_STREAM_ROLES = _safe_non_stream_roles_from_stack_priors()
+SAFE_NON_STREAM_ROLES: frozenset[str] = (
+    _LEGACY_SAFE_NON_STREAM_ROLES
+    if _DERIVED_SAFE_NON_STREAM_ROLES is None
+    else _DERIVED_SAFE_NON_STREAM_ROLES
 )
 
 
@@ -146,7 +202,7 @@ def should_stream_role(role: str) -> bool:
         return False
     if mode == "force":
         return True
-    return role not in _HEAVY_STREAM_ROLES
+    return role not in SAFE_NON_STREAM_ROLES
 
 
 def _topology_hash() -> str:

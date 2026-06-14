@@ -5,6 +5,8 @@ import json
 import threading
 from unittest.mock import MagicMock
 
+import yaml
+
 from src.inference_tap import (
     TapWriter,
     _NullWriter,
@@ -56,6 +58,51 @@ class TestStreamPolicy:
         assert should_stream_role("architect_general") is False
         assert should_stream_role("vision_escalation") is True
         assert should_stream_role("ingest_long_context") is True
+
+    def test_safe_non_stream_roles_derive_from_stack_priors(self, tmp_path, monkeypatch):
+        import src.runtime.inference_tap as tap
+
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            yaml.safe_dump(
+                {
+                    "roles": {
+                        "architect_general": {
+                            "deployment_status": "live_stack",
+                            "model": {"mem_gb": 69.0},
+                        },
+                        "frontdoor": {
+                            "deployment_status": "live_stack",
+                            "model": {"mem_gb": 37.0},
+                        },
+                        "candidate_large": {
+                            "deployment_status": "benchmark_or_candidate",
+                            "model": {"mem_gb": 120.0},
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("INFERENCE_TAP_SAFE_NON_STREAM_MIN_MEM_GB", raising=False)
+
+        assert tap._safe_non_stream_roles_from_stack_priors(priors) == frozenset(
+            {"architect_general"}
+        )
+
+    def test_safe_non_stream_roles_fallback_when_priors_missing(self, tmp_path):
+        import src.runtime.inference_tap as tap
+
+        assert tap._safe_non_stream_roles_from_stack_priors(tmp_path / "missing.yaml") is None
+
+    def test_should_stream_role_safe_mode_uses_derived_policy(self, monkeypatch):
+        import src.runtime.inference_tap as tap
+
+        monkeypatch.setenv("INFERENCE_TAP_STREAM_MODE", "safe")
+        monkeypatch.setattr(tap, "SAFE_NON_STREAM_ROLES", frozenset({"huge_role"}))
+
+        assert should_stream_role("huge_role") is False
+        assert should_stream_role("architect_general") is True
 
     def test_should_stream_role_force_mode(self, monkeypatch):
         monkeypatch.setenv("INFERENCE_TAP_STREAM_MODE", "force")
