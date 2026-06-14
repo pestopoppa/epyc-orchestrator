@@ -14,6 +14,7 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 from experiment_journal import (
     BASELINE_PROMOTION_EVENT_TYPE,
     ExperimentJournal,
+    JOURNAL_SNAPSHOT_EVENT_TYPE,
     JournalEntry,
 )
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
@@ -116,6 +117,40 @@ def test_baseline_promotion_event_does_not_affect_archive_reconstruction(
         "target_trial_ids": [],
         "field_names": [],
     }
+
+
+def test_journal_snapshot_event_round_trips_without_counting_as_trial(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(9))
+    snapshot = {
+        "archive": {"frontier": [9]},
+        "baseline": {"baselines_by_tier": {"1": 1.8}},
+    }
+
+    event = journal.append_journal_snapshot_event(
+        through_trial_id=9,
+        snapshot=snapshot,
+        policy_version="unit-policy-v1",
+        actor="unit-test",
+        parent_snapshot_hash="parent-hash",
+    )
+
+    assert event["type"] == JOURNAL_SNAPSHOT_EVENT_TYPE
+    assert event["through_trial_id"] == 9
+    assert event["snapshot"] == snapshot
+    assert event["parent_snapshot_hash"] == "parent-hash"
+    assert len(event["snapshot_hash"]) == 64
+    assert journal.count() == 1
+    assert journal.next_trial_id() == 10
+
+    reloaded = ExperimentJournal(journal_dir=tmp_path)
+    assert reloaded.count() == 1
+    assert reloaded.next_trial_id() == 10
+    assert reloaded.journal_snapshot_events() == [event]
+    assert reloaded.latest_journal_snapshot_event() == event
+    assert reloaded.supersession_events() == []
 
 
 def test_matching_trial_ids_does_not_mutate_entries(tmp_path: Path) -> None:

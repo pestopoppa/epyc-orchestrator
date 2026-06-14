@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import copy
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass, field, replace
@@ -90,6 +91,7 @@ TSV_COLUMNS = [
 
 SUPERSESSION_EVENT_TYPE = "supersession"
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
+JOURNAL_SNAPSHOT_EVENT_TYPE = "journal_snapshot"
 
 
 def has_legacy_scale_failure_analysis(text: str) -> bool:
@@ -233,6 +235,39 @@ class BaselinePromotionEvent:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     type: str = BASELINE_PROMOTION_EVENT_TYPE
+
+
+@dataclass
+class JournalSnapshotEvent:
+    """Append-only segment snapshot for bounded journal replay."""
+
+    through_trial_id: int
+    snapshot: dict[str, Any]
+    policy_version: str
+    actor: str
+    parent_snapshot_hash: str = ""
+    snapshot_hash: str = ""
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    type: str = JOURNAL_SNAPSHOT_EVENT_TYPE
+
+
+def _snapshot_hash(
+    *,
+    through_trial_id: int,
+    snapshot: dict[str, Any],
+    policy_version: str,
+    parent_snapshot_hash: str = "",
+) -> str:
+    payload = {
+        "through_trial_id": int(through_trial_id),
+        "snapshot": snapshot,
+        "policy_version": policy_version,
+        "parent_snapshot_hash": parent_snapshot_hash,
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 class ExperimentJournal:
@@ -416,6 +451,33 @@ class ExperimentJournal:
             )
         ))
 
+    def append_journal_snapshot_event(
+        self,
+        *,
+        through_trial_id: int,
+        snapshot: dict[str, Any],
+        policy_version: str,
+        actor: str,
+        parent_snapshot_hash: str = "",
+    ) -> dict[str, Any]:
+        """Append a segment snapshot row without changing replay authority."""
+        snapshot_hash = _snapshot_hash(
+            through_trial_id=through_trial_id,
+            snapshot=snapshot,
+            policy_version=policy_version,
+            parent_snapshot_hash=parent_snapshot_hash,
+        )
+        return self.append_ledger_event(asdict(
+            JournalSnapshotEvent(
+                through_trial_id=int(through_trial_id),
+                snapshot=copy.deepcopy(snapshot),
+                policy_version=policy_version,
+                actor=actor,
+                parent_snapshot_hash=parent_snapshot_hash,
+                snapshot_hash=snapshot_hash,
+            )
+        ))
+
     # ── queries ──────────────────────────────────────────────────
 
     def recent(self, n: int = 20) -> list[JournalEntry]:
@@ -446,6 +508,15 @@ class ExperimentJournal:
     def baseline_promotion_events(self) -> list[dict[str, Any]]:
         """Return loaded append-only baseline promotion event rows."""
         return self.ledger_events(BASELINE_PROMOTION_EVENT_TYPE)
+
+    def journal_snapshot_events(self) -> list[dict[str, Any]]:
+        """Return loaded append-only journal snapshot event rows."""
+        return self.ledger_events(JOURNAL_SNAPSHOT_EVENT_TYPE)
+
+    def latest_journal_snapshot_event(self) -> dict[str, Any] | None:
+        """Return the newest snapshot event by ledger order, if any."""
+        events = self.journal_snapshot_events()
+        return events[-1] if events else None
 
     def _supersession_overrides_by_trial(self) -> dict[int, dict[str, Any]]:
         entry_fields = set(JournalEntry.__dataclass_fields__)
