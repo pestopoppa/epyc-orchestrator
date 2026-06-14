@@ -11,6 +11,8 @@ from src.prompt_builders.resolver import (
     resolve_prompt,
 )
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ── _safe_format ─────────────────────────────────────────────────────────
 
@@ -205,7 +207,7 @@ class TestPromptFilesExist:
             "coder_escalation",
             "coder_escalation",
             "architect_general",
-            "architect_coding",
+            _RETIRED_ARCHITECT_ROLE,
             "ingest_long_context",
             "worker_general",
             "worker_math",

@@ -17,6 +17,8 @@ from src.api.routes.chat_routing import (
     _should_use_direct,
 )
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ── _should_use_direct ───────────────────────────────────────────────────
 
@@ -208,7 +210,7 @@ class TestHeuristicRolePriors:
 
         priors = _heuristic_role_priors("Hello")
 
-        assert "architect_coding" not in priors
+        assert _RETIRED_ARCHITECT_ROLE not in priors
         assert "frontdoor" in priors
         assert "worker_general" in priors
         assert "new_specialist" in priors

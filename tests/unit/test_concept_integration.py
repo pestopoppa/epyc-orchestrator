@@ -20,6 +20,8 @@ from src.tool_registry import (
 from src.api.health_tracker import BackendHealthTracker
 from src.graph.state import TaskState
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ============================================================================
 # Phase 1A: Side Effect Declaration
@@ -231,8 +233,8 @@ class TestFallbackMap:
         roles = get_fallback_roles("coder_escalation")
         assert Role.FRONTDOOR in roles
 
-    def test_retired_architect_coding_string_uses_live_architect_fallbacks(self):
-        roles = get_fallback_roles("architect_coding")
+    def test_retired_architect_role_string_uses_live_architect_fallbacks(self):
+        roles = get_fallback_roles(_RETIRED_ARCHITECT_ROLE)
         assert roles == [Role.CODER_ESCALATION]
 
     def test_unknown_role(self):

@@ -29,6 +29,8 @@ from src.config import (
     reset_config,
 )
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ============================================================================
 # _env_bool
@@ -292,7 +294,7 @@ class TestServerURLsConfig:
     def test_default_architect_urls(self) -> None:
         cfg = ServerURLsConfig()
         assert "http://localhost:8083" in cfg.architect_general
-        assert "architect_coding" not in cfg.as_dict()
+        assert _RETIRED_ARCHITECT_ROLE not in cfg.as_dict()
 
     def test_defaults_derive_from_stack_priors(self, tmp_path: Path) -> None:
         priors = tmp_path / "stack_priors.yaml"

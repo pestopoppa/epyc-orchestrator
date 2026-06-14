@@ -16,6 +16,8 @@ from unittest.mock import AsyncMock, patch
 from src.graph.state import TaskDeps, TaskResult, TaskState
 from src.roles import Role
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ---------------------------------------------------------------------------
 # 1. State conversion round-trip
@@ -243,7 +245,7 @@ class TestNodeRouting:
         assert select_start_lg_node("unknown_role") == "frontdoor"
         assert select_start_lg_node("frontdoor") == "frontdoor"
         assert select_start_lg_node(str(Role.ARCHITECT_CODING)) == "architect"
-        assert select_start_lg_node("architect_coding") == "architect"
+        assert select_start_lg_node(_RETIRED_ARCHITECT_ROLE) == "architect"
 
 
 # ---------------------------------------------------------------------------

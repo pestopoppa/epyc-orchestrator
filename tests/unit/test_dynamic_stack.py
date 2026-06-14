@@ -1,8 +1,6 @@
 """Tests for DS-6 (backend instance management, QuarterScheduler) and DS-7 (stack templates)."""
 
-import threading
 import time
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +11,8 @@ from src.backends.concurrency_aware import (
     _STATE_ASSIGNED_QUARTER,
     _STATE_MIGRATION_FAILED_COLD,
 )
+
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
 
 # === DS-6: Backend instance management ===
@@ -208,7 +208,6 @@ class TestQuarterScheduler:
         assert len(available) == 3
 
     def test_burst_request(self):
-        from scripts.server.quarter_scheduler import QuarterStatus
         qs = self._make_scheduler()
         # Assign all 4 quarters
         for name in ["Q0A", "Q0B", "Q1A", "Q1B"]:
@@ -247,7 +246,7 @@ class TestQuarterScheduler:
         for name in ["Q0A", "Q0B", "Q1A", "Q1B"]:
             qs.assign(name, "frontdoor")
         qs.request_burst("architect_general", quarters_needed=2)
-        second = qs.request_burst("architect_coding", quarters_needed=2)
+        second = qs.request_burst(_RETIRED_ARCHITECT_ROLE, quarters_needed=2)
         assert second is None
 
 

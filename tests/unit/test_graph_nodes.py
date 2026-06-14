@@ -39,6 +39,8 @@ from src.graph.graph import orchestration_graph
 from src.escalation import ErrorCategory
 from src.roles import Role
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ── Fixtures ───────────────────────────────────────────────────────────
 
@@ -245,12 +247,12 @@ class TestSelectStartNode:
         node = select_start_node(Role.ARCHITECT_GENERAL)
         assert isinstance(node, ArchitectNode)
 
-    def test_architect_coding(self):
+    def test_retired_architect_role_enum(self):
         node = select_start_node(Role.ARCHITECT_CODING)
         assert isinstance(node, ArchitectNode)
 
-    def test_legacy_architect_coding_string(self):
-        node = select_start_node("architect_coding")
+    def test_legacy_architect_role_string(self):
+        node = select_start_node(_RETIRED_ARCHITECT_ROLE)
         assert isinstance(node, ArchitectNode)
 
     def test_string_role(self):

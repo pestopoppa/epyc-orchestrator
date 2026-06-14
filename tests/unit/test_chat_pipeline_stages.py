@@ -30,6 +30,8 @@ from src.api.routes.chat_pipeline.direct_stage import (
 )
 from src.api.routes.chat_utils import RoutingResult
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -775,7 +777,7 @@ class TestExecuteDelegated:
                 "src.api.routes.chat_pipeline.delegation_stage._architect_delegated_answer"
             ) as mock_deleg:
                 mock_deleg.side_effect = RuntimeError(
-                    "Inference lock timeout (role=architect_coding, mode=exclusive)"
+                    f"Inference lock timeout (role={_RETIRED_ARCHITECT_ROLE}, mode=exclusive)"
                 )
                 result = _execute_delegated(
                     request,

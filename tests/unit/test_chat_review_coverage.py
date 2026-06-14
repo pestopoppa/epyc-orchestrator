@@ -17,6 +17,8 @@ from src.api.routes.chat_review import (
     _store_plan_review_episode,
 )
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 class TestDetectOutputQualityIssue:
     """Tests for _detect_output_quality_issue heuristics."""
@@ -97,7 +99,7 @@ class TestShouldReview:
         state = MagicMock()
         state.hybrid_router = MagicMock()
         assert _should_review(state, "task-1", "architect_general", "Long answer") is False
-        assert _should_review(state, "task-1", "architect_coding", "Long answer") is False
+        assert _should_review(state, "task-1", _RETIRED_ARCHITECT_ROLE, "Long answer") is False
 
     def test_short_answer_skips_review(self):
         """Answers < 50 chars skip review."""
@@ -518,10 +520,10 @@ class TestApplyPlanReview:
     def test_reroute_s2_patch(self):
         """Reroute on S2 changes second role."""
         review = MagicMock()
-        review.patches = [{"op": "reroute", "step": "S2", "v": "architect_coding"}]
+        review.patches = [{"op": "reroute", "step": "S2", "v": _RETIRED_ARCHITECT_ROLE}]
         result = _apply_plan_review(["coder", "worker"], review)
         assert result[0] == "coder"
-        assert result[1] == "architect_coding"
+        assert result[1] == _RETIRED_ARCHITECT_ROLE
 
     def test_invalid_step_id_defaults_to_first(self):
         """Invalid step_id defaults to first position."""

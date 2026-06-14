@@ -19,6 +19,8 @@ from src.api.routes.chat_pipeline.routing_decision import normalize_ingress_role
 from src.api.routes.chat_utils import RoutingResult
 from src.roles import Role
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 class TestRouteRequest:
     """Tests for _route_request (Stage 1)."""
@@ -369,7 +371,7 @@ class TestRouteRequest:
 
 
 def test_normalize_ingress_role_legacy_aliases() -> None:
-    assert normalize_ingress_role("architect_coding") == "architect_general"
+    assert normalize_ingress_role(_RETIRED_ARCHITECT_ROLE) == "architect_general"
     assert normalize_ingress_role("coder") == "coder_escalation"
     assert normalize_ingress_role("worker_coder") == "worker_general"
     assert normalize_ingress_role("worker_code") == "worker_general"

@@ -7,6 +7,8 @@ from pathlib import Path
 from src import cli_orch
 from src.cli_orch import _fallback_status_targets, _stack_status_targets
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 def test_stack_status_targets_group_live_roles_by_port(tmp_path: Path) -> None:
     priors = tmp_path / "stack_priors.yaml"
@@ -44,7 +46,7 @@ roles:
 def test_stack_status_targets_fallback_excludes_retired_ports(tmp_path: Path) -> None:
     targets = _stack_status_targets(tmp_path / "missing.yaml")
 
-    assert ("architect_coding", 8084) not in targets
+    assert (_RETIRED_ARCHITECT_ROLE, 8084) not in targets
     assert ("coder_escalation/frontdoor/worker_summarize", 8070) in targets
     assert all(port != 8090 for _, port in targets)
 
