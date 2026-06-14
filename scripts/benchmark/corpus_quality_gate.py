@@ -44,13 +44,10 @@ from src.registry.stack_priors import (
     stack_prior_serving,
     stack_prior_serving_ports,
 )
+from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
-FALLBACK_MODELS = {
-    "frontdoor": {"port": 8070, "name": "Qwen3.6-35B-A3B Q8_0", "role": "frontdoor"},
-    "worker_general": {"port": 8072, "name": "gemma-4-26B-A4B-it Q4_K_M", "role": "worker_general"},
-    "architect_general": {"port": 8083, "name": "Qwen3.5-122B-A10B Q4_K_M", "role": "architect_general"},
-}
+FALLBACK_MODEL_ROLES = ("frontdoor", "worker_general", "architect_general")
 
 
 def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
@@ -76,7 +73,26 @@ def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
     return models
 
 
-MODELS = _load_live_models() or dict(FALLBACK_MODELS)
+def _fallback_models() -> dict[str, dict]:
+    """Return degraded model choices from the manifest, without copied model names."""
+    models: dict[str, dict] = {}
+    for role in FALLBACK_MODEL_ROLES:
+        port = PORT_MAP.get(role)
+        if role not in HOT_ROLES or not isinstance(port, int):
+            continue
+        models[role] = {
+            "port": port,
+            "name": f"{role} (manifest fallback)",
+            "role": role,
+        }
+    return models
+
+
+def _default_model_keys(models: dict[str, dict]) -> list[str]:
+    return [role for role in FALLBACK_MODEL_ROLES if role in models] or list(models.keys())
+
+
+MODELS = _load_live_models() or _fallback_models()
 
 # Code generation prompts — novel tasks where corpus could help or hurt
 PROMPTS = [
@@ -402,7 +418,12 @@ def judge_pair(
 
 def main():
     parser = argparse.ArgumentParser(description="Corpus quality gate")
-    parser.add_argument("--models", nargs="+", default=["7b", "32b"], choices=list(MODELS.keys()))
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=_default_model_keys(MODELS),
+        choices=list(MODELS.keys()),
+    )
     parser.add_argument("--index-path", default="/mnt/raid0/llm/cache/corpus/v3_sharded")
     parser.add_argument("--mode", choices=["speed", "rag"], default="speed",
                         help="speed: silent injection (2A), rag: quality RAG instruction (2B)")
