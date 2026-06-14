@@ -31,6 +31,7 @@ from src.autopilot_core.tier_specs import (  # noqa: E402
 DEFAULT_JOURNAL = REPO / "orchestration" / "autopilot_journal.jsonl"
 DEFAULT_STATE = REPO / "orchestration" / "autopilot_state.json"
 DEFAULT_REPORT_DIR = REPO / "orchestration" / "reports"
+BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
 
 
 def _read_jsonl(path: Path) -> tuple[list[dict[str, Any]], int]:
@@ -231,6 +232,81 @@ def _row_table(
     return lines
 
 
+def _baseline_promotion_events(
+    rows: list[dict[str, Any]],
+    rows_by_tid: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    scoped_trial_ids = set(rows_by_tid)
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("type") != BASELINE_PROMOTION_EVENT_TYPE:
+            continue
+        source_trial_id = _as_int(row.get("source_trial_id"))
+        if source_trial_id is None or source_trial_id not in scoped_trial_ids:
+            continue
+        events.append(row)
+    return sorted(
+        events,
+        key=lambda row: (
+            row.get("timestamp", ""),
+            _as_int(row.get("source_trial_id")) or -1,
+        ),
+    )
+
+
+def _promotion_event_table(
+    events: list[dict[str, Any]],
+    rows_by_tid: dict[int, dict[str, Any]],
+) -> list[str]:
+    lines = ["## Baseline Promotion Evidence", ""]
+    if not events:
+        lines.extend(["None.", ""])
+        return lines
+
+    lines.extend([
+        (
+            "| Source trial | In replay rows | Tier | Previous q | New q | Delta | "
+            "Result q | Result speed | Pareto status | Matrix | Speed mode | Reason |"
+        ),
+        "|---:|---|---:|---:|---:|---:|---:|---:|---|---|---|---|",
+    ])
+    for event in events:
+        source_trial_id = _as_int(event.get("source_trial_id"))
+        previous_quality = _as_float(event.get("previous_quality"))
+        new_quality = _as_float(event.get("new_quality"))
+        quality_delta = (
+            new_quality - previous_quality
+            if new_quality is not None and previous_quality is not None
+            else None
+        )
+        proof = event.get("proof") if isinstance(event.get("proof"), dict) else {}
+        result_metrics = (
+            event.get("result_metrics")
+            if isinstance(event.get("result_metrics"), dict)
+            else {}
+        )
+        lines.append(
+            "| "
+            + " | ".join([
+                str(source_trial_id if source_trial_id is not None else "n/a"),
+                "yes" if source_trial_id in rows_by_tid else "no",
+                str(_as_int(event.get("tier")) or "n/a"),
+                _fmt(previous_quality, 3),
+                _fmt(new_quality, 3),
+                _fmt(quality_delta, 3),
+                _fmt(result_metrics.get("quality"), 3),
+                _fmt(result_metrics.get("speed"), 2),
+                str(result_metrics.get("pareto_status") or "n/a"),
+                str(proof.get("matrix_status") or "n/a"),
+                str(proof.get("speed_metric_mode") or "n/a"),
+                str(event.get("reason") or "n/a").replace("|", "\\|"),
+            ])
+            + " |"
+        )
+    lines.append("")
+    return lines
+
+
 def _write_report(
     path: Path,
     *,
@@ -310,6 +386,12 @@ def _write_report(
             rows_by_tid,
             task_rate_frontier,
             include_dominators=False,
+        )
+    )
+    lines.extend(
+        _promotion_event_table(
+            _baseline_promotion_events(rows, rows_by_tid),
+            rows_by_tid,
         )
     )
     lines.extend([
