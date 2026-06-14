@@ -258,5 +258,5 @@ def rerank_snippets(
 
 
 def is_available() -> bool:
-    """Check if the reranker model is available on disk."""
-    return _MODEL_PATH.exists() and _TOKENIZER_PATH.exists()
+    """Check if the reranker model is loadable, not merely present on disk."""
+    return _ensure_loaded()

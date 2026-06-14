@@ -97,7 +97,13 @@ def test_reason_mxbai_artifact_plan_includes_export_contract():
     assert export_plan["output_names"] == ["token_embeddings"]
     assert export_plan["opset"] == 18
     assert export_plan["dynamic_axes"]["token_embeddings"] == {0: "batch", 1: "sequence"}
-    assert export_plan["required_dependencies"] == ["torch", "onnx", "onnxruntime", "pylate"]
+    assert export_plan["required_dependencies"] == [
+        "torch",
+        "onnx",
+        "onnxscript",
+        "onnxruntime",
+        "pylate",
+    ]
 
 
 def test_wrapper_calls_pylate_with_feature_dict():

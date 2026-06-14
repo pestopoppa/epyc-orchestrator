@@ -296,7 +296,7 @@ def artifact_plan(profile: ModelArtifactProfile, out_dir: Path) -> dict[str, obj
             "input_names": list(contract.input_names),
             "output_names": list(contract.output_names),
             "dynamic_axes": {name: dict(axes) for name, axes in contract.dynamic_axes.items()},
-            "required_dependencies": ["torch", "onnx", "onnxruntime", "pylate"],
+            "required_dependencies": ["torch", "onnx", "onnxscript", "onnxruntime", "pylate"],
         }
 
     return plan
@@ -371,12 +371,14 @@ def _require_reason_mxbai_export_dependencies() -> None:
     """Fail fast when Reason-mxbai export deps are missing."""
     try:
         import onnx  # noqa: F401
+        import onnxscript  # noqa: F401
         import torch  # noqa: F401
         from onnxruntime.quantization import QuantType, quantize_dynamic  # noqa: F401
         from pylate import models  # noqa: F401
     except ImportError as e:
         raise ExportDependencyError(
-            "Reason-mxbai export requires torch, onnx, onnxruntime quantization, and pylate: "
+            "Reason-mxbai export requires torch, onnx, onnxscript, "
+            "onnxruntime quantization, and pylate: "
             f"{e}"
         ) from e
 
