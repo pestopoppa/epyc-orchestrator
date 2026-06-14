@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.cli_orch import _stack_status_targets
+from src.cli_orch import _fallback_status_targets, _stack_status_targets
 
 
 def test_stack_status_targets_group_live_roles_by_port(tmp_path: Path) -> None:
@@ -44,4 +44,13 @@ def test_stack_status_targets_fallback_excludes_retired_ports(tmp_path: Path) ->
     targets = _stack_status_targets(tmp_path / "missing.yaml")
 
     assert ("architect_coding", 8084) not in targets
-    assert ("frontdoor/coder_escalation", 8070) in targets
+    assert ("coder_escalation/frontdoor/worker_summarize", 8070) in targets
+    assert all(port != 8090 for _, port in targets)
+
+
+def test_fallback_status_targets_derive_alias_groups_from_manifest() -> None:
+    targets = _fallback_status_targets()
+
+    assert ("coder_escalation/frontdoor/worker_summarize", 8070) in targets
+    assert ("toolrunner/worker_explore/worker_general/worker_math", 8072) in targets
+    assert all(port != 8090 for _, port in targets)

@@ -23,6 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
 from src.registry.stack_priors import (
     live_stack_role_records,
     stack_prior_endpoint_port,
@@ -40,6 +41,28 @@ FALLBACK_STATUS_TARGETS = [
     ("worker_vision", 8086),
     ("vision_escalation", 8087),
 ]
+FALLBACK_STATUS_EXCLUDED_ROLES = frozenset({"embedder"})
+
+
+def _fallback_status_targets() -> list[tuple[str, int]]:
+    hot_ports = {
+        PORT_MAP[role]
+        for role in HOT_ROLES
+        if role not in FALLBACK_STATUS_EXCLUDED_ROLES
+        and isinstance(PORT_MAP.get(role), int)
+    }
+    names_by_port: dict[int, list[str]] = {}
+    for role, port in sorted(PORT_MAP.items()):
+        if role in FALLBACK_STATUS_EXCLUDED_ROLES:
+            continue
+        if isinstance(port, int) and port in hot_ports:
+            names_by_port.setdefault(port, []).append(role)
+    if not names_by_port:
+        return list(FALLBACK_STATUS_TARGETS)
+    return [
+        ("/".join(sorted(names)), port)
+        for port, names in sorted(names_by_port.items())
+    ]
 
 
 def _stack_status_targets(
@@ -47,7 +70,7 @@ def _stack_status_targets(
 ) -> list[tuple[str, int]]:
     roles = live_stack_role_records(stack_priors_path)
     if not roles:
-        return list(FALLBACK_STATUS_TARGETS)
+        return _fallback_status_targets()
 
     names_by_port: dict[int, list[str]] = {}
     for role, record in roles.items():
@@ -61,7 +84,7 @@ def _stack_status_targets(
         names_by_port.setdefault(port, []).append(role)
 
     if not names_by_port:
-        return list(FALLBACK_STATUS_TARGETS)
+        return _fallback_status_targets()
     return [
         ("/".join(sorted(names)), port)
         for port, names in sorted(names_by_port.items())
