@@ -41,6 +41,22 @@ DEFAULT_CLUSTER_SIM_THRESHOLD = 0.75      # cosine threshold for greedy clusteri
 DEFAULT_PATTERN_SIM_THRESHOLD = 0.70      # looser for cross-species convention pass
 
 
+def _dedupe_ints(values: list[Any]) -> list[int]:
+    """Stable integer de-duplication for source/evidence IDs."""
+    out: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        try:
+            int_value = int(value)
+        except (TypeError, ValueError):
+            continue
+        if int_value in seen:
+            continue
+        seen.add(int_value)
+        out.append(int_value)
+    return out
+
+
 @dataclass
 class DistillationStats:
     """Per-cycle counters for the distillation pass."""
@@ -140,6 +156,7 @@ class KnowledgeDistiller:
                     "description": row["description"],
                     "insight": row["insight"],
                     "source_trial_id": row["source_trial_id"],
+                    "evidence_trial_ids": self.store._evidence_trial_ids_for_row(row),
                     "species": row["species"],
                     "metadata": json.loads(row["metadata_json"] or "{}"),
                     "validity": validity,
@@ -234,6 +251,11 @@ class KnowledgeDistiller:
             # for negative signal post-promotion (see update_validity).
             mean_validity = sum(e["validity"] for e in cluster_entries) / len(cluster_entries)
             source_ids = [e["id"] for e in cluster_entries]
+            evidence_trial_ids = _dedupe_ints([
+                trial_id
+                for entry in cluster_entries
+                for trial_id in entry.get("evidence_trial_ids", [])
+            ])
 
             pattern_id = self.store.store(
                 description=f"[PATTERN] {seed['description']}",
@@ -250,6 +272,7 @@ class KnowledgeDistiller:
                     "compression_ratio": seed_len / max(total_len, 1),
                 },
                 entry_type="pattern",
+                evidence_trial_ids=evidence_trial_ids,
             )
 
             # Quarantine the consolidated raw rows by aggressively bumping
@@ -299,6 +322,11 @@ class KnowledgeDistiller:
             total_sources = sum(
                 int(e["metadata"].get("source_count", 1)) for e in cluster_entries
             )
+            evidence_trial_ids = _dedupe_ints([
+                trial_id
+                for entry in cluster_entries
+                for trial_id in entry.get("evidence_trial_ids", [])
+            ])
 
             if (
                 len(species_set) < MIN_SPECIES_FOR_CONVENTION
@@ -327,6 +355,7 @@ class KnowledgeDistiller:
                     "source_pattern_ids": [e["id"] for e in cluster_entries],
                 },
                 entry_type="convention",
+                evidence_trial_ids=evidence_trial_ids,
             )
             new_ids.append(convention_id)
             consolidated += len(cluster_entries)

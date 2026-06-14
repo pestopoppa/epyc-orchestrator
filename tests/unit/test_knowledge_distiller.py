@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -88,6 +88,7 @@ class TestKnowledgeDistiller:
                 insight=f"alpha tag insight entry {i} with extra explanatory detail",
                 source_trial_id=i,
                 species="prompt_forge",
+                evidence_trial_ids=[100 + i],
             )
         stats = distiller.distill(trial_id=20)
         assert stats.patterns_created == 1
@@ -99,6 +100,12 @@ class TestKnowledgeDistiller:
         types = [r.entry_type for r in results]
         assert "pattern" in types
         assert "raw" not in types
+
+        pattern_row = store._conn.execute(
+            "SELECT * FROM strategies WHERE entry_type = 'pattern'"
+        ).fetchone()
+        assert store._evidence_trial_ids_for_row(pattern_row) == [100, 101, 102, 103]
+        assert store.retrieve("alpha", k=10, excluded_trial_ids={102}) == []
 
     def test_pattern_skipped_when_not_compressible(self, store, distiller):
         # Cluster has one large seed and two tiny entries; the pattern row
@@ -125,11 +132,14 @@ class TestKnowledgeDistiller:
         # → cross-species convention.
         for species in ("prompt_forge", "numeric_swarm", "structural_lab"):
             for i in range(3):
+                source_trial_id = len(species) * 10 + i
                 store.store(
                     description=f"alpha tag long shared description for {species} run {i}",
                     insight=f"alpha tag matching insight describing {species} trial {i}",
                     source_trial_id=i,
                     species=species,
+                    evidence_trial_ids=[source_trial_id],
+                    metadata={"test_source_trial_id": source_trial_id},
                 )
         stats = distiller.distill(trial_id=40)
         assert stats.patterns_created >= 3
@@ -141,6 +151,27 @@ class TestKnowledgeDistiller:
         ).fetchall()
         assert len(rows) >= 1
         assert all(r["species"] == "all" for r in rows)
+
+        convention = store._conn.execute(
+            "SELECT * FROM strategies WHERE entry_type = 'convention' LIMIT 1"
+        ).fetchone()
+        convention_evidence = store._evidence_trial_ids_for_row(convention)
+        source_pattern_ids = json.loads(convention["metadata_json"])["source_pattern_ids"]
+        pattern_rows = store._conn.execute(
+            "SELECT * FROM strategies WHERE id IN (%s)"
+            % ",".join("?" for _ in source_pattern_ids),
+            tuple(source_pattern_ids),
+        ).fetchall()
+        expected_evidence = sorted({
+            trial_id
+            for row in pattern_rows
+            for trial_id in store._evidence_trial_ids_for_row(row)
+        })
+        assert sorted(convention_evidence) == expected_evidence
+
+        excluded_trial = convention_evidence[0]
+        visible = store.retrieve("alpha", k=20, excluded_trial_ids={excluded_trial})
+        assert all(entry.id != convention["id"] for entry in visible)
 
     def test_idempotent(self, store, distiller):
         # Running distill twice must not double-promote.

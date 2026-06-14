@@ -407,6 +407,20 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
             return [
                 SimpleNamespace(trial_id=1, bug_corrupted_by=""),
                 SimpleNamespace(trial_id=2, bug_corrupted_by="resource_contention"),
+                SimpleNamespace(trial_id=3, bug_corrupted_by="", outcome_status="error"),
+                SimpleNamespace(
+                    trial_id=4,
+                    bug_corrupted_by="",
+                    outcome_status="ok",
+                    keep_revert_decision="excluded",
+                ),
+                SimpleNamespace(
+                    trial_id=5,
+                    bug_corrupted_by="",
+                    outcome_status="ok",
+                    keep_revert_decision="",
+                    eval_details={"learning_exclusion": {"by": "mad_noise"}},
+                ),
             ]
 
     class FakeStrategyStore:
@@ -428,7 +442,7 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
         _ctx(journal=FakeJournal(), strategy_store=store, state={}),
     )
 
-    assert store.excluded_trial_ids == {2}
+    assert store.excluded_trial_ids == {2, 3, 4, 5}
 
 
 def test_reset_memories_returns_none_eval() -> None:
