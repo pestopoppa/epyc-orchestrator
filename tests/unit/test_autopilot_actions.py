@@ -59,6 +59,17 @@ def test_dispatcher_unknown_action_type() -> None:
     assert species == "unknown"
 
 
+def test_blacklisted_action_becomes_invalid_skip() -> None:
+    result = autopilot._blacklisted_action_skip(
+        {"type": "seed_batch", "n_questions": 10},
+        "Auto-blacklisted: 3 consecutive failures",
+    )
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert result.reason == "action blacklisted: Auto-blacklisted: 3 consecutive failures"
+    assert result.action_type == "seed_batch"
+
+
 def test_structural_experiment_invalid_flags_returns_skip_outcome() -> None:
     """Invalid flag dependency surfaces the validator reason as a SkipOutcome,
     not a bare None — this is the graph_router-deadlock fix."""

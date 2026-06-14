@@ -219,6 +219,12 @@ MAX_CONSECUTIVE_PASSIVE = int(
 _QUOTA_NUMERIC_SURFACES = ("think_harder", "escalation", "monitor", "memrl_retrieval")
 
 
+def _blacklisted_action_skip(action: dict[str, Any], blocked_reason: str) -> SkipOutcome:
+    """Convert a pre-dispatch blacklist hit into journalable planner feedback."""
+    action_type = str(action.get("type") or "unknown")
+    return SkipOutcome("invalid", f"action blacklisted: {blocked_reason}", action_type)
+
+
 def _enforce_experiment_quota(
     action: dict[str, Any],
     state: dict[str, Any],
@@ -2215,13 +2221,14 @@ def _run_loop_inner(
 
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch
+        pre_dispatch_skip: SkipOutcome | None = None
         blocked_reason = check_blacklist(action, blacklist)
         if blocked_reason:
             log.warning(
-                "Trial %d: action blacklisted (%s), requesting new action",
+                "Trial %d: action blacklisted (%s), recording invalid skip",
                 trial_counter, blocked_reason,
             )
-            action = {"type": "seed_batch", "n_questions": 10}
+            pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
 
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
         phase.set(
@@ -2248,16 +2255,26 @@ def _run_loop_inner(
         #   - finds the trial in the journal (case a) → re-syncs counter
         #   - finds nothing (case b) → writes AUTOPILOT_KILLED placeholder
         # Both cases prevent silent corruption of the planner's view.
-        state["in_flight_trial"] = {
-            "trial_id": trial_counter,
-            "action": action,
-            "started_at": time.time(),
-            "host_pid": os.getpid(),
-            "host_started_at": state.get("autopilot_fleet_started_at"),
-        }
-        save_state(state)
+        if pre_dispatch_skip is None:
+            state["in_flight_trial"] = {
+                "trial_id": trial_counter,
+                "action": action,
+                "started_at": time.time(),
+                "host_pid": os.getpid(),
+                "host_started_at": state.get("autopilot_fleet_started_at"),
+            }
+            save_state(state)
 
-        if dry_run:
+        if pre_dispatch_skip is not None:
+            phase.set(
+                "dispatch_precheck_skip",
+                trial_id=trial_counter,
+                action_type=pre_dispatch_skip.action_type,
+                skip_status=pre_dispatch_skip.status,
+            )
+            eval_result = pre_dispatch_skip
+            species_name = pre_dispatch_skip.action_type or action.get("type", "unknown")
+        elif dry_run:
             phase.set("dispatch_dry_run", trial_id=trial_counter, action_type=action.get("type", ""))
             eval_result = EvalResult(
                 tier=0, quality=2.5, speed=15.0, cost=0.3, reliability=0.95
