@@ -132,6 +132,14 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: reuse src.registry.stack_priors helpers instead of local stack-prior YAML readers
+  - rule_id: local_generated_docs_stack_prior_yaml_reader
+    category: production_blocker
+    owner: documentation-governance
+    consumer_scope: generated current-stack summaries and AutoPilot system-card role tables
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: reuse src.registry.stack_priors helpers instead of local stack-prior YAML readers
   - rule_id: static_inference_lock_role_policy
     category: production_blocker
     owner: runtime-governance

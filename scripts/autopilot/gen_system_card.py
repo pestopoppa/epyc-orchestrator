@@ -20,6 +20,7 @@ if str(DEFAULT_ROOT) not in sys.path:
 from scripts.registry.render_stack_summary import (  # noqa: E402
     clean_cell as _clean,
     format_number as _format_number,
+    load_stack_priors as _load_stack_priors,
     registry_role_rows as _registry_role_rows,
     stack_prior_role_rows as _stack_prior_role_rows,
 )
@@ -171,7 +172,9 @@ def generate_system_card(
     """Return the current AutoPilot system card as Markdown."""
     root_path = Path(root)
     registry = _load_yaml(root_path / "orchestration" / "model_registry.yaml")
-    stack_priors = _load_yaml(root_path / "orchestration" / "derived" / "stack_priors.yaml")
+    stack_priors = _load_stack_priors(
+        root_path / "orchestration" / "derived" / "stack_priors.yaml"
+    )
     state = state_override if state_override is not None else _load_json(
         root_path / "orchestration" / "autopilot_state.json"
     )

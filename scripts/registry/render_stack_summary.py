@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
+if str(DEFAULT_ROOT) not in sys.path:
+    sys.path.insert(0, str(DEFAULT_ROOT))
+
 DEFAULT_STACK_PRIORS = DEFAULT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_REGISTRY = DEFAULT_ROOT / "orchestration" / "model_registry.yaml"
 DEFAULT_OUTPUT = DEFAULT_ROOT / "docs" / "generated" / "current_stack_summary.md"
@@ -47,6 +51,12 @@ def load_yaml(path: Path) -> dict[str, Any]:
     except OSError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def load_stack_priors(path: Path = DEFAULT_STACK_PRIORS) -> dict[str, Any]:
+    from src.registry.stack_priors import load_stack_priors_artifact
+
+    return load_stack_priors_artifact(path) or {}
 
 
 def nested(data: dict[str, Any], *keys: str) -> Any:
@@ -221,7 +231,7 @@ def render_current_stack_summary(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
     registry_path: Path = DEFAULT_REGISTRY,
 ) -> str:
-    stack_priors = load_yaml(stack_priors_path)
+    stack_priors = load_stack_priors(stack_priors_path)
     registry = load_yaml(registry_path)
     source = "orchestration/derived/stack_priors.yaml"
     rows = stack_prior_role_rows(stack_priors)

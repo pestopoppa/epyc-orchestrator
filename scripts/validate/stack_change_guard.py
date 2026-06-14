@@ -245,6 +245,19 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="reuse src.registry.stack_priors helpers for q_scorer stack-prior loading and validation",
     ),
     HardcodedSurfaceRule(
+        rule_id="local_generated_docs_stack_prior_yaml_reader",
+        category="production_blocker",
+        pattern=(
+            r"\bstack_priors\s*=\s*(?:_load_yaml|load_yaml)\s*\("
+            r"(?:.*stack_priors\.yaml|stack_priors_path)"
+        ),
+        path_globs=(
+            "scripts/autopilot/gen_system_card.py",
+            "scripts/registry/render_stack_summary.py",
+        ),
+        remediation="reuse src.registry.stack_priors helpers for generated stack docs/system cards",
+    ),
+    HardcodedSurfaceRule(
         rule_id="static_inference_lock_role_policy",
         category="production_blocker",
         pattern=(

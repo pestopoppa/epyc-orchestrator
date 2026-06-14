@@ -1046,6 +1046,36 @@ data = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
     )
 
 
+def test_scan_hardcoded_surfaces_flags_local_generated_docs_stack_prior_reader(
+    tmp_path: Path,
+) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    registry = tmp_path / "scripts" / "registry"
+    autopilot.mkdir(parents=True)
+    registry.mkdir(parents=True)
+    (autopilot / "gen_system_card.py").write_text(
+        'stack_priors = _load_yaml(root_path / "orchestration" / "derived" / "stack_priors.yaml")\n',
+        encoding="utf-8",
+    )
+    (registry / "render_stack_summary.py").write_text(
+        "stack_priors = load_yaml(stack_priors_path)\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    finding_paths = {
+        finding.path.as_posix()
+        for finding in findings
+        if finding.rule_id == "local_generated_docs_stack_prior_yaml_reader"
+        and finding.category == "production_blocker"
+    }
+    assert finding_paths == {
+        "scripts/autopilot/gen_system_card.py",
+        "scripts/registry/render_stack_summary.py",
+    }
+
+
 def test_scan_hardcoded_surfaces_flags_static_inference_lock_role_policy(
     tmp_path: Path,
 ) -> None:
