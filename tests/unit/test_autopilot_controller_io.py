@@ -342,3 +342,35 @@ def test_invoke_controller_archives_timeout_before_return(monkeypatch) -> None:
     assert records[0]["status"] == "timeout"
     assert records[0]["ok"] is False
     assert records[0]["resume_session_id"] == "old-session"
+
+
+def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
+    captured = {}
+
+    class FakeTimeoutProcess:
+        stdout = iter(())
+        stderr = None
+
+        def wait(self, timeout):
+            raise controller_io.subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
+
+        def kill(self):
+            pass
+
+    def fake_popen(cmd, *args, **kwargs):
+        captured["cmd"] = cmd
+        return FakeTimeoutProcess()
+
+    monkeypatch.setenv("AUTOPILOT_CLAUDE_MODEL", "opus")
+    monkeypatch.setenv("AUTOPILOT_CLAUDE_FALLBACK_MODEL", "sonnet")
+    monkeypatch.setattr(controller_io.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(controller_io, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(controller_io, "_append_planner_archive", lambda record: None)
+
+    controller_io.invoke_controller("prompt", timeout=1)
+
+    assert captured["cmd"][:3] == ["claude", "-p", "prompt"]
+    assert "--model" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--model") + 1] == "opus"
+    assert "--fallback-model" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--fallback-model") + 1] == "sonnet"

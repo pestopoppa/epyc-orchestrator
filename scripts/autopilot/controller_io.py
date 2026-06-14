@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -42,6 +43,11 @@ PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
 PLANNER_ARCHIVE_PATH = Path(
     "/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl"
 )
+
+# Do not inherit the operator's last interactive Claude model. Fable access is
+# metered/temporary, and a stale global default can brick AutoPilot planning.
+DEFAULT_CLAUDE_MODEL = "opus"
+DEFAULT_CLAUDE_FALLBACK_MODEL = "sonnet"
 
 _NUMERIC_SURFACES = {"memrl_retrieval", "think_harder", "monitor", "escalation"}
 _PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
@@ -260,6 +266,15 @@ def invoke_controller(
         "--verbose",  # required by claude CLI for stream-json output
         "--allowedTools", "Read,Grep,Glob",
     ]
+    planner_model = os.environ.get("AUTOPILOT_CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL).strip()
+    if planner_model:
+        cmd.extend(["--model", planner_model])
+    fallback_model = os.environ.get(
+        "AUTOPILOT_CLAUDE_FALLBACK_MODEL",
+        DEFAULT_CLAUDE_FALLBACK_MODEL,
+    ).strip()
+    if fallback_model:
+        cmd.extend(["--fallback-model", fallback_model])
     if session_id:
         cmd.extend(["--resume", session_id])
 
