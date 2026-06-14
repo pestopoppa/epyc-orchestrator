@@ -301,7 +301,18 @@ _STACK_PRIOR_SERVER_URL_ALIASES: dict[str, str] = {
     "worker": "worker_general",
     "worker_coder": "worker_fast",
 }
+_STACK_MANIFEST_SERVER_URL_ALIASES: dict[str, str] = {
+    "worker_coder": "worker_fast",
+}
+_STACK_MANIFEST_SERVICE_ROLES: dict[str, str] = {
+    "api_url": "orchestrator",
+    "ocr_server": "document_formalizer",
+}
 _STACK_PRIOR_SERVER_URLS_CACHE: dict[str, str] | None = None
+
+
+def _localhost_url_from_port(port: Any) -> str | None:
+    return f"http://localhost:{port}" if isinstance(port, int) and port > 0 else None
 
 
 def _format_stack_prior_url(serving: dict[str, Any]) -> str | None:
@@ -314,6 +325,33 @@ def _format_stack_prior_url(serving: dict[str, Any]) -> str | None:
         return ",".join(urls)
     endpoint = serving.get("endpoint")
     return endpoint if isinstance(endpoint, str) and endpoint.startswith("http") else None
+
+
+def _stack_manifest_server_urls() -> dict[str, str]:
+    """Return compatibility/service URLs derived from stack manifest ports."""
+    try:
+        from scripts.server.stack_manifest import PORT_MAP
+    except Exception:
+        return {}
+
+    urls: dict[str, str] = {}
+    worker_fast = _localhost_url_from_port(PORT_MAP.get("worker_fast"))
+    if worker_fast:
+        urls["worker_fast"] = worker_fast
+
+    for alias, target in _STACK_MANIFEST_SERVER_URL_ALIASES.items():
+        if target in urls:
+            urls[alias] = urls[target]
+
+    for name, role in _STACK_MANIFEST_SERVICE_ROLES.items():
+        url = _localhost_url_from_port(PORT_MAP.get(role))
+        if url:
+            urls[name] = url
+
+    api_url = urls.get("api_url")
+    if api_url:
+        urls["vision_api"] = f"{api_url}/v1/vision/analyze"
+    return urls
 
 
 def _stack_prior_server_urls() -> dict[str, str]:
@@ -336,6 +374,9 @@ def _stack_prior_server_urls() -> dict[str, str]:
                 urls[alias] = urls[target]
     except Exception:
         urls = {}
+
+    for name, url in _stack_manifest_server_urls().items():
+        urls.setdefault(name, url)
 
     _STACK_PRIOR_SERVER_URLS_CACHE = urls
     return _STACK_PRIOR_SERVER_URLS_CACHE

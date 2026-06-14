@@ -581,9 +581,11 @@ class TestEnvVarOverrides:
             """
 roles:
   frontdoor:
+    deployment_status: live_stack
     serving:
       ports: [9100, 9200]
   worker_general:
+    deployment_status: live_stack
     serving:
       ports: [9400, 9500]
 """.lstrip(),
@@ -594,6 +596,30 @@ roles:
             cfg = get_config()
             assert cfg.server_urls.frontdoor == "full:http://localhost:9100,http://localhost:9200"
             assert cfg.server_urls.worker == "full:http://localhost:9400,http://localhost:9500"
+
+    def test_server_url_defaults_use_manifest_for_service_and_warm_compat(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        from scripts.server import stack_manifest
+
+        missing_priors = tmp_path / "missing-stack-priors.yaml"
+        monkeypatch.setitem(stack_manifest.PORT_MAP, "worker_fast", 9902)
+        monkeypatch.setitem(stack_manifest.PORT_MAP, "orchestrator", 9900)
+        monkeypatch.setitem(stack_manifest.PORT_MAP, "document_formalizer", 9901)
+
+        with patch.dict(
+            os.environ,
+            {"ORCHESTRATOR_PATHS_STACK_PRIORS_PATH": str(missing_priors)},
+        ):
+            reset_config()
+            cfg = get_config()
+            assert cfg.server_urls.worker_fast == "http://localhost:9902"
+            assert cfg.server_urls.worker_coder == "http://localhost:9902"
+            assert cfg.server_urls.api_url == "http://localhost:9900"
+            assert cfg.server_urls.ocr_server == "http://localhost:9901"
+            assert cfg.server_urls.vision_api == "http://localhost:9900/v1/vision/analyze"
 
     def test_monitor_override(self):
         with patch.dict(os.environ, {"ORCHESTRATOR_MONITOR_ENTROPY_THRESHOLD": "5.0"}):
