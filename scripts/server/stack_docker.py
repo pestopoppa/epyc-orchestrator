@@ -1,9 +1,10 @@
 """Docker container management for orchestrator-rostered services.
 
-Currently the orchestrator stack rosters NextPLAID (multi-vector retrieval)
-and SearXNG (metasearch) as Docker services. Container-management helpers
-are kept here so `orchestrator_stack.py` doesn't have to know docker CLI
-semantics directly; it re-imports the four public helpers.
+Currently the orchestrator stack rosters NextPLAID (multi-vector retrieval),
+SearXNG (metasearch), and Crawl4AI (browser-backed extraction) as Docker
+services. Container-management helpers are kept here so `orchestrator_stack.py`
+doesn't have to know docker CLI semantics directly; it re-imports the four
+public helpers.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ def start_docker_container(service: dict) -> ProcessInfo | None:
     """Start a Docker service. Removes any existing container with the same name first."""
     name = service["name"]
     port = service["port"]
+    container_port = service.get("container_port", 8080)
 
     # Remove existing container (stopped or running) with same name
     subprocess.run(
@@ -50,7 +52,12 @@ def start_docker_container(service: dict) -> ProcessInfo | None:
         capture_output=True, timeout=10,
     )
 
-    cmd = ["docker", "run", "-d", "--name", name, "-p", f"{port}:8080"]
+    cmd = ["docker", "run", "-d", "--name", name]
+    if shm_size := service.get("shm_size"):
+        cmd.extend(["--shm-size", str(shm_size)])
+    cmd.extend(["-p", f"{port}:{container_port}"])
+    for key, value in sorted(service.get("env", {}).items()):
+        cmd.extend(["-e", f"{key}={value}"])
     for vol in service.get("volumes", []):
         cmd.extend(["-v", vol])
     cmd.append(service["image"])
@@ -68,7 +75,7 @@ def start_docker_container(service: dict) -> ProcessInfo | None:
 
     # Wait for health
     health_path = service.get("health_path", "/health")
-    print(f"    Waiting for health...")
+    print("    Waiting for health...")
     if wait_for_health(port, timeout=60, path=health_path):
         print(f"    [OK] {name} ready ({service['description']})")
         # Use container_id as PID placeholder (Docker manages the actual process)

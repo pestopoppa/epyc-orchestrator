@@ -278,7 +278,7 @@ ORCHESTRATOR_PROFILES: dict[str, dict[str, str]] = {
 
 
 # =============================================================================
-# Docker Services (NextPLAID multi-vector retrieval + SearXNG metasearch)
+# Docker Services (NextPLAID retrieval + SearXNG metasearch + Crawl4AI extraction)
 # =============================================================================
 
 DOCKER_SERVICES = [
@@ -342,6 +342,18 @@ DOCKER_SERVICES = [
         ],
         "args": [],  # Config via mounted settings.yml, not CLI args
         "health_path": "/",  # SearXNG serves HTML on /, not /health
+    },
+    {
+        "name": "crawl4ai",
+        # Crawl4AI's maintained Docker deployment serves on 11235. Do not use
+        # the old handoff hint of 8086; that is the worker_vision port.
+        "port": 11235,
+        "container_port": 11235,
+        "image": "unclecode/crawl4ai:latest",
+        "description": "Browser-backed page extraction for web_research",
+        "shm_size": "1g",
+        "args": [],
+        "health_path": "/health",
     },
 ]
 

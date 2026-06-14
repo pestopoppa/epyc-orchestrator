@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from typing import Any
-
-import pytest
 
 from scripts.server import stack_docker
 from scripts.server.stack_docker import (
@@ -126,10 +123,44 @@ def test_start_docker_container_happy_path(monkeypatch) -> None:
     # Verify docker run command had volume + image + args wired in
     run_cmd = calls[1]
     assert "docker" in run_cmd and "run" in run_cmd
+    assert "-p" in run_cmd
+    assert "8090:8080" in run_cmd
     assert "-v" in run_cmd
     assert "/etc/searxng:/etc/searxng" in run_cmd
     assert run_cmd[-2] == "searxng/searxng:latest"
     assert run_cmd[-1] == "--foo"
+
+
+def test_start_docker_container_supports_nondefault_container_options(monkeypatch) -> None:
+    service = {
+        "name": "crawl4ai",
+        "port": 11235,
+        "container_port": 11235,
+        "image": "unclecode/crawl4ai:latest",
+        "description": "browser extraction",
+        "shm_size": "1g",
+        "env": {"BETA": "two", "ALPHA": "one"},
+    }
+    responses = [
+        _Result(returncode=0),
+        _Result(returncode=0, stdout="abcdef1234567890\n"),
+    ]
+    fake_run, calls = _make_run_recorder(responses)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(stack_docker, "wait_for_health", lambda port, timeout, path: True)
+
+    info = start_docker_container(service)
+
+    assert isinstance(info, ProcessInfo)
+    assert info.role == "crawl4ai"
+    run_cmd = calls[1]
+    assert run_cmd[:5] == ["docker", "run", "-d", "--name", "crawl4ai"]
+    assert "--shm-size" in run_cmd
+    assert "1g" in run_cmd
+    assert "-p" in run_cmd
+    assert "11235:11235" in run_cmd
+    assert run_cmd.index("ALPHA=one") < run_cmd.index("BETA=two")
+    assert run_cmd[-1] == "unclecode/crawl4ai:latest"
 
 
 def test_start_docker_container_returns_none_when_run_fails(monkeypatch) -> None:

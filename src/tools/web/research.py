@@ -17,8 +17,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import time
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -41,6 +43,8 @@ _WORKER_URL = "http://localhost:8082/completion"
 _WORKER_MODEL_HINT = "gemma-4-26B-A4B-it-Q4_K_M"
 _WORKER_TIMEOUT = 45  # seconds per synthesis call
 _FETCH_TIMEOUT = 15  # seconds per URL fetch
+_CRAWL4AI_DEFAULT_URL = "http://localhost:11235"
+_CRAWL4AI_TIMEOUT = 20  # seconds per browser-backed crawl
 _MAX_FETCH_WORKERS = 5
 _MAX_SYNTH_WORKERS = 3
 _CONTENT_PER_PAGE = 6000  # chars of page content to send to worker
@@ -61,6 +65,21 @@ _IRRELEVANT_PHRASES = (
     "unable to find relevant",
 )
 _IRRELEVANT_MAX_CHARS = 120  # synthesis shorter than this is likely a "not relevant" dismissal
+
+_DISABLED_ENV_VALUES = {"1", "true", "yes", "on"}
+_BLOCKED_PAGE_MARKERS = (
+    "access denied",
+    "captcha",
+    "checking if the site connection is secure",
+    "checking your browser",
+    "cloudflare ray id",
+    "enable javascript",
+    "forbidden",
+    "please verify you are a human",
+    "rate limited",
+    "too many requests",
+    "unusual traffic",
+)
 
 
 def _utc_timestamp(epoch_seconds: float | None = None) -> str:
@@ -114,8 +133,223 @@ def _is_irrelevant_synthesis(synthesis: str) -> bool:
     return False
 
 
-def _fetch_page(url: str, max_length: int = _CONTENT_PER_PAGE) -> dict[str, Any]:
-    """Fetch a single URL and extract text content.
+def _crawl4ai_base_url() -> str:
+    """Return the configured Crawl4AI base URL without a trailing slash."""
+    return os.environ.get("ORCHESTRATOR_CRAWL4AI_URL", _CRAWL4AI_DEFAULT_URL).rstrip("/")
+
+
+def _crawl4ai_enabled() -> bool:
+    """Feature gate for browser-backed fetching."""
+    disabled = os.environ.get("ORCHESTRATOR_CRAWL4AI_DISABLE", "").strip().lower()
+    return disabled not in _DISABLED_ENV_VALUES
+
+
+def _crawl4ai_timeout_seconds() -> float:
+    """Return Crawl4AI request timeout, falling back on invalid env input."""
+    raw = os.environ.get("ORCHESTRATOR_CRAWL4AI_TIMEOUT_SECONDS")
+    if raw is None:
+        return float(_CRAWL4AI_TIMEOUT)
+    try:
+        return max(1.0, float(raw))
+    except ValueError:
+        logger.warning("Invalid ORCHESTRATOR_CRAWL4AI_TIMEOUT_SECONDS=%r; using default", raw)
+        return float(_CRAWL4AI_TIMEOUT)
+
+
+def _cached_fetch_result(
+    url: str,
+    *,
+    max_length: int,
+    start: float,
+) -> dict[str, Any] | None:
+    """Return a fresh cached fetch result, if available."""
+    if url not in _fetch_cache:
+        return None
+
+    content, cached_at = _fetch_cache[url]
+    if time.time() - cached_at >= _CACHE_TTL_SECONDS:
+        return None
+
+    elapsed = (time.perf_counter() - start) * 1000
+    return {
+        "url": url,
+        "content": content[:max_length],
+        "success": True,
+        "elapsed_ms": elapsed,
+        "cached": True,
+        "retrieved": _utc_timestamp(cached_at),
+        "content_sha256": _sha256_text(content),
+        "fetch_backend": "cache",
+    }
+
+
+def _successful_fetch_result(
+    *,
+    url: str,
+    content: str,
+    max_length: int,
+    start: float,
+    backend: str,
+) -> dict[str, Any]:
+    """Cache full content and return the standard fetch-result envelope."""
+    retrieved_at = time.time()
+    _fetch_cache[url] = (content, retrieved_at)
+    elapsed = (time.perf_counter() - start) * 1000
+    return {
+        "url": url,
+        "content": content[:max_length],
+        "success": True,
+        "elapsed_ms": elapsed,
+        "cached": False,
+        "retrieved": _utc_timestamp(retrieved_at),
+        "content_sha256": _sha256_text(content),
+        "fetch_backend": backend,
+    }
+
+
+def _is_blocked_page(content: str, status_code: int | None = None) -> bool:
+    """Detect common anti-bot/interstitial pages that should fall back or fail."""
+    if status_code in {401, 403, 429}:
+        return True
+    lower = content.strip().lower()
+    if not lower:
+        return True
+    return any(marker in lower for marker in _BLOCKED_PAGE_MARKERS)
+
+
+def _crawl4ai_text_value(value: Any) -> str:
+    """Extract text from Crawl4AI markdown/content variants."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("fit_markdown", "raw_markdown", "markdown", "text", "content"):
+            text = _crawl4ai_text_value(value.get(key))
+            if text.strip():
+                return text
+    return ""
+
+
+def _extract_crawl4ai_markdown(data: Any) -> str:
+    """Extract Markdown/text from common Crawl4AI REST response shapes."""
+    pending: list[Any] = [data]
+    seen: set[int] = set()
+    while pending:
+        node = pending.pop(0)
+        node_id = id(node)
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+
+        if isinstance(node, list):
+            pending.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        if node.get("success") is False:
+            continue
+
+        for key in ("markdown", "fit_markdown", "raw_markdown", "text", "content", "cleaned_html", "html"):
+            text = _crawl4ai_text_value(node.get(key))
+            if text.strip():
+                return text.strip()
+
+        for key in ("result", "results", "data"):
+            if key in node:
+                pending.append(node[key])
+
+    return ""
+
+
+def _poll_crawl4ai_task(
+    task_id: str,
+    *,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Poll a Crawl4AI async job until it completes."""
+    timeout = timeout_seconds if timeout_seconds is not None else _crawl4ai_timeout_seconds()
+    deadline = time.time() + timeout
+    quoted_task_id = urllib.parse.quote(task_id, safe="")
+    url = f"{_crawl4ai_base_url()}/job/{quoted_task_id}"
+    last_status = "unknown"
+
+    while time.time() < deadline:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=min(5.0, timeout)) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        last_status = str(data.get("status") or data.get("state") or "").lower()
+        if last_status in {"completed", "complete", "done", "finished", "success"}:
+            return data
+        if last_status in {"cancelled", "canceled", "error", "failed", "failure"}:
+            raise RuntimeError(f"Crawl4AI task {task_id} failed with status {last_status}")
+        time.sleep(0.5)
+
+    raise TimeoutError(f"Crawl4AI task {task_id} timed out with status {last_status}")
+
+
+def _fetch_page_crawl4ai(
+    url: str,
+    *,
+    max_length: int,
+    start: float,
+) -> dict[str, Any]:
+    """Fetch a page through the local Crawl4AI REST service."""
+    payload = {
+        "urls": [url],
+        "browser_config": {
+            "type": "BrowserConfig",
+            "params": {"headless": True},
+        },
+        "crawler_config": {
+            "type": "CrawlerRunConfig",
+            "params": {"stream": False, "cache_mode": "bypass"},
+        },
+    }
+    req = urllib.request.Request(
+        f"{_crawl4ai_base_url()}/crawl",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=_crawl4ai_timeout_seconds()) as response:
+        status_code = getattr(response, "status", None)
+        response_data = json.loads(response.read().decode("utf-8"))
+
+    content = _extract_crawl4ai_markdown(response_data)
+    if not content:
+        task_id = (
+            response_data.get("task_id")
+            or response_data.get("job_id")
+            or response_data.get("id")
+            if isinstance(response_data, dict)
+            else None
+        )
+        if task_id:
+            response_data = _poll_crawl4ai_task(str(task_id))
+            content = _extract_crawl4ai_markdown(response_data)
+
+    if not content.strip():
+        raise ValueError("Crawl4AI returned no extractable content")
+    if _is_blocked_page(content, status_code=status_code):
+        raise ValueError("Crawl4AI returned an anti-bot or access-blocked page")
+
+    return _successful_fetch_result(
+        url=url,
+        content=content,
+        max_length=max_length,
+        start=start,
+        backend="crawl4ai",
+    )
+
+
+def _fetch_page_urllib(
+    url: str,
+    *,
+    max_length: int,
+    start: float,
+) -> dict[str, Any]:
+    """Fetch a single URL with urllib and extract text content.
 
     Args:
         url: URL to fetch.
@@ -124,23 +358,6 @@ def _fetch_page(url: str, max_length: int = _CONTENT_PER_PAGE) -> dict[str, Any]
     Returns:
         Dict with url, content, success, and timing.
     """
-    start = time.perf_counter()
-
-    # Check cache
-    if url in _fetch_cache:
-        content, cached_at = _fetch_cache[url]
-        if time.time() - cached_at < _CACHE_TTL_SECONDS:
-            elapsed = (time.perf_counter() - start) * 1000
-            return {
-                "url": url,
-                "content": content[:max_length],
-                "success": True,
-                "elapsed_ms": elapsed,
-                "cached": True,
-                "retrieved": _utc_timestamp(cached_at),
-                "content_sha256": _sha256_text(content),
-            }
-
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; OrchestratorBot/1.0)",
         "Accept": "text/html,application/xhtml+xml,text/plain",
@@ -157,20 +374,13 @@ def _fetch_page(url: str, max_length: int = _CONTENT_PER_PAGE) -> dict[str, Any]
             else:
                 content = raw
 
-            # Cache full content
-            retrieved_at = time.time()
-            _fetch_cache[url] = (content, retrieved_at)
-
-            elapsed = (time.perf_counter() - start) * 1000
-            return {
-                "url": url,
-                "content": content[:max_length],
-                "success": True,
-                "elapsed_ms": elapsed,
-                "cached": False,
-                "retrieved": _utc_timestamp(retrieved_at),
-                "content_sha256": _sha256_text(content),
-            }
+            return _successful_fetch_result(
+                url=url,
+                content=content,
+                max_length=max_length,
+                start=start,
+                backend="urllib",
+            )
 
     except (HTTPError, URLError, Exception) as e:
         elapsed = (time.perf_counter() - start) * 1000
@@ -180,7 +390,28 @@ def _fetch_page(url: str, max_length: int = _CONTENT_PER_PAGE) -> dict[str, Any]
             "success": False,
             "error": str(e),
             "elapsed_ms": elapsed,
+            "fetch_backend": "urllib",
         }
+
+
+def _fetch_page(url: str, max_length: int = _CONTENT_PER_PAGE) -> dict[str, Any]:
+    """Fetch a single URL and extract text content.
+
+    Browser-backed Crawl4AI extraction is attempted first when enabled. The
+    original urllib path remains the fallback for missing/failed Crawl4AI.
+    """
+    start = time.perf_counter()
+    cached = _cached_fetch_result(url, max_length=max_length, start=start)
+    if cached is not None:
+        return cached
+
+    if _crawl4ai_enabled():
+        try:
+            return _fetch_page_crawl4ai(url, max_length=max_length, start=start)
+        except Exception as e:
+            logger.debug("Crawl4AI fetch failed for %s; falling back to urllib: %s", url, e)
+
+    return _fetch_page_urllib(url, max_length=max_length, start=start)
 
 
 _MIN_PARAGRAPH_LEN = 80
