@@ -190,6 +190,63 @@ def test_append_baseline_promotion_event_only_for_updated_baseline(
     assert journal.baseline_promotion_events() == [event]
 
 
+def test_baseline_promotion_summary_reports_no_events(journal: ExperimentJournal) -> None:
+    lines = autopilot._baseline_promotion_summary_lines({}, journal)
+
+    assert lines == [
+        "Baseline promotion events: 0",
+        "Baseline ledger state: no promotion events",
+    ]
+
+
+def test_baseline_promotion_summary_compares_latest_event_to_state(
+    journal: ExperimentJournal,
+) -> None:
+    journal.append_baseline_promotion_event(
+        source_trial_id=8,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8},
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+        actor="unit-test",
+    )
+
+    lines = autopilot._baseline_promotion_summary_lines(
+        {"baseline_state": {"baselines_by_tier": {"1": 1.8}}},
+        journal,
+    )
+
+    assert lines[0] == "Baseline promotion events: 1"
+    assert lines[1].startswith("Latest baseline event: trial #8 T1 1.500 -> 1.800 at ")
+    assert lines[2] == "Baseline ledger state matches state: yes"
+
+
+def test_baseline_promotion_summary_reports_state_drift(
+    journal: ExperimentJournal,
+) -> None:
+    journal.append_baseline_promotion_event(
+        source_trial_id=8,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8},
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+        actor="unit-test",
+    )
+
+    lines = autopilot._baseline_promotion_summary_lines(
+        {"baseline_state": {"baselines_by_tier": {"1": 1.7}}},
+        journal,
+    )
+
+    assert lines[2] == "Baseline ledger state matches state: no"
+
+
 def test_merge_external_control_fields_preserves_operator_pause() -> None:
     state = {
         "trial_counter": 42,
