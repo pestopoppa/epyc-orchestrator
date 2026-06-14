@@ -30,3 +30,10 @@ exceptions:
     owner: stack-change-governance
     rationale: retired-role denylist prevents architect_coding and thinking_reasoning from becoming deployable stack-template roles
     expires: "2026-07-31"
+  - rule_id: retired_role_in_tests
+    category: legacy_test
+    path_glob: scripts/memory/*.py
+    classification: legacy_test
+    owner: stack-change-governance
+    rationale: memory seed fixtures carry retired-role labels for replay/backcompat only
+    expires: "2026-07-31"

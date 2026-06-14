@@ -177,7 +177,7 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         rule_id="retired_role_in_tests",
         category="legacy_test",
         pattern=r"\barchitect_coding\b",
-        path_globs=("tests/**/*.py",),
+        path_globs=("tests/**/*.py", "scripts/memory/**/*.py"),
         exclude_globs=("tests/unit/test_stack_change_guard.py",),
         remediation="label as retired-role coverage or migrate fixture to stack priors",
     ),
