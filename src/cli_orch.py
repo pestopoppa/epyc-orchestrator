@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
+from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP, ROLE_LAUNCH_META
 from src.registry.stack_priors import (
     live_stack_role_records,
     stack_prior_endpoint_port,
@@ -33,21 +33,30 @@ from src.registry.stack_priors import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_STACK_PRIORS_PATH = Path(__file__).parent.parent / "orchestration" / "derived" / "stack_priors.yaml"
-FALLBACK_STATUS_EXCLUDED_ROLES = frozenset({
-    "embedder",
-})
+
+
+def _fallback_status_role_mode(role: str) -> str | None:
+    launch_meta = ROLE_LAUNCH_META.get(role)
+    if not isinstance(launch_meta, dict):
+        return None
+    mode = launch_meta.get("mode")
+    return mode if isinstance(mode, str) else None
+
+
+def _fallback_status_includes_role(role: str) -> bool:
+    return _fallback_status_role_mode(role) != "embedding"
 
 
 def _fallback_status_targets() -> list[tuple[str, int]]:
     hot_ports = {
         PORT_MAP[role]
         for role in HOT_ROLES
-        if role not in FALLBACK_STATUS_EXCLUDED_ROLES
+        if _fallback_status_includes_role(role)
         and isinstance(PORT_MAP.get(role), int)
     }
     names_by_port: dict[int, list[str]] = {}
     for role, port in sorted(PORT_MAP.items()):
-        if role in FALLBACK_STATUS_EXCLUDED_ROLES:
+        if not _fallback_status_includes_role(role):
             continue
         if isinstance(port, int) and port in hot_ports:
             names_by_port.setdefault(port, []).append(role)

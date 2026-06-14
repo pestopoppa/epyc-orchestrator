@@ -75,10 +75,56 @@ def test_fallback_status_targets_follow_manifest_without_literal_port_list(
         "HOT_ROLES",
         {"frontdoor", "coder_escalation", "worker_general", "embedder"},
     )
+    monkeypatch.setattr(
+        cli_orch,
+        "ROLE_LAUNCH_META",
+        {
+            "frontdoor": {"mode": "default"},
+            "worker_general": {"mode": "worker_pool"},
+            "embedder": {"mode": "embedding"},
+        },
+    )
 
     targets = _fallback_status_targets()
 
     assert targets == [
         ("coder_escalation/frontdoor", 9001),
+        ("worker_general", 9002),
+    ]
+
+
+def test_fallback_status_targets_exclude_embedding_mode_roles_from_manifest(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_orch,
+        "PORT_MAP",
+        {
+            "frontdoor": 9001,
+            "worker_general": 9002,
+            "embedder": 9090,
+            "embedder_1": 9091,
+        },
+    )
+    monkeypatch.setattr(
+        cli_orch,
+        "HOT_ROLES",
+        {"frontdoor", "worker_general", "embedder", "embedder_1"},
+    )
+    monkeypatch.setattr(
+        cli_orch,
+        "ROLE_LAUNCH_META",
+        {
+            "frontdoor": {"mode": "default"},
+            "worker_general": {"mode": "worker_pool"},
+            "embedder": {"mode": "embedding"},
+            "embedder_1": {"mode": "embedding"},
+        },
+    )
+
+    targets = _fallback_status_targets()
+
+    assert targets == [
+        ("frontdoor", 9001),
         ("worker_general", 9002),
     ]

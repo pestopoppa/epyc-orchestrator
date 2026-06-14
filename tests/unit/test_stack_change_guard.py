@@ -978,6 +978,26 @@ def test_scan_hardcoded_surfaces_flags_static_cli_degraded_status_targets(
     )
 
 
+def test_scan_hardcoded_surfaces_flags_static_cli_status_excluded_roles(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "cli_orch.py").write_text(
+        'FALLBACK_STATUS_EXCLUDED_ROLES = frozenset({"embedder"})\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_cli_status_excluded_roles"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "src/cli_orch.py"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_static_autopilot_preflight_targets(
     tmp_path: Path,
 ) -> None:

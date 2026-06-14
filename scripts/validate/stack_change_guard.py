@@ -217,6 +217,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="derive degraded status targets from stack_manifest PORT_MAP/HOT_ROLES",
     ),
     HardcodedSurfaceRule(
+        rule_id="static_cli_status_excluded_roles",
+        category="production_blocker",
+        pattern=r"^FALLBACK_STATUS_EXCLUDED_ROLES\b\s*(?::[^=]+)?=",
+        path_globs=("src/cli_orch.py",),
+        remediation="derive degraded status exclusions from stack_manifest ROLE_LAUNCH_META launch modes",
+    ),
+    HardcodedSurfaceRule(
         rule_id="static_autopilot_preflight_targets",
         category="production_blocker",
         pattern=r"\bFALLBACK_MODEL_SERVER_TARGETS\s*=\s*\[",
