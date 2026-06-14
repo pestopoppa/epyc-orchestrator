@@ -7,13 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
-import yaml
 
 from src.api.dependencies import dep_health_tracker
 from src.api.health_tracker import BackendHealthTracker
 from src.api.models import HealthResponse
 from src.config import get_config
 from src.observability import classify_exception
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_serving,
+    stack_prior_serving_ports,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -129,36 +133,20 @@ def _stack_prior_backend_urls(
     stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
 ) -> dict[str, str]:
     """Return live backend probe targets from generated stack priors."""
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        logger.warning("Using fallback health probes; stack priors load failed: %s", exc)
-        return {}
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
+    roles = live_stack_role_records(stack_priors_path)
+    if not roles:
+        logger.warning("Using fallback health probes; no live stack-prior backend roles found")
         return {}
 
     roles_by_url: dict[str, list[str]] = {}
     for role, record in roles.items():
-        if not isinstance(role, str):
-            continue
-        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict):
-            continue
-
+        serving = stack_prior_serving(record)
         endpoint = serving.get("endpoint")
         url = _first_backend_url(endpoint) if isinstance(endpoint, str) and endpoint else ""
         if not url:
-            serving_ports = serving.get("ports")
-            if isinstance(serving_ports, list):
-                for port in serving_ports:
-                    if isinstance(port, int):
-                        url = f"http://localhost:{port}"
-                        break
+            for port in stack_prior_serving_ports(serving):
+                url = f"http://localhost:{port}"
+                break
         if url:
             roles_by_url.setdefault(url, []).append(role)
 

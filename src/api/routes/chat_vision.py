@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
-import yaml
 from src.config import get_config as _get_config
 from src.exceptions import ArchiveExtractionError
 from src.prompt_builders import (
@@ -22,6 +21,11 @@ from src.prompt_builders import (
     VISION_TOOL_DESCRIPTIONS,
 )
 from src.api.routes.chat_utils import QWEN_STOP
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_serving,
+    stack_prior_serving_ports,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,35 +69,24 @@ def _stack_prior_vl_urls(
     stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
 ) -> dict[str, str]:
     """Return live VL role endpoints from generated stack priors."""
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        logger.warning("Using fallback VL URLs; stack priors load failed: %s", exc)
-        return {}
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
+    roles = live_stack_role_records(stack_priors_path)
+    if not roles:
+        logger.warning("Using fallback VL URLs; no live stack-prior VL roles found")
         return {}
 
     urls: dict[str, str] = {}
     for role in _VISION_ROLES:
         record = roles.get(role)
-        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+        if record is None:
             continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict):
-            continue
+        serving = stack_prior_serving(record)
         endpoint = serving.get("endpoint")
         if isinstance(endpoint, str) and endpoint:
             urls[role] = _first_server_url(endpoint)
             continue
-        serving_ports = serving.get("ports")
-        if isinstance(serving_ports, list):
-            for port in serving_ports:
-                if isinstance(port, int):
-                    urls[role] = f"http://localhost:{port}"
-                    break
+        for port in stack_prior_serving_ports(serving):
+            urls[role] = f"http://localhost:{port}"
+            break
     return urls
 
 
@@ -337,7 +330,7 @@ async def _handle_vision_request(
                 "store_results": False,
             }
             resp = await client.post(
-                f"{_urls.api_url}/vision/analyze",
+                f"{_get_config().server_urls.api_url.rstrip('/')}/vision/analyze",
                 json=legacy_payload,
             )
         if resp.status_code == 200:
