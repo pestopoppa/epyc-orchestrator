@@ -2469,6 +2469,7 @@ def _run_loop_inner(
         # first trusted within-noise point becomes the seed via the same median path. AP-22
         # suppression remains tied to the mad_noise/reproduction_confirmed tag (criticism
         # below). Non-trusted exclusions (exogenous reload, etc.) still skip entirely.
+        baseline_update = None
         if (
             learning_excluded_by in ("mad_noise", "reproduction_confirmed")
             and eval_result.tier >= MIN_FRONTIER_EVAL_TIER
@@ -2891,6 +2892,21 @@ def _run_loop_inner(
             )
         archive.save(state)
         save_state(state)
+        try:
+            _append_baseline_promotion_event(
+                journal=journal,
+                baseline_update=baseline_update,
+                eval_result=eval_result,
+                source_trial_id=trial_counter - 1,
+                pareto_status=pareto_status,
+                baseline_state=state.get("baseline_state", {}),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "Baseline promotion event append failed for trial %d: %s",
+                trial_counter - 1,
+                exc,
+            )
 
         # Phase 6b — clear in_flight_trial marker AFTER final save_state.
         # This is the closing half of the WAL pattern: a crash between
@@ -3087,6 +3103,36 @@ def _archive_for_read_command(
     if archive is None:
         return ParetoArchive(), f"{source}->state-empty-fallback"
     return archive, source
+
+
+def _append_baseline_promotion_event(
+    *,
+    journal: ExperimentJournal,
+    baseline_update: Any,
+    eval_result: EvalResult,
+    source_trial_id: int,
+    pareto_status: str,
+    baseline_state: dict[str, Any],
+) -> dict[str, Any] | None:
+    if baseline_update is None or not baseline_update.updated:
+        return None
+    return journal.append_baseline_promotion_event(
+        source_trial_id=source_trial_id,
+        tier=baseline_update.tier,
+        previous_quality=baseline_update.previous_quality,
+        new_quality=baseline_update.new_quality,
+        reason=baseline_update.reason,
+        proof=baseline_update.proof,
+        result_metrics={
+            "quality": eval_result.quality,
+            "speed": eval_result.speed,
+            "cost": eval_result.cost,
+            "reliability": eval_result.reliability,
+            "n_questions": eval_result.n_questions,
+            "pareto_status": pareto_status,
+        },
+        baseline_state=baseline_state,
+    )
 
 
 def cmd_status(args: argparse.Namespace) -> None:

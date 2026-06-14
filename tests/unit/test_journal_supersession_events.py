@@ -11,7 +11,11 @@ ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
-from experiment_journal import ExperimentJournal, JournalEntry
+from experiment_journal import (
+    BASELINE_PROMOTION_EVENT_TYPE,
+    ExperimentJournal,
+    JournalEntry,
+)
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 
 
@@ -50,6 +54,68 @@ def test_supersession_event_round_trips_without_counting_as_trial(tmp_path: Path
     assert reloaded.count() == 1
     assert reloaded.next_trial_id() == 2
     assert reloaded.supersession_events() == [event]
+
+
+def test_baseline_promotion_event_round_trips_without_counting_as_trial(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(7))
+
+    event = journal.append_baseline_promotion_event(
+        source_trial_id=7,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="test promotion",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8, "speed": 42.0},
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+        actor="unit-test",
+    )
+
+    assert event["type"] == BASELINE_PROMOTION_EVENT_TYPE
+    assert event["source_trial_id"] == 7
+    assert event["baseline_state"]["baselines_by_tier"]["1"] == 1.8
+    assert journal.count() == 1
+    assert journal.next_trial_id() == 8
+
+    reloaded = ExperimentJournal(journal_dir=tmp_path)
+    assert reloaded.count() == 1
+    assert reloaded.next_trial_id() == 8
+    assert reloaded.baseline_promotion_events() == [event]
+    assert reloaded.ledger_events(BASELINE_PROMOTION_EVENT_TYPE) == [event]
+    assert reloaded.supersession_events() == []
+
+
+def test_baseline_promotion_event_does_not_affect_archive_reconstruction(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(1))
+    journal.append_baseline_promotion_event(
+        source_trial_id=1,
+        tier=1,
+        previous_quality=0.8,
+        new_quality=1.0,
+        reason="test promotion",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.0},
+        baseline_state={"baselines_by_tier": {"1": 1.0}},
+        actor="unit-test",
+    )
+    rows = [asdict(entry) for entry in journal.all_entries()]
+    rows.extend(journal.ledger_events())
+
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+
+    assert archive is not None
+    assert [entry["trial_id"] for entry in archive["all_entries"]] == [1]
+    assert archive["supersessions"] == {
+        "events_applied": 0,
+        "target_trial_ids": [],
+        "field_names": [],
+    }
 
 
 def test_matching_trial_ids_does_not_mutate_entries(tmp_path: Path) -> None:

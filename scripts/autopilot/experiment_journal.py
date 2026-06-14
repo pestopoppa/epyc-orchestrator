@@ -89,6 +89,7 @@ TSV_COLUMNS = [
 ]
 
 SUPERSESSION_EVENT_TYPE = "supersession"
+BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
 
 
 def has_legacy_scale_failure_analysis(text: str) -> bool:
@@ -214,6 +215,26 @@ class SupersessionEvent:
     type: str = SUPERSESSION_EVENT_TYPE
 
 
+@dataclass
+class BaselinePromotionEvent:
+    """Append-only ledger event recording an accepted production baseline move."""
+
+    source_trial_id: int
+    tier: int
+    previous_quality: float | None
+    new_quality: float
+    reason: str
+    proof: dict[str, Any]
+    result_metrics: dict[str, Any]
+    baseline_state: dict[str, Any]
+    policy_version: str
+    actor: str
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    type: str = BASELINE_PROMOTION_EVENT_TYPE
+
+
 class ExperimentJournal:
     """Append-only experiment log with TSV (human-readable) + JSONL (machine-readable)."""
 
@@ -330,6 +351,21 @@ class ExperimentJournal:
 
         self._entries.append(entry)
 
+    def append_ledger_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        """Append a non-trial ledger event row to JSONL."""
+        event = copy.deepcopy(event)
+        if not event.get("type"):
+            raise ValueError("ledger events require a type")
+        if "trial_id" in event:
+            raise ValueError("ledger events must not use the trial_id field")
+        event.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        batch = self._current_batch()
+        jsonl = self._jsonl_path(batch)
+        with open(jsonl, "a") as f:
+            f.write(json.dumps(event, default=str) + "\n")
+        self._ledger_events_by_batch.setdefault(batch, []).append(event)
+        return event
+
     def append_supersession_event(
         self,
         *,
@@ -340,7 +376,7 @@ class ExperimentJournal:
         actor: str,
     ) -> dict[str, Any]:
         """Append a supersession event row to JSONL without mutating trials."""
-        event = asdict(
+        return self.append_ledger_event(asdict(
             SupersessionEvent(
                 target_trial_ids=target_trial_ids,
                 fields=fields,
@@ -348,13 +384,37 @@ class ExperimentJournal:
                 policy_version=policy_version,
                 actor=actor,
             )
-        )
-        batch = self._current_batch()
-        jsonl = self._jsonl_path(batch)
-        with open(jsonl, "a") as f:
-            f.write(json.dumps(event, default=str) + "\n")
-        self._ledger_events_by_batch.setdefault(batch, []).append(event)
-        return event
+        ))
+
+    def append_baseline_promotion_event(
+        self,
+        *,
+        source_trial_id: int,
+        tier: int,
+        previous_quality: float | None,
+        new_quality: float,
+        reason: str,
+        proof: dict[str, Any],
+        result_metrics: dict[str, Any],
+        baseline_state: dict[str, Any],
+        policy_version: str = "baseline-promotion-v1",
+        actor: str = "autopilot.py",
+    ) -> dict[str, Any]:
+        """Append a baseline-promotion event row without changing baseline state."""
+        return self.append_ledger_event(asdict(
+            BaselinePromotionEvent(
+                source_trial_id=source_trial_id,
+                tier=tier,
+                previous_quality=previous_quality,
+                new_quality=new_quality,
+                reason=reason,
+                proof=proof,
+                result_metrics=result_metrics,
+                baseline_state=baseline_state,
+                policy_version=policy_version,
+                actor=actor,
+            )
+        ))
 
     # ── queries ──────────────────────────────────────────────────
 
@@ -368,16 +428,24 @@ class ExperimentJournal:
     def count(self) -> int:
         return len(self._entries)
 
-    def supersession_events(self) -> list[dict[str, Any]]:
-        """Return loaded append-only supersession event rows."""
+    def ledger_events(self, event_type: str | None = None) -> list[dict[str, Any]]:
+        """Return loaded append-only ledger event rows, optionally filtered by type."""
         events: list[dict[str, Any]] = []
         for batch in sorted(self._ledger_events_by_batch):
             events.extend(
                 event
                 for event in self._ledger_events_by_batch[batch]
-                if event.get("type") == SUPERSESSION_EVENT_TYPE
+                if event_type is None or event.get("type") == event_type
             )
         return events
+
+    def supersession_events(self) -> list[dict[str, Any]]:
+        """Return loaded append-only supersession event rows."""
+        return self.ledger_events(SUPERSESSION_EVENT_TYPE)
+
+    def baseline_promotion_events(self) -> list[dict[str, Any]]:
+        """Return loaded append-only baseline promotion event rows."""
+        return self.ledger_events(BASELINE_PROMOTION_EVENT_TYPE)
 
     def _supersession_overrides_by_trial(self) -> dict[int, dict[str, Any]]:
         entry_fields = set(JournalEntry.__dataclass_fields__)

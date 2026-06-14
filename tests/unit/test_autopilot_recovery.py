@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -132,6 +133,61 @@ def test_archive_for_read_command_falls_back_when_journal_empty(
 
     assert archive is sentinel
     assert source == "journal-current-run->state-empty-fallback"
+
+
+def test_append_baseline_promotion_event_only_for_updated_baseline(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    eval_result = autopilot.EvalResult(
+        tier=1,
+        quality=1.8,
+        speed=42.0,
+        cost=0.4,
+        reliability=0.95,
+        n_questions=50,
+    )
+    rejected = SimpleNamespace(
+        updated=False,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="not updated",
+        proof={},
+    )
+
+    assert autopilot._append_baseline_promotion_event(
+        journal=journal,
+        baseline_update=rejected,
+        eval_result=eval_result,
+        source_trial_id=8,
+        pareto_status="frontier",
+        baseline_state={},
+    ) is None
+    assert journal.baseline_promotion_events() == []
+
+    accepted = SimpleNamespace(
+        updated=True,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+    )
+
+    event = autopilot._append_baseline_promotion_event(
+        journal=journal,
+        baseline_update=accepted,
+        eval_result=eval_result,
+        source_trial_id=8,
+        pareto_status="frontier",
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+    )
+
+    assert event is not None
+    assert event["source_trial_id"] == 8
+    assert event["result_metrics"]["pareto_status"] == "frontier"
+    assert journal.baseline_promotion_events() == [event]
 
 
 def test_merge_external_control_fields_preserves_operator_pause() -> None:
