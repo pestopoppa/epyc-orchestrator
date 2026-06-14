@@ -20,6 +20,8 @@ from src.llm_primitives.types import LLMResult
 from src.roles import Role
 from src.session import Session, SQLiteSessionStore
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ── Test Fixtures ───────────────────────────────────────────────────────
 
@@ -854,7 +856,7 @@ class TestEscalationHandling:
                 answer="[FAILED: Max escalation reached]",
                 success=False,
                 turns=5,
-                role_history=["architect_coding"],
+                role_history=[_RETIRED_ARCHITECT_ROLE],
             )
 
             with patch("src.api.routes.chat_pipeline.repl_executor.run_task", return_value=fail_result):

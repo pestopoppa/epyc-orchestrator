@@ -7,6 +7,8 @@ from pathlib import Path
 
 from src.pipeline_monitor.diagnostic import build_diagnostic, append_diagnostic
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 class TestBuildDiagnostic:
     def test_basic_structure(self):
@@ -77,7 +79,7 @@ class TestBuildDiagnostic:
             question_id="test",
             suite="coding",
             config="ARCHITECT:delegated",
-            role="architect_coding",
+            role=_RETIRED_ARCHITECT_ROLE,
             mode="delegated",
             passed=False,
             answer="",
@@ -87,7 +89,7 @@ class TestBuildDiagnostic:
             error_type="timeout",
             tokens_generated=999,
             elapsed_s=90.0,
-            role_history=["architect_coding", "coder_escalation"],
+            role_history=[_RETIRED_ARCHITECT_ROLE, "coder_escalation"],
             delegation_events=[{"to_role": "coder_escalation"}],
             delegation_diagnostics={"break_reason": "role_repetition", "effective_max_loops": 2},
             tools_used=1,

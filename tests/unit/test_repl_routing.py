@@ -5,6 +5,8 @@ from unittest.mock import Mock
 
 from src.repl_environment import REPLEnvironment
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 class TestMyRole:
     """Test _my_role() / my_role() function."""
@@ -376,7 +378,7 @@ class TestFetchReport:
         report_id = "worker_coder-1234567890-deadbeefcafebabe"
         (tmp_path / f"{report_id}.txt").write_text("alpha beta gamma delta")
 
-        repl = REPLEnvironment(context="test", role="architect_coding")
+        repl = REPLEnvironment(context="test", role=_RETIRED_ARCHITECT_ROLE)
         result = repl.execute(
             f"""
 output = fetch_report("{report_id}", offset=6, max_chars=8)

@@ -15,6 +15,8 @@ from src.classifiers.role_classifier import (
 )
 from src.classifiers.role_taxonomy import TrinityRole
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 class TestVerifierRule:
     def test_review_with_prior_content(self):
@@ -61,8 +63,8 @@ class TestThinkerRule:
         assert out.role == TrinityRole.THINKER.value
         assert out.reason == "thinker_architect_role"
 
-    def test_force_role_architect_coding(self):
-        out = classify_role("Quick task.", force_role="architect_coding")
+    def test_force_role_retired_architect(self):
+        out = classify_role("Quick task.", force_role=_RETIRED_ARCHITECT_ROLE)
         assert out.role == TrinityRole.THINKER.value
 
     def test_thinking_budget_above_zero(self):

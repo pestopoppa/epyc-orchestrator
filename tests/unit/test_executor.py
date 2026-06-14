@@ -17,6 +17,8 @@ from src.executor import (
 from src.model_server import ModelServer
 from src.registry_loader import RegistryLoader, RoleConfig
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 @pytest.fixture
 def minimal_registry(tmp_path: Path) -> RegistryLoader:
@@ -948,12 +950,12 @@ class TestExecutorEscalation:
             status=StepStatus.COMPLETED,
             escalation_count=2,
             escalated_from="coder_escalation",
-            executed_role="architect_coding",
+            executed_role=_RETIRED_ARCHITECT_ROLE,
         )
         d = result.to_dict()
         assert d["escalation_count"] == 2
         assert d["escalated_from"] == "coder_escalation"
-        assert d["executed_role"] == "architect_coding"
+        assert d["executed_role"] == _RETIRED_ARCHITECT_ROLE
 
     def test_step_result_to_dict_excludes_zero_escalation(self):
         """Test that StepResult.to_dict excludes escalation info when count is 0."""

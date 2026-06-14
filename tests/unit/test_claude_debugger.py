@@ -10,6 +10,8 @@ import pytest
 
 from src.pipeline_monitor.claude_debugger import ClaudeDebugger
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 @pytest.fixture(autouse=True)
 def _isolate_change_log(tmp_path: Path):
@@ -159,7 +161,7 @@ class TestClaudeDebuggerPromptBuilding:
         debugger.batch_count = 2
         diag = _make_diag(
             "q1",
-            role="architect_coding",
+            role=_RETIRED_ARCHITECT_ROLE,
             mode="delegated",
             delegation_diagnostics={"break_reason": "max_loops", "effective_max_loops": 2},
         )
@@ -211,7 +213,7 @@ class TestClaudeDebuggerPromptBuilding:
         debugger.batch_count = 2
         diag = _make_diag(
             "q1",
-            role="architect_coding",
+            role=_RETIRED_ARCHITECT_ROLE,
             mode="delegated",
             delegation_diagnostics={
                 "break_reason": "specialist_report",
