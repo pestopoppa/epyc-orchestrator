@@ -231,6 +231,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="derive degraded model-server preflight targets from stack_manifest PORT_MAP/HOT_ROLES",
     ),
     HardcodedSurfaceRule(
+        rule_id="static_autopilot_preflight_excluded_roles",
+        category="production_blocker",
+        pattern=r"^FALLBACK_MODEL_SERVER_EXCLUDED_ROLES\b\s*(?::[^=]+)?=",
+        path_globs=("scripts/autopilot/preflight_audit.py",),
+        remediation="derive degraded preflight exclusions from stack_manifest ROLE_LAUNCH_META launch modes",
+    ),
+    HardcodedSurfaceRule(
         rule_id="stale_corpus_quality_gate_models",
         category="production_blocker",
         pattern=r"\bFALLBACK_MODELS\s*=\s*\{|\bdefault=\[[\"']7b[\"'],\s*[\"']32b[\"']\]",

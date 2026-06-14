@@ -116,6 +116,14 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: derive degraded model-server preflight targets from stack_manifest PORT_MAP/HOT_ROLES
+  - rule_id: static_autopilot_preflight_excluded_roles
+    category: production_blocker
+    owner: autopilot-instrumentation
+    consumer_scope: AutoPilot degraded-mode non-model-server role exclusion
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive degraded preflight exclusions from stack_manifest ROLE_LAUNCH_META launch modes
   - rule_id: stale_corpus_quality_gate_models
     category: production_blocker
     owner: benchmark-governance

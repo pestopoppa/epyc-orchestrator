@@ -100,12 +100,60 @@ def test_model_server_targets_fallback_follows_manifest_without_literal_port_lis
         "HOT_ROLES",
         {"frontdoor", "coder_escalation", "worker_general", "embedder"},
     )
+    monkeypatch.setattr(
+        _MOD,
+        "ROLE_LAUNCH_META",
+        {
+            "frontdoor": {"mode": "default"},
+            "worker_general": {"mode": "worker_pool"},
+            "embedder": {"mode": "embedding"},
+        },
+    )
 
     targets = _MOD._model_server_targets(tmp_path / "missing.yaml", "http://localhost:8002")
 
     assert targets == [
         ("API", "http://localhost:8002/health"),
         ("coder_escalation/frontdoor", "http://localhost:9001/health"),
+        ("worker_general", "http://localhost:9002/health"),
+    ]
+
+
+def test_model_server_targets_fallback_excludes_embedding_mode_roles_from_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        _MOD,
+        "PORT_MAP",
+        {
+            "frontdoor": 9001,
+            "worker_general": 9002,
+            "embedder": 9090,
+            "embedder_1": 9091,
+        },
+    )
+    monkeypatch.setattr(
+        _MOD,
+        "HOT_ROLES",
+        {"frontdoor", "worker_general", "embedder", "embedder_1"},
+    )
+    monkeypatch.setattr(
+        _MOD,
+        "ROLE_LAUNCH_META",
+        {
+            "frontdoor": {"mode": "default"},
+            "worker_general": {"mode": "worker_pool"},
+            "embedder": {"mode": "embedding"},
+            "embedder_1": {"mode": "embedding"},
+        },
+    )
+
+    targets = _MOD._model_server_targets(tmp_path / "missing.yaml", "http://localhost:8002")
+
+    assert targets == [
+        ("API", "http://localhost:8002/health"),
+        ("frontdoor", "http://localhost:9001/health"),
         ("worker_general", "http://localhost:9002/health"),
     ]
 

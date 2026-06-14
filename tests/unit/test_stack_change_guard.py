@@ -1018,6 +1018,26 @@ def test_scan_hardcoded_surfaces_flags_static_autopilot_preflight_targets(
     )
 
 
+def test_scan_hardcoded_surfaces_flags_static_autopilot_preflight_excluded_roles(
+    tmp_path: Path,
+) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    autopilot.mkdir(parents=True)
+    (autopilot / "preflight_audit.py").write_text(
+        'FALLBACK_MODEL_SERVER_EXCLUDED_ROLES = frozenset({"embedder"})\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_autopilot_preflight_excluded_roles"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/autopilot/preflight_audit.py"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_stale_corpus_quality_gate_models(
     tmp_path: Path,
 ) -> None:

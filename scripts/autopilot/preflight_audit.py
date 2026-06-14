@@ -29,7 +29,7 @@ from src.autopilot_core.journal_reconstruction import (
 )
 from src.autopilot_core.journal_snapshot_replay import build_snapshot_replay_diagnostic
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
-from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
+from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP, ROLE_LAUNCH_META
 
 log = logging.getLogger("autopilot.preflight")
 
@@ -52,7 +52,18 @@ STACK_CHANGE_GATE_COMMAND = [
     "check",
     "--run-promotion-gate",
 ]
-FALLBACK_MODEL_SERVER_EXCLUDED_ROLES = frozenset({"embedder"})
+
+
+def _fallback_model_server_role_mode(role: str) -> str | None:
+    launch_meta = ROLE_LAUNCH_META.get(role)
+    if not isinstance(launch_meta, dict):
+        return None
+    mode = launch_meta.get("mode")
+    return mode if isinstance(mode, str) else None
+
+
+def _fallback_model_server_includes_role(role: str) -> bool:
+    return _fallback_model_server_role_mode(role) != "embedding"
 
 
 def _health_url(endpoint: str) -> str | None:
@@ -67,12 +78,12 @@ def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str
     hot_ports = {
         PORT_MAP[role]
         for role in HOT_ROLES
-        if role not in FALLBACK_MODEL_SERVER_EXCLUDED_ROLES
+        if _fallback_model_server_includes_role(role)
         and isinstance(PORT_MAP.get(role), int)
     }
     names_by_port: dict[int, list[str]] = {}
     for role, port in sorted(PORT_MAP.items()):
-        if role in FALLBACK_MODEL_SERVER_EXCLUDED_ROLES:
+        if not _fallback_model_server_includes_role(role):
             continue
         if isinstance(port, int) and port in hot_ports:
             names_by_port.setdefault(port, []).append(role)
