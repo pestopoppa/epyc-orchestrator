@@ -1,7 +1,7 @@
 """Tests for ColBERT reranker module."""
 
 import numpy as np
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -146,27 +146,66 @@ class TestIsAvailable:
         assert isinstance(result, bool)
 
 
-class TestLateonModelPathOverride:
-    """Test LATEON_MODEL_PATH env var override (NIB2-47)."""
+class TestModelPathOverride:
+    """Test ColBERT reranker model-path slot selection."""
 
     def test_default_points_to_gte_moderncolbert(self, monkeypatch):
         """With no env var, module resolves to the GTE-ModernColBERT-v1 directory."""
         monkeypatch.delenv("LATEON_MODEL_PATH", raising=False)
+        monkeypatch.delenv("REASON_MXBAI_MODEL_PATH", raising=False)
         import importlib
         import src.tools.web.colbert_reranker as cr
         importlib.reload(cr)
         assert str(cr._MODEL_DIR) == "/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx"
+        assert cr._MODEL_SLOT == "gte_moderncolbert"
         assert cr._MODEL_PATH.name == "model_int8.onnx"
 
     def test_env_var_overrides_to_lateon(self, monkeypatch):
         """LATEON_MODEL_PATH redirects the module-level constants."""
         monkeypatch.setenv("LATEON_MODEL_PATH", "/mnt/raid0/llm/models/lateon-onnx-int8")
+        monkeypatch.delenv("REASON_MXBAI_MODEL_PATH", raising=False)
         import importlib
         import src.tools.web.colbert_reranker as cr
         importlib.reload(cr)
         assert str(cr._MODEL_DIR) == "/mnt/raid0/llm/models/lateon-onnx-int8"
+        assert cr._MODEL_SLOT == "lateon"
         assert cr._MODEL_PATH == cr._MODEL_DIR / "model_int8.onnx"
         assert cr._TOKENIZER_PATH == cr._MODEL_DIR / "tokenizer.json"
         # Restore default for subsequent tests.
         monkeypatch.delenv("LATEON_MODEL_PATH", raising=False)
+        importlib.reload(cr)
+
+    def test_reason_mxbai_env_var_selects_fallback_slot(self, monkeypatch):
+        """REASON_MXBAI_MODEL_PATH redirects when LateOn is unset."""
+        monkeypatch.delenv("LATEON_MODEL_PATH", raising=False)
+        monkeypatch.setenv(
+            "REASON_MXBAI_MODEL_PATH",
+            "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8",
+        )
+        import importlib
+        import src.tools.web.colbert_reranker as cr
+        importlib.reload(cr)
+        assert str(cr._MODEL_DIR) == (
+            "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8"
+        )
+        assert cr._MODEL_SLOT == "reason_mxbai"
+        assert cr._MODEL_PATH == cr._MODEL_DIR / "model_int8.onnx"
+        assert cr._TOKENIZER_PATH == cr._MODEL_DIR / "tokenizer.json"
+        monkeypatch.delenv("REASON_MXBAI_MODEL_PATH", raising=False)
+        importlib.reload(cr)
+
+    def test_lateon_precedes_reason_mxbai_when_both_are_set(self, monkeypatch):
+        """LateOn remains the primary slot when both overrides are configured."""
+        monkeypatch.setenv("LATEON_MODEL_PATH", "/mnt/raid0/llm/models/lateon-onnx-int8")
+        monkeypatch.setenv(
+            "REASON_MXBAI_MODEL_PATH",
+            "/mnt/raid0/llm/models/reason-mxbai-colbert-v0-32m-onnx-int8",
+        )
+        import importlib
+        import src.tools.web.colbert_reranker as cr
+        importlib.reload(cr)
+        assert str(cr._MODEL_DIR) == "/mnt/raid0/llm/models/lateon-onnx-int8"
+        assert cr._MODEL_SLOT == "lateon"
+        monkeypatch.delenv("LATEON_MODEL_PATH", raising=False)
+        monkeypatch.delenv("REASON_MXBAI_MODEL_PATH", raising=False)
         importlib.reload(cr)

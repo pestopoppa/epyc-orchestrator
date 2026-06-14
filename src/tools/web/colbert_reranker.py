@@ -2,9 +2,9 @@
 
 Provides semantic reranking of search snippets via late-interaction
 MaxSim scoring. Default: GTE-ModernColBERT-v1 ONNX (128-dim per-token
-embeddings, INT8 quantized, 144MB). Set ``LATEON_MODEL_PATH`` env var
-to point at the LightOn LateOn model (`lightonai/LateOn`) for a
-same-architecture drop-in upgrade (+2.55pp BEIR).
+embeddings, INT8 quantized, 144MB). Set ``LATEON_MODEL_PATH`` for the
+LightOn LateOn primary slot or ``REASON_MXBAI_MODEL_PATH`` for the
+Reason-mxbai 32M edge-reasoning fallback slot.
 
 Model loaded lazily on first call, cached as module-level singleton.
 ONNX inference session is thread-safe for prediction.
@@ -37,11 +37,24 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Model path resolution: LATEON_MODEL_PATH overrides to the LateOn ONNX INT8 drop-in
-# (intake-430, +2.55pp BEIR vs GTE-ModernColBERT-v1; same ModernBERT backbone, same
-# 128-dim output). Defaults to GTE-ModernColBERT-v1 so legacy deployments stay pinned.
+# Model path resolution is a three-slot selector:
+# 1. LATEON_MODEL_PATH: primary general-retrieval upgrade (intake-430,
+#    +2.55pp BEIR vs GTE-ModernColBERT-v1; same ModernBERT backbone/output).
+# 2. REASON_MXBAI_MODEL_PATH: 32M natural-language edge-reasoning fallback
+#    (intake-453; lower CPU latency target, A/B still gated on AR-3 Package D).
+# 3. Default GTE-ModernColBERT-v1: legacy pinned baseline.
 _DEFAULT_MODEL_DIR = Path("/mnt/raid0/llm/models/gte-moderncolbert-v1-onnx")
-_MODEL_DIR = Path(os.environ.get("LATEON_MODEL_PATH") or _DEFAULT_MODEL_DIR)
+
+
+def _resolve_model_dir() -> tuple[Path, str]:
+    if lateon_path := os.environ.get("LATEON_MODEL_PATH"):
+        return Path(lateon_path), "lateon"
+    if reason_mxbai_path := os.environ.get("REASON_MXBAI_MODEL_PATH"):
+        return Path(reason_mxbai_path), "reason_mxbai"
+    return _DEFAULT_MODEL_DIR, "gte_moderncolbert"
+
+
+_MODEL_DIR, _MODEL_SLOT = _resolve_model_dir()
 _MODEL_PATH = _MODEL_DIR / "model_int8.onnx"
 _TOKENIZER_PATH = _MODEL_DIR / "tokenizer.json"
 
