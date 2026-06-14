@@ -27,7 +27,8 @@ class CapturingEvolutionManager(EvolutionManager):
     "description": "Still says baseline 9.900",
     "insight": "Suite 'coder' regression: -6.900",
     "species": "seeder",
-    "confidence": "high"
+    "confidence": "high",
+    "evidence_trial_ids": [28, 43]
   }
 ]
 ```"""
@@ -65,6 +66,7 @@ def test_distill_scrubs_legacy_scale_input_and_output() -> None:
     result = manager.distill([entry], store, last_n=1, trial_id=183)
 
     assert result["status"] == "success"
+    assert "evidence_trial_ids" in manager.prompt
     assert "baseline 9.900" not in manager.prompt
     assert "-9.900" not in manager.prompt
     assert "legacy-scale failure_analysis omitted" in manager.prompt
@@ -133,3 +135,59 @@ def test_distill_filters_corrupt_and_learning_excluded_rows() -> None:
     assert "CORRUPT_SHOULD_NOT_APPEAR" not in manager.prompt
     assert "EXCLUDED_SHOULD_NOT_APPEAR" not in manager.prompt
     assert store.rows[0]["evidence_trial_ids"] == [43]
+
+
+def test_distill_skips_multitrial_insight_without_evidence_ids() -> None:
+    class UngroundedEvolutionManager(CapturingEvolutionManager):
+        def _invoke_llm(self, prompt: str) -> str:
+            self.prompt = prompt
+            return """```json:insights
+[
+  {
+    "description": "Generic pattern with no support",
+    "insight": "Do a broad thing",
+    "species": "all",
+    "confidence": "medium"
+  }
+]
+```"""
+
+    manager = UngroundedEvolutionManager()
+    store = FakeStrategyStore()
+    first = JournalEntry(
+        trial_id=51,
+        timestamp="2026-06-01T00:00:00Z",
+        species="seeder",
+        action_type="seed_batch",
+        tier=1,
+        quality=1.0,
+        speed=40.0,
+        cost=0.2,
+        reliability=0.98,
+        pareto_status="dominated",
+    )
+    second = JournalEntry(
+        trial_id=52,
+        timestamp="2026-06-01T00:01:00Z",
+        species="numeric_swarm",
+        action_type="numeric_trial",
+        tier=1,
+        quality=1.2,
+        speed=41.0,
+        cost=0.2,
+        reliability=0.98,
+        pareto_status="frontier",
+    )
+
+    result = manager.distill([first, second], store, last_n=2, trial_id=201)
+
+    assert result == {
+        "status": "skipped",
+        "reason": "no grounded insights extracted",
+        "insights_total": 1,
+        "insights_stored": 0,
+        "ungrounded_insights_skipped": 1,
+        "trials_analyzed": 2,
+        "entries_filtered": 0,
+    }
+    assert store.rows == []

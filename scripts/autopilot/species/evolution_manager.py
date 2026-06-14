@@ -58,12 +58,16 @@ Return your analysis as a JSON array of insight objects:
     "description": "Brief description of the insight",
     "insight": "Actionable recommendation based on the finding",
     "species": "which species this is most relevant to (or 'all')",
-    "confidence": "high|medium|low"
+    "confidence": "high|medium|low",
+    "evidence_trial_ids": [123]
   }}
 ]
 ```
 
 Include 3-7 insights. Be specific and actionable, not generic.
+Set evidence_trial_ids to one or more trial numbers shown above that directly
+support the insight. Do not cite invented or unrelated trials; insights without
+valid evidence_trial_ids are discarded.
 """
 
 
@@ -171,9 +175,22 @@ class EvolutionManager:
         if not insights:
             return {"status": "failed", "reason": "no insights extracted"}
 
-        # Store each insight in StrategyStore
+        # Store each insight in StrategyStore. Evidence is per-insight, not
+        # batch-level: a broad distillation response may mix unrelated claims,
+        # so only grounded claims should enter retrievable strategy memory.
         stored = 0
-        evidence_trial_ids = sorted(
+        ungrounded_skipped = 0
+        valid_evidence_trial_ids = {
+            int(e.trial_id)
+            for e in entries
+            if getattr(e, "trial_id", None) is not None
+        }
+        fallback_evidence_trial_ids = sorted(
+            valid_evidence_trial_ids
+            if len(valid_evidence_trial_ids) == 1
+            else set()
+        )
+        batch_evidence_trial_ids = sorted(
             {
                 int(e.trial_id)
                 for e in entries
@@ -181,6 +198,23 @@ class EvolutionManager:
             }
         )
         for insight in insights:
+            if not isinstance(insight, dict):
+                ungrounded_skipped += 1
+                log.warning("Skipping malformed distilled insight: %r", insight)
+                continue
+            evidence_trial_ids = self._insight_evidence_trial_ids(
+                insight,
+                valid_evidence_trial_ids,
+                fallback_evidence_trial_ids=fallback_evidence_trial_ids,
+            )
+            if not evidence_trial_ids:
+                ungrounded_skipped += 1
+                log.warning(
+                    "Skipping ungrounded distilled insight from trial %s; valid evidence=%s",
+                    trial_id,
+                    batch_evidence_trial_ids,
+                )
+                continue
             try:
                 strategy_store.store(
                     description=scrub_legacy_scale_text(insight.get("description", "")),
@@ -194,6 +228,17 @@ class EvolutionManager:
             except Exception as e:
                 log.warning("Failed to store insight: %s", e)
 
+        if stored == 0:
+            return {
+                "status": "skipped",
+                "reason": "no grounded insights extracted",
+                "insights_total": len(insights),
+                "insights_stored": stored,
+                "ungrounded_insights_skipped": ungrounded_skipped,
+                "trials_analyzed": len(entries),
+                "entries_filtered": filtered_count,
+            }
+
         log.info(
             "EvolutionManager distilled %d insights from %d trials",
             stored, len(entries),
@@ -202,6 +247,7 @@ class EvolutionManager:
             "status": "success",
             "insights_stored": stored,
             "insights_total": len(insights),
+            "ungrounded_insights_skipped": ungrounded_skipped,
             "trials_analyzed": len(entries),
             "entries_filtered": filtered_count,
         }
@@ -268,7 +314,7 @@ class EvolutionManager:
             log.error("Local model invocation failed: %s", e)
             return ""
 
-    def _extract_insights(self, response: str) -> list[dict[str, str]]:
+    def _extract_insights(self, response: str) -> list[dict[str, Any]]:
         """Extract insight objects from LLM response."""
         # Look for JSON block with insights marker
         marker = "```json:insights"
@@ -301,6 +347,63 @@ class EvolutionManager:
 
         log.warning("Could not extract insights from response")
         return []
+
+    @staticmethod
+    def _coerce_trial_ids(raw: Any) -> list[int]:
+        """Parse evidence trial IDs from LLM JSON without trusting its shape."""
+        if raw is None:
+            return []
+        if isinstance(raw, int):
+            return [raw]
+        if isinstance(raw, float):
+            return [int(raw)] if raw.is_integer() else []
+        if isinstance(raw, str):
+            try:
+                decoded = json.loads(raw)
+            except json.JSONDecodeError:
+                ids: list[int] = []
+                for part in raw.replace("#", "").replace(",", " ").split():
+                    try:
+                        ids.append(int(part))
+                    except ValueError:
+                        continue
+                return ids
+            return EvolutionManager._coerce_trial_ids(decoded)
+        if isinstance(raw, dict):
+            for key in ("trial_id", "trial_ids", "evidence_trial_ids"):
+                if key in raw:
+                    return EvolutionManager._coerce_trial_ids(raw[key])
+            return []
+        if isinstance(raw, (list, tuple, set)):
+            ids: list[int] = []
+            for item in raw:
+                ids.extend(EvolutionManager._coerce_trial_ids(item))
+            return ids
+        return []
+
+    @staticmethod
+    def _insight_evidence_trial_ids(
+        insight: dict[str, Any],
+        valid_trial_ids: set[int],
+        *,
+        fallback_evidence_trial_ids: list[int],
+    ) -> list[int]:
+        """Return valid per-insight evidence IDs, or a single-row fallback."""
+        for key in (
+            "evidence_trial_ids",
+            "evidence_trials",
+            "supporting_trial_ids",
+            "trial_ids",
+            "trial_id",
+        ):
+            if key in insight:
+                ids = {
+                    tid
+                    for tid in EvolutionManager._coerce_trial_ids(insight.get(key))
+                    if tid in valid_trial_ids
+                }
+                return sorted(ids)
+        return fallback_evidence_trial_ids
 
     def summary(self) -> dict[str, Any]:
         """Summary for controller."""
