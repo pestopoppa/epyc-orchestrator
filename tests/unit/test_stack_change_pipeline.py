@@ -11,6 +11,7 @@ import yaml
 from scripts.registry import stack_change_pipeline as pipeline
 from scripts.registry.render_stack_summary import render_current_stack_summary
 from scripts.registry.stack_change_pipeline import (
+    BENCHMARK_PREFLIGHT_TARGETS,
     PipelineReport,
     PipelineStep,
     PROMOTION_GATE_TARGETS,
@@ -25,6 +26,10 @@ PROMOTION_GATE_COMMAND = "promotion_gate: run uv run pytest -q " + " ".join(
     PROMOTION_GATE_TARGETS
 )
 SURFACE_INVENTORY_LINE = f"surface_inventory: run {SURFACE_INVENTORY_COMMAND}"
+
+
+def test_promotion_gate_includes_benchmark_preflight_regressions() -> None:
+    assert set(BENCHMARK_PREFLIGHT_TARGETS).issubset(PROMOTION_GATE_TARGETS)
 
 
 def _write_yaml(path: Path, data: dict) -> Path:

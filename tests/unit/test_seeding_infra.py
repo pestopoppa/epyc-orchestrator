@@ -70,7 +70,7 @@ def test_run_preflight_records_recovered_api_probe_cause():
         post=Mock(return_value=smoke_ok),
     )
     _MOD.state.get_poll_client = Mock(return_value=client)
-    _MOD._check_port = Mock(side_effect=lambda port: port in {8080})
+    _MOD._check_port = Mock(side_effect=lambda port: port in {_MOD.MODEL_PORTS[0]})
     _MOD._launch_api_only = Mock(return_value=True)
     _MOD._wait_for_workers_ready = Mock()
 
@@ -87,7 +87,7 @@ def test_run_preflight_records_api_launch_failure():
     unhealthy = Mock(status_code=503)
     client = Mock(get=Mock(return_value=unhealthy))
     _MOD.state.get_poll_client = Mock(return_value=client)
-    _MOD._check_port = Mock(side_effect=lambda port: port in {8080})
+    _MOD._check_port = Mock(side_effect=lambda port: port in {_MOD.MODEL_PORTS[0]})
     _MOD._launch_api_only = Mock(return_value=False)
 
     assert _MOD.run_preflight("http://localhost:8000", restart_api=False) is False

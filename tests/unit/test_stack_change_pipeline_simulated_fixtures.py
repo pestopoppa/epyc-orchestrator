@@ -311,6 +311,7 @@ def _config(tmp_path: Path, *, mode: str, roles: set[str]) -> StackChangePipelin
     registry = tmp_path / "orchestration" / "model_registry.yaml"
     descriptors = tmp_path / "orchestration" / "model_descriptors.yaml"
     priors = tmp_path / "orchestration" / "derived" / "stack_priors.yaml"
+    operator_summary = tmp_path / "docs" / "generated" / "current_stack_summary.md"
     procedure = tmp_path / "orchestration" / "procedures" / "add_model.yaml"
     schema = tmp_path / "orchestration" / "procedure.schema.json"
     _write_role_enum_files(
@@ -321,6 +322,7 @@ def _config(tmp_path: Path, *, mode: str, roles: set[str]) -> StackChangePipelin
             research_registry=None,
             descriptors=descriptors,
             stack_priors=priors,
+            operator_summary=operator_summary,
             procedure=procedure,
             schema=schema,
             surface_exceptions=tmp_path / "missing_exceptions.yaml",
@@ -336,6 +338,7 @@ def _config(tmp_path: Path, *, mode: str, roles: set[str]) -> StackChangePipelin
         research_registry=None,
         descriptors=descriptors,
         stack_priors=priors,
+        operator_summary=operator_summary,
         procedure=procedure,
         schema=schema,
         surface_exceptions=tmp_path / "missing_exceptions.yaml",
@@ -354,6 +357,19 @@ def test_pipeline_report_names_simulated_fixture_target(tmp_path: Path) -> None:
     assert step.name == "simulated_fixtures"
     assert step.status == "reference"
     assert SIMULATED_FIXTURE_TARGET in step.details[0]
+
+
+def test_simulated_update_does_not_write_real_operator_summary(tmp_path: Path) -> None:
+    config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
+    _base_frontdoor_registry(config.lean_registry)
+    real_summary = StackChangePipelineConfig(mode="check").operator_summary
+    before = real_summary.read_text(encoding="utf-8")
+
+    assert run_stack_change_pipeline(config).ok
+
+    assert config.operator_summary.exists()
+    assert config.operator_summary != real_summary
+    assert real_summary.read_text(encoding="utf-8") == before
 
 
 def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(

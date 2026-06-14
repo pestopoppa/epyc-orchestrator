@@ -53,7 +53,17 @@ DESCRIPTOR_DIFF_LIMIT = 12
 MODEL_FIELD_DIFF_LIMIT = 8
 SIMULATED_FIXTURE_TARGET = "tests/unit/test_stack_change_pipeline_simulated_fixtures.py"
 LAUNCH_PARITY_TARGET = "tests/unit/test_build_server_command_helpers.py"
-PROMOTION_GATE_TARGETS = (SIMULATED_FIXTURE_TARGET, LAUNCH_PARITY_TARGET)
+BENCHMARK_PREFLIGHT_TARGETS = (
+    "tests/unit/test_seeding_infra.py",
+    "tests/unit/test_seeding_infra_additional.py",
+    "tests/unit/test_seeding_infra_branching.py",
+    "tests/unit/test_seed_specialist_routing_main_and_retry.py",
+)
+PROMOTION_GATE_TARGETS = (
+    SIMULATED_FIXTURE_TARGET,
+    LAUNCH_PARITY_TARGET,
+    *BENCHMARK_PREFLIGHT_TARGETS,
+)
 SURFACE_INVENTORY_COMMAND = (
     "uv run python scripts/validate/stack_change_guard.py "
     "--list-hardcoded-surface-rules"
