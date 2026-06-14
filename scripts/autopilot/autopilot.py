@@ -49,6 +49,7 @@ sys.path.insert(0, str(ORCH_ROOT))
 
 import yaml
 
+from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import ParetoArchive, ParetoEntry, pareto_archive_from_journal_rows
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
@@ -1382,15 +1383,6 @@ def _slot_query_ports_from_stack_priors(
     stack_priors_path: Path = STACK_PRIORS_PATH,
 ) -> dict[str, list[int]]:
     """Return primary live llama-server ports by role from generated stack priors."""
-    try:
-        payload = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
-    except OSError as exc:
-        log.debug("Using fallback slot-query ports; stack priors unavailable: %s", exc)
-        return {}
-    roles = payload.get("roles")
-    if not isinstance(roles, dict):
-        return {}
-
     def _is_slot_server(serving: dict[str, Any]) -> bool:
         binary = serving.get("binary")
         if binary in {"llama.cpp", "ik-pr1744"}:
@@ -1401,13 +1393,9 @@ def _slot_query_ports_from_stack_priors(
         return isinstance(binary_path, str) and Path(binary_path).name == "llama-server"
 
     ports_by_role: dict[str, set[int]] = {}
-    for role, record in roles.items():
-        if not isinstance(role, str) or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict) or not _is_slot_server(serving):
+    for role, record in live_stack_role_records(stack_priors_path).items():
+        serving = stack_prior_serving(record)
+        if not _is_slot_server(serving):
             continue
         launch = serving.get("launch")
         entries = launch.get("entries") if isinstance(launch, dict) else None

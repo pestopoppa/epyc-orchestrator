@@ -43,8 +43,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -173,19 +171,12 @@ STACK_PRIORS_PATH = _PATHS["project_root"] / "orchestration/derived/stack_priors
 
 def _stack_prior_launch(role_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return generated launch requirements/runtime for a live role, if usable."""
-    try:
-        payload = yaml.safe_load(STACK_PRIORS_PATH.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+    from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+
+    record = live_stack_role_records(STACK_PRIORS_PATH).get(role_name)
+    if not isinstance(record, dict):
         return {}, {}
-    roles = payload.get("roles")
-    if not isinstance(roles, dict):
-        return {}, {}
-    record = roles.get(role_name)
-    if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
-        return {}, {}
-    serving = record.get("serving")
-    if not isinstance(serving, dict):
-        return {}, {}
+    serving = stack_prior_serving(record)
     launch = serving.get("launch")
     if not isinstance(launch, dict):
         return {}, {}

@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
-import yaml
+
+from src.registry.stack_priors import live_stack_role_records
 
 logger = logging.getLogger(__name__)
 
@@ -95,19 +96,8 @@ def _quant_bits(quant: Any) -> float:
 def _stack_prior_model_features(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
 ) -> dict[str, dict[str, float | bool]]:
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
-        return {}
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
-        return {}
-
     features: dict[str, dict[str, float | bool]] = {}
-    for role, record in roles.items():
-        if not isinstance(role, str) or not isinstance(record, dict):
-            continue
+    for role, record in live_stack_role_records(stack_priors_path).items():
         model = record.get("model")
         if not isinstance(model, dict):
             continue

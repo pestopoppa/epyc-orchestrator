@@ -22,8 +22,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 # Helper modules (extracted earlier in the refactor)
 from scripts.server import stack_checkpoint as _stack_checkpoint
 from scripts.server import stack_processes as _stack_processes
@@ -64,6 +62,11 @@ from scripts.server.stack_paths import (
 )
 from scripts.server.stack_prewarm import prewarm_all as _prewarm_all
 from scripts.server.stack_state import ProcessInfo
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_serving,
+    stack_prior_serving_ports,
+)
 from src.registry_loader import RegistryLoader
 
 
@@ -214,25 +217,9 @@ def _find_pids_on_port(port: int) -> list[int]:
 def _stack_prior_serving_ports(path: Path | None = None) -> set[int]:
     """Return live model-serving ports from generated stack priors."""
     priors_path = path or _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
-    try:
-        data = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return set()
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
-        return set()
-
     ports: set[int] = set()
-    for record in roles.values():
-        if not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        raw_ports = serving.get("ports") if isinstance(serving, dict) else None
-        if not isinstance(raw_ports, list):
-            continue
-        ports.update(port for port in raw_ports if isinstance(port, int))
+    for record in live_stack_role_records(priors_path).values():
+        ports.update(stack_prior_serving_ports(stack_prior_serving(record)))
     return ports
 
 
@@ -287,25 +274,13 @@ def _stack_prior_launch_requirements(path: Path | None = None) -> dict[str, dict
 
 def _stack_prior_launch_contracts(path: Path | None = None) -> dict[str, dict[str, Any]]:
     priors_path = path or _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
-    try:
-        data = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return {}
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
-        return {}
 
     contracts_by_role: dict[str, dict[str, Any]] = {}
-    for role, record in roles.items():
-        if not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
+    for role, record in live_stack_role_records(priors_path).items():
+        serving = stack_prior_serving(record)
         launch = serving.get("launch") if isinstance(serving, dict) else None
         requirements = launch.get("requirements") if isinstance(launch, dict) else None
         runtime = launch.get("runtime") if isinstance(launch, dict) else None
-        raw_ports = serving.get("ports") if isinstance(serving, dict) else None
         cleaned_requirements = {
             str(key): str(value)
             for key, value in requirements.items()
@@ -314,8 +289,7 @@ def _stack_prior_launch_contracts(path: Path | None = None) -> dict[str, dict[st
         contracts_by_role[str(role)] = {
             "requirements": cleaned_requirements,
             "runtime": runtime if isinstance(runtime, dict) else {},
-            "ports": [port for port in raw_ports if isinstance(port, int)]
-            if isinstance(raw_ports, list) else [],
+            "ports": stack_prior_serving_ports(serving),
         }
     return contracts_by_role
 
