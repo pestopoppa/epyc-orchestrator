@@ -973,6 +973,31 @@ def test_scan_hardcoded_surfaces_flags_static_autopilot_preflight_targets(
     )
 
 
+def test_scan_hardcoded_surfaces_flags_stale_corpus_quality_gate_models(
+    tmp_path: Path,
+) -> None:
+    benchmark = tmp_path / "scripts" / "benchmark"
+    benchmark.mkdir(parents=True)
+    (benchmark / "corpus_quality_gate.py").write_text(
+        """
+FALLBACK_MODELS = {
+    "frontdoor": {"port": 8070, "name": "Qwen3.6-35B-A3B Q8_0"},
+}
+parser.add_argument("--models", default=["7b", "32b"])
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "stale_corpus_quality_gate_models"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/benchmark/corpus_quality_gate.py"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_static_autopilot_kv_port_map(tmp_path: Path) -> None:
     autopilot = tmp_path / "scripts" / "autopilot"
     autopilot.mkdir(parents=True)

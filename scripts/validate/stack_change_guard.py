@@ -224,6 +224,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="derive degraded model-server preflight targets from stack_manifest PORT_MAP/HOT_ROLES",
     ),
     HardcodedSurfaceRule(
+        rule_id="stale_corpus_quality_gate_models",
+        category="production_blocker",
+        pattern=r"\bFALLBACK_MODELS\s*=\s*\{|\bdefault=\[[\"']7b[\"'],\s*[\"']32b[\"']\]",
+        path_globs=("scripts/benchmark/corpus_quality_gate.py",),
+        remediation="derive corpus quality gate model choices from stack priors or stack_manifest roles",
+    ),
+    HardcodedSurfaceRule(
         rule_id="stale_autopilot_program_stack_guidance",
         category="production_blocker",
         pattern=(

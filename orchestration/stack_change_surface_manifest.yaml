@@ -108,6 +108,14 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: derive degraded model-server preflight targets from stack_manifest PORT_MAP/HOT_ROLES
+  - rule_id: stale_corpus_quality_gate_models
+    category: production_blocker
+    owner: benchmark-governance
+    consumer_scope: corpus quality gate benchmark model choices and degraded fallback labels
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive corpus quality gate model choices from stack priors or stack_manifest roles
   - rule_id: stale_autopilot_program_stack_guidance
     category: production_blocker
     owner: autopilot-instrumentation
