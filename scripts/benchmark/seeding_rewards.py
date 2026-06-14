@@ -1,6 +1,8 @@
 """Reward computation, escalation chain detection, and reward injection.
 
-Imports only seeding_types and generated YAML — no other project modules.
+Keep module imports light for benchmark scripts; stack-prior artifact loading is
+lazy so the shared runtime fail-closed loader can be reused without changing
+seeding script bootstrap order.
 """
 
 from __future__ import annotations
@@ -9,8 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from urllib.parse import urlparse
-
-import yaml
 
 from seeding_types import (
     ACTION_ARCHITECT,
@@ -94,10 +94,10 @@ def _clean_throughput_mapping(values: Any) -> dict[str, float]:
 def _read_stack_priors(path: Path | None = None) -> dict[str, Any]:
     stack_priors_path = path or STACK_PRIORS_PATH
     try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
+        from src.registry.stack_priors import load_stack_priors_artifact
+    except ImportError:
         return {}
+    data = load_stack_priors_artifact(stack_priors_path) or {}
     return data if isinstance(data, dict) else {}
 
 
