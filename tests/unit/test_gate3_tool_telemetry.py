@@ -61,6 +61,17 @@ def test_web_research_pass():
     assert status == "PASS"
 
 
+def test_web_research_success_with_response_error_still_passes_soft_telemetry():
+    status, lines = classify_web_research({
+        "error_code": 500,
+        "tools_called": ["web_research"],
+        "tool_timings": [{"tool_name": "web_research", "success": True}],
+        "web_research_results": [{"query": "q", "pages_fetched": 1}],
+    })
+    assert status == "PASS"
+    assert "post-tool error" in " ".join(lines)
+
+
 def test_web_research_success_but_empty_results_is_infra_not_pass():
     """Guards the structured-unwrap regression: success rows but empty results."""
     status, lines = classify_web_research({

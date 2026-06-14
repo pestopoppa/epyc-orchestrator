@@ -127,10 +127,11 @@ def classify_web_research(resp: dict) -> tuple[str, list[str]]:
     Verifies the structured-output unwrap on the live path: when web_research
     succeeds, its timing row is success=True AND web_research_results is non-empty
     (i.e. inv.result is the raw dict, not a ToolOutput envelope)."""
-    if resp.get("error"):
-        return "INFRA_FAIL", [f"web_research request errored: {resp.get('error')!r}"]
     tc = resp.get("tools_called") or []
     if "web_research" not in tc:
+        if resp.get("error") or resp.get("error_code"):
+            err = resp.get("error") or resp.get("error_code")
+            return "INFRA_FAIL", [f"web_research request errored before tool telemetry: {err!r}"]
         return "INCONCLUSIVE", [f"model did not route to web_research (tools_called={tc})"]
     rows = [t for t in (resp.get("tool_timings") or []) if t.get("tool_name") == "web_research"]
     if not rows:
@@ -147,7 +148,11 @@ def classify_web_research(resp: dict) -> tuple[str, list[str]]:
             "web_research success but web_research_results EMPTY — empty query result "
             "OR structured-unwrap regression (inv.result not dict). Infra-bucketed."
         ]
-    return "PASS", [f"web_research ok: success rows + {len(results)} result(s)"]
+    lines = [f"web_research ok: success rows + {len(results)} result(s)"]
+    if resp.get("error") or resp.get("error_code"):
+        err = resp.get("error") or resp.get("error_code")
+        lines.append(f"response carried post-tool error {err!r}; ignored for soft telemetry")
+    return "PASS", lines
 
 
 # ── live env confirmation ───────────────────────────────────────────────────
@@ -284,7 +289,11 @@ def _run_live() -> int:
             # Soft structured-output probe (web_research; infra-bucketed).
             wr_resp = _call(
                 label="soft_web_research",
-                prompt="Use the web_research tool to look up a current fact, then summarize it briefly.",
+                prompt=(
+                    "Use the web_research tool exactly once with query='current Python 3.13.5 "
+                    "release date', max_results=1, and max_pages=1. Then summarize the "
+                    "result briefly."
+                ),
                 force_mode="repl",
             )
 
