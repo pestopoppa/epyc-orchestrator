@@ -78,6 +78,62 @@ def _make_entry(
     )
 
 
+def test_archive_for_read_command_defaults_to_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel = object()
+    monkeypatch.setattr(autopilot, "ParetoArchive", lambda: sentinel)
+
+    archive, source = autopilot._archive_for_read_command(
+        journal=object(),
+        source=autopilot.ARCHIVE_SOURCE_STATE,
+    )
+
+    assert archive is sentinel
+    assert source == autopilot.ARCHIVE_SOURCE_STATE
+
+
+def test_archive_for_read_command_can_use_journal_snapshot() -> None:
+    class FakeJournal:
+        def all_entries(self):
+            return [
+                _make_entry(1, quality=1.4, speed=40.0),
+                _make_entry(2, quality=1.5, speed=45.0),
+            ]
+
+        def supersession_events(self):
+            return []
+
+    archive, source = autopilot._archive_for_read_command(
+        journal=FakeJournal(),
+        source=autopilot.ARCHIVE_SOURCE_JOURNAL_ALL,
+    )
+
+    assert source == autopilot.ARCHIVE_SOURCE_JOURNAL_ALL
+    assert archive.read_only is True
+    assert [entry.trial_id for entry in archive.frontier(tier=2)] == [2]
+
+
+def test_archive_for_read_command_falls_back_when_journal_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EmptyJournal:
+        def all_entries(self):
+            return []
+
+        def supersession_events(self):
+            return []
+
+    sentinel = object()
+    monkeypatch.setattr(autopilot, "ParetoArchive", lambda: sentinel)
+
+    archive, source = autopilot._archive_for_read_command(
+        journal=EmptyJournal(),
+        source=autopilot.ARCHIVE_SOURCE_JOURNAL_CURRENT_RUN,
+    )
+
+    assert archive is sentinel
+    assert source == "journal-current-run->state-empty-fallback"
+
+
 def test_merge_external_control_fields_preserves_operator_pause() -> None:
     state = {
         "trial_counter": 42,

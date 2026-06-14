@@ -29,6 +29,7 @@ from src.autopilot_core.pareto_math import (  # noqa: E402
 from src.autopilot_core.tier_specs import (  # noqa: E402
     DEFAULT_FRONTIER_TIER,
     DEFAULT_REFERENCE_POINT,
+    LEGACY_OBJECTIVE_POLICY,
     MIN_FRONTIER_EVAL_TIER,
     spec_for,
 )
@@ -82,6 +83,7 @@ class ParetoArchive:
 
     def __init__(self, state_path: Path | None = None):
         self.state_path = state_path or DEFAULT_STATE_PATH
+        self._read_only = False
         # Tier-segregated: each eval tier >= MIN_FRONTIER_EVAL_TIER keeps its OWN frontier +
         # hypervolume history. Quality is never compared across tiers. T0 stays audit-only
         # (in _all_entries, never on any frontier).
@@ -92,6 +94,37 @@ class ParetoArchive:
         # recompute robust-median representative objectives across reproductions.
         self._repro_clusters: dict[str, list[list[float]]] = {}
         self._load()
+
+    @classmethod
+    def from_archive_payload(
+        cls,
+        archive_payload: dict[str, Any] | None,
+        *,
+        state_path: Path | None = None,
+        read_only: bool = True,
+    ) -> ParetoArchive:
+        """Build an archive object from an already reconstructed archive payload.
+
+        This deliberately bypasses ``__init__`` so journal-reconstructed diagnostics can
+        expose the normal read API without reading or mutating ``autopilot_state.json``.
+        """
+        archive = cls.__new__(cls)
+        archive.state_path = state_path or DEFAULT_STATE_PATH
+        archive._read_only = bool(read_only)
+        archive._frontiers = {}
+        archive._all_entries = []
+        archive._hv_history_by_tier = {}
+        archive._repro_clusters = {}
+        archive._load_archive_payload(archive_payload or {})
+        return archive
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
+    def _require_mutable(self) -> None:
+        if self._read_only:
+            raise RuntimeError("read-only ParetoArchive snapshot cannot be mutated")
 
     # ── per-tier access helpers ──────────────────────────────────
     @staticmethod
@@ -111,11 +144,7 @@ class ParetoArchive:
 
     # ── persistence ──────────────────────────────────────────────
 
-    def _load(self) -> None:
-        if not self.state_path.exists():
-            return
-        data = json.loads(self.state_path.read_text())
-        archive_data = data.get("pareto_archive", {})
+    def _load_archive_payload(self, archive_data: dict[str, Any]) -> None:
         self._all_entries = [
             ParetoEntry.from_dict(e) for e in archive_data.get("all_entries", [])
         ]
@@ -141,6 +170,13 @@ class ParetoArchive:
         # Frontiers are always REBUILT per-tier from all_entries (ignores any legacy `frontier`
         # field + scrubs T0 pollution + auto-migrates old single-frontier state).
         self._rebuild_frontier()
+
+    def _load(self) -> None:
+        if not self.state_path.exists():
+            return
+        data = json.loads(self.state_path.read_text())
+        archive_data = data.get("pareto_archive", {})
+        self._load_archive_payload(archive_data)
 
         # Integrity check: detect lost frontier
         trial_counter = data.get("trial_counter", 0)
@@ -171,6 +207,11 @@ class ParetoArchive:
                 f"Restore from checkpoint or reconstruct from logs."
             )
 
+    def load(self, state: dict[str, Any]) -> None:
+        """Load archive payload from an in-memory autopilot state dict."""
+        self._require_mutable()
+        self._load_archive_payload((state or {}).get("pareto_archive", {}) or {})
+
     def save(self, state: dict[str, Any] | None = None) -> None:
         """Atomically save archive to state file, merging with existing state.
 
@@ -179,6 +220,7 @@ class ParetoArchive:
         trial_counter et al.; a partial write would brick startup. Symmetric
         with state_store.save_state's atomic semantics.
         """
+        self._require_mutable()
         if self.state_path.exists():
             existing = json.loads(self.state_path.read_text())
         else:
@@ -264,6 +306,7 @@ class ParetoArchive:
     def update(self, entry: ParetoEntry) -> str:
         """Add entry to archive, routed to ITS tier's frontier. Returns 'frontier'/'dominated'/
         fast_reject. Dominance + hypervolume are strictly within `entry.eval_tier`."""
+        self._require_mutable()
         self._all_entries.append(entry)
         if not self.is_frontier_eligible(entry):
             entry.is_production_best = False
@@ -311,6 +354,7 @@ class ParetoArchive:
         Returns ``(status, median_objectives)``. An empty fingerprint has no stable
         identity to dedup on, so it falls back to a plain per-trial :meth:`update`.
         """
+        self._require_mutable()
         tier = int(tier)
         if not fingerprint:
             status = self.update(
@@ -371,6 +415,7 @@ class ParetoArchive:
         """Mark the single global production-best. R8 guard: refuse unless `trial_id` is on the
         CANONICAL (T1) frontier — a T2 validation entry must never become the deployed config.
         Returns True if marked, False if refused."""
+        self._require_mutable()
         canonical = self._front(DEFAULT_FRONTIER_TIER)
         if not any(e.trial_id == trial_id for e in canonical):
             return False
@@ -908,6 +953,38 @@ class ParetoArchive:
                 )
         lines.append(f"\nSuggested attack: {g['suggested_attack']}")
         return "\n".join(lines)
+
+
+def pareto_archive_from_journal_rows(
+    rows: list[dict[str, Any]],
+    session_start_ts: float | None = None,
+    *,
+    current_run_only: bool = False,
+    max_trial_id: int | None = None,
+    deinflate_before_ts: float | None = None,
+    deinflate_factor: float = 1.0,
+    objective_policy: str = LEGACY_OBJECTIVE_POLICY,
+    state_path: Path | None = None,
+) -> ParetoArchive | None:
+    """Return a read-only ParetoArchive reconstructed from append-only journal rows."""
+    from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
+
+    archive_payload = reconstruct_archive_from_journal_rows(
+        rows,
+        session_start_ts,
+        current_run_only=current_run_only,
+        max_trial_id=max_trial_id,
+        deinflate_before_ts=deinflate_before_ts,
+        deinflate_factor=deinflate_factor,
+        objective_policy=objective_policy,
+    )
+    if archive_payload is None:
+        return None
+    return ParetoArchive.from_archive_payload(
+        archive_payload,
+        state_path=state_path,
+        read_only=True,
+    )
 
 
 # ── hypervolume computation ──────────────────────────────────────

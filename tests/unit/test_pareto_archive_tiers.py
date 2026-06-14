@@ -19,6 +19,7 @@ from pareto_archive import (  # noqa: E402
     PARETO_STATUS_TIER_EXCLUDED,
     ParetoArchive,
     ParetoEntry,
+    pareto_archive_from_journal_rows,
 )
 
 
@@ -84,3 +85,77 @@ def test_load_rebuilds_frontier_without_legacy_t0_pollution(tmp_path: Path) -> N
 
     assert [e.trial_id for e in archive.frontier()] == [118]
     assert archive.summary()["best_quality"] == 1.895
+
+
+def test_readonly_archive_from_journal_rows_matches_read_surface() -> None:
+    rows = [
+        {
+            "trial_id": 1,
+            "tier": 0,
+            "quality": 2.4,
+            "speed": 80.0,
+            "cost": 0.5,
+            "reliability": 1.0,
+            "timestamp": "2026-06-14T00:00:01+00:00",
+        },
+        {
+            "trial_id": 2,
+            "tier": 1,
+            "quality": 1.7,
+            "speed": 40.0,
+            "cost": 0.4,
+            "reliability": 0.9,
+            "timestamp": "2026-06-14T00:00:02+00:00",
+            "species": "seed",
+        },
+        {
+            "trial_id": 3,
+            "tier": 1,
+            "quality": 1.8,
+            "speed": 45.0,
+            "cost": 0.4,
+            "reliability": 0.9,
+            "timestamp": "2026-06-14T00:00:03+00:00",
+            "species": "seed",
+        },
+    ]
+
+    archive = pareto_archive_from_journal_rows(rows, current_run_only=False)
+
+    assert archive is not None
+    assert archive.read_only is True
+    assert archive.frontier_size() == 1
+    assert [entry.trial_id for entry in archive.frontier()] == [3]
+    assert [trial_id for trial_id, _hv in archive.hypervolume_trend()] == [2, 3]
+    assert "T1" in archive.summary_text()
+
+
+def test_readonly_archive_refuses_mutation_methods() -> None:
+    archive = ParetoArchive.from_archive_payload(
+        {
+            "all_entries": [
+                _entry(2, tier=1, q=1.7).to_dict(),
+            ],
+        }
+    )
+
+    assert archive.read_only is True
+    assert [entry.trial_id for entry in archive.frontier()] == [2]
+    for mutate in (
+        lambda: archive.update(_entry(3, tier=1, q=1.8)),
+        lambda: archive.upsert_representative(
+            "fp",
+            1,
+            (1.8, 40.0, -0.5, 0.9),
+            trial_id=3,
+        ),
+        lambda: archive.mark_production_best(2),
+        lambda: archive.save({}),
+        lambda: archive.load({"pareto_archive": {}}),
+    ):
+        try:
+            mutate()
+        except RuntimeError as exc:
+            assert "read-only" in str(exc)
+        else:
+            raise AssertionError("read-only archive mutation unexpectedly succeeded")

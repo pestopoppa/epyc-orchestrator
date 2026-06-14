@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from dataclasses import asdict
 import fcntl
 import json
 import logging
@@ -49,7 +50,7 @@ sys.path.insert(0, str(ORCH_ROOT))
 import yaml
 
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
-from pareto_archive import ParetoArchive, ParetoEntry
+from pareto_archive import ParetoArchive, ParetoEntry, pareto_archive_from_journal_rows
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
 from eval_tower import EvalTower
 from config_applicator import health_check
@@ -117,6 +118,15 @@ except Exception:  # pragma: no cover - import-path fallback
         return 0
 
 log = logging.getLogger("autopilot")
+
+ARCHIVE_SOURCE_STATE = "state"
+ARCHIVE_SOURCE_JOURNAL_CURRENT_RUN = "journal-current-run"
+ARCHIVE_SOURCE_JOURNAL_ALL = "journal-all"
+ARCHIVE_SOURCE_CHOICES = (
+    ARCHIVE_SOURCE_STATE,
+    ARCHIVE_SOURCE_JOURNAL_CURRENT_RUN,
+    ARCHIVE_SOURCE_JOURNAL_ALL,
+)
 
 if TYPE_CHECKING:
     from autopilot_tui import AutoPilotTUI
@@ -3047,17 +3057,54 @@ def cmd_start(args: argparse.Namespace) -> None:
     )
 
 
+def _journal_rows_for_archive(journal: ExperimentJournal) -> list[dict[str, Any]]:
+    rows = [asdict(entry) for entry in journal.all_entries()]
+    if hasattr(journal, "supersession_events"):
+        rows.extend(journal.supersession_events())
+    return rows
+
+
+def _archive_for_read_command(
+    journal: ExperimentJournal,
+    *,
+    source: str = ARCHIVE_SOURCE_STATE,
+) -> tuple[ParetoArchive, str]:
+    """Archive view for operator read commands.
+
+    The live trial loop remains state-backed. Journal reconstruction is explicit
+    diagnostics-only until the archive cutover protocol is validated separately.
+    """
+    if source == ARCHIVE_SOURCE_STATE:
+        return ParetoArchive(), ARCHIVE_SOURCE_STATE
+    if source not in ARCHIVE_SOURCE_CHOICES:
+        raise ValueError(f"unknown archive source: {source}")
+
+    archive = pareto_archive_from_journal_rows(
+        _journal_rows_for_archive(journal),
+        None,
+        current_run_only=(source == ARCHIVE_SOURCE_JOURNAL_CURRENT_RUN),
+    )
+    if archive is None:
+        return ParetoArchive(), f"{source}->state-empty-fallback"
+    return archive, source
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     """Show current status."""
     state = load_state()
-    archive = ParetoArchive()
     journal = ExperimentJournal()
+    archive, archive_source = _archive_for_read_command(
+        journal,
+        source=getattr(args, "archive_source", ARCHIVE_SOURCE_STATE),
+    )
 
     print("AutoPilot Status")
     print("=" * 50)
     print(f"Trial counter: {state.get('trial_counter', 0)}")
     print(f"Paused: {state.get('paused', False)}")
     print(f"Session ID: {state.get('session_id', 'none')}")
+    if archive_source != ARCHIVE_SOURCE_STATE:
+        print(f"Archive source: {archive_source}")
     print()
     print(archive.summary_text(tier=DEFAULT_FRONTIER_TIER))
     print()
@@ -3082,11 +3129,16 @@ def cmd_resume(args: argparse.Namespace) -> None:
 def cmd_report(args: argparse.Namespace) -> None:
     """Generate markdown report."""
     journal = ExperimentJournal()
-    archive = ParetoArchive()
+    archive, archive_source = _archive_for_read_command(
+        journal,
+        source=getattr(args, "archive_source", ARCHIVE_SOURCE_STATE),
+    )
 
     print("# AutoPilot Optimization Report")
     print()
     print(f"Generated: {datetime.now(timezone.utc).isoformat()}")
+    if archive_source != ARCHIVE_SOURCE_STATE:
+        print(f"Archive source: {archive_source}")
     print()
     print("## Summary")
     print(journal.summary_text())
@@ -3375,6 +3427,15 @@ def main() -> None:
 
     # status
     p_status = subparsers.add_parser("status")
+    p_status.add_argument(
+        "--archive-source",
+        choices=ARCHIVE_SOURCE_CHOICES,
+        default=ARCHIVE_SOURCE_STATE,
+        help=(
+            "Archive read source for this operator command only. "
+            "journal-current-run/journal-all are read-only diagnostics."
+        ),
+    )
     p_status.set_defaults(func=cmd_status)
 
     # pause / resume
@@ -3385,6 +3446,15 @@ def main() -> None:
 
     # report
     p_report = subparsers.add_parser("report")
+    p_report.add_argument(
+        "--archive-source",
+        choices=ARCHIVE_SOURCE_CHOICES,
+        default=ARCHIVE_SOURCE_STATE,
+        help=(
+            "Archive read source for this operator command only. "
+            "journal-current-run/journal-all are read-only diagnostics."
+        ),
+    )
     p_report.set_defaults(func=cmd_report)
 
     # plot
