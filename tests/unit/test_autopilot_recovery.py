@@ -196,6 +196,8 @@ def test_baseline_promotion_summary_reports_no_events(journal: ExperimentJournal
     assert lines == [
         "Baseline promotion events: 0",
         "Baseline ledger state: no promotion events",
+        "Baseline fold cutover dry-run: not_ready",
+        "Baseline fold blocker: no baseline promotion events; YAML remains cold-start seed",
     ]
 
 

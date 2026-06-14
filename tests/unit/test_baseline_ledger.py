@@ -42,9 +42,15 @@ def test_reconcile_reports_no_events() -> None:
     result = reconcile_baseline_ledger([], {"baselines_by_tier": {"1": 1.8}})
 
     assert result.status == "no_events"
+    assert not result.cutover_ready
+    assert result.cutover_blockers == [
+        "no baseline promotion events; YAML remains cold-start seed"
+    ]
     assert format_baseline_ledger_summary(result) == [
         "Baseline promotion events: 0",
         "Baseline ledger state: no promotion events",
+        "Baseline fold cutover dry-run: not_ready",
+        "Baseline fold blocker: no baseline promotion events; YAML remains cold-start seed",
     ]
 
 
@@ -58,6 +64,8 @@ def test_reconcile_uses_append_order_not_timestamp_order() -> None:
     )
 
     assert result.status == "match"
+    assert result.cutover_ready
+    assert result.cutover_blockers == []
     assert result.latest_event["source_trial_id"] == 2
     assert result.folded_state == {"baselines_by_tier": {"1": 1.9}}
 
@@ -78,6 +86,10 @@ def test_reconcile_reports_drift() -> None:
     )
 
     assert result.status == "drift"
+    assert not result.cutover_ready
+    assert result.cutover_blockers == [
+        "ledger fold does not match current state baseline (drift)"
+    ]
 
 
 def test_reconcile_does_not_infer_missing_snapshot() -> None:
@@ -87,7 +99,27 @@ def test_reconcile_does_not_infer_missing_snapshot() -> None:
     )
 
     assert result.status == "unreconstructable"
+    assert not result.cutover_ready
+    assert result.cutover_blockers == [
+        "no promotion event has a usable baseline_state snapshot"
+    ]
     assert "event 0 has no usable baseline_state snapshot" in result.warnings
+
+
+def test_reconcile_blocks_cutover_when_any_promotion_event_lacks_snapshot() -> None:
+    result = reconcile_baseline_ledger(
+        [
+            _event(1, new_quality=1.8, baseline_state=None),
+            _event(2, new_quality=1.9),
+        ],
+        {"baselines_by_tier": {"1": 1.9}},
+    )
+
+    assert result.status == "match"
+    assert not result.cutover_ready
+    assert "1 promotion event(s) lack usable baseline_state snapshots" in (
+        result.cutover_blockers
+    )
 
 
 def test_reconcile_quality_mismatch_is_warning_only() -> None:
@@ -97,6 +129,10 @@ def test_reconcile_quality_mismatch_is_warning_only() -> None:
     )
 
     assert result.status == "match"
+    assert not result.cutover_ready
+    assert result.cutover_blockers == [
+        "baseline promotion ledger has warning diagnostics"
+    ]
     assert result.warnings == [
         "event new_quality 1.800 differs from baseline_state.baselines_by_tier[1] 1.700"
     ]

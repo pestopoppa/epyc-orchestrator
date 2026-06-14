@@ -24,6 +24,8 @@ class BaselineLedgerReconciliation:
     status: str
     event_count: int = 0
     valid_snapshot_count: int = 0
+    cutover_ready: bool = False
+    cutover_blockers: list[str] = field(default_factory=list)
     latest_event: dict[str, Any] | None = None
     folded_state: dict[str, Any] | None = None
     state_baseline: dict[str, Any] | None = None
@@ -80,7 +82,12 @@ def reconcile_baseline_ledger(
     """
     promotion_events = _promotion_events(events)
     if not promotion_events:
-        return BaselineLedgerReconciliation(status="no_events")
+        return BaselineLedgerReconciliation(
+            status="no_events",
+            cutover_blockers=[
+                "no baseline promotion events; YAML remains cold-start seed"
+            ],
+        )
 
     folded_state: dict[str, Any] | None = None
     latest_valid_event: dict[str, Any] | None = None
@@ -100,6 +107,9 @@ def reconcile_baseline_ledger(
             status="unreconstructable",
             event_count=len(promotion_events),
             valid_snapshot_count=valid_snapshot_count,
+            cutover_blockers=[
+                "no promotion event has a usable baseline_state snapshot"
+            ],
             warnings=warnings,
         )
 
@@ -119,10 +129,26 @@ def reconcile_baseline_ledger(
     else:
         status = "drift"
 
+    cutover_blockers: list[str] = []
+    missing_snapshot_count = len(promotion_events) - valid_snapshot_count
+    if missing_snapshot_count:
+        cutover_blockers.append(
+            f"{missing_snapshot_count} promotion event(s) lack usable "
+            "baseline_state snapshots"
+        )
+    if status != "match":
+        cutover_blockers.append(
+            f"ledger fold does not match current state baseline ({status})"
+        )
+    if warnings:
+        cutover_blockers.append("baseline promotion ledger has warning diagnostics")
+
     return BaselineLedgerReconciliation(
         status=status,
         event_count=len(promotion_events),
         valid_snapshot_count=valid_snapshot_count,
+        cutover_ready=not cutover_blockers,
+        cutover_blockers=cutover_blockers,
         latest_event=latest_valid_event,
         folded_state=folded_state,
         state_baseline=canonical_state,
@@ -144,8 +170,7 @@ def format_baseline_ledger_summary(
     lines = [f"Baseline promotion events: {reconciliation.event_count}"]
     if reconciliation.status == "no_events":
         lines.append("Baseline ledger state: no promotion events")
-        return lines
-    if reconciliation.status == "unreconstructable":
+    elif reconciliation.status == "unreconstructable":
         lines.append("Baseline ledger state: unreconstructable")
     else:
         event = reconciliation.latest_event or {}
@@ -158,6 +183,12 @@ def format_baseline_ledger_summary(
             f"at {event.get('timestamp', 'n/a')}"
         )
         lines.append(f"Baseline ledger state status: {reconciliation.status}")
+    lines.append(
+        "Baseline fold cutover dry-run: "
+        f"{'ready' if reconciliation.cutover_ready else 'not_ready'}"
+    )
+    for blocker in reconciliation.cutover_blockers:
+        lines.append(f"Baseline fold blocker: {blocker}")
     for warning in reconciliation.warnings:
         lines.append(f"Baseline ledger warning: {warning}")
     return lines
