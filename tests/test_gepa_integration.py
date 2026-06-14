@@ -7,9 +7,8 @@ Does NOT require live model servers — all inference is mocked.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -238,19 +237,19 @@ def test_auto_action_gepa_split():
 
 def test_validate_single_variable_gepa():
     """gepa_optimize passes single-variable validation."""
-    from autopilot import _validate_single_variable
+    from controller_io import validate_single_variable
 
     # Valid
-    assert _validate_single_variable(
+    assert validate_single_variable(
         {"type": "gepa_optimize", "file": "frontdoor.md"}
     ) is None
 
     # Invalid: no file
-    assert _validate_single_variable(
+    assert validate_single_variable(
         {"type": "gepa_optimize"}
     ) is not None
 
     # Invalid: multiple files
-    assert _validate_single_variable(
+    assert validate_single_variable(
         {"type": "gepa_optimize", "file": "a.md,b.md"}
     ) is not None
