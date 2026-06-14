@@ -16,6 +16,7 @@ import argparse
 import json
 import logging
 import random
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -38,9 +39,19 @@ sys.path.insert(0, str(BENCHMARK_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parents[1]))
 
 ORCHESTRATOR_URL = "http://localhost:8000"
+REPO_ROOT = SCRIPT_DIR.parents[1]
 STACK_PRIORS_PATH = SCRIPT_DIR.parents[1] / "orchestration" / "derived" / "stack_priors.yaml"
 STATE_PATH = SCRIPT_DIR.parents[1] / "orchestration" / "autopilot_state.json"
 JOURNAL_PATH = SCRIPT_DIR.parents[1] / "orchestration" / "autopilot_journal.jsonl"
+STACK_CHANGE_GATE_TIMEOUT_S = 180
+STACK_CHANGE_GATE_COMMAND = [
+    "uv",
+    "run",
+    "python",
+    "scripts/registry/stack_change_pipeline.py",
+    "check",
+    "--run-promotion-gate",
+]
 FALLBACK_MODEL_SERVER_TARGETS = [
     ("frontdoor/coder_escalation/worker_summarize", "http://localhost:8070/health"),
     ("worker_general/worker_math/toolrunner", "http://localhost:8072/health"),
@@ -117,6 +128,23 @@ def _check(name: str, condition: bool, detail: str = "") -> bool:
     suffix = f" — {detail}" if detail else ""
     print(f"  [{mark}] {name}{suffix}")
     return condition
+
+
+def _tail_output(text: str, max_chars: int = 500) -> str:
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return "..." + text[-max_chars:]
+
+
+def _gate_success_detail(output: str) -> str:
+    lines = [line.strip() for line in output.splitlines()]
+    selected = [
+        line
+        for line in lines
+        if line.startswith(("summary:", "acceptance:"))
+    ]
+    return "; ".join(selected) or "passed"
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -262,10 +290,51 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
     }
 
 
+def audit_stack_change_gate() -> bool:
+    """Run the canonical stack-change gate before AutoPilot touches live evals."""
+    _header("0. Stack Change Promotion Gate")
+    try:
+        result = subprocess.run(
+            STACK_CHANGE_GATE_COMMAND,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=STACK_CHANGE_GATE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return _check(
+            "Canonical stack-change promotion gate",
+            False,
+            f"timed out after {STACK_CHANGE_GATE_TIMEOUT_S}s",
+        )
+    except OSError as exc:
+        return _check(
+            "Canonical stack-change promotion gate",
+            False,
+            str(exc)[:120],
+        )
+
+    output = "\n".join(
+        part.strip()
+        for part in (result.stdout, result.stderr)
+        if part and part.strip()
+    )
+    if result.returncode == 0:
+        return _check(
+            "Canonical stack-change promotion gate",
+            True,
+            _gate_success_detail(output),
+        )
+    return _check(
+        "Canonical stack-change promotion gate",
+        False,
+        _tail_output(output),
+    )
+
+
 def audit_model_servers(url: str = ORCHESTRATOR_URL) -> bool:
     """Check all key model servers are healthy."""
     _header("1. Model Server Health")
-    import subprocess
 
     all_ok = True
     for name, health_url in _model_server_targets(orchestrator_url=url):
@@ -594,6 +663,7 @@ def main():
     print("╚" + "═" * 58 + "╝")
 
     results = []
+    results.append(("Stack Change Gate", audit_stack_change_gate()))
     results.append(("Model Servers", audit_model_servers(args.url)))
     results.append(("Web Search", audit_web_search()))
     results.append(("Web Fetch", audit_web_fetch()))

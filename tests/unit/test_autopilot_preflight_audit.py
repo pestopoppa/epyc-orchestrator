@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
@@ -77,6 +78,51 @@ def test_model_server_targets_fallback_is_current(tmp_path: Path) -> None:
     assert "http://localhost:8071/health" not in health_urls
     assert "http://localhost:8086/health" in health_urls
     assert "http://localhost:8087/health" in health_urls
+
+
+def test_audit_stack_change_gate_runs_canonical_command(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout="summary: ok\n", stderr="")
+
+    monkeypatch.setattr(_MOD.subprocess, "run", fake_run)
+
+    assert _MOD.audit_stack_change_gate() is True
+    assert calls == [
+        (
+            _MOD.STACK_CHANGE_GATE_COMMAND,
+            {
+                "cwd": _MOD.REPO_ROOT,
+                "capture_output": True,
+                "text": True,
+                "timeout": _MOD.STACK_CHANGE_GATE_TIMEOUT_S,
+            },
+        )
+    ]
+
+
+def test_audit_stack_change_gate_blocks_on_failure(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="summary: failed\n",
+            stderr="promotion gate rejected stack change\n",
+        )
+
+    monkeypatch.setattr(_MOD.subprocess, "run", fake_run)
+
+    assert _MOD.audit_stack_change_gate() is False
+
+
+def test_audit_stack_change_gate_fails_closed_on_timeout(monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        raise _MOD.subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(_MOD.subprocess, "run", fake_run)
+
+    assert _MOD.audit_stack_change_gate() is False
 
 
 def test_audit_blacklist_detects_superseded_corrupted_sources(
