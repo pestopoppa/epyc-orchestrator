@@ -67,6 +67,24 @@ def test_stack_prior_throughput_by_role_loads_live_roles_only(tmp_path: Path):
     assert _RETIRED_ARCHITECT_ROLE not in throughput
 
 
+def test_stack_prior_architect_reward_roles_load_live_architect_like_roles(tmp_path: Path):
+    stack_priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {
+            "frontdoor": 10.0,
+            "worker_general": 100.0,
+            "architect_general": 20.0,
+            "vision_escalation": 30.0,
+        },
+    )
+
+    roles = _MOD.stack_prior_architect_reward_roles(stack_priors)
+
+    assert roles == {"architect_general", "vision_escalation"}
+    assert "worker_general" not in roles
+    assert _RETIRED_ARCHITECT_ROLE not in roles
+
+
 def test_compute_comparative_rewards_uses_stack_prior_throughput(tmp_path: Path):
     stack_priors = _write_stack_priors(
         tmp_path / "stack_priors.yaml",
@@ -332,6 +350,23 @@ def test_3way_rewards_ignore_retired_architect_from_stack_priors(tmp_path: Path)
         )
 
     assert rewards[_MOD.ACTION_ARCHITECT] == 0.0
+
+
+def test_3way_rewards_use_explicit_architect_fallback_when_priors_missing(tmp_path: Path):
+    missing_stack_priors = tmp_path / "missing_stack_priors.yaml"
+
+    with patch.object(_MOD, "STACK_PRIORS_PATH", missing_stack_priors):
+        rewards = _MOD.compute_3way_rewards(
+            {
+                "vision_escalation:delegated": _rr(
+                    role="vision_escalation",
+                    mode="delegated",
+                    passed=True,
+                ),
+            }
+        )
+
+    assert rewards[_MOD.ACTION_ARCHITECT] == 1.0
 
 
 def test_has_delegation_and_score_delegation_chain_paths():
