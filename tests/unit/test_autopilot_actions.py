@@ -263,6 +263,40 @@ def test_prompt_mutation_skill_gate_default_off_single_eval(monkeypatch) -> None
     assert swarm.epochs == ["prompt_mutation:frontdoor.md/targeted_fix"]
 
 
+def test_prompt_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None:
+    class FakeForge:
+        def __init__(self):
+            self.applied = 0
+
+        def propose_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="old",
+                safety_valid=False,
+                safety_reason="domain_mismatched_anchoring",
+            )
+
+        def apply_mutation(self, mutation):
+            self.applied += 1
+
+    tower = _QueuedTower([])
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+    result, species = actions._action_prompt_mutation(
+        {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=swarm, journal=_FakeJournal()),
+    )
+
+    assert result is None
+    assert species == "prompt_forge"
+    assert forge.applied == 0
+    assert tower.calls == 0
+    assert swarm.epochs == []
+
+
 def test_prompt_mutation_skill_gate_rejects_per_suite_regression(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_SKILL_EFFICACY_GATE", "1")
 
@@ -352,6 +386,41 @@ def test_code_mutation_skill_gate_accepts_clean_gain(monkeypatch) -> None:
     assert detail["accept"] is True
     assert detail["artifact_kind"] == "code"
     assert detail["aggregate_delta"] == pytest.approx(0.15)
+
+
+def test_code_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None:
+    class FakeForge:
+        def __init__(self):
+            self.applied = 0
+
+        def propose_code_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="old",
+                syntax_valid=True,
+                safety_valid=False,
+                safety_reason="misapplied_best_practice",
+            )
+
+        def apply_code_mutation(self, mutation):
+            self.applied += 1
+
+    tower = _QueuedTower([])
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+    result, species = actions._action_code_mutation(
+        {"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=swarm, journal=_FakeJournal()),
+    )
+
+    assert result is None
+    assert species == "prompt_forge"
+    assert forge.applied == 0
+    assert tower.calls == 0
+    assert swarm.epochs == []
 
 
 def test_distill_knowledge_returns_evolution_manager_species() -> None:

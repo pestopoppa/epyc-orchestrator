@@ -430,6 +430,12 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     except FileNotFoundError:
         log.warning("Prompt file not found: %s (may have been removed in refactoring)", target)
         return None, "prompt_forge"
+    if not getattr(mutation, "safety_valid", True):
+        log.warning(
+            "Prompt mutation failed transfer safety, skipping: %s",
+            getattr(mutation, "safety_reason", "unsafe"),
+        )
+        return None, "prompt_forge"
     skill_without = _skill_efficacy_without_result(ctx)
     ctx.forge.apply_mutation(mutation)
     eval_result = ctx.tower.hybrid_eval()
@@ -548,6 +554,12 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
 
     if not mutation.syntax_valid:
         log.warning("Code mutation failed syntax validation, skipping")
+        return None, "prompt_forge"
+    if not getattr(mutation, "safety_valid", True):
+        log.warning(
+            "Code mutation failed transfer safety, skipping: %s",
+            getattr(mutation, "safety_reason", "unsafe"),
+        )
         return None, "prompt_forge"
 
     skill_without = _skill_efficacy_without_result(ctx)

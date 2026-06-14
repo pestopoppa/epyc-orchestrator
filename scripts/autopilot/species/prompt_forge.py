@@ -10,7 +10,6 @@ import json
 import logging
 import re
 import subprocess
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -22,7 +21,6 @@ if TYPE_CHECKING:
 
 import ast
 import importlib
-import subprocess as _subprocess  # avoid shadowing
 
 ORCH_ROOT = Path(__file__).resolve().parents[3]
 PROMPTS_DIR = ORCH_ROOT / "orchestration" / "prompts"
@@ -47,6 +45,49 @@ MUTATION_TYPES = [
     "gepa",  # AP-19: GEPA evolutionary optimization (runs internal eval loop)
 ]
 
+_MIN_VALIDATION_TRIALS = 5
+_SUITE_ALIASES: dict[str, tuple[str, ...]] = {
+    "aime": ("aime",),
+    "coder": ("coder", "humaneval", "mbpp"),
+    "cruxeval": ("cruxeval", "crux eval"),
+    "debugbench": ("debugbench", "debug bench"),
+    "gpqa": ("gpqa",),
+    "gsm8k": ("gsm8k",),
+    "hotpotqa": ("hotpotqa", "hotpot qa"),
+    "livecodebench": ("livecodebench", "live code bench", "lcb"),
+    "math": ("math",),
+    "skill_transfer": ("skill_transfer", "skill transfer"),
+    "thinking": ("thinking",),
+    "usaco": ("usaco",),
+}
+_SUITE_TERM_TO_CANONICAL = {
+    term: canonical
+    for canonical, aliases in _SUITE_ALIASES.items()
+    for term in aliases
+}
+_SUITE_TERM_RE = re.compile(
+    r"(?<![\w-])("
+    + "|".join(re.escape(term) for term in sorted(_SUITE_TERM_TO_CANONICAL, key=len, reverse=True))
+    + r")(?![\w-])",
+    re.IGNORECASE,
+)
+_TRIAL_REF_RE = re.compile(r"(?:\btrial\s*#?\s*|\[?t)(\d+)\]?", re.IGNORECASE)
+_UNIVERSAL_TRANSFER_RE = re.compile(
+    r"\b(always|never|universally|global(?:ly)?|all\s+(?:tasks|prompts|suites|benchmarks)|"
+    r"every\s+(?:task|prompt|suite|benchmark))\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class TransferSafetyVerdict:
+    valid: bool
+    reason: str = "ok"
+    warnings: tuple[str, ...] = ()
+    source_suites: tuple[str, ...] = ()
+    introduced_suites: tuple[str, ...] = ()
+    evidence_trial_count: int = 0
+
 
 @dataclass
 class PromptMutation:
@@ -57,6 +98,9 @@ class PromptMutation:
     mutated_content: str = ""
     git_diff: str = ""
     accepted: bool = False
+    safety_valid: bool = True
+    safety_reason: str = "ok"
+    safety_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -69,6 +113,29 @@ class CodeMutation:
     git_diff: str = ""
     accepted: bool = False
     syntax_valid: bool = False
+    safety_valid: bool = True
+    safety_reason: str = "ok"
+    safety_warnings: list[str] = field(default_factory=list)
+
+
+def _suite_mentions(text: str) -> set[str]:
+    return {
+        _SUITE_TERM_TO_CANONICAL[match.group(1).lower()]
+        for match in _SUITE_TERM_RE.finditer(text or "")
+    }
+
+
+def _added_text(original: str, mutated: str) -> str:
+    original_lines = {line.strip() for line in original.splitlines() if line.strip()}
+    return "\n".join(
+        line.strip()
+        for line in mutated.splitlines()
+        if line.strip() and line.strip() not in original_lines
+    )
+
+
+def _trial_reference_count(text: str) -> int:
+    return len({int(match) for match in _TRIAL_REF_RE.findall(text or "")})
 
 
 class PromptForge:
@@ -169,6 +236,20 @@ class PromptForge:
             original_content=original,
             mutated_content=mutated_content,
         )
+        self._attach_transfer_safety(
+            mutation,
+            original_content=original,
+            failure_context=failure_context,
+            per_suite_quality=per_suite_quality,
+            description=description,
+        )
+        if not mutation.safety_valid:
+            log.warning(
+                "Prompt mutation rejected by transfer safety (%s): %s",
+                target_file,
+                mutation.safety_reason,
+            )
+            mutation.mutated_content = original
         return mutation
 
     def _propose_via_gepa(
@@ -358,6 +439,9 @@ class PromptForge:
                 bar = "█" * int(quality) + "░" * (3 - int(quality))
                 lines.append(f"  {suite}: {quality:.2f} {bar}")
             lines.append("")
+
+        lines.append(self._negative_transfer_safety_block())
+        lines.append("")
 
         # Output format
         lines.append(
@@ -573,12 +657,26 @@ class PromptForge:
             original_content=original,
             mutated_content=mutated_content,
         )
+        self._attach_transfer_safety(
+            mutation,
+            original_content=original,
+            failure_context=failure_context,
+            per_suite_quality=per_suite_quality,
+            description=description,
+        )
 
         # Deep validation: syntax + shrinkage + public names + import test
         valid, reason = self._validate_code_mutation(original, mutated_content, target_file)
         mutation.syntax_valid = valid
         if not valid:
             log.warning("Code mutation rejected (%s): %s", target_file, reason)
+            mutation.mutated_content = original
+        if not mutation.safety_valid:
+            log.warning(
+                "Code mutation rejected by transfer safety (%s): %s",
+                target_file,
+                mutation.safety_reason,
+            )
             mutation.mutated_content = original
 
         return mutation
@@ -771,6 +869,9 @@ class PromptForge:
                 lines.append(f"  {suite}: {quality:.2f} {bar}")
             lines.append("")
 
+        lines.append(self._negative_transfer_safety_block())
+        lines.append("")
+
         lines.append(
             "## IMPORTANT CONSTRAINTS:\n"
             "1. Return the COMPLETE modified file in a ```python fenced block\n"
@@ -786,6 +887,96 @@ class PromptForge:
         )
 
         return "\n".join(lines)
+
+    def _negative_transfer_safety_block(self) -> str:
+        return (
+            "## Negative-transfer safety (AP-33):\n"
+            "- Do not import tactics anchored to a benchmark suite or domain that is "
+            "not present in the failure context or per-suite quality list.\n"
+            f"- If fewer than {_MIN_VALIDATION_TRIALS} trial IDs are cited, phrase "
+            "changes as exploratory and do not claim validation.\n"
+            "- Do not turn suite-specific fixes into universal always/never/all-tasks "
+            "best practices."
+        )
+
+    def _attach_transfer_safety(
+        self,
+        mutation: PromptMutation | CodeMutation,
+        *,
+        original_content: str,
+        failure_context: str,
+        per_suite_quality: dict[str, float] | None,
+        description: str,
+    ) -> TransferSafetyVerdict:
+        verdict = self._transfer_safety_verdict(
+            original_content=original_content,
+            mutated_content=mutation.mutated_content,
+            failure_context=failure_context,
+            per_suite_quality=per_suite_quality,
+            description=description or mutation.description,
+        )
+        mutation.safety_valid = verdict.valid
+        mutation.safety_reason = verdict.reason
+        mutation.safety_warnings = list(verdict.warnings)
+        return verdict
+
+    def _transfer_safety_verdict(
+        self,
+        *,
+        original_content: str,
+        mutated_content: str,
+        failure_context: str,
+        per_suite_quality: dict[str, float] | None,
+        description: str,
+    ) -> TransferSafetyVerdict:
+        source_text = " ".join(str(suite) for suite in (per_suite_quality or {}))
+        source_suites = _suite_mentions(source_text)
+        if not source_suites:
+            source_suites = _suite_mentions(failure_context)
+
+        introduced_text = f"{description}\n{_added_text(original_content, mutated_content)}"
+        introduced_suites = _suite_mentions(introduced_text)
+        evidence_count = _trial_reference_count(failure_context)
+
+        warnings: list[str] = []
+        if failure_context.strip() and evidence_count < _MIN_VALIDATION_TRIALS:
+            warnings.append(f"low_evidence_trial_count:{evidence_count}")
+
+        mismatched = introduced_suites - source_suites
+        if source_suites and mismatched:
+            return TransferSafetyVerdict(
+                valid=False,
+                reason=(
+                    "domain_mismatched_anchoring:"
+                    f" introduced_suites={sorted(mismatched)}"
+                    f" source_suites={sorted(source_suites)}"
+                ),
+                warnings=tuple(warnings),
+                source_suites=tuple(sorted(source_suites)),
+                introduced_suites=tuple(sorted(introduced_suites)),
+                evidence_trial_count=evidence_count,
+            )
+
+        if introduced_suites and _UNIVERSAL_TRANSFER_RE.search(introduced_text):
+            return TransferSafetyVerdict(
+                valid=False,
+                reason=(
+                    "misapplied_best_practice:"
+                    f" introduced_suites={sorted(introduced_suites)}"
+                ),
+                warnings=tuple(warnings),
+                source_suites=tuple(sorted(source_suites)),
+                introduced_suites=tuple(sorted(introduced_suites)),
+                evidence_trial_count=evidence_count,
+            )
+
+        return TransferSafetyVerdict(
+            valid=True,
+            warnings=tuple(warnings),
+            source_suites=tuple(sorted(source_suites)),
+            introduced_suites=tuple(sorted(introduced_suites)),
+            evidence_trial_count=evidence_count,
+        )
 
     def _extract_code_mutation(self, result: str, original: str) -> str:
         """Extract mutated Python code from Claude's response."""
