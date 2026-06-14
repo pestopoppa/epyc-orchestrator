@@ -59,14 +59,6 @@ def _coerce_float(value, default: float) -> float:
     return default
 
 
-def _coerce_port(ports) -> int:
-    if isinstance(ports, list):
-        for port in ports:
-            if isinstance(port, int):
-                return port
-    return 0
-
-
 def _role_description(role: str, record: dict) -> str:
     model = record.get("model") if isinstance(record.get("model"), dict) else {}
     serving = record.get("serving") if isinstance(record.get("serving"), dict) else {}
@@ -90,33 +82,54 @@ def _role_description(role: str, record: dict) -> str:
 def load_model_fleet(stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH) -> list[dict]:
     """Load live GraphRouter model nodes from the generated stack-priors contract."""
     try:
-        import yaml
+        from src.registry.stack_priors import (
+            load_stack_priors_artifact,
+            live_stack_role_records,
+            stack_prior_endpoint_port,
+            stack_prior_serving,
+            stack_prior_serving_ports,
+        )
 
-        data = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
+        artifact = load_stack_priors_artifact(stack_priors_path)
+        live_roles = live_stack_role_records(stack_priors_path)
     except Exception as exc:
         logger.warning("Using degraded GraphRouter model fleet; stack priors unavailable: %s", exc)
         return list(DEGRADED_MODEL_FLEET)
 
-    roles = data.get("roles")
+    if not isinstance(artifact, dict):
+        logger.warning("Using degraded GraphRouter model fleet; stack priors unavailable: cannot load contract")
+        return list(DEGRADED_MODEL_FLEET)
+
+    roles = artifact.get("roles")
+    if roles is not None and not isinstance(roles, dict):
+        logger.warning("Using degraded GraphRouter model fleet; stack priors roles field is invalid")
+        return list(DEGRADED_MODEL_FLEET)
+
     if not isinstance(roles, dict):
         logger.warning("Using degraded GraphRouter model fleet; stack priors roles field is invalid")
         return list(DEGRADED_MODEL_FLEET)
 
+    if not isinstance(live_roles, dict):
+        logger.warning("Using degraded GraphRouter model fleet; stack priors roles field is invalid")
+        return list(DEGRADED_MODEL_FLEET)
+
     fleet: list[dict] = []
-    for role, record in sorted(roles.items()):
+    for role, record in sorted(live_roles.items()):
         if not isinstance(role, str) or not isinstance(record, dict):
             continue
-        if record.get("deployment_status") != "live_stack":
-            continue
 
-        serving = record.get("serving") if isinstance(record.get("serving"), dict) else {}
+        serving = stack_prior_serving(record)
         priors = record.get("priors") if isinstance(record.get("priors"), dict) else {}
         model = record.get("model") if isinstance(record.get("model"), dict) else {}
+        endpoint_port = stack_prior_endpoint_port(serving)
+        if endpoint_port is None:
+            serving_ports = stack_prior_serving_ports(serving)
+            endpoint_port = serving_ports[0] if serving_ports else 0
         fleet.append(
             {
                 "role_id": role,
                 "description": _role_description(role, record),
-                "port": _coerce_port(serving.get("ports")),
+                "port": endpoint_port,
                 "tps": _coerce_float(priors.get("throughput_tps"), 0.0),
                 "tier": str(serving.get("tier") or "unknown").upper(),
                 "gb": _coerce_float(model.get("mem_gb"), 0.0),

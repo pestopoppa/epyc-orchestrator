@@ -12,7 +12,6 @@ import time
 import uuid
 from typing import AsyncGenerator
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -33,7 +32,7 @@ from src.prompt_builders import (
     extract_code_from_response,
     auto_wrap_final,
 )
-from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
+from src.registry.stack_priors import live_stack_role_records
 from src.repl_environment import REPLEnvironment
 from src.roles import Role
 
@@ -88,20 +87,12 @@ def _ordered_role_ids(role_ids: list[str]) -> list[str]:
 def _live_stack_role_ids() -> list[str]:
     """Read deployed role IDs from the generated stack-priors contract."""
     try:
-        with DEFAULT_STACK_PRIORS.open("r", encoding="utf-8") as fh:
-            payload = yaml.safe_load(fh)
+        records = live_stack_role_records()
     except Exception as exc:
         logger.debug("Could not load stack priors for OpenAI models list: %s", exc)
         return []
 
-    roles = payload.get("roles") if isinstance(payload, dict) else None
-    if not isinstance(roles, dict):
-        return []
-    return _ordered_role_ids([
-        str(role)
-        for role, record in roles.items()
-        if isinstance(record, dict) and record.get("deployment_status") == "live_stack"
-    ])
+    return _ordered_role_ids([str(role) for role in records])
 
 
 def available_roles() -> list[str]:

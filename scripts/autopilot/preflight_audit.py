@@ -21,8 +21,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-import yaml
-
+from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
     fold_supersession_events,
@@ -79,14 +78,8 @@ def _model_server_targets(
     orchestrator_url: str = ORCHESTRATOR_URL,
 ) -> list[tuple[str, str]]:
     """Return health targets from generated stack priors, with degraded fallback."""
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
-        return _fallback_model_server_targets(orchestrator_url)
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
+    roles = live_stack_role_records(stack_priors_path)
+    if not roles:
         return _fallback_model_server_targets(orchestrator_url)
 
     names_by_health_url: dict[str, list[str]] = {}
@@ -94,13 +87,7 @@ def _model_server_targets(
     names_by_health_url[api_health] = ["API"]
 
     for role_name, record in roles.items():
-        if not isinstance(role_name, str) or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict):
-            continue
+        serving = stack_prior_serving(record)
         endpoint = serving.get("endpoint")
         if not isinstance(endpoint, str):
             continue

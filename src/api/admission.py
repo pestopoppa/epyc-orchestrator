@@ -44,7 +44,11 @@ from pathlib import Path
 import threading
 import time
 
-import yaml
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_serving,
+    stack_prior_serving_ports,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,30 +78,17 @@ def _merge_limit(limits: dict[str, int], url: str, slots: int) -> None:
 
 
 def _limits_from_stack_priors(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
-    with path.open("r", encoding="utf-8") as fh:
-        loaded = yaml.safe_load(fh)
-    roles = loaded.get("roles") if isinstance(loaded, dict) else None
-    if not isinstance(roles, dict):
-        return {}
-
     limits: dict[str, int] = {}
-    for record in roles.values():
-        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict):
-            continue
+    for record in live_stack_role_records(path).values():
+        serving = stack_prior_serving(record)
         slots = serving.get("slots")
         if not isinstance(slots, int) or slots <= 0:
             continue
         endpoint = serving.get("endpoint")
         if isinstance(endpoint, str):
             _merge_limit(limits, endpoint, slots)
-        ports = serving.get("ports")
-        if isinstance(ports, list):
-            for port in ports:
-                if isinstance(port, int):
-                    _merge_limit(limits, f"http://localhost:{port}", slots)
+        for port in stack_prior_serving_ports(serving):
+            _merge_limit(limits, f"http://localhost:{port}", slots)
     return limits
 
 
@@ -105,7 +96,7 @@ def _load_default_limits(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
     defaults = dict(FALLBACK_LIMITS)
     try:
         limits = _limits_from_stack_priors(path)
-    except (OSError, yaml.YAMLError, AttributeError, TypeError):
+    except (OSError, AttributeError, TypeError):
         logger.warning("Falling back to static admission limits", exc_info=True)
         return defaults
     for url, slots in limits.items():

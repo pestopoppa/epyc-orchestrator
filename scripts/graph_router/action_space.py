@@ -103,14 +103,22 @@ def load_live_canonical_actions(
     contract cannot be read or contains no live roles.
     """
     try:
-        import yaml
-
-        data = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
+        from src.registry.stack_priors import load_stack_priors_artifact, live_stack_role_records
     except Exception as exc:
         logger.warning("Using degraded GraphRouter actions; stack priors unavailable: %s", exc)
         return DEGRADED_CANONICAL_ACTIONS.copy()
 
-    roles = data.get("roles", {})
+    data = load_stack_priors_artifact(stack_priors_path)
+    if not isinstance(data, dict):
+        logger.warning("Using degraded GraphRouter actions; stack priors unavailable: cannot load contract")
+        return DEGRADED_CANONICAL_ACTIONS.copy()
+
+    roles = data.get("roles")
+    if roles is not None and not isinstance(roles, Mapping):
+        logger.warning("Using degraded GraphRouter actions; stack priors roles field is invalid")
+        return DEGRADED_CANONICAL_ACTIONS.copy()
+
+    roles = live_stack_role_records(stack_priors_path)
     if not isinstance(roles, Mapping):
         logger.warning("Using degraded GraphRouter actions; stack priors roles field is invalid")
         return DEGRADED_CANONICAL_ACTIONS.copy()

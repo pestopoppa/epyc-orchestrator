@@ -20,10 +20,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
-import yaml
+
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_endpoint_port,
+    stack_prior_serving,
+)
 
 log = logging.getLogger(__name__)
 
@@ -391,15 +395,6 @@ _FALLBACK_PRODUCTION_PORTS = {
 PRODUCTION_PORTS = _FALLBACK_PRODUCTION_PORTS
 
 
-def _endpoint_port(endpoint: Any) -> int | None:
-    if not isinstance(endpoint, str):
-        return None
-    try:
-        return urlparse(endpoint).port
-    except ValueError:
-        return None
-
-
 def _is_slot_server(serving: dict[str, Any]) -> bool:
     binary = serving.get("binary")
     if binary in {"llama.cpp", "ik-pr1744"}:
@@ -426,16 +421,6 @@ def _entry_ports(serving: dict[str, Any], *, include_aliases: bool) -> list[int]
     )
 
 
-def _load_stack_prior_roles(stack_priors_path: Path = STACK_PRIORS_PATH) -> dict[str, Any]:
-    try:
-        payload = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
-    except OSError as exc:
-        log.debug("Using fallback KV compression ports; stack priors unavailable: %s", exc)
-        return {}
-    roles = payload.get("roles")
-    return roles if isinstance(roles, dict) else {}
-
-
 def production_ports_from_stack_priors(
     stack_priors_path: Path = STACK_PRIORS_PATH,
     *,
@@ -449,17 +434,17 @@ def production_ports_from_stack_priors(
     explicit operator-selected role lists.
     """
     ports: dict[str, int] = {}
-    for role, record in _load_stack_prior_roles(stack_priors_path).items():
-        if not isinstance(role, str) or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict) or not _is_slot_server(serving):
+    for role, record in live_stack_role_records(stack_priors_path).items():
+        serving = stack_prior_serving(record)
+        if not _is_slot_server(serving):
             continue
 
         if include_aliases:
-            port = _endpoint_port(serving.get("endpoint"))
+            try:
+                port = stack_prior_endpoint_port(serving)
+            except ValueError:
+                log.debug("Skipping malformed serving endpoint for role %s", role)
+                port = None
             if port is None:
                 ports_for_role = _entry_ports(serving, include_aliases=True)
                 port = ports_for_role[0] if ports_for_role else None
