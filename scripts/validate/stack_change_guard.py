@@ -231,6 +231,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="derive corpus quality gate model choices from stack priors or stack_manifest roles",
     ),
     HardcodedSurfaceRule(
+        rule_id="local_config_stack_prior_yaml_reader",
+        category="production_blocker",
+        pattern=r"\byaml\.safe_load\s*\(\s*priors_path\.read_text",
+        path_globs=("src/config/models.py",),
+        remediation="reuse src.registry.stack_priors helpers for config server URL defaults",
+    ),
+    HardcodedSurfaceRule(
         rule_id="stale_autopilot_program_stack_guidance",
         category="production_blocker",
         pattern=(

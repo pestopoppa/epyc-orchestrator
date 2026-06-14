@@ -998,6 +998,30 @@ parser.add_argument("--models", default=["7b", "32b"])
     )
 
 
+def test_scan_hardcoded_surfaces_flags_local_config_stack_prior_reader(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "src" / "config"
+    config.mkdir(parents=True)
+    (config / "models.py").write_text(
+        """
+import yaml
+
+payload = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "local_config_stack_prior_yaml_reader"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "src/config/models.py"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_static_autopilot_kv_port_map(tmp_path: Path) -> None:
     autopilot = tmp_path / "scripts" / "autopilot"
     autopilot.mkdir(parents=True)

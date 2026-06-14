@@ -116,6 +116,14 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: derive corpus quality gate model choices from stack priors or stack_manifest roles
+  - rule_id: local_config_stack_prior_yaml_reader
+    category: production_blocker
+    owner: config-governance
+    consumer_scope: config server URL defaults and stack-prior helper reuse
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: reuse src.registry.stack_priors helpers instead of local stack-prior YAML readers
   - rule_id: stale_autopilot_program_stack_guidance
     category: production_blocker
     owner: autopilot-instrumentation
