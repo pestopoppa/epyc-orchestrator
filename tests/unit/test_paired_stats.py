@@ -76,3 +76,23 @@ def test_summary_reports_no_vectors_for_current_style_rows(tmp_path: Path) -> No
     assert summary["rows"] == 1
     assert summary["vector_trials"] == 0
     assert summary["fingerprints_with_vectors"] == {}
+
+
+def test_iter_journal_rows_folds_supersession_events(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    rows = [
+        _row(1, "base", [("q1", True)]),
+        _row(2, "cand", [("q1", False)]),
+        {
+            "type": "supersession",
+            "target_trial_ids": [2],
+            "fields": {"bug_corrupted_by": "resource_contention"},
+        },
+    ]
+    journal.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    loaded = list(paired_stats.iter_journal_rows(journal))
+
+    assert [row["trial_id"] for row in loaded] == [1, 2]
+    assert loaded[1]["bug_corrupted_by"] == "resource_contention"
+    assert "type" not in loaded[1]

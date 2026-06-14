@@ -15,6 +15,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from src.autopilot_core.journal_reconstruction import (  # noqa: E402
+    fold_supersession_events,
     reconstruct_archive_from_journal_rows,
 )
 from src.autopilot_core.pareto_math import dominates  # noqa: E402
@@ -47,6 +48,11 @@ def _read_jsonl(path: Path) -> tuple[list[dict[str, Any]], int]:
             if isinstance(row, dict):
                 rows.append(row)
     return rows, malformed
+
+
+def _effective_journal_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    folded_rows, _ = fold_supersession_events(rows)
+    return [row for row in folded_rows if row.get("trial_id") is not None]
 
 
 def _read_state(path: Path) -> dict[str, Any]:
@@ -237,7 +243,7 @@ def _write_report(
 ) -> None:
     rows_by_tid = {
         tid: row
-        for row in rows
+        for row in _effective_journal_rows(rows)
         if (tid := _as_int(row.get("trial_id"))) is not None
     }
     legacy_frontier = _frontier_for(legacy)

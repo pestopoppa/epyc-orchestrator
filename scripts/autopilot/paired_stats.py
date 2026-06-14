@@ -19,6 +19,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from src.autopilot_core.journal_reconstruction import fold_supersession_events
+
 DEFAULT_JOURNAL_DIR = Path(__file__).resolve().parents[2] / "orchestration"
 
 
@@ -50,6 +52,7 @@ def iter_journal_rows(path: Path | str) -> Iterable[dict[str, Any]]:
     """Yield JSONL rows from one file or every autopilot_journal*.jsonl in a dir."""
     p = Path(path)
     files = [p] if p.is_file() else sorted(p.glob("autopilot_journal*.jsonl"))
+    rows: list[dict[str, Any]] = []
     for file_path in files:
         with file_path.open() as f:
             for line_no, line in enumerate(f, start=1):
@@ -57,9 +60,11 @@ def iter_journal_rows(path: Path | str) -> Iterable[dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    yield json.loads(line)
+                    rows.append(json.loads(line))
                 except json.JSONDecodeError as exc:
                     raise ValueError(f"invalid JSON in {file_path}:{line_no}: {exc}") from exc
+    folded_rows, _ = fold_supersession_events(rows)
+    yield from (row for row in folded_rows if row.get("trial_id") is not None)
 
 
 def extract_question_outcomes(row: dict[str, Any]) -> list[QuestionOutcome]:

@@ -18,6 +18,8 @@ from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any
 
+from src.autopilot_core.journal_reconstruction import fold_supersession_events
+
 
 DEFAULT_JOURNAL = Path("orchestration/autopilot_journal.jsonl")
 DEFAULT_OUT_DIR = Path("orchestration/reports")
@@ -196,6 +198,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 def load_journal(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    parse_errors: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, 1):
             if not line.strip():
@@ -203,7 +206,7 @@ def load_journal(path: Path) -> list[dict[str, Any]]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                rows.append(
+                parse_errors.append(
                     {
                         "trial_id": None,
                         "timestamp": None,
@@ -212,7 +215,10 @@ def load_journal(path: Path) -> list[dict[str, Any]]:
                 )
                 continue
             rows.append(row)
-    return rows
+    folded_rows, _ = fold_supersession_events(rows)
+    return [
+        row for row in folded_rows if row.get("trial_id") is not None
+    ] + parse_errors
 
 
 def _details(row: dict[str, Any]) -> dict[str, Any]:

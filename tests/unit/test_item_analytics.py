@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
-from scripts.autopilot.item_analytics import analyze_rows, render_markdown
+from scripts.autopilot.item_analytics import analyze_rows, load_journal, render_markdown
 
 
 def test_suite_level_report_flags_pinned_zero_without_per_qid() -> None:
@@ -122,3 +123,30 @@ def test_markdown_reports_unavailable_per_qid() -> None:
 
     assert "Per-qid analytics: **unavailable**" in md
     assert "agentic" in md
+
+
+def test_load_journal_folds_supersession_events(tmp_path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    rows = [
+        {
+            "trial_id": 1,
+            "timestamp": "2026-06-01T00:00:00+00:00",
+            "eval_details": {"per_suite_quality": {"agentic": 1.0}},
+        },
+        {
+            "trial_id": 2,
+            "timestamp": "2026-06-02T00:00:00+00:00",
+            "eval_details": {"per_suite_quality": {"agentic": 0.0}},
+        },
+        {
+            "type": "supersession",
+            "target_trial_ids": [2],
+            "fields": {"bug_corrupted_by": "resource_contention"},
+        },
+    ]
+    journal.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    loaded = load_journal(journal)
+
+    assert [row["trial_id"] for row in loaded] == [1, 2]
+    assert loaded[1]["bug_corrupted_by"] == "resource_contention"
