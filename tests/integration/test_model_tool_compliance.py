@@ -501,10 +501,7 @@ class TestModelResponsePatterns:
 # =============================================================================
 
 
-@pytest.mark.skipif(
-    "not config.getoption('--run-live-models', default=False)",
-    reason="Requires --run-live-models flag",
-)
+@pytest.mark.requires_live_models
 class TestLiveModelCompliance:
     """Live tests against running models.
 
@@ -584,18 +581,3 @@ class TestComplianceDashboard:
         assert len(metrics) == 3
         assert metrics["frontdoor_list_dir"]["is_compliant"] is True
         assert metrics["frontdoor_list_dir_bad"]["is_compliant"] is False
-
-
-# =============================================================================
-# Pytest Configuration
-# =============================================================================
-
-
-def pytest_addoption(parser):
-    """Add custom pytest options."""
-    parser.addoption(
-        "--run-live-models",
-        action="store_true",
-        default=False,
-        help="Run tests against live models (requires orchestrator)",
-    )

@@ -60,6 +60,12 @@ def pytest_addoption(parser):
         default=False,
         help="Run tests that require a live OCR server",
     )
+    parser.addoption(
+        "--run-live-models",
+        action="store_true",
+        default=False,
+        help="Run tests against live models (requires orchestrator)",
+    )
 
 
 def pytest_configure(config):
@@ -69,6 +75,9 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "real_mode: marks tests that require real inference servers")
     config.addinivalue_line(
         "markers", "requires_server: marks tests that require a live llama-server"
+    )
+    config.addinivalue_line(
+        "markers", "requires_live_models: marks tests that require live orchestrator models"
     )
     config.addinivalue_line("markers", "integration: marks integration tests")
 
@@ -137,6 +146,12 @@ def pytest_collection_modifyitems(config, items):
     except (AttributeError, TypeError):
         # pytest-xdist not installed or not using -n flag
         pass
+
+    if not config.getoption("--run-live-models"):
+        skip_live_models = pytest.mark.skip(reason="Need --run-live-models to run live model tests")
+        for item in items:
+            if "requires_live_models" in item.keywords:
+                item.add_marker(skip_live_models)
 
 
 @pytest.fixture
