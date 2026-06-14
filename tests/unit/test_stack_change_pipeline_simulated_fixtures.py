@@ -30,8 +30,14 @@ from scripts.registry.stack_change_pipeline import (  # noqa: E402
     StackChangePipelineConfig,
     run_stack_change_pipeline,
 )
+from scripts.registry import stack_change_pipeline as pipeline  # noqa: E402
 
 gen_system_card = importlib.import_module("gen_system_card")
+
+
+@pytest.fixture(autouse=True)
+def _clean_runtime_attestation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipeline, "_runtime_attestation_warnings", lambda: [])
 
 
 def _write_yaml(path: Path, data: dict[str, Any]) -> Path:

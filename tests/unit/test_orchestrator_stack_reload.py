@@ -345,6 +345,29 @@ def test_status_attestation_detects_mmproj_drift() -> None:
     ) == "mmproj-drift"
 
 
+def test_runtime_attestation_warnings_report_model_drift(monkeypatch) -> None:
+    info = stack_commands.ProcessInfo(
+        role="frontdoor",
+        pid=123,
+        port=8070,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="frontdoor.log",
+    )
+
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {"frontdoor": info})
+    monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "process_cmdline",
+        lambda _pid: ["llama-server", "-m", "/models/stale.gguf"],
+    )
+
+    assert stack_commands.runtime_attestation_warnings() == [
+        "frontdoor pid 123 expected current.gguf; live cmdline has stale.gguf"
+    ]
+
+
 def test_cmd_status_prints_model_attestation_warning(monkeypatch, capsys) -> None:
     info = stack_commands.ProcessInfo(
         role="frontdoor",

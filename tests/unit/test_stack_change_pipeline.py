@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scripts.registry import stack_change_pipeline as pipeline
@@ -26,6 +27,11 @@ PROMOTION_GATE_COMMAND = "promotion_gate: run uv run pytest -q " + " ".join(
     PROMOTION_GATE_TARGETS
 )
 SURFACE_INVENTORY_LINE = f"surface_inventory: run {SURFACE_INVENTORY_COMMAND}"
+
+
+@pytest.fixture(autouse=True)
+def _clean_runtime_attestation(monkeypatch):
+    monkeypatch.setattr(pipeline, "_runtime_attestation_warnings", lambda: [])
 
 
 def test_promotion_gate_includes_benchmark_preflight_regressions() -> None:
@@ -353,11 +359,14 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "guard_all_surfaces",
         "guard_strict",
         "q_scorer_priors",
+        "runtime_attestation",
         "simulated_fixtures",
         "promotion_gate",
     }
     q_scorer_step = next(step for step in check_report.steps if step.name == "q_scorer_priors")
     assert q_scorer_step.status == "ok"
+    runtime_step = next(step for step in check_report.steps if step.name == "runtime_attestation")
+    assert runtime_step.status == "ok"
     operator_step = next(step for step in check_report.steps if step.name == "operator_summary")
     assert operator_step.status == "ok"
     check_config = _config(tmp_path, mode="check")
@@ -516,6 +525,43 @@ def test_q_scorer_prior_source_errors_block_promotion_gate(
     assert q_scorer_step.errors == [
         "live q_scorer role 'frontdoor' uses throughput source "
         "degraded_fallback; expected stack_priors"
+    ]
+    assert promotion_step.status == "skipped"
+
+
+def test_runtime_attestation_warnings_block_promotion_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    monkeypatch.setattr(
+        pipeline,
+        "_runtime_attestation_warnings",
+        lambda: ["frontdoor pid 123 expected current.gguf; live cmdline has stale.gguf"],
+    )
+
+    def fake_run(cmd, **_kwargs):
+        if cmd[:4] == ["uv", "run", "pytest", "-q"]:
+            raise AssertionError("promotion gate should be skipped on runtime drift")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    config = StackChangePipelineConfig(
+        **{
+            **update_config.__dict__,
+            "run_promotion_gate": True,
+            "mode": "check",
+        }
+    )
+    report = run_stack_change_pipeline(config)
+
+    runtime_step = next(step for step in report.steps if step.name == "runtime_attestation")
+    promotion_step = next(step for step in report.steps if step.name == "promotion_gate")
+    assert not report.ok
+    assert runtime_step.status == "failed"
+    assert runtime_step.errors == [
+        "live process drift: frontdoor pid 123 expected current.gguf; live cmdline has stale.gguf"
     ]
     assert promotion_step.status == "skipped"
 

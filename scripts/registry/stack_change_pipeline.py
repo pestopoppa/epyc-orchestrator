@@ -643,6 +643,12 @@ def _promotion_gate_command() -> list[str]:
     return ["uv", "run", "pytest", "-q", *PROMOTION_GATE_TARGETS]
 
 
+def _runtime_attestation_warnings() -> list[str]:
+    from scripts.server.stack_commands import runtime_attestation_warnings
+
+    return runtime_attestation_warnings()
+
+
 def _q_scorer_prior_sources_step(
     config: StackChangePipelineConfig,
     *,
@@ -661,6 +667,34 @@ def _q_scorer_prior_sources_step(
         name="q_scorer_priors",
         status="ok",
         details=["live q_scorer prior sources are stack-prior derived"],
+    )
+
+
+def _runtime_attestation_step(*, prior_ok: bool) -> PipelineStep:
+    if not prior_ok:
+        return PipelineStep(
+            name="runtime_attestation",
+            status="skipped",
+            warnings=["skipped because earlier stack-change checks failed"],
+        )
+    try:
+        warnings = _runtime_attestation_warnings()
+    except Exception as exc:  # noqa: BLE001
+        return PipelineStep(
+            name="runtime_attestation",
+            status="failed",
+            errors=[f"runtime attestation failed to run: {exc}"],
+        )
+    if warnings:
+        return PipelineStep(
+            name="runtime_attestation",
+            status="failed",
+            errors=[f"live process drift: {warning}" for warning in warnings],
+        )
+    return PipelineStep(
+        name="runtime_attestation",
+        status="ok",
+        details=["no concrete live model/mmproj drift detected"],
     )
 
 
@@ -768,6 +802,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
         )
     )
     report.steps.append(_q_scorer_prior_sources_step(config, prior_ok=report.ok))
+    report.steps.append(_runtime_attestation_step(prior_ok=report.ok))
     report.steps.append(
         PipelineStep(
             name="simulated_fixtures",

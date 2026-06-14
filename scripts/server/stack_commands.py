@@ -349,6 +349,86 @@ def _status_attestation(
     return "mmproj-drift"
 
 
+def _attestation_warning(
+    name: str,
+    info: ProcessInfo,
+    attestation: str,
+    cmdline: list[str],
+    launch_requirements: dict[str, str],
+) -> str | None:
+    if attestation == "model-drift":
+        expected = Path(info.model_path).name
+        actual_models = ", ".join(Path(token).name for token in cmdline if token.endswith(".gguf"))
+        return f"{name} pid {info.pid} expected {expected}; live cmdline has {actual_models}"
+    if attestation == "mmproj-drift":
+        expected = Path(str(launch_requirements.get("mmproj_path") or "")).name
+        actual_mmproj = ", ".join(
+            Path(token).name for token in _cmdline_flag_values(cmdline, "--mmproj")
+        ) or "no --mmproj"
+        return (
+            f"{name} pid {info.pid} expected mmproj {expected}; "
+            f"live cmdline has {actual_mmproj}"
+        )
+    return None
+
+
+def runtime_attestation_warnings(
+    state: dict[str, ProcessInfo] | None = None,
+) -> list[str]:
+    """Return concrete live process drift warnings without mutating stack state."""
+    state = load_state() if state is None else dict(state)
+    if not state:
+        return []
+
+    warnings: list[str] = []
+    seen_pids: set[int] = set()
+    launch_requirements_by_role = _stack_prior_launch_requirements()
+    for name, info in sorted(state.items()):
+        if info.pid != -1 and info.pid in seen_pids:
+            continue
+        seen_pids.add(info.pid)
+        cmdline: list[str] = []
+
+        if info.pid == -1:
+            alive = docker_container_running(info.role)
+        else:
+            try:
+                os.kill(info.pid, 0)
+                alive = True
+            except ProcessLookupError:
+                alive = False
+            if not alive and is_port_in_use(info.port):
+                replacement_pids = _pids_on_port(info.port)
+                if replacement_pids:
+                    info = ProcessInfo(
+                        role=info.role,
+                        pid=replacement_pids[0],
+                        port=info.port,
+                        started_at=info.started_at,
+                        model_path=info.model_path,
+                        log_file=info.log_file,
+                    )
+                    alive = True
+            cmdline = _stack_processes.process_cmdline(info.pid) if alive else []
+
+        launch_requirements = (
+            launch_requirements_by_role.get(info.role)
+            or launch_requirements_by_role.get(name)
+            or {}
+        )
+        attestation = _status_attestation(info, alive, cmdline, launch_requirements)
+        warning = _attestation_warning(
+            name,
+            info,
+            attestation,
+            cmdline,
+            launch_requirements,
+        )
+        if warning:
+            warnings.append(warning)
+    return warnings
+
+
 def _preserved_process_info(
     role: str,
     port: int,
@@ -1280,20 +1360,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             or {}
         )
         attestation = _status_attestation(info, alive, cmdline, launch_requirements)
-        if attestation == "model-drift":
-            expected = Path(info.model_path).name
-            actual_models = ", ".join(Path(token).name for token in cmdline if token.endswith(".gguf"))
-            attestation_warnings.append(
-                f"{name} pid {info.pid} expected {expected}; live cmdline has {actual_models}"
-            )
-        elif attestation == "mmproj-drift":
-            expected = Path(str(launch_requirements.get("mmproj_path") or "")).name
-            actual_mmproj = ", ".join(
-                Path(token).name for token in _cmdline_flag_values(cmdline, "--mmproj")
-            ) or "no --mmproj"
-            attestation_warnings.append(
-                f"{name} pid {info.pid} expected mmproj {expected}; live cmdline has {actual_mmproj}"
-            )
+        warning = _attestation_warning(name, info, attestation, cmdline, launch_requirements)
+        if warning:
+            attestation_warnings.append(warning)
 
         print(
             f"{name:<25} {info.port:<8} {pid_str:<10} {status:<10} "
