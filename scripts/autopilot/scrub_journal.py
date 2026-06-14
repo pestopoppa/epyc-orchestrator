@@ -30,12 +30,11 @@ Examples:
         --commit-sha de34dd4 --reason "preview"
 
 Notes:
-    - The journal is rewritten in place — the JSONL files are completely
-      regenerated from the in-memory entries (which now include the
-      bug_corrupted_by tag). The TSV is also rewritten so quick-look
-      consumers see the change.
-    - A .bak-<timestamp> backup of every overwritten file is created
-      alongside the original, so undoing the scrub is just a `mv` away.
+    - Default mode is append-only: the journal gets a supersession event
+      describing the override, and existing trial rows are not rewritten.
+    - Legacy `--rewrite-in-place` mode rewrites JSONL/TSV files from the
+      in-memory entries. A .bak-<timestamp> backup of every overwritten file
+      is created alongside the original.
     - The Pareto archive in autopilot_state.json is NOT touched. Tagging
       a journal entry as corrupted does NOT remove the corresponding
       Pareto point — the operator can do that separately if needed.
@@ -176,10 +175,15 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would be tagged without writing")
     ap.add_argument("--append-event", action="store_true",
-                    help="append a supersession event instead of rewriting trial rows")
+                    help="compatibility no-op; append-only supersession events are now the default")
+    ap.add_argument("--rewrite-in-place", action="store_true",
+                    help="legacy mode: rewrite JSONL/TSV trial rows instead of appending an event")
     ap.add_argument("--force-while-autopilot-alive", action="store_true",
                     help="skip the autopilot-running safety guard (rarely needed)")
     args = ap.parse_args()
+    if args.append_event and args.rewrite_in_place:
+        ap.error("--append-event and --rewrite-in-place are mutually exclusive")
+    append_mode = not args.rewrite_in_place
 
     if not any([args.trial_id_min, args.trial_id_max, args.since, args.until]):
         print(
@@ -213,7 +217,7 @@ def main() -> int:
         "bug_corrupted_by": args.commit_sha,
         "bug_corrupted_reason": (args.reason or "")[:200],
     }
-    if args.append_event:
+    if append_mode:
         tagged_ids = journal.matching_trial_ids(
             trial_id_min=args.trial_id_min,
             trial_id_max=args.trial_id_max,
@@ -244,7 +248,7 @@ def main() -> int:
         print(f"  trial_ids: {ids_preview}")
     print()
     print(f"Before scrub: trustworthy={n_before_trustworthy}")
-    if args.append_event:
+    if append_mode:
         print(
             "After  scrub: unchanged (append-event mode does not rewrite trial rows)"
         )
@@ -255,17 +259,17 @@ def main() -> int:
 
     if args.dry_run:
         print()
-        if args.append_event:
+        if append_mode:
             print("DRY-RUN — no files written. Re-run without --dry-run to append event.")
         else:
-            print("DRY-RUN — no files written. Re-run without --dry-run to apply.")
+            print("DRY-RUN — no files written. Re-run without --dry-run to rewrite files.")
         return 0
 
     if n_tagged == 0:
-        print("Nothing to tag — exiting without rewriting files.")
+        print("Nothing to tag — exiting without writing files.")
         return 0
 
-    if args.append_event:
+    if append_mode:
         event = journal.append_supersession_event(
             target_trial_ids=tagged_ids,
             fields=fields,
