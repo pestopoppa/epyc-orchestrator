@@ -964,4 +964,6 @@ def dispatch_action(
         gate=gate, archive=archive, journal=journal, state=state,
         strategy_store=strategy_store, evo=evo, watcher=watcher,
     )
+    if hasattr(ctx.tower, "set_trial_context"):
+        ctx.tower.set_trial_context(ctx.state.get("trial_counter"))
     return handler(action, ctx)

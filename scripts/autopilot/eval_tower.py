@@ -156,6 +156,27 @@ def _stable_question_qid(suite: str, prompt_text: str) -> str:
     return hashlib.sha1(payload).hexdigest()[:16]
 
 
+def _question_qid(q: dict[str, Any]) -> str:
+    explicit = str(q.get("qid") or q.get("stable_qid") or q.get("id") or "").strip()
+    if explicit:
+        return explicit
+    return _stable_question_qid(str(q.get("suite", "unknown")), str(q.get("prompt", "")))
+
+
+def _annotate_partition(questions: list[dict], partition: str) -> list[dict]:
+    annotated = []
+    for q in questions:
+        item = dict(q)
+        item["eval_partition"] = partition
+        annotated.append(item)
+    return annotated
+
+
+def _audit_seed(trial_id: int, core_id: str) -> int:
+    payload = f"w6-audit-v1\x00{trial_id}\x00{core_id}".encode("utf-8")
+    return int(hashlib.sha256(payload).hexdigest()[:16], 16)
+
+
 def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
     registry_path = (
         Path(__file__).resolve().parents[2] / "orchestration" / "model_registry.yaml"
@@ -298,6 +319,7 @@ class QuestionResult:
     exogenous_unrecovered: bool = False
     external_restart: bool = False
     retry_count: int = 0
+    eval_partition: str = "core"
 
 
 # EV-6: Cross-family verification constraint.
@@ -346,7 +368,18 @@ class EvalTower:
         self._sentinels: list[dict] | None = None
         self._pool = None
         self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
+        self._trial_id_context: int | None = None
         self.on_question = on_question
+
+    def set_trial_context(self, trial_id: int | str | None) -> None:
+        """Set the current AutoPilot trial id for deterministic audit sampling."""
+        try:
+            self._trial_id_context = int(trial_id) if trial_id is not None else None
+        except (TypeError, ValueError):
+            self._trial_id_context = None
+
+    def _resolve_trial_id(self, trial_id: int | None = None) -> int | None:
+        return trial_id if trial_id is not None else self._trial_id_context
 
     # ── sentinel questions (T0) ──────────────────────────────────
 
@@ -517,6 +550,38 @@ class EvalTower:
         self._core_cache[cache_key] = loaded
         return loaded
 
+    def _load_audit_block(
+        self,
+        core_questions: list[dict],
+        audit_n: int,
+        trial_id: int,
+        core_id: str,
+    ) -> tuple[list[dict], int]:
+        pool = self._load_pool()
+        if not pool:
+            raise ValueError("question pool unavailable for W6 audit block")
+
+        excluded_qids = {_question_qid(q) for q in core_questions}
+        filtered: dict[str, list[dict]] = {}
+        for suite, suite_qs in pool.items():
+            keep = [
+                q
+                for q in suite_qs
+                if _question_qid(q) not in excluded_qids and _is_scoreable_question(q)
+            ]
+            if keep:
+                filtered[suite] = keep
+        if not filtered:
+            raise ValueError("question pool has no scoreable non-core W6 audit items")
+
+        seed = _audit_seed(trial_id, core_id)
+        questions = _sample_scoreable_eval_questions(
+            filtered,
+            audit_n,
+            random.Random(seed),
+        )
+        return questions, seed
+
     # ── single question evaluation ───────────────────────────────
 
     def _eval_question(
@@ -533,6 +598,7 @@ class EvalTower:
         scoring_method = q.get("scoring_method", "exact_match")
         scoring_config = q.get("scoring_config", {})
         image_path = q.get("image_path", "")
+        eval_partition = str(q.get("eval_partition") or "core")
 
         if self.on_question:
             self.on_question(prompt)
@@ -605,6 +671,7 @@ class EvalTower:
                 exogenous_unrecovered=bool(meta.get("exogenous_unrecovered", False)),
                 external_restart=bool(meta.get("external_restart", False)),
                 retry_count=int(meta.get("retry_count", 0)),
+                eval_partition=eval_partition,
             )
         except Exception as e:
             elapsed = time.time() - start
@@ -616,6 +683,7 @@ class EvalTower:
                 qid=stable_qid,
                 error=str(e),
                 elapsed_s=elapsed,
+                eval_partition=eval_partition,
             )
 
     def _eval_batch(
@@ -746,12 +814,35 @@ class EvalTower:
             {
                 "qid": r.qid or _stable_question_qid(str(r.suite), str(r.prompt)),
                 "suite": r.suite,
+                "partition": r.eval_partition or "core",
                 "correct": bool(r.correct),
                 "latency_ms": int(round(max(0.0, r.elapsed_s) * 1000)),
                 "tools_used": int(r.tools_used or 0),
             }
             for r in results
         ]
+        partition_correct: dict[str, list[bool]] = {}
+        partition_suite_correct: dict[str, dict[str, list[bool]]] = {}
+        for r in results:
+            partition = r.eval_partition or "core"
+            partition_correct.setdefault(partition, []).append(r.correct)
+            partition_suite_correct.setdefault(partition, {}).setdefault(
+                r.suite, []
+            ).append(r.correct)
+        partition_quality = {
+            partition: (sum(vals) / len(vals)) * 3.0
+            for partition, vals in partition_correct.items()
+        }
+        partition_counts = {
+            partition: len(vals) for partition, vals in partition_correct.items()
+        }
+        partition_suite_quality = {
+            partition: {
+                suite: (sum(vals) / len(vals)) * 3.0
+                for suite, vals in suites.items()
+            }
+            for partition, suites in partition_suite_correct.items()
+        }
 
         # Routing distribution
         route_counts: dict[str, int] = {}
@@ -877,6 +968,9 @@ class EvalTower:
                 "correct": correct_count,
                 "total": len(results),
                 "per_suite_counts": per_suite_counts,
+                "partition_quality": partition_quality,
+                "partition_counts": partition_counts,
+                "partition_suite_quality": partition_suite_quality,
                 "errors": sum(1 for r in results if r.error),
                 "speed_semantics": "speed is the objective speed used by safety/Pareto; median_request_tps and aggregate_tps retain raw throughput components",
                 "speed_metric_mode": speed_metric_mode,
@@ -978,13 +1072,26 @@ class EvalTower:
 
         return self._aggregate(results, tier=0)
 
-    def eval_t1(self, n: int = 100, seed: int = 42) -> EvalResult:
+    def eval_t1(
+        self,
+        n: int = 100,
+        seed: int = 42,
+        trial_id: int | None = None,
+    ) -> EvalResult:
         """Tier 1: 100 stratified questions from benchmark pool, ~5min."""
         configured_core_id = os.environ.get("AUTOPILOT_T1_CORE_ID", "").strip()
         configured_core_path = os.environ.get("AUTOPILOT_T1_CORE_PATH", "").strip()
         core_metadata: dict[str, Any] = {}
         core_path = ""
         core_selection = "legacy_pool_seed"
+        resolved_trial_id = self._resolve_trial_id(trial_id)
+        audit_policy: dict[str, Any] = {
+            "enabled": os.environ.get("AUTOPILOT_W6_AUDIT_BLOCK") == "1",
+            "requested_n": max(0, _env_int("AUTOPILOT_W6_AUDIT_N", 10)),
+            "every_n_trials": max(
+                1, _env_int("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", 1)
+            ),
+        }
 
         if configured_core_path and not configured_core_id:
             error = "AUTOPILOT_T1_CORE_PATH requires AUTOPILOT_T1_CORE_ID"
@@ -1034,11 +1141,76 @@ class EvalTower:
             questions = _sample_scoreable_eval_questions(pool, n, rng)
             core_id = f"legacy_pool_seed_{seed}_n{n}"
 
+        audit_questions: list[dict] = []
+        if audit_policy["enabled"] and audit_policy["requested_n"] > 0:
+            if resolved_trial_id is None:
+                error = "AUTOPILOT_W6_AUDIT_BLOCK=1 requires a trial_id"
+                log.error("T1 W6 audit block misconfigured: %s", error)
+                return EvalResult(
+                    tier=1,
+                    quality=0,
+                    speed=0,
+                    cost=0,
+                    reliability=0,
+                    core_id=core_id,
+                    details={
+                        "core_id": core_id,
+                        "audit_policy": audit_policy,
+                        "audit_error": error,
+                    },
+                )
+            audit_policy["trial_id"] = resolved_trial_id
+            if resolved_trial_id % audit_policy["every_n_trials"] == 0:
+                try:
+                    audit_questions, audit_seed = self._load_audit_block(
+                        questions,
+                        audit_policy["requested_n"],
+                        resolved_trial_id,
+                        core_id,
+                    )
+                    audit_policy.update(
+                        {
+                            "active": True,
+                            "seed": audit_seed,
+                            "actual_n": len(audit_questions),
+                        }
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.error("T1 W6 audit block load failed: %s", exc)
+                    return EvalResult(
+                        tier=1,
+                        quality=0,
+                        speed=0,
+                        cost=0,
+                        reliability=0,
+                        core_id=core_id,
+                        details={
+                            "core_id": core_id,
+                            "audit_policy": audit_policy,
+                            "audit_error": str(exc),
+                        },
+                    )
+            else:
+                audit_policy.update(
+                    {
+                        "active": False,
+                        "actual_n": 0,
+                        "skip_reason": "trial_not_on_audit_cadence",
+                    }
+                )
+        else:
+            audit_policy.update({"active": False, "actual_n": 0})
+
         # Tool-use sentinels join the JOURNALED eval (T1) so get_eval_secret /
         # tool_helpfulness telemetry reaches the trial record + planner. Inert
         # ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
         base_core_questions = len(questions)
-        questions = questions + self._load_tool_sentinels()
+        base_audit_questions = len(audit_questions)
+        questions = (
+            _annotate_partition(questions, "core")
+            + _annotate_partition(audit_questions, "audit")
+            + _annotate_partition(self._load_tool_sentinels(), "tool_sentinel")
+        )
 
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=10, label="T1")
@@ -1053,6 +1225,8 @@ class EvalTower:
                 "core_metadata": core_metadata,
                 "requested_n": n,
                 "base_core_questions": base_core_questions,
+                "base_audit_questions": base_audit_questions,
+                "audit_policy": audit_policy,
             }
         )
         return result
@@ -1068,7 +1242,10 @@ class EvalTower:
         questions = _sample_scoreable_eval_questions(pool, n, rng)
         # Tool-use sentinels also join T2 (the journaled deep eval) for the same
         # reason as T1. Inert ([]) unless AUTOPILOT_TOOL_SENTINELS=1.
-        questions = questions + self._load_tool_sentinels()
+        questions = (
+            _annotate_partition(questions, "core")
+            + _annotate_partition(self._load_tool_sentinels(), "tool_sentinel")
+        )
 
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=50, label="T2")
@@ -1076,13 +1253,19 @@ class EvalTower:
         return self._aggregate(results, tier=2)
 
     def evaluate(
-        self, tier: int = 0, n: int | None = None, seed: int = 42
+        self,
+        tier: int = 0,
+        n: int | None = None,
+        seed: int = 42,
+        trial_id: int | None = None,
     ) -> EvalResult:
         """Run evaluation at specified tier."""
         if tier == 0:
             return self.eval_t0()
         elif tier == 1:
-            return self.eval_t1(n=n or 100, seed=seed)
+            if trial_id is None:
+                return self.eval_t1(n=n or 100, seed=seed)
+            return self.eval_t1(n=n or 100, seed=seed, trial_id=trial_id)
         elif tier == 2:
             return self.eval_t2(n=n or 500, seed=seed)
         else:
@@ -1116,7 +1299,12 @@ class EvalTower:
             log.warning("Could not capture traces: %s", e)
             return ""
 
-    def hybrid_eval(self, seed: int = 42, t1_n: int = 50) -> EvalResult:
+    def hybrid_eval(
+        self,
+        seed: int = 42,
+        t1_n: int = 50,
+        trial_id: int | None = None,
+    ) -> EvalResult:
         """Hybrid evaluation: T1 as the real gate; legacy T0 prefilter is opt-in.
 
         Fable5 instrument review found the T0 sentinel slice can hide harder
@@ -1126,7 +1314,10 @@ class EvalTower:
         """
         if os.environ.get("AUTOPILOT_HYBRID_T0_GATE") != "1":
             log.info("Hybrid eval: T0 gate disabled, running T1 (%d questions)...", t1_n)
-            t1 = self.eval_t1(n=t1_n, seed=seed)
+            if trial_id is None:
+                t1 = self.eval_t1(n=t1_n, seed=seed)
+            else:
+                t1 = self.eval_t1(n=t1_n, seed=seed, trial_id=trial_id)
             log.info("Hybrid eval: T1 result q=%.3f r=%.2f", t1.quality, t1.reliability)
             return t1
 
@@ -1137,7 +1328,10 @@ class EvalTower:
 
         log.info("Hybrid eval: T0 passed (q=%.3f), running T1 (%d questions)...",
                  t0.quality, t1_n)
-        t1 = self.eval_t1(n=t1_n, seed=seed)
+        if trial_id is None:
+            t1 = self.eval_t1(n=t1_n, seed=seed)
+        else:
+            t1 = self.eval_t1(n=t1_n, seed=seed, trial_id=trial_id)
         log.info("Hybrid eval: T1 result q=%.3f r=%.2f", t1.quality, t1.reliability)
         return t1
 

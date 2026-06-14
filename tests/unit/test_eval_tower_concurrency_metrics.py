@@ -98,6 +98,7 @@ def test_aggregate_emits_compact_stable_question_results() -> None:
         {
             "qid": expected_qid,
             "suite": "math",
+            "partition": "core",
             "correct": True,
             "latency_ms": 1234,
             "tools_used": 2,

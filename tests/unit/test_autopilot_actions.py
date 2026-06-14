@@ -162,6 +162,31 @@ def test_dispatcher_routes_to_correct_handler(monkeypatch) -> None:
     assert captured["ctx_type"] == "_ActionContext"
 
 
+def test_dispatcher_sets_tower_trial_context(monkeypatch) -> None:
+    captured = {}
+
+    class FakeTower:
+        def set_trial_context(self, trial_id):
+            captured["trial_id"] = trial_id
+
+    def fake_handler(action, ctx):
+        captured["handler_saw_trial_id"] = captured.get("trial_id")
+        return ("EVAL_SENTINEL", "test_species")
+
+    monkeypatch.setitem(actions._ACTION_HANDLERS, "seed_batch", fake_handler)
+
+    result, species = actions.dispatch_action(
+        {"type": "seed_batch", "n_questions": 5},
+        seeder="seeder_obj", swarm="swarm_obj", forge=None, lab=None, tower=FakeTower(),
+        gate=None, archive=None, journal=None, state={"trial_counter": 817},
+    )
+
+    assert result == "EVAL_SENTINEL"
+    assert species == "test_species"
+    assert captured["trial_id"] == 817
+    assert captured["handler_saw_trial_id"] == 817
+
+
 def test_action_handlers_registered_for_all_known_types() -> None:
     """Sanity check: every documented action type has a handler."""
     expected = {
