@@ -128,6 +128,30 @@ def test_archive_authority_diagnostic_matches_reconstructed_state() -> None:
     assert diagnostic["journal_frontier_count"] == 1
 
 
+def test_archive_authority_diagnostic_ignores_nonsemantic_entry_metadata() -> None:
+    rows = [_journal_row(1, quality=1.2)]
+    archive = json.loads(json.dumps(_archive(rows)))
+    for entries in (
+        archive["all_entries"],
+        archive["frontier"],
+        archive["frontiers_by_tier"]["1"],
+    ):
+        entries[0].update(
+            {
+                "config_fingerprint": "",
+                "git_tag": "",
+                "n_reproductions": 1,
+                "species": "runtime-only-label",
+                "timestamp": "2026-06-14T00:00:01.001Z",
+            }
+        )
+    state = {"trial_counter": 2, "pareto_archive": archive}
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "match"
+
+
 def test_archive_authority_diagnostic_detects_archive_drift() -> None:
     rows = [_journal_row(1, quality=1.2)]
     archive = json.loads(json.dumps(_archive(rows)))

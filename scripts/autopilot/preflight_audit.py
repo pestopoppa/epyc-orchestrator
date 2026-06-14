@@ -143,19 +143,18 @@ def _trial_id(row: dict) -> int | None:
 
 def _archive_entry_view(entry: dict) -> dict:
     view: dict[str, object] = {}
-    for field in (
-        "trial_id",
-        "objectives",
-        "git_tag",
-        "species",
-        "is_production_best",
-        "timestamp",
-        "eval_tier",
-        "config_fingerprint",
-        "n_reproductions",
-    ):
+    for field in ("trial_id", "objectives", "eval_tier"):
         if field in entry:
             view[field] = entry[field]
+    fingerprint = entry.get("config_fingerprint")
+    if fingerprint:
+        view["config_fingerprint"] = fingerprint
+    try:
+        reproductions = int(entry.get("n_reproductions"))
+    except (TypeError, ValueError):
+        reproductions = 0
+    if reproductions > 1:
+        view["n_reproductions"] = reproductions
     return view
 
 
