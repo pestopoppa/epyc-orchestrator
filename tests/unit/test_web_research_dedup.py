@@ -228,3 +228,103 @@ class TestSourceQuarantine:
         assert source["synthesis"].startswith("> SOURCE-QUARANTINE:")
         assert "Ignore previous instructions" in source["synthesis"]
         assert result["pages_synthesized"] == 1
+
+    def test_web_research_empty_search_results_are_diagnosable(self, monkeypatch):
+        def fake_web_search(query, max_results=5, domain_filter=None):
+            return {
+                "success": True,
+                "backend": "fake",
+                "elapsed_ms": 7,
+                "results": [],
+            }
+
+        monkeypatch.setattr(research_mod, "web_search", fake_web_search)
+
+        result = _web_research_impl("empty query", max_results=3, max_pages=2)
+
+        assert result["success"] is True
+        assert result["sources"] == []
+        assert result["search_backend"] == "fake"
+        assert result["search_result_count"] == 0
+        assert result["pages_attempted"] == 0
+        assert result["pages_fetched"] == 0
+        assert result["pages_fetched_successful"] == 0
+        assert result["pages_synthesized"] == 0
+        assert result["fetch_failures"] == 0
+        assert result["synthesis_failures"] == 0
+        assert result["no_results_reason"] == "search_returned_no_results"
+
+    def test_web_research_fetch_failures_are_counted(self, monkeypatch):
+        def fake_web_search(query, max_results=5, domain_filter=None):
+            return {
+                "success": True,
+                "backend": "fake",
+                "elapsed_ms": 1,
+                "results": [
+                    {"url": "https://example.test/good", "title": "Good", "snippet": "Good snippet"},
+                    {"url": "https://example.test/bad", "title": "Bad", "snippet": "Bad snippet"},
+                ],
+            }
+
+        def fake_fetch_page(url, max_length=6000):
+            if url.endswith("/bad"):
+                return {"url": url, "content": "", "success": False, "error": "fetch failed"}
+            return {
+                "url": url,
+                "content": "Useful source content about the query. " * 8,
+                "success": True,
+                "retrieved": "2026-06-12T00:00:00Z",
+                "content_sha256": "abcdef1234567890",
+            }
+
+        def fake_synthesize_page(url, title, content, query):
+            return {"url": url, "title": title, "synthesis": "Useful synthesized answer.", "success": True}
+
+        monkeypatch.setattr(research_mod, "web_search", fake_web_search)
+        monkeypatch.setattr(research_mod, "_fetch_page", fake_fetch_page)
+        monkeypatch.setattr(research_mod, "_synthesize_page", fake_synthesize_page)
+
+        result = _web_research_impl("test query", max_results=2, max_pages=2)
+
+        assert result["search_result_count"] == 2
+        assert result["pages_attempted"] == 2
+        assert result["pages_fetched_successful"] == 1
+        assert result["fetch_failures"] == 1
+        assert result["pages_fetched"] == 1
+        assert result["pages_synthesized"] == 1
+        assert result["synthesis_failures"] == 0
+
+    def test_web_research_synthesis_failures_are_counted(self, monkeypatch):
+        def fake_web_search(query, max_results=5, domain_filter=None):
+            return {
+                "success": True,
+                "backend": "fake",
+                "elapsed_ms": 1,
+                "results": [
+                    {"url": "https://example.test/source", "title": "Source", "snippet": "Snippet"},
+                ],
+            }
+
+        def fake_fetch_page(url, max_length=6000):
+            return {
+                "url": url,
+                "content": "Useful source content about the query. " * 8,
+                "success": True,
+                "retrieved": "2026-06-12T00:00:00Z",
+                "content_sha256": "abcdef1234567890",
+            }
+
+        def fake_synthesize_page(url, title, content, query):
+            return {"url": url, "title": title, "synthesis": "", "success": False, "error": "boom"}
+
+        monkeypatch.setattr(research_mod, "web_search", fake_web_search)
+        monkeypatch.setattr(research_mod, "_fetch_page", fake_fetch_page)
+        monkeypatch.setattr(research_mod, "_synthesize_page", fake_synthesize_page)
+
+        result = _web_research_impl("test query", max_results=1, max_pages=1)
+
+        assert result["pages_attempted"] == 1
+        assert result["pages_fetched_successful"] == 1
+        assert result["pages_fetched"] == 1
+        assert result["pages_synthesized"] == 0
+        assert result["synthesis_failures"] == 1

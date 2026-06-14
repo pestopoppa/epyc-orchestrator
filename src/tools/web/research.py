@@ -798,21 +798,53 @@ def _web_research_impl(
     # Step 1: Search
     search_result = web_search(query, max_results=max_results, domain_filter=domain_filter)
     if not search_result["success"]:
+        total_elapsed = (time.perf_counter() - t0) * 1000
         return {
             "success": False,
             "error": f"Search failed: {search_result.get('error', 'unknown')}",
             "query": query,
+            "sources": [],
+            "search_result_count": 0,
+            "pages_attempted": 0,
+            "pages_fetched": 0,
+            "pages_fetched_successful": 0,
+            "pages_synthesized": 0,
+            "pages_irrelevant": 0,
+            "irrelevant_rate": 0.0,
+            "fetch_failures": 0,
+            "synthesis_failures": 0,
+            "dedup_paragraphs_removed": 0,
+            "dedup_chars_saved": 0,
+            "total_elapsed_ms": total_elapsed,
+            "search_backend": search_result.get("backend", "unknown"),
+            "search_elapsed_ms": search_result.get("elapsed_ms", 0),
+            "no_results_reason": "search_failed",
         }
 
     search_backend = search_result.get("backend", "unknown")
     results = search_result["results"]
     if not results:
+        total_elapsed = (time.perf_counter() - t0) * 1000
         return {
             "success": True,
             "query": query,
             "sources": [],
             "synthesis": "No search results found.",
+            "search_result_count": 0,
+            "pages_attempted": 0,
+            "pages_fetched": 0,
+            "pages_fetched_successful": 0,
+            "pages_synthesized": 0,
+            "pages_irrelevant": 0,
+            "irrelevant_rate": 0.0,
+            "fetch_failures": 0,
+            "synthesis_failures": 0,
+            "dedup_paragraphs_removed": 0,
+            "dedup_chars_saved": 0,
+            "total_elapsed_ms": total_elapsed,
+            "search_backend": search_backend,
             "search_elapsed_ms": search_result.get("elapsed_ms", 0),
+            "no_results_reason": "search_returned_no_results",
         }
 
     # Step 1.5: Rerank by semantic relevance (feature-gated)
@@ -955,15 +987,23 @@ def _web_research_impl(
 
     total_elapsed = (time.perf_counter() - t0) * 1000
     synth_count = sum(1 for s in sources if "synthesis" in s)
+    fetch_failures = sum(1 for p in fetched.values() if not p.get("success"))
+    fetch_successes = sum(1 for p in fetched.values() if p.get("success"))
+    synthesis_failures = sum(1 for s in synthesized if not s.get("success"))
 
     return {
         "success": True,
         "query": query,
         "sources": sources,
+        "search_result_count": len(results),
+        "pages_attempted": len(pages_to_fetch),
         "pages_fetched": len(to_synthesize),
+        "pages_fetched_successful": fetch_successes,
         "pages_synthesized": synth_count,
         "pages_irrelevant": len(irrelevant_pages),
         "irrelevant_rate": round(irrelevant_rate, 3),
+        "fetch_failures": fetch_failures,
+        "synthesis_failures": synthesis_failures,
         "dedup_paragraphs_removed": dedup_stats["paragraphs_removed"],
         "dedup_chars_saved": dedup_stats["chars_saved"],
         "total_elapsed_ms": total_elapsed,
