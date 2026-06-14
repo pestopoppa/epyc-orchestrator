@@ -933,6 +933,41 @@ Tier demotion is not an open exploration surface by default.
     )
 
 
+def test_scan_hardcoded_surfaces_flags_static_autopilot_kv_port_map(tmp_path: Path) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    autopilot.mkdir(parents=True)
+    (autopilot / "kv_compress.py").write_text(
+        "PRODUCTION_PORTS = {'frontdoor': 8070}\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_autopilot_kv_production_ports"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/autopilot/kv_compress.py"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_allows_kv_degraded_fallback_port_map(tmp_path: Path) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    autopilot.mkdir(parents=True)
+    (autopilot / "kv_compress.py").write_text(
+        "_FALLBACK_PRODUCTION_PORTS = {'frontdoor': 8070}\n"
+        "PRODUCTION_PORTS = _FALLBACK_PRODUCTION_PORTS\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert not any(
+        finding.rule_id == "static_autopilot_kv_production_ports"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_stale_launch_wrapper_inventory(tmp_path: Path) -> None:
     server = tmp_path / "scripts" / "server"
     server.mkdir(parents=True)

@@ -1,13 +1,13 @@
 """Tests for layer-adaptive KV compression (NIB2-20)."""
 
-import pytest
-
 from scripts.autopilot.kv_compress import (
     compute_layer_adaptive_weights,
     LAYER_PROFILES,
     MODEL_LAYER_COUNT_ALIASES,
     MODEL_LAYER_COUNTS,
     PRODUCTION_PORTS,
+    production_ports,
+    production_ports_from_stack_priors,
     _layer_count_for_role,
 )
 
@@ -94,3 +94,105 @@ class TestComputeLayerAdaptiveWeights:
         assert LEGACY_ARCHITECT_ROLE not in PRODUCTION_PORTS
         assert PRODUCTION_PORTS["coder_escalation"] == PRODUCTION_PORTS["frontdoor"]
         assert PRODUCTION_PORTS["worker_general"] == 8072
+
+    def test_production_ports_from_stack_priors_use_primary_physical_ports(self, tmp_path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8070
+      binary: llama.cpp
+      launch:
+        entries:
+          - {port: 8070, alias: false}
+          - {port: 8080, alias: false}
+  coder_escalation:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8070
+      binary: llama.cpp
+      launch:
+        entries:
+          - {port: 8070, alias: true}
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8072
+      binary: ik-pr1744
+      launch:
+        runtime:
+          binary_path: /mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server
+        entries:
+          - {port: 8072, alias: false}
+  candidate:
+    deployment_status: benchmark_only
+    serving:
+      endpoint: http://localhost:8099
+      binary: llama.cpp
+      launch:
+        entries:
+          - {port: 8099, alias: false}
+  embedder:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8090
+      binary: embedding-server
+      launch:
+        entries:
+          - {port: 8090, alias: false}
+""".lstrip(),
+            encoding="utf-8",
+        )
+
+        assert production_ports_from_stack_priors(priors) == {
+            "frontdoor": 8070,
+            "worker_general": 8072,
+        }
+
+    def test_production_ports_from_stack_priors_can_include_aliases(self, tmp_path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8070
+      binary: llama.cpp
+      launch: {entries: [{port: 8070, alias: false}]}
+  coder_escalation:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8070
+      binary: llama.cpp
+      launch: {entries: [{port: 8070, alias: true}]}
+  worker_math:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8072 ik-pr1744
+      binary: ik-pr1744
+      launch:
+        runtime:
+          binary_path: /mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server
+        entries:
+          - {port: 8072, alias: true}
+""".lstrip(),
+            encoding="utf-8",
+        )
+
+        assert production_ports_from_stack_priors(priors, include_aliases=True) == {
+            "coder_escalation": 8070,
+            "frontdoor": 8070,
+            "worker_math": 8072,
+        }
+
+    def test_production_ports_falls_back_when_stack_priors_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            "scripts.autopilot.kv_compress.production_ports_from_stack_priors",
+            lambda include_aliases=False: {},
+        )
+
+        assert production_ports() == PRODUCTION_PORTS

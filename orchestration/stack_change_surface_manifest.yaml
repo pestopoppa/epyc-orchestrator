@@ -100,6 +100,14 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: regenerate guidance from stack priors and system card sources
+  - rule_id: static_autopilot_kv_production_ports
+    category: production_blocker
+    owner: autopilot-instrumentation
+    consumer_scope: AutoPilot KV-compaction role-to-port routing
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive compaction role ports from generated stack priors
   - rule_id: stale_launch_wrapper_static_inventory
     category: production_blocker
     owner: stack-change-governance

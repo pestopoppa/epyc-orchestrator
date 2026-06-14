@@ -15,15 +15,20 @@ Usage by autopilot controller:
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
+import yaml
 
 log = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
 
 @dataclass
@@ -372,13 +377,107 @@ def compress_slot_adaptive(
     )
 
 
-# Production port assignments (from orchestrator_stack.py)
-PRODUCTION_PORTS = {
+# Degraded fallback only. Runtime callers use production_ports(), which reads
+# generated stack priors so slot-compaction actions follow stack changes.
+_FALLBACK_PRODUCTION_PORTS = {
     "frontdoor": 8070,
     "coder_escalation": 8070,  # shares server with frontdoor (same Qwen3.6 Q8 GGUF)
     "worker_general": 8072,
     "architect_general": 8083,
 }
+
+# Backward-compatible fallback for older imports/tests. New code should call
+# production_ports().
+PRODUCTION_PORTS = _FALLBACK_PRODUCTION_PORTS
+
+
+def _endpoint_port(endpoint: Any) -> int | None:
+    if not isinstance(endpoint, str):
+        return None
+    try:
+        return urlparse(endpoint).port
+    except ValueError:
+        return None
+
+
+def _is_slot_server(serving: dict[str, Any]) -> bool:
+    binary = serving.get("binary")
+    if binary in {"llama.cpp", "ik-pr1744"}:
+        return True
+    launch = serving.get("launch")
+    runtime = launch.get("runtime") if isinstance(launch, dict) else None
+    binary_path = runtime.get("binary_path") if isinstance(runtime, dict) else None
+    return isinstance(binary_path, str) and Path(binary_path).name == "llama-server"
+
+
+def _entry_ports(serving: dict[str, Any], *, include_aliases: bool) -> list[int]:
+    launch = serving.get("launch")
+    entries = launch.get("entries") if isinstance(launch, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return sorted(
+        entry["port"]
+        for entry in entries
+        if (
+            isinstance(entry, dict)
+            and (include_aliases or entry.get("alias") is not True)
+            and isinstance(entry.get("port"), int)
+        )
+    )
+
+
+def _load_stack_prior_roles(stack_priors_path: Path = STACK_PRIORS_PATH) -> dict[str, Any]:
+    try:
+        payload = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
+    except OSError as exc:
+        log.debug("Using fallback KV compression ports; stack priors unavailable: %s", exc)
+        return {}
+    roles = payload.get("roles")
+    return roles if isinstance(roles, dict) else {}
+
+
+def production_ports_from_stack_priors(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+    *,
+    include_aliases: bool = False,
+) -> dict[str, int]:
+    """Return live role→primary port mapping from generated stack priors.
+
+    ``include_aliases=False`` returns one entry per physical primary role so
+    compress-all actions do not hit the same server repeatedly through aliases.
+    ``include_aliases=True`` maps every live role to its endpoint port for
+    explicit operator-selected role lists.
+    """
+    ports: dict[str, int] = {}
+    for role, record in _load_stack_prior_roles(stack_priors_path).items():
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict) or not _is_slot_server(serving):
+            continue
+
+        if include_aliases:
+            port = _endpoint_port(serving.get("endpoint"))
+            if port is None:
+                ports_for_role = _entry_ports(serving, include_aliases=True)
+                port = ports_for_role[0] if ports_for_role else None
+            if port is not None:
+                ports[role] = port
+            continue
+
+        primary_ports = _entry_ports(serving, include_aliases=False)
+        if primary_ports:
+            ports[role] = primary_ports[0]
+    return dict(sorted(ports.items()))
+
+
+def production_ports(*, include_aliases: bool = False) -> dict[str, int]:
+    """Return live KV-compression ports, falling back only in degraded mode."""
+    return production_ports_from_stack_priors(include_aliases=include_aliases) or dict(
+        _FALLBACK_PRODUCTION_PORTS
+    )
 
 
 def auto_compress_all(
@@ -395,7 +494,7 @@ def auto_compress_all(
     Returns dict of role → CompressResult (or None if below threshold).
     """
     results = {}
-    for role, port in PRODUCTION_PORTS.items():
+    for role, port in production_ports().items():
         results[role] = auto_compress_if_needed(
             port, slot_id=0, threshold=threshold, keep_ratio=keep_ratio,
             role=role, layer_adaptive_profile=layer_adaptive_profile, **kwargs,

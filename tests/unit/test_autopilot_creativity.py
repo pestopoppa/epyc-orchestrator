@@ -352,8 +352,10 @@ roles:
   worker_general:
     deployment_status: live_stack
     serving:
-      binary: llama.cpp
+      binary: ik-pr1744
       launch:
+        runtime:
+          binary_path: /mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server
         entries:
           - {port: 8072, alias: false}
   reap_candidate:

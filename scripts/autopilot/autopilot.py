@@ -1391,6 +1391,15 @@ def _slot_query_ports_from_stack_priors(
     if not isinstance(roles, dict):
         return {}
 
+    def _is_slot_server(serving: dict[str, Any]) -> bool:
+        binary = serving.get("binary")
+        if binary in {"llama.cpp", "ik-pr1744"}:
+            return True
+        launch = serving.get("launch")
+        runtime = launch.get("runtime") if isinstance(launch, dict) else None
+        binary_path = runtime.get("binary_path") if isinstance(runtime, dict) else None
+        return isinstance(binary_path, str) and Path(binary_path).name == "llama-server"
+
     ports_by_role: dict[str, set[int]] = {}
     for role, record in roles.items():
         if not isinstance(role, str) or not isinstance(record, dict):
@@ -1398,7 +1407,7 @@ def _slot_query_ports_from_stack_priors(
         if record.get("deployment_status") != "live_stack":
             continue
         serving = record.get("serving")
-        if not isinstance(serving, dict) or serving.get("binary") != "llama.cpp":
+        if not isinstance(serving, dict) or not _is_slot_server(serving):
             continue
         launch = serving.get("launch")
         entries = launch.get("entries") if isinstance(launch, dict) else None

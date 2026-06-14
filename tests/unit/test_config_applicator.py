@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scripts.autopilot import config_applicator as applicator
+from scripts.autopilot import kv_compress
 
 
 def test_restart_api_with_env_uses_stack_reload(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,3 +89,51 @@ def test_apply_params_marks_partial_kv_failure() -> None:
 
     assert result["status"] == "error"
     assert result["errors"] == ["kv_compact:worker_general: slot busy"]
+
+
+def test_kv_compaction_applicator_defaults_to_physical_ports(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[int, float]] = []
+
+    def fake_ports(*, include_aliases: bool = False) -> dict[str, int]:
+        if include_aliases:
+            return {"frontdoor": 8070, "coder_escalation": 8070, "worker_general": 8072}
+        return {"frontdoor": 8070, "worker_general": 8072}
+
+    def fake_compress_slot(*, port: int, keep_ratio: float, **_kwargs):
+        calls.append((port, keep_ratio))
+        return kv_compress.CompressResult(success=True, port=port)
+
+    monkeypatch.setattr(kv_compress, "production_ports", fake_ports)
+    monkeypatch.setattr(kv_compress, "compress_slot", fake_compress_slot)
+
+    result = applicator.KvCompactionApplicator().apply({"kv.keep_ratio": 0.4})
+
+    assert result.status == "ok"
+    assert set(result.payload["per_role"]) == {"frontdoor", "worker_general"}
+    assert calls == [(8070, 0.4), (8072, 0.4)]
+
+
+def test_kv_compaction_applicator_honors_explicit_alias_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    def fake_ports(*, include_aliases: bool = False) -> dict[str, int]:
+        if include_aliases:
+            return {"frontdoor": 8070, "coder_escalation": 8070}
+        return {"frontdoor": 8070}
+
+    def fake_compress_slot(*, port: int, **_kwargs):
+        calls.append(port)
+        return kv_compress.CompressResult(success=True, port=port)
+
+    monkeypatch.setattr(kv_compress, "production_ports", fake_ports)
+    monkeypatch.setattr(kv_compress, "compress_slot", fake_compress_slot)
+
+    result = applicator.KvCompactionApplicator(roles=["coder_escalation"]).apply(
+        {"kv.keep_ratio": 0.4}
+    )
+
+    assert result.status == "ok"
+    assert set(result.payload["per_role"]) == {"coder_escalation"}
+    assert calls == [8070]

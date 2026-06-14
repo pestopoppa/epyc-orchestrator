@@ -222,6 +222,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="derive AutoPilot operator endpoints and tier guidance from stack priors/system card",
     ),
     HardcodedSurfaceRule(
+        rule_id="static_autopilot_kv_production_ports",
+        category="production_blocker",
+        pattern=r"\bPRODUCTION_PORTS\s*=\s*\{",
+        path_globs=("scripts/autopilot/kv_compress.py",),
+        remediation="derive KV-compaction role ports from generated stack priors",
+    ),
+    HardcodedSurfaceRule(
         rule_id="stale_launch_wrapper_static_inventory",
         category="production_blocker",
         pattern=(

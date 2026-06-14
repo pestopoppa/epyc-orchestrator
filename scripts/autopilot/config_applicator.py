@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 import sys
@@ -192,7 +191,8 @@ class KvCompactionApplicator:
     def apply(self, params: dict[str, Any]) -> ApplyResult:
         try:
             from scripts.autopilot.kv_compress import (
-                PRODUCTION_PORTS, compress_slot,
+                compress_slot,
+                production_ports,
             )
         except ImportError as exc:
             log.error("kv_compress module not available: %s", exc)
@@ -213,11 +213,13 @@ class KvCompactionApplicator:
         if not kwargs:
             return ApplyResult(status="no_changes", payload={"status": "no_changes"})
 
-        target_roles = self.roles or list(PRODUCTION_PORTS.keys())
+        default_ports = production_ports()
+        role_ports = production_ports(include_aliases=True)
+        target_roles = self.roles or list(default_ports.keys())
         payload: dict[str, Any] = {"per_role": {}}
         errors: list[str] = []
         for role in target_roles:
-            port = PRODUCTION_PORTS.get(role)
+            port = role_ports.get(role)
             if port is None:
                 payload["per_role"][role] = {"status": "skipped", "reason": "no port mapping"}
                 continue
@@ -418,9 +420,9 @@ def apply_kv_compact(
     """Apply KV-compression trial params via kv_compress.compress_slot().
 
     params: NumericSwarm trial values like {"kv.keep_ratio": 0.5, "kv.keep_first": 4, "kv.n_future": 128}.
-    roles: subset of roles to compact (default = all PRODUCTION_PORTS). Each role
-           is compacted in turn; only idle slots are touched (slot state checked
-           inside the underlying compress_slot endpoint via the server).
+    roles: subset of roles to compact (default = physical primary roles from
+           stack priors). Each role is compacted in turn; only idle slots are
+           touched inside the underlying compress_slot endpoint via the server.
     """
     return KvCompactionApplicator(roles=roles).apply(params).to_dict()
 
