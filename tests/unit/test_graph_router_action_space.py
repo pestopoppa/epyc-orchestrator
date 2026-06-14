@@ -10,7 +10,11 @@ import numpy as np
 import pytest
 import yaml
 
-from scripts.graph_router.action_space import load_live_canonical_actions, normalize_action
+from scripts.graph_router.action_space import (
+    DEGRADED_CANONICAL_ACTIONS,
+    load_live_canonical_actions,
+    normalize_action,
+)
 from scripts.graph_router.extract_training_data import extract as extract_training_data
 from scripts.graph_router.extract_verifier_training_data import extract as extract_verifier_data
 from scripts.graph_router.extract_verifier_training_data_debiased import (
@@ -101,6 +105,49 @@ def test_live_actions_derive_from_stack_priors_and_normalize_legacy_labels(
     assert normalize_action(legacy_worker) == "worker_general"
     assert normalize_action("frontdoor:direct") is None
     assert normalize_action("frontdoor:direct", include_seeded_frontdoor=True) == "frontdoor"
+
+
+def test_live_actions_keep_preferred_order_and_append_new_live_roles(tmp_path: Path) -> None:
+    priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {
+            "unit_new_role": _stack_prior_record("unit_new_role"),
+            "vision_escalation": _stack_prior_record("vision_escalation"),
+            "worker_general": _stack_prior_record("worker_general"),
+            "candidate": _stack_prior_record(
+                "candidate",
+                deployment_status="benchmark_or_candidate",
+            ),
+            "frontdoor": _stack_prior_record("frontdoor"),
+            "architect_general": _stack_prior_record("architect_general"),
+        },
+    )
+
+    assert load_live_canonical_actions(priors) == [
+        "frontdoor",
+        "architect_general",
+        "worker_general",
+        "vision_escalation",
+        "unit_new_role",
+    ]
+
+
+def test_live_actions_fall_back_when_stack_prior_roles_are_malformed(tmp_path: Path) -> None:
+    priors = tmp_path / "stack_priors.yaml"
+    priors.write_text(
+        yaml.safe_dump(
+            {
+                "stack_priors_version": 1,
+                "contract": {"schema": "epyc.stack_priors", "version": 1},
+                "status": "compiled",
+                "roles": ["frontdoor", "worker_general"],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_live_canonical_actions(priors) == DEGRADED_CANONICAL_ACTIONS
 
 
 def test_extract_training_data_remaps_preembedded_legacy_actions(
