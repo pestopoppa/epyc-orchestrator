@@ -298,7 +298,8 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
             r"\b(?:8071|8084|architect_coding|512GB|19\.6\s*t/s|12\.7\s*t/s)\b|"
             r"\bTarget ports\b|\bWARM tier demotion\b|"
             r"\bQ-scorer frontdoor throughput\b|"
-            r"\bQwen3-Coder-30B\b|\bQwen3\.5-35B\b"
+            r"\bQwen3-Coder-30B\b|\bQwen3\.5-35B\b|"
+            r"\byaml\.safe_load\b"
         ),
         path_globs=("scripts/autopilot/program.md",),
         remediation="derive AutoPilot operator endpoints and tier guidance from stack priors/system card",

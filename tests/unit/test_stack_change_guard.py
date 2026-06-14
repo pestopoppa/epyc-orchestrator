@@ -914,6 +914,31 @@ try-cheap-first (Qwen3-Coder-30B-A3B, fastest)
     )
 
 
+def test_scan_hardcoded_surfaces_flags_autopilot_program_local_yaml_reader(
+    tmp_path: Path,
+) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    autopilot.mkdir(parents=True)
+    (autopilot / "program.md").write_text(
+        """
+```python
+import yaml
+data = yaml.safe_load(open("orchestration/derived/stack_priors.yaml")) or {}
+```
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "stale_autopilot_program_stack_guidance"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/autopilot/program.md"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_allows_stack_prior_autopilot_program_guidance(tmp_path: Path) -> None:
     autopilot = tmp_path / "scripts" / "autopilot"
     autopilot.mkdir(parents=True)

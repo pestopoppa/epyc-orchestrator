@@ -257,18 +257,13 @@ curl -X POST "http://localhost:${PORT}/slots/0?action=compact" \
 **Target endpoints**: derive live primary endpoints from the generated stack-priors contract before issuing compaction requests. Do not copy endpoint tables from historical docs, and do not target retired roles or dead ports.
 
 ```bash
-uv run python - <<'PY'
-import yaml
-data = yaml.safe_load(open("orchestration/derived/stack_priors.yaml")) or {}
-for role, record in sorted((data.get("roles") or {}).items()):
-    if record.get("deployment_status") != "live_stack":
-        continue
-    serving = record.get("serving") or {}
-    endpoint = serving.get("endpoint")
-    if endpoint:
-        print(f"{role}: {endpoint}")
-PY
+uv run python scripts/autopilot/gen_system_card.py --stdout
 ```
+
+Use the generated **Live Stack Roles** table as the controller-facing endpoint
+surface. If a code path needs structured values, use shared
+`src.registry.stack_priors` helpers rather than adding local YAML parsing to
+planner prompts.
 
 **NumericSwarm integration**: Treat `keep_ratio` as a continuous parameter and `layer_weights` as a per-role vector. Evaluate quality post-compact via `tower.hybrid_eval()`. The 4D Pareto archive (quality × speed × -cost × reliability) captures the compression/quality tradeoff naturally — speed improves with compression (fewer KV entries = less memory bandwidth), quality may degrade.
 
