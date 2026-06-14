@@ -23,6 +23,11 @@ from scripts.registry.sync_procedure_role_enums import (  # noqa: E402
     ProcedureRoleSyncError,
     sync_procedure_role_enums,
 )
+from scripts.registry.render_stack_summary import (  # noqa: E402
+    DEFAULT_OUTPUT as DEFAULT_OPERATOR_SUMMARY,
+    render_current_stack_summary,
+    write_current_stack_summary,
+)
 from scripts.validate.stack_change_guard import (  # noqa: E402
     DEFAULT_SURFACE_EXCEPTIONS,
     DEFAULT_SURFACE_MANIFEST,
@@ -69,6 +74,7 @@ class StackChangePipelineConfig:
     research_registry: Path | None = DEFAULT_RESEARCH_REGISTRY
     descriptors: Path = DEFAULT_DESCRIPTOR_OUTPUT
     stack_priors: Path = DEFAULT_STACK_PRIORS
+    operator_summary: Path = DEFAULT_OPERATOR_SUMMARY
     procedure: Path = DEFAULT_PROCEDURE
     schema: Path = DEFAULT_SCHEMA
     surface_exceptions: Path = DEFAULT_SURFACE_EXCEPTIONS
@@ -543,6 +549,51 @@ def _procedure_enums(config: StackChangePipelineConfig, *, check: bool) -> Pipel
     )
 
 
+def _check_operator_summary(config: StackChangePipelineConfig) -> PipelineStep:
+    expected = render_current_stack_summary(
+        stack_priors_path=config.stack_priors,
+        registry_path=config.lean_registry,
+    )
+    try:
+        current = config.operator_summary.read_text(encoding="utf-8")
+    except OSError:
+        current = ""
+    if current == expected:
+        return PipelineStep(
+            name="operator_summary",
+            status="ok",
+            details=[f"fresh: {config.operator_summary}"],
+        )
+    return PipelineStep(
+        name="operator_summary",
+        status="stale",
+        errors=[
+            f"operator stack summary is stale or missing: {config.operator_summary}",
+            "run: uv run python scripts/registry/stack_change_pipeline.py update",
+        ],
+    )
+
+
+def _update_operator_summary(config: StackChangePipelineConfig) -> PipelineStep:
+    try:
+        write_current_stack_summary(
+            config.operator_summary,
+            stack_priors_path=config.stack_priors,
+            registry_path=config.lean_registry,
+        )
+    except OSError as exc:
+        return PipelineStep(
+            name="operator_summary",
+            status="failed",
+            errors=[f"operator stack summary update failed: {exc}"],
+        )
+    return PipelineStep(
+        name="operator_summary",
+        status="updated",
+        details=[f"wrote generated operator summary: {config.operator_summary}"],
+    )
+
+
 def _guard_step(
     name: str,
     config: StackChangePipelineConfig,
@@ -660,12 +711,14 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
         report.steps.append(_check_descriptors(config))
         report.steps.append(_check_stack_priors(config))
         report.steps.append(_procedure_enums(config, check=True))
+        report.steps.append(_check_operator_summary(config))
     else:
         descriptor_step = _update_descriptors(config)
         report.steps.append(descriptor_step)
         if descriptor_step.ok:
             report.steps.append(_update_stack_priors(config))
             report.steps.append(_procedure_enums(config, check=False))
+            report.steps.append(_update_operator_summary(config))
         else:
             report.steps.append(
                 PipelineStep(
@@ -677,6 +730,13 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
             report.steps.append(
                 PipelineStep(
                     name="procedure_enums",
+                    status="skipped",
+                    warnings=["skipped because descriptor update failed"],
+                )
+            )
+            report.steps.append(
+                PipelineStep(
+                    name="operator_summary",
                     status="skipped",
                     warnings=["skipped because descriptor update failed"],
                 )
@@ -736,6 +796,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--research-registry", type=Path, default=DEFAULT_RESEARCH_REGISTRY)
     parser.add_argument("--descriptors", type=Path, default=DEFAULT_DESCRIPTOR_OUTPUT)
     parser.add_argument("--stack-priors", type=Path, default=DEFAULT_STACK_PRIORS)
+    parser.add_argument("--operator-summary", type=Path, default=DEFAULT_OPERATOR_SUMMARY)
     parser.add_argument("--procedure", type=Path, default=DEFAULT_PROCEDURE)
     parser.add_argument("--schema", type=Path, default=DEFAULT_SCHEMA)
     parser.add_argument("--surface-exceptions", type=Path, default=DEFAULT_SURFACE_EXCEPTIONS)
@@ -770,6 +831,7 @@ def main(argv: list[str] | None = None) -> int:
         research_registry=args.research_registry,
         descriptors=args.descriptors,
         stack_priors=args.stack_priors,
+        operator_summary=args.operator_summary,
         procedure=args.procedure,
         schema=args.schema,
         surface_exceptions=args.surface_exceptions,

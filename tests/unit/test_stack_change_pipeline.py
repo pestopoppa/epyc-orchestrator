@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 
 from scripts.registry import stack_change_pipeline as pipeline
+from scripts.registry.render_stack_summary import render_current_stack_summary
 from scripts.registry.stack_change_pipeline import (
     PipelineReport,
     PipelineStep,
@@ -123,6 +124,7 @@ def _config(tmp_path: Path, *, mode: str) -> StackChangePipelineConfig:
     registry = _registry(tmp_path / "orchestration" / "model_registry.yaml")
     descriptors = tmp_path / "orchestration" / "model_descriptors.yaml"
     priors = tmp_path / "orchestration" / "derived" / "stack_priors.yaml"
+    operator_summary = tmp_path / "docs" / "generated" / "current_stack_summary.md"
     procedure = _procedure(tmp_path / "orchestration" / "procedures" / "add_model.yaml")
     schema = _schema(tmp_path / "orchestration" / "procedure.schema.json")
     return StackChangePipelineConfig(
@@ -132,6 +134,7 @@ def _config(tmp_path: Path, *, mode: str) -> StackChangePipelineConfig:
         research_registry=None,
         descriptors=descriptors,
         stack_priors=priors,
+        operator_summary=operator_summary,
         procedure=procedure,
         schema=schema,
         surface_exceptions=tmp_path / "missing_exceptions.yaml",
@@ -340,6 +343,7 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "descriptors",
         "stack_priors",
         "procedure_enums",
+        "operator_summary",
         "guard",
         "guard_all_surfaces",
         "guard_strict",
@@ -349,6 +353,15 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
     }
     q_scorer_step = next(step for step in check_report.steps if step.name == "q_scorer_priors")
     assert q_scorer_step.status == "ok"
+    operator_step = next(step for step in check_report.steps if step.name == "operator_summary")
+    assert operator_step.status == "ok"
+    check_config = _config(tmp_path, mode="check")
+    assert check_config.operator_summary.read_text(
+        encoding="utf-8"
+    ) == render_current_stack_summary(
+        stack_priors_path=check_config.stack_priors,
+        registry_path=check_config.lean_registry,
+    )
     promotion_step = next(step for step in check_report.steps if step.name == "promotion_gate")
     assert promotion_step.status == "reference"
     assert any(PROMOTION_GATE_COMMAND.removeprefix("promotion_gate: run ") in detail for detail in promotion_step.details)
@@ -520,6 +533,25 @@ def test_check_reports_stale_generated_artifact_without_writing(tmp_path: Path) 
     assert config.stack_priors.read_text(encoding="utf-8") == priors_before
 
 
+def test_check_reports_stale_operator_summary_without_writing(tmp_path: Path) -> None:
+    config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(config).ok
+    summary_before = config.operator_summary.read_text(encoding="utf-8")
+    config.operator_summary.write_text("stale\n", encoding="utf-8")
+
+    check_config = StackChangePipelineConfig(
+        **{**config.__dict__, "mode": "check"}
+    )
+    report = run_stack_change_pipeline(check_config)
+
+    assert not report.ok
+    summary_step = next(step for step in report.steps if step.name == "operator_summary")
+    assert summary_step.status == "stale"
+    assert any("operator stack summary is stale" in error for error in summary_step.errors)
+    assert config.operator_summary.read_text(encoding="utf-8") == "stale\n"
+    config.operator_summary.write_text(summary_before, encoding="utf-8")
+
+
 def test_update_refuses_to_remove_existing_descriptor_model_ids(tmp_path: Path) -> None:
     config = _config(tmp_path, mode="update")
     _write_yaml(
@@ -543,7 +575,9 @@ def test_update_refuses_to_remove_existing_descriptor_model_ids(tmp_path: Path) 
     assert any("benchmark-only-reap" in error for error in report.errors)
     assert config.descriptors.read_text(encoding="utf-8") == descriptor_before
     assert not config.stack_priors.exists()
+    assert not config.operator_summary.exists()
     assert {step.name: step.status for step in report.steps}["stack_priors"] == "skipped"
+    assert {step.name: step.status for step in report.steps}["operator_summary"] == "skipped"
 
 
 def test_check_reports_descriptor_model_removal_blocker(tmp_path: Path) -> None:

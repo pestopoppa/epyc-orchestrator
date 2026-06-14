@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,18 +14,14 @@ import yaml
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_ROOT = SCRIPT_DIR.parents[1]
 
-TRANSLATION = str.maketrans(
-    {
-        "—": "-",
-        "–": "-",
-        "→": "->",
-        "×": "x",
-        "≥": ">=",
-        "≤": "<=",
-        "≈": "~",
-        "σ": "sigma",
-        "Δ": "Delta",
-    }
+if str(DEFAULT_ROOT) not in sys.path:
+    sys.path.insert(0, str(DEFAULT_ROOT))
+
+from scripts.registry.render_stack_summary import (  # noqa: E402
+    clean_cell as _clean,
+    format_number as _format_number,
+    registry_role_rows as _registry_role_rows,
+    stack_prior_role_rows as _stack_prior_role_rows,
 )
 
 TRUST_BOUNDARY_FILES = [
@@ -38,17 +33,6 @@ TRUST_BOUNDARY_FILES = [
     "scripts/autopilot/safety_gate.py",
     "scripts/autopilot/eval_tower.py",
 ]
-
-
-def _clean(value: Any, max_len: int | None = None) -> str:
-    text = str(value if value is not None else "")
-    text = text.translate(TRANSLATION)
-    text = " ".join(text.split())
-    text = text.encode("ascii", "ignore").decode("ascii")
-    text = text.replace("|", "/")
-    if max_len is not None and len(text) > max_len:
-        return text[: max_len - 3].rstrip() + "..."
-    return text
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -64,165 +48,6 @@ def _load_json(path: Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def _nested(data: dict[str, Any], *keys: str) -> Any:
-    current: Any = data
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def _port_from_url(url: Any) -> str:
-    if not url:
-        return ""
-    match = re.search(r":(\d+)(?:/|$)", str(url))
-    return match.group(1) if match else ""
-
-
-def _format_number(value: Any) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return _clean(value) or "n/a"
-    return f"{number:.3f}".rstrip("0").rstrip(".")
-
-
-def _format_acceleration(config: Any) -> str:
-    if not isinstance(config, dict):
-        return "none"
-    raw_type = config.get("type") or config.get("spec_type") or "none"
-    accel_type = _clean(raw_type, 32)
-    details: list[str] = []
-    if "experts" in config:
-        details.append(f"experts={config['experts']}")
-    if config.get("lookup") is not None:
-        details.append(f"lookup={str(config.get('lookup')).lower()}")
-    if "draft_max" in config:
-        details.append(f"draft_max={config['draft_max']}")
-    if "spec_type" in config and config.get("spec_type") != raw_type:
-        details.append(f"spec={config['spec_type']}")
-    return accel_type if not details else f"{accel_type} ({', '.join(details)})"
-
-
-def _format_launch_requirements(requirements: Any) -> str:
-    if not isinstance(requirements, dict):
-        return "none"
-    parts: list[str] = []
-    mmproj_path = requirements.get("mmproj_path")
-    if mmproj_path:
-        parts.append(f"mmproj={Path(str(mmproj_path)).name}")
-    draft_path = requirements.get("draft_model_path")
-    if draft_path:
-        parts.append(f"draft={Path(str(draft_path)).name}")
-    return ", ".join(parts) if parts else "none"
-
-
-def _stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
-    roles = stack_priors.get("roles")
-    if not isinstance(roles, dict):
-        return []
-
-    rows: list[str] = []
-    for name, record in sorted(roles.items()):
-        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving") if isinstance(record.get("serving"), dict) else {}
-        priors = record.get("priors") if isinstance(record.get("priors"), dict) else {}
-        ports = serving.get("ports")
-        port_values = [str(port) for port in ports if isinstance(port, int)] if isinstance(ports, list) else []
-        if not port_values:
-            endpoint_port = _port_from_url(serving.get("endpoint"))
-            if endpoint_port:
-                port_values.append(endpoint_port)
-        if not port_values:
-            continue
-        launch = serving.get("launch") if isinstance(serving.get("launch"), dict) else {}
-        description = (
-            f"{_clean(record.get('deployment_status'), 32)}; "
-            f"binding={_clean(serving.get('binding'), 48)}; "
-            f"status={_clean(record.get('status'), 32)}"
-        )
-        rows.append(
-            "| "
-            + " | ".join(
-                [
-                    _clean(name, 28),
-                    _clean(", ".join(port_values), 28),
-                    _clean(record.get("display_name") or record.get("model_id") or "unknown", 44),
-                    _clean(serving.get("tier") or "n/a", 12),
-                    _clean(_format_acceleration(record.get("acceleration")), 48),
-                    _clean(_format_launch_requirements(launch.get("requirements")), 48),
-                    _clean(_format_number(priors.get("throughput_tps")), 18),
-                    _clean(description, 96),
-                ]
-            )
-            + " |"
-        )
-    return rows
-
-
-def _registry_role_rows(registry: dict[str, Any]) -> list[str]:
-    server_mode = registry.get("server_mode") or {}
-    roles = registry.get("roles") or {}
-    if not isinstance(server_mode, dict) or not isinstance(roles, dict):
-        return []
-
-    rows: list[str] = []
-    for name in sorted(server_mode):
-        if name == "dev":
-            continue
-        server_cfg = server_mode.get(name) or {}
-        role_cfg = roles.get(name) or {}
-        if not isinstance(server_cfg, dict) or not isinstance(role_cfg, dict):
-            continue
-        model_type = server_cfg.get("model_type")
-        registry_role = name in roles
-        hot_local_alias = server_cfg.get("tier") == "hot" and model_type is None
-        if not registry_role and not hot_local_alias:
-            continue
-        backend_type = _nested(role_cfg, "backend", "type") or "local"
-        if backend_type != "local":
-            continue
-        port = server_cfg.get("port") or _port_from_url(server_cfg.get("url"))
-        if not port:
-            continue
-        model = (
-            server_cfg.get("model")
-            or _nested(role_cfg, "model", "name")
-            or server_cfg.get("model_role")
-            or "unknown"
-        )
-        tier = server_cfg.get("tier") or _nested(role_cfg, "memory", "residency") or "n/a"
-        accel = _format_acceleration(
-            server_cfg.get("acceleration") or role_cfg.get("acceleration")
-        )
-        throughput = (
-            server_cfg.get("throughput")
-            or _nested(role_cfg, "performance", "optimized_tps")
-            or _nested(role_cfg, "performance", "baseline_tps")
-            or "n/a"
-        )
-        description = server_cfg.get("description") or role_cfg.get("description") or ""
-        rows.append(
-            "| "
-            + " | ".join(
-                [
-                    _clean(name, 28),
-                    _clean(port, 12),
-                    _clean(model, 44),
-                    _clean(tier, 12),
-                    _clean(accel, 48),
-                    "none",
-                    _clean(throughput, 18),
-                    _clean(description, 96),
-                ]
-            )
-            + " |"
-        )
-    return rows
 
 
 def _baseline_payload(
