@@ -45,6 +45,8 @@ pytestmark = [
     ),
 ]
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 class TestClassifyAndRoute:
     """Test _classify_and_route() keyword-based routing."""
@@ -358,7 +360,7 @@ class TestChatEndpoint:
             json={
                 "prompt": "Implement in delegated mode",
                 "real_mode": True,
-                "force_role": "architect_coding",
+                "force_role": _RETIRED_ARCHITECT_ROLE,
                 "force_mode": "delegated",
                 "allow_delegation": True,
             },

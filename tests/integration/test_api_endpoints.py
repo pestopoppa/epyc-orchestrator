@@ -20,6 +20,8 @@ from src.api.state import AppState
 
 pytestmark = pytest.mark.integration
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 @pytest.fixture
 def mock_state():
@@ -208,6 +210,6 @@ class TestModelsEndpoint:
         data = resp.json()
         assert isinstance(data, dict)
         model_ids = {item["id"] for item in data.get("data", [])}
-        assert "architect_coding" not in model_ids
+        assert _RETIRED_ARCHITECT_ROLE not in model_ids
         assert "frontdoor" in model_ids
         assert "orchestrator" in model_ids

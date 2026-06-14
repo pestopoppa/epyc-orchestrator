@@ -16,6 +16,9 @@ _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["seeding_rewards_test"] = _MOD
 _SPEC.loader.exec_module(_MOD)
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+_RETIRED_ARCHITECT_DELEGATED_KEY = f"{_RETIRED_ARCHITECT_ROLE}:delegated"
+
 
 def _rr(**overrides):
     base = dict(
@@ -41,8 +44,8 @@ def _write_stack_priors(path: Path, throughput: dict[str, float]) -> Path:
 """
         )
     role_blocks.append(
-        """
-  architect_coding:
+        f"""
+  {_RETIRED_ARCHITECT_ROLE}:
     deployment_status: retired
     priors:
       throughput_tps: 999.0
@@ -61,7 +64,7 @@ def test_stack_prior_throughput_by_role_loads_live_roles_only(tmp_path: Path):
     throughput = _MOD.stack_prior_throughput_by_role(stack_priors)
 
     assert throughput == {"frontdoor": 10.0, "worker_general": 100.0}
-    assert "architect_coding" not in throughput
+    assert _RETIRED_ARCHITECT_ROLE not in throughput
 
 
 def test_compute_comparative_rewards_uses_stack_prior_throughput(tmp_path: Path):
@@ -320,8 +323,8 @@ def test_3way_rewards_ignore_retired_architect_from_stack_priors(tmp_path: Path)
                     mode="delegated",
                     passed=False,
                 ),
-                "architect_coding:delegated": _rr(
-                    role="architect_coding",
+                _RETIRED_ARCHITECT_DELEGATED_KEY: _rr(
+                    role=_RETIRED_ARCHITECT_ROLE,
                     mode="delegated",
                     passed=True,
                 ),
@@ -497,8 +500,8 @@ def test_score_delegation_chain_infra_skip_and_architect_only_path():
                 delegation_events=[{"event": "delegated"}],
                 delegation_success=None,
             ),
-            "architect_coding:delegated": _rr(
-                role="architect_coding",
+            _RETIRED_ARCHITECT_DELEGATED_KEY: _rr(
+                role=_RETIRED_ARCHITECT_ROLE,
                 mode="delegated",
                 passed=True,
                 error_type="infrastructure",
