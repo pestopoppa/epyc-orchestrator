@@ -4,7 +4,7 @@
 import json
 import os
 import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -380,6 +380,87 @@ class TestBatchLlmQueryEnabled:
         llm.llm_batch.assert_called_once_with(
             ["prompt"], role="coder", persona="analyst",
         )
+
+    def test_batch_llm_query_schema_validates_response(self):
+        """Schema mode parses valid child JSON into structured response."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm(use_toon=False)
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+        }
+
+        llm.llm_batch.return_value = ['{"answer": 42}']
+
+        result = repl._batch_llm_query(["return the answer"], schema=schema)
+        parsed = json.loads(result)
+
+        assert parsed["schema_validation"] is True
+        assert parsed["results"][0]["valid"] is True
+        assert parsed["results"][0]["response"] == {"answer": 42}
+        assert parsed["results"][0]["raw_response"] == '{"answer": 42}'
+        assert parsed["results"][0]["attempts"] == 1
+        call_prompts = llm.llm_batch.call_args.args[0]
+        assert "Return only a JSON value" in call_prompts[0]
+        assert "return the answer" in call_prompts[0]
+
+    def test_batch_llm_query_schema_retries_invalid_response(self):
+        """Schema mode retries failed child JSON and preserves ordering."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm(use_toon=False)
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+        }
+        llm.llm_batch.side_effect = [
+            ["not json"],
+            ['{"answer": 7}'],
+        ]
+
+        result = repl._batch_llm_query(["return the answer"], schema=schema)
+        parsed = json.loads(result)
+
+        assert parsed["results"][0]["valid"] is True
+        assert parsed["results"][0]["response"] == {"answer": 7}
+        assert parsed["results"][0]["attempts"] == 2
+        assert llm.llm_batch.call_count == 2
+        retry_prompt = llm.llm_batch.call_args_list[1].args[0][0]
+        assert "previous response failed schema validation" in retry_prompt
+        assert "not json" in retry_prompt
+
+    def test_batch_llm_query_schema_reports_exhausted_retry(self):
+        """Schema mode reports invalid entries instead of silently returning junk."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, llm = _make_repl_with_llm(use_toon=False)
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "integer"}},
+            "required": ["answer"],
+        }
+        llm.llm_batch.side_effect = [
+            ["not json"],
+            ['{"answer": "wrong"}'],
+        ]
+
+        result = repl._batch_llm_query(["return the answer"], schema=schema)
+        parsed = json.loads(result)
+
+        assert parsed["results"][0]["valid"] is False
+        assert parsed["results"][0]["response"] == '{"answer": "wrong"}'
+        assert parsed["results"][0]["raw_response"] == '{"answer": "wrong"}'
+        assert "not of type" in parsed["results"][0]["error"]
+        assert parsed["results"][0]["attempts"] == 2
+
+    def test_batch_llm_query_schema_rejects_non_dict_schema(self):
+        """Schema argument must be a JSON Schema dict."""
+        os.environ["REPL_COMBINED_OPS"] = "1"
+        repl, _ = _make_repl_with_llm(use_toon=False)
+
+        result = repl._batch_llm_query(["prompt"], schema="not a dict")
+
+        assert "schema must be a JSON Schema dict" in result
 
     def test_batch_llm_query_toon_encoding(self):
         """TOON encoding produces text format with headers."""

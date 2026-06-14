@@ -16,15 +16,46 @@ import logging
 import os
 import re
 
+from src.graph.helpers import _validate_final_answer
+
 logger = logging.getLogger(__name__)
 
 _FEATURE_FLAG_VALUES = {"1", "true", "on"}
 _MAX_QUERIES = 5
+_MAX_SCHEMA_RETRIES = 2
 
 
 def _feature_enabled() -> bool:
     """Check whether combined ops are enabled via env var."""
     return os.environ.get("REPL_COMBINED_OPS", "").strip().lower() in _FEATURE_FLAG_VALUES
+
+
+def _render_child_schema_preamble(schema: dict) -> str:
+    """Prompt prefix for schema-constrained child LLM calls."""
+    return (
+        "Return only a JSON value matching this JSON Schema. Do not wrap it in markdown "
+        "or add prose.\n```json\n"
+        + json.dumps(schema, indent=2)
+        + "\n```"
+    )
+
+
+def _render_child_schema_retry_prompt(
+    original_prompt: str,
+    schema: dict,
+    err: str,
+    rejected: str,
+) -> str:
+    rejected_trunc = rejected[:500]
+    if len(rejected) > 500:
+        rejected_trunc += f"...[truncated {len(rejected) - 500} chars]"
+    return (
+        f"{_render_child_schema_preamble(schema)}\n\n"
+        "Your previous response failed schema validation.\n"
+        f"Validation error: {err}\n"
+        f"Rejected response: {rejected_trunc}\n\n"
+        f"Original task:\n{original_prompt}"
+    )
 
 
 class _CombinedOpsMixin:
@@ -304,6 +335,8 @@ class _CombinedOpsMixin:
         prompts: list[str],
         role: str = "worker",
         persona: str | None = None,
+        schema: dict | None = None,
+        max_retries: int = 1,
     ) -> str:
         """Run multiple sub-LM queries in parallel with structured output.
 
@@ -315,6 +348,9 @@ class _CombinedOpsMixin:
             prompts: List of prompts to send to sub-LMs (max 5).
             role: Role determining which model to use (default "worker").
             persona: Optional persona name for system prompt injection.
+            schema: Optional JSON Schema dict. When provided, child responses
+                are parsed and validated before being returned.
+            max_retries: Per-result schema retry count, capped to 2.
 
         Returns:
             Structured results in JSON or TOON format.
@@ -330,6 +366,9 @@ class _CombinedOpsMixin:
         if self.llm_primitives is None:
             return "[ERROR: No LLM primitives configured — cannot run batch queries]"
 
+        if schema is not None and not isinstance(schema, dict):
+            return "[ERROR: schema must be a JSON Schema dict]"
+
         # Cap prompts to prevent abuse
         if len(prompts) > _MAX_QUERIES:
             prompts = prompts[:_MAX_QUERIES]
@@ -337,12 +376,70 @@ class _CombinedOpsMixin:
         else:
             capped = False
 
-        results = self.llm_primitives.llm_batch(prompts, role=role, persona=persona)
+        retry_budget = max(0, min(max_retries, _MAX_SCHEMA_RETRIES))
+        query_prompts = (
+            [f"{_render_child_schema_preamble(schema)}\n\n{prompt}" for prompt in prompts]
+            if schema is not None
+            else prompts
+        )
+        raw_results = self.llm_primitives.llm_batch(query_prompts, role=role, persona=persona)
+        result_entries = []
+        retry_count = 0
+        validation_failures = 0
+
+        for prompt, raw_result in zip(prompts, raw_results):
+            if schema is None:
+                result_entries.append({"prompt": prompt[:100], "response": raw_result})
+                continue
+
+            attempts = 1
+            current_raw = raw_result
+            ok, err, parsed = _validate_final_answer(current_raw, schema)
+
+            while not ok and attempts <= retry_budget:
+                retry_count += 1
+                attempts += 1
+                retry_prompt = _render_child_schema_retry_prompt(
+                    prompt,
+                    schema,
+                    err or "unknown validation error",
+                    current_raw,
+                )
+                retry_result = self.llm_primitives.llm_batch(
+                    [retry_prompt], role=role, persona=persona,
+                )
+                current_raw = retry_result[0] if retry_result else ""
+                ok, err, parsed = _validate_final_answer(current_raw, schema)
+
+            if not ok:
+                validation_failures += 1
+
+            result_entries.append(
+                {
+                    "prompt": prompt[:100],
+                    "response": parsed if ok else current_raw,
+                    "raw_response": current_raw,
+                    "valid": ok,
+                    "error": None if ok else err,
+                    "attempts": attempts,
+                }
+            )
 
         self._exploration_log.add_event(
             "batch_llm_query",
-            {"prompts": [p[:100] for p in prompts], "role": role, "persona": persona, "capped": capped},
-            {"response_count": len(results), "response_lengths": [len(r) for r in results]},
+            {
+                "prompts": [p[:100] for p in prompts],
+                "role": role,
+                "persona": persona,
+                "capped": capped,
+                "schema": schema is not None,
+            },
+            {
+                "response_count": len(raw_results),
+                "response_lengths": [len(r) for r in raw_results],
+                "retry_count": retry_count,
+                "validation_failures": validation_failures,
+            },
         )
 
         # Format output
@@ -350,10 +447,14 @@ class _CombinedOpsMixin:
             lines = [f"=== batch_llm_query ({len(prompts)} prompts, role={role}) ==="]
             if capped:
                 lines.append(f"[WARNING: Capped to {_MAX_QUERIES} prompts]")
-            for i, (prompt, result) in enumerate(zip(prompts, results)):
+            for i, entry in enumerate(result_entries):
+                prompt = entry["prompt"]
                 prompt_preview = prompt[:80] + "..." if len(prompt) > 80 else prompt
                 lines.append(f'--- prompt {i + 1}: "{prompt_preview}" ---')
-                lines.append(result)
+                if schema is not None and not entry["valid"]:
+                    lines.append(f"[SCHEMA INVALID: {entry['error']}]")
+                response = entry["response"]
+                lines.append(response if isinstance(response, str) else json.dumps(response, default=str))
             return "\n".join(lines)
         else:
             output = {
@@ -362,10 +463,8 @@ class _CombinedOpsMixin:
                 "role": role,
                 "persona": persona,
                 "capped": capped,
-                "results": [
-                    {"prompt": p[:100], "response": r}
-                    for p, r in zip(prompts, results)
-                ],
+                "schema_validation": schema is not None,
+                "results": result_entries,
             }
             return json.dumps(output, indent=2, default=str)
 
