@@ -238,6 +238,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="reuse src.registry.stack_priors helpers for config server URL defaults",
     ),
     HardcodedSurfaceRule(
+        rule_id="local_q_scorer_stack_prior_yaml_reader",
+        category="production_blocker",
+        pattern=r"\byaml\.safe_load\s*\(\s*stack_priors_path\.read_text",
+        path_globs=("orchestration/repl_memory/q_scorer.py",),
+        remediation="reuse src.registry.stack_priors helpers for q_scorer stack-prior loading and validation",
+    ),
+    HardcodedSurfaceRule(
         rule_id="static_inference_lock_role_policy",
         category="production_blocker",
         pattern=(

@@ -259,15 +259,7 @@ def stack_prior_q_scorer_priors_by_role(
     memory_sources = dict(fallback_priors.memory_cost_source_by_role)
 
     try:
-        import yaml
-        from src.registry.stack_priors import validate_stack_priors_contract
-
-        data = yaml.safe_load(stack_priors_path.read_text()) or {}
-        if not isinstance(data, dict):
-            raise ValueError(f"{stack_priors_path} did not parse to a mapping")
-        contract_errors = validate_stack_priors_contract(data)
-        if contract_errors:
-            raise ValueError("; ".join(contract_errors[:3]))
+        data = _load_valid_stack_priors(stack_priors_path)
     except Exception as exc:
         logger.warning("Using fallback q_scorer priors; stack-priors load failed: %s", exc)
         return _fallback_q_scorer_priors(
@@ -316,12 +308,14 @@ def stack_prior_q_scorer_priors_by_role(
 
 
 def _load_valid_stack_priors(stack_priors_path: Path) -> dict[str, Any]:
-    import yaml
-    from src.registry.stack_priors import validate_stack_priors_contract
+    from src.registry.stack_priors import (
+        load_stack_priors_artifact,
+        validate_stack_priors_contract,
+    )
 
-    data = yaml.safe_load(stack_priors_path.read_text()) or {}
-    if not isinstance(data, dict):
-        raise ValueError(f"{stack_priors_path} did not parse to a mapping")
+    data = load_stack_priors_artifact(stack_priors_path)
+    if data is None:
+        raise ValueError(f"stack-priors artifact unavailable or malformed: {stack_priors_path}")
     contract_errors = validate_stack_priors_contract(data)
     if contract_errors:
         raise ValueError("; ".join(contract_errors[:3]))

@@ -1022,6 +1022,30 @@ payload = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
     )
 
 
+def test_scan_hardcoded_surfaces_flags_local_q_scorer_stack_prior_reader(
+    tmp_path: Path,
+) -> None:
+    repl_memory = tmp_path / "orchestration" / "repl_memory"
+    repl_memory.mkdir(parents=True)
+    (repl_memory / "q_scorer.py").write_text(
+        """
+import yaml
+
+data = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "local_q_scorer_stack_prior_yaml_reader"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "orchestration/repl_memory/q_scorer.py"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_static_inference_lock_role_policy(
     tmp_path: Path,
 ) -> None:
