@@ -61,12 +61,6 @@ _TOOL_REQUIRED_KEYWORDS = {
     "run the": "run_shell",
 }
 
-_HEURISTIC_PRIOR_ROLE_CANDIDATES = (
-    "frontdoor",
-    "worker_general",
-    "architect_general",
-    "coder_escalation",
-)
 _DEGRADED_HEURISTIC_PRIOR_ROLES = (
     "frontdoor",
     "worker_general",
@@ -256,11 +250,49 @@ def _role_to_task_type(role: str) -> str:
     return "general"
 
 
+def _role_record_float(
+    record: dict[str, Any],
+    section: str,
+    field: str,
+    default: float = 0.0,
+) -> float:
+    block = record.get(section)
+    if not isinstance(block, dict):
+        return default
+    value = block.get(field, default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _role_residency_rank(record: dict[str, Any]) -> int:
+    serving = record.get("serving")
+    tier = str(serving.get("tier", "") if isinstance(serving, dict) else "").lower()
+    return {"hot": 0, "warm": 1, "cold": 2}.get(tier, 3)
+
+
+def _heuristic_prior_role_sort_key(item: tuple[str, dict[str, Any]]) -> tuple[int, int, float, str]:
+    role, record = item
+    return (
+        0 if role == "frontdoor" else 1,
+        _role_residency_rank(record),
+        -_role_record_float(record, "model", "mem_gb"),
+        role,
+    )
+
+
 def _live_heuristic_prior_roles() -> tuple[str, ...]:
-    live_roles = set(live_stack_role_records())
-    if not live_roles:
+    live_records = live_stack_role_records()
+    if not live_records:
         return _DEGRADED_HEURISTIC_PRIOR_ROLES
-    role_ids = tuple(role for role in _HEURISTIC_PRIOR_ROLE_CANDIDATES if role in live_roles)
+    role_ids = tuple(
+        role
+        for role, _record in sorted(
+            live_records.items(),
+            key=_heuristic_prior_role_sort_key,
+        )
+    )
     return role_ids or _DEGRADED_HEURISTIC_PRIOR_ROLES
 
 
@@ -274,8 +306,16 @@ def _heuristic_role_priors(
     Priors are advisory only and should be combined with learned evidence.
     """
     role, _ = _classify_and_route(prompt, context, has_image=has_image)
-    priors: dict[str, float] = {role_id: 0.15 for role_id in _live_heuristic_prior_roles()}
-    priors[str(role)] = max(priors.get(str(role), 0.0), 0.55)
+    prior_roles = _live_heuristic_prior_roles()
+    role_id = str(role)
+    baseline_denominator = (
+        len(prior_roles)
+        if role_id not in prior_roles
+        else max(len(prior_roles) - 1, 1)
+    )
+    baseline_prior = 0.45 / baseline_denominator if baseline_denominator else 0.15
+    priors: dict[str, float] = {candidate: baseline_prior for candidate in prior_roles}
+    priors[role_id] = max(priors.get(role_id, 0.0), 0.55)
     if _should_use_direct(prompt, context):
         priors["frontdoor"] = max(priors.get("frontdoor", 0.0), 0.7)
     total = sum(priors.values())

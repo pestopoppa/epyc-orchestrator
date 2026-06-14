@@ -7,9 +7,11 @@ tool requirement detection.
 from unittest.mock import MagicMock, patch
 
 
+import src.api.routes.chat_routing as chat_routing
 from src.api.routes.chat_routing import (
     _classify_and_route,
     _heuristic_role_priors,
+    _live_heuristic_prior_roles,
     _role_to_task_type,
     _select_mode,
     _should_use_direct,
@@ -166,14 +168,49 @@ class TestRoleToTaskType:
 class TestHeuristicRolePriors:
     """Test lightweight routing priors."""
 
+    def test_live_prior_roles_derive_from_stack_priors(self, monkeypatch):
+        monkeypatch.setattr(
+            chat_routing,
+            "live_stack_role_records",
+            lambda: {
+                "frontdoor": {"serving": {"tier": "hot"}, "model": {"mem_gb": 37.0}},
+                "new_specialist": {"serving": {"tier": "hot"}, "model": {"mem_gb": 22.0}},
+                "worker_general": {"serving": {"tier": "hot"}, "model": {"mem_gb": 16.0}},
+            },
+        )
+
+        roles = _live_heuristic_prior_roles()
+
+        assert roles == ("frontdoor", "new_specialist", "worker_general")
+
+    def test_live_prior_roles_fall_back_when_priors_unavailable(self, monkeypatch):
+        monkeypatch.setattr(chat_routing, "live_stack_role_records", lambda: {})
+
+        assert _live_heuristic_prior_roles() == (
+            "frontdoor",
+            "worker_general",
+            "architect_general",
+            "coder_escalation",
+        )
+
     @patch("src.classifiers.classify_and_route")
-    def test_excludes_retired_roles(self, mock_classify):
+    def test_excludes_retired_roles(self, mock_classify, monkeypatch):
         mock_classify.return_value = MagicMock(role="frontdoor", strategy="rules")
+        monkeypatch.setattr(
+            chat_routing,
+            "live_stack_role_records",
+            lambda: {
+                "frontdoor": {"serving": {"tier": "hot"}, "model": {"mem_gb": 37.0}},
+                "new_specialist": {"serving": {"tier": "hot"}, "model": {"mem_gb": 22.0}},
+                "worker_general": {"serving": {"tier": "hot"}, "model": {"mem_gb": 16.0}},
+            },
+        )
 
         priors = _heuristic_role_priors("Hello")
 
         assert "architect_coding" not in priors
         assert "frontdoor" in priors
         assert "worker_general" in priors
-        assert "architect_general" in priors
+        assert "new_specialist" in priors
+        assert priors["frontdoor"] > 0.5
         assert abs(sum(priors.values()) - 1.0) < 1e-9

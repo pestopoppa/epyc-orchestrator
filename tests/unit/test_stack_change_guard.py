@@ -1141,6 +1141,31 @@ def test_scan_hardcoded_surfaces_flags_static_openai_model_role_order(
     )
 
 
+def test_scan_hardcoded_surfaces_flags_static_chat_routing_prior_roles(
+    tmp_path: Path,
+) -> None:
+    route = tmp_path / "src" / "api" / "routes"
+    route.mkdir(parents=True)
+    (route / "chat_routing.py").write_text(
+        """
+_HEURISTIC_PRIOR_ROLE_CANDIDATES = (
+    "frontdoor",
+    "worker_general",
+)
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_chat_routing_heuristic_prior_roles"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "src/api/routes/chat_routing.py"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_static_inference_lock_role_policy(
     tmp_path: Path,
 ) -> None:

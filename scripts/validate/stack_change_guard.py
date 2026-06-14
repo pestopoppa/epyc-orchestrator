@@ -272,6 +272,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="derive OpenAI /models role ordering from generated stack-prior topology",
     ),
     HardcodedSurfaceRule(
+        rule_id="static_chat_routing_heuristic_prior_roles",
+        category="production_blocker",
+        pattern=r"^_HEURISTIC_PRIOR_ROLE_CANDIDATES\b\s*(?::[^=]+)?=",
+        path_globs=("src/api/routes/chat_routing.py",),
+        remediation="derive chat-routing heuristic prior roles from generated stack priors",
+    ),
+    HardcodedSurfaceRule(
         rule_id="static_inference_lock_role_policy",
         category="production_blocker",
         pattern=(
