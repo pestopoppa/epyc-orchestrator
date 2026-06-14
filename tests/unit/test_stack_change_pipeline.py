@@ -14,6 +14,7 @@ from scripts.registry.stack_change_pipeline import (
     PipelineStep,
     PROMOTION_GATE_TARGETS,
     SIMULATED_FIXTURE_TARGET,
+    SURFACE_INVENTORY_COMMAND,
     StackChangePipelineConfig,
     _print_report,
     run_stack_change_pipeline,
@@ -22,6 +23,7 @@ from scripts.registry.stack_change_pipeline import (
 PROMOTION_GATE_COMMAND = "promotion_gate: run uv run pytest -q " + " ".join(
     PROMOTION_GATE_TARGETS
 )
+SURFACE_INVENTORY_LINE = f"surface_inventory: run {SURFACE_INVENTORY_COMMAND}"
 
 
 def _write_yaml(path: Path, data: dict) -> Path:
@@ -350,6 +352,7 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
     assert check_report.acceptance_lines() == [
         "acceptance: no-inference checks passed",
         PROMOTION_GATE_COMMAND,
+        SURFACE_INVENTORY_LINE,
     ]
 
 
@@ -386,6 +389,7 @@ def test_acceptance_lines_summarize_unique_hardcoded_surface_warnings() -> None:
         "warnings: 5 unique (6 total)",
         "surface_warnings: production_blocker=1, waived_production_blocker=1, legacy_test=1, historical_doc=1",
         PROMOTION_GATE_COMMAND,
+        SURFACE_INVENTORY_LINE,
     ]
 
 
@@ -402,6 +406,7 @@ def test_print_report_includes_promotion_gate_for_passing_check(
     assert "summary: ok" in output
     assert "acceptance: no-inference checks passed" in output
     assert PROMOTION_GATE_COMMAND in output
+    assert SURFACE_INVENTORY_LINE in output
     assert SIMULATED_FIXTURE_TARGET in output
 
 

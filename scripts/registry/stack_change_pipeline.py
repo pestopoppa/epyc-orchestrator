@@ -45,6 +45,10 @@ MODEL_FIELD_DIFF_LIMIT = 8
 SIMULATED_FIXTURE_TARGET = "tests/unit/test_stack_change_pipeline_simulated_fixtures.py"
 LAUNCH_PARITY_TARGET = "tests/unit/test_build_server_command_helpers.py"
 PROMOTION_GATE_TARGETS = (SIMULATED_FIXTURE_TARGET, LAUNCH_PARITY_TARGET)
+SURFACE_INVENTORY_COMMAND = (
+    "uv run python scripts/validate/stack_change_guard.py "
+    "--list-hardcoded-surface-rules"
+)
 SURFACE_WARNING_ORDER = (
     "production_blocker",
     "waived_production_blocker",
@@ -140,6 +144,7 @@ class PipelineReport:
                 "promotion_gate: run uv run pytest -q "
                 + " ".join(PROMOTION_GATE_TARGETS)
             )
+            lines.append(f"surface_inventory: run {SURFACE_INVENTORY_COMMAND}")
             return lines
         return [
             "acceptance: blocked",
