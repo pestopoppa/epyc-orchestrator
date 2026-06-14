@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -40,6 +41,7 @@ STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.y
 STACK_PRIOR_SEEDING_EXCLUDED_ROLES = frozenset({
     "toolrunner", "worker_math", "worker_summarize",
 })
+HEAVY_MODEL_MEM_GB_THRESHOLD = 18.0
 
 EVAL_DIR = RESEARCH_ROOT / "benchmarks" / "results" / "eval"
 SEEN_FILE = EVAL_DIR / "seen_questions.jsonl"
@@ -161,6 +163,80 @@ def _read_stack_prior_active_roles(
     return active
 
 
+def _primary_port_from_serving(serving: dict[str, Any]) -> int | None:
+    endpoint = serving.get("endpoint")
+    if isinstance(endpoint, str):
+        port = urlparse(endpoint).port
+        if port is not None:
+            return port
+
+    launch = serving.get("launch")
+    entries = launch.get("entries") if isinstance(launch, dict) else None
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("alias"):
+                continue
+            port = entry.get("port")
+            if isinstance(port, int):
+                return port
+
+    ports = serving.get("ports")
+    if isinstance(ports, list):
+        for port in ports:
+            if isinstance(port, int):
+                return port
+    return None
+
+
+def _read_stack_prior_topology(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> dict[str, Any]:
+    """Read benchmark topology constants from generated stack priors."""
+    try:
+        with stack_priors_path.open() as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+    roles = data.get("roles", {})
+    if not isinstance(roles, dict):
+        return {}
+
+    role_port: dict[str, int] = {}
+    model_ports: set[int] = set()
+    heavy_ports: set[int] = set()
+    for role_name, record in sorted(roles.items()):
+        if not isinstance(role_name, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+        port = _primary_port_from_serving(serving)
+        if port is None:
+            continue
+        role_port[role_name] = port
+        model_ports.add(port)
+
+        model = record.get("model")
+        mem_gb = model.get("mem_gb") if isinstance(model, dict) else None
+        try:
+            is_heavy = float(mem_gb) >= HEAVY_MODEL_MEM_GB_THRESHOLD
+        except (TypeError, ValueError):
+            is_heavy = False
+        if is_heavy:
+            heavy_ports.add(port)
+
+    if not role_port:
+        return {}
+    return {
+        "role_port": role_port,
+        "heavy_ports": heavy_ports,
+        "model_ports": sorted(model_ports),
+    }
+
+
 # ── Orchestrator defaults ─────────────────────────────────────────────
 
 DEFAULT_ORCHESTRATOR_URL = "http://localhost:8000"
@@ -238,19 +314,12 @@ THREE_WAY_COST_TIER: dict[str, int] = {
 
 
 # ── Server topology ──────────────────────────────────────────────────
-# Updated 2026-05-19 for the 2026-05-16 same-GGUF consolidation:
-#   - frontdoor + coder_escalation + worker_summarize share ONE Qwen3.6-35B
-#     Q8 server on port 8070 (was 8080/8081 separate servers).
-#   - worker_general lives on 8072 (gemma4-26B-A4B Q4 MTP).
-#   - architect_coding REMOVED 2026-05-06 (consolidated into coder_escalation).
-#   - worker_explore / worker_math deprecated.
-# Registry server_mode.<role>.port is the source of truth; ROLE_PORT below
-# is a fallback for older callers and discover_active_roles when port is
-# absent from the registry block.
+# Generated stack priors are preferred. Static values are degraded/offline
+# fallbacks for historical fixtures and broken local checkouts.
 
-HEAVY_PORTS = {8070, 8083, 8085, 8087}
+_HEAVY_PORTS_FALLBACK = {8070, 8083, 8085, 8087}
 
-ROLE_PORT: dict[str, int] = {
+_ROLE_PORT_FALLBACK: dict[str, int] = {
     "frontdoor": 8070,
     "coder_escalation": 8070,
     "worker_summarize": 8070,
@@ -261,7 +330,14 @@ ROLE_PORT: dict[str, int] = {
     "ingest_long_context": 8085,
 }
 
-MODEL_PORTS = [8070, 8072, 8083, 8085, 8086, 8087, 8090]
+_MODEL_PORTS_FALLBACK = [8070, 8072, 8083, 8085, 8086, 8087]
+
+_STACK_PRIOR_TOPOLOGY = _read_stack_prior_topology()
+ROLE_PORT: dict[str, int] = dict(
+    _STACK_PRIOR_TOPOLOGY.get("role_port") or _ROLE_PORT_FALLBACK
+)
+HEAVY_PORTS = set(_STACK_PRIOR_TOPOLOGY.get("heavy_ports") or _HEAVY_PORTS_FALLBACK)
+MODEL_PORTS = list(_STACK_PRIOR_TOPOLOGY.get("model_ports") or _MODEL_PORTS_FALLBACK)
 
 STACK_SCRIPT = PROJECT_ROOT / "scripts" / "server" / "orchestrator_stack.py"
 

@@ -111,6 +111,58 @@ roles:
     assert "reap_25b_frontdoor" not in by_name
 
 
+def test_read_stack_prior_topology_derives_primary_model_ports(tmp_path: Path) -> None:
+    stack_priors = tmp_path / "stack_priors.yaml"
+    stack_priors.write_text(
+        """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8070
+      ports: [8070, 8080, 8180]
+    model:
+      mem_gb: 37.0
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8072
+      ports: [8072, 8082]
+    model:
+      mem_gb: 16.0
+  vision_escalation:
+    deployment_status: live_stack
+    serving:
+      ports: [8087, 8187]
+      launch:
+        entries:
+          - port: 8187
+            alias: true
+          - port: 8087
+            alias: false
+    model:
+      mem_gb: 18.0
+  candidate:
+    deployment_status: benchmark_or_candidate
+    serving:
+      endpoint: http://localhost:8099
+    model:
+      mem_gb: 999.0
+""",
+        encoding="utf-8",
+    )
+
+    topology = _MOD._read_stack_prior_topology(stack_priors)
+
+    assert topology["role_port"] == {
+        "frontdoor": 8070,
+        "vision_escalation": 8087,
+        "worker_general": 8072,
+    }
+    assert topology["model_ports"] == [8070, 8072, 8087]
+    assert topology["heavy_ports"] == {8070, 8087}
+
+
 def test_discover_active_roles_prefers_stack_priors_over_registry(
     tmp_path: Path,
 ) -> None:
