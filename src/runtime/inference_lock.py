@@ -32,18 +32,23 @@ log = logging.getLogger(__name__)
 _SLOT_ERASE_CAPABILITY: dict[int, str | None | bool] = {}
 
 
+# Degraded fallback only. Normal startup derives lock roles from generated
+# stack priors so this table is used only when that artifact is missing or
+# invalid.
 _LEGACY_HEAVY_ROLES = frozenset({
     "frontdoor",
     "coder_escalation",
     "architect_general",
     "ingest_long_context",
     "vision_escalation",
+    "worker_summarize",
 })
 
 _LEGACY_LIGHT_ROLES = frozenset({
+    "worker_general",
     "worker_explore",
     "worker_math",
-    "worker_fast",
+    "toolrunner",
     "worker_vision",
 })
 
