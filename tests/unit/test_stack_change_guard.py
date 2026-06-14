@@ -8,9 +8,12 @@ from pathlib import Path
 
 import yaml
 
+import scripts.validate.stack_change_guard as stack_change_guard
 from scripts.validate.stack_change_guard import (
     HARDCODED_SURFACE_RULES,
+    GuardResult,
     hardcoded_surface_rule_inventory,
+    hardcoded_surface_warning_counts,
     main as stack_change_guard_main,
     scan_hardcoded_surfaces,
     validate_stack_priors,
@@ -461,6 +464,22 @@ def test_hardcoded_surface_rule_inventory_is_machine_readable() -> None:
     )
 
 
+def test_hardcoded_surface_warning_counts_bucket_unique_warnings() -> None:
+    warnings = [
+        "hardcoded_surface.production_blocker.seeding_baseline_tps_table: file:1",
+        "hardcoded_surface.production_blocker.seeding_baseline_tps_table: file:1",
+        "hardcoded_surface.waived.production_blocker.retired_role_in_active_code: file:2",
+        "hardcoded_surface.legacy_test.retired_role_in_tests: file:3",
+        "non-surface warning",
+    ]
+
+    assert hardcoded_surface_warning_counts(warnings) == {
+        "production_blocker": 1,
+        "waived_production_blocker": 1,
+        "legacy_test": 1,
+    }
+
+
 def test_stack_change_guard_can_print_surface_rule_inventory_json(capsys) -> None:
     rc = stack_change_guard_main(
         ["--list-hardcoded-surface-rules", "--surface-inventory-format", "json"]
@@ -473,6 +492,37 @@ def test_stack_change_guard_can_print_surface_rule_inventory_json(capsys) -> Non
         rule["rule_id"] == "stale_autopilot_program_stack_guidance"
         for rule in payload["rules"]
     )
+
+
+def test_stack_change_guard_can_print_summary_only(monkeypatch, capsys) -> None:
+    warnings = [
+        "hardcoded_surface.production_blocker.seeding_baseline_tps_table: file:1",
+        "hardcoded_surface.production_blocker.seeding_baseline_tps_table: file:1",
+        "hardcoded_surface.waived.production_blocker.retired_role_in_active_code: file:2",
+        "hardcoded_surface.historical_doc.retired_role_in_operator_docs: docs:1",
+        "non-surface warning",
+    ]
+
+    def fake_validate_stack_priors(*args, **kwargs) -> GuardResult:
+        return GuardResult(errors=[], warnings=warnings)
+
+    monkeypatch.setattr(
+        stack_change_guard,
+        "validate_stack_priors",
+        fake_validate_stack_priors,
+    )
+
+    rc = stack_change_guard_main(["--surface-summary-only"])
+
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "WARN: 4 unique stack-prior warning(s) (5 total)" in output
+    assert (
+        "surface_warnings: production_blocker=1, "
+        "waived_production_blocker=1, historical_doc=1"
+    ) in output
+    assert "other_warnings: 1" in output
+    assert "file:1" not in output
 
 
 def test_scan_hardcoded_surfaces_flags_retired_launch_env_var(tmp_path: Path) -> None:

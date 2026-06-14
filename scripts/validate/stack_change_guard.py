@@ -9,10 +9,11 @@ import hashlib
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
@@ -46,6 +47,12 @@ SURFACE_EXCEPTION_CLASSIFICATIONS = frozenset(
         "historical_doc",
         "intentional_live_exception",
     }
+)
+SURFACE_WARNING_ORDER = (
+    "production_blocker",
+    "waived_production_blocker",
+    "legacy_test",
+    "historical_doc",
 )
 
 
@@ -244,6 +251,51 @@ def hardcoded_surface_rule_inventory(
             for rule in rules
         ],
     }
+
+
+def hardcoded_surface_warning_counts(warnings: Iterable[str]) -> dict[str, int]:
+    """Return unique hardcoded-surface warning counts by category bucket."""
+    counts: Counter[str] = Counter()
+    for warning in sorted(set(warnings)):
+        bucket = _hardcoded_surface_warning_bucket(warning)
+        if bucket is not None:
+            counts[bucket] += 1
+    return dict(counts)
+
+
+def _hardcoded_surface_warning_bucket(warning: str) -> str | None:
+    prefix = "hardcoded_surface."
+    if not warning.startswith(prefix):
+        return None
+    suffix = warning[len(prefix):]
+    parts = suffix.split(".", 3)
+    if not parts:
+        return None
+    if parts[0] == "waived" and len(parts) >= 2:
+        return f"waived_{parts[1]}"
+    return parts[0]
+
+
+def _warning_summary_lines(warnings: list[str]) -> list[str]:
+    unique_warnings = sorted(set(warnings))
+    lines = [
+        f"WARN: {len(unique_warnings)} unique stack-prior warning(s) "
+        f"({len(warnings)} total)"
+    ]
+    surface_counts = hardcoded_surface_warning_counts(warnings)
+    if surface_counts:
+        ordered_keys = [key for key in SURFACE_WARNING_ORDER if key in surface_counts]
+        ordered_keys.extend(sorted(set(surface_counts) - set(ordered_keys)))
+        lines.append(
+            "surface_warnings: "
+            + ", ".join(f"{key}={surface_counts[key]}" for key in ordered_keys)
+        )
+    non_surface_count = sum(
+        1 for warning in unique_warnings if _hardcoded_surface_warning_bucket(warning) is None
+    )
+    if non_surface_count:
+        lines.append(f"other_warnings: {non_surface_count}")
+    return lines
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -1154,6 +1206,11 @@ def main(argv: list[str] | None = None) -> int:
         default="yaml",
         help="Format for --list-hardcoded-surface-rules",
     )
+    parser.add_argument(
+        "--surface-summary-only",
+        action="store_true",
+        help="Print warning counts instead of individual warning lines",
+    )
     args = parser.parse_args(argv)
     if args.list_hardcoded_surface_rules:
         inventory = hardcoded_surface_rule_inventory()
@@ -1184,9 +1241,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {error}")
         return 1
     if result.warnings:
-        print(f"WARN: {len(result.warnings)} stack-prior warning(s)")
-        for warning in result.warnings:
-            print(f"  - {warning}")
+        if args.surface_summary_only:
+            print("\n".join(_warning_summary_lines(result.warnings)))
+        else:
+            print(f"WARN: {len(result.warnings)} stack-prior warning(s)")
+            for warning in result.warnings:
+                print(f"  - {warning}")
         return 0
     print(f"OK: {args.priors}")
     return 0
