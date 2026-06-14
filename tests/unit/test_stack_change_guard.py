@@ -12,10 +12,12 @@ import scripts.validate.stack_change_guard as stack_change_guard
 from scripts.validate.stack_change_guard import (
     HARDCODED_SURFACE_RULES,
     GuardResult,
+    HardcodedSurfaceRule,
     hardcoded_surface_rule_inventory,
     hardcoded_surface_warning_counts,
     main as stack_change_guard_main,
     scan_hardcoded_surfaces,
+    validate_surface_manifest,
     validate_stack_priors,
 )
 from src.registry.stack_priors import STACK_PRIORS_VERSION, stack_priors_contract
@@ -462,6 +464,111 @@ def test_hardcoded_surface_rule_inventory_is_machine_readable() -> None:
         and "scripts/benchmark/seeding_rewards.py" in rule["path_globs"]
         for rule in inventory["rules"]
     )
+    assert all("ownership" in rule for rule in inventory["rules"])
+
+
+def test_validate_surface_manifest_accepts_complete_rule_ownership(tmp_path: Path) -> None:
+    rule = HardcodedSurfaceRule(
+        rule_id="unit_rule",
+        category="production_blocker",
+        pattern=r"\bunit\b",
+        path_globs=("src/**/*.py",),
+        remediation="derive from generated truth",
+    )
+    manifest = _write_yaml(
+        tmp_path / "surface_manifest.yaml",
+        {
+            "version": 1,
+            "surfaces": [
+                {
+                    "rule_id": "unit_rule",
+                    "category": "production_blocker",
+                    "owner": "stack-change-governance",
+                    "consumer_scope": "unit test surface",
+                    "promotion_blocker": True,
+                    "review_cadence": "every stack change",
+                    "evidence_command": "uv run python scripts/validate/stack_change_guard.py",
+                    "drift_response": "remove stale hardcode",
+                }
+            ],
+        },
+    )
+
+    assert validate_surface_manifest(manifest, rules=(rule,)) == []
+
+
+def test_validate_surface_manifest_rejects_missing_rule_ownership(tmp_path: Path) -> None:
+    rules = (
+        HardcodedSurfaceRule(
+            rule_id="covered_rule",
+            category="historical_doc",
+            pattern=r"\bold\b",
+            path_globs=("docs/**/*.md",),
+            remediation="label historical",
+        ),
+        HardcodedSurfaceRule(
+            rule_id="missing_rule",
+            category="legacy_test",
+            pattern=r"\bold\b",
+            path_globs=("tests/**/*.py",),
+            remediation="migrate fixture",
+        ),
+    )
+    manifest = _write_yaml(
+        tmp_path / "surface_manifest.yaml",
+        {
+            "version": 1,
+            "surfaces": [
+                {
+                    "rule_id": "covered_rule",
+                    "category": "historical_doc",
+                    "owner": "documentation-governance",
+                    "consumer_scope": "docs",
+                    "promotion_blocker": False,
+                    "review_cadence": "every stack change",
+                    "evidence_command": "guard --all-hardcoded-surfaces",
+                    "drift_response": "label historical",
+                }
+            ],
+        },
+    )
+
+    errors = validate_surface_manifest(manifest, rules=rules)
+
+    assert any("missing_rule" in error for error in errors)
+
+
+def test_validate_surface_manifest_rejects_category_policy_drift(tmp_path: Path) -> None:
+    rule = HardcodedSurfaceRule(
+        rule_id="unit_rule",
+        category="production_blocker",
+        pattern=r"\bunit\b",
+        path_globs=("src/**/*.py",),
+        remediation="derive from generated truth",
+    )
+    manifest = _write_yaml(
+        tmp_path / "surface_manifest.yaml",
+        {
+            "version": 1,
+            "surfaces": [
+                {
+                    "rule_id": "unit_rule",
+                    "category": "legacy_test",
+                    "owner": "stack-change-governance",
+                    "consumer_scope": "unit test surface",
+                    "promotion_blocker": False,
+                    "review_cadence": "every stack change",
+                    "evidence_command": "guard",
+                    "drift_response": "remove stale hardcode",
+                }
+            ],
+        },
+    )
+
+    errors = validate_surface_manifest(manifest, rules=(rule,))
+
+    assert any("category 'legacy_test'" in error for error in errors)
+    assert any("promotion_blocker=False" in error for error in errors)
 
 
 def test_hardcoded_surface_warning_counts_bucket_unique_warnings() -> None:
@@ -490,6 +597,7 @@ def test_stack_change_guard_can_print_surface_rule_inventory_json(capsys) -> Non
     assert payload["rule_count"] == len(HARDCODED_SURFACE_RULES)
     assert any(
         rule["rule_id"] == "stale_autopilot_program_stack_guidance"
+        and rule["ownership"]["owner"] == "autopilot-instrumentation"
         for rule in payload["rules"]
     )
 

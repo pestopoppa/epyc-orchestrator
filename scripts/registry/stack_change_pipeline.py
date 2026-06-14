@@ -25,6 +25,7 @@ from scripts.registry.sync_procedure_role_enums import (  # noqa: E402
 )
 from scripts.validate.stack_change_guard import (  # noqa: E402
     DEFAULT_SURFACE_EXCEPTIONS,
+    DEFAULT_SURFACE_MANIFEST,
     validate_stack_priors,
 )
 from src.registry.model_descriptors import (  # noqa: E402
@@ -68,6 +69,7 @@ class StackChangePipelineConfig:
     procedure: Path = DEFAULT_PROCEDURE
     schema: Path = DEFAULT_SCHEMA
     surface_exceptions: Path = DEFAULT_SURFACE_EXCEPTIONS
+    surface_manifest: Path = DEFAULT_SURFACE_MANIFEST
     roles: set[str] | None = None
     allow_known_gaps: bool = False
     compile_incomplete: bool = True
@@ -553,6 +555,7 @@ def _guard_step(
         repo_root=config.repo_root,
         surface_categories=None if all_surfaces else frozenset({"production_blocker"}),
         surface_exceptions_path=config.surface_exceptions,
+        surface_manifest_path=config.surface_manifest,
         procedure_path=config.procedure,
         procedure_schema_path=config.schema,
         registry_path=config.lean_registry,
@@ -711,6 +714,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--procedure", type=Path, default=DEFAULT_PROCEDURE)
     parser.add_argument("--schema", type=Path, default=DEFAULT_SCHEMA)
     parser.add_argument("--surface-exceptions", type=Path, default=DEFAULT_SURFACE_EXCEPTIONS)
+    parser.add_argument("--surface-manifest", type=Path, default=DEFAULT_SURFACE_MANIFEST)
     parser.add_argument("--roles", nargs="+", help="Explicit active roles")
     parser.add_argument(
         "--strict-descriptor-compile",
@@ -744,6 +748,7 @@ def main(argv: list[str] | None = None) -> int:
         procedure=args.procedure,
         schema=args.schema,
         surface_exceptions=args.surface_exceptions,
+        surface_manifest=args.surface_manifest,
         roles=set(args.roles) if args.roles else None,
         allow_known_gaps=args.allow_known_gaps,
         compile_incomplete=not args.strict_descriptor_compile,

@@ -26,6 +26,7 @@ DEFAULT_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
 DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_SURFACE_EXCEPTIONS = REPO_ROOT / "orchestration" / "stack_change_guard_exceptions.yaml"
+DEFAULT_SURFACE_MANIFEST = REPO_ROOT / "orchestration" / "stack_change_surface_manifest.yaml"
 DEFAULT_ADD_MODEL_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_model_to_registry.yaml"
 DEFAULT_PROCEDURE_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"
 RETIRED_LIVE_ROLES = {"architect_coding"}
@@ -232,8 +233,10 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
 
 def hardcoded_surface_rule_inventory(
     rules: tuple[HardcodedSurfaceRule, ...] = HARDCODED_SURFACE_RULES,
+    ownership_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the curated model-specific surface rules as machine-readable data."""
+    ownership_by_rule = _surface_manifest_by_rule(ownership_manifest)
     return {
         "version": 1,
         "rule_count": len(rules),
@@ -247,10 +250,127 @@ def hardcoded_surface_rule_inventory(
                 "exclude_globs": list(rule.exclude_globs),
                 "ignore_comment_lines": rule.ignore_comment_lines,
                 "remediation": rule.remediation,
+                "ownership": ownership_by_rule.get(rule.rule_id, {}),
             }
             for rule in rules
         ],
     }
+
+
+def _surface_manifest_by_rule(manifest: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(manifest, dict):
+        return {}
+    surfaces = manifest.get("surfaces")
+    if not isinstance(surfaces, list):
+        return {}
+    by_rule: dict[str, dict[str, Any]] = {}
+    for raw_surface in surfaces:
+        if not isinstance(raw_surface, dict):
+            continue
+        rule_id = raw_surface.get("rule_id")
+        if not isinstance(rule_id, str) or not rule_id:
+            continue
+        by_rule[rule_id] = {
+            key: raw_surface[key]
+            for key in (
+                "owner",
+                "consumer_scope",
+                "promotion_blocker",
+                "review_cadence",
+                "evidence_command",
+                "drift_response",
+            )
+            if key in raw_surface
+        }
+    return by_rule
+
+
+def load_surface_manifest(path: Path = DEFAULT_SURFACE_MANIFEST) -> tuple[dict[str, Any] | None, list[str]]:
+    """Load the hardcoded-surface ownership manifest."""
+    if not path.exists():
+        return None, [f"missing hardcoded-surface ownership manifest: {path}"]
+    try:
+        return _load_yaml(path), []
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        return None, [f"failed to load hardcoded-surface ownership manifest {path}: {exc}"]
+
+
+def validate_surface_manifest(
+    path: Path = DEFAULT_SURFACE_MANIFEST,
+    *,
+    rules: tuple[HardcodedSurfaceRule, ...] = HARDCODED_SURFACE_RULES,
+) -> list[str]:
+    """Validate scanner-rule ownership metadata for stack-change reviews."""
+    manifest, errors = load_surface_manifest(path)
+    if errors:
+        return errors
+    if manifest is None:
+        return [f"missing hardcoded-surface ownership manifest: {path}"]
+    if manifest.get("version") != 1:
+        errors.append("hardcoded-surface ownership manifest version must be 1")
+    surfaces = manifest.get("surfaces")
+    if not isinstance(surfaces, list):
+        return errors + ["hardcoded-surface ownership manifest has no list-valued 'surfaces'"]
+
+    rules_by_id = {rule.rule_id: rule for rule in rules}
+    seen: dict[str, int] = {}
+    required_text_fields = (
+        "rule_id",
+        "category",
+        "owner",
+        "consumer_scope",
+        "review_cadence",
+        "evidence_command",
+        "drift_response",
+    )
+    for index, raw_surface in enumerate(surfaces, start=1):
+        prefix = f"surface manifest entry #{index}"
+        if not isinstance(raw_surface, dict):
+            errors.append(f"{prefix} is not a mapping")
+            continue
+        for field in required_text_fields:
+            value = raw_surface.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{prefix} missing non-empty {field!r}")
+        rule_id = raw_surface.get("rule_id")
+        if not isinstance(rule_id, str) or not rule_id.strip():
+            continue
+        rule_id = rule_id.strip()
+        if rule_id in seen:
+            errors.append(
+                f"surface manifest rule_id {rule_id!r} is duplicated "
+                f"(entries {seen[rule_id]} and {index})"
+            )
+        seen[rule_id] = index
+        rule = rules_by_id.get(rule_id)
+        if rule is None:
+            errors.append(f"surface manifest entry {rule_id!r} has no scanner rule")
+            continue
+        category = raw_surface.get("category")
+        if isinstance(category, str) and category.strip() != rule.category:
+            errors.append(
+                f"surface manifest entry {rule_id!r} category {category!r} "
+                f"does not match scanner category {rule.category!r}"
+            )
+        promotion_blocker = raw_surface.get("promotion_blocker")
+        expected_blocker = rule.category == "production_blocker"
+        if not isinstance(promotion_blocker, bool):
+            errors.append(
+                f"surface manifest entry {rule_id!r} missing boolean 'promotion_blocker'"
+            )
+        elif promotion_blocker != expected_blocker:
+            errors.append(
+                f"surface manifest entry {rule_id!r} promotion_blocker={promotion_blocker!r} "
+                f"does not match category policy {expected_blocker!r}"
+            )
+
+    missing = sorted(set(rules_by_id) - set(seen))
+    if missing:
+        errors.append(
+            "hardcoded-surface ownership manifest missing rule_id(s): "
+            + ", ".join(missing)
+        )
+    return errors
 
 
 def hardcoded_surface_warning_counts(warnings: Iterable[str]) -> dict[str, int]:
@@ -1050,6 +1170,7 @@ def validate_stack_priors(
     repo_root: Path = REPO_ROOT,
     surface_categories: frozenset[str] | None = frozenset({"production_blocker"}),
     surface_exceptions_path: Path | None = DEFAULT_SURFACE_EXCEPTIONS,
+    surface_manifest_path: Path | None = DEFAULT_SURFACE_MANIFEST,
     procedure_path: Path | None = None,
     procedure_schema_path: Path | None = None,
     launch_manifest_targets: dict[str, dict[str, Any]] | None = None,
@@ -1132,6 +1253,8 @@ def validate_stack_priors(
         errors.append("known_global_gaps must be a mapping when present")
 
     if scan_surfaces:
+        if surface_manifest_path is not None:
+            errors.extend(validate_surface_manifest(surface_manifest_path))
         errors.extend(
             validate_procedure_role_enums(
                 priors,
@@ -1196,6 +1319,12 @@ def main(argv: list[str] | None = None) -> int:
         help="YAML file documenting hardcoded-surface exceptions",
     )
     parser.add_argument(
+        "--surface-manifest",
+        type=Path,
+        default=DEFAULT_SURFACE_MANIFEST,
+        help="YAML file documenting hardcoded-surface ownership",
+    )
+    parser.add_argument(
         "--list-hardcoded-surface-rules",
         action="store_true",
         help="Print the curated hardcoded-surface rule inventory and exit",
@@ -1213,7 +1342,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     if args.list_hardcoded_surface_rules:
-        inventory = hardcoded_surface_rule_inventory()
+        manifest, manifest_errors = load_surface_manifest(args.surface_manifest)
+        if manifest_errors:
+            print(f"FAIL: {len(manifest_errors)} surface manifest error(s)")
+            for error in manifest_errors:
+                print(f"  - {error}")
+            return 1
+        manifest_validation_errors = validate_surface_manifest(args.surface_manifest)
+        if manifest_validation_errors:
+            print(f"FAIL: {len(manifest_validation_errors)} surface manifest error(s)")
+            for error in manifest_validation_errors:
+                print(f"  - {error}")
+            return 1
+        inventory = hardcoded_surface_rule_inventory(ownership_manifest=manifest)
         if args.surface_inventory_format == "json":
             print(json.dumps(inventory, indent=2, sort_keys=True))
         else:
@@ -1234,6 +1375,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=args.repo_root,
         surface_categories=surface_categories,
         surface_exceptions_path=args.surface_exceptions,
+        surface_manifest_path=args.surface_manifest,
     )
     if result.errors:
         print(f"FAIL: {len(result.errors)} stack-prior error(s)")

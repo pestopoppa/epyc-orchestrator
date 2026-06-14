@@ -1,0 +1,110 @@
+version: 1
+description: >
+  Ownership map for hardcoded model/stack surface scanner rules. Every rule in
+  scripts/validate/stack_change_guard.py must have exactly one entry here so a
+  future stack update has an accountable review path.
+surfaces:
+  - rule_id: retired_role_in_active_code
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: live Python behavior in src, benchmark helpers, and server helpers
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: remove the live reference or add a narrow expiring exception
+  - rule_id: retired_role_env_flag
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: server launch environment flags
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: remove retired launch flags before promotion
+  - rule_id: stale_procedure_role_enum
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: add-model procedure role choices
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/registry/sync_procedure_role_enums.py --check
+    drift_response: regenerate procedure enums from stack priors
+  - rule_id: retired_role_in_lean_registry
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: lean production model registry
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: remove retired roles from production registry truth
+  - rule_id: retired_role_in_source_access
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: web-source role access metadata
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: bind source access to current live roles only
+  - rule_id: retired_role_in_quality_signature
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: model quality signature metadata
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: remove retired signatures or bind fresh evidence to live roles
+  - rule_id: retired_role_in_tests
+    category: legacy_test
+    owner: test-infrastructure
+    consumer_scope: tests and fixtures that intentionally exercise legacy labels
+    promotion_blocker: false
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py --all-hardcoded-surfaces --surface-summary-only
+    drift_response: migrate fixtures to stack priors or label them as retired-role coverage
+  - rule_id: retired_role_in_operator_docs
+    category: historical_doc
+    owner: documentation-governance
+    consumer_scope: operator documentation and generated architecture diagrams
+    promotion_blocker: false
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py --all-hardcoded-surfaces --surface-summary-only
+    drift_response: regenerate current stack tables or label the text as historical
+  - rule_id: bilinear_model_specs_table
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: bilinear routing model feature tables
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive model features from stack priors and descriptors
+  - rule_id: seeding_baseline_tps_table
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: seeding reward throughput and cost priors
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive reward priors from generated stack priors
+  - rule_id: legacy_cli_port_probe_map
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: CLI health/status probe target map
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive probes from stack priors or stack manifest status APIs
+  - rule_id: stale_autopilot_program_stack_guidance
+    category: production_blocker
+    owner: autopilot-instrumentation
+    consumer_scope: AutoPilot operator guidance consumed by planner prompts
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: regenerate guidance from stack priors and system card sources
+  - rule_id: stale_launch_wrapper_static_inventory
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: shell launch wrappers and operator stack summaries
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive summaries from stack_manifest or stack priors
