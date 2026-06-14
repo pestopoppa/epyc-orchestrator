@@ -16,6 +16,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -220,6 +221,95 @@ def validate_stack_priors_contract(priors: dict[str, Any]) -> list[str]:
         if not isinstance(known_gaps, list):
             errors.append(f"role {role!r} known_gaps must be a list")
     return errors
+
+
+def load_stack_priors_artifact(path: Path = DEFAULT_OUTPUT) -> dict[str, Any] | None:
+    """Load a generated stack-priors artifact for runtime consumers.
+
+    Compilation and validation paths should use the stricter helpers in this
+    module. Runtime consumers use this fail-closed loader so a missing or
+    malformed generated artifact falls back to their explicit degraded modes.
+    """
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def live_stack_role_records(path: Path = DEFAULT_OUTPUT) -> dict[str, dict[str, Any]]:
+    """Return live stack-prior role records keyed by role name."""
+    artifact = load_stack_priors_artifact(path)
+    if artifact is None:
+        return {}
+    roles = artifact.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    live: dict[str, dict[str, Any]] = {}
+    for role, record in roles.items():
+        if not isinstance(role, str):
+            continue
+        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+            continue
+        live[role] = record
+    return live
+
+
+def stack_prior_serving(record: dict[str, Any]) -> dict[str, Any]:
+    """Return the mapping-valued ``serving`` block from a role record."""
+    serving = record.get("serving")
+    return serving if isinstance(serving, dict) else {}
+
+
+def stack_prior_endpoint_port(serving: dict[str, Any]) -> int | None:
+    """Return the endpoint port from a stack-prior serving block, if present."""
+    endpoint = serving.get("endpoint")
+    if not isinstance(endpoint, str):
+        return None
+    return urlparse(endpoint).port
+
+
+def stack_prior_serving_ports(serving: dict[str, Any]) -> list[int]:
+    """Return integer serving ports from a stack-prior serving block."""
+    ports = serving.get("ports")
+    if not isinstance(ports, list):
+        return []
+    return [port for port in ports if isinstance(port, int)]
+
+
+def live_role_primary_ports(
+    role_names: set[str] | frozenset[str],
+    path: Path = DEFAULT_OUTPUT,
+) -> dict[str, int]:
+    """Return one primary serving port per requested live role."""
+    ports: dict[str, int] = {}
+    for role, record in live_stack_role_records(path).items():
+        if role not in role_names:
+            continue
+        serving = stack_prior_serving(record)
+        endpoint_port = stack_prior_endpoint_port(serving)
+        if endpoint_port is not None:
+            ports[role] = endpoint_port
+            continue
+        for port in stack_prior_serving_ports(serving):
+            ports[role] = port
+            break
+    return ports
+
+
+def live_warm_worker_slots(path: Path = DEFAULT_OUTPUT) -> dict[str, int]:
+    """Return live warm worker roles and their stack-prior slot caps."""
+    caps: dict[str, int] = {}
+    for role, record in live_stack_role_records(path).items():
+        if not role.startswith("worker_"):
+            continue
+        serving = stack_prior_serving(record)
+        if serving.get("tier") != "warm":
+            continue
+        slots = serving.get("slots")
+        caps[role] = slots if isinstance(slots, int) and slots > 0 else 1
+    return caps
 
 
 def _coerce_tps(value: Any) -> float | None:

@@ -11,6 +11,12 @@ from src.registry.stack_priors import (
     STACK_PRIORS_VERSION,
     StackPriorsCompileError,
     compile_stack_priors,
+    live_role_primary_ports,
+    live_stack_role_records,
+    live_warm_worker_slots,
+    load_stack_priors_artifact,
+    stack_prior_endpoint_port,
+    stack_prior_serving_ports,
     validate_stack_priors_contract,
 )
 
@@ -18,6 +24,59 @@ from src.registry.stack_priors import (
 def _write_yaml(path: Path, data: dict) -> Path:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def test_runtime_stack_prior_helpers_fail_closed_on_missing_artifact(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.yaml"
+
+    assert load_stack_priors_artifact(missing) is None
+    assert live_stack_role_records(missing) == {}
+    assert live_warm_worker_slots(missing) == {}
+    assert live_role_primary_ports(frozenset({"worker_vision"}), missing) == {}
+
+
+def test_runtime_stack_prior_helpers_project_live_roles(tmp_path: Path) -> None:
+    priors = _write_yaml(
+        tmp_path / "stack_priors.yaml",
+        {
+            "roles": {
+                "worker_batch": {
+                    "deployment_status": "live_stack",
+                    "serving": {"tier": "warm", "slots": 4, "ports": [9123]},
+                },
+                "worker_general": {
+                    "deployment_status": "live_stack",
+                    "serving": {"tier": "hot", "slots": 4, "ports": [8072]},
+                },
+                "worker_vision": {
+                    "deployment_status": "live_stack",
+                    "serving": {"endpoint": "http://127.0.0.1:9101", "ports": [9999]},
+                },
+                "vision_escalation": {
+                    "deployment_status": "live_stack",
+                    "serving": {"ports": [9107]},
+                },
+                "candidate_worker": {
+                    "deployment_status": "benchmark_or_candidate",
+                    "serving": {"tier": "warm", "slots": 8, "ports": [9000]},
+                },
+            }
+        },
+    )
+
+    assert sorted(live_stack_role_records(priors)) == [
+        "vision_escalation",
+        "worker_batch",
+        "worker_general",
+        "worker_vision",
+    ]
+    assert live_warm_worker_slots(priors) == {"worker_batch": 4}
+    assert live_role_primary_ports(
+        frozenset({"worker_vision", "vision_escalation", "candidate_worker"}),
+        priors,
+    ) == {"worker_vision": 9101, "vision_escalation": 9107}
+    assert stack_prior_endpoint_port({"endpoint": "http://localhost:1234/v1"}) == 1234
+    assert stack_prior_serving_ports({"ports": [1, "2", 3, None]}) == [1, 3]
 
 
 def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path: Path) -> None:

@@ -15,15 +15,13 @@ import base64
 import logging
 import time
 from pathlib import Path
-from urllib.parse import urlparse
-
-import yaml
 
 from src.api.models import ChatRequest, ChatResponse
 from src.api.routes.chat_utils import RoutingResult
 from src.api.services.memrl import score_completed_task
 from src.api.structured_logging import task_extra
 from src.llm_primitives import LLMPrimitives
+from src.registry.stack_priors import live_role_primary_ports
 
 _VISION_ROLES = frozenset({"worker_vision", "vision_escalation"})
 _DEFAULT_STACK_PRIORS_PATH = (
@@ -35,39 +33,9 @@ log = logging.getLogger(__name__)
 
 
 def _stack_prior_vl_ports(stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH) -> dict[str, int]:
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        log.warning("Using fallback VL ports; stack priors load failed: %s", exc)
-        return {}
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
-        return {}
-
-    ports: dict[str, int] = {}
-    for role in _VISION_ROLES:
-        record = roles.get(role)
-        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict):
-            continue
-
-        endpoint = serving.get("endpoint")
-        if isinstance(endpoint, str):
-            parsed_port = urlparse(endpoint).port
-            if parsed_port is not None:
-                ports[role] = parsed_port
-                continue
-
-        serving_ports = serving.get("ports")
-        if isinstance(serving_ports, list):
-            for value in serving_ports:
-                if isinstance(value, int):
-                    ports[role] = value
-                    break
+    ports = live_role_primary_ports(_VISION_ROLES, stack_priors_path)
+    if not ports:
+        log.warning("Using fallback VL ports; no live stack-prior VL ports found")
     return ports
 
 

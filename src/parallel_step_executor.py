@@ -23,9 +23,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-import yaml
-
-from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
+from src.registry.stack_priors import (
+    DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
+    live_warm_worker_slots,
+)
 
 if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
@@ -43,28 +44,10 @@ def _live_burst_worker_roles(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
 ) -> frozenset[str]:
     """Return live worker roles that stack priors mark as WARM burst-safe."""
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        logger.debug("No stack-prior burst-worker roles available: %s", exc)
-        return frozenset()
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
-        return frozenset()
-
-    burst_roles: set[str] = set()
-    for role, record in roles.items():
-        if not isinstance(role, str) or not role.startswith("worker_"):
-            continue
-        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict) or serving.get("tier") != "warm":
-            continue
-        burst_roles.add(role)
-    return frozenset(burst_roles)
+    roles = frozenset(live_warm_worker_slots(stack_priors_path))
+    if not roles:
+        logger.debug("No stack-prior burst-worker roles available")
+    return roles
 
 
 BURST_WORKER_ROLES = _live_burst_worker_roles()
