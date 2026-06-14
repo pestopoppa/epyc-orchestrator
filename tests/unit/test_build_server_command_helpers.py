@@ -21,6 +21,36 @@ def _stack_prior_role(role: str) -> dict[str, Any]:
     return role_record
 
 
+def _write_launch_prior(
+    tmp_path: Path,
+    role: str,
+    *,
+    requirements: dict[str, Any],
+    runtime: dict[str, Any],
+) -> Path:
+    path = tmp_path / "stack_priors.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "roles": {
+                    role: {
+                        "deployment_status": "live_stack",
+                        "serving": {
+                            "launch": {
+                                "requirements": requirements,
+                                "runtime": runtime,
+                            }
+                        },
+                    }
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _flag_value(cmd: list[str], flag: str) -> str | None:
     if flag not in cmd:
         return None
@@ -173,6 +203,42 @@ def test_build_vision_command_matches_stack_prior_launch_witness(
     assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
+def test_build_vision_command_prefers_stack_prior_requirements(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    priors = _write_launch_prior(
+        tmp_path,
+        "vision_escalation",
+        requirements={
+            "model_path": "/prior/vision.gguf",
+            "mmproj_path": "/prior/mmproj.gguf",
+        },
+        runtime={
+            "binary_path": "/prior/llama-server",
+            "cache": {"context_tokens": 12000, "slots": 1},
+            "flags": {
+                "flash_attn": False,
+                "override_kv": ["qwen3vlmoe.expert_used_count=int:2"],
+                "spec": {"enabled": False},
+            },
+        },
+    )
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
+
+    cmd = oss._build_vision_command(port=9087, vision_type="escalation")
+
+    assert cmd[0] == "/prior/llama-server"
+    assert _flag_value(cmd, "-m") == "/prior/vision.gguf"
+    assert _flag_value(cmd, "--mmproj") == "/prior/mmproj.gguf"
+    assert _all_flag_values(cmd, "--override-kv") == [
+        "qwen3vlmoe.expert_used_count=int:2"
+    ]
+    assert _flag_value(cmd, "-np") == "1"
+    assert _flag_value(cmd, "-c") == "12000"
+    assert "--flash-attn" not in cmd
+
+
 def test_build_embedding_command_enables_embeddings_and_cls_pool() -> None:
     cmd = oss._build_embedding_command(port=8090)
     assert "--embeddings" in cmd
@@ -229,6 +295,117 @@ def test_build_worker_explore_command_matches_stack_prior_launch_witness() -> No
     assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
+def test_build_worker_explore_command_prefers_stack_prior_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    priors = _write_launch_prior(
+        tmp_path,
+        "worker_general",
+        requirements={
+            "model_path": "/prior/gemma.gguf",
+            "draft_model_path": "/prior/draft.gguf",
+        },
+        runtime={
+            "binary_path": "/prior/ik/llama-server",
+            "cache": {
+                "context_tokens": 12288,
+                "slots": 1,
+                "ubatch": 256,
+                "kv_type_k": "q5_0",
+                "kv_type_v": "q6_0",
+                "no_mmap": False,
+            },
+            "flags": {
+                "flash_attn": False,
+                "jinja": False,
+                "reasoning": "off",
+                "override_kv": [],
+                "spec": {
+                    "enabled": True,
+                    "type": "mtp",
+                    "draft_model_path": "/prior/draft.gguf",
+                    "draft_max": 4,
+                    "draft_p_min": 0.25,
+                    "threads_draft": 8,
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
+
+    cmd = oss._build_worker_explore_command(
+        port=8072,
+        model_path="/fallback/gemma.gguf",
+        binary_override=None,
+    )
+
+    assert cmd[0] == "/prior/ik/llama-server"
+    assert _flag_value(cmd, "-m") == "/prior/gemma.gguf"
+    assert _flag_value(cmd, "-md") == "/prior/draft.gguf"
+    assert _flag_value(cmd, "--draft-max") == "4"
+    assert _flag_value(cmd, "--draft-p-min") == "0.25"
+    assert _flag_value(cmd, "--threads-draft") == "8"
+    assert _flag_value(cmd, "-ub") == "256"
+    assert _flag_value(cmd, "-c") == "12288"
+    assert _flag_value(cmd, "-ctk") == "q5_0"
+    assert _flag_value(cmd, "-ctv") == "q6_0"
+    assert "--no-mmap" not in cmd
+    assert "--jinja" not in cmd
+    assert "--flash-attn" not in cmd
+
+
+def test_build_worker_explore_command_rejects_boolean_runtime_numbers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    priors = _write_launch_prior(
+        tmp_path,
+        "worker_general",
+        requirements={
+            "model_path": "/prior/gemma.gguf",
+            "draft_model_path": "/prior/draft.gguf",
+        },
+        runtime={
+            "binary_path": "/prior/ik/llama-server",
+            "cache": {
+                "context_tokens": True,
+                "slots": True,
+                "ubatch": True,
+                "kv_type_k": "q8_0",
+                "kv_type_v": "q8_0",
+            },
+            "flags": {
+                "flash_attn": True,
+                "jinja": True,
+                "reasoning": "off",
+                "spec": {
+                    "enabled": True,
+                    "type": "mtp",
+                    "draft_model_path": "/prior/draft.gguf",
+                    "draft_max": True,
+                    "draft_p_min": True,
+                    "threads_draft": True,
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
+
+    cmd = oss._build_worker_explore_command(
+        port=8072,
+        model_path="/fallback/gemma.gguf",
+        binary_override=None,
+    )
+
+    assert _flag_value(cmd, "-np") == "1"
+    assert _flag_value(cmd, "-c") == str(oss.LAUNCH_CONTEXT_TOKENS["worker_general"])
+    assert _flag_value(cmd, "-ub") == str(oss.WORKER_MTP_UBATCH_TOKENS)
+    assert _flag_value(cmd, "--draft-max") == str(oss.WORKER_MTP_DRAFT_MAX)
+    assert _flag_value(cmd, "--draft-p-min") == str(oss.WORKER_MTP_DRAFT_P_MIN)
+    assert _flag_value(cmd, "--threads-draft") == str(oss.WORKER_MTP_THREADS_DRAFT)
+
+
 def test_build_worker_explore_command_uses_binary_override_when_set() -> None:
     cmd = oss._build_worker_explore_command(
         port=8072, model_path="/m/gemma4.gguf",
@@ -237,10 +414,24 @@ def test_build_worker_explore_command_uses_binary_override_when_set() -> None:
     assert cmd[0] == "/opt/ik_llama.cpp/build/bin/llama-server"
 
 
-def test_build_worker_explore_command_falls_back_to_llama_server() -> None:
+def test_build_worker_explore_command_prefers_live_stack_prior_binary() -> None:
     cmd = oss._build_worker_explore_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
+    runtime = _stack_prior_role("worker_general")["serving"]["launch"]["runtime"]
+    assert cmd[0] == runtime["binary_path"]
+
+
+def test_build_worker_explore_command_falls_back_to_llama_server_without_priors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", tmp_path / "missing.yaml")
+
+    cmd = oss._build_worker_explore_command(
+        port=8072, model_path="/m/gemma4.gguf", binary_override=None,
+    )
+
     assert cmd[0] == str(oss.LLAMA_SERVER)
 
 
@@ -388,6 +579,60 @@ def test_append_acceleration_args_hierarchical_speculation_with_intermediate() -
     oss._append_acceleration_args(cmd, "some_role", accel, "/m/x.gguf")
     assert "--hierarchical-spec" in cmd
     assert cmd[cmd.index("--n-layer-exit-intermediate") + 1] == "7"
+
+
+def test_build_role_command_prefers_stack_prior_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    slot_dir = tmp_path / "slot-cache" / "frontdoor"
+    priors = _write_launch_prior(
+        tmp_path,
+        "frontdoor",
+        requirements={},
+        runtime={
+            "binary_path": "/prior/llama-server",
+            "cache": {
+                "context_tokens": 24576,
+                "slots": 1,
+                "ubatch": 2048,
+                "kv_type_k": "q5_0",
+                "kv_type_v": "q6_0",
+                "mlock": False,
+                "slot_save_path": str(slot_dir),
+            },
+            "flags": {
+                "flash_attn": False,
+                "jinja": False,
+                "reasoning": None,
+                "override_kv": ["qwen36.expert_used_count=int:3"],
+                "spec": {"enabled": False},
+            },
+        },
+    )
+    monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
+    role = SimpleNamespace(
+        name="frontdoor",
+        model=SimpleNamespace(full_path="/fallback/frontdoor.gguf"),
+        acceleration=SimpleNamespace(type="none", experts=None, draft_role=None),
+    )
+
+    cmd = oss._build_role_command(role, port=9070)
+
+    assert cmd[0] == "/prior/llama-server"
+    assert _flag_value(cmd, "-m") == "/fallback/frontdoor.gguf"
+    assert _flag_value(cmd, "-np") == "1"
+    assert _flag_value(cmd, "-c") == "24576"
+    assert _flag_value(cmd, "-ub") == "2048"
+    assert _flag_value(cmd, "-ctk") == "q5_0"
+    assert _flag_value(cmd, "-ctv") == "q6_0"
+    assert _all_flag_values(cmd, "--override-kv") == [
+        "qwen36.expert_used_count=int:3"
+    ]
+    assert _flag_value(cmd, "--slot-save-path") == str(slot_dir)
+    assert "--mlock" not in cmd
+    assert "--jinja" not in cmd
+    assert "--flash-attn" not in cmd
 
 
 # -----------------------------------------------------------------------------

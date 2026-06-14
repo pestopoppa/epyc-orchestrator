@@ -43,6 +43,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
@@ -97,6 +99,7 @@ from scripts.server.stack_manifest import (
     DEV_MODEL,
     DEV_MODEL_PATH,
     DEFAULT_EFFECTIVE_CONTEXT_TOKENS,
+    DEFAULT_UBATCH_TOKENS,
     DOCKER_SERVICES,
     EMBEDDER_PORTS,
     EMBEDDING_MODEL_PATH,
@@ -164,6 +167,114 @@ from src.config import _registry_timeout
 from src.registry_loader import RegistryLoader
 
 # =============================================================================
+
+STACK_PRIORS_PATH = _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
+
+
+def _stack_prior_launch(role_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return generated launch requirements/runtime for a live role, if usable."""
+    try:
+        payload = yaml.safe_load(STACK_PRIORS_PATH.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}, {}
+    roles = payload.get("roles")
+    if not isinstance(roles, dict):
+        return {}, {}
+    record = roles.get(role_name)
+    if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
+        return {}, {}
+    serving = record.get("serving")
+    if not isinstance(serving, dict):
+        return {}, {}
+    launch = serving.get("launch")
+    if not isinstance(launch, dict):
+        return {}, {}
+    requirements = launch.get("requirements")
+    runtime = launch.get("runtime")
+    return (
+        requirements if isinstance(requirements, dict) else {},
+        runtime if isinstance(runtime, dict) else {},
+    )
+
+
+def _runtime_cache(runtime: dict[str, Any]) -> dict[str, Any]:
+    cache = runtime.get("cache")
+    return cache if isinstance(cache, dict) else {}
+
+
+def _runtime_flags(runtime: dict[str, Any]) -> dict[str, Any]:
+    flags = runtime.get("flags")
+    return flags if isinstance(flags, dict) else {}
+
+
+def _runtime_positive_int(
+    container: dict[str, Any],
+    key: str,
+    fallback: int | str,
+) -> str:
+    value = container.get(key)
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return str(value)
+    if isinstance(value, str) and value.isdigit() and int(value) > 0:
+        return value
+    return str(fallback)
+
+
+def _runtime_number_string(
+    container: dict[str, Any],
+    key: str,
+    fallback: int | float | str,
+) -> str:
+    value = container.get(key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    if isinstance(value, str) and value:
+        try:
+            float(value)
+        except ValueError:
+            return str(fallback)
+        return value
+    return str(fallback)
+
+
+def _runtime_string(container: dict[str, Any], key: str, fallback: str) -> str:
+    value = container.get(key)
+    return value if isinstance(value, str) and value else fallback
+
+
+def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:
+    kv_type_k = cache.get("kv_type_k")
+    kv_type_v = cache.get("kv_type_v")
+    if isinstance(kv_type_k, str) and isinstance(kv_type_v, str):
+        cmd.extend(["-ctk", kv_type_k, "-ctv", kv_type_v])
+    if cache.get("kv_hadamard") is True:
+        cmd.append("--kv-hadamard")
+
+
+def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any]) -> None:
+    spec = _runtime_flags(runtime).get("spec")
+    if not isinstance(spec, dict) or spec.get("enabled") is not True:
+        return
+    draft_model_path = spec.get("draft_model_path")
+    if not isinstance(draft_model_path, str) or not draft_model_path:
+        return
+    cmd.extend(["-md", draft_model_path])
+    spec_type = spec.get("type")
+    if isinstance(spec_type, str) and spec_type:
+        cmd.extend(["--spec-type", spec_type])
+    draft_max = spec.get("draft_max")
+    if isinstance(draft_max, int) and not isinstance(draft_max, bool) and draft_max > 0:
+        cmd.extend(["--draft-max", str(draft_max)])
+    draft_p_min = spec.get("draft_p_min")
+    if isinstance(draft_p_min, (int, float)) and not isinstance(draft_p_min, bool):
+        cmd.extend(["--draft-p-min", str(float(draft_p_min))])
+    threads_draft = spec.get("threads_draft")
+    if (
+        isinstance(threads_draft, int)
+        and not isinstance(threads_draft, bool)
+        and threads_draft > 0
+    ):
+        cmd.extend(["--threads-draft", str(threads_draft)])
 # Path/binary constants moved to scripts/server/stack_paths.py (2026-05-22).
 # Manifest (PORT_MAP, ROLE_LAUNCH_META, model paths, classification helpers,
 # validate_model_paths, validate_against_registry, etc.) moved to
@@ -315,50 +426,65 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
     Pre-fix: vision_escalation = hardcoded 96, worker_vision = hardcoded 24.
     """
     if vision_type == "escalation":
+        role_name = "vision_escalation"
+        requirements, runtime = _stack_prior_launch(role_name)
+        cache = _runtime_cache(runtime)
+        flags = _runtime_flags(runtime)
         # Qwen3-VL-30B MoE - larger model, expert reduction
-        thread_count = _resolve_thread_count("vision_escalation", numa_instance)
-        return [
-            str(LLAMA_SERVER),
+        thread_count = _resolve_thread_count(role_name, numa_instance)
+        cmd = [
+            _runtime_string(runtime, "binary_path", str(LLAMA_SERVER)),
             "-m",
-            VISION_ESCALATION_MODEL,
+            _runtime_string(requirements, "model_path", VISION_ESCALATION_MODEL),
             "--mmproj",
-            VISION_ESCALATION_MMPROJ,
-            "--override-kv",
-            "qwen3vlmoe.expert_used_count=int:4",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "-np",
-            "1",
-            "-c",
-            str(LAUNCH_CONTEXT_TOKENS["vision_escalation"]),
-            "-t",
-            thread_count,
-            "--flash-attn",
-            "on",
+            _runtime_string(requirements, "mmproj_path", VISION_ESCALATION_MMPROJ),
         ]
+        for override in flags.get("override_kv") or ["qwen3vlmoe.expert_used_count=int:4"]:
+            if isinstance(override, str) and override:
+                cmd.extend(["--override-kv", override])
+        cmd.extend(
+            [
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+                "-np",
+                _runtime_positive_int(cache, "slots", 1),
+                "-c",
+                _runtime_positive_int(cache, "context_tokens", LAUNCH_CONTEXT_TOKENS[role_name]),
+                "-t",
+                thread_count,
+            ]
+        )
+        if flags.get("flash_attn", True) is True:
+            cmd.extend(["--flash-attn", "on"])
+        return cmd
     # Qwen2.5-VL-7B - smaller worker model
-    thread_count = _resolve_thread_count("worker_vision", numa_instance)
-    return [
-        str(LLAMA_SERVER),
+    role_name = "worker_vision"
+    requirements, runtime = _stack_prior_launch(role_name)
+    cache = _runtime_cache(runtime)
+    flags = _runtime_flags(runtime)
+    thread_count = _resolve_thread_count(role_name, numa_instance)
+    cmd = [
+        _runtime_string(runtime, "binary_path", str(LLAMA_SERVER)),
         "-m",
-        VISION_WORKER_MODEL,
+        _runtime_string(requirements, "model_path", VISION_WORKER_MODEL),
         "--mmproj",
-        VISION_WORKER_MMPROJ,
+        _runtime_string(requirements, "mmproj_path", VISION_WORKER_MMPROJ),
         "--host",
         "127.0.0.1",
         "--port",
         str(port),
         "-np",
-        "2",
+        _runtime_positive_int(cache, "slots", 2),
         "-c",
-        str(LAUNCH_CONTEXT_TOKENS["worker_vision"]),
+        _runtime_positive_int(cache, "context_tokens", LAUNCH_CONTEXT_TOKENS[role_name]),
         "-t",
         thread_count,
-        "--flash-attn",
-        "on",
     ]
+    if flags.get("flash_attn", True) is True:
+        cmd.extend(["--flash-attn", "on"])
+    return cmd
 
 
 def _build_embedding_command(port: int) -> list[str]:
@@ -416,7 +542,21 @@ def _build_worker_explore_command(
     in the registry — required because gemma4 MTP needs ik_llama.cpp PR #1744 build,
     not the production llama.cpp build.
     """
-    binary = binary_override if binary_override else str(LLAMA_SERVER)
+    requirements, runtime = _stack_prior_launch("worker_general")
+    cache = _runtime_cache(runtime)
+    flags = _runtime_flags(runtime)
+    spec = flags.get("spec") if isinstance(flags.get("spec"), dict) else {}
+    binary = (
+        binary_override
+        if binary_override
+        else _runtime_string(runtime, "binary_path", str(LLAMA_SERVER))
+    )
+    model_path = _runtime_string(requirements, "model_path", model_path)
+    draft_model_path = _runtime_string(
+        spec,
+        "draft_model_path",
+        _runtime_string(requirements, "draft_model_path", EXPLORE_DRAFT_MODEL),
+    )
     # 2026-05-24: now uses generic _resolve_thread_count(role, numa_instance).
     # Pre-2026-05-24 used a port-matching workaround here because the generic
     # _resolve_thread_count ignored numa_instance — that bug is now fixed at
@@ -427,25 +567,25 @@ def _build_worker_explore_command(
         "-m",
         model_path,
         "-md",
-        EXPLORE_DRAFT_MODEL,  # MTP draft (gemma4 assistant Q8)
+        draft_model_path,  # MTP draft (gemma4 assistant Q8)
         "--spec-type",
-        WORKER_MTP_SPEC_TYPE,  # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
+        _runtime_string(spec, "type", WORKER_MTP_SPEC_TYPE),  # CRITICAL: engages ik_llama.cpp PR #1744 MTP code path.
         # Without this, -md is treated as standard spec decode and
         # MTP-arch draft tensors are loaded but never assigned to a
         # backend buffer → "tensor buffer not set" assertion.
         "--draft-max",
-        str(WORKER_MTP_DRAFT_MAX),  # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
+        _runtime_positive_int(spec, "draft_max", WORKER_MTP_DRAFT_MAX),  # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
         "--draft-p-min",
-        str(WORKER_MTP_DRAFT_P_MIN),  # greedy: accept top-1 drafts, verifier rejects mismatches
+        _runtime_number_string(spec, "draft_p_min", WORKER_MTP_DRAFT_P_MIN),  # greedy: accept top-1 drafts, verifier rejects mismatches
         "--threads-draft",
-        str(WORKER_MTP_THREADS_DRAFT),  # dedicate 16 threads to small 4-layer drafter
+        _runtime_positive_int(spec, "threads_draft", WORKER_MTP_THREADS_DRAFT),  # dedicate 16 threads to small 4-layer drafter
         "-ub",
-        str(WORKER_MTP_UBATCH_TOKENS),  # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
-        "--no-mmap",  # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
+        _runtime_positive_int(cache, "ubatch", WORKER_MTP_UBATCH_TOKENS),  # MTP override of canonical -ub 8192 (per gemma4 deep-dive)
+        *(["--no-mmap"] if cache.get("no_mmap", True) is True else []),  # canonical recipe: bulk-read on EPYC NUMA cold-cache decode
         "--reasoning",
-        "off",  # disable gemma4 thinking-channel (output otherwise lands in
+        str(flags.get("reasoning") or "off"),  # disable gemma4 thinking-channel (output otherwise lands in
         # reasoning_content not content; registry: gemma4_26b reasoning=off)
-        "--jinja",  # gemma4 ships a custom chat template embedded in the gguf;
+        *(["--jinja"] if flags.get("jinja", True) is True else []),  # gemma4 ships a custom chat template embedded in the gguf;
         # without --jinja, llama.cpp rejects /v1/chat/completions
         # with "this custom template is not supported"
         "--host",
@@ -459,9 +599,9 @@ def _build_worker_explore_command(
         # -np 2 because external-draft spec decode (Qwen3-Coder + 0.75B draft)
         # had per-slot draft state; MTP fuses draft + target, hence -np 1.
         "-np",
-        "1",
+        _runtime_positive_int(cache, "slots", 1),
         "-c",
-        str(LAUNCH_CONTEXT_TOKENS["worker_general"]),  # match research-registry max_context; 8192 causes MTP buffer mismatches
+        _runtime_positive_int(cache, "context_tokens", LAUNCH_CONTEXT_TOKENS["worker_general"]),  # match research-registry max_context; 8192 causes MTP buffer mismatches
         # Per-instance thread count (full=96, quarters=48). Pre-2026-05-08 was
         # hardcoded -t 24 (Qwen3-Coder tolerated it); gemma4 + MTP under
         # ik_llama.cpp PR #1744 must match the bench recipe to avoid the
@@ -471,11 +611,10 @@ def _build_worker_explore_command(
         # KV cache q8_0/q8_0 — registry-declared and required for stable MTP buffer
         # allocation. f16 default left some MTP tensor buffers uninitialized.
         "-ctk",
-        WORKER_MTP_KV_TYPES[0],
+        _runtime_string(cache, "kv_type_k", WORKER_MTP_KV_TYPES[0]),
         "-ctv",
-        WORKER_MTP_KV_TYPES[1],
-        "--flash-attn",
-        "on",
+        _runtime_string(cache, "kv_type_v", WORKER_MTP_KV_TYPES[1]),
+        *(["--flash-attn", "on"] if flags.get("flash_attn", True) is True else []),
     ]
 
 
@@ -665,16 +804,25 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
     model_path = role_config.model.full_path
     accel = role_config.acceleration
     role_name = role_config.name
-    parallel_slots = "1" if role_name in SERIAL_ROLES else "2"
+    _requirements, runtime = _stack_prior_launch(role_name)
+    cache = _runtime_cache(runtime)
+    flags = _runtime_flags(runtime)
+    fallback_slots = 1 if role_name in SERIAL_ROLES else 2
+    parallel_slots = _runtime_positive_int(cache, "slots", fallback_slots)
     thread_count = _resolve_thread_count(role_name, numa_instance)
-    context_size = _KV_CONTEXT_SIZES.get(role_name, str(DEFAULT_EFFECTIVE_CONTEXT_TOKENS))
-    binary = _resolve_binary_for_role(role_name)
+    context_size = _runtime_positive_int(
+        cache,
+        "context_tokens",
+        _KV_CONTEXT_SIZES.get(role_name, str(DEFAULT_EFFECTIVE_CONTEXT_TOKENS)),
+    )
+    binary = _runtime_string(runtime, "binary_path", str(_resolve_binary_for_role(role_name)))
+    ubatch = _runtime_positive_int(cache, "ubatch", DEFAULT_UBATCH_TOKENS)
 
     # -ub 8192: matches the canonical-bench single-instance recipe
     # (scripts/benchmark/run_qwen36_retest.py uses `-ub 8192` + `-c 8192` + `--parallel 1`).
     # Without this, frontdoor's decode throughput was 12.66 t/s vs 25-27 t/s in the bench CSV.
     cmd = [
-        str(binary),
+        binary,
         "-m",
         model_path,
         "--host",
@@ -687,32 +835,48 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
         context_size,
         "-t",
         thread_count,
-        "-ub",
-        "8192",
-        "--flash-attn",
-        "on",
     ]
+    cmd.extend(["-ub", ubatch])
+    if flags.get("flash_attn", True) is True:
+        cmd.extend(["--flash-attn", "on"])
 
     # --jinja: model's native chat template (enables thinking on Qwen3/3.5).
     # SKIP for architect_general — Qwen3.5 hybrids enter infinite <think> loops.
     # --reasoning off is insufficient: the jinja template itself primes the model
     # into think mode. Without --jinja, llama-server falls back to generic ChatML
     # which has no thinking scaffolding.
-    if role_name != "architect_general":
+    if flags.get("jinja", role_name != "architect_general") is True:
         cmd.append("--jinja")
 
-    _append_kv_quant_args(cmd, role_name)
+    if runtime:
+        _append_runtime_kv_args(cmd, cache)
+    else:
+        _append_kv_quant_args(cmd, role_name)
 
     # mlock: lock model weights in RAM to prevent page cache eviction.
     # Validated in S2: 30x latency improvement under memory pressure.
-    if role_name in MLOCK_ROLES:
+    if cache.get("mlock", role_name in MLOCK_ROLES) is True:
         cmd.append("--mlock")
 
-    _append_acceleration_args(cmd, role_name, accel, model_path)
+    if runtime:
+        for override in flags.get("override_kv") or []:
+            if isinstance(override, str) and override:
+                cmd.extend(["--override-kv", override])
+        _append_runtime_spec_args(cmd, runtime)
+        reasoning = flags.get("reasoning")
+        if isinstance(reasoning, str) and reasoning:
+            cmd.extend(["--reasoning", reasoning])
+    else:
+        _append_acceleration_args(cmd, role_name, accel, model_path)
     _apply_numa_spec_overrides(cmd, NUMA_CONFIG.get(role_name))
 
     # DS-3: KV state save/restore — per-role subdir to avoid slot ID collisions.
-    slot_dir = SLOT_SAVE_DIR / role_name
+    slot_save_path = cache.get("slot_save_path")
+    slot_dir = (
+        Path(slot_save_path)
+        if isinstance(slot_save_path, str) and slot_save_path
+        else SLOT_SAVE_DIR / role_name
+    )
     slot_dir.mkdir(parents=True, exist_ok=True)
     cmd.extend(["--slot-save-path", str(slot_dir)])
 
