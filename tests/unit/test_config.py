@@ -300,19 +300,24 @@ class TestServerURLsConfig:
             """
 roles:
   frontdoor:
+    deployment_status: live_stack
     serving:
       ports: [9100, 9200]
   coder_escalation:
+    deployment_status: live_stack
     serving:
       endpoint: http://localhost:9300
       ports: [9300]
   worker_general:
+    deployment_status: live_stack
     serving:
       ports: [9400, 9500, 9600]
   worker_explore:
+    deployment_status: live_stack
     serving:
       ports: [9400, 9500]
   worker_fast:
+    deployment_status: live_stack
     serving:
       ports: [9902]
 """.lstrip(),

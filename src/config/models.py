@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+
 from .validation import _registry_runtime_value, _registry_timeout
 
 # ============================================================================
@@ -322,21 +324,9 @@ def _stack_prior_server_urls() -> dict[str, str]:
 
     urls: dict[str, str] = {}
     try:
-        import yaml
-
         priors_path = Path(_get_default_stack_priors_path())
-        payload = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
-        roles = payload.get("roles")
-        if not isinstance(roles, dict):
-            _STACK_PRIOR_SERVER_URLS_CACHE = {}
-            return _STACK_PRIOR_SERVER_URLS_CACHE
-
-        for role, record in roles.items():
-            if not isinstance(role, str) or not isinstance(record, dict):
-                continue
-            serving = record.get("serving")
-            if not isinstance(serving, dict):
-                continue
+        for role, record in live_stack_role_records(priors_path).items():
+            serving = stack_prior_serving(record)
             url = _format_stack_prior_url(serving)
             if url:
                 urls[role] = url
