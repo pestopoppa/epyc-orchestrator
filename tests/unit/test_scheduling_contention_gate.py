@@ -232,6 +232,24 @@ def test_admit_times_out_when_persistently_blocked(real_matrix_path) -> None:
     assert 0.4 <= elapsed < 1.5  # respected the 400ms budget
 
 
+def test_admit_zero_wait_times_out_without_poll_sleep(real_matrix_path, monkeypatch) -> None:
+    m = contention.load_contention_matrix(real_matrix_path)
+    gate = gate_mod.ContentionGate(
+        matrix=m,
+        active_holders_fn=_fake_active_factory({"architect_general": [0]}),
+    )
+
+    monkeypatch.setattr(gate_mod.time, "sleep", lambda _: pytest.fail("zero-wait path slept"))
+
+    d = gate.admit("frontdoor", contention.TrafficClass.BACKGROUND, max_queue_wait_ms=0)
+
+    assert not d.admitted
+    assert d.decision == contention.PairDecision.QUEUE
+    assert d.blocking_roles == ["architect_general"]
+    assert "timeout" in d.reason
+    assert gate.metrics_snapshot()["contention_timeout_count"] == 1
+
+
 def test_admit_unblocks_when_active_clears(real_matrix_path) -> None:
     m = contention.load_contention_matrix(real_matrix_path)
     # Mutable holders dict — flip to empty after 200 ms
