@@ -18,11 +18,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-import yaml
-
 from src.config import get_config
 from src.env_parsing import env_float as _env_float
-from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
+from src.registry.stack_priors import (
+    DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
+    live_stack_role_records,
+    stack_prior_serving,
+)
 
 log = logging.getLogger(__name__)
 
@@ -47,9 +49,7 @@ _LEGACY_LIGHT_ROLES = frozenset({
 
 
 def _launch_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
-    serving = record.get("serving")
-    if not isinstance(serving, dict):
-        return []
+    serving = stack_prior_serving(record)
     launch = serving.get("launch")
     if not isinstance(launch, dict):
         return []
@@ -60,9 +60,7 @@ def _launch_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _launch_modes(record: dict[str, Any]) -> set[str]:
-    serving = record.get("serving")
-    if not isinstance(serving, dict):
-        return set()
+    serving = stack_prior_serving(record)
     launch = serving.get("launch")
     if not isinstance(launch, dict):
         return set()
@@ -88,23 +86,13 @@ def _lock_roles_from_stack_priors(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
 ) -> tuple[frozenset[str], frozenset[str]] | None:
     """Derive exclusive/shared lock roles from the generated live stack priors."""
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
-        return None
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
+    roles = live_stack_role_records(stack_priors_path)
+    if not roles:
         return None
 
     heavy: set[str] = set()
     light: set[str] = set()
     for role, record in roles.items():
-        if not isinstance(role, str):
-            continue
-        if not isinstance(record, dict) or record.get("deployment_status") != "live_stack":
-            continue
         if _is_stack_prior_shared_role(record):
             light.add(role)
         else:
