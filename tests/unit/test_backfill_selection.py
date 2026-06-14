@@ -12,7 +12,6 @@ from src.scheduling.contention import (
     ContentionMatrix,
     Nway,
     Pair,
-    Placement,
     SameRole,
     TrafficClass,
     select_backfill_candidate,
@@ -88,6 +87,23 @@ def test_priority_order_first_fit() -> None:
         candidates, active, TrafficClass.BACKGROUND,
         instance_regions=_REGIONS, matrix=m,
     )
+    assert pick == ("worker_general", 3)
+
+
+def test_skips_same_role_occupied_candidate_then_picks_later_admissible() -> None:
+    """Same-role policy cannot override physical occupancy of an active quarter."""
+    m = _matrix(
+        n_way=[(("frontdoor", "worker_general"), 1.1, "allow")],
+        same_role=[("frontdoor", "allow")],
+    )
+    active = {"frontdoor": frozenset({"q0"})}
+    candidates = [("frontdoor", 1), ("worker_general", 3)]  # occupied q0, then disjoint q2
+
+    pick = select_backfill_candidate(
+        candidates, active, TrafficClass.BACKGROUND,
+        instance_regions=_REGIONS, matrix=m,
+    )
+
     assert pick == ("worker_general", 3)
 
 
