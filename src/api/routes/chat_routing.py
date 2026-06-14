@@ -14,10 +14,8 @@ import logging
 import re
 from typing import Any
 
-import yaml
-
 from src.constants import TASK_IR_OBJECTIVE_LEN
-from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
+from src.registry.stack_priors import live_stack_role_records
 from src.task_ir import canonicalize_task_ir
 
 log = logging.getLogger(__name__)
@@ -259,21 +257,9 @@ def _role_to_task_type(role: str) -> str:
 
 
 def _live_heuristic_prior_roles() -> tuple[str, ...]:
-    try:
-        with DEFAULT_STACK_PRIORS.open("r", encoding="utf-8") as fh:
-            payload = yaml.safe_load(fh)
-    except Exception as exc:
-        log.debug("Could not load stack priors for heuristic routing priors: %s", exc)
+    live_roles = set(live_stack_role_records())
+    if not live_roles:
         return _DEGRADED_HEURISTIC_PRIOR_ROLES
-
-    roles = payload.get("roles") if isinstance(payload, dict) else None
-    if not isinstance(roles, dict):
-        return _DEGRADED_HEURISTIC_PRIOR_ROLES
-    live_roles = {
-        str(role)
-        for role, record in roles.items()
-        if isinstance(record, dict) and record.get("deployment_status") == "live_stack"
-    }
     role_ids = tuple(role for role in _HEURISTIC_PRIOR_ROLE_CANDIDATES if role in live_roles)
     return role_ids or _DEGRADED_HEURISTIC_PRIOR_ROLES
 

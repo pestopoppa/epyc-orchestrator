@@ -22,9 +22,12 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlparse
 
-import yaml
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_endpoint_port,
+    stack_prior_serving,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,32 +45,20 @@ FALLBACK_STATUS_TARGETS = [
 def _stack_status_targets(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
 ) -> list[tuple[str, int]]:
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
-        return list(FALLBACK_STATUS_TARGETS)
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
+    roles = live_stack_role_records(stack_priors_path)
+    if not roles:
         return list(FALLBACK_STATUS_TARGETS)
 
     names_by_port: dict[int, list[str]] = {}
     for role, record in roles.items():
-        if not isinstance(role, str) or not isinstance(record, dict):
+        serving = stack_prior_serving(record)
+        try:
+            port = stack_prior_endpoint_port(serving)
+        except ValueError:
             continue
-        if record.get("deployment_status") != "live_stack":
+        if port is None:
             continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict):
-            continue
-        endpoint = serving.get("endpoint")
-        if not isinstance(endpoint, str):
-            continue
-        parsed = urlparse(endpoint)
-        if parsed.port is None:
-            continue
-        names_by_port.setdefault(parsed.port, []).append(role)
+        names_by_port.setdefault(port, []).append(role)
 
     if not names_by_port:
         return list(FALLBACK_STATUS_TARGETS)

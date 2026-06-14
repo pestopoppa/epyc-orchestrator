@@ -12,8 +12,6 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import yaml
-
 from src.constants import TASK_IR_OBJECTIVE_LEN
 
 from src.api.routes.chat_utils import (
@@ -21,7 +19,10 @@ from src.api.routes.chat_utils import (
     TWO_STAGE_CONFIG,
     LONG_CONTEXT_CONFIG,
 )
-from src.registry.stack_priors import DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS
+from src.registry.stack_priors import (
+    DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
+    live_stack_role_records,
+)
 
 log = logging.getLogger(__name__)
 _SUMMARIZATION_WORKER_ROLE_PREFERENCE = (
@@ -92,22 +93,10 @@ def _summarization_worker_role(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
 ) -> str:
     """Select the live stack worker role for chunk digests."""
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError) as exc:
-        log.debug("Using degraded summarization worker role; stack priors unavailable: %s", exc)
+    live_roles = set(live_stack_role_records(stack_priors_path))
+    if not live_roles:
         return _DEGRADED_SUMMARIZATION_WORKER_ROLE
 
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
-        return _DEGRADED_SUMMARIZATION_WORKER_ROLE
-
-    live_roles = {
-        str(role)
-        for role, record in roles.items()
-        if isinstance(record, dict) and record.get("deployment_status") == "live_stack"
-    }
     for role in _SUMMARIZATION_WORKER_ROLE_PREFERENCE:
         if role in live_roles:
             return role

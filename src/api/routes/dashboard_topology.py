@@ -14,7 +14,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_serving,
+    stack_prior_serving_ports,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,23 +64,13 @@ def _stack_prior_port_hints(
     stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
 ) -> dict[int, str]:
     """Project live model-serving port labels from generated stack priors."""
-    try:
-        payload = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return {}
-    roles = payload.get("roles")
-    if not isinstance(roles, dict):
+    roles = live_stack_role_records(stack_priors_path)
+    if not roles:
         return {}
 
     hints: dict[int, str] = {}
     for role, record in sorted(roles.items()):
-        if not isinstance(role, str) or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        serving = record.get("serving")
-        if not isinstance(serving, dict):
-            continue
+        serving = stack_prior_serving(record)
         launch = serving.get("launch")
         launch = launch if isinstance(launch, dict) else {}
         primary_roles = launch.get("primary_roles")
@@ -98,8 +92,7 @@ def _stack_prior_port_hints(
 
         if mapped:
             continue
-        raw_ports = serving.get("ports")
-        ports = [port for port in raw_ports if isinstance(port, int)] if isinstance(raw_ports, list) else []
+        ports = stack_prior_serving_ports(serving)
         for index, port in enumerate(ports):
             hints[port] = role if index == 0 else f"{role}.q{index - 1}"
 

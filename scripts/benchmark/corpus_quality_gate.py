@@ -30,15 +30,20 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
 
 import requests
-import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_endpoint_port,
+    stack_prior_serving,
+    stack_prior_serving_ports,
+)
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
 FALLBACK_MODELS = {
@@ -48,43 +53,19 @@ FALLBACK_MODELS = {
 }
 
 
-def _port_from_role_record(record: dict) -> int | None:
-    serving = record.get("serving")
-    if not isinstance(serving, dict):
-        return None
-
-    endpoint = serving.get("endpoint")
-    if isinstance(endpoint, str):
-        parsed = urlparse(endpoint)
-        if parsed.port:
-            return parsed.port
-
-    ports = serving.get("ports")
-    if isinstance(ports, list):
-        for port in ports:
-            if isinstance(port, int):
-                return port
-    return None
-
-
 def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
-        return {}
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
-        return {}
+    roles = live_stack_role_records(path)
 
     models: dict[str, dict] = {}
     for role, record in roles.items():
         if not isinstance(record, dict):
             continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        port = _port_from_role_record(record)
+        serving = stack_prior_serving(record)
+        port = stack_prior_endpoint_port(serving)
+        if port is None:
+            for candidate_port in stack_prior_serving_ports(serving):
+                port = candidate_port
+                break
         if port is None:
             continue
         models[str(role)] = {

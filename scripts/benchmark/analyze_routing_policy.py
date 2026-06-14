@@ -20,11 +20,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import yaml
-
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+from src.registry.stack_priors import live_stack_role_records
+
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 FALLBACK_SPECIALIST_ROLES = frozenset({
     "architect_general",
@@ -42,21 +42,12 @@ logger = logging.getLogger(__name__)
 
 def _live_specialist_roles(stack_priors_path: Path = STACK_PRIORS_PATH) -> set[str]:
     """Return live non-worker specialist roles from generated stack priors."""
-    try:
-        with stack_priors_path.open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
-        return set(FALLBACK_SPECIALIST_ROLES)
-
-    roles = data.get("roles")
-    if not isinstance(roles, dict):
-        return set(FALLBACK_SPECIALIST_ROLES)
+    roles = live_stack_role_records(stack_priors_path)
 
     specialists: set[str] = set()
-    for role_name, record in roles.items():
+    for role_name in roles:
+        record = roles[role_name]
         if not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
             continue
         role = str(role_name)
         if role == "frontdoor" or role == "toolrunner" or role.startswith("worker_"):
