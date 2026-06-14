@@ -79,6 +79,36 @@ def test_memory_residency_warnings_are_advisory() -> None:
     assert state.is_throttled() == (False, [])
 
 
+def test_default_rewarm_paths_derive_from_launcher_targets(monkeypatch) -> None:
+    derived = ("/models/b.gguf", "/models/a.gguf")
+
+    monkeypatch.setattr(host_health, "_stack_rewarm_ggufs", lambda: derived)
+
+    assert host_health._default_rewarm_ggufs() == derived
+
+
+def test_default_rewarm_paths_fall_back_when_launcher_targets_fail(monkeypatch) -> None:
+    def _raise() -> tuple[str, ...]:
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr(host_health, "_stack_rewarm_ggufs", _raise)
+
+    assert host_health._default_rewarm_ggufs() == host_health._FALLBACK_REWARM_GGUFS
+
+
+def test_default_rewarm_paths_fall_back_when_launcher_targets_empty(monkeypatch) -> None:
+    monkeypatch.setattr(host_health, "_stack_rewarm_ggufs", lambda: ())
+
+    assert host_health._default_rewarm_ggufs() == host_health._FALLBACK_REWARM_GGUFS
+
+
+def test_numa_rewarm_resolves_default_paths_lazily(monkeypatch) -> None:
+    monkeypatch.setattr(host_health, "_default_rewarm_ggufs", lambda: ("/tmp/missing.gguf",))
+    monkeypatch.setattr(host_health.shutil, "which", lambda binary: f"/usr/bin/{binary}")
+
+    assert host_health._numa_interleave_rewarm() == {"/tmp/missing.gguf": False}
+
+
 def test_flush_sets_paused_true_then_restores(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
     _write_state(state_path, paused=False)

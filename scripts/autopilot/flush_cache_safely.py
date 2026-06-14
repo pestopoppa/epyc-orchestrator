@@ -28,7 +28,7 @@ from pathlib import Path
 # Ensure module path resolves regardless of cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.autopilot.host_health import flush_cache_with_pause, _DEFAULT_REWARM_GGUFS
+from scripts.autopilot.host_health import flush_cache_with_pause
 
 
 def main() -> int:
@@ -49,7 +49,6 @@ def main() -> int:
     result = flush_cache_with_pause(
         state_path=args.state_path,
         rewarm=not args.no_rewarm,
-        rewarm_paths=_DEFAULT_REWARM_GGUFS,
     )
     print(json.dumps({k: (v if not isinstance(v, dict) else {Path(p).name: ok for p, ok in v.items()})
                       for k, v in result.items()}, indent=2))

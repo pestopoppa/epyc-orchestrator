@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shlex
 import shutil
 import subprocess
 import time
@@ -329,12 +328,13 @@ def is_throttled() -> tuple[bool, list[str]]:
 # Any trial that DID complete during the window gets tagged with
 # DeficiencyCategory.EXOGENOUS_CACHE_FLUSH by the safety_gate wire-in.
 
-# Active role GGUFs to rewarm post-flush. Source-of-truth would be NUMA_CONFIG +
-# the model registry; this list is the conservative fallback used when the
-# launcher modules aren't importable (e.g., when running host_health standalone).
+# Active role GGUFs to rewarm post-flush. The live target list is resolved from
+# the same launcher collector used by stack startup; this tuple is only the
+# degraded fallback for standalone/partial environments where those modules
+# cannot be imported.
 # Models too small to need NUMA-interleave rewarm (embedders, drafters) are
 # omitted — bare `cat` on a 4 GB file is fine.
-_DEFAULT_REWARM_GGUFS = (
+_FALLBACK_REWARM_GGUFS = (
     "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",                              # frontdoor / coder_escalation / worker_summarize
     "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",                              # worker_general
     "/mnt/raid0/llm/lmstudio/models/unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",  # architect_general (multipart; cat pulls all 3 via mmap follow)
@@ -343,8 +343,42 @@ _DEFAULT_REWARM_GGUFS = (
     "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",            # worker_vision
 )
 
+# Backward-compatible degraded fallback for older wrappers/tests that import
+# this private constant. Runtime defaults use _default_rewarm_ggufs().
+_DEFAULT_REWARM_GGUFS = _FALLBACK_REWARM_GGUFS
 
-def _numa_interleave_rewarm(gguf_paths: tuple[str, ...] = _DEFAULT_REWARM_GGUFS,
+
+def _stack_rewarm_ggufs() -> tuple[str, ...]:
+    """Return launcher-derived GGUF/MMProj prewarm targets for the live stack."""
+    from scripts.server.orchestrator_stack import build_server_command
+    from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+    from scripts.server.stack_prewarm import collect_targets
+    from src.registry.registry_loader import RegistryLoader
+
+    targets = collect_targets(HOT_SERVERS + WARM_SERVERS, build_server_command, RegistryLoader())
+    return tuple(
+        str(targets[key]["path"])
+        for key in sorted(
+            targets,
+            key=lambda k: (-int(targets[k].get("size_bytes", 0)), str(targets[k]["path"])),
+        )
+    )
+
+
+def _default_rewarm_ggufs() -> tuple[str, ...]:
+    """Resolve live rewarm targets, falling back only in degraded standalone mode."""
+    try:
+        ggufs = _stack_rewarm_ggufs()
+    except Exception as exc:
+        log.warning("using fallback rewarm GGUF list; launcher target resolution failed: %s", exc)
+        return _FALLBACK_REWARM_GGUFS
+    if not ggufs:
+        log.warning("using fallback rewarm GGUF list; launcher target resolution returned no targets")
+        return _FALLBACK_REWARM_GGUFS
+    return ggufs
+
+
+def _numa_interleave_rewarm(gguf_paths: tuple[str, ...] | None = None,
                             timeout_per_gguf: int = 120) -> dict[str, bool]:
     """Warm each GGUF back into the page cache with `numactl --interleave=all`.
 
@@ -356,6 +390,9 @@ def _numa_interleave_rewarm(gguf_paths: tuple[str, ...] = _DEFAULT_REWARM_GGUFS,
 
     Returns {gguf_path: success_bool} for the operator to see what got warmed.
     """
+    if gguf_paths is None:
+        gguf_paths = _default_rewarm_ggufs()
+
     if not shutil.which("numactl"):
         log.warning("numactl not found; cannot do NUMA-interleaved rewarm")
         return {p: False for p in gguf_paths}
@@ -395,7 +432,7 @@ def flush_cache_with_pause(
     *,
     state_path: Path | None = None,
     rewarm: bool = True,
-    rewarm_paths: tuple[str, ...] = _DEFAULT_REWARM_GGUFS,
+    rewarm_paths: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     """The robust pause+flush+rewarm+resume sequence.
 
