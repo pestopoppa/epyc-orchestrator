@@ -51,6 +51,32 @@ roles:
     assert "candidate" not in models
 
 
+def test_load_live_models_falls_back_to_ports_when_endpoint_port_is_invalid(
+    tmp_path: Path,
+) -> None:
+    stack_priors = tmp_path / "stack_priors.yaml"
+    stack_priors.write_text(
+        """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:notaport
+      ports: [9100]
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:notaport
+""",
+        encoding="utf-8",
+    )
+
+    models = _MOD._load_live_models(stack_priors)
+
+    assert models["frontdoor"]["port"] == 9100
+    assert "worker_general" not in models
+
+
 def test_fallback_models_derive_ports_from_manifest(monkeypatch) -> None:
     monkeypatch.setattr(
         _MOD,

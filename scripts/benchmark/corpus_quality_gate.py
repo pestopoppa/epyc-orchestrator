@@ -50,6 +50,18 @@ STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.y
 FALLBACK_MODEL_ROLES = ("frontdoor", "worker_general", "architect_general")
 
 
+def _stack_prior_primary_port(serving: dict) -> int | None:
+    try:
+        port = stack_prior_endpoint_port(serving)
+    except ValueError:
+        port = None
+    if port is not None:
+        return port
+    for candidate_port in stack_prior_serving_ports(serving):
+        return candidate_port
+    return None
+
+
 def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
     roles = live_stack_role_records(path)
 
@@ -58,11 +70,7 @@ def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
         if not isinstance(record, dict):
             continue
         serving = stack_prior_serving(record)
-        port = stack_prior_endpoint_port(serving)
-        if port is None:
-            for candidate_port in stack_prior_serving_ports(serving):
-                port = candidate_port
-                break
+        port = _stack_prior_primary_port(serving)
         if port is None:
             continue
         models[str(role)] = {
