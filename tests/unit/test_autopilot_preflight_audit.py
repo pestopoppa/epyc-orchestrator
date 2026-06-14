@@ -110,6 +110,34 @@ def test_model_server_targets_fallback_follows_manifest_without_literal_port_lis
     ]
 
 
+def test_model_server_targets_fallback_when_live_records_have_no_health_urls(
+    tmp_path: Path,
+) -> None:
+    priors = tmp_path / "stack_priors.yaml"
+    priors.write_text(
+        """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    serving:
+      endpoint: not-a-url
+  worker_general:
+    deployment_status: live_stack
+    serving: {}
+""",
+        encoding="utf-8",
+    )
+
+    targets = _MOD._model_server_targets(priors, "http://localhost:8002")
+    health_urls = {health_url for _, health_url in targets}
+
+    assert ("API", "http://localhost:8002/health") in targets
+    assert "http://localhost:8070/health" in health_urls
+    assert "http://localhost:8072/health" in health_urls
+    assert "http://not-a-url/health" not in health_urls
+    assert "http://localhost:8090/health" not in health_urls
+
+
 def test_audit_stack_change_gate_runs_canonical_command(monkeypatch) -> None:
     calls = []
 

@@ -117,6 +117,14 @@ def test_cmd_name_resolves_lazily_via_getattr(cmd_name: str) -> None:
     assert callable(fn)
 
 
+@pytest.mark.parametrize("cmd_name", ["cmd_start", "cmd_stop", "cmd_reload", "cmd_status"])
+def test_cmd_name_resolves_to_stack_commands_function(cmd_name: str) -> None:
+    stack = importlib.import_module("scripts.server.orchestrator_stack")
+    commands = importlib.import_module("scripts.server.stack_commands")
+
+    assert getattr(stack, cmd_name) is getattr(commands, cmd_name)
+
+
 def test_orchestrator_stack_unknown_attr_raises() -> None:
     """__getattr__ must reject unknown names (not return cmd_* for everything)."""
     stack = importlib.import_module("scripts.server.orchestrator_stack")

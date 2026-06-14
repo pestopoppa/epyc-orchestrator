@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import subprocess
 
-import pytest
-
 from scripts.server import stack_host
 from scripts.server.stack_host import (
     _HOST_PREREQ_GOVERNOR,
@@ -113,3 +111,30 @@ def test_apply_host_prerequisites_returns_false_when_sudo_fails(monkeypatch) -> 
     monkeypatch.setattr(subprocess, "run", fail_run)
 
     assert apply_host_prerequisites(auto_fix=True) is False
+
+
+def test_apply_host_prerequisites_skips_already_canonical_fix_targets(monkeypatch, capsys) -> None:
+    """Autofix should only attempt the prerequisite that is still drifting."""
+    calls: list[list[str]] = []
+
+    def read_sysctl(key: str) -> str:
+        return _HOST_PREREQ_SYSCTLS[key]
+
+    def read_thp(path: str) -> str:
+        return _HOST_PREREQ_THP[path]
+
+    monkeypatch.setattr(stack_host, "_read_sysctl", read_sysctl)
+    monkeypatch.setattr(stack_host, "_read_thp_active", read_thp)
+    monkeypatch.setattr(stack_host, "_read_governor", lambda: "powersave")
+
+    def record_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", record_run)
+
+    assert apply_host_prerequisites(auto_fix=True) is False
+    assert calls == [["sudo", "-n", "cpupower", "frequency-set", "-g", _HOST_PREREQ_GOVERNOR]]
+    out = capsys.readouterr().out
+    assert "[FIX] Applying canonical settings (sudo -n)..." in out
+    assert "FAILED" not in out
