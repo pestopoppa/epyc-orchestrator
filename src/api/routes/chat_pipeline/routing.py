@@ -78,6 +78,16 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         heuristic_priors,
         _classify_and_route,
     )
+    xmas_meta = None
+    try:
+        from src.classifiers.xmas_routing import build_xmas_routing_metadata
+
+        xmas_meta = build_xmas_routing_metadata(
+            request.prompt,
+            request.context or "",
+        )
+    except Exception:
+        xmas_meta = None
 
     role_for_signals = str(routing_decision[0]) if routing_decision else ""
     _factual_risk_score, _factual_risk_band = assess_factual_risk(
@@ -142,6 +152,7 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         _difficulty_band,
         _estimated_cost,
         _assigned_role,
+        xmas_meta,
     )
 
     # Compute role-specific timeout

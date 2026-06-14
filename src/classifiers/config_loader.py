@@ -251,4 +251,10 @@ def _get_default_config() -> dict[str, Any]:
                 "uncertainty_markers": 0.15,
             },
         },
+        "xmas_routing": {
+            "mode": "off",
+            "confidence_threshold": 0.55,
+            "winner_table_path": "",
+            "require_complete_table": False,
+        },
     }

@@ -278,3 +278,12 @@ difficulty_signal:
     math_presence: 0.10
     nesting_depth: 0.15
     ambiguity_markers: 0.15
+
+# Tier 7: X-MAS-style heterogeneous routing telemetry
+# Default OFF. Shadow mode classifies prompts into a 5x5 domain/function cell
+# and logs the table-suggested role without changing the route.
+xmas_routing:
+  mode: "off"              # off|shadow|enforce; enforce currently logs only
+  confidence_threshold: 0.55
+  winner_table_path: ""    # populate with a per-stack table path after eval sweep
+  require_complete_table: false

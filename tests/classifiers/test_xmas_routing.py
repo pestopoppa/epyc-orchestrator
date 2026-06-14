@@ -5,10 +5,14 @@ import yaml
 
 from src.classifiers.xmas_routing import (
     WinnerTable,
+    XmasRoutingConfig,
     XmasCell,
+    build_xmas_routing_metadata,
     classify_xmas_cell,
+    get_xmas_routing_config,
     load_winner_table,
 )
+from src.classifiers.config_loader import reset_classifier_config
 
 
 def test_classify_math_verify_cell() -> None:
@@ -112,3 +116,94 @@ def test_winner_table_can_require_complete_5x5_table() -> None:
             },
             require_complete=True,
         )
+
+
+def test_xmas_config_defaults_off(monkeypatch, tmp_path) -> None:
+    cfg_path = tmp_path / "classifier_config.yaml"
+    cfg_path.write_text("xmas_routing:\n  mode: off\n", encoding="utf-8")
+    monkeypatch.setenv("ORCHESTRATOR_CLASSIFIER_CONFIG", str(cfg_path))
+    monkeypatch.delenv("ORCHESTRATOR_XMAS_ROUTING_MODE", raising=False)
+    monkeypatch.delenv("ORCHESTRATOR_XMAS_WINNER_TABLE_PATH", raising=False)
+    reset_classifier_config()
+
+    try:
+        cfg = get_xmas_routing_config()
+    finally:
+        reset_classifier_config()
+
+    assert cfg.mode == "off"
+    assert not cfg.enabled
+    assert build_xmas_routing_metadata("Refactor this function", config=cfg) is None
+
+
+def test_xmas_config_env_override(monkeypatch, tmp_path) -> None:
+    cfg_path = tmp_path / "classifier_config.yaml"
+    table_path = tmp_path / "winner.yaml"
+    cfg_path.write_text(
+        "xmas_routing:\n  mode: off\n  confidence_threshold: 0.2\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ORCHESTRATOR_CLASSIFIER_CONFIG", str(cfg_path))
+    monkeypatch.setenv("ORCHESTRATOR_XMAS_ROUTING_MODE", "shadow")
+    monkeypatch.setenv("ORCHESTRATOR_XMAS_WINNER_TABLE_PATH", str(table_path))
+    reset_classifier_config()
+
+    try:
+        cfg = get_xmas_routing_config()
+    finally:
+        reset_classifier_config()
+
+    assert cfg.mode == "shadow"
+    assert cfg.enabled
+    assert cfg.confidence_threshold == 0.2
+    assert cfg.winner_table_path == table_path
+
+
+def test_build_xmas_metadata_with_winner_table(tmp_path) -> None:
+    table_path = tmp_path / "xmas.yaml"
+    table_path.write_text(
+        yaml.safe_dump(
+            {
+                "version": "xmas-test",
+                "fallback_role": "frontdoor",
+                "cells": {
+                    "code": {"refine": "coder_escalation"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = XmasRoutingConfig(
+        mode="shadow",
+        confidence_threshold=0.55,
+        winner_table_path=table_path,
+    )
+
+    meta = build_xmas_routing_metadata(
+        "Refactor this Python function and fix the bug.",
+        config=cfg,
+    )
+
+    assert meta is not None
+    assert meta["mode"] == "shadow"
+    assert meta["cell"] == "code:refine"
+    assert meta["is_confident"] is True
+    assert meta["suggested_role"] == "coder_escalation"
+    assert meta["winner_table_version"] == "xmas-test"
+    assert meta["winner_table_status"] == "loaded"
+    assert meta["applied"] is False
+
+
+def test_build_xmas_metadata_survives_missing_table(tmp_path) -> None:
+    cfg = XmasRoutingConfig(
+        mode="shadow",
+        winner_table_path=tmp_path / "missing.yaml",
+    )
+
+    meta = build_xmas_routing_metadata("Verify this proof.", config=cfg)
+
+    assert meta is not None
+    assert meta["cell"] == "math:verify"
+    assert meta["suggested_role"] is None
+    assert meta["winner_table_status"] == "missing"
+    assert meta["applied"] is False

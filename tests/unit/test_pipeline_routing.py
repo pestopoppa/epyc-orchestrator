@@ -246,6 +246,73 @@ class TestRouteRequest:
         assert call_kwargs["task_id"] == result.task_id
         assert "routing_decision" in call_kwargs
 
+    def test_xmas_default_off_omits_routing_metadata(self, monkeypatch):
+        """Default-off X-MAS telemetry should not alter progress metadata."""
+        from src.classifiers.config_loader import reset_classifier_config
+
+        monkeypatch.delenv("ORCHESTRATOR_XMAS_ROUTING_MODE", raising=False)
+        monkeypatch.delenv("ORCHESTRATOR_XMAS_WINNER_TABLE_PATH", raising=False)
+        reset_classifier_config()
+        request = ChatRequest(prompt="Refactor this Python function.", real_mode=True)
+        state = MagicMock()
+        state.hybrid_router = None
+        state.failure_graph = None
+
+        with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
+            mock_classify.return_value = (str(Role.CODER_ESCALATION), "rules")
+            _route_request(request, state)
+
+        call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
+        assert "xmas" not in call_kwargs["routing_meta"]
+
+    def test_xmas_shadow_metadata_is_logged_without_route_change(self):
+        """X-MAS shadow telemetry logs suggestions without changing routing."""
+        request = ChatRequest(prompt="Refactor this Python function.", real_mode=True)
+        state = MagicMock()
+        state.hybrid_router = None
+        state.failure_graph = None
+
+        with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
+            mock_classify.return_value = (str(Role.FRONTDOOR), "rules")
+            with patch(
+                "src.classifiers.xmas_routing.build_xmas_routing_metadata"
+            ) as mock_xmas:
+                mock_xmas.return_value = {
+                    "mode": "shadow",
+                    "cell": "code:refine",
+                    "suggested_role": "coder_escalation",
+                    "applied": False,
+                }
+                result = _route_request(request, state)
+
+        assert result.routing_decision == [str(Role.FRONTDOOR)]
+        call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
+        assert call_kwargs["routing_meta"]["xmas"] == {
+            "mode": "shadow",
+            "cell": "code:refine",
+            "suggested_role": "coder_escalation",
+            "applied": False,
+        }
+
+    def test_xmas_shadow_failure_does_not_break_routing(self):
+        """X-MAS telemetry is advisory; classifier failures are ignored."""
+        request = ChatRequest(prompt="Refactor this Python function.", real_mode=True)
+        state = MagicMock()
+        state.hybrid_router = None
+        state.failure_graph = None
+
+        with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
+            mock_classify.return_value = (str(Role.FRONTDOOR), "rules")
+            with patch(
+                "src.classifiers.xmas_routing.build_xmas_routing_metadata",
+                side_effect=RuntimeError("boom"),
+            ):
+                result = _route_request(request, state)
+
+        assert result.routing_decision == [str(Role.FRONTDOOR)]
+        call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
+        assert "xmas" not in call_kwargs["routing_meta"]
+
     def test_task_id_generated(self):
         """Task ID is generated with chat prefix."""
         request = ChatRequest(prompt="test", mock_mode=True)
@@ -837,3 +904,37 @@ def test_routing_meta_persists_ure_uncertainty_when_shadow_enabled(monkeypatch):
     assert 0.0 <= meta["uncertainty_score"] <= 1.0
     assert meta["uncertainty_components"]
     assert meta["uncertainty_n_alternatives"] == 2
+
+
+def test_routing_meta_embeds_xmas_when_supplied(monkeypatch):
+    request = ChatRequest(prompt="Refactor this function")
+    state = SimpleNamespace(
+        active_requests=0,
+        llm_primitives=None,
+        registry=None,
+        hybrid_router=None,
+    )
+    monkeypatch.setattr(
+        "src.features.features",
+        lambda: SimpleNamespace(ure_uncertainty_shadow_log=False),
+    )
+
+    meta = routing_meta(
+        request,
+        state,
+        routing_strategy="rules",
+        heuristic_priors={},
+        factual_risk_score=0.0,
+        factual_risk_band="",
+        difficulty_score=0.0,
+        difficulty_band="",
+        estimated_cost=0.0,
+        assigned_role="worker",
+        xmas_meta={"mode": "shadow", "cell": "code:refine", "applied": False},
+    )
+
+    assert meta["xmas"] == {
+        "mode": "shadow",
+        "cell": "code:refine",
+        "applied": False,
+    }

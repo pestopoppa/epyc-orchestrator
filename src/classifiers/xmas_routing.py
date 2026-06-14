@@ -8,6 +8,7 @@ not alter production routing by itself.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,8 @@ XMAS_FUNCTIONS: tuple[str, ...] = (
 DEFAULT_DOMAIN = "knowledge"
 DEFAULT_FUNCTION = "solve"
 DEFAULT_FALLBACK_ROLE = str(Role.FRONTDOOR)
+DEFAULT_CONFIDENCE_THRESHOLD = 0.55
+XMAS_ROUTING_MODES = frozenset({"off", "shadow", "enforce"})
 
 _DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
     "math": (
@@ -208,6 +211,20 @@ class XmasClassification:
 
 
 @dataclass(frozen=True)
+class XmasRoutingConfig:
+    """Default-off runtime config for passive X-MAS telemetry."""
+
+    mode: str = "off"
+    confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
+    winner_table_path: Path | None = None
+    require_complete_table: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode in {"shadow", "enforce"}
+
+
+@dataclass(frozen=True)
 class WinnerTable:
     """Per-stack X-MAS winner lookup table."""
 
@@ -331,6 +348,104 @@ def classify_xmas_cell(prompt: str, context: str = "") -> XmasClassification:
     )
 
 
+def get_xmas_routing_config() -> XmasRoutingConfig:
+    """Load default-off X-MAS routing telemetry config.
+
+    Environment overrides are intentionally narrow so operators can enable
+    shadow logging for a reload window without touching broad feature flags.
+    """
+    raw: dict[str, Any] = {}
+    try:
+        from src.classifiers.config_loader import get_classifier_config
+
+        cfg = get_classifier_config()
+        loaded = cfg.get("xmas_routing", {}) if isinstance(cfg, dict) else {}
+        raw = loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        raw = {}
+
+    mode = str(
+        os.environ.get("ORCHESTRATOR_XMAS_ROUTING_MODE", raw.get("mode", "off"))
+    ).strip().lower()
+    if mode not in XMAS_ROUTING_MODES:
+        mode = "off"
+
+    threshold = _clamped_float(
+        raw.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
+        DEFAULT_CONFIDENCE_THRESHOLD,
+    )
+
+    raw_path = os.environ.get("ORCHESTRATOR_XMAS_WINNER_TABLE_PATH")
+    if raw_path is None:
+        raw_path = raw.get("winner_table_path")
+    winner_table_path = Path(raw_path).expanduser() if isinstance(raw_path, str) and raw_path else None
+
+    return XmasRoutingConfig(
+        mode=mode,
+        confidence_threshold=threshold,
+        winner_table_path=winner_table_path,
+        require_complete_table=bool(raw.get("require_complete_table", False)),
+    )
+
+
+def build_xmas_routing_metadata(
+    prompt: str,
+    context: str = "",
+    *,
+    config: XmasRoutingConfig | None = None,
+) -> dict[str, Any] | None:
+    """Build passive X-MAS routing metadata, or None when default-off.
+
+    This function never mutates routing decisions. Even when ``mode`` is
+    ``enforce``, this first hook emits ``applied=false`` so downstream analysis
+    can be collected before any behavior change.
+    """
+    cfg = config or get_xmas_routing_config()
+    if not cfg.enabled:
+        return None
+
+    result = classify_xmas_cell(prompt, context)
+    meta: dict[str, Any] = {
+        "mode": cfg.mode,
+        "domain": result.domain,
+        "function": result.function,
+        "cell": result.cell.key,
+        "confidence": result.confidence,
+        "domain_confidence": result.domain_confidence,
+        "function_confidence": result.function_confidence,
+        "confidence_threshold": cfg.confidence_threshold,
+        "is_confident": result.is_confident(cfg.confidence_threshold),
+        "matched_terms": {
+            key: list(value)
+            for key, value in result.matched_terms.items()
+        },
+        "suggested_role": None,
+        "winner_table_version": None,
+        "winner_table_path": str(cfg.winner_table_path) if cfg.winner_table_path else None,
+        "winner_table_status": "not_configured",
+        "applied": False,
+    }
+
+    if cfg.winner_table_path is None:
+        return meta
+
+    try:
+        table = load_winner_table(
+            cfg.winner_table_path,
+            require_complete=cfg.require_complete_table,
+        )
+    except FileNotFoundError:
+        meta["winner_table_status"] = "missing"
+    except Exception as exc:
+        meta["winner_table_status"] = "invalid"
+        meta["winner_table_error"] = str(exc)[:200]
+    else:
+        meta["suggested_role"] = table.winner_for(result.domain, result.function)
+        meta["winner_table_version"] = table.version
+        meta["winner_table_status"] = "loaded"
+    return meta
+
+
 def load_winner_table(path: str | Path, *, require_complete: bool = False) -> WinnerTable:
     """Load an X-MAS winner table from JSON or YAML."""
     table_path = Path(path)
@@ -400,6 +515,18 @@ def _score_to_confidence(score: int) -> float:
     if score <= 0:
         return 0.0
     return round(min(0.95, 0.45 + 0.12 * min(score, 4)), 3)
+
+
+def _clamped_float(value: object, fallback: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if parsed < 0.0:
+        return 0.0
+    if parsed > 1.0:
+        return 1.0
+    return parsed
 
 
 def _validate_domain(domain: str) -> None:

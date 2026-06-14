@@ -261,6 +261,7 @@ def routing_meta(
     difficulty_band: str,
     estimated_cost: float,
     assigned_role: str,
+    xmas_meta: dict | None = None,
 ) -> dict:
     """Build progress-log routing metadata."""
     meta = {
@@ -277,6 +278,8 @@ def routing_meta(
         "assigned_role": assigned_role,
         "estimated_cost": round(estimated_cost, 6),
     }
+    if xmas_meta:
+        meta["xmas"] = xmas_meta
     if state.llm_primitives and hasattr(state.llm_primitives, "get_stats"):
         try:
             stats = state.llm_primitives.get_stats()
@@ -351,6 +354,7 @@ def log_routing_start(
     difficulty_band: str,
     estimated_cost: float,
     assigned_role: str,
+    xmas_meta: dict | None = None,
 ) -> None:
     """Log routing start to MemRL progress logger when available."""
     if not state.progress_logger:
@@ -371,6 +375,7 @@ def log_routing_start(
             difficulty_band,
             estimated_cost,
             assigned_role,
+            xmas_meta,
         ),
     )
 
