@@ -890,6 +890,30 @@ def test_scan_hardcoded_surfaces_flags_stale_autopilot_program_guidance(tmp_path
     )
 
 
+def test_scan_hardcoded_surfaces_flags_stale_autopilot_program_model_claims(
+    tmp_path: Path,
+) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    autopilot.mkdir(parents=True)
+    (autopilot / "program.md").write_text(
+        """
+- **Q-scorer frontdoor throughput**: Currently uses 19.6 t/s but actual is 12.7 t/s.
+try-cheap-first (Qwen3-Coder-30B-A3B, fastest)
+  -> frontdoor (Qwen3.5-35B-A3B, quality gate)
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "stale_autopilot_program_stack_guidance"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/autopilot/program.md"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_allows_stack_prior_autopilot_program_guidance(tmp_path: Path) -> None:
     autopilot = tmp_path / "scripts" / "autopilot"
     autopilot.mkdir(parents=True)

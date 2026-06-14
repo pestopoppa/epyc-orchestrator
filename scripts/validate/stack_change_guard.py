@@ -212,7 +212,12 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
     HardcodedSurfaceRule(
         rule_id="stale_autopilot_program_stack_guidance",
         category="production_blocker",
-        pattern=r"\b(?:8071|8084|architect_coding|512GB)\b|\bTarget ports\b|\bWARM tier demotion\b",
+        pattern=(
+            r"\b(?:8071|8084|architect_coding|512GB|19\.6\s*t/s|12\.7\s*t/s)\b|"
+            r"\bTarget ports\b|\bWARM tier demotion\b|"
+            r"\bQ-scorer frontdoor throughput\b|"
+            r"\bQwen3-Coder-30B\b|\bQwen3\.5-35B\b"
+        ),
         path_globs=("scripts/autopilot/program.md",),
         remediation="derive AutoPilot operator endpoints and tier guidance from stack priors/system card",
     ),

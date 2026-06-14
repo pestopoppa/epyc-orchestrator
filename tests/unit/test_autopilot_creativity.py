@@ -16,9 +16,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
-
-
 ROOT = Path(__file__).resolve().parents[2]
 AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(ROOT))
@@ -330,6 +327,63 @@ def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> 
     assert "rollback" not in viable
     assert "distill_knowledge" not in viable
     assert "distill_skillbank" not in viable
+
+
+def test_slot_query_ports_from_stack_priors_uses_live_primary_llama_entries(tmp_path: Path) -> None:
+    priors = tmp_path / "stack_priors.yaml"
+    priors.write_text(
+        """
+roles:
+  frontdoor:
+    deployment_status: live_stack
+    serving:
+      binary: llama.cpp
+      launch:
+        entries:
+          - {port: 8070, alias: false}
+          - {port: 8080, alias: false}
+  coder_escalation:
+    deployment_status: live_stack
+    serving:
+      binary: llama.cpp
+      launch:
+        entries:
+          - {port: 8070, alias: true}
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      binary: llama.cpp
+      launch:
+        entries:
+          - {port: 8072, alias: false}
+  reap_candidate:
+    deployment_status: benchmark_only
+    serving:
+      binary: llama.cpp
+      launch:
+        entries:
+          - {port: 8099, alias: false}
+  embedder:
+    deployment_status: live_stack
+    serving:
+      binary: embedding-server
+      launch:
+        entries:
+          - {port: 8090, alias: false}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    assert autopilot._slot_query_ports_from_stack_priors(priors) == {
+        "frontdoor": [8070, 8080],
+        "worker_general": [8072],
+    }
+
+
+def test_slot_query_ports_falls_back_when_stack_priors_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "_slot_query_ports_from_stack_priors", lambda: {})
+
+    assert autopilot._slot_query_ports() == autopilot._FALLBACK_SLOT_QUERY_PORTS
 
 
 def test_build_exploration_block_resilient_to_archive_errors(tmp_path: Path) -> None:

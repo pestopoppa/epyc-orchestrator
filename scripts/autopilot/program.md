@@ -245,14 +245,14 @@ curl -X POST "http://localhost:${PORT}/slots/0?action=compact" \
   -d '{"keep_ratio": 0.3, "keep_first": 8, "layer_weights": [0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,1.0,1.0,1.0,1.0,1.0,1.0,1.5,1.5,1.5,2.0,2.0,2.0,2.5,3.0]}'
 ```
 
-**Quality data** (from multi-ratio sweep on Qwen3.5-35B-A3B frontdoor):
+**Quality data** (from a legacy frontdoor multi-ratio sweep):
 - 90% keep: identical output to baseline
 - 75% keep: identical output to baseline
 - 50% keep: slight reword, semantically equivalent
 - 25% keep: different phrasing, coherent
 - 10% keep: format shift, quality cliff onset
 
-**PPL gate** (Qwen3.5-35B-A3B at 50% eviction): ratio = 1.096 (<1.10 threshold).
+**PPL gate** (legacy frontdoor at 50% eviction): ratio = 1.096 (<1.10 threshold).
 
 **Target endpoints**: derive live primary endpoints from the generated stack-priors contract before issuing compaction requests. Do not copy endpoint tables from historical docs, and do not target retired roles or dead ports.
 
@@ -337,7 +337,7 @@ These have been empirically tested and found non-viable:
 
 ### Infrastructure
 - **`tool_permissions` in legacy path**: No role has permissions defined. Cascading path (`cascading_tool_policy=True`) is the only viable path.
-- **Q-scorer frontdoor throughput**: Currently uses 19.6 t/s (moe6+lookup) but lookup is disabled. Actual is 12.7 t/s (moe6-only). This inflates frontdoor cost penalty ~1.5x. Needs correction.
+- **Stack-prior cost/throughput drift**: Q-scorer role costs and throughput priors are generated from `orchestration/derived/stack_priors.yaml`. If a planner prompt, memory, or handoff cites literal model speeds/costs that disagree with the generated system card, treat the literal as stale and run the stack-change pipeline checks before optimizing on it.
 
 ---
 
@@ -382,8 +382,8 @@ This is an OPTIONAL forecast of the trial's four objectives in the same units th
 The full production request path is:
 
 ```
-try-cheap-first (Qwen3-Coder-30B-A3B, fastest)
-  → frontdoor (Qwen3.5-35B-A3B, quality gate)
+try-cheap-first (live worker/fast path from the generated system card)
+  → frontdoor (live quality gate from stack priors)
     → escalation to specialist (coder_escalation, math, etc.)
     → OR architect consultation → TOON plan → redelegate to frontdoor/specialist
 ```

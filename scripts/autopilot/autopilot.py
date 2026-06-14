@@ -598,6 +598,7 @@ def _autopilot_logging_handlers(
 
 CONSTITUTION_PATH = SCRIPT_DIR / "constitution.md"
 SYSTEM_CARD_PATH = SCRIPT_DIR / "system_card.md"
+STACK_PRIORS_PATH = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
 CONTROLLER_PROMPT_TEMPLATE = """\
 You are the AutoPilot meta-reasoning controller for an LLM orchestration stack.
@@ -1367,13 +1368,60 @@ def append_blacklist(action: dict[str, Any], trial_id: int, reason: str) -> None
 # ── Slot Memory Visibility (AM KV Compaction) ──────────────────
 
 
-# Primary production ports by role — query these for slot memory stats.
-_SLOT_QUERY_PORTS: dict[str, list[int]] = {
+# Degraded fallback only. Runtime slot visibility should follow generated stack
+# priors so the planner does not miss newly added live llama-server ports.
+_FALLBACK_SLOT_QUERY_PORTS: dict[str, list[int]] = {
     "frontdoor": [8070],
     "coder": [8070],  # shares server with frontdoor (same Qwen3.6-35B Q8 GGUF)
     "worker": [8072],
     "architect_general": [8083],
 }
+
+
+def _slot_query_ports_from_stack_priors(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> dict[str, list[int]]:
+    """Return primary live llama-server ports by role from generated stack priors."""
+    try:
+        payload = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
+    except OSError as exc:
+        log.debug("Using fallback slot-query ports; stack priors unavailable: %s", exc)
+        return {}
+    roles = payload.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    ports_by_role: dict[str, set[int]] = {}
+    for role, record in roles.items():
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict) or serving.get("binary") != "llama.cpp":
+            continue
+        launch = serving.get("launch")
+        entries = launch.get("entries") if isinstance(launch, dict) else None
+        if not isinstance(entries, list):
+            continue
+        role_ports = ports_by_role.setdefault(role, set())
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("alias") is True:
+                continue
+            port = entry.get("port")
+            if isinstance(port, int):
+                role_ports.add(port)
+
+    return {
+        role: sorted(ports)
+        for role, ports in sorted(ports_by_role.items())
+        if ports
+    }
+
+
+def _slot_query_ports() -> dict[str, list[int]]:
+    """Return live slot-query ports, falling back only when stack priors fail."""
+    return _slot_query_ports_from_stack_priors() or dict(_FALLBACK_SLOT_QUERY_PORTS)
 
 
 def _query_slot_memory() -> str:
@@ -1385,7 +1433,7 @@ def _query_slot_memory() -> str:
     import httpx
 
     lines: list[str] = []
-    for role, ports in _SLOT_QUERY_PORTS.items():
+    for role, ports in _slot_query_ports().items():
         for port in ports:
             try:
                 resp = httpx.get(

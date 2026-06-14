@@ -233,9 +233,10 @@ consumer_surfaces:
     source_of_truth: generated stack summary and stack-prior endpoint/tier data
     promotion_blocker: true
     review_cadence: every stack change
-    validation_command: uv run python scripts/validate/stack_change_guard.py --all-hardcoded-surfaces --surface-summary-only
+    validation_command: uv run python scripts/validate/stack_change_guard.py --all-hardcoded-surfaces --surface-summary-only && uv run pytest -q tests/unit/test_autopilot_creativity.py
     implementation_refs:
       - scripts/autopilot/program.md
+      - scripts/autopilot/autopilot.py
       - scripts/autopilot/gen_system_card.py
     drift_response: regenerate prompt-visible stack guidance from stack priors
   - surface_id: procedure_role_enums
