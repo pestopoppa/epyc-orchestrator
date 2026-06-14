@@ -21,7 +21,7 @@ from src.autopilot_core.journal_snapshot_replay import (  # noqa: E402
 )
 
 
-STRICT_READY_STATUSES = {"archive_prefix_match"}
+STRICT_READY_READINESS = "current"
 
 
 def _journal_rows(journal: ExperimentJournal) -> list[dict]:
@@ -74,7 +74,7 @@ def main() -> int:
     else:
         print("\n".join(format_snapshot_replay_summary(diagnostic)))
 
-    if args.strict and diagnostic.status not in STRICT_READY_STATUSES:
+    if args.strict and diagnostic.bounded_replay_readiness != STRICT_READY_READINESS:
         return 1
     return 0
 

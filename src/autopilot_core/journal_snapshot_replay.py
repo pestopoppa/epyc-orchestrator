@@ -22,6 +22,7 @@ class JournalSnapshotReplayDiagnostic:
     """Structured snapshot-readiness result for operator commands."""
 
     status: str
+    bounded_replay_readiness: str = "not_ready"
     event_count: int = 0
     hash_status: str = "not_applicable"
     latest_event: dict[str, Any] | None = None
@@ -32,6 +33,7 @@ class JournalSnapshotReplayDiagnostic:
     tail_trial_count: int = 0
     tail_max_trial_id: int | None = None
     journal_max_trial_id: int | None = None
+    post_snapshot_prefix_event_count: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -229,8 +231,26 @@ def build_snapshot_replay_diagnostic(
                 "latest snapshot archive payload differs from current policy prefix replay"
             )
 
+    prefix_invalidated = (
+        bool(post_snapshot_prefix_events) or status == "archive_prefix_drift"
+    )
+    if prefix_invalidated:
+        bounded_replay_readiness = "prefix_invalidated"
+    elif status == "archive_prefix_match" and hash_status == "match":
+        bounded_replay_readiness = (
+            "current" if tail_count == 0 else "tail_unverified"
+        )
+        if tail_count:
+            warnings.append(
+                "journal has post-snapshot trials; bounded replay must verify tail "
+                "folding before using the snapshot as current"
+            )
+    else:
+        bounded_replay_readiness = "not_ready"
+
     return JournalSnapshotReplayDiagnostic(
         status=status,
+        bounded_replay_readiness=bounded_replay_readiness,
         event_count=len(snapshot_indices),
         hash_status=hash_status,
         latest_event=latest_event,
@@ -241,6 +261,7 @@ def build_snapshot_replay_diagnostic(
         tail_trial_count=tail_count,
         tail_max_trial_id=tail_max,
         journal_max_trial_id=journal_max,
+        post_snapshot_prefix_event_count=len(post_snapshot_prefix_events),
         warnings=warnings,
     )
 
@@ -271,6 +292,10 @@ def format_snapshot_replay_summary(
     )
     lines.append(f"Journal snapshot hash status: {diagnostic.hash_status}")
     lines.append(f"Journal snapshot replay status: {diagnostic.status}")
+    lines.append(
+        "Journal snapshot bounded replay readiness: "
+        f"{diagnostic.bounded_replay_readiness}"
+    )
     for warning in diagnostic.warnings:
         lines.append(f"Journal snapshot warning: {warning}")
     return lines

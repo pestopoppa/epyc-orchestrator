@@ -71,6 +71,7 @@ def test_snapshot_replay_reports_no_events() -> None:
     diagnostic = build_snapshot_replay_diagnostic([_row(1)], [])
 
     assert diagnostic.status == "no_events"
+    assert diagnostic.bounded_replay_readiness == "not_ready"
     assert format_snapshot_replay_summary(diagnostic) == [
         "Journal snapshot events: 0",
         "Journal snapshot replay: no snapshot events",
@@ -87,13 +88,34 @@ def test_snapshot_replay_verifies_hash_without_archive_payload() -> None:
     diagnostic = build_snapshot_replay_diagnostic(rows + [event], [event])
 
     assert diagnostic.status == "hash_verified"
+    assert diagnostic.bounded_replay_readiness == "not_ready"
     assert diagnostic.hash_status == "match"
     assert diagnostic.tail_trial_count == 1
     assert diagnostic.tail_max_trial_id == 2
     assert diagnostic.warnings == ["latest snapshot payload has no archive view to verify"]
 
 
-def test_snapshot_replay_matches_archive_prefix() -> None:
+def test_snapshot_replay_reports_current_archive_prefix() -> None:
+    rows = [_row(1, quality=1.2)]
+    event = _snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": _archive(rows)},
+    )
+
+    diagnostic = build_snapshot_replay_diagnostic(rows + [event], [event])
+
+    assert diagnostic.status == "archive_prefix_match"
+    assert diagnostic.bounded_replay_readiness == "current"
+    assert diagnostic.hash_status == "match"
+    assert diagnostic.tail_trial_count == 0
+    assert diagnostic.warnings == []
+    assert (
+        "Journal snapshot bounded replay readiness: current"
+        in format_snapshot_replay_summary(diagnostic)
+    )
+
+
+def test_snapshot_replay_flags_unverified_tail_after_matching_prefix() -> None:
     rows = [_row(1, quality=1.2), _row(2, quality=1.1)]
     event = _snapshot_event(
         through_trial_id=1,
@@ -103,10 +125,11 @@ def test_snapshot_replay_matches_archive_prefix() -> None:
     diagnostic = build_snapshot_replay_diagnostic(rows + [event], [event])
 
     assert diagnostic.status == "archive_prefix_match"
+    assert diagnostic.bounded_replay_readiness == "tail_unverified"
     assert diagnostic.hash_status == "match"
     assert diagnostic.event_count == 1
     assert diagnostic.tail_trial_count == 1
-    assert diagnostic.warnings == []
+    assert any("post-snapshot trials" in item for item in diagnostic.warnings)
 
 
 def test_snapshot_replay_requires_matching_hash_for_ready_status() -> None:
@@ -120,6 +143,7 @@ def test_snapshot_replay_requires_matching_hash_for_ready_status() -> None:
     diagnostic = build_snapshot_replay_diagnostic(rows + [event], [event])
 
     assert diagnostic.status == "archive_prefix_hash_unverified"
+    assert diagnostic.bounded_replay_readiness == "not_ready"
     assert diagnostic.hash_status == "mismatch"
     assert "latest snapshot_hash does not match event payload" in diagnostic.warnings
 
@@ -149,5 +173,7 @@ def test_snapshot_replay_flags_post_snapshot_supersession_prefix_drift() -> None
     )
 
     assert diagnostic.status == "archive_prefix_drift"
+    assert diagnostic.bounded_replay_readiness == "prefix_invalidated"
+    assert diagnostic.post_snapshot_prefix_event_count == 1
     assert any("post-snapshot supersession" in item for item in diagnostic.warnings)
     assert any("archive payload differs" in item for item in diagnostic.warnings)
