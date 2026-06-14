@@ -10,7 +10,7 @@ Managed by `orchestrator_stack.py`, the system provides graceful start/stop, hea
 
 The stack spans three tiers of servers, each mapped to a port range. The HOT tier holds the models you interact with most — the frontdoor, coders, architects, and embedders — all pinned in RAM so there is zero cold-start penalty. Auxiliary services handle retrieval and OCR on their own ports.
 
-The current role/port/model summary is generated from `orchestration/derived/stack_priors.yaml` at [`../generated/current_stack_summary.md`](../generated/current_stack_summary.md) and checked by `scripts/registry/stack_change_pipeline.py`. Treat hand-written tables in this chapter as explanatory context, not source truth.
+The current role/port/model summary is generated from `orchestration/derived/stack_priors.yaml` at [`../generated/current_stack_summary.md`](../generated/current_stack_summary.md) and checked by `scripts/registry/stack_change_pipeline.py`. Treat hand-written tables in this chapter as explanatory context, not source truth. For production launch hygiene after model or serving-topology changes, follow the [stack-change launch runbook](../reference/stack-change-launch-runbook.md).
 
 <details>
 <summary>Server port assignments and tier breakdown</summary>
