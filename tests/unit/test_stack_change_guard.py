@@ -9,6 +9,9 @@ from pathlib import Path
 import yaml
 
 from scripts.validate.stack_change_guard import (
+    HARDCODED_SURFACE_RULES,
+    hardcoded_surface_rule_inventory,
+    main as stack_change_guard_main,
     scan_hardcoded_surfaces,
     validate_stack_priors,
 )
@@ -440,6 +443,36 @@ def test_scan_hardcoded_surfaces_classifies_curated_surfaces(tmp_path: Path) -> 
     assert "legacy_test" in categories
     assert "historical_doc" in categories
     assert any(finding.path.as_posix() == "scripts/benchmark/seeding_types.py" for finding in findings)
+
+
+def test_hardcoded_surface_rule_inventory_is_machine_readable() -> None:
+    inventory = hardcoded_surface_rule_inventory()
+    rule_ids = [rule["rule_id"] for rule in inventory["rules"]]
+
+    assert inventory["version"] == 1
+    assert inventory["rule_count"] == len(HARDCODED_SURFACE_RULES)
+    assert len(rule_ids) == len(set(rule_ids))
+    assert "production_blocker" in inventory["categories"]
+    assert any(
+        rule["rule_id"] == "seeding_baseline_tps_table"
+        and rule["category"] == "production_blocker"
+        and "scripts/benchmark/seeding_rewards.py" in rule["path_globs"]
+        for rule in inventory["rules"]
+    )
+
+
+def test_stack_change_guard_can_print_surface_rule_inventory_json(capsys) -> None:
+    rc = stack_change_guard_main(
+        ["--list-hardcoded-surface-rules", "--surface-inventory-format", "json"]
+    )
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["rule_count"] == len(HARDCODED_SURFACE_RULES)
+    assert any(
+        rule["rule_id"] == "stale_autopilot_program_stack_guidance"
+        for rule in payload["rules"]
+    )
 
 
 def test_scan_hardcoded_surfaces_flags_retired_launch_env_var(tmp_path: Path) -> None:

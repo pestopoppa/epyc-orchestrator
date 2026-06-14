@@ -8,6 +8,7 @@ import fnmatch
 import hashlib
 import json
 import re
+import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -15,10 +16,11 @@ from typing import Any
 
 import yaml
 
-from src.registry.stack_priors import _launch_runtime_record, validate_stack_priors_contract
-
-
 REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
+sys.path.insert(0, str(REPO_ROOT))
+
+from src.registry.stack_priors import _launch_runtime_record, validate_stack_priors_contract  # noqa: E402
+
 DEFAULT_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
 DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_PRIORS = REPO_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
@@ -219,6 +221,29 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         ignore_comment_lines=True,
     ),
 )
+
+
+def hardcoded_surface_rule_inventory(
+    rules: tuple[HardcodedSurfaceRule, ...] = HARDCODED_SURFACE_RULES,
+) -> dict[str, Any]:
+    """Return the curated model-specific surface rules as machine-readable data."""
+    return {
+        "version": 1,
+        "rule_count": len(rules),
+        "categories": sorted({rule.category for rule in rules}),
+        "rules": [
+            {
+                "rule_id": rule.rule_id,
+                "category": rule.category,
+                "pattern": rule.pattern,
+                "path_globs": list(rule.path_globs),
+                "exclude_globs": list(rule.exclude_globs),
+                "ignore_comment_lines": rule.ignore_comment_lines,
+                "remediation": rule.remediation,
+            }
+            for rule in rules
+        ],
+    }
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -1118,7 +1143,26 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_SURFACE_EXCEPTIONS,
         help="YAML file documenting hardcoded-surface exceptions",
     )
+    parser.add_argument(
+        "--list-hardcoded-surface-rules",
+        action="store_true",
+        help="Print the curated hardcoded-surface rule inventory and exit",
+    )
+    parser.add_argument(
+        "--surface-inventory-format",
+        choices=("yaml", "json"),
+        default="yaml",
+        help="Format for --list-hardcoded-surface-rules",
+    )
     args = parser.parse_args(argv)
+    if args.list_hardcoded_surface_rules:
+        inventory = hardcoded_surface_rule_inventory()
+        if args.surface_inventory_format == "json":
+            print(json.dumps(inventory, indent=2, sort_keys=True))
+        else:
+            print(yaml.safe_dump(inventory, sort_keys=False))
+        return 0
+
     if args.all_hardcoded_surfaces:
         surface_categories = None
     elif args.hardcoded_surface_category:
