@@ -183,3 +183,11 @@ def test_controller_template_uses_constitution_and_system_card() -> None:
     assert "{program}" not in autopilot.CONTROLLER_PROMPT_TEMPLATE
     assert "{constitution}" in autopilot.CONTROLLER_PROMPT_TEMPLATE
     assert "{system_card}" in autopilot.CONTROLLER_PROMPT_TEMPLATE
+    assert "{planner_evidence}" in autopilot.CONTROLLER_PROMPT_TEMPLATE
+    assert (
+        autopilot.CONTROLLER_PROMPT_TEMPLATE.index("### Pareto Frontier Geometry")
+        < autopilot.CONTROLLER_PROMPT_TEMPLATE.index(
+            "### Evidence Power and Sequential Candidate Status"
+        )
+        < autopilot.CONTROLLER_PROMPT_TEMPLATE.index("### Journal Trustworthiness")
+    )

@@ -87,6 +87,7 @@ from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
 )
+from src.autopilot_core.planner_evidence import format_planner_evidence_section
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
@@ -617,6 +618,9 @@ Your job: analyze current system state and propose the SINGLE best next action.
 
 ### Pareto Frontier Geometry
 {pareto_geometry}
+
+### Evidence Power and Sequential Candidate Status
+{planner_evidence}
 
 ### Journal Trustworthiness (bug_corrupted filtering)
 {journal_trustworthiness}
@@ -1938,6 +1942,14 @@ def _run_loop_inner(
                 pareto_geometry_text = f"(geometry unavailable: {_exc})"
 
             try:
+                planner_evidence_text = format_planner_evidence_section(
+                    asdict(entry)
+                    for entry in journal.entries_with_supersessions()
+                )
+            except Exception as _exc:
+                planner_evidence_text = f"(planner evidence unavailable: {_exc})"
+
+            try:
                 _known_actions = [
                     "seed_batch", "numeric_trial", "prompt_mutation",
                     "gepa_optimize", "code_mutation", "structural_experiment",
@@ -1972,6 +1984,7 @@ def _run_loop_inner(
                 system_card=system_card_text,
                 pareto_summary=archive.summary_text(tier=DEFAULT_FRONTIER_TIER),
                 pareto_geometry=pareto_geometry_text,
+                planner_evidence=planner_evidence_text,
                 journal_trustworthiness=journal_trustworthiness_text,
                 hypotheses_under_test=hypotheses_text,
                 journal_summary=journal.summary_text(20),
