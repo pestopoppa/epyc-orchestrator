@@ -12,6 +12,7 @@ import pytest
 
 from src.api.routes.chat_vision import (
     _execute_vision_tool,
+    _fallback_vl_port_for_role,
     _handle_multi_file_vision,
     _handle_vision_request,
     _needs_structured_analysis,
@@ -81,6 +82,10 @@ roles:
         assert _vl_url_for_role("vision_escalation", tmp_path / "missing.yaml") == (
             "http://localhost:8087"
         )
+
+    def test_fallback_vl_port_uses_manifest_port(self):
+        assert _fallback_vl_port_for_role("worker_vision") == 8086
+        assert _fallback_vl_port_for_role("vision_escalation") == 8087
 
     def test_vl_url_for_port_resolves_generated_endpoint(self, tmp_path: Path):
         priors = tmp_path / "stack_priors.yaml"

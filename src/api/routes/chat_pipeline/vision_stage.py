@@ -39,12 +39,25 @@ def _stack_prior_vl_ports(stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH) 
     return ports
 
 
+def _manifest_vl_port_for_role(role: str) -> int | None:
+    try:
+        from scripts.server.stack_manifest import PORT_MAP
+    except Exception:
+        return None
+    port = PORT_MAP.get(role)
+    return port if isinstance(port, int) else None
+
+
+def _fallback_vl_port_for_role(role: str) -> int:
+    return _manifest_vl_port_for_role(role) or _FALLBACK_VL_PORT_BY_ROLE.get(role, 8086)
+
+
 def _vl_port_for_role(
     role: str,
     stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
 ) -> int:
     ports = _stack_prior_vl_ports(stack_priors_path)
-    return ports.get(role, _FALLBACK_VL_PORT_BY_ROLE.get(role, 8086))
+    return ports.get(role, _fallback_vl_port_for_role(role))
 
 
 async def _execute_vision(

@@ -90,12 +90,24 @@ def _stack_prior_vl_urls(
     return urls
 
 
+def _manifest_vl_port_for_role(role: str) -> int | None:
+    try:
+        from scripts.server.stack_manifest import PORT_MAP
+    except Exception:
+        return None
+    port = PORT_MAP.get(role)
+    return port if isinstance(port, int) else None
+
+
+def _fallback_vl_port_for_role(role: str) -> int:
+    return _manifest_vl_port_for_role(role) or _FALLBACK_VL_PORT_BY_ROLE.get(role, 8086)
+
+
 def _fallback_vl_url_for_role(role: str) -> str:
     configured = getattr(_get_config().server_urls, role, "")
     if isinstance(configured, str) and configured:
         return _first_server_url(configured)
-    port = _FALLBACK_VL_PORT_BY_ROLE.get(role, 8086)
-    return f"http://localhost:{port}"
+    return f"http://localhost:{_fallback_vl_port_for_role(role)}"
 
 
 def _vl_url_for_role(
@@ -115,8 +127,8 @@ def _vl_url_for_port(
     for url in _stack_prior_vl_urls(stack_priors_path).values():
         if urlparse(url).port == vl_port:
             return url
-    for role, port in _FALLBACK_VL_PORT_BY_ROLE.items():
-        if port == vl_port:
+    for role in _VISION_ROLES:
+        if _fallback_vl_port_for_role(role) == vl_port:
             return _fallback_vl_url_for_role(role)
     return f"http://localhost:{vl_port}"
 

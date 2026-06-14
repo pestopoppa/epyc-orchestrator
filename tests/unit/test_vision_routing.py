@@ -276,9 +276,11 @@ roles:
     def test_vl_port_for_role_falls_back_when_stack_priors_missing(self, tmp_path: Path):
         """Missing generated priors use explicit degraded-mode VL defaults."""
         from src.api.routes.chat_pipeline.vision_stage import (
+            _fallback_vl_port_for_role,
             _vl_port_for_role,
         )
 
+        assert _fallback_vl_port_for_role("worker_vision") == 8086
         assert _vl_port_for_role("vision_escalation", tmp_path / "missing.yaml") == 8087
 
     def test_returns_none_for_non_vision_role(self):
