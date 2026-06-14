@@ -28,6 +28,9 @@ from scripts.validate.stack_change_guard import (  # noqa: E402
     DEFAULT_SURFACE_MANIFEST,
     validate_stack_priors,
 )
+from orchestration.repl_memory.q_scorer import (  # noqa: E402
+    validate_live_q_scorer_prior_sources,
+)
 from src.registry.model_descriptors import (  # noqa: E402
     DEFAULT_DESCRIPTOR_OUTPUT,
     DEFAULT_LEAN_REGISTRY,
@@ -579,6 +582,27 @@ def _promotion_gate_command() -> list[str]:
     return ["uv", "run", "pytest", "-q", *PROMOTION_GATE_TARGETS]
 
 
+def _q_scorer_prior_sources_step(
+    config: StackChangePipelineConfig,
+    *,
+    prior_ok: bool,
+) -> PipelineStep:
+    if not prior_ok:
+        return PipelineStep(
+            name="q_scorer_priors",
+            status="skipped",
+            warnings=["skipped because earlier stack-change checks failed"],
+        )
+    errors = validate_live_q_scorer_prior_sources(config.stack_priors)
+    if errors:
+        return PipelineStep(name="q_scorer_priors", status="failed", errors=errors)
+    return PipelineStep(
+        name="q_scorer_priors",
+        status="ok",
+        details=["live q_scorer prior sources are stack-prior derived"],
+    )
+
+
 def _clip_output(text: str, *, max_chars: int = 2000) -> str:
     if len(text) <= max_chars:
         return text
@@ -673,6 +697,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
             allow_known_gaps=config.allow_known_gaps,
         )
     )
+    report.steps.append(_q_scorer_prior_sources_step(config, prior_ok=report.ok))
     report.steps.append(
         PipelineStep(
             name="simulated_fixtures",

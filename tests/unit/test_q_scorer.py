@@ -48,6 +48,7 @@ from orchestration.repl_memory.q_scorer import (
     registry_baseline_tps_by_role,
     registry_memory_cost_by_role,
     stack_prior_q_scorer_priors_by_role,
+    validate_live_q_scorer_prior_sources,
 )
 from orchestration.repl_memory.progress_logger import EventType
 from src.registry.stack_priors import STACK_PRIORS_VERSION, stack_priors_contract
@@ -248,6 +249,7 @@ class TestScoringConfigDefaults:
         assert "candidate_arch" not in priors.baseline_tps_by_role
         retired_role = "architect" + "_coding"
         assert retired_role not in priors.baseline_tps_by_role
+        assert validate_live_q_scorer_prior_sources(priors_path) == []
 
     def test_stack_prior_priors_keep_missing_live_fields_visible_as_fallback(self, tmp_path):
         priors_path = _write_stack_priors(
@@ -271,6 +273,10 @@ class TestScoringConfigDefaults:
         assert priors.baseline_quality_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
         assert priors.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
         assert priors.uses_degraded_fallback is True
+        assert validate_live_q_scorer_prior_sources(priors_path) == [
+            "live q_scorer role 'frontdoor' uses throughput source "
+            "degraded_fallback; expected stack_priors"
+        ]
 
     def test_stack_prior_priors_fall_back_when_artifact_missing(self, tmp_path):
         missing = tmp_path / "missing_stack_priors.yaml"
@@ -282,6 +288,9 @@ class TestScoringConfigDefaults:
         assert priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_DEGRADED_FALLBACK
         assert priors.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_DEGRADED_FALLBACK
         assert priors.degraded_reason is not None
+        errors = validate_live_q_scorer_prior_sources(missing)
+        assert len(errors) == 1
+        assert errors[0].startswith("q_scorer stack-priors validation failed:")
 
     def test_default_stack_priors_path_exists(self):
         assert DEFAULT_STACK_PRIORS_PATH.exists()

@@ -315,6 +315,69 @@ def stack_prior_q_scorer_priors_by_role(
     )
 
 
+def _load_valid_stack_priors(stack_priors_path: Path) -> dict[str, Any]:
+    import yaml
+    from src.registry.stack_priors import validate_stack_priors_contract
+
+    data = yaml.safe_load(stack_priors_path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{stack_priors_path} did not parse to a mapping")
+    contract_errors = validate_stack_priors_contract(data)
+    if contract_errors:
+        raise ValueError("; ".join(contract_errors[:3]))
+    return data
+
+
+def _live_stack_q_scorer_roles(stack_priors: dict[str, Any]) -> set[str]:
+    roles = stack_priors.get("roles", {})
+    if not isinstance(roles, dict):
+        return set()
+    live_roles: set[str] = set()
+    for role, record in roles.items():
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        live_roles.add(role)
+        live_roles.update(STACK_PRIOR_SCORER_ROLE_ALIASES.get(role, ()))
+    return live_roles
+
+
+def validate_live_q_scorer_prior_sources(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> list[str]:
+    """Return promotion-blocking errors for live q_scorer degraded priors.
+
+    Degraded fallback tables remain valid for offline/replay maintenance. They
+    must not silently satisfy live-stack promotion when a generated stack-prior
+    artifact is present and structurally valid.
+    """
+    try:
+        stack_priors = _load_valid_stack_priors(stack_priors_path)
+    except Exception as exc:
+        return [f"q_scorer stack-priors validation failed: {exc}"]
+
+    priors = stack_prior_q_scorer_priors_by_role(stack_priors_path)
+    errors: list[str] = []
+    if priors.degraded_reason:
+        errors.append(f"q_scorer priors are degraded: {priors.degraded_reason}")
+
+    source_maps = (
+        ("throughput", priors.baseline_tps_source_by_role),
+        ("quality", priors.baseline_quality_source_by_role),
+        ("memory_cost", priors.memory_cost_source_by_role),
+    )
+    for role in sorted(_live_stack_q_scorer_roles(stack_priors)):
+        for prior_name, source_by_role in source_maps:
+            source = source_by_role.get(role, "<missing>")
+            if source != PRIOR_SOURCE_STACK_PRIORS:
+                errors.append(
+                    f"live q_scorer role {role!r} uses {prior_name} source "
+                    f"{source}; expected {PRIOR_SOURCE_STACK_PRIORS}"
+                )
+    return errors
+
+
 def descriptor_q_scorer_priors_by_role(
     descriptor_path: Path = DEFAULT_MODEL_DESCRIPTOR_PATH,
     registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,

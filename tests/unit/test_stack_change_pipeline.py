@@ -343,9 +343,12 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "guard",
         "guard_all_surfaces",
         "guard_strict",
+        "q_scorer_priors",
         "simulated_fixtures",
         "promotion_gate",
     }
+    q_scorer_step = next(step for step in check_report.steps if step.name == "q_scorer_priors")
+    assert q_scorer_step.status == "ok"
     promotion_step = next(step for step in check_report.steps if step.name == "promotion_gate")
     assert promotion_step.status == "reference"
     assert any(PROMOTION_GATE_COMMAND.removeprefix("promotion_gate: run ") in detail for detail in promotion_step.details)
@@ -462,6 +465,41 @@ def test_run_promotion_gate_executes_combined_no_inference_targets(
     assert captured["cwd"] == tmp_path
     assert promotion_step.status == "ok"
     assert any("53 passed" in detail for detail in promotion_step.details)
+
+
+def test_q_scorer_prior_source_errors_block_promotion_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    monkeypatch.setattr(
+        pipeline,
+        "validate_live_q_scorer_prior_sources",
+        lambda _path: [
+            "live q_scorer role 'frontdoor' uses throughput source "
+            "degraded_fallback; expected stack_priors"
+        ],
+    )
+
+    config = StackChangePipelineConfig(
+        **{
+            **update_config.__dict__,
+            "run_promotion_gate": True,
+            "mode": "check",
+        }
+    )
+    report = run_stack_change_pipeline(config)
+
+    q_scorer_step = next(step for step in report.steps if step.name == "q_scorer_priors")
+    promotion_step = next(step for step in report.steps if step.name == "promotion_gate")
+    assert not report.ok
+    assert q_scorer_step.status == "failed"
+    assert q_scorer_step.errors == [
+        "live q_scorer role 'frontdoor' uses throughput source "
+        "degraded_fallback; expected stack_priors"
+    ]
+    assert promotion_step.status == "skipped"
 
 
 def test_check_reports_stale_generated_artifact_without_writing(tmp_path: Path) -> None:

@@ -23,6 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "autopilot"))
 from orchestration.repl_memory.q_scorer import (  # noqa: E402
     PRIOR_SOURCE_STACK_PRIORS,
     stack_prior_q_scorer_priors_by_role,
+    validate_live_q_scorer_prior_sources,
 )
 from scripts.registry.stack_change_pipeline import (  # noqa: E402
     SIMULATED_FIXTURE_TARGET,
@@ -398,6 +399,7 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
     assert q_priors.baseline_tps_by_role["coder_escalation"] == 18.5
     assert q_priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.874)
+    assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
 
 
 def test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor(
@@ -579,7 +581,7 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
                 },
                 "architect_general": {
                     "model": {"name": "Qwen3.5-122B-A3B-Instruct-Q4_K_M", "ctx_max": 16384},
-                    "performance": {"baseline_tps": 12.19},
+                    "performance": {"quality_pct": 94, "baseline_tps": 12.19},
                     "acceleration": {
                         "type": "moe_expert_reduction",
                         "override_key": "qwen35moe.expert_used_count",
