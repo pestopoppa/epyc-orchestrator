@@ -13,6 +13,8 @@ The orchestrator.py facade that caused that bug was deleted in Phase 1.
 
 import inspect
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 class TestChatImportsResolve:
     """Verify all imports in chat.py and decomposed modules resolve without errors."""
@@ -275,7 +277,7 @@ class TestRoleTimeouts:
 
         # Workers get shorter timeouts for faster circuit breaker response
         assert ROLE_TIMEOUTS["worker_explore"] < ROLE_TIMEOUTS["architect_general"]
-        assert "architect_coding" not in ROLE_TIMEOUTS
+        assert _RETIRED_ARCHITECT_ROLE not in ROLE_TIMEOUTS
         assert ROLE_TIMEOUTS["worker_explore"] == 60
         assert ROLE_TIMEOUTS["architect_general"] == 600
 

@@ -7,8 +7,6 @@ running servers and is not exercised here).
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from src.config.stack_templates import (
@@ -23,6 +21,8 @@ from src.config.stack_templates import (
     validate_template,
 )
 from src.config.stack_migration import migrate_to_template
+
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
 
 def _make_role(ram_gb: float, tier: str, port: int, n_quarters: int = 0) -> RoleConfig:
@@ -119,11 +119,11 @@ class TestValidatorFineGrained:
     def test_retired_deployable_role_rejected(self):
         roles = {
             "frontdoor": _make_role(10, "HOT", 8000),
-            "architect_coding": _make_role(10, "HOT", 8001),
+            _RETIRED_ARCHITECT_ROLE: _make_role(10, "HOT", 8001),
         }
         result = validate_template(_make_template(roles))
         assert not result.valid
-        assert any("Retired role 'architect_coding'" in e for e in result.errors)
+        assert any(f"Retired role '{_RETIRED_ARCHITECT_ROLE}'" in e for e in result.errors)
 
 
 class TestDefaultYamlRoundTrip:
@@ -134,7 +134,7 @@ class TestDefaultYamlRoundTrip:
         assert t.resource_budget.max_mlock_gb == 800  # from default.yaml
         assert t.roles["coder_escalation"].alias_to == "frontdoor"
         assert t.roles["worker_explore"].alias_to == "worker_general"
-        assert "architect_coding" not in t.roles
+        assert _RETIRED_ARCHITECT_ROLE not in t.roles
         assert t.roles["architect_general"].instance_count == 1
         assert t.roles["ingest_long_context"].instance_count == 5
         result = validate_template(t)

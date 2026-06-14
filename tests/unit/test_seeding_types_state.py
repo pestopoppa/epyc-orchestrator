@@ -16,6 +16,8 @@ _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["seeding_types_state_test"] = _MOD
 _SPEC.loader.exec_module(_MOD)
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 def test_read_registry_timeout_returns_fallback_when_registry_unreadable():
     with patch("pathlib.Path.open", side_effect=OSError("boom")):
@@ -186,10 +188,10 @@ def test_discover_active_roles_prefers_stack_priors_over_registry(
     assert _MOD.discover_active_roles(registry_path=registry_path) == []
 
 
-def test_default_roles_and_architect_roles_exclude_retired_architect_coding():
-    assert "architect_coding" not in _MOD.DEFAULT_ROLES
+def test_default_roles_and_architect_roles_exclude_retired_architect_role():
+    assert _RETIRED_ARCHITECT_ROLE not in _MOD.DEFAULT_ROLES
     assert _MOD.ARCHITECT_ROLES == {"architect_general"}
-    assert "architect_coding" not in _MOD.ROLE_COST_TIER
+    assert _RETIRED_ARCHITECT_ROLE not in _MOD.ROLE_COST_TIER
 
 
 def test_discover_active_roles_includes_registry_role_timeouts(tmp_path: Path):

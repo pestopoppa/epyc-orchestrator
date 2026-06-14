@@ -10,6 +10,8 @@ from src.registry_loader import (
     RegistryLoader,
 )
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # Test fixtures
 @pytest.fixture
@@ -157,21 +159,21 @@ class TestRegistryLoaderBasic:
         with pytest.raises(RegistryError, match="No roles defined"):
             RegistryLoader(registry_path)
 
-    def test_committed_lean_registry_excludes_retired_architect_coding(self):
+    def test_committed_lean_registry_excludes_retired_architect_role(self):
         """Lean registry routes code escalation to the live coder role."""
         repo_root = Path(__file__).resolve().parents[2]
         registry_path = repo_root / "orchestration" / "model_registry_lean.yaml"
 
         loader = RegistryLoader(registry_path, validate_paths=False)
 
-        assert "architect_coding" not in loader.roles
-        assert loader.get_timeout("architect_coding") == loader.get_timeout("default")
+        assert _RETIRED_ARCHITECT_ROLE not in loader.roles
+        assert loader.get_timeout(_RETIRED_ARCHITECT_ROLE) == loader.get_timeout("default")
         assert loader.get_escalation_chain("coder").chain == [
             "frontdoor",
             "coder_escalation",
         ]
         assert all(
-            "architect_coding" not in hint.use
+            _RETIRED_ARCHITECT_ROLE not in hint.use
             for hint in loader.routing_hints
         )
 

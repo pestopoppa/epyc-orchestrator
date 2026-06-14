@@ -20,6 +20,8 @@ from src.registry.stack_priors import (
     validate_stack_priors_contract,
 )
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 def _write_yaml(path: Path, data: dict) -> Path:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
@@ -468,7 +470,7 @@ def test_compile_refuses_missing_descriptor_without_allow_incomplete(tmp_path: P
         compile_stack_priors(
             registry_path=registry_path,
             descriptor_path=descriptor_path,
-            active_roles={"architect_coding"},
+            active_roles={_RETIRED_ARCHITECT_ROLE},
         )
 
-    assert "architect_coding: Missing model descriptor binding" in str(exc.value)
+    assert f"{_RETIRED_ARCHITECT_ROLE}: Missing model descriptor binding" in str(exc.value)

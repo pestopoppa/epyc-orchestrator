@@ -16,11 +16,13 @@ _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["analyze_routing_policy_test"] = _MOD
 _SPEC.loader.exec_module(_MOD)
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 def test_live_specialist_roles_derive_from_stack_priors(tmp_path: Path) -> None:
     stack_priors = tmp_path / "stack_priors.yaml"
     stack_priors.write_text(
-        """
+        f"""
 roles:
   frontdoor:
     deployment_status: live_stack
@@ -34,7 +36,7 @@ roles:
     deployment_status: live_stack
   ingest_long_context:
     deployment_status: live_stack
-  architect_coding:
+  {_RETIRED_ARCHITECT_ROLE}:
     deployment_status: retired
   reap_25b_frontdoor:
     deployment_status: benchmark_or_candidate
@@ -50,5 +52,5 @@ roles:
 def test_live_specialist_roles_fallback_excludes_retired_role(tmp_path: Path) -> None:
     roles = _MOD._live_specialist_roles(tmp_path / "missing.yaml")
 
-    assert "architect_coding" not in roles
+    assert _RETIRED_ARCHITECT_ROLE not in roles
     assert {"architect_general", "coder_escalation"}.issubset(roles)

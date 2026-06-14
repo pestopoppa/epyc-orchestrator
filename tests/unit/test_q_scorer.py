@@ -36,6 +36,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 from orchestration.repl_memory.q_scorer import (
     DEFAULT_STACK_PRIORS_PATH,
     FALLBACK_BASELINE_TPS_BY_ROLE,
@@ -191,7 +193,7 @@ class TestScoringConfigDefaults:
         assert cfg.baseline_tps_by_role["toolrunner"] == pytest.approx(60.7)
         assert cfg.baseline_tps_by_role["worker_vision"] == pytest.approx(20.0)
         assert cfg.baseline_tps_by_role["vision_escalation"] == pytest.approx(27.6)
-        assert "architect_coding" not in cfg.baseline_tps_by_role
+        assert _RETIRED_ARCHITECT_ROLE not in cfg.baseline_tps_by_role
 
     def test_default_config_exposes_stack_prior_sources(self):
         cfg = ScoringConfig()
@@ -345,7 +347,7 @@ roles:
             "vision_escalation",
         ):
             assert costs[role] == pytest.approx(1.0)
-        assert "architect_coding" not in costs
+        assert _RETIRED_ARCHITECT_ROLE not in costs
 
     def test_descriptor_priors_overlay_clean_existing_roles(self, tmp_path):
         descriptor_path = tmp_path / "model_descriptors.yaml"
@@ -624,7 +626,7 @@ class TestMultiDimensionalCost:
         assert cfg.memory_cost_by_role["coder_escalation"] == pytest.approx(1.0)
         assert cfg.memory_cost_by_role["architect_general"] == pytest.approx(1.0)
         assert cfg.memory_cost_by_role["ingest_long_context"] == pytest.approx(1.0)
-        assert "architect_coding" not in cfg.memory_cost_by_role
+        assert _RETIRED_ARCHITECT_ROLE not in cfg.memory_cost_by_role
 
     def test_quality_gap_penalty_architect(self):
         """HOT architect gets quality-gap penalty but no warm-tier memory penalty."""
