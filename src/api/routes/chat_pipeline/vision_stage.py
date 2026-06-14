@@ -19,37 +19,26 @@ from pathlib import Path
 from src.api.models import ChatRequest, ChatResponse
 from src.api.routes.chat_utils import RoutingResult
 from src.api.services.memrl import score_completed_task
+from src.api.routes.vision_serving import (
+    VISION_ROLES as _VISION_ROLES,
+    fallback_vl_port_for_role as _fallback_vl_port_for_role,
+    stack_prior_vl_ports as _shared_stack_prior_vl_ports,
+)
 from src.api.structured_logging import task_extra
 from src.llm_primitives import LLMPrimitives
-from src.registry.stack_priors import live_role_primary_ports
 
-_VISION_ROLES = frozenset({"worker_vision", "vision_escalation"})
 _DEFAULT_STACK_PRIORS_PATH = (
     Path(__file__).resolve().parents[4] / "orchestration" / "derived" / "stack_priors.yaml"
 )
-_FALLBACK_VL_PORT_BY_ROLE = {"worker_vision": 8086, "vision_escalation": 8087}
 
 log = logging.getLogger(__name__)
 
 
 def _stack_prior_vl_ports(stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH) -> dict[str, int]:
-    ports = live_role_primary_ports(_VISION_ROLES, stack_priors_path)
+    ports = _shared_stack_prior_vl_ports(stack_priors_path)
     if not ports:
         log.warning("Using fallback VL ports; no live stack-prior VL ports found")
     return ports
-
-
-def _manifest_vl_port_for_role(role: str) -> int | None:
-    try:
-        from scripts.server.stack_manifest import PORT_MAP
-    except Exception:
-        return None
-    port = PORT_MAP.get(role)
-    return port if isinstance(port, int) else None
-
-
-def _fallback_vl_port_for_role(role: str) -> int:
-    return _manifest_vl_port_for_role(role) or _FALLBACK_VL_PORT_BY_ROLE.get(role, 8086)
 
 
 def _vl_port_for_role(

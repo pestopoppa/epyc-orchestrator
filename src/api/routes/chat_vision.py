@@ -21,6 +21,10 @@ from src.prompt_builders import (
     VISION_TOOL_DESCRIPTIONS,
 )
 from src.api.routes.chat_utils import QWEN_STOP
+from src.api.routes.vision_serving import (
+    VISION_ROLES as _VISION_ROLES,
+    fallback_vl_port_for_role as _fallback_vl_port_for_role,
+)
 from src.registry.stack_priors import (
     live_stack_role_records,
     stack_prior_serving,
@@ -32,8 +36,6 @@ logger = logging.getLogger(__name__)
 _DEFAULT_STACK_PRIORS_PATH = (
     Path(__file__).resolve().parents[3] / "orchestration" / "derived" / "stack_priors.yaml"
 )
-_VISION_ROLES = frozenset({"worker_vision", "vision_escalation"})
-_FALLBACK_VL_PORT_BY_ROLE = {"worker_vision": 8086, "vision_escalation": 8087}
 
 if TYPE_CHECKING:
     from src.api.models import ChatRequest
@@ -88,19 +90,6 @@ def _stack_prior_vl_urls(
             urls[role] = f"http://localhost:{port}"
             break
     return urls
-
-
-def _manifest_vl_port_for_role(role: str) -> int | None:
-    try:
-        from scripts.server.stack_manifest import PORT_MAP
-    except Exception:
-        return None
-    port = PORT_MAP.get(role)
-    return port if isinstance(port, int) else None
-
-
-def _fallback_vl_port_for_role(role: str) -> int:
-    return _manifest_vl_port_for_role(role) or _FALLBACK_VL_PORT_BY_ROLE.get(role, 8086)
 
 
 def _fallback_vl_url_for_role(role: str) -> str:
