@@ -135,6 +135,15 @@ class TestAdmissionController:
 
         assert _load_default_limits(priors) == FALLBACK_LIMITS
 
+    def test_load_default_limits_falls_back_when_stack_priors_malformed(
+        self,
+        tmp_path: Path,
+    ):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text("roles: [not, valid", encoding="utf-8")
+
+        assert _load_default_limits(priors) == FALLBACK_LIMITS
+
     def test_thread_safety(self):
         """Concurrent acquire/release should not corrupt state."""
         ctrl = AdmissionController({"http://localhost:8080": 2})
