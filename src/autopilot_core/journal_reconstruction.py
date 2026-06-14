@@ -87,6 +87,13 @@ def _fold_supersession_events(
     return folded_rows, meta
 
 
+def fold_supersession_events(
+    rows: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Public read-view helper for folding append-only supersession events."""
+    return _fold_supersession_events(rows)
+
+
 def parse_journal_ts(value: Any) -> float | None:
     """Parse a journal timestamp value to Unix seconds."""
     if value is None:

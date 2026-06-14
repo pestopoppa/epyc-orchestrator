@@ -22,8 +22,7 @@ import json
 import logging
 import re
 import time
-from collections import deque
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,8 +42,6 @@ from src.api.routes.dashboard_tap import (
     _INFERENCE_TAP_PATH,
     _PROMPT_TAP_PATH,
     _REPL_TAP_PATH,
-    _SECTION_SEP,
-    _SUBSECTION_SEP,
     _TAP_SENTINEL_PATH,
     _parse_inference_sections,
     _parse_structured_tap_requests,
@@ -62,7 +59,6 @@ from src.api.routes.dashboard_tasks import (
 from src.api.routes.dashboard_topology import (
     _PORT_HINTS,
     role_aliases,
-    _ROLE_COLORS,
     _clean_model_name,
     _discover_llama_models,
     _discover_llama_ports,
@@ -76,6 +72,7 @@ from src.autopilot_core.action_identity import (
     config_fingerprint_from_row as core_config_fingerprint_from_row,
 )
 from src.autopilot_core.journal_reconstruction import (
+    fold_supersession_events as core_fold_supersession_events,
     latest_journal_run_rows as core_latest_journal_run_rows,
     objectives_from_journal_row as core_objectives_from_journal_row,
     parse_journal_ts as core_parse_journal_ts,
@@ -1141,6 +1138,11 @@ def _latest_journal_run_rows(
     return core_latest_journal_run_rows(rows)
 
 
+def _effective_journal_trial_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    folded_rows, _ = core_fold_supersession_events(rows)
+    return [row for row in folded_rows if row.get("trial_id") is not None]
+
+
 def _pareto_hypervolume(points: list[list[float]]) -> float:
     """Compatibility wrapper for tests; implementation lives in autopilot_core."""
     return _pareto_hypervolume_impl(points)
@@ -1336,6 +1338,7 @@ async def autopilot_progress() -> JSONResponse:
                         entries.append(json.loads(raw))
                     except Exception:
                         continue
+            entries = _effective_journal_trial_rows(entries)
             # Sort by timestamp ascending so deltas make sense even if the
             # journal was rewritten out-of-order (shouldn't happen, but cheap).
             entries.sort(key=lambda e: _parse_journal_ts(e.get("timestamp")) or 0)
@@ -2405,22 +2408,26 @@ async def gepa_status() -> JSONResponse:
                     f.seek(-128 * 1024, 2)
                     f.readline()  # discard partial line
                 journal_tail = f.read().decode("utf-8", errors="ignore")
+            rows = []
             for line in journal_tail.splitlines()[-15:]:
                 try:
-                    j = json.loads(line)
-                    recent_trials.append({
-                        "trial_id": j.get("trial_id"),
-                        "timestamp": j.get("timestamp", ""),
-                        "species": j.get("species"),
-                        "quality": j.get("quality"),
-                        "speed": j.get("speed"),
-                        "cost": j.get("cost"),
-                        "reliability": j.get("reliability"),
-                        "pareto_status": j.get("pareto_status"),
-                        "description": (j.get("config_snapshot", {}).get("description") or "")[:140],
-                    })
+                    rows.append(json.loads(line))
                 except Exception:
                     pass
+            for j in _effective_journal_trial_rows(rows)[-15:]:
+                if j.get("bug_corrupted_by"):
+                    continue
+                recent_trials.append({
+                    "trial_id": j.get("trial_id"),
+                    "timestamp": j.get("timestamp", ""),
+                    "species": j.get("species"),
+                    "quality": j.get("quality"),
+                    "speed": j.get("speed"),
+                    "cost": j.get("cost"),
+                    "reliability": j.get("reliability"),
+                    "pareto_status": j.get("pareto_status"),
+                    "description": (j.get("config_snapshot", {}).get("description") or "")[:140],
+                })
         except Exception:
             pass
 

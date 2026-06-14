@@ -11,9 +11,6 @@ import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
-
-import pytest
 
 from src.api.routes import (
     dashboard,
@@ -715,6 +712,131 @@ def test_dashboard_module_html_loads_from_file() -> None:
     assert len(dashboard._DASHBOARD_HTML) > 40_000
     assert "<!doctype html>" in dashboard._DASHBOARD_HTML
     assert "</body></html>" in dashboard._DASHBOARD_HTML
+
+
+def test_dashboard_effective_journal_rows_fold_supersession_events() -> None:
+    rows = [
+        {
+            "trial_id": 1,
+            "timestamp": "2026-06-13T00:00:00+00:00",
+            "bug_corrupted_by": "",
+        },
+        {
+            "trial_id": 2,
+            "timestamp": "2026-06-13T00:01:00+00:00",
+            "bug_corrupted_by": "",
+        },
+        {
+            "type": "supersession",
+            "timestamp": "2026-06-13T00:02:00+00:00",
+            "target_trial_ids": [2],
+            "fields": {"bug_corrupted_by": "resource_contention"},
+        },
+    ]
+
+    effective = dashboard._effective_journal_trial_rows(rows)
+
+    assert [row["trial_id"] for row in effective] == [1, 2]
+    assert effective[1]["bug_corrupted_by"] == "resource_contention"
+    assert rows[1]["bug_corrupted_by"] == ""
+
+
+def test_autopilot_progress_uses_superseded_journal_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    started_at = datetime.now(timezone.utc).timestamp() - 45
+    state_path.write_text(json.dumps({
+        "in_flight_trial": {
+            "trial_id": 4,
+            "started_at": started_at,
+            "action": {"type": "seed_batch"},
+        }
+    }))
+    rows = [
+        {
+            "trial_id": 0,
+            "timestamp": "2026-06-13T00:00:00+00:00",
+            "action_type": "seed_batch",
+        },
+        {
+            "trial_id": 1,
+            "timestamp": "2026-06-13T00:01:00+00:00",
+            "action_type": "seed_batch",
+        },
+        {
+            "trial_id": 2,
+            "timestamp": "2026-06-13T00:02:00+00:00",
+            "action_type": "seed_batch",
+        },
+        {
+            "trial_id": 3,
+            "timestamp": "2026-06-13T00:03:00+00:00",
+            "action_type": "seed_batch",
+        },
+        {
+            "type": "supersession",
+            "timestamp": "2026-06-13T00:04:00+00:00",
+            "target_trial_ids": [2],
+            "fields": {"bug_corrupted_by": "resource_contention"},
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.autopilot_progress())
+    payload = json.loads(response.body)
+
+    assert payload["percent_source"] == "action_p50"
+    assert payload["n_action_type_samples"] == 2
+
+
+def test_gepa_status_uses_superseded_journal_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    log_path = tmp_path / "autopilot.log"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    log_path.write_text("2026-06-13 00:00:00,000 GEPA: Trial active\n")
+    rows = [
+        {
+            "trial_id": 1,
+            "timestamp": "2026-06-13T00:00:00+00:00",
+            "species": "prompt_forge",
+            "quality": 1.0,
+            "speed": 10.0,
+            "cost": 0.5,
+            "reliability": 1.0,
+            "pareto_status": "frontier",
+        },
+        {
+            "trial_id": 2,
+            "timestamp": "2026-06-13T00:01:00+00:00",
+            "species": "prompt_forge",
+            "quality": 9.0,
+            "speed": 99.0,
+            "cost": 0.5,
+            "reliability": 1.0,
+            "pareto_status": "frontier",
+        },
+        {
+            "type": "supersession",
+            "timestamp": "2026-06-13T00:02:00+00:00",
+            "target_trial_ids": [2],
+            "fields": {"bug_corrupted_by": "resource_contention"},
+        },
+    ]
+    journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", log_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL", journal_path)
+
+    response = asyncio.run(dashboard.gepa_status())
+    payload = json.loads(response.body)
+
+    assert [trial["trial_id"] for trial in payload["recent_trials"]] == [1]
 
 
 def test_pareto_endpoint_prefers_current_journal_run_over_old_rows_and_state(
