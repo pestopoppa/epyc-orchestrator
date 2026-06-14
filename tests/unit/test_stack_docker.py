@@ -139,13 +139,21 @@ def test_start_docker_container_supports_nondefault_container_options(monkeypatc
         "image": "unclecode/crawl4ai:latest",
         "description": "browser extraction",
         "shm_size": "1g",
+        "run_timeout": 180,
         "env": {"BETA": "two", "ALPHA": "one"},
     }
     responses = [
         _Result(returncode=0),
         _Result(returncode=0, stdout="abcdef1234567890\n"),
     ]
-    fake_run, calls = _make_run_recorder(responses)
+    timeouts = []
+    fake_run_inner, calls = _make_run_recorder(responses)
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["docker", "run"]:
+            timeouts.append(kwargs.get("timeout"))
+        return fake_run_inner(cmd, *args, **kwargs)
+
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(stack_docker, "wait_for_health", lambda port, timeout, path: True)
 
@@ -161,6 +169,35 @@ def test_start_docker_container_supports_nondefault_container_options(monkeypatc
     assert "11235:11235" in run_cmd
     assert run_cmd.index("ALPHA=one") < run_cmd.index("BETA=two")
     assert run_cmd[-1] == "unclecode/crawl4ai:latest"
+    assert timeouts == [180]
+
+
+def test_start_docker_container_returns_none_on_run_timeout(monkeypatch) -> None:
+    service = {
+        "name": "crawl4ai",
+        "port": 11235,
+        "container_port": 11235,
+        "image": "unclecode/crawl4ai:latest",
+        "description": "browser extraction",
+        "run_timeout": 180,
+    }
+    calls = []
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(list(cmd))
+        if cmd[:2] == ["docker", "run"]:
+            assert kwargs.get("timeout") == 180
+            raise subprocess.TimeoutExpired(cmd, 180)
+        return _Result(returncode=0)
+
+    def boom(*a, **kw):
+        raise AssertionError("wait_for_health called after docker run timeout")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(stack_docker, "wait_for_health", boom)
+
+    assert start_docker_container(service) is None
+    assert calls[-1] == ["docker", "rm", "-f", "crawl4ai"]
 
 
 def test_start_docker_container_returns_none_when_run_fails(monkeypatch) -> None:

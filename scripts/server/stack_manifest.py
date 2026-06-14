@@ -352,6 +352,7 @@ DOCKER_SERVICES = [
         "image": "unclecode/crawl4ai:latest",
         "description": "Browser-backed page extraction for web_research",
         "shm_size": "1g",
+        "run_timeout": 180,
         "args": [],
         "health_path": "/health",
     },

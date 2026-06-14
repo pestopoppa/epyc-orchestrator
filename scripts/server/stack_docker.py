@@ -65,7 +65,13 @@ def start_docker_container(service: dict) -> ProcessInfo | None:
 
     print(f"  Starting {name} on port {port}...")
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    run_timeout = service.get("run_timeout", 30)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=run_timeout)
+    except subprocess.TimeoutExpired:
+        print(f"    [FAIL] docker run timed out after {run_timeout}s")
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=5)
+        return None
     if result.returncode != 0:
         print(f"    [FAIL] docker run failed: {result.stderr.strip()[:200]}")
         return None
