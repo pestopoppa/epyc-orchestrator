@@ -243,7 +243,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"journal file does not exist: {journal_path}", file=sys.stderr)
         return 2
 
-    state = json.loads(state_path.read_text(encoding="utf-8"))
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"state file is not valid JSON: {state_path}: {exc}", file=sys.stderr)
+        return 2
     if not isinstance(state, dict):
         print(f"state file is not a JSON object: {state_path}", file=sys.stderr)
         return 2

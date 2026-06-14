@@ -132,3 +132,18 @@ def test_cli_json_strict_returns_nonzero_on_drift(
     assert rc == 1
     assert out["ok"] is False
     assert out["entry_id_delta"]["journal_only_examples"] == [2]
+
+
+def test_cli_returns_two_for_invalid_state_json(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    state_path.write_text("{not-json", encoding="utf-8")
+    journal_path.write_text("", encoding="utf-8")
+
+    rc = main(["--state", str(state_path), "--journal", str(journal_path)])
+
+    assert rc == 2
+    assert "state file is not valid JSON" in capsys.readouterr().err
