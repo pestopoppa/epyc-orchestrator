@@ -225,6 +225,49 @@ def _blacklisted_action_skip(action: dict[str, Any], blocked_reason: str) -> Ski
     return SkipOutcome("invalid", f"action blacklisted: {blocked_reason}", action_type)
 
 
+def _format_blacklist_pattern(pattern: Any) -> str:
+    if not isinstance(pattern, dict) or not pattern:
+        return "{}"
+    return json.dumps(pattern, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _format_blacklist_for_prompt(blacklist: list[dict[str, Any]]) -> str:
+    """Render blacklist prompt context without hiding older enforced patterns."""
+    if not blacklist:
+        return "  (none)"
+
+    cap = max(0, BLACKLIST_RENDER_CAP)
+    shown = blacklist[-cap:] if cap else []
+    older = blacklist[:-cap] if cap else list(blacklist)
+    lines: list[str] = []
+
+    if shown:
+        lines.append(
+            f"  Recent entries ({len(shown)} newest; all {len(blacklist)} enforced):"
+        )
+        for entry in shown:
+            reason = str(entry.get("reason", ""))
+            if len(reason) > 80:
+                reason = reason[:79] + "..."
+            lines.append(
+                f"  - {_format_blacklist_pattern(entry.get('pattern', {}))} -- {reason}"
+            )
+
+    if older:
+        lines.append(
+            f"  Older enforced patterns ({len(older)}; reasons omitted, still blocked):"
+        )
+        for entry in older:
+            suffix = ""
+            if entry.get("source_trial") is not None:
+                suffix = f" (source_trial={entry['source_trial']})"
+            lines.append(
+                f"    - {_format_blacklist_pattern(entry.get('pattern', {}))}{suffix}"
+            )
+
+    return "\n".join(lines)
+
+
 def _enforce_experiment_quota(
     action: dict[str, Any],
     state: dict[str, Any],
@@ -1791,29 +1834,11 @@ def _run_loop_inner(
                 "constitution.md",
             )
             system_card_text = _render_system_card(state)
-            # B2: Format blacklist for controller. Prompt-budget trim (2026-06-10):
-            # the blacklist grows unbounded (auto-appended on failures) and the FULL
-            # list is still enforced at dispatch by check_blacklist(); the planner
-            # only needs a recent, compact view to avoid re-proposing. Render the
-            # most-recent BLACKLIST_RENDER_CAP entries with a length-capped reason,
-            # plus a one-line count of any older entries elided (still enforced).
-            if blacklist:
-                shown = blacklist[-BLACKLIST_RENDER_CAP:]
-                bl_lines = []
-                for entry in shown:
-                    reason = str(entry.get("reason", ""))
-                    if len(reason) > 80:
-                        reason = reason[:79] + "…"
-                    bl_lines.append(f"  - {entry.get('pattern', {})} — {reason}")
-                elided = len(blacklist) - len(shown)
-                if elided > 0:
-                    bl_lines.append(
-                        f"  …(+{elided} older blacklisted configs not shown; all "
-                        f"{len(blacklist)} remain enforced at dispatch)"
-                    )
-                blacklist_text = "\n".join(bl_lines)
-            else:
-                blacklist_text = "  (none)"
+            # B2: Format blacklist for controller. The full blacklist is always
+            # enforced at dispatch by check_blacklist(). The prompt view shows
+            # recent entries with reasons plus compact older patterns so the
+            # planner/critic do not unknowingly re-propose hidden hard blocks.
+            blacklist_text = _format_blacklist_for_prompt(blacklist)
 
             # AM compaction: query slot memory so controller can decide on compaction
             try:

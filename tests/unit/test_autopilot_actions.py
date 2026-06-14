@@ -70,6 +70,37 @@ def test_blacklisted_action_becomes_invalid_skip() -> None:
     assert result.action_type == "seed_batch"
 
 
+def test_blacklist_prompt_includes_older_enforced_patterns(monkeypatch) -> None:
+    monkeypatch.setattr(autopilot, "BLACKLIST_RENDER_CAP", 2)
+
+    text = autopilot._format_blacklist_for_prompt([
+        {
+            "pattern": {
+                "type": "structural_experiment",
+                "flags": {"skillbank": True},
+            },
+            "reason": "old hidden reason",
+            "source_trial": 505,
+        },
+        {
+            "pattern": {"type": "numeric_trial", "surface": "monitor"},
+            "reason": "recent monitor reason",
+            "source_trial": 747,
+        },
+        {
+            "pattern": {"type": "train_routing_models"},
+            "reason": "recent routing reason",
+            "source_trial": 781,
+        },
+    ])
+
+    assert "recent monitor reason" in text
+    assert "recent routing reason" in text
+    assert "Older enforced patterns" in text
+    assert '{"flags":{"skillbank":true},"type":"structural_experiment"}' in text
+    assert "source_trial=505" in text
+
+
 def test_structural_experiment_invalid_flags_returns_skip_outcome() -> None:
     """Invalid flag dependency surfaces the validator reason as a SkipOutcome,
     not a bare None — this is the graph_router-deadlock fix."""
