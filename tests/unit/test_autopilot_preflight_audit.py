@@ -78,6 +78,7 @@ def test_model_server_targets_fallback_is_current(tmp_path: Path) -> None:
     assert "http://localhost:8071/health" not in health_urls
     assert "http://localhost:8086/health" in health_urls
     assert "http://localhost:8087/health" in health_urls
+    assert "http://localhost:8090/health" not in health_urls
 
 
 def test_audit_stack_change_gate_runs_canonical_command(monkeypatch) -> None:

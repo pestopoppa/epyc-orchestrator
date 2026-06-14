@@ -29,6 +29,7 @@ from src.autopilot_core.journal_reconstruction import (
 )
 from src.autopilot_core.journal_snapshot_replay import build_snapshot_replay_diagnostic
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
 
 log = logging.getLogger("autopilot.preflight")
 
@@ -59,6 +60,7 @@ FALLBACK_MODEL_SERVER_TARGETS = [
     ("worker_vision", "http://localhost:8086/health"),
     ("vision_escalation", "http://localhost:8087/health"),
 ]
+FALLBACK_MODEL_SERVER_EXCLUDED_ROLES = frozenset({"embedder"})
 
 
 def _health_url(endpoint: str) -> str | None:
@@ -70,7 +72,28 @@ def _health_url(endpoint: str) -> str | None:
 
 def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str]]:
     api_health = _health_url(orchestrator_url) or "http://localhost:8000/health"
-    return [("API", api_health), *FALLBACK_MODEL_SERVER_TARGETS]
+    hot_ports = {
+        PORT_MAP[role]
+        for role in HOT_ROLES
+        if role not in FALLBACK_MODEL_SERVER_EXCLUDED_ROLES
+        and isinstance(PORT_MAP.get(role), int)
+    }
+    names_by_port: dict[int, list[str]] = {}
+    for role, port in sorted(PORT_MAP.items()):
+        if role in FALLBACK_MODEL_SERVER_EXCLUDED_ROLES:
+            continue
+        if isinstance(port, int) and port in hot_ports:
+            names_by_port.setdefault(port, []).append(role)
+
+    if not names_by_port:
+        return [("API", api_health), *FALLBACK_MODEL_SERVER_TARGETS]
+    return [
+        ("API", api_health),
+        *[
+            ("/".join(sorted(names)), f"http://localhost:{port}/health")
+            for port, names in sorted(names_by_port.items())
+        ],
+    ]
 
 
 def _model_server_targets(
