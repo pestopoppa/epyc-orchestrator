@@ -34,6 +34,10 @@ Usage:
     python -m scripts.benchmark.colbert.export_lateon_onnx_int8 \
         --profile reason-mxbai --print-plan --json
 
+    # Export downloaded Reason-mxbai source artifacts to model.onnx + model_int8.onnx
+    python -m scripts.benchmark.colbert.export_lateon_onnx_int8 \
+        --profile reason-mxbai --no-download --export-int8 --no-parity
+
     # Skip parity (download only)
     python -m scripts.benchmark.colbert.export_lateon_onnx_int8 --no-parity
 """
@@ -46,6 +50,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 log = logging.getLogger("colbert.export")
 
@@ -124,6 +129,17 @@ PARITY_SNIPPETS = [
 
 PARITY_TOLERANCE = 1e-2  # max |cosine(ref, int8) - 1| per snippet
 REQUIRED_RUNTIME_FILES = ("model_int8.onnx", "tokenizer.json")
+REASON_MXBAI_EXPORT_INPUTS = ("input_ids", "attention_mask")
+REASON_MXBAI_EXPORT_OUTPUTS = ("token_embeddings",)
+REASON_MXBAI_EXPORT_AXES: dict[str, dict[int, str]] = {
+    "input_ids": {0: "batch", 1: "sequence"},
+    "attention_mask": {0: "batch", 1: "sequence"},
+    "token_embeddings": {0: "batch", 1: "sequence"},
+}
+REASON_MXBAI_EXPORT_OPSET = 18
+REASON_MXBAI_QUANTIZE_OPS = ("MatMul", "Gemm")
+REASON_MXBAI_EXPORT_INT8 = "model_int8.onnx"
+REASON_MXBAI_EXPORT_FP32 = "model.onnx"
 
 
 @dataclass(frozen=True)
@@ -137,6 +153,58 @@ class ModelArtifactProfile:
     ships_prebuilt_onnx: bool
     model_slot_env: str
     notes: str
+
+
+@dataclass(frozen=True)
+class PyLateExportContract:
+    """Stable PyLate->ONNX conversion contract."""
+
+    input_names: tuple[str, ...]
+    output_names: tuple[str, ...]
+    dynamic_axes: dict[str, dict[int, str]]
+    opset: int
+
+
+class ExportDependencyError(RuntimeError):
+    """Raised when export dependencies are missing."""
+
+
+class PyLateColBERTTokenEmbeddingsWrapper:
+    """Thin wrapper for PyLate ColBERT that emits only token_embeddings."""
+
+    def __init__(self, model: Any):
+        self.model = model
+
+    def __call__(self, input_ids, attention_mask):
+        outputs = self.model({"input_ids": input_ids, "attention_mask": attention_mask})
+        return self._extract_token_embeddings(outputs)
+
+    @staticmethod
+    def _extract_token_embeddings(outputs: Any):
+        if isinstance(outputs, dict):
+            if "token_embeddings" in outputs:
+                return outputs["token_embeddings"]
+            if "last_hidden_state" in outputs:
+                return outputs["last_hidden_state"]
+            raise ValueError("PyLate output dict does not include token_embeddings.")
+
+        if isinstance(outputs, (tuple, list)):
+            if not outputs:
+                raise ValueError("PyLate output sequence is empty.")
+            return outputs[0]
+
+        token_embeddings = getattr(outputs, "token_embeddings", outputs)
+        if token_embeddings is None:
+            raise ValueError("PyLate output does not include token embeddings.")
+        return token_embeddings
+
+
+REASON_MXBAI_EXPORT_CONTRACT = PyLateExportContract(
+    input_names=REASON_MXBAI_EXPORT_INPUTS,
+    output_names=REASON_MXBAI_EXPORT_OUTPUTS,
+    dynamic_axes=REASON_MXBAI_EXPORT_AXES,
+    opset=REASON_MXBAI_EXPORT_OPSET,
+)
 
 
 MODEL_PROFILES = {
@@ -190,9 +258,24 @@ def resolve_profile(profile_name: str, model_id: str | None = None) -> ModelArti
     )
 
 
+def reason_mxbai_export_paths(model_dir: Path) -> dict[str, Path]:
+    """Return concrete export artifact paths for source-only Reason-mxbai."""
+    return {
+        "fp32_onnx": model_dir / REASON_MXBAI_EXPORT_FP32,
+        "int8_onnx": model_dir / REASON_MXBAI_EXPORT_INT8,
+    }
+
+
+def resolve_export_contract(profile: ModelArtifactProfile) -> PyLateExportContract | None:
+    """Return the conversion contract when export exists for the profile."""
+    if not profile.ships_prebuilt_onnx and profile.download_files == REASON_MXBAI_SOURCE_FILES:
+        return REASON_MXBAI_EXPORT_CONTRACT
+    return None
+
+
 def artifact_plan(profile: ModelArtifactProfile, out_dir: Path) -> dict[str, object]:
     """Return a serializable plan for operators and tests."""
-    return {
+    plan: dict[str, object] = {
         "profile": profile.name,
         "repo_id": profile.repo_id,
         "out": str(out_dir),
@@ -202,6 +285,21 @@ def artifact_plan(profile: ModelArtifactProfile, out_dir: Path) -> dict[str, obj
         "download_files": list(profile.download_files),
         "notes": profile.notes,
     }
+
+    contract = resolve_export_contract(profile)
+    if contract is not None:
+        export_paths = reason_mxbai_export_paths(out_dir)
+        plan["export_plan"] = {
+            "fp32_onnx": str(export_paths["fp32_onnx"]),
+            "int8_onnx": str(export_paths["int8_onnx"]),
+            "opset": contract.opset,
+            "input_names": list(contract.input_names),
+            "output_names": list(contract.output_names),
+            "dynamic_axes": {name: dict(axes) for name, axes in contract.dynamic_axes.items()},
+            "required_dependencies": ["torch", "onnx", "onnxruntime", "pylate"],
+        }
+
+    return plan
 
 
 def missing_files(out_dir: Path, rel_paths: tuple[str, ...] | list[str]) -> list[str]:
@@ -267,6 +365,92 @@ def ensure_onnx_artifacts(
         "--no-parity, then run the local Torch->ONNX->INT8 export step before "
         "parity or reranker latency benchmarking."
     )
+
+
+def _require_reason_mxbai_export_dependencies() -> None:
+    """Fail fast when Reason-mxbai export deps are missing."""
+    try:
+        import onnx  # noqa: F401
+        import torch  # noqa: F401
+        from onnxruntime.quantization import QuantType, quantize_dynamic  # noqa: F401
+        from pylate import models  # noqa: F401
+    except ImportError as e:
+        raise ExportDependencyError(
+            "Reason-mxbai export requires torch, onnx, onnxruntime quantization, and pylate: "
+            f"{e}"
+        ) from e
+
+
+def quantize_onnx_int8(
+    source_onnx: Path,
+    target_onnx: Path,
+    *,
+    per_channel: bool = True,
+    op_types_to_quantize: tuple[str, ...] = REASON_MXBAI_QUANTIZE_OPS,
+) -> Path:
+    """Quantize a float32 ONNX artifact to int8 with explicit input/output paths."""
+    from onnxruntime.quantization import QuantType, quantize_dynamic
+
+    quantize_dynamic(
+        model_input=str(source_onnx),
+        model_output=str(target_onnx),
+        per_channel=per_channel,
+        op_types_to_quantize=list(op_types_to_quantize),
+        weight_type=QuantType.QInt8,
+    )
+    return target_onnx
+
+
+def export_reason_mxbai_to_onnx_int8(
+    model_dir: Path,
+    *,
+    fp32_onnx: Path | None = None,
+    int8_onnx: Path | None = None,
+    contract: PyLateExportContract | None = None,
+) -> Path:
+    """Export source-only Reason-mxbai to INT8 ONNX via a thin PyLate wrapper."""
+    _require_reason_mxbai_export_dependencies()
+
+    import torch
+    from pylate import models
+
+    model = models.ColBERT(model_name_or_path=str(model_dir))
+    if hasattr(model, "eval"):
+        model.eval()
+    wrapper = PyLateColBERTTokenEmbeddingsWrapper(model)
+
+    class _ExportModule(torch.nn.Module):
+        def __init__(self, wrapped: PyLateColBERTTokenEmbeddingsWrapper):
+            super().__init__()
+            self.wrapped = wrapped
+
+        def forward(self, input_ids, attention_mask):
+            return self.wrapped(input_ids, attention_mask)
+
+    export_module = _ExportModule(wrapper).eval()
+
+    paths = reason_mxbai_export_paths(model_dir)
+    fp32_onnx_path = fp32_onnx or paths["fp32_onnx"]
+    int8_onnx_path = int8_onnx or paths["int8_onnx"]
+    fp32_onnx_path.parent.mkdir(parents=True, exist_ok=True)
+    contract = contract or REASON_MXBAI_EXPORT_CONTRACT
+    max_seq_len = 64
+
+    dummy_input_ids = torch.ones((1, max_seq_len), dtype=torch.long)
+    dummy_attention_mask = torch.ones((1, max_seq_len), dtype=torch.long)
+    torch.onnx.export(
+        export_module,
+        (dummy_input_ids, dummy_attention_mask),
+        str(fp32_onnx_path),
+        input_names=list(contract.input_names),
+        output_names=list(contract.output_names),
+        dynamic_axes={name: dict(axes) for name, axes in contract.dynamic_axes.items()},
+        opset_version=contract.opset,
+        export_params=True,
+        do_constant_folding=True,
+    )
+
+    return quantize_onnx_int8(fp32_onnx_path, int8_onnx_path)
 
 
 def _pooled_vec(per_token):
@@ -361,6 +545,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--out", type=Path, help="Output directory")
     ap.add_argument("--no-download", action="store_true", help="Skip HF download")
+    ap.add_argument(
+        "--export-int8",
+        action="store_true",
+        help="Export source-only profile to INT8 ONNX (requires torch + onnxruntime + pylate).",
+    )
     ap.add_argument("--no-parity", action="store_true", help="Skip parity validation")
     ap.add_argument("--print-plan", action="store_true", help="Print artifact plan and exit")
     ap.add_argument("--json", action="store_true", help="Emit JSON for --print-plan")
@@ -380,6 +569,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.no_download:
         download(out_dir, profile)
+    elif not profile.ships_prebuilt_onnx:
+        log.info(
+            "Source-only profile %s running without download from %s.",
+            profile.name,
+            out_dir,
+        )
+
+    if args.export_int8:
+        if profile.ships_prebuilt_onnx:
+            log.info("Profile %s ships prebuilt ONNX; skipping export-int8.", profile.name)
+        else:
+            try:
+                export_reason_mxbai_to_onnx_int8(out_dir)
+                log.info("Export complete: %s", out_dir / REASON_MXBAI_EXPORT_INT8)
+            except ExportDependencyError as e:
+                log.error("Export preflight failed: %s", e)
+                return 4
+            except Exception as e:  # noqa: BLE001
+                log.error("Export failed: %s", e)
+                return 5
 
     if args.no_parity:
         log.info("Parity skipped.")
