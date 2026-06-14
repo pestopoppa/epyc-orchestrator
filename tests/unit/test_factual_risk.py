@@ -8,6 +8,7 @@ from src.classifiers.factual_risk import (
     FactualRiskResult,
     _extract_features,
     _compute_score,
+    _role_tier_for_role,
     _role_adjustment,
     _band,
     assess_risk,
@@ -177,8 +178,30 @@ class TestRoleAdjustment:
     def test_worker_is_tier_3(self):
         assert _role_adjustment("worker_general") == 1.0
 
-    def test_frontdoor_is_tier_3(self):
-        assert _role_adjustment("frontdoor") == 1.0
+    def test_frontdoor_uses_live_stack_prior_model_tier(self):
+        assert _role_tier_for_role("frontdoor") == "tier_2"
+        assert _role_adjustment("frontdoor") == 0.8
+
+    def test_role_tier_ignores_candidate_stack_prior_records(self, tmp_path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  retired_large_role:
+    deployment_status: benchmark_or_candidate
+    model:
+      mem_gb: 69.0
+""",
+            encoding="utf-8",
+        )
+
+        assert _role_tier_for_role("retired_large_role", priors) == "tier_3"
+
+    def test_role_tier_uses_degraded_fallback_when_stack_priors_missing(self, tmp_path):
+        missing = tmp_path / "missing_stack_priors.yaml"
+
+        assert _role_tier_for_role("frontdoor", missing) == "tier_2"
+        assert _role_tier_for_role("worker_fast", missing) == "tier_3"
 
     def test_unknown_role_defaults_tier_3(self):
         assert _role_adjustment("unknown_new_role") == 1.0

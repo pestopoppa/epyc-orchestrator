@@ -258,6 +258,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="reuse src.registry.stack_priors helpers for generated stack docs/system cards",
     ),
     HardcodedSurfaceRule(
+        rule_id="static_factual_risk_role_tiers",
+        category="production_blocker",
+        pattern=r"^_ROLE_TO_TIER\b\s*(?::[^=]+)?=",
+        path_globs=("src/classifiers/factual_risk.py",),
+        remediation="derive factual-risk role capability tiers from generated stack priors",
+    ),
+    HardcodedSurfaceRule(
         rule_id="static_inference_lock_role_policy",
         category="production_blocker",
         pattern=(

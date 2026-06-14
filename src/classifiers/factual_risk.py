@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -159,26 +160,91 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
     "uncertainty_markers": 0.15,  # applied as negative contribution
 }
 
-# Default role adjustment tiers
+# Default role adjustment tiers. Role -> tier selection is derived from generated
+# stack priors when available; these values remain the tier multipliers.
 _DEFAULT_ROLE_TIERS: dict[str, float] = {
-    "tier_1": 0.6,  # 235B+ (architect_general, thinking_*)
-    "tier_2": 0.8,  # 32B-70B (coder_escalation)
-    "tier_3": 1.0,  # 7B-14B (worker_*, frontdoor, explore)
+    "tier_1": 0.6,
+    "tier_2": 0.8,
+    "tier_3": 1.0,
 }
 
-# Role → tier mapping
-_ROLE_TO_TIER: dict[str, str] = {
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+
+_TIER_1_MIN_MODEL_MEM_GB = 60.0
+_TIER_2_MIN_MODEL_MEM_GB = 18.0
+
+# Explicit degraded fallback only. Normal live role tiers come from generated
+# stack priors so model swaps update factual-risk role adjustment automatically.
+_DEGRADED_ROLE_TO_TIER: dict[str, str] = {
     "architect_general": "tier_1",
     "thinking_reasoning": "tier_1",
     "thinking_exploration": "tier_1",
     "coder_escalation": "tier_2",
     "coder_general": "tier_2",
+    "frontdoor": "tier_2",
+    "ingest_long_context": "tier_2",
+    "worker_summarize": "tier_2",
+    "vision_escalation": "tier_2",
     "worker_general": "tier_3",
-    "worker_fast": "tier_3",
     "worker_explore": "tier_3",
-    "frontdoor": "tier_3",
-    "ingest": "tier_3",
+    "worker_math": "tier_3",
+    "worker_vision": "tier_3",
+    "toolrunner": "tier_3",
 }
+_STACK_PRIOR_ROLE_TIERS_CACHE: dict[str, str] | None = None
+
+
+def _tier_from_model_mem(mem_gb: float) -> str:
+    if mem_gb >= _TIER_1_MIN_MODEL_MEM_GB:
+        return "tier_1"
+    if mem_gb >= _TIER_2_MIN_MODEL_MEM_GB:
+        return "tier_2"
+    return "tier_3"
+
+
+def _role_tiers_from_stack_priors(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> dict[str, str]:
+    """Return live role -> factual-risk tier from generated stack priors."""
+    try:
+        from src.registry.stack_priors import live_stack_role_records
+    except Exception:
+        return {}
+
+    tiers: dict[str, str] = {}
+    for role, record in live_stack_role_records(stack_priors_path).items():
+        model = record.get("model")
+        if not isinstance(model, dict):
+            continue
+        mem_gb = model.get("mem_gb")
+        try:
+            tiers[role] = _tier_from_model_mem(float(mem_gb))
+        except (TypeError, ValueError):
+            continue
+    return tiers
+
+
+def _stack_prior_role_tiers(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> dict[str, str]:
+    global _STACK_PRIOR_ROLE_TIERS_CACHE
+    if stack_priors_path == DEFAULT_STACK_PRIORS_PATH:
+        if _STACK_PRIOR_ROLE_TIERS_CACHE is None:
+            _STACK_PRIOR_ROLE_TIERS_CACHE = _role_tiers_from_stack_priors(stack_priors_path)
+        return _STACK_PRIOR_ROLE_TIERS_CACHE
+    return _role_tiers_from_stack_priors(stack_priors_path)
+
+
+def _role_tier_for_role(
+    role: str,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> str:
+    return (
+        _stack_prior_role_tiers(stack_priors_path).get(role)
+        or _DEGRADED_ROLE_TO_TIER.get(role)
+        or "tier_3"
+    )
 
 
 def _get_config() -> dict[str, Any]:
@@ -219,7 +285,11 @@ def _compute_score(features: dict[str, float], weights: dict[str, float] | None 
     return max(0.0, min(1.0, score))
 
 
-def _role_adjustment(role: str, config: dict[str, Any] | None = None) -> float:
+def _role_adjustment(
+    role: str,
+    config: dict[str, Any] | None = None,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> float:
     """Get risk adjustment multiplier for a role.
 
     Stronger models reduce effective risk because they hallucinate less.
@@ -227,11 +297,12 @@ def _role_adjustment(role: str, config: dict[str, Any] | None = None) -> float:
     Args:
         role: Role name (e.g. "architect_general").
         config: Optional config dict with role_adjustments.
+        stack_priors_path: Generated stack-prior artifact to derive live role tiers.
 
     Returns:
         Multiplier in (0, 1].
     """
-    tier = _ROLE_TO_TIER.get(role, "tier_3")
+    tier = _role_tier_for_role(role, stack_priors_path=stack_priors_path)
     if config and "role_adjustments" in config:
         return float(config["role_adjustments"].get(tier, 1.0))
     return _DEFAULT_ROLE_TIERS.get(tier, 1.0)

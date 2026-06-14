@@ -1076,6 +1076,26 @@ def test_scan_hardcoded_surfaces_flags_local_generated_docs_stack_prior_reader(
     }
 
 
+def test_scan_hardcoded_surfaces_flags_static_factual_risk_role_tiers(
+    tmp_path: Path,
+) -> None:
+    classifier = tmp_path / "src" / "classifiers"
+    classifier.mkdir(parents=True)
+    (classifier / "factual_risk.py").write_text(
+        "_ROLE_TO_TIER: dict[str, str] = {'frontdoor': 'tier_3'}\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_factual_risk_role_tiers"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "src/classifiers/factual_risk.py"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_static_inference_lock_role_policy(
     tmp_path: Path,
 ) -> None:
