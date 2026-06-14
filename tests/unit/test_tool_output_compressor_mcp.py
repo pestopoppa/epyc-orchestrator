@@ -140,3 +140,140 @@ def test_run_bash_compressed_emits_telemetry(monkeypatch, tmp_path) -> None:
     assert record["pre_bytes"] == len("raw output")
     assert record["post_bytes"] == len("short")
     assert record["compressor_strategy"] == "unit"
+    assert record["top_up_candidate"] is False
+    assert record["followup_distance"] is None
+    assert record["followup_reason"] is None
+    assert record["next_turn_followup_command"] is None
+    assert record["followup_source_command"] is None
+
+
+def test_followup_detector_marks_repeat_within_three_turns() -> None:
+    history = [
+        {"tool": "run_bash_compressed", "command": "ls"},
+        {"tool": "run_bash_compressed", "command": "git status"},
+        {"tool": "run_bash_compressed", "command": "python -m pytest"},
+        {"tool": "run_bash_compressed", "command": "git status"},
+    ]
+
+    result = mod._infer_top_up_followup("git status", history)
+
+    assert result["top_up_candidate"] is True
+    assert result["followup_distance"] == 1
+    assert result["followup_reason"] == mod.TOP_UP_REASON_REPEAT
+    assert result["next_turn_followup_command"] == "git status"
+    assert result["followup_source_command"] == "git status"
+
+
+def test_followup_detector_marks_file_view_after_listing() -> None:
+    history = [{"tool": "run_bash_compressed", "command": "ls /tmp"}]
+
+    result = mod._infer_top_up_followup("cat /tmp/file.txt", history)
+
+    assert result["top_up_candidate"] is True
+    assert result["followup_distance"] == 1
+    assert result["followup_reason"] == mod.TOP_UP_REASON_LIST_VIEW
+    assert result["next_turn_followup_command"] == "cat /tmp/file.txt"
+    assert result["followup_source_command"] == "ls /tmp"
+
+
+def test_followup_detector_marks_head_with_flags_after_listing() -> None:
+    history = [{"tool": "run_bash_compressed", "command": "ls src"}]
+
+    result = mod._infer_top_up_followup("head -20 src/tool_output_compressor_mcp.py", history)
+
+    assert result["top_up_candidate"] is True
+    assert result["followup_distance"] == 1
+    assert result["followup_reason"] == mod.TOP_UP_REASON_LIST_VIEW
+    assert result["next_turn_followup_command"] == "head -20 src/tool_output_compressor_mcp.py"
+    assert result["followup_source_command"] == "ls src"
+
+
+def test_followup_detector_ignores_non_followup_patterns() -> None:
+    history = [
+        {"tool": "run_bash_compressed", "command": "ls /tmp"},
+        {"tool": "run_bash_compressed", "command": "git status"},
+        {"tool": "run_bash_compressed", "command": "echo hi"},
+    ]
+
+    result = mod._infer_top_up_followup("python -m pytest", history)
+
+    assert result["top_up_candidate"] is False
+    assert result["followup_distance"] is None
+    assert result["followup_reason"] is None
+    assert result["next_turn_followup_command"] is None
+    assert result["followup_source_command"] is None
+
+
+def test_run_bash_compressed_marks_session_followup(monkeypatch, tmp_path) -> None:
+    telemetry = tmp_path / "tool_compression_monitor.jsonl"
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="raw output", stderr="")
+
+    telemetry.write_text(
+        '{"timestamp": "2026-06-14T00:00:00Z", "tool": '
+        '"run_bash_compressed", "command": "git status", '
+        '"session_id": "session-1"}\n'
+    )
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setenv("TOOL_COMPRESSION_MONITOR_PATH", str(telemetry))
+    monkeypatch.setenv("TOOL_COMPRESSION_SESSION_ID", "session-1")
+    monkeypatch.setenv("TOOL_COMPRESSION_SESSION_PATH", str(telemetry))
+    monkeypatch.setattr(
+        mod,
+        "_compress_output",
+        lambda output, command: _CompressionResult(
+            text="short",
+            strategy="unit",
+            original_chars=len(output),
+            compressed_chars=5,
+        ),
+    )
+
+    _call_tool("git status")
+
+    _, record = [json.loads(line) for line in telemetry.read_text().splitlines()]
+    assert record["top_up_candidate"] is True
+    assert record["followup_distance"] == 1
+    assert record["followup_reason"] == mod.TOP_UP_REASON_REPEAT
+    assert record["session_id"] == "session-1"
+
+
+def test_run_bash_compressed_filters_history_to_current_session(monkeypatch, tmp_path) -> None:
+    telemetry = tmp_path / "tool_compression_monitor.jsonl"
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout="raw output", stderr="")
+
+    telemetry.write_text(
+        "\n".join(
+            [
+                '{"timestamp": "2026-06-14T00:00:00Z", "tool": '
+                '"run_bash_compressed", "command": "git status"}',
+                '{"timestamp": "2026-06-14T00:00:01Z", "tool": '
+                '"run_bash_compressed", "command": "git status", '
+                '"session_id": "session-2"}',
+                "",
+            ]
+        )
+    )
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setenv("TOOL_COMPRESSION_MONITOR_PATH", str(telemetry))
+    monkeypatch.setenv("TOOL_COMPRESSION_SESSION_ID", "session-1")
+    monkeypatch.setenv("TOOL_COMPRESSION_SESSION_PATH", str(telemetry))
+    monkeypatch.setattr(
+        mod,
+        "_compress_output",
+        lambda output, command: _CompressionResult(
+            text="short",
+            strategy="unit",
+            original_chars=len(output),
+            compressed_chars=5,
+        ),
+    )
+
+    _call_tool("git status")
+
+    *_, record = [json.loads(line) for line in telemetry.read_text().splitlines()]
+    assert record["top_up_candidate"] is False
+    assert record["followup_source_command"] is None
