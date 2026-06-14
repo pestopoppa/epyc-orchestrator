@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib
 import sys
 from pathlib import Path
-from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +56,19 @@ def test_migration_status_keys_present(monkeypatch) -> None:
     s = cab.kv_migration_status()
     for key in ("enabled", "per_region_locks", "reason", "dispatch_path"):
         assert key in s
+
+
+def test_migration_status_reports_httpx_unavailable_reason(monkeypatch) -> None:
+    monkeypatch.setenv("ORCHESTRATOR_PER_REGION_LOCKS", "1")
+    monkeypatch.setattr(ca_mod, "_HTTPX_AVAILABLE", False)
+    cab = _build()
+
+    assert cab.kv_migration_status() == {
+        "enabled": False,
+        "per_region_locks": True,
+        "dispatch_path": "per_region_locks",
+        "reason": "httpx unavailable",
+    }
 
 
 def test_chat_request_carries_migration_budget_ms() -> None:
