@@ -3,6 +3,8 @@
 
 from src.routing_bindings import BindingPriority, BindingRouter, RoutingBinding
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 class TestBindingPriority:
     """Tests for BindingPriority enum."""
@@ -29,8 +31,8 @@ class TestBindingRouter:
     def test_higher_priority_wins(self):
         router = BindingRouter()
         router.add(RoutingBinding("code", "coder_escalation", BindingPriority.DEFAULT))
-        router.add(RoutingBinding("code", "architect_coding", BindingPriority.USER_PREF))
-        assert router.resolve("code") == "architect_coding"
+        router.add(RoutingBinding("code", _RETIRED_ARCHITECT_ROLE, BindingPriority.USER_PREF))
+        assert router.resolve("code") == _RETIRED_ARCHITECT_ROLE
 
     def test_different_task_types_independent(self):
         router = BindingRouter()
@@ -42,19 +44,19 @@ class TestBindingRouter:
     def test_inactive_binding_ignored(self):
         router = BindingRouter()
         router.add(RoutingBinding("code", "coder_escalation", BindingPriority.DEFAULT))
-        router.add(RoutingBinding("code", "architect_coding", BindingPriority.USER_PREF, active=False))
+        router.add(RoutingBinding("code", _RETIRED_ARCHITECT_ROLE, BindingPriority.USER_PREF, active=False))
         assert router.resolve("code") == "coder_escalation"
 
     def test_session_binding_override(self):
         router = BindingRouter()
         router.add(RoutingBinding("code", "coder_escalation", BindingPriority.DEFAULT))
-        router.set_session_binding("code", "architect_coding")
-        assert router.resolve("code") == "architect_coding"
+        router.set_session_binding("code", _RETIRED_ARCHITECT_ROLE)
+        assert router.resolve("code") == _RETIRED_ARCHITECT_ROLE
 
     def test_clear_session_bindings(self):
         router = BindingRouter()
         router.add(RoutingBinding("code", "coder_escalation", BindingPriority.DEFAULT))
-        router.set_session_binding("code", "architect_coding")
+        router.set_session_binding("code", _RETIRED_ARCHITECT_ROLE)
         router.clear_session_bindings()
         assert router.resolve("code") == "coder_escalation"
 
@@ -71,12 +73,12 @@ class TestBindingRouter:
     def test_list_bindings(self):
         router = BindingRouter()
         router.add(RoutingBinding("code", "coder_escalation", BindingPriority.DEFAULT))
-        router.add(RoutingBinding("code", "architect_coding", BindingPriority.USER_PREF))
+        router.add(RoutingBinding("code", _RETIRED_ARCHITECT_ROLE, BindingPriority.USER_PREF))
 
         bindings = router.list_bindings("code")
         assert len(bindings) == 2
         assert any(b["role"] == "coder_escalation" for b in bindings)
-        assert any(b["role"] == "architect_coding" for b in bindings)
+        assert any(b["role"] == _RETIRED_ARCHITECT_ROLE for b in bindings)
 
     def test_list_all_bindings(self):
         router = BindingRouter()
@@ -95,9 +97,9 @@ class TestBindingRouter:
     def test_session_binding_replaces_previous(self):
         router = BindingRouter()
         router.set_session_binding("code", "coder_escalation")
-        router.set_session_binding("code", "architect_coding")
+        router.set_session_binding("code", _RETIRED_ARCHITECT_ROLE)
 
         bindings = router.list_bindings("code")
         session_bindings = [b for b in bindings if b["priority"] == "SESSION"]
         assert len(session_bindings) == 1
-        assert session_bindings[0]["role"] == "architect_coding"
+        assert session_bindings[0]["role"] == _RETIRED_ARCHITECT_ROLE

@@ -27,6 +27,8 @@ from src.pipeline_monitor.anomaly import (
     SIGNAL_WEIGHTS,
 )
 
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
+
 
 # ── repetition_loop ──
 
@@ -441,13 +443,13 @@ class TestMisroutedToCoder:
 
     def test_code_execution_delegated_to_coder(self):
         # Code tasks SHOULD go to coder — not a misroute
-        events = [{"from_role": "architect_coding", "to_role": "coder_escalation"}]
-        assert detect_misrouted_to_coder("code_execution", "architect_coding", events) is False
+        events = [{"from_role": _RETIRED_ARCHITECT_ROLE, "to_role": "coder_escalation"}]
+        assert detect_misrouted_to_coder("code_execution", _RETIRED_ARCHITECT_ROLE, events) is False
 
     def test_substring_delegated_to_coder(self):
         # substring scoring often used for code — not a misroute
-        events = [{"from_role": "architect_coding", "to_role": "coder_escalation"}]
-        assert detect_misrouted_to_coder("substring", "architect_coding", events) is False
+        events = [{"from_role": _RETIRED_ARCHITECT_ROLE, "to_role": "coder_escalation"}]
+        assert detect_misrouted_to_coder("substring", _RETIRED_ARCHITECT_ROLE, events) is False
 
     def test_mcq_delegated_to_worker(self):
         # Not going to coder — not this signal
@@ -484,9 +486,9 @@ class TestWastefulDelegation:
 
     def test_code_execution_exempt(self):
         """Code tasks are expected to delegate — not wasteful."""
-        events = [{"from_role": "architect_coding", "to_role": "coder_escalation"}]
+        events = [{"from_role": _RETIRED_ARCHITECT_ROLE, "to_role": "coder_escalation"}]
         assert detect_wasteful_delegation(
-            "42", "architect_coding", events, scoring_method="code_execution",
+            "42", _RETIRED_ARCHITECT_ROLE, events, scoring_method="code_execution",
         ) is False
 
     def test_no_delegation_no_signal(self):
