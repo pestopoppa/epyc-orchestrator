@@ -9,6 +9,7 @@ Log format is JSONL (one JSON object per line) for efficient streaming reads.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -25,6 +26,16 @@ _WORKSPACE_LOG_PATH = Path("/workspace/logs/progress")
 
 # Use RAID path if available, otherwise fallback to workspace
 DEFAULT_LOG_PATH = _RAID_LOG_PATH if _RAID_LOG_PATH.parent.exists() else _WORKSPACE_LOG_PATH
+
+TASK_RECORD_SCHEMA_VERSION = "task_record.v1"
+_TASK_RECORD_CACHE_LIMIT = 10_000
+_TOKEN_COUNT_KEYS = (
+    "total_tokens",
+    "tokens",
+    "tokens_generated",
+    "output_tokens",
+    "completion_tokens",
+)
 
 
 def _get_fallback_log_dir() -> Path:
@@ -176,6 +187,89 @@ class ProgressLogger:
         date_str = dt.strftime("%Y-%m-%d")
         return self.log_dir / f"{date_str}.jsonl"
 
+    def _task_record_cache(self) -> Dict[str, Dict[str, Any]]:
+        cache = getattr(self, "_task_record_pending", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._task_record_pending = cache
+        return cache
+
+    @staticmethod
+    def _text_ref(text: object) -> str | None:
+        if not isinstance(text, str) or not text:
+            return None
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return f"progress-text-sha256:{digest}"
+
+    @staticmethod
+    def _token_count(data: Dict[str, Any]) -> int | None:
+        prompt_tokens = data.get("prompt_tokens")
+        completion_tokens = data.get("completion_tokens")
+        if (
+            isinstance(prompt_tokens, int)
+            and not isinstance(prompt_tokens, bool)
+            and prompt_tokens >= 0
+            and isinstance(completion_tokens, int)
+            and not isinstance(completion_tokens, bool)
+            and completion_tokens >= 0
+        ):
+            return prompt_tokens + completion_tokens
+        for key in _TOKEN_COUNT_KEYS:
+            value = data.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                return value
+        return None
+
+    def _remember_task_record_start(
+        self,
+        task_id: str,
+        task_ir: Dict[str, Any],
+        routing_decision: List[str],
+        routing_strategy: str,
+        started_at: datetime,
+    ) -> None:
+        cache = self._task_record_cache()
+        if len(cache) >= _TASK_RECORD_CACHE_LIMIT:
+            cache.pop(next(iter(cache)), None)
+        objective = task_ir.get("objective", "")
+        cache[task_id] = {
+            "schema_version": TASK_RECORD_SCHEMA_VERSION,
+            "task_id": task_id,
+            "class": task_ir.get("task_type") or "unknown",
+            "prompt_ref": self._text_ref(objective),
+            "prompt_chars": len(objective) if isinstance(objective, str) else None,
+            "route_taken": [str(role) for role in routing_decision],
+            "routing_strategy": routing_strategy,
+            "started_ts_utc": started_at.isoformat(),
+            "_started_at": started_at,
+        }
+
+    def _complete_task_record(
+        self,
+        task_id: str,
+        success: bool,
+        details: Optional[str],
+        completion_data: Dict[str, Any],
+        completed_at: datetime,
+    ) -> Dict[str, Any] | None:
+        record = self._task_record_cache().pop(task_id, None)
+        if not record:
+            return None
+        started_at = record.pop("_started_at", None)
+        if isinstance(started_at, datetime):
+            record["wall_s"] = round(
+                max(0.0, (completed_at - started_at).total_seconds()),
+                3,
+            )
+        else:
+            record["wall_s"] = None
+        record["completed_ts_utc"] = completed_at.isoformat()
+        record["tokens"] = self._token_count(completion_data)
+        record["outcome"] = "success" if success else "failure"
+        if details:
+            record["outcome_details_ref"] = self._text_ref(details)
+        return record
+
     def log(self, entry: ProgressEntry) -> None:
         """
         Log a progress entry.
@@ -222,17 +316,16 @@ class ProgressLogger:
         routing_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log task start with routing decision."""
-        self.log(
-            ProgressEntry(
-                event_type=EventType.TASK_STARTED,
-                task_id=task_id,
-                data={
-                    "task_type": task_ir.get("task_type"),
-                    "objective": task_ir.get("objective", "")[:200],
-                    "priority": task_ir.get("priority"),
-                },
-            )
+        task_started_entry = ProgressEntry(
+            event_type=EventType.TASK_STARTED,
+            task_id=task_id,
+            data={
+                "task_type": task_ir.get("task_type"),
+                "objective": task_ir.get("objective", "")[:200],
+                "priority": task_ir.get("priority"),
+            },
         )
+        self.log(task_started_entry)
 
         self.log(
             ProgressEntry(
@@ -245,6 +338,13 @@ class ProgressLogger:
                     **(routing_meta or {}),
                 },
             )
+        )
+        self._remember_task_record_start(
+            task_id,
+            task_ir,
+            routing_decision,
+            routing_strategy,
+            task_started_entry.timestamp,
         )
 
     # Current policy version — bump when delegation logic changes materially
@@ -295,11 +395,23 @@ class ProgressLogger:
         completion_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log task completion."""
+        completion_data = dict(completion_meta or {})
+        completed_at = datetime.now(timezone.utc)
+        task_record = self._complete_task_record(
+            task_id,
+            success,
+            details,
+            completion_data,
+            completed_at,
+        )
+        if task_record:
+            completion_data["task_record_v1"] = task_record
         self.log(
             ProgressEntry(
                 event_type=EventType.TASK_COMPLETED if success else EventType.TASK_FAILED,
                 task_id=task_id,
-                data=(completion_meta or {}),
+                timestamp=completed_at,
+                data=completion_data,
                 outcome="success" if success else "failure",
                 outcome_details=details,
             )
