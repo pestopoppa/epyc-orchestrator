@@ -159,7 +159,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--budget-tokens", type=int, default=DEFAULT_BUDGET_TOKENS)
     args = parser.parse_args(argv)
 
-    journal = ExperimentJournal(journal_dir=args.journal_dir)
+    if args.journal_dir is not None:
+        journal_dir = args.journal_dir.expanduser().resolve()
+        if not journal_dir.exists():
+            print(f"journal directory does not exist: {journal_dir}", file=sys.stderr)
+            return 2
+        if not journal_dir.is_dir():
+            print(f"journal path is not a directory: {journal_dir}", file=sys.stderr)
+            return 2
+    else:
+        journal_dir = None
+
+    journal = ExperimentJournal(journal_dir=journal_dir)
     print(
         render_generated_stm(
             journal.entries_with_supersessions(),

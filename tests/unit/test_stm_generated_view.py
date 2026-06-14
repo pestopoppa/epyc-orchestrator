@@ -11,7 +11,7 @@ AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
-from stm_generated_view import render_generated_stm  # noqa: E402
+from stm_generated_view import main, render_generated_stm  # noqa: E402
 
 
 def _entry(
@@ -109,3 +109,26 @@ def test_render_generated_stm_uses_sanitized_failure_and_weak_suite_context() ->
     assert "baseline 9.900" not in text
     assert "legacy-scale failure_analysis omitted" in text
     assert "Weak suites: coder=1.20" in text
+
+
+def test_cli_rejects_missing_explicit_journal_dir_without_creating_it(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    missing = tmp_path / "missing"
+
+    rc = main(["--journal-dir", str(missing)])
+
+    assert rc == 2
+    assert not missing.exists()
+    assert "journal directory does not exist" in capsys.readouterr().err
+
+
+def test_cli_renders_existing_explicit_journal_dir(tmp_path: Path, capsys) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(1, pareto_status="frontier"))
+
+    rc = main(["--journal-dir", str(tmp_path), "--last-n", "5"])
+
+    assert rc == 0
+    assert "Journal-derived read-only preview" in capsys.readouterr().out
