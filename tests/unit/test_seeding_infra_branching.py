@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +18,7 @@ _SPEC = importlib.util.spec_from_file_location("seeding_infra_branching", _ROOT 
 _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["seeding_infra_branching"] = _MOD
 _SPEC.loader.exec_module(_MOD)
+_MOD.os.environ[_MOD.STACK_CHANGE_GATE_ENV] = "0"
 _REAL_WAIT_FOR_WORKERS_READY = _MOD._wait_for_workers_ready
 _REAL_IS_SERVER_IDLE = _MOD._is_server_idle
 _REAL_LAUNCH_API_ONLY = _MOD._launch_api_only

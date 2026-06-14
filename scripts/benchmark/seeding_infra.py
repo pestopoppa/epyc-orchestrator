@@ -29,6 +29,7 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 MAX_RECOVERY_ATTEMPTS = 10
+STACK_CHANGE_GATE_ENV = "EPYC_SEEDING_PREFLIGHT_STACK_CHANGE_GATE"
 _preflight_diagnostics: dict[str, Any] = {
     "api_health": {},
     "idle_probes": {},
@@ -329,7 +330,7 @@ def _kill_port(port: int) -> bool:
     """Kill the process listening on a port. Returns True if killed."""
     import subprocess
 
-    result = subprocess.run(
+    subprocess.run(
         ["fuser", "-k", f"{port}/tcp"],
         capture_output=True,
         timeout=10,
@@ -447,6 +448,57 @@ def _auto_launch_stack(hot_only: bool = True) -> bool:
     return False
 
 
+# ── Stack-change gate ────────────────────────────────────────────────
+
+
+def _run_stack_change_gate() -> bool:
+    """Fail closed if generated stack truth or promotion checks are stale.
+
+    Benchmark preflight can launch the API directly when model ports are already
+    up, bypassing ``orchestrator_stack.py start``. Run the same no-inference
+    promotion gate here before any API/model probes. The child process disables
+    this benchmark-preflight hook so promotion-gate unit tests do not
+    recursively invoke themselves.
+    """
+    import subprocess
+
+    if os.environ.get(STACK_CHANGE_GATE_ENV, "1") == "0":
+        logger.info("  Stack-change gate skipped via %s=0", STACK_CHANGE_GATE_ENV)
+        return True
+
+    script = PROJECT_ROOT / "scripts" / "registry" / "stack_change_pipeline.py"
+    cmd = [sys.executable, str(script), "check", "--run-promotion-gate"]
+    env = os.environ.copy()
+    env[STACK_CHANGE_GATE_ENV] = "0"
+    logger.info("  Stack-change gate: %s", " ".join(cmd))
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.error("  Stack-change gate timed out after %.0fs", exc.timeout or 180)
+        return False
+    except Exception as exc:
+        logger.error("  Stack-change gate failed to launch: %s", exc)
+        return False
+
+    if result.returncode == 0:
+        logger.info("  Stack-change gate: OK")
+        return True
+
+    logger.error("  Stack-change gate failed (exit %s)", result.returncode)
+    tail = (result.stderr or result.stdout or "").strip().splitlines()[-8:]
+    for line in tail:
+        logger.error("    %s", line)
+    return False
+
+
 # ── Recovery ─────────────────────────────────────────────────────────
 
 
@@ -496,6 +548,20 @@ def run_preflight(url: str, restart_api: bool = True) -> bool:
         "failure_reason": "",
         "failure_detail": "",
     }
+
+    _set_preflight_state("running", stage="stack_change_gate")
+    if not _run_stack_change_gate():
+        logger.error("PREFLIGHT FAILED: Stack-change gate failed")
+        _set_preflight_state(
+            "failed",
+            stage="stack_change_gate",
+            failure_reason="stack_change_gate_failed",
+            failure_detail=(
+                f"{PROJECT_ROOT / 'scripts' / 'registry' / 'stack_change_pipeline.py'} "
+                "check --run-promotion-gate"
+            ),
+        )
+        return False
 
     # 0. Restart API if requested (ensures code changes are picked up)
     if restart_api and _check_port(8000):
@@ -558,7 +624,7 @@ def run_preflight(url: str, restart_api: bool = True) -> bool:
                     ok = status.get("healthy", False) if isinstance(status, dict) else status
                     tag = "OK" if ok else "DOWN"
                     logger.info(f"  Backend {name}: {tag}")
-    except Exception as e:
+    except Exception:
         pass  # Health endpoint may not expose backends — continue
 
     # 3. Smoke test (60s timeout — if 2+2 takes longer, something is broken)

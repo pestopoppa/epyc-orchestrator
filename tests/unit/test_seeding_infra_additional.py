@@ -16,6 +16,7 @@ _SPEC = importlib.util.spec_from_file_location("seeding_infra_additional", _ROOT
 _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["seeding_infra_additional"] = _MOD
 _SPEC.loader.exec_module(_MOD)
+_MOD.os.environ[_MOD.STACK_CHANGE_GATE_ENV] = "0"
 
 
 def _reset_diags() -> None:

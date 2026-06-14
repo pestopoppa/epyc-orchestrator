@@ -5,7 +5,8 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 
 _ROOT = Path(__file__).resolve().parents[2] / "scripts" / "benchmark"
@@ -14,6 +15,37 @@ _SPEC = importlib.util.spec_from_file_location("seeding_infra", _ROOT / "seeding
 _MOD = importlib.util.module_from_spec(_SPEC)
 sys.modules["seeding_infra"] = _MOD
 _SPEC.loader.exec_module(_MOD)
+_MOD.os.environ[_MOD.STACK_CHANGE_GATE_ENV] = "0"
+
+
+def test_stack_change_gate_runs_pipeline_with_recursion_guard():
+    result = SimpleNamespace(returncode=0, stdout="summary: ok", stderr="")
+
+    with (
+        patch.dict(_MOD.os.environ, {_MOD.STACK_CHANGE_GATE_ENV: "1"}),
+        patch("subprocess.run", return_value=result) as run,
+    ):
+        assert _MOD._run_stack_change_gate() is True
+
+    command = run.call_args.args[0]
+    kwargs = run.call_args.kwargs
+    assert command[:2] == [sys.executable, str(_MOD.PROJECT_ROOT / "scripts/registry/stack_change_pipeline.py")]
+    assert command[-2:] == ["check", "--run-promotion-gate"]
+    assert kwargs["cwd"] == str(_MOD.PROJECT_ROOT)
+    assert kwargs["env"][_MOD.STACK_CHANGE_GATE_ENV] == "0"
+
+
+def test_run_preflight_stops_before_service_mutation_when_stack_gate_fails():
+    with patch.object(_MOD, "_run_stack_change_gate", return_value=False):
+        _MOD._check_port = Mock()
+
+        assert _MOD.run_preflight("http://localhost:8000", restart_api=True) is False
+
+    _MOD._check_port.assert_not_called()
+    diag = _MOD.get_preflight_diagnostics()["last_preflight"]
+    assert diag["status"] == "failed"
+    assert diag["stage"] == "stack_change_gate"
+    assert diag["failure_reason"] == "stack_change_gate_failed"
 
 
 def test_check_server_health_records_http_failure():
