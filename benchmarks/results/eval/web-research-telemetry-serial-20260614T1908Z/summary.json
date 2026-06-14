@@ -1,0 +1,23 @@
+{
+  "avg_elapsed_ms": 52148.382975987624,
+  "created_at": "2026-06-14T19:24:10.191414+00:00",
+  "fetch_failures_total": 0,
+  "max_pages": 3,
+  "max_results": 5,
+  "pages_attempted_total": 60,
+  "pages_fetched_successful_total": 60,
+  "pages_fetched_total": 60,
+  "pages_irrelevant_total": 0,
+  "pages_synthesized_total": 60,
+  "query_count": 20,
+  "records_jsonl": "benchmarks/results/eval/web-research-telemetry-serial-20260614T1908Z/records.jsonl",
+  "run_id": "web-research-telemetry-serial-20260614T1908Z",
+  "search_backends": [
+    "searxng"
+  ],
+  "search_results_total": 100,
+  "success_count": 20,
+  "synthesis_failures_total": 0,
+  "synthesis_workers": 1,
+  "worker_timeout_s": 120
+}
