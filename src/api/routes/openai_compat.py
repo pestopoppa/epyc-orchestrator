@@ -32,7 +32,7 @@ from src.prompt_builders import (
     extract_code_from_response,
     auto_wrap_final,
 )
-from src.registry.stack_priors import live_stack_role_records
+from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
 from src.repl_environment import REPLEnvironment
 from src.roles import Role
 
@@ -54,18 +54,8 @@ def _extract_text(content: str | list) -> str:
     return ""
 
 COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
-PREFERRED_ROLE_ORDER = (
-    "frontdoor",
-    "coder_escalation",
-    "architect_general",
-    "worker_general",
-    "worker_math",
-    "worker_vision",
-    "ingest_long_context",
-    "vision_escalation",
-    "worker_summarize",
-    "toolrunner",
-)
+# Explicit degraded fallback only. Normal /models output is ordered from
+# generated stack-prior launch topology so stack swaps do not require code edits.
 DEGRADED_AVAILABLE_ROLES = (
     "frontdoor",
     "coder_escalation",
@@ -80,11 +70,28 @@ DEGRADED_AVAILABLE_ROLES = (
 )
 
 
-def _ordered_role_ids(role_ids: list[str]) -> list[str]:
-    role_set = set(role_ids)
-    ordered = [role for role in PREFERRED_ROLE_ORDER if role in role_set]
-    ordered.extend(sorted(role_set.difference(ordered)))
-    return ordered
+def _primary_stack_prior_port(record: dict) -> int:
+    serving = stack_prior_serving(record)
+    ports = serving.get("ports")
+    if isinstance(ports, list):
+        numeric_ports = [port for port in ports if isinstance(port, int)]
+        if numeric_ports:
+            return min(numeric_ports)
+    return 1_000_000
+
+
+def _ordered_live_role_ids(records: dict[str, dict]) -> list[str]:
+    return [
+        role
+        for role, _record in sorted(
+            records.items(),
+            key=lambda item: (
+                0 if item[0] == "frontdoor" else 1,
+                _primary_stack_prior_port(item[1]),
+                item[0],
+            ),
+        )
+    ]
 
 
 def _live_stack_role_ids() -> list[str]:
@@ -95,7 +102,7 @@ def _live_stack_role_ids() -> list[str]:
         logger.debug("Could not load stack priors for OpenAI models list: %s", exc)
         return []
 
-    return _ordered_role_ids([str(role) for role in records])
+    return _ordered_live_role_ids(records)
 
 
 def available_roles() -> list[str]:

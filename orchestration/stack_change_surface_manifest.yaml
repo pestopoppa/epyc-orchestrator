@@ -148,6 +148,14 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: derive factual-risk capability tiers from generated stack priors
+  - rule_id: static_openai_model_role_order
+    category: production_blocker
+    owner: api-governance
+    consumer_scope: OpenAI-compatible /v1/models role ordering
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive /v1/models ordering from generated stack-prior topology
   - rule_id: static_inference_lock_role_policy
     category: production_blocker
     owner: runtime-governance

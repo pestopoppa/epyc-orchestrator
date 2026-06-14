@@ -41,19 +41,22 @@ def test_available_roles_uses_stack_prior_roles_when_present(monkeypatch):
     ]
 
 
-def test_ordered_role_ids_prefers_current_operator_surface_order():
-    assert openai_compat._ordered_role_ids(
-        [
-            "toolrunner",
-            "worker_general",
-            "frontdoor",
-            "vision_escalation",
-            "worker_summarize",
-        ]
+def test_ordered_live_role_ids_uses_stack_prior_topology():
+    def record(*ports: int) -> dict:
+        return {"serving": {"ports": list(ports)}}
+
+    assert openai_compat._ordered_live_role_ids(
+        {
+            "toolrunner": record(8072),
+            "worker_general": record(8072, 8082),
+            "frontdoor": record(8070, 8080),
+            "vision_escalation": record(8087),
+            "worker_summarize": record(8070),
+        }
     ) == [
         "frontdoor",
-        "worker_general",
-        "vision_escalation",
         "worker_summarize",
         "toolrunner",
+        "worker_general",
+        "vision_escalation",
     ]

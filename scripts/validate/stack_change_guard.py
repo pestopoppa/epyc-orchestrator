@@ -265,6 +265,13 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="derive factual-risk role capability tiers from generated stack priors",
     ),
     HardcodedSurfaceRule(
+        rule_id="static_openai_model_role_order",
+        category="production_blocker",
+        pattern=r"^PREFERRED_ROLE_ORDER\b\s*(?::[^=]+)?=",
+        path_globs=("src/api/routes/openai_compat.py",),
+        remediation="derive OpenAI /models role ordering from generated stack-prior topology",
+    ),
+    HardcodedSurfaceRule(
         rule_id="static_inference_lock_role_policy",
         category="production_blocker",
         pattern=(
