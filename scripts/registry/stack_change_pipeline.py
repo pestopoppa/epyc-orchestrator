@@ -694,7 +694,7 @@ def _runtime_attestation_step(*, prior_ok: bool) -> PipelineStep:
     return PipelineStep(
         name="runtime_attestation",
         status="ok",
-        details=["no concrete live model/mmproj drift detected"],
+        details=["no concrete live process drift detected"],
     )
 
 

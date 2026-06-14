@@ -356,6 +356,8 @@ def test_runtime_attestation_warnings_report_model_drift(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(stack_commands, "load_state", lambda: {"frontdoor": info})
+    monkeypatch.setattr(stack_commands, "_scan_known_ports", lambda: {})
+    monkeypatch.setattr(stack_commands, "_stack_prior_launch_contracts", lambda: {})
     monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
     monkeypatch.setattr(
         stack_commands._stack_processes,
@@ -366,6 +368,158 @@ def test_runtime_attestation_warnings_report_model_drift(monkeypatch) -> None:
     assert stack_commands.runtime_attestation_warnings() == [
         "frontdoor pid 123 expected current.gguf; live cmdline has stale.gguf"
     ]
+
+
+def test_runtime_attestation_warnings_report_unmanaged_listener(monkeypatch) -> None:
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {})
+    monkeypatch.setattr(stack_commands, "_scan_known_ports", lambda: {8070: [123, 456]})
+
+    assert stack_commands.runtime_attestation_warnings() == [
+        "known stack port 8070 has unmanaged listener pid(s) 123,456"
+    ]
+
+
+def test_runtime_attestation_warnings_report_runtime_flag_drift(monkeypatch) -> None:
+    info = stack_commands.ProcessInfo(
+        role="worker_general",
+        pid=123,
+        port=8072,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="worker.log",
+    )
+
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {"worker_general": info})
+    monkeypatch.setattr(stack_commands, "_scan_known_ports", lambda: {8072: [123]})
+    monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(
+        stack_commands,
+        "_stack_prior_launch_contracts",
+        lambda: {
+            "worker_general": {
+                "requirements": {
+                    "model_path": "/models/current.gguf",
+                    "draft_model_path": "/models/draft.gguf",
+                },
+                "runtime": {
+                    "binary_path": "/opt/llama/bin/llama-server",
+                    "cache": {
+                        "context_tokens": 16384,
+                        "slots": 1,
+                        "ubatch": 512,
+                        "kv_type_k": "q8_0",
+                        "kv_type_v": "q8_0",
+                        "no_mmap": False,
+                        "mlock": True,
+                    },
+                    "flags": {
+                        "flash_attn": True,
+                        "jinja": True,
+                        "spec": {
+                            "enabled": True,
+                            "type": "mtp",
+                            "draft_max": 2,
+                            "draft_p_min": 0.0,
+                            "threads_draft": 1,
+                        },
+                    },
+                },
+                "ports": [8072],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "process_cmdline",
+        lambda _pid: [
+            "/opt/llama/bin/llama-server",
+            "-m",
+            "/models/current.gguf",
+            "-md",
+            "/models/draft.gguf",
+            "-c",
+            "8192",
+            "-np",
+            "1",
+            "-ub",
+            "512",
+            "-ctk",
+            "q8_0",
+            "-ctv",
+            "q8_0",
+            "--mlock",
+            "--flash-attn",
+            "off",
+            "--jinja",
+            "--spec-type",
+            "mtp",
+            "--draft-max",
+            "2",
+            "--draft-p-min",
+            "0.0",
+            "--threads-draft",
+            "1",
+        ],
+    )
+
+    assert stack_commands.runtime_attestation_warnings() == [
+        "worker_general pid 123 runtime context_tokens expected 16384; live cmdline has 8192",
+        "worker_general pid 123 runtime flash_attn expected True; live cmdline has False",
+    ]
+
+
+def test_runtime_attestation_warnings_match_replica_by_port(monkeypatch) -> None:
+    info = stack_commands.ProcessInfo(
+        role="server",
+        pid=123,
+        port=8282,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="worker-8282.log",
+    )
+
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {"server_8282": info})
+    monkeypatch.setattr(stack_commands, "_scan_known_ports", lambda: {8282: [123]})
+    monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(
+        stack_commands,
+        "_stack_prior_launch_contracts",
+        lambda: {
+            "worker_general": {
+                "requirements": {
+                    "model_path": "/models/current.gguf",
+                    "draft_model_path": "/models/draft.gguf",
+                },
+                "runtime": {
+                    "flags": {
+                        "spec": {
+                            "enabled": True,
+                            "type": "mtp",
+                            "draft_max": 2,
+                        },
+                    },
+                },
+                "ports": [8282],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "process_cmdline",
+        lambda _pid: [
+            "llama-server",
+            "-m",
+            "/models/current.gguf",
+            "-md",
+            "/models/draft.gguf",
+            "--spec-type",
+            "mtp",
+            "--draft-max",
+            "2",
+        ],
+    )
+
+    assert stack_commands.runtime_attestation_warnings() == []
 
 
 def test_cmd_status_prints_model_attestation_warning(monkeypatch, capsys) -> None:

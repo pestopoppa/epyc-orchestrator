@@ -277,6 +277,15 @@ def _cmdline_has_path(cmdline: list[str], expected_path: str) -> bool:
 
 
 def _stack_prior_launch_requirements(path: Path | None = None) -> dict[str, dict[str, str]]:
+    contracts = _stack_prior_launch_contracts(path)
+    return {
+        role: contract["requirements"]
+        for role, contract in contracts.items()
+        if contract.get("requirements")
+    }
+
+
+def _stack_prior_launch_contracts(path: Path | None = None) -> dict[str, dict[str, Any]]:
     priors_path = path or _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
     try:
         data = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
@@ -286,23 +295,29 @@ def _stack_prior_launch_requirements(path: Path | None = None) -> dict[str, dict
     if not isinstance(roles, dict):
         return {}
 
-    requirements_by_role: dict[str, dict[str, str]] = {}
+    contracts_by_role: dict[str, dict[str, Any]] = {}
     for role, record in roles.items():
         if not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
             continue
         serving = record.get("serving")
         launch = serving.get("launch") if isinstance(serving, dict) else None
         requirements = launch.get("requirements") if isinstance(launch, dict) else None
-        if not isinstance(requirements, dict):
-            continue
-        cleaned = {
+        runtime = launch.get("runtime") if isinstance(launch, dict) else None
+        raw_ports = serving.get("ports") if isinstance(serving, dict) else None
+        cleaned_requirements = {
             str(key): str(value)
             for key, value in requirements.items()
             if value is not None
+        } if isinstance(requirements, dict) else {}
+        contracts_by_role[str(role)] = {
+            "requirements": cleaned_requirements,
+            "runtime": runtime if isinstance(runtime, dict) else {},
+            "ports": [port for port in raw_ports if isinstance(port, int)]
+            if isinstance(raw_ports, list) else [],
         }
-        if cleaned:
-            requirements_by_role[str(role)] = cleaned
-    return requirements_by_role
+    return contracts_by_role
 
 
 def _model_path_attestation(info: ProcessInfo, alive: bool, cmdline: list[str]) -> str:
@@ -372,17 +387,203 @@ def _attestation_warning(
     return None
 
 
+def _last_cmdline_flag_value(cmdline: list[str], *flags: str) -> str | None:
+    values = _cmdline_flag_values(cmdline, *flags)
+    return values[-1] if values else None
+
+
+def _runtime_value_warning(
+    name: str,
+    info: ProcessInfo,
+    label: str,
+    expected: Any,
+    actual: Any,
+) -> str:
+    return (
+        f"{name} pid {info.pid} runtime {label} expected {expected}; "
+        f"live cmdline has {actual}"
+    )
+
+
+def _runtime_attestation_warnings(
+    name: str,
+    info: ProcessInfo,
+    cmdline: list[str],
+    launch_contract: dict[str, Any],
+) -> list[str]:
+    if not cmdline or info.pid == -1 or not launch_contract:
+        return []
+    requirements = launch_contract.get("requirements")
+    runtime = launch_contract.get("runtime")
+    if not isinstance(requirements, dict):
+        requirements = {}
+    if not isinstance(runtime, dict):
+        runtime = {}
+
+    warnings: list[str] = []
+    binary_path = runtime.get("binary_path")
+    if isinstance(binary_path, str) and binary_path:
+        actual_binary = cmdline[0]
+        if actual_binary != binary_path:
+            warnings.append(_runtime_value_warning(
+                name, info, "binary_path", Path(binary_path).name, Path(actual_binary).name
+            ))
+
+    model_path = requirements.get("model_path")
+    if isinstance(model_path, str) and model_path:
+        model_values = _cmdline_flag_values(cmdline, "-m", "--model")
+        if not any(_cmdline_has_path([value], model_path) for value in model_values):
+            actual = ", ".join(Path(value).name for value in model_values) or "no -m"
+            warnings.append(_runtime_value_warning(
+                name, info, "model_path", Path(model_path).name, actual
+            ))
+
+    draft_model_path = requirements.get("draft_model_path")
+    if isinstance(draft_model_path, str) and draft_model_path:
+        draft_values = _cmdline_flag_values(cmdline, "-md")
+        if not any(_cmdline_has_path([value], draft_model_path) for value in draft_values):
+            actual = ", ".join(Path(value).name for value in draft_values) or "no -md"
+            warnings.append(_runtime_value_warning(
+                name, info, "draft_model_path", Path(draft_model_path).name, actual
+            ))
+
+    mmproj_path = requirements.get("mmproj_path")
+    if isinstance(mmproj_path, str) and mmproj_path:
+        mmproj_values = _cmdline_flag_values(cmdline, "--mmproj")
+        if not any(_cmdline_has_path([value], mmproj_path) for value in mmproj_values):
+            actual = ", ".join(Path(value).name for value in mmproj_values) or "no --mmproj"
+            warnings.append(_runtime_value_warning(
+                name, info, "mmproj_path", Path(mmproj_path).name, actual
+            ))
+
+    cache = runtime.get("cache")
+    flags = runtime.get("flags")
+    cache = cache if isinstance(cache, dict) else {}
+    flags = flags if isinstance(flags, dict) else {}
+    scalar_flags = {
+        "context_tokens": ("-c", "--ctx-size"),
+        "slots": ("-np", "--parallel"),
+        "ubatch": ("-ub", "--ubatch-size"),
+        "kv_type_k": ("-ctk",),
+        "kv_type_v": ("-ctv",),
+    }
+    for key, flag_names in scalar_flags.items():
+        expected = cache.get(key)
+        if expected is None:
+            continue
+        actual = _last_cmdline_flag_value(cmdline, *flag_names)
+        if actual != str(expected):
+            warnings.append(_runtime_value_warning(
+                name, info, key, expected, actual or f"no {flag_names[0]}"
+            ))
+
+    for key, flag_name in {"no_mmap": "--no-mmap", "mlock": "--mlock"}.items():
+        expected = cache.get(key)
+        if not isinstance(expected, bool):
+            continue
+        actual = flag_name in cmdline
+        if actual != expected:
+            warnings.append(_runtime_value_warning(name, info, key, expected, actual))
+
+    slot_save_path = cache.get("slot_save_path")
+    if isinstance(slot_save_path, str) and slot_save_path:
+        actual = _last_cmdline_flag_value(cmdline, "--slot-save-path")
+        if actual is None or not _cmdline_has_path([actual], slot_save_path):
+            warnings.append(_runtime_value_warning(
+                name, info, "slot_save_path", Path(slot_save_path).name,
+                Path(actual).name if actual else "no --slot-save-path",
+            ))
+
+    flash_attn = flags.get("flash_attn")
+    if isinstance(flash_attn, bool):
+        actual = _last_cmdline_flag_value(cmdline, "--flash-attn") == "on"
+        if actual != flash_attn:
+            warnings.append(_runtime_value_warning(
+                name, info, "flash_attn", flash_attn, actual
+            ))
+    jinja = flags.get("jinja")
+    if isinstance(jinja, bool):
+        actual = "--jinja" in cmdline
+        if actual != jinja:
+            warnings.append(_runtime_value_warning(name, info, "jinja", jinja, actual))
+    reasoning = flags.get("reasoning")
+    if reasoning is not None:
+        actual = _last_cmdline_flag_value(cmdline, "--reasoning")
+        if actual != str(reasoning):
+            warnings.append(_runtime_value_warning(
+                name, info, "reasoning", reasoning, actual or "no --reasoning"
+            ))
+
+    override_kv = flags.get("override_kv", [])
+    expected_overrides = sorted(str(value) for value in override_kv) if isinstance(
+        override_kv, list
+    ) else []
+    actual_overrides = sorted(_cmdline_flag_values(cmdline, "--override-kv"))
+    if actual_overrides != expected_overrides:
+        warnings.append(_runtime_value_warning(
+            name, info, "override_kv", expected_overrides, actual_overrides
+        ))
+
+    spec = flags.get("spec")
+    spec = spec if isinstance(spec, dict) else {}
+    expected_spec_enabled = spec.get("enabled") is True
+    actual_spec_enabled = bool(
+        _cmdline_flag_values(cmdline, "-md")
+        or _cmdline_flag_values(cmdline, "--spec-type")
+    )
+    if actual_spec_enabled != expected_spec_enabled:
+        warnings.append(_runtime_value_warning(
+            name, info, "spec.enabled", expected_spec_enabled, actual_spec_enabled
+        ))
+    if expected_spec_enabled:
+        for key, flag_names in {
+            "type": ("--spec-type",),
+            "draft_max": ("--draft-max",),
+            "draft_p_min": ("--draft-p-min",),
+            "threads_draft": ("--threads-draft",),
+        }.items():
+            expected = spec.get(key)
+            if expected is None:
+                continue
+            actual = _last_cmdline_flag_value(cmdline, *flag_names)
+            if actual != str(expected):
+                warnings.append(_runtime_value_warning(
+                    name, info, f"spec.{key}", expected, actual or f"no {flag_names[0]}"
+                ))
+    return warnings
+
+
+def _launch_contract_for_process(
+    name: str,
+    info: ProcessInfo,
+    contracts_by_role: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    direct = contracts_by_role.get(info.role) or contracts_by_role.get(name)
+    if direct:
+        return direct
+    for contract in contracts_by_role.values():
+        ports = contract.get("ports")
+        if isinstance(ports, list) and info.port in ports:
+            return contract
+    return {}
+
+
 def runtime_attestation_warnings(
     state: dict[str, ProcessInfo] | None = None,
 ) -> list[str]:
     """Return concrete live process drift warnings without mutating stack state."""
     state = load_state() if state is None else dict(state)
-    if not state:
-        return []
 
     warnings: list[str] = []
     seen_pids: set[int] = set()
-    launch_requirements_by_role = _stack_prior_launch_requirements()
+    contracts_by_role = _stack_prior_launch_contracts()
+    state_ports = {info.port for info in state.values()}
+    for port, pids in sorted(_scan_known_ports().items()):
+        if port not in state_ports:
+            warnings.append(
+                f"known stack port {port} has unmanaged listener pid(s) "
+                + ",".join(str(pid) for pid in pids)
+            )
     for name, info in sorted(state.items()):
         if info.pid != -1 and info.pid in seen_pids:
             continue
@@ -411,11 +612,9 @@ def runtime_attestation_warnings(
                     alive = True
             cmdline = _stack_processes.process_cmdline(info.pid) if alive else []
 
-        launch_requirements = (
-            launch_requirements_by_role.get(info.role)
-            or launch_requirements_by_role.get(name)
-            or {}
-        )
+        launch_contract = _launch_contract_for_process(name, info, contracts_by_role)
+        launch_requirements = launch_contract.get("requirements")
+        launch_requirements = launch_requirements if isinstance(launch_requirements, dict) else {}
         attestation = _status_attestation(info, alive, cmdline, launch_requirements)
         warning = _attestation_warning(
             name,
@@ -426,6 +625,7 @@ def runtime_attestation_warnings(
         )
         if warning:
             warnings.append(warning)
+        warnings.extend(_runtime_attestation_warnings(name, info, cmdline, launch_contract))
     return warnings
 
 
