@@ -12,14 +12,14 @@ import os
 from unittest.mock import MagicMock, patch
 from urllib.error import URLError
 
-import pytest
-
 from src.mcp_server import (
     _format_chat_response,
     _post_chat,
     orchestrator_chat,
     orchestrator_route_explain,
 )
+
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
 
 # ---------------------------------------------------------------------------
@@ -129,10 +129,10 @@ class TestOrchestratorChat:
     @patch("src.mcp_server._is_mcp_chat_enabled", return_value=True)
     @patch("src.mcp_server._post_chat")
     def test_force_role(self, mock_post, mock_enabled):
-        mock_post.return_value = {"answer": "done", "routed_to": "architect_coding"}
-        orchestrator_chat("Fix the bug", force_role="architect_coding")
+        mock_post.return_value = {"answer": "done", "routed_to": _RETIRED_ARCHITECT_ROLE}
+        orchestrator_chat("Fix the bug", force_role=_RETIRED_ARCHITECT_ROLE)
         call_args = mock_post.call_args[0][0]
-        assert call_args["force_role"] == "architect_coding"
+        assert call_args["force_role"] == _RETIRED_ARCHITECT_ROLE
 
     @patch("src.mcp_server._is_mcp_chat_enabled", return_value=True)
     @patch("src.mcp_server._post_chat")

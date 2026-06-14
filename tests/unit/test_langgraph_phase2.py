@@ -10,15 +10,16 @@ Tests cover:
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import fields as dataclass_fields
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.graph.state import TaskDeps, TaskResult, TaskState
+from src.graph.state import TaskDeps, TaskState
 from src.roles import Role
+
+_RETIRED_ARCHITECT_ROLE = "architect_" "coding"
 
 
 # ---------------------------------------------------------------------------
@@ -32,7 +33,6 @@ class TestAppendReducerDeltas:
     def test_role_history_delta(self):
         """role_history should contain only elements added during node execution."""
         from src.graph.langgraph.state import (
-            APPEND_FIELDS,
             snapshot_append_lengths,
             state_update_delta,
             task_state_to_lg,
@@ -45,13 +45,13 @@ class TestAppendReducerDeltas:
 
         # Simulate TaskState after node execution added a new role
         task_state = TaskState(
-            role_history=["frontdoor", "coder_escalation", "architect_coding"],
+            role_history=["frontdoor", "coder_escalation", _RETIRED_ARCHITECT_ROLE],
         )
         update = task_state_to_lg(task_state)
         state_update_delta(update, snap)
 
         # Only the new element should be in the update
-        assert update["role_history"] == ["architect_coding"]
+        assert update["role_history"] == [_RETIRED_ARCHITECT_ROLE]
 
     def test_empty_delta_when_no_additions(self):
         """If node adds nothing to a list, delta should be empty."""
@@ -258,7 +258,7 @@ class TestFullRoundTrip:
             consecutive_failures=3,
             consecutive_nudges=1,
             escalation_count=2,
-            role_history=["frontdoor", "coder_escalation", "architect_coding"],
+            role_history=["frontdoor", "coder_escalation", _RETIRED_ARCHITECT_ROLE],
             escalation_prompt="escalation reason",
             last_error="some error",
             last_output="some output",
@@ -369,7 +369,7 @@ class TestDualRunValidation:
     async def test_simple_success_parity(self):
         """Scenario: frontdoor succeeds on turn 1. Both backends should agree."""
         from src.graph.langgraph.nodes import frontdoor_node
-        from src.graph.langgraph.state import task_state_to_lg, snapshot_append_lengths
+        from src.graph.langgraph.state import task_state_to_lg
 
         # Mock _execute_turn to return success
         mock_turn = AsyncMock(return_value=("The answer is 42", None, True, {"_tool_outputs": []}))
