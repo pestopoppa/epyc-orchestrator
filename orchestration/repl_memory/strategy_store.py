@@ -71,6 +71,7 @@ class StrategyEntry:
     validity_score: float = 0.5
     staleness: float = 1.0
     rrf_score: float = 0.0
+    evidence_trial_ids: list[int] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -147,6 +148,7 @@ class StrategyStore:
         for col, ddl in (
             ("entry_type", "ALTER TABLE strategies ADD COLUMN entry_type TEXT DEFAULT 'raw'"),
             ("context_hash", "ALTER TABLE strategies ADD COLUMN context_hash TEXT DEFAULT ''"),
+            ("evidence_trial_ids", "ALTER TABLE strategies ADD COLUMN evidence_trial_ids TEXT DEFAULT '[]'"),
         ):
             try:
                 self._conn.execute(ddl)
@@ -445,6 +447,7 @@ class StrategyStore:
         species: str,
         metadata: dict[str, Any] | None = None,
         entry_type: str = "raw",
+        evidence_trial_ids: list[int] | None = None,
     ) -> str:
         """Store a strategy entry. Returns the UUID.
 
@@ -457,6 +460,11 @@ class StrategyStore:
         created_at = datetime.now(timezone.utc).isoformat()
         metadata = metadata or {}
         context_hash = self.compute_context_hash()
+        if evidence_trial_ids is None:
+            evidence_trial_ids = [source_trial_id]
+        evidence_trial_ids_json = json.dumps(
+            [int(tid) for tid in evidence_trial_ids if tid is not None]
+        )
 
         # Embed description + insight for retrieval
         embed_text = f"{description} {insight}"
@@ -470,10 +478,11 @@ class StrategyStore:
         self._conn.execute(
             """INSERT INTO strategies
                (id, description, insight, source_trial_id, species, created_at,
-                metadata_json, entry_type, context_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                metadata_json, entry_type, context_hash, evidence_trial_ids)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (entry_id, description, insight, source_trial_id, species,
-             created_at, json.dumps(metadata), entry_type, context_hash),
+             created_at, json.dumps(metadata), entry_type, context_hash,
+             evidence_trial_ids_json),
         )
         if getattr(self, "_fts_enabled", False):
             try:
@@ -487,6 +496,33 @@ class StrategyStore:
         self._conn.commit()
 
         return entry_id
+
+    def _evidence_trial_ids_for_row(self, row: sqlite3.Row) -> list[int]:
+        ids: list[int] = []
+        try:
+            raw = row["evidence_trial_ids"] or "[]"
+        except (IndexError, KeyError):
+            raw = "[]"
+        try:
+            decoded = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            decoded = []
+        if isinstance(decoded, list):
+            for item in decoded:
+                try:
+                    ids.append(int(item))
+                except (TypeError, ValueError):
+                    continue
+        if ids:
+            return ids
+        try:
+            source_trial_id = row["source_trial_id"]
+        except (IndexError, KeyError):
+            source_trial_id = None
+        try:
+            return [int(source_trial_id)]
+        except (TypeError, ValueError):
+            return []
 
     def retrieve(
         self,
@@ -557,7 +593,8 @@ class StrategyStore:
                 continue
             if sid in quarantined:
                 continue
-            if row["source_trial_id"] in excluded_trial_ids:
+            evidence_trial_ids = self._evidence_trial_ids_for_row(row)
+            if excluded_trial_ids and excluded_trial_ids.intersection(evidence_trial_ids):
                 continue
 
             validity = self._validity_score(sid)
@@ -589,6 +626,7 @@ class StrategyStore:
                 validity_score=validity,
                 staleness=staleness,
                 rrf_score=rrf_score,
+                evidence_trial_ids=evidence_trial_ids,
             ))
             if len(entries) >= k:
                 break

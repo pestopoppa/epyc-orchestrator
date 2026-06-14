@@ -173,6 +173,13 @@ class EvolutionManager:
 
         # Store each insight in StrategyStore
         stored = 0
+        evidence_trial_ids = sorted(
+            {
+                int(e.trial_id)
+                for e in entries
+                if getattr(e, "trial_id", None) is not None
+            }
+        )
         for insight in insights:
             try:
                 strategy_store.store(
@@ -181,6 +188,7 @@ class EvolutionManager:
                     source_trial_id=trial_id,
                     species=insight.get("species", "all"),
                     metadata={"confidence": insight.get("confidence", "medium")},
+                    evidence_trial_ids=evidence_trial_ids,
                 )
                 stored += 1
             except Exception as e:

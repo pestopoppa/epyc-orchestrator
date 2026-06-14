@@ -74,6 +74,7 @@ def test_distill_scrubs_legacy_scale_input_and_output() -> None:
     assert "-6.900" not in stored["insight"]
     assert "legacy-scale" in stored["description"]
     assert "legacy-scale" in stored["insight"]
+    assert stored["evidence_trial_ids"] == [28]
 
 
 def test_distill_filters_corrupt_and_learning_excluded_rows() -> None:
@@ -131,3 +132,4 @@ def test_distill_filters_corrupt_and_learning_excluded_rows() -> None:
     assert "CLEAN_FAILURE_SHOULD_APPEAR" in manager.prompt
     assert "CORRUPT_SHOULD_NOT_APPEAR" not in manager.prompt
     assert "EXCLUDED_SHOULD_NOT_APPEAR" not in manager.prompt
+    assert store.rows[0]["evidence_trial_ids"] == [43]

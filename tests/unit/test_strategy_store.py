@@ -86,6 +86,31 @@ class TestStrategyStore:
         assert results
         assert all(r.source_trial_id != 2 for r in results)
 
+    def test_retrieve_excludes_any_evidence_trial_id(self, store):
+        sid = store.store(
+            "Strategy A",
+            "Insight A",
+            source_trial_id=99,
+            species="alpha",
+            evidence_trial_ids=[1, 2],
+        )
+        store.store("Strategy B", "Insight B", source_trial_id=3, species="alpha")
+
+        results = store.retrieve("Strategy", k=10, excluded_trial_ids={2})
+
+        assert results
+        assert all(r.id != sid for r in results)
+        assert any(r.source_trial_id == 3 for r in results)
+
+    def test_retrieve_exclusion_falls_back_to_source_trial_id(self, store):
+        store.store("Legacy evidence", "Insight", source_trial_id=5, species="alpha")
+        store._conn.execute("UPDATE strategies SET evidence_trial_ids = '[]'")
+        store._conn.commit()
+
+        results = store.retrieve("Legacy evidence", k=10, excluded_trial_ids={5})
+
+        assert results == []
+
     def test_metadata_roundtrip(self, store):
         meta = {"key": "value", "nested": {"a": 1}}
         store.store("Test", "Test insight", source_trial_id=1, species="test",
@@ -101,6 +126,7 @@ class TestStrategyStore:
         assert isinstance(d, dict)
         assert d["species"] == "serializer"
         assert d["source_trial_id"] == 7
+        assert d["evidence_trial_ids"] == [7]
         assert "id" in d
         assert "created_at" in d
 

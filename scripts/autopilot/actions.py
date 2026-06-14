@@ -275,7 +275,17 @@ def _build_mutation_context(
             excluded_trial_ids = {
                 int(e.trial_id)
                 for e in entries
-                if getattr(e, "bug_corrupted_by", "")
+                if (
+                    getattr(e, "bug_corrupted_by", "")
+                    or getattr(e, "outcome_status", "ok") != "ok"
+                    or getattr(e, "keep_revert_decision", "") == "excluded"
+                    or (
+                        isinstance(getattr(e, "eval_details", {}) or {}, dict)
+                        and (getattr(e, "eval_details", {}) or {}).get(
+                            "learning_exclusion"
+                        )
+                    )
+                )
             }
         except Exception:
             excluded_trial_ids = set()
