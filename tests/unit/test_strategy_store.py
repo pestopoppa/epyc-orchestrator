@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 
 import numpy as np
@@ -117,7 +118,9 @@ class TestStrategyStore:
                      metadata=meta)
         results = store.retrieve("Test", k=1)
         assert len(results) == 1
-        assert results[0].metadata == meta
+        assert results[0].metadata["key"] == "value"
+        assert results[0].metadata["nested"] == {"a": 1}
+        assert results[0].metadata["insight_format"]["title"] == "Test"
 
     def test_to_dict_serialization(self, store):
         store.store("Serialize me", "Check dict", source_trial_id=7, species="serializer")
@@ -134,6 +137,79 @@ class TestStrategyStore:
         store.close()
         # Double close should not raise
         store.close()
+
+
+class TestAP32InsightFormat:
+    """AP-32: task-agnostic insight format metadata."""
+
+    def test_store_records_derived_insight_format_metadata(self, store):
+        sid = store.store(
+            "Disable brittle benchmark-specific prompt anchors.",
+            "Patterns tied to one suite should stay local until cross-suite evidence exists.",
+            source_trial_id=11,
+            species="prompt_forge",
+        )
+
+        row = store._conn.execute(
+            "SELECT metadata_json FROM strategies WHERE id=?", (sid,)
+        ).fetchone()
+        meta = json.loads(row["metadata_json"])
+        fmt = meta["insight_format"]
+
+        assert fmt["version"] == 1
+        assert fmt["title"] == "Disable brittle benchmark-specific prompt anchors"
+        assert fmt["description"] == "Disable brittle benchmark-specific prompt anchors."
+        assert fmt["generalized_content"].startswith("Patterns tied to one suite")
+        assert fmt["specificity_flags"] == []
+
+        results = store.retrieve("benchmark-specific prompt anchors", k=1)
+        assert results[0].title == fmt["title"]
+        assert results[0].generalized_content == fmt["generalized_content"]
+        assert results[0].specificity_flags == []
+
+    def test_store_accepts_explicit_generalized_content(self, store):
+        sid = store.store(
+            "Prefer mutation evidence that crosses benchmark families.",
+            "Changed a concrete file after one trial.",
+            source_trial_id=123,
+            species="structural_lab",
+            title="Prefer cross-suite mechanisms before promotion",
+            generalized_content=(
+                "Promote a mutation pattern only after evidence spans more than one "
+                "benchmark family."
+            ),
+        )
+
+        row = store._conn.execute(
+            "SELECT insight, metadata_json FROM strategies WHERE id=?", (sid,)
+        ).fetchone()
+        meta = json.loads(row["metadata_json"])
+        fmt = meta["insight_format"]
+
+        assert row["insight"] == fmt["generalized_content"]
+        assert fmt["title"] == "Prefer cross-suite mechanisms before promotion"
+        assert fmt["specificity_flags"] == []
+
+    def test_audit_insight_specificity_flags_task_specific_entries(self, store):
+        sid = store.store(
+            "scripts/autopilot/foo.py improved trial #123",
+            "Keep commit abc1234 behavior from /mnt/raid0/llm/example/path.",
+            source_trial_id=123,
+            species="structural_lab",
+        )
+
+        findings = store.audit_insight_specificity()
+
+        assert len(findings) == 1
+        assert findings[0]["id"] == sid
+        assert findings[0]["source_trial_id"] == 123
+        assert findings[0]["species"] == "structural_lab"
+        assert findings[0]["specificity_flags"] == [
+            "absolute_path",
+            "commit_hash",
+            "repo_path",
+            "trial_reference",
+        ]
 
 
 class TestAP28HybridRetrieval:

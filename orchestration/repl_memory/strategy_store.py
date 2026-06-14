@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass, field, asdict
@@ -52,6 +53,56 @@ DEFAULT_CONTEXT_FILES: tuple[Path, ...] = (
 
 # Reciprocal Rank Fusion default constant (Cormack et al. 2009).
 _RRF_K = 60
+_TITLE_MAX_CHARS = 96
+
+_SPECIFICITY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("absolute_path", re.compile(r"(?:/mnt/raid0|/workspace|/home/node)/[^\s,;:)]+")),
+    ("repo_path", re.compile(r"\b(?:src|scripts|tests|orchestration|handoffs|docs)/[^\s,;:)]+")),
+    ("trial_reference", re.compile(r"\btrial\s+#?\d+\b|(?<!\w)#\d+\b", re.IGNORECASE)),
+    ("commit_hash", re.compile(r"\b[0-9a-f]{7,40}\b", re.IGNORECASE)),
+)
+
+
+def _compact_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _derive_title(description: str) -> str:
+    text = _compact_text(description)
+    for separator in (". ", ": ", " - "):
+        if separator in text:
+            text = text.split(separator, 1)[0]
+            break
+    return text[:_TITLE_MAX_CHARS].rstrip(" .")
+
+
+def _specificity_flags(*parts: str) -> list[str]:
+    text = " ".join(_compact_text(part) for part in parts if part)
+    flags = [name for name, pattern in _SPECIFICITY_PATTERNS if pattern.search(text)]
+    return sorted(set(flags))
+
+
+def _insight_format(
+    *,
+    title: str | None,
+    description: str,
+    generalized_content: str | None,
+    insight: str,
+) -> dict[str, Any]:
+    formatted_title = _compact_text(title) or _derive_title(description)
+    formatted_description = _compact_text(description)
+    formatted_content = _compact_text(generalized_content if generalized_content is not None else insight)
+    return {
+        "version": 1,
+        "title": formatted_title,
+        "description": formatted_description,
+        "generalized_content": formatted_content,
+        "specificity_flags": _specificity_flags(
+            formatted_title,
+            formatted_description,
+            formatted_content,
+        ),
+    }
 
 
 @dataclass
@@ -72,6 +123,9 @@ class StrategyEntry:
     staleness: float = 1.0
     rrf_score: float = 0.0
     evidence_trial_ids: list[int] = field(default_factory=list)
+    title: str = ""
+    generalized_content: str = ""
+    specificity_flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -448,6 +502,8 @@ class StrategyStore:
         metadata: dict[str, Any] | None = None,
         entry_type: str = "raw",
         evidence_trial_ids: list[int] | None = None,
+        title: str | None = None,
+        generalized_content: str | None = None,
     ) -> str:
         """Store a strategy entry. Returns the UUID.
 
@@ -455,10 +511,23 @@ class StrategyStore:
         used by the knowledge distiller; the current configuration epoch's
         ``context_hash`` is recorded alongside the row so future retrievals
         can detect staleness.
+
+        AP-32: new rows also carry normalized insight-format metadata:
+        ``(title, description, generalized_content)`` plus specificity flags.
+        The SQLite text columns remain backward-compatible retrieval fields.
         """
         entry_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
-        metadata = metadata or {}
+        metadata = dict(metadata or {})
+        format_meta = _insight_format(
+            title=title,
+            description=description,
+            generalized_content=generalized_content,
+            insight=insight,
+        )
+        metadata["insight_format"] = format_meta
+        if generalized_content is not None:
+            insight = format_meta["generalized_content"]
         context_hash = self.compute_context_hash()
         if evidence_trial_ids is None:
             evidence_trial_ids = [source_trial_id]
@@ -467,7 +536,7 @@ class StrategyStore:
         )
 
         # Embed description + insight for retrieval
-        embed_text = f"{description} {insight}"
+        embed_text = f"{format_meta['title']} {description} {insight}"
         embedding = self._embed(embed_text)
 
         # FAISS
@@ -612,6 +681,20 @@ class StrategyStore:
                 entry_type = row["entry_type"] or "raw"
             except (IndexError, KeyError):
                 entry_type = "raw"
+            format_meta = meta.get("insight_format") if isinstance(meta, dict) else {}
+            if not isinstance(format_meta, dict):
+                format_meta = {}
+            title = _compact_text(format_meta.get("title")) or _derive_title(row["description"])
+            generalized_content = (
+                _compact_text(format_meta.get("generalized_content"))
+                or _compact_text(row["insight"])
+            )
+            flags = format_meta.get("specificity_flags")
+            specificity_flags = (
+                sorted({str(flag) for flag in flags})
+                if isinstance(flags, list)
+                else _specificity_flags(title, row["description"], generalized_content)
+            )
 
             entries.append(StrategyEntry(
                 id=row["id"],
@@ -627,11 +710,39 @@ class StrategyStore:
                 staleness=staleness,
                 rrf_score=rrf_score,
                 evidence_trial_ids=evidence_trial_ids,
+                title=title,
+                generalized_content=generalized_content,
+                specificity_flags=specificity_flags,
             ))
             if len(entries) >= k:
                 break
 
         return entries
+
+    def audit_insight_specificity(self) -> list[dict[str, Any]]:
+        """Return stored strategies whose insight text looks task-specific."""
+        rows = self._conn.execute(
+            "SELECT id, description, insight, source_trial_id, species, metadata_json "
+            "FROM strategies ORDER BY created_at ASC"
+        ).fetchall()
+        findings: list[dict[str, Any]] = []
+        for row in rows:
+            meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+            format_meta = meta.get("insight_format") if isinstance(meta, dict) else {}
+            if not isinstance(format_meta, dict):
+                format_meta = {}
+            generalized = _compact_text(format_meta.get("generalized_content")) or row["insight"]
+            flags = _specificity_flags(row["description"], row["insight"], generalized)
+            if not flags:
+                continue
+            findings.append({
+                "id": row["id"],
+                "source_trial_id": row["source_trial_id"],
+                "species": row["species"],
+                "specificity_flags": flags,
+                "title": _compact_text(format_meta.get("title")) or _derive_title(row["description"]),
+            })
+        return findings
 
     def count(self) -> int:
         """Number of strategies in the store."""
