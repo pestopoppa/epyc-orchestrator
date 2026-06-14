@@ -92,6 +92,22 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: derive probes from stack priors or stack manifest status APIs
+  - rule_id: static_cli_degraded_status_targets
+    category: production_blocker
+    owner: stack-change-governance
+    consumer_scope: CLI degraded-mode status target discovery
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive degraded status targets from stack_manifest PORT_MAP/HOT_ROLES
+  - rule_id: static_autopilot_preflight_targets
+    category: production_blocker
+    owner: autopilot-instrumentation
+    consumer_scope: AutoPilot degraded-mode model-server preflight target discovery
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive degraded model-server preflight targets from stack_manifest PORT_MAP/HOT_ROLES
   - rule_id: stale_autopilot_program_stack_guidance
     category: production_blocker
     owner: autopilot-instrumentation

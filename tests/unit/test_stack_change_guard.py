@@ -933,6 +933,46 @@ Tier demotion is not an open exploration surface by default.
     )
 
 
+def test_scan_hardcoded_surfaces_flags_static_cli_degraded_status_targets(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "cli_orch.py").write_text(
+        "FALLBACK_STATUS_TARGETS = [('frontdoor/coder_escalation', 8070)]\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_cli_degraded_status_targets"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "src/cli_orch.py"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_flags_static_autopilot_preflight_targets(
+    tmp_path: Path,
+) -> None:
+    autopilot = tmp_path / "scripts" / "autopilot"
+    autopilot.mkdir(parents=True)
+    (autopilot / "preflight_audit.py").write_text(
+        "FALLBACK_MODEL_SERVER_TARGETS = [('frontdoor', 'http://localhost:8070/health')]\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_autopilot_preflight_targets"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "scripts/autopilot/preflight_audit.py"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_static_autopilot_kv_port_map(tmp_path: Path) -> None:
     autopilot = tmp_path / "scripts" / "autopilot"
     autopilot.mkdir(parents=True)

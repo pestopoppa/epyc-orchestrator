@@ -210,6 +210,20 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="derive status probes from stack priors or stack manifest API",
     ),
     HardcodedSurfaceRule(
+        rule_id="static_cli_degraded_status_targets",
+        category="production_blocker",
+        pattern=r"\bFALLBACK_STATUS_TARGETS\s*=\s*\[",
+        path_globs=("src/cli_orch.py",),
+        remediation="derive degraded status targets from stack_manifest PORT_MAP/HOT_ROLES",
+    ),
+    HardcodedSurfaceRule(
+        rule_id="static_autopilot_preflight_targets",
+        category="production_blocker",
+        pattern=r"\bFALLBACK_MODEL_SERVER_TARGETS\s*=\s*\[",
+        path_globs=("scripts/autopilot/preflight_audit.py",),
+        remediation="derive degraded model-server preflight targets from stack_manifest PORT_MAP/HOT_ROLES",
+    ),
+    HardcodedSurfaceRule(
         rule_id="stale_autopilot_program_stack_guidance",
         category="production_blocker",
         pattern=(
