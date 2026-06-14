@@ -92,6 +92,20 @@ def test_reconcile_reports_drift() -> None:
     ]
 
 
+def test_reconcile_blocks_cutover_when_state_baseline_missing() -> None:
+    result = reconcile_baseline_ledger([_event(1, new_quality=1.8)], None)
+
+    assert result.status == "missing_state_baseline"
+    assert not result.cutover_ready
+    assert result.cutover_blockers == [
+        "ledger fold does not match current state baseline (missing_state_baseline)"
+    ]
+    assert format_baseline_ledger_summary(result)[-1] == (
+        "Baseline fold blocker: ledger fold does not match current state "
+        "baseline (missing_state_baseline)"
+    )
+
+
 def test_reconcile_does_not_infer_missing_snapshot() -> None:
     result = reconcile_baseline_ledger(
         [_event(1, new_quality=1.8, baseline_state=None)],

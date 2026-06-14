@@ -97,6 +97,27 @@ def test_seq_rows_fold_by_candidate_and_skip_malformed_z() -> None:
     assert "trials=[20,21,22]" in text
 
 
+def test_seq_rows_ignore_non_matching_core_ids() -> None:
+    rows = [
+        _row(
+            24,
+            config={"type": "numeric_trial", "surface": "memrl_retrieval"},
+            seq={"candidate": "candidate-a", "core_id": "old_core", "z": 1.0},
+        ),
+        _row(
+            25,
+            config={"type": "numeric_trial", "surface": "memrl_retrieval"},
+            seq={"candidate": "candidate-a", "core_id": "core_v1", "z": 1.0},
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows, core_id="core_v1")
+
+    assert "seq_candidates=1" in text
+    assert "seq=accumulating k=1" in text
+    assert "trials=[24,25]" in text
+
+
 def test_missing_timing_fields_do_not_invent_task_rate() -> None:
     row = _row(30)
     row["eval_details"] = {

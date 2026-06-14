@@ -72,6 +72,27 @@ def test_report_excludes_corrupted_vectors_from_trusted_history() -> None:
     assert any("trusted vector history too small" in b for b in report["cutover_blockers"])
 
 
+def test_report_excludes_invalid_and_skipped_vectors_from_trusted_history() -> None:
+    invalid = _row(1, "fp-a", set(range(20)))
+    invalid["outcome_status"] = "invalid"
+    skipped = _row(2, "fp-a", set(range(21)))
+    skipped["outcome_status"] = "skipped"
+    trusted = _row(3, "fp-b", set(range(22)))
+
+    report = seq_readiness_report.build_seq_readiness_report(
+        [invalid, skipped, trusted],
+        min_trusted_vector_trials=2,
+        min_seq_shadow_rows=0,
+        min_shared_qids=1,
+    )
+
+    assert report["raw_vector_trials"] == 3
+    assert report["trusted_vector_trials"] == 1
+    assert report["untrusted_vector_trials"] == 2
+    assert report["untrusted_vector_trial_ids"] == [1, 2]
+    assert report["candidate_clusters"][0]["trusted_vector_trials"] == [3]
+
+
 def test_report_blocks_cutover_without_seq_shadow_denominator() -> None:
     rows = [
         _row(1, "fp-a", set(range(20))),

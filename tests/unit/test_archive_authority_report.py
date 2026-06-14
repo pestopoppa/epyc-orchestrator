@@ -79,6 +79,28 @@ def test_report_summarizes_id_and_value_drift() -> None:
     assert "Journal-only entries: 1 [2]" in rendered
 
 
+def test_markdown_renders_structured_report_core_fields() -> None:
+    rows = [_row(1, quality=1.2)]
+    report = build_archive_authority_report(
+        {"trial_counter": 2, "pareto_archive": _archive(rows)},
+        rows,
+    )
+
+    rendered = render_markdown(report)
+
+    assert f"- Status: {report['diagnostic']['status']}" in rendered
+    assert f"- Recommendation: {report['recommendation']}" in rendered
+    assert (
+        "- State/journal trial bounds: "
+        f"state_trial_counter={report['state_trial_counter']}, "
+        f"journal_max_trial_id={report['journal_max_trial_id']}"
+    ) in rendered
+    assert (
+        f"- Common-entry value mismatches: {report['entry_mismatches']['count']}"
+        in rendered
+    )
+
+
 def test_cli_json_strict_returns_nonzero_on_drift(
     tmp_path: Path,
     capsys,

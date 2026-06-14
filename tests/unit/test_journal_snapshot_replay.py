@@ -177,3 +177,30 @@ def test_snapshot_replay_flags_post_snapshot_supersession_prefix_drift() -> None
     assert diagnostic.post_snapshot_prefix_event_count == 1
     assert any("post-snapshot supersession" in item for item in diagnostic.warnings)
     assert any("archive payload differs" in item for item in diagnostic.warnings)
+
+
+def test_snapshot_replay_latest_invalid_event_blocks_older_ready_snapshot() -> None:
+    rows = [_row(1, quality=1.2)]
+    valid_event = _snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": _archive(rows)},
+    )
+    invalid_latest = {
+        "type": JOURNAL_SNAPSHOT_EVENT_TYPE,
+        "snapshot": {"archive": _archive(rows)},
+        "policy_version": "unit-policy-v2",
+        "actor": "unit-test",
+        "timestamp": "2026-06-14T00:00:04Z",
+    }
+
+    diagnostic = build_snapshot_replay_diagnostic(
+        rows + [valid_event, invalid_latest],
+        [valid_event, invalid_latest],
+    )
+
+    assert diagnostic.status == "invalid_latest_event"
+    assert diagnostic.bounded_replay_readiness == "not_ready"
+    assert diagnostic.event_count == 2
+    assert diagnostic.warnings == [
+        "latest snapshot event has no usable through_trial_id"
+    ]
