@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src import cli_orch
 from src.cli_orch import _fallback_status_targets, _stack_status_targets
 
 
@@ -54,3 +55,30 @@ def test_fallback_status_targets_derive_alias_groups_from_manifest() -> None:
     assert ("coder_escalation/frontdoor/worker_summarize", 8070) in targets
     assert ("toolrunner/worker_explore/worker_general/worker_math", 8072) in targets
     assert all(port != 8090 for _, port in targets)
+
+
+def test_fallback_status_targets_follow_manifest_without_literal_port_list(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        cli_orch,
+        "PORT_MAP",
+        {
+            "frontdoor": 9001,
+            "coder_escalation": 9001,
+            "worker_general": 9002,
+            "embedder": 9090,
+        },
+    )
+    monkeypatch.setattr(
+        cli_orch,
+        "HOT_ROLES",
+        {"frontdoor", "coder_escalation", "worker_general", "embedder"},
+    )
+
+    targets = _fallback_status_targets()
+
+    assert targets == [
+        ("coder_escalation/frontdoor", 9001),
+        ("worker_general", 9002),
+    ]

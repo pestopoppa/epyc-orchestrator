@@ -52,14 +52,6 @@ STACK_CHANGE_GATE_COMMAND = [
     "check",
     "--run-promotion-gate",
 ]
-FALLBACK_MODEL_SERVER_TARGETS = [
-    ("frontdoor/coder_escalation/worker_summarize", "http://localhost:8070/health"),
-    ("worker_general/worker_math/toolrunner", "http://localhost:8072/health"),
-    ("architect_general", "http://localhost:8083/health"),
-    ("ingest_long_context", "http://localhost:8085/health"),
-    ("worker_vision", "http://localhost:8086/health"),
-    ("vision_escalation", "http://localhost:8087/health"),
-]
 FALLBACK_MODEL_SERVER_EXCLUDED_ROLES = frozenset({"embedder"})
 
 
@@ -85,8 +77,6 @@ def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str
         if isinstance(port, int) and port in hot_ports:
             names_by_port.setdefault(port, []).append(role)
 
-    if not names_by_port:
-        return [("API", api_health), *FALLBACK_MODEL_SERVER_TARGETS]
     return [
         ("API", api_health),
         *[

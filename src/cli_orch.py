@@ -33,15 +33,9 @@ from src.registry.stack_priors import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_STACK_PRIORS_PATH = Path(__file__).parent.parent / "orchestration" / "derived" / "stack_priors.yaml"
-FALLBACK_STATUS_TARGETS = [
-    ("frontdoor/coder_escalation", 8070),
-    ("worker_general", 8072),
-    ("architect_general", 8083),
-    ("ingest_long_context", 8085),
-    ("worker_vision", 8086),
-    ("vision_escalation", 8087),
-]
-FALLBACK_STATUS_EXCLUDED_ROLES = frozenset({"embedder"})
+FALLBACK_STATUS_EXCLUDED_ROLES = frozenset({
+    "embedder",
+})
 
 
 def _fallback_status_targets() -> list[tuple[str, int]]:
@@ -57,8 +51,6 @@ def _fallback_status_targets() -> list[tuple[str, int]]:
             continue
         if isinstance(port, int) and port in hot_ports:
             names_by_port.setdefault(port, []).append(role)
-    if not names_by_port:
-        return list(FALLBACK_STATUS_TARGETS)
     return [
         ("/".join(sorted(names)), port)
         for port, names in sorted(names_by_port.items())

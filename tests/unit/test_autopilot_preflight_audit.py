@@ -81,6 +81,35 @@ def test_model_server_targets_fallback_is_current(tmp_path: Path) -> None:
     assert "http://localhost:8090/health" not in health_urls
 
 
+def test_model_server_targets_fallback_follows_manifest_without_literal_port_list(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        _MOD,
+        "PORT_MAP",
+        {
+            "frontdoor": 9001,
+            "coder_escalation": 9001,
+            "worker_general": 9002,
+            "embedder": 9090,
+        },
+    )
+    monkeypatch.setattr(
+        _MOD,
+        "HOT_ROLES",
+        {"frontdoor", "coder_escalation", "worker_general", "embedder"},
+    )
+
+    targets = _MOD._model_server_targets(tmp_path / "missing.yaml", "http://localhost:8002")
+
+    assert targets == [
+        ("API", "http://localhost:8002/health"),
+        ("coder_escalation/frontdoor", "http://localhost:9001/health"),
+        ("worker_general", "http://localhost:9002/health"),
+    ]
+
+
 def test_audit_stack_change_gate_runs_canonical_command(monkeypatch) -> None:
     calls = []
 
