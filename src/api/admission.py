@@ -93,15 +93,15 @@ def _limits_from_stack_priors(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
 
 
 def _load_default_limits(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
-    defaults = dict(FALLBACK_LIMITS)
     try:
         limits = _limits_from_stack_priors(path)
     except (OSError, AttributeError, TypeError):
         logger.warning("Falling back to static admission limits", exc_info=True)
-        return defaults
-    for url, slots in limits.items():
-        _merge_limit(defaults, url, slots)
-    return defaults
+        return dict(FALLBACK_LIMITS)
+    if limits:
+        return limits
+    logger.warning("Falling back to static admission limits; no stack-prior limits found")
+    return dict(FALLBACK_LIMITS)
 
 
 DEFAULT_LIMITS: dict[str, int] = _load_default_limits()

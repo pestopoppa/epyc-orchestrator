@@ -882,13 +882,20 @@ def _serving_record(
         if isinstance(launch_cfg, dict)
         else _launch_record([])
     )
-    launch_record["runtime"] = _launch_runtime_record(
+    runtime_record = _launch_runtime_record(
         role,
         descriptor,
         server_cfg,
         role_cfg,
         launch_cfg,
     )
+    launch_record["runtime"] = runtime_record
+
+    if not isinstance(slots, int) or slots <= 0:
+        cache = runtime_record.get("cache") if isinstance(runtime_record, dict) else {}
+        runtime_slots = cache.get("slots") if isinstance(cache, dict) else None
+        if isinstance(runtime_slots, int) and runtime_slots > 0:
+            slots = runtime_slots
 
     return {
         "endpoint": server_cfg.get("url")

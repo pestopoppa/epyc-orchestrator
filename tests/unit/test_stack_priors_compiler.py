@@ -435,6 +435,7 @@ def test_compile_uses_stack_manifest_when_server_mode_is_absent(tmp_path: Path) 
     assert role["deployment_status"] == "live_stack"
     assert role["serving"]["binding"] == "stack_manifest.role"
     assert role["serving"]["endpoint"] == "http://localhost:8086"
+    assert role["serving"]["slots"] == 2
     assert role["serving"]["effective_context_tokens"] == 8192
     assert role["serving"]["launch"]["entries"] == [
         {

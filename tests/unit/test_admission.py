@@ -5,7 +5,12 @@ import threading
 
 import yaml
 
-from src.api.admission import AdmissionController, _limits_from_stack_priors
+from src.api.admission import (
+    AdmissionController,
+    FALLBACK_LIMITS,
+    _limits_from_stack_priors,
+    _load_default_limits,
+)
 
 
 class TestAdmissionController:
@@ -95,6 +100,40 @@ class TestAdmissionController:
         assert limits["http://localhost:8080"] == 2
         assert limits["http://localhost:8180"] == 2
         assert "http://localhost:8084" not in limits
+
+    def test_load_default_limits_prefers_generated_limits(self, tmp_path: Path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            yaml.safe_dump(
+                {
+                    "roles": {
+                        "frontdoor": {
+                            "deployment_status": "live_stack",
+                            "serving": {
+                                "endpoint": "http://localhost:9000",
+                                "ports": [9000, 9001],
+                                "slots": 3,
+                            },
+                        }
+                    }
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        limits = _load_default_limits(priors)
+
+        assert limits == {
+            "http://localhost:9000": 3,
+            "http://localhost:9001": 3,
+        }
+
+    def test_load_default_limits_falls_back_when_generated_limits_empty(self, tmp_path: Path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(yaml.safe_dump({"roles": {}}), encoding="utf-8")
+
+        assert _load_default_limits(priors) == FALLBACK_LIMITS
 
     def test_thread_safety(self):
         """Concurrent acquire/release should not corrupt state."""
