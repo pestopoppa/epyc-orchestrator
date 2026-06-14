@@ -29,6 +29,11 @@ Run during the deploy window (orchestrator + this driver started with the flag):
   AUTOPILOT_TOOL_SENTINELS=1 AUTOPILOT_EVAL_CONCURRENCY=1 \
     .venv/bin/python scripts/autopilot/gate3_tool_telemetry.py
 
+For functional-smoke speedups on a known multi-slot/multi-replica stack, set
+AUTOPILOT_GATE3_PARALLELISM=N to fan out the independent sentinel calls. Keep
+benchmark-grade latency/reliability evidence on dedicated benchmark harnesses;
+parallel Gate-3 runs prove telemetry/tool plumbing, not throughput.
+
 The pure assertion helpers below take raw /chat response dicts and are unit-
 tested in tests/unit/test_gate3_tool_telemetry.py (no inference required).
 """
@@ -38,6 +43,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 _ORCH_ROOT = Path(__file__).resolve().parents[2]
@@ -71,6 +77,25 @@ def _gate_skip_soft() -> bool:
         "yes",
         "on",
     }
+
+
+def _gate_parallelism() -> int:
+    """Opt-in live sentinel fanout for functional-smoke runs.
+
+    Gate-3 is a telemetry contract, not a latency benchmark. Defaulting to
+    serial preserves the historical deploy gate. Operators can deliberately set
+    AUTOPILOT_GATE3_PARALLELISM (or the broader AUTOPILOT_EVAL_CONCURRENCY) when
+    the live stack has verified independent slots/replicas.
+    """
+    raw = os.environ.get("AUTOPILOT_GATE3_PARALLELISM")
+    if raw is None:
+        raw = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
+    if raw is None:
+        return 1
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 1
 
 
 def _print(line: str = "") -> None:
@@ -233,14 +258,16 @@ def _run_live() -> int:
     tower = EvalTower()
     request_timeout = _gate_request_timeout(tower.timeout)
     skip_soft = _gate_skip_soft()
+    parallelism = _gate_parallelism()
     _print(f"  gate request timeout: {request_timeout}s (EvalTower default={tower.timeout}s)")
     _print(f"  soft web_research probe: {'SKIP' if skip_soft else 'RUN'}")
+    _print(f"  sentinel batch parallelism: {parallelism} (functional smoke; not latency evidence)")
     sentinels = tower._load_tool_sentinels()
     if not sentinels:
         _print("FATAL: no tool sentinels loaded (AUTOPILOT_TOOL_SENTINELS unset or file missing)")
         return 2
 
-    def _call(label: str, prompt: str, force_mode: str) -> dict:
+    def _call(label: str, prompt: str, force_mode: str, client: httpx.Client) -> dict:
         _print(f"  -> {label}: start force_mode={force_mode!r}")
         start = time.monotonic()
         resp = call_orchestrator_forced(
@@ -261,16 +288,44 @@ def _run_live() -> int:
             )
         return resp
 
-    responses: list[dict] = []
-    with httpx.Client(timeout=request_timeout) as client:
-        for q in sentinels:
-            resp = _call(
-                label=q["id"],
-                prompt=q["prompt"],
-                force_mode=q.get("force_mode", "repl"),
-            )
-            responses.append(resp)
+    def _call_isolated(label: str, prompt: str, force_mode: str) -> dict:
+        with httpx.Client(timeout=request_timeout) as isolated_client:
+            return _call(label, prompt, force_mode, isolated_client)
 
+    sentinel_specs = [
+        (q["id"], q["prompt"], q.get("force_mode", "repl"))
+        for q in sentinels
+    ]
+    responses: list[dict] = []
+    workers = min(len(sentinel_specs), parallelism)
+    if workers <= 1:
+        with httpx.Client(timeout=request_timeout) as client:
+            for label, prompt, force_mode in sentinel_specs:
+                resp = _call(
+                    label=label,
+                    prompt=prompt,
+                    force_mode=force_mode,
+                    client=client,
+                )
+                responses.append(resp)
+    else:
+        ordered: list[dict | None] = [None] * len(sentinel_specs)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(_call_isolated, label, prompt, force_mode): idx
+                for idx, (label, prompt, force_mode) in enumerate(sentinel_specs)
+            }
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                try:
+                    ordered[idx] = fut.result()
+                except Exception as exc:  # defensive: preserve gate diagnostics
+                    label = sentinel_specs[idx][0]
+                    ordered[idx] = {"error": f"{type(exc).__name__}: {exc}", "label": label}
+                    _print(f"  <- {label}: ERROR={ordered[idx]['error']}")
+        responses = [r if r is not None else {"error": "missing parallel result"} for r in ordered]
+
+    with httpx.Client(timeout=request_timeout) as client:
         # Isolation: a no-tool request AFTER the batch (shared registry is warm).
         # force_mode="repl" is REQUIRED — the cross-request pollution bug lived in
         # the REPL telemetry path, so we must exercise THAT path (force_mode=""
@@ -281,6 +336,7 @@ def _run_live() -> int:
             label="isolation_no_tool",
             prompt="Reply with only the number 4. Do not use any tools.",
             force_mode="repl",
+            client=client,
         )
 
         if skip_soft:
@@ -295,6 +351,7 @@ def _run_live() -> int:
                     "result briefly."
                 ),
                 force_mode="repl",
+                client=client,
             )
 
     ges_ok, ges_lines = check_get_eval_secret_contract(responses)

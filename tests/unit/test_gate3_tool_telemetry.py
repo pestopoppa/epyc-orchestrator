@@ -14,6 +14,7 @@ if str(_AP) not in sys.path:
     sys.path.insert(0, str(_AP))
 
 from gate3_tool_telemetry import (  # noqa: E402
+    _gate_parallelism,
     _gate_request_timeout,
     _gate_skip_soft,
     check_get_eval_secret_contract,
@@ -128,3 +129,30 @@ def test_gate_skip_soft_parses_truthy_values(monkeypatch):
 
     monkeypatch.setenv("AUTOPILOT_GATE3_SKIP_SOFT", "false")
     assert _gate_skip_soft() is False
+
+
+def test_gate_parallelism_defaults_to_serial(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_GATE3_PARALLELISM", raising=False)
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    assert _gate_parallelism() == 1
+
+
+def test_gate_parallelism_uses_gate_override_first(monkeypatch):
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "2")
+    monkeypatch.setenv("AUTOPILOT_GATE3_PARALLELISM", "4")
+    assert _gate_parallelism() == 4
+
+
+def test_gate_parallelism_falls_back_to_eval_concurrency(monkeypatch):
+    monkeypatch.delenv("AUTOPILOT_GATE3_PARALLELISM", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "3")
+    assert _gate_parallelism() == 3
+
+
+def test_gate_parallelism_invalid_or_low_values_are_serial(monkeypatch):
+    monkeypatch.setenv("AUTOPILOT_GATE3_PARALLELISM", "bad")
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "3")
+    assert _gate_parallelism() == 1
+
+    monkeypatch.setenv("AUTOPILOT_GATE3_PARALLELISM", "0")
+    assert _gate_parallelism() == 1
