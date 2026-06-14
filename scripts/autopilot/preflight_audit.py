@@ -22,7 +22,13 @@ from urllib.parse import urlparse
 
 import yaml
 
-from src.autopilot_core.journal_reconstruction import fold_supersession_events
+from src.autopilot_core.baseline_ledger import canonical_jsonable
+from src.autopilot_core.journal_reconstruction import (
+    fold_supersession_events,
+    reconstruct_archive_from_journal_rows,
+)
+from src.autopilot_core.journal_snapshot_replay import build_snapshot_replay_diagnostic
+from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
 
 log = logging.getLogger("autopilot.preflight")
 
@@ -33,6 +39,8 @@ sys.path.insert(0, str(SCRIPT_DIR.parents[1]))
 
 ORCHESTRATOR_URL = "http://localhost:8000"
 STACK_PRIORS_PATH = SCRIPT_DIR.parents[1] / "orchestration" / "derived" / "stack_priors.yaml"
+STATE_PATH = SCRIPT_DIR.parents[1] / "orchestration" / "autopilot_state.json"
+JOURNAL_PATH = SCRIPT_DIR.parents[1] / "orchestration" / "autopilot_journal.jsonl"
 FALLBACK_MODEL_SERVER_TARGETS = [
     ("frontdoor/coder_escalation/worker_summarize", "http://localhost:8070/health"),
     ("worker_general/worker_math/toolrunner", "http://localhost:8072/health"),
@@ -109,6 +117,150 @@ def _check(name: str, condition: bool, detail: str = "") -> bool:
     suffix = f" — {detail}" if detail else ""
     print(f"  [{mark}] {name}{suffix}")
     return condition
+
+
+def _load_jsonl(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    if not path.exists():
+        return rows
+    for line_num, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        try:
+            row = json.loads(line)
+        except Exception:
+            log.debug("Skipping malformed JSONL line %d in %s", line_num, path)
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def _trial_id(row: dict) -> int | None:
+    try:
+        return int(row.get("trial_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _archive_entry_view(entry: dict) -> dict:
+    view: dict[str, object] = {}
+    for field in (
+        "trial_id",
+        "objectives",
+        "git_tag",
+        "species",
+        "is_production_best",
+        "timestamp",
+        "eval_tier",
+        "config_fingerprint",
+        "n_reproductions",
+    ):
+        if field in entry:
+            view[field] = entry[field]
+    return view
+
+
+def _sorted_entry_views(entries: object) -> list[dict]:
+    if not isinstance(entries, list):
+        return []
+    views = [_archive_entry_view(entry) for entry in entries if isinstance(entry, dict)]
+    return sorted(
+        views,
+        key=lambda item: (
+            str(item.get("eval_tier", "")),
+            str(item.get("trial_id", "")),
+            json.dumps(item.get("objectives", []), sort_keys=True, default=str),
+        ),
+    )
+
+
+def _archive_authority_view(payload: dict) -> dict:
+    frontiers_by_tier = payload.get("frontiers_by_tier")
+    if not isinstance(frontiers_by_tier, dict):
+        frontiers_by_tier = {
+            str(DEFAULT_FRONTIER_TIER): payload.get("frontier", [])
+        } if payload.get("frontier") else {}
+    hv_by_tier = payload.get("hv_history_by_tier")
+    if not isinstance(hv_by_tier, dict):
+        hv_by_tier = {
+            str(DEFAULT_FRONTIER_TIER): payload.get("hypervolume_history", [])
+        } if payload.get("hypervolume_history") else {}
+    return canonical_jsonable(
+        {
+            "frontier": _sorted_entry_views(payload.get("frontier", [])),
+            "frontiers_by_tier": {
+                str(tier): _sorted_entry_views(frontier)
+                for tier, frontier in sorted(frontiers_by_tier.items())
+            },
+            "all_entries": _sorted_entry_views(payload.get("all_entries", [])),
+            "hypervolume_history": payload.get("hypervolume_history", []),
+            "hv_history_by_tier": hv_by_tier,
+        }
+    )
+
+
+def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
+    """Compare state-backed archive authority with journal reconstruction."""
+    state_archive = state.get("pareto_archive")
+    if not isinstance(state_archive, dict) or not state_archive:
+        return {
+            "status": "missing_state_archive",
+            "warnings": ["autopilot_state.json has no pareto_archive payload"],
+        }
+
+    trial_ids = [_trial_id(row) for row in journal_rows]
+    journal_max_trial_id = max((trial_id for trial_id in trial_ids if trial_id is not None), default=None)
+    try:
+        state_trial_counter = int(state.get("trial_counter"))
+    except (TypeError, ValueError):
+        state_trial_counter = None
+
+    warnings: list[str] = []
+    if (
+        state_trial_counter is not None
+        and journal_max_trial_id is not None
+        and journal_max_trial_id >= state_trial_counter
+    ):
+        warnings.append(
+            f"journal max trial {journal_max_trial_id} is not below "
+            f"state trial_counter {state_trial_counter}"
+        )
+
+    journal_archive = reconstruct_archive_from_journal_rows(
+        journal_rows,
+        None,
+        current_run_only=False,
+    )
+    if journal_archive is None:
+        return {
+            "status": "journal_unreconstructable",
+            "state_trial_counter": state_trial_counter,
+            "journal_max_trial_id": journal_max_trial_id,
+            "warnings": warnings + ["journal rows did not reconstruct an archive"],
+        }
+
+    ledger_events = [
+        row for row in journal_rows
+        if row.get("type") and "trial_id" not in row
+    ]
+    snapshot_diagnostic = build_snapshot_replay_diagnostic(journal_rows, ledger_events)
+    if snapshot_diagnostic.bounded_replay_readiness == "prefix_invalidated":
+        warnings.append("latest journal snapshot prefix is invalidated")
+
+    state_view = _archive_authority_view(state_archive)
+    journal_view = _archive_authority_view(journal_archive)
+    status = "match" if state_view == journal_view and not warnings else "drift"
+    return {
+        "status": status,
+        "state_trial_counter": state_trial_counter,
+        "journal_max_trial_id": journal_max_trial_id,
+        "state_entry_count": len(state_view["all_entries"]),
+        "journal_entry_count": len(journal_view["all_entries"]),
+        "state_frontier_count": len(state_view["frontier"]),
+        "journal_frontier_count": len(journal_view["frontier"]),
+        "snapshot_readiness": snapshot_diagnostic.bounded_replay_readiness,
+        "snapshot_replay_status": snapshot_diagnostic.status,
+        "warnings": warnings,
+    }
 
 
 def audit_model_servers(url: str = ORCHESTRATOR_URL) -> bool:
@@ -286,9 +438,56 @@ def audit_blacklist() -> bool:
     return all_ok
 
 
+def audit_archive_authority() -> bool:
+    """Check state-backed archive authority matches append-only journal replay."""
+    _header("8. Archive Authority Drift")
+    if not STATE_PATH.exists():
+        return _check("State file exists", False, str(STATE_PATH))
+    if not JOURNAL_PATH.exists():
+        return _check("Journal file exists", False, str(JOURNAL_PATH))
+    try:
+        state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return _check("State JSON parses", False, str(exc)[:80])
+    if not isinstance(state, dict):
+        return _check("State JSON is an object", False)
+
+    journal_rows = _load_jsonl(JOURNAL_PATH)
+    diagnostic = archive_authority_diagnostic(state, journal_rows)
+    all_ok = True
+    all_ok &= _check(
+        "Journal rows loaded",
+        bool(journal_rows),
+        f"{len(journal_rows)} rows",
+    )
+    all_ok &= _check(
+        "State archive matches journal fold",
+        diagnostic["status"] == "match",
+        (
+            f"status={diagnostic['status']} "
+            f"state_entries={diagnostic.get('state_entry_count', 'n/a')} "
+            f"journal_entries={diagnostic.get('journal_entry_count', 'n/a')} "
+            f"state_frontier={diagnostic.get('state_frontier_count', 'n/a')} "
+            f"journal_frontier={diagnostic.get('journal_frontier_count', 'n/a')}"
+        ),
+    )
+    snapshot_ok = diagnostic.get("snapshot_readiness") != "prefix_invalidated"
+    all_ok &= _check(
+        "Snapshot prefix is not invalidated",
+        snapshot_ok,
+        (
+            f"readiness={diagnostic.get('snapshot_readiness', 'n/a')} "
+            f"replay={diagnostic.get('snapshot_replay_status', 'n/a')}"
+        ),
+    )
+    for warning in diagnostic.get("warnings", []):
+        _check("Archive authority warning", False, str(warning))
+    return all_ok
+
+
 def audit_seeding_pipeline(url: str) -> bool:
     """Send a real question through the seeding eval pipeline and check all fields."""
-    _header("8. Seeding Eval Pipeline (end-to-end)")
+    _header("9. Seeding Eval Pipeline (end-to-end)")
     import httpx
 
     # Send a simple question through the orchestrator (mimic seeding eval path)
@@ -357,7 +556,7 @@ def audit_seeding_pipeline(url: str) -> bool:
 
 def audit_eval_tower() -> bool:
     """Check eval tower speed calculation with synthetic data."""
-    _header("9. Eval Tower Speed Calculation")
+    _header("10. Eval Tower Speed Calculation")
     from dataclasses import dataclass
 
     @dataclass
@@ -403,6 +602,7 @@ def main():
     results.append(("F1 Scoring", audit_f1_scoring()))
     results.append(("Question Pool", audit_question_pool()))
     results.append(("Blacklist", audit_blacklist()))
+    results.append(("Archive Authority", audit_archive_authority()))
     results.append(("Seeding Pipeline", audit_seeding_pipeline(args.url)))
     results.append(("Eval Tower", audit_eval_tower()))
 

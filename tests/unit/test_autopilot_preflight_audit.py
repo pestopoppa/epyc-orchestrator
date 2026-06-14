@@ -4,8 +4,36 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
+from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 from scripts.autopilot import preflight_audit as _MOD
+
+
+def _journal_row(
+    trial_id: int,
+    *,
+    quality: float = 1.0,
+    speed: float = 40.0,
+) -> dict[str, Any]:
+    return {
+        "trial_id": trial_id,
+        "timestamp": f"2026-06-14T00:00:0{trial_id}Z",
+        "species": "unit",
+        "action_type": "seed_batch",
+        "tier": 1,
+        "quality": quality,
+        "speed": speed,
+        "cost": 0.2,
+        "reliability": 0.9,
+        "pareto_status": "frontier",
+    }
+
+
+def _archive(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    return archive
 
 
 def test_model_server_targets_derive_from_stack_priors(tmp_path: Path) -> None:
@@ -84,3 +112,75 @@ blacklist:
     monkeypatch.setattr(_MOD, "SCRIPT_DIR", script_dir)
 
     assert _MOD.audit_blacklist() is False
+
+
+def test_archive_authority_diagnostic_matches_reconstructed_state() -> None:
+    rows = [_journal_row(1, quality=1.2)]
+    archive = _archive(rows)
+    state = {"trial_counter": 2, "pareto_archive": archive}
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "match"
+    assert diagnostic["state_entry_count"] == 1
+    assert diagnostic["journal_entry_count"] == 1
+    assert diagnostic["state_frontier_count"] == 1
+    assert diagnostic["journal_frontier_count"] == 1
+
+
+def test_archive_authority_diagnostic_detects_archive_drift() -> None:
+    rows = [_journal_row(1, quality=1.2)]
+    archive = json.loads(json.dumps(_archive(rows)))
+    archive["frontier"][0]["objectives"][0] = 0.5
+    state = {"trial_counter": 2, "pareto_archive": archive}
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "drift"
+    assert diagnostic["state_entry_count"] == 1
+    assert diagnostic["journal_entry_count"] == 1
+
+
+def test_archive_authority_diagnostic_flags_journal_ahead_of_state() -> None:
+    rows = [_journal_row(1)]
+    state = {"trial_counter": 1, "pareto_archive": _archive(rows)}
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "drift"
+    assert diagnostic["warnings"] == [
+        "journal max trial 1 is not below state trial_counter 1"
+    ]
+
+
+def test_audit_archive_authority_uses_state_and_journal_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    rows = [_journal_row(1)]
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    state_path.write_text(
+        json.dumps({"trial_counter": 2, "pareto_archive": _archive(rows)}),
+        encoding="utf-8",
+    )
+    journal_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_MOD, "STATE_PATH", state_path)
+    monkeypatch.setattr(_MOD, "JOURNAL_PATH", journal_path)
+
+    assert _MOD.audit_archive_authority() is True
+
+    state_path.write_text(
+        json.dumps(
+            {
+                "trial_counter": 2,
+                "pareto_archive": {"frontier": [], "all_entries": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _MOD.audit_archive_authority() is False
