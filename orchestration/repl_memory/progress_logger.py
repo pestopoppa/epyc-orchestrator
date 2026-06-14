@@ -220,6 +220,13 @@ class ProgressLogger:
                 return value
         return None
 
+    @staticmethod
+    def _normalize_operator_verdict(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lower().replace(" ", "_")
+        return normalized or None
+
     def _remember_task_record_start(
         self,
         task_id: str,
@@ -251,6 +258,8 @@ class ProgressLogger:
         details: Optional[str],
         completion_data: Dict[str, Any],
         completed_at: datetime,
+        operator_verdict: Optional[str] = None,
+        operator_verdict_details: Optional[str] = None,
     ) -> Dict[str, Any] | None:
         record = self._task_record_cache().pop(task_id, None)
         if not record:
@@ -268,6 +277,14 @@ class ProgressLogger:
         record["outcome"] = "success" if success else "failure"
         if details:
             record["outcome_details_ref"] = self._text_ref(details)
+        normalized_verdict = self._normalize_operator_verdict(operator_verdict)
+        if normalized_verdict:
+            record["operator_verdict"] = normalized_verdict
+            record["operator_verdict_source"] = "explicit_operator"
+            if operator_verdict_details:
+                record["operator_verdict_details_ref"] = self._text_ref(
+                    operator_verdict_details
+                )
         return record
 
     def log(self, entry: ProgressEntry) -> None:
@@ -393,9 +410,23 @@ class ProgressLogger:
         success: bool,
         details: Optional[str] = None,
         completion_meta: Optional[Dict[str, Any]] = None,
+        operator_verdict: Optional[str] = None,
+        operator_verdict_details: Optional[str] = None,
     ) -> None:
         """Log task completion."""
         completion_data = dict(completion_meta or {})
+        meta_verdict_details = completion_data.pop("operator_verdict_details", None)
+        if operator_verdict is None:
+            operator_verdict = completion_data.get("operator_verdict")  # type: ignore[assignment]
+        normalized_operator_verdict = self._normalize_operator_verdict(operator_verdict)
+        if normalized_operator_verdict:
+            completion_data["operator_verdict"] = normalized_operator_verdict
+            if operator_verdict_details is None and isinstance(meta_verdict_details, str):
+                operator_verdict_details = meta_verdict_details
+            if operator_verdict_details:
+                completion_data["operator_verdict_details_ref"] = self._text_ref(
+                    operator_verdict_details
+                )
         completed_at = datetime.now(timezone.utc)
         task_record = self._complete_task_record(
             task_id,
@@ -403,6 +434,8 @@ class ProgressLogger:
             details,
             completion_data,
             completed_at,
+            normalized_operator_verdict,
+            operator_verdict_details,
         )
         if task_record:
             completion_data["task_record_v1"] = task_record

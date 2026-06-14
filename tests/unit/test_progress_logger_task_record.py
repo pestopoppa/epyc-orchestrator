@@ -97,3 +97,31 @@ def test_task_record_sums_prompt_and_completion_tokens(tmp_path):
 
     record = _read_events(tmp_path)[-1]["data"]["task_record_v1"]
     assert record["tokens"] == 15
+
+
+def test_task_completion_embeds_operator_verdict_refs(tmp_path):
+    logger = ProgressLogger(log_dir=tmp_path, buffer_size=100)
+
+    logger.log_task_started(
+        task_id="chat-verdict",
+        task_ir={"task_type": "review", "objective": "Review a stack-change patch"},
+        routing_decision=["architect_general"],
+        routing_strategy="operator",
+    )
+    logger.log_task_completed(
+        "chat-verdict",
+        success=True,
+        completion_meta={"operator_verdict_details": "contains private note"},
+        operator_verdict="Accepted",
+    )
+    logger.flush()
+
+    terminal_event = _read_events(tmp_path)[-1]
+    payload = json.dumps(terminal_event)
+    assert "contains private note" not in payload
+    assert terminal_event["data"]["operator_verdict"] == "accepted"
+    assert "operator_verdict_details_ref" in terminal_event["data"]
+    record = terminal_event["data"]["task_record_v1"]
+    assert record["operator_verdict"] == "accepted"
+    assert record["operator_verdict_source"] == "explicit_operator"
+    assert "operator_verdict_details_ref" in record
