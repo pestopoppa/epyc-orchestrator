@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """Unit tests for _dedup_pages() in src/tools/web/research.py."""
 
+import io
+import json
+from urllib.error import HTTPError
+
 from src.tools.web.research import (
     _dedup_pages,
     _format_source_quarantine,
     _is_irrelevant_synthesis,
     _MIN_PARAGRAPH_LEN,
+    _synthesize_page,
     _web_research_impl,
 )
 from src.tools.web import research as research_mod
@@ -328,3 +333,55 @@ class TestSourceQuarantine:
         assert result["pages_fetched"] == 1
         assert result["pages_synthesized"] == 0
         assert result["synthesis_failures"] == 1
+
+
+class TestWorkerSynthesis:
+    """Worker synthesis request robustness."""
+
+    def test_synthesize_page_retries_http_5xx_with_reduced_cap(self, monkeypatch):
+        from src.api.routes import chat_utils
+
+        monkeypatch.setattr(chat_utils, "apply_chat_template_for_model", lambda _hint, body: body)
+        monkeypatch.setattr(research_mod, "_SYNTH_MAX_TOKENS", 512)
+        monkeypatch.setattr(research_mod, "_SYNTH_RETRY_MAX_TOKENS", 256)
+
+        requested_caps = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({"content": "Recovered synthesis."}).encode("utf-8")
+
+        def fake_urlopen(req, timeout):
+            payload = json.loads(req.data.decode("utf-8"))
+            requested_caps.append(payload["n_predict"])
+            if len(requested_caps) == 1:
+                raise HTTPError(
+                    req.full_url,
+                    500,
+                    "Internal Server Error",
+                    hdrs={},
+                    fp=io.BytesIO(b"decode boundary"),
+                )
+            return FakeResponse()
+
+        monkeypatch.setattr(research_mod.urllib.request, "urlopen", fake_urlopen)
+
+        result = _synthesize_page(
+            "https://example.test/source",
+            "Source",
+            "Useful source content. " * 20,
+            "test query",
+        )
+
+        assert requested_caps == [512, 256]
+        assert result["success"] is True
+        assert result["retry"] is True
+        assert result["attempt"] == "retry_reduced_n_predict"
+        assert result["n_predict"] == 256
+        assert result["synthesis"] == "Recovered synthesis."

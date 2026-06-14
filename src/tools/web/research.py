@@ -53,6 +53,7 @@ _MAX_FETCH_WORKERS = 5
 _MAX_SYNTH_WORKERS = 3
 _CONTENT_PER_PAGE = 6000  # chars of page content to send to worker
 _SYNTH_MAX_TOKENS = 512  # worker output cap
+_SYNTH_RETRY_MAX_TOKENS = 256  # reduced cap for one retry after worker 5xx
 _SOURCE_QUARANTINE_LABEL = "SOURCE-QUARANTINE"
 
 # Relevance detection patterns for synthesis output instrumentation
@@ -679,6 +680,34 @@ def _dedup_pages(
     return deduped, stats
 
 
+def _worker_http_error_detail(exc: HTTPError, *, max_chars: int = 500) -> str:
+    """Return a bounded detail string for worker HTTP failures."""
+    try:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        body = ""
+
+    detail = f"HTTP {exc.code} {exc.reason}"
+    if body:
+        detail = f"{detail}: {body[:max_chars]}"
+    return detail
+
+
+def _worker_completion_payload(prompt: str, *, n_predict: int) -> bytes:
+    """Build the llama-server /completion payload for web synthesis."""
+    return json.dumps(
+        {
+            "prompt": prompt,
+            "temperature": 0.1,
+            "n_predict": n_predict,
+            "stream": False,
+            # No family-specific stop tokens — let the model use its natural
+            # EOT. The n_predict cap bounds the output length. (Previously
+            # hardcoded ["<|im_end|>"] which only worked for Qwen.)
+        }
+    ).encode("utf-8")
+
+
 def _synthesize_page(
     url: str,
     title: str,
@@ -730,49 +759,80 @@ def _synthesize_page(
     )
     prompt = apply_chat_template_for_model(_WORKER_MODEL_HINT, body)
 
-    payload = json.dumps(
-        {
-            "prompt": prompt,
-            "temperature": 0.1,
-            "n_predict": _SYNTH_MAX_TOKENS,
-            "stream": False,
-            # No family-specific stop tokens — let the model use its natural
-            # EOT. The n_predict cap bounds the output length. (Previously
-            # hardcoded ["<|im_end|>"] which only worked for Qwen.)
-        }
-    ).encode("utf-8")
-
     headers = {
         "Content-Type": "application/json",
     }
-    req = urllib.request.Request(_WORKER_URL, data=payload, headers=headers)
 
-    start = time.perf_counter()
-    try:
-        with urllib.request.urlopen(req, timeout=_WORKER_TIMEOUT) as response:
-            data = json.loads(response.read().decode("utf-8"))
-            synthesis = data.get("content", "").strip()
-            elapsed = (time.perf_counter() - start) * 1000
+    attempts = [("primary", _SYNTH_MAX_TOKENS)]
+    if _SYNTH_MAX_TOKENS > _SYNTH_RETRY_MAX_TOKENS:
+        attempts.append(("retry_reduced_n_predict", _SYNTH_RETRY_MAX_TOKENS))
 
-            return {
-                "url": url,
-                "title": title,
-                "synthesis": synthesis,
-                "success": True,
-                "elapsed_ms": elapsed,
-            }
+    errors: list[str] = []
+    total_start = time.perf_counter()
+    for attempt_idx, (attempt_label, n_predict) in enumerate(attempts):
+        payload = _worker_completion_payload(prompt, n_predict=n_predict)
+        req = urllib.request.Request(_WORKER_URL, data=payload, headers=headers)
+        attempt_start = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=_WORKER_TIMEOUT) as response:
+                data = json.loads(response.read().decode("utf-8"))
+                synthesis = data.get("content", "").strip()
+                elapsed = (time.perf_counter() - total_start) * 1000
 
-    except Exception as e:
-        elapsed = (time.perf_counter() - start) * 1000
-        logger.warning(f"Worker synthesis failed for {url}: {e}")
-        return {
-            "url": url,
-            "title": title,
-            "synthesis": "",
-            "success": False,
-            "error": str(e),
-            "elapsed_ms": elapsed,
-        }
+                return {
+                    "url": url,
+                    "title": title,
+                    "synthesis": synthesis,
+                    "success": True,
+                    "elapsed_ms": elapsed,
+                    "n_predict": n_predict,
+                    "retry": attempt_idx > 0,
+                    "attempt": attempt_label,
+                }
+        except HTTPError as e:
+            elapsed = (time.perf_counter() - attempt_start) * 1000
+            detail = _worker_http_error_detail(e)
+            errors.append(f"{attempt_label} n_predict={n_predict}: {detail}")
+            logger.warning(
+                "Worker synthesis %s failed for %s: model=%s prompt_chars=%d "
+                "content_chars=%d n_predict=%d elapsed_ms=%.1f error=%s",
+                attempt_label,
+                url,
+                _WORKER_MODEL_HINT,
+                len(prompt),
+                len(content),
+                n_predict,
+                elapsed,
+                detail,
+            )
+            if e.code < 500:
+                break
+        except Exception as e:
+            elapsed = (time.perf_counter() - attempt_start) * 1000
+            errors.append(f"{attempt_label} n_predict={n_predict}: {e}")
+            logger.warning(
+                "Worker synthesis %s failed for %s: model=%s prompt_chars=%d "
+                "content_chars=%d n_predict=%d elapsed_ms=%.1f error=%s",
+                attempt_label,
+                url,
+                _WORKER_MODEL_HINT,
+                len(prompt),
+                len(content),
+                n_predict,
+                elapsed,
+                e,
+            )
+            break
+
+    elapsed = (time.perf_counter() - total_start) * 1000
+    return {
+        "url": url,
+        "title": title,
+        "synthesis": "",
+        "success": False,
+        "error": "; ".join(errors) if errors else "worker synthesis failed",
+        "elapsed_ms": elapsed,
+    }
 
 
 def _web_research_impl(
