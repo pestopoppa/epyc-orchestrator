@@ -46,9 +46,10 @@ VALID_INDICES = frozenset({"code", "docs"})
 # Subprocess-per-query: every call pays full ONNX runtime + ColBERT model
 # load (~770 ms p50, ~2.3 s worst-case). Acceptable for human-paced REPL;
 # if soak telemetry shows the hit is real for high-frequency tool loops,
-# see handoffs/active/repl-turn-efficiency.md "S7: Cold-start daemon options"
-# for the two evaluated paths (homegrown sidecar vs upstream next-plaid SDK CLI).
-COLGREP_BIN = "/mnt/raid0/llm/UTILS/bin/colgrep"
+# see handoffs/active/repl-turn-efficiency.md "Cold-Start Daemon Gate".
+COLGREP_VERSION = "1.2.0"
+COLGREP_EXPECTED_SHA256 = "833e52aa6c40d090142fa132e3c75d3e792a4707474682a2496e3471f646f956"
+COLGREP_BIN = f"/mnt/raid0/llm/UTILS/bin/colgrep-{COLGREP_VERSION}"
 COLGREP_DEFAULT_PATH = "/mnt/raid0/llm/epyc-orchestrator/src"
 COLGREP_TIMEOUT_S = 10
 

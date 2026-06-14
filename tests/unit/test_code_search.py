@@ -488,6 +488,18 @@ class TestColgrepIntegration:
         },
     ])
 
+    def test_default_colgrep_binary_path_is_version_pinned(self):
+        """Default ColGREP path points at a versioned binary, not the mutable alias."""
+        from src.repl_environment.code_search import (
+            COLGREP_BIN,
+            COLGREP_EXPECTED_SHA256,
+            COLGREP_VERSION,
+        )
+
+        assert COLGREP_VERSION == "1.2.0"
+        assert COLGREP_BIN.endswith(f"/colgrep-{COLGREP_VERSION}")
+        assert len(COLGREP_EXPECTED_SHA256) == 64
+
     def _fake_proc(self, stdout: str = "", returncode: int = 0, stderr: str = ""):
         proc = MagicMock()
         proc.stdout = stdout
