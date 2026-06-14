@@ -221,7 +221,7 @@ def test_baseline_promotion_summary_compares_latest_event_to_state(
 
     assert lines[0] == "Baseline promotion events: 1"
     assert lines[1].startswith("Latest baseline event: trial #8 T1 1.500 -> 1.800 at ")
-    assert lines[2] == "Baseline ledger state matches state: yes"
+    assert lines[2] == "Baseline ledger state status: match"
 
 
 def test_baseline_promotion_summary_reports_state_drift(
@@ -244,7 +244,7 @@ def test_baseline_promotion_summary_reports_state_drift(
         journal,
     )
 
-    assert lines[2] == "Baseline ledger state matches state: no"
+    assert lines[2] == "Baseline ledger state status: drift"
 
 
 def test_merge_external_control_fields_preserves_operator_pause() -> None:

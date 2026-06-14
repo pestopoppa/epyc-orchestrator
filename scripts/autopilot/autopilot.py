@@ -98,6 +98,10 @@ from src.autopilot_core.tier_specs import (
     task_rate_objectives_from,
     task_rate_qph_from,
 )
+from src.autopilot_core.baseline_ledger import (
+    format_baseline_ledger_summary,
+    reconcile_baseline_ledger,
+)
 
 # Preflight diagnostics from seeding infra
 sys.path.insert(0, str(SCRIPT_DIR.parent / "benchmark"))
@@ -3135,59 +3139,15 @@ def _append_baseline_promotion_event(
     )
 
 
-def _canonical_jsonable(value: Any) -> Any:
-    """Normalize JSON-like payloads for stable read-only diagnostics."""
-    try:
-        return json.loads(json.dumps(value, sort_keys=True, default=str))
-    except (TypeError, ValueError):
-        return value
-
-
-def _format_optional_metric(value: Any) -> str:
-    try:
-        return f"{float(value):.3f}"
-    except (TypeError, ValueError):
-        return "n/a"
-
-
 def _baseline_promotion_summary_lines(
     state: dict[str, Any], journal: ExperimentJournal,
 ) -> list[str]:
-    """Read-only baseline-as-ledger preview for operator commands.
-
-    W4 authority still comes from ``state['baseline_state']``. This diagnostic
-    folds append-only promotion events by taking the latest event snapshot and
-    comparing it with current state so drift is visible before any cutover.
-    """
-    events = journal.baseline_promotion_events()
-    if not events:
-        return [
-            "Baseline promotion events: 0",
-            "Baseline ledger state: no promotion events",
-        ]
-
-    latest = events[-1]
-    latest_state = latest.get("baseline_state") or {}
-    state_baseline = state.get("baseline_state") or {}
-    if not state_baseline:
-        match_label = "missing state baseline"
-    elif _canonical_jsonable(state_baseline) == _canonical_jsonable(latest_state):
-        match_label = "yes"
-    else:
-        match_label = "no"
-
-    return [
-        f"Baseline promotion events: {len(events)}",
-        (
-            "Latest baseline event: "
-            f"trial #{latest.get('source_trial_id', 'n/a')} "
-            f"T{latest.get('tier', 'n/a')} "
-            f"{_format_optional_metric(latest.get('previous_quality'))} -> "
-            f"{_format_optional_metric(latest.get('new_quality'))} "
-            f"at {latest.get('timestamp', 'n/a')}"
-        ),
-        f"Baseline ledger state matches state: {match_label}",
-    ]
+    """Read-only baseline-as-ledger preview for operator commands."""
+    reconciliation = reconcile_baseline_ledger(
+        journal.baseline_promotion_events(),
+        state.get("baseline_state"),
+    )
+    return format_baseline_ledger_summary(reconciliation)
 
 
 def cmd_status(args: argparse.Namespace) -> None:
