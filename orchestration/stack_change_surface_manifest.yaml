@@ -124,6 +124,22 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: reuse src.registry.stack_priors helpers instead of local stack-prior YAML readers
+  - rule_id: static_inference_lock_role_policy
+    category: production_blocker
+    owner: runtime-governance
+    consumer_scope: inference lock exclusive/shared role policy
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive lock role policy from generated stack priors; keep only explicit _LEGACY_* degraded fallbacks
+  - rule_id: static_inference_tap_stream_policy
+    category: production_blocker
+    owner: runtime-governance
+    consumer_scope: inference tap safe-mode stream policy
+    promotion_blocker: true
+    review_cadence: every stack change
+    evidence_command: uv run python scripts/validate/stack_change_guard.py
+    drift_response: derive tap stream policy from stack-prior model facts; keep only explicit _LEGACY_* degraded fallbacks
   - rule_id: stale_autopilot_program_stack_guidance
     category: production_blocker
     owner: autopilot-instrumentation

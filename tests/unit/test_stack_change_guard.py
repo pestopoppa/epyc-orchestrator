@@ -1022,6 +1022,102 @@ payload = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
     )
 
 
+def test_scan_hardcoded_surfaces_flags_static_inference_lock_role_policy(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "src" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "inference_lock.py").write_text(
+        """
+HEAVY_ROLES: frozenset[str] = frozenset({"frontdoor", "architect_general"})
+LIGHT_ROLES = frozenset({"worker_general"})
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_inference_lock_role_policy"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "src/runtime/inference_lock.py"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_allows_derived_inference_lock_policy(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "src" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "inference_lock.py").write_text(
+        """
+_LEGACY_HEAVY_ROLES = frozenset({"frontdoor", "architect_general"})
+_LEGACY_LIGHT_ROLES = frozenset({"worker_general"})
+_DERIVED_LOCK_ROLES = _lock_roles_from_stack_priors()
+if _DERIVED_LOCK_ROLES is None:
+    HEAVY_ROLES = _LEGACY_HEAVY_ROLES
+    LIGHT_ROLES = _LEGACY_LIGHT_ROLES
+else:
+    HEAVY_ROLES, LIGHT_ROLES = _DERIVED_LOCK_ROLES
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert not any(
+        finding.rule_id == "static_inference_lock_role_policy"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_flags_static_inference_tap_stream_policy(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "src" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "inference_tap.py").write_text(
+        'SAFE_NON_STREAM_ROLES: frozenset[str] = frozenset({"architect_general"})\n',
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert any(
+        finding.rule_id == "static_inference_tap_stream_policy"
+        and finding.category == "production_blocker"
+        and finding.path.as_posix() == "src/runtime/inference_tap.py"
+        for finding in findings
+    )
+
+
+def test_scan_hardcoded_surfaces_allows_derived_inference_tap_stream_policy(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "src" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "inference_tap.py").write_text(
+        """
+_LEGACY_SAFE_NON_STREAM_ROLES: frozenset[str] = frozenset({"architect_general"})
+_DERIVED_SAFE_NON_STREAM_ROLES = _safe_non_stream_roles_from_stack_priors()
+SAFE_NON_STREAM_ROLES: frozenset[str] = (
+    _LEGACY_SAFE_NON_STREAM_ROLES
+    if _DERIVED_SAFE_NON_STREAM_ROLES is None
+    else _DERIVED_SAFE_NON_STREAM_ROLES
+)
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    findings = scan_hardcoded_surfaces(tmp_path)
+
+    assert not any(
+        finding.rule_id == "static_inference_tap_stream_policy"
+        for finding in findings
+    )
+
+
 def test_scan_hardcoded_surfaces_flags_static_autopilot_kv_port_map(tmp_path: Path) -> None:
     autopilot = tmp_path / "scripts" / "autopilot"
     autopilot.mkdir(parents=True)

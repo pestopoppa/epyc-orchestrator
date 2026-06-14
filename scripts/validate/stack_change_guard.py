@@ -238,6 +238,26 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
         remediation="reuse src.registry.stack_priors helpers for config server URL defaults",
     ),
     HardcodedSurfaceRule(
+        rule_id="static_inference_lock_role_policy",
+        category="production_blocker",
+        pattern=(
+            r"\b(?:HEAVY_ROLES|LIGHT_ROLES)\b\s*(?::[^=]+)?"
+            r"=\s*frozenset\s*\(\s*\{"
+        ),
+        path_globs=("src/runtime/inference_lock.py",),
+        remediation="derive lock role policy from stack priors; keep only explicit _LEGACY_* degraded fallbacks",
+    ),
+    HardcodedSurfaceRule(
+        rule_id="static_inference_tap_stream_policy",
+        category="production_blocker",
+        pattern=(
+            r"\bSAFE_NON_STREAM_ROLES\b\s*(?::[^=]+)?"
+            r"=\s*frozenset\s*\(\s*\{"
+        ),
+        path_globs=("src/runtime/inference_tap.py",),
+        remediation="derive tap stream policy from stack-prior model facts; keep only explicit _LEGACY_* degraded fallbacks",
+    ),
+    HardcodedSurfaceRule(
         rule_id="stale_autopilot_program_stack_guidance",
         category="production_blocker",
         pattern=(
