@@ -265,7 +265,25 @@ def _build_mutation_context(
     # B1: Strategy store retrieval — add past strategy insights
     if ctx.strategy_store is not None:
         query = f"{target} {mutation_type} {description}"
-        strategies = ctx.strategy_store.retrieve(query, k=3)
+        excluded_trial_ids: set[int] = set()
+        try:
+            entries = (
+                ctx.journal.entries_with_supersessions()
+                if hasattr(ctx.journal, "entries_with_supersessions")
+                else ctx.journal.all_entries()
+            )
+            excluded_trial_ids = {
+                int(e.trial_id)
+                for e in entries
+                if getattr(e, "bug_corrupted_by", "")
+            }
+        except Exception:
+            excluded_trial_ids = set()
+        strategies = ctx.strategy_store.retrieve(
+            query,
+            k=3,
+            excluded_trial_ids=excluded_trial_ids,
+        )
         if strategies:
             strategy_lines = "\n".join(
                 f"- Trial #{s.source_trial_id} ({s.species}): {s.description} → {s.insight}"

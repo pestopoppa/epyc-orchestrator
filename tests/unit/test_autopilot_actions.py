@@ -401,6 +401,36 @@ def test_distill_knowledge_uses_superseded_journal_view() -> None:
     assert evo.journal_entries == ["folded"]
 
 
+def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> None:
+    class FakeJournal(_FakeJournal):
+        def entries_with_supersessions(self):
+            return [
+                SimpleNamespace(trial_id=1, bug_corrupted_by=""),
+                SimpleNamespace(trial_id=2, bug_corrupted_by="resource_contention"),
+            ]
+
+    class FakeStrategyStore:
+        def __init__(self):
+            self.excluded_trial_ids = None
+
+        def retrieve(self, query, k, excluded_trial_ids=None):
+            self.excluded_trial_ids = excluded_trial_ids
+            return []
+
+    store = FakeStrategyStore()
+
+    actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(journal=FakeJournal(), strategy_store=store, state={}),
+    )
+
+    assert store.excluded_trial_ids == {2}
+
+
 def test_reset_memories_returns_none_eval() -> None:
     class FakeLab:
         def reset_and_reseed(self, **kw):

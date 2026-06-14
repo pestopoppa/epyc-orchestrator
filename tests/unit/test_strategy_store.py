@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import sys
-import tempfile
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -78,6 +76,15 @@ class TestStrategyStore:
 
         results = store.retrieve("Strategy", k=10, species="alpha")
         assert all(r.species == "alpha" for r in results)
+
+    def test_retrieve_excludes_source_trial_ids(self, store):
+        store.store("Strategy A", "Insight A", source_trial_id=1, species="alpha")
+        store.store("Strategy B", "Insight B", source_trial_id=2, species="alpha")
+
+        results = store.retrieve("Strategy", k=10, excluded_trial_ids={2})
+
+        assert results
+        assert all(r.source_trial_id != 2 for r in results)
 
     def test_metadata_roundtrip(self, store):
         meta = {"key": "value", "nested": {"a": 1}}
@@ -182,8 +189,7 @@ class TestAP28HybridRetrieval:
     def test_staleness_penalises_old_entries(self, store):
         # Insert with fixed hash, then pretend the world moved on by
         # rewriting compute_context_hash to return a different string.
-        sid = store.store("Old entry", "from epoch A",
-                          source_trial_id=1, species="alpha")
+        store.store("Old entry", "from epoch A", source_trial_id=1, species="alpha")
         # Confirm it's currently fresh
         results = store.retrieve("Old entry", k=1)
         assert results[0].staleness == 1.0

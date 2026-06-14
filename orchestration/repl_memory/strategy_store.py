@@ -496,6 +496,7 @@ class StrategyStore:
         include_quarantined: bool = False,
         rrf_k: int = _RRF_K,
         stale_penalty: float = 0.5,
+        excluded_trial_ids: set[int] | None = None,
     ) -> list[StrategyEntry]:
         """Retrieve strategies via Reciprocal Rank Fusion of FAISS + BM25.
 
@@ -534,6 +535,7 @@ class StrategyStore:
         fused: list[tuple[str, float]] = []
         current_hash = self.compute_context_hash()
         quarantined = set() if include_quarantined else self.quarantined_ids()
+        excluded_trial_ids = excluded_trial_ids or set()
 
         for sid in all_ids:
             score = 0.0
@@ -554,6 +556,8 @@ class StrategyStore:
             if species and row["species"] != species:
                 continue
             if sid in quarantined:
+                continue
+            if row["source_trial_id"] in excluded_trial_ids:
                 continue
 
             validity = self._validity_score(sid)
