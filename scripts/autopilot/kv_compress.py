@@ -320,11 +320,12 @@ def compute_layer_adaptive_weights(
     return weights
 
 
-# Static fallback layer counts for layer-adaptive KV compression.
+# Degraded fallback layer counts for layer-adaptive KV compression.
 #
-# Keep this table conservative: use it only for current live runtimes whose
-# attention-layer count is known. Unknown or recently swapped roles should fall
-# back to uniform compression until descriptors grow native layer metadata.
+# Normal operation reads attention-layer counts from generated stack priors.
+# Keep this table conservative and degraded-only: unknown or recently swapped
+# roles should fall back to uniform compression until descriptors carry native
+# layer metadata.
 MODEL_LAYER_COUNTS = {
     "frontdoor": 28,  # Qwen3.6/Qwen3.5 35B-A3B family
     "architect_general": 64,  # Qwen3.5-122B-A10B

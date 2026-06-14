@@ -1,12 +1,12 @@
 descriptor_version: 3
-compiled_at: '2026-06-14T09:28:29Z'
+compiled_at: '2026-06-14T14:00:38Z'
 status: compiled
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: cfe8204
-    sha256: 4b83920a5769389262fabfafb4f67f8422cdaeaa5f90bf926905d4a356bd9474
+    repo_commit: '4139843'
+    sha256: 99368745def2306ba47381ed63807e5bc10065d06e803d5d25f754f110d4a14f
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
     repo_commit: b5e123f
@@ -243,6 +243,9 @@ models:
     server_role: ingest_long_context
     requirements: {}
   known_gaps: []
+  architecture:
+    attention_layers: 32
+    source: registry.model
 - model_id: qwen3-vl-30b-a3b-q4_k_m
   display_name: Qwen3-VL-30B-A3B-Instruct
   family: qwen3-vl
@@ -388,6 +391,9 @@ models:
     server_role: architect_general
     requirements: {}
   known_gaps: []
+  architecture:
+    attention_layers: 64
+    source: registry.model
 - model_id: qwen3.6-35b-a3b-q8_0
   display_name: Qwen3.6-35B-A3B-Q8_0
   family: qwen3.6
@@ -474,6 +480,9 @@ models:
     server_role: coder_escalation
     requirements: {}
   known_gaps: []
+  architecture:
+    attention_layers: 28
+    source: registry.model
 - model_id: reap-qwen3-coder-25b-a3b-q4_k_m
   display_name: REAP-Qwen3-Coder-25B-A3B-Q4_K_M
   family: reap-qwen3-coder

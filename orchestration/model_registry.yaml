@@ -879,6 +879,7 @@ roles:
       quant: Q8_0
       size_gb: 37
       architecture: qwen35moe
+      attention_layers: 28  # layer-adaptive KV compression; total blocks intentionally not asserted here
       previous_model: Qwen3.5-35B-A3B-UD-Q4_K_M (swapped 2026-05-04; +11pp, +80% t/s under canonical)
       use_chat_api: true
       disable_thinking: true  # Unsloth recommended; thinking off for routing/agentic
@@ -919,6 +920,7 @@ roles:
       quant: Q8_0
       size_gb: 37
       architecture: qwen35moe
+      attention_layers: 28  # shares frontdoor runtime; layer-adaptive KV compression count
       previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M (swapped 2026-05-06; +20pp coder, beats REAP-246B by 27pp)
       use_chat_api: true
       disable_thinking: true
@@ -1027,6 +1029,7 @@ roles:
       quant: Q4_K_M
       size_gb: 45
       architecture: ssm_moe_hybrid
+      attention_layers: 32  # SSM layers excluded for layer-adaptive KV compression
       ctx_max: 262144  # GGUF metadata: qwen3next.context_length
     candidate_roles:
     - ingest
@@ -1076,6 +1079,7 @@ roles:
       size_gb: 69
       split_count: 3
       architecture: moe_hybrid
+      attention_layers: 64  # layer-adaptive KV compression
       ctx_max: 262144  # GGUF metadata: qwen35moe.context_length
       previous_model: Qwen3-235B-A22B-Q4_K_M (swapped 2026-03-19, 122B = quality 2.57/3, -64GB)
     candidate_roles:
@@ -2343,6 +2347,7 @@ roles:
       quant: Q8_0
       size_gb: 37
       architecture: qwen35moe
+      attention_layers: 28  # shares frontdoor runtime; layer-adaptive KV compression count
       previous_model: Qwen2.5-Coder-32B-Instruct-Q4_K_M (swapped 2026-05-06; +16pp canonical quality, shared mmap with frontdoor/coder_escalation)
       use_chat_api: true
       disable_thinking: true

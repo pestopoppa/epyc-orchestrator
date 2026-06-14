@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-14T09:28:29Z'
+compiled_at: '2026-06-14T14:00:38Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 4b83920a5769389262fabfafb4f67f8422cdaeaa5f90bf926905d4a356bd9474
-    repo_commit: cfe8204
+    sha256: 99368745def2306ba47381ed63807e5bc10065d06e803d5d25f754f110d4a14f
+    repo_commit: '4139843'
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: b5e24e968946f4e86d8ea26e001bc15efc73e00f629c9fd5f78b919ea7591a22
-    repo_commit: cfe8204
+    sha256: 50dc2744d21d68c7503da2da77b564d51aa12ecce64ccb6585876d2520ef8bb7
+    repo_commit: '4139843'
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 396fa910d54a253c9898f63d2730245b0a858ff1c83410b95519d335866a1f78
-    repo_commit: cfe8204
+    repo_commit: '4139843'
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: cfe8204
+    repo_commit: '4139843'
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 8cd752703d0ba4ca89017c3193c2eb43b447475c8e78d2a7c0ee01c73d3a4f9e
-    repo_commit: cfe8204
+    repo_commit: '4139843'
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: a13a6f5b6cf6ec4f37be1a42083128f38cfba023dbfc45508149572741325648
-    repo_commit: cfe8204
+    repo_commit: '4139843'
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: cfe8204
+    repo_commit: '4139843'
 roles:
   architect_general:
     role: architect_general
@@ -172,6 +172,7 @@ roles:
       ctx_max: 262144
       modalities:
       - text
+      attention_layers: 64
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
@@ -291,6 +292,7 @@ roles:
       ctx_max: 262144
       modalities:
       - text
+      attention_layers: 28
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
@@ -434,6 +436,7 @@ roles:
       ctx_max: 262144
       modalities:
       - text
+      attention_layers: 28
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
@@ -579,6 +582,7 @@ roles:
       modalities:
       - long_context
       - text
+      attention_layers: 32
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
@@ -650,6 +654,7 @@ roles:
       ctx_max: 262144
       modalities:
       - text
+      attention_layers: 64
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata
@@ -1453,6 +1458,7 @@ roles:
       ctx_max: 262144
       modalities:
       - text
+      attention_layers: 28
     evidence:
       precedence:
         serving: server_mode/stack_manifest outrank roles metadata

@@ -79,9 +79,23 @@ class TestComputeLayerAdaptiveWeights:
 
     def test_live_shared_role_aliases_reuse_current_layer_count(self):
         """Shared runtimes must not carry stale independent layer counts."""
+        assert _stack_prior_layer_count_for_role("coder_escalation") == MODEL_LAYER_COUNTS["frontdoor"]
+        assert _stack_prior_layer_count_for_role("worker_summarize") == MODEL_LAYER_COUNTS["frontdoor"]
         assert _layer_count_for_role("coder_escalation") == MODEL_LAYER_COUNTS["frontdoor"]
         assert _layer_count_for_role("worker_summarize") == MODEL_LAYER_COUNTS["frontdoor"]
         assert MODEL_LAYER_COUNT_ALIASES["coder_escalation"] == "frontdoor"
+
+    def test_current_live_roles_expose_stack_prior_layer_counts(self):
+        """Current live KV-adaptive roles should use generated stack-prior metadata."""
+        assert _stack_prior_layer_count_for_role("frontdoor") == MODEL_LAYER_COUNTS["frontdoor"]
+        assert (
+            _stack_prior_layer_count_for_role("architect_general")
+            == MODEL_LAYER_COUNTS["architect_general"]
+        )
+        assert (
+            _stack_prior_layer_count_for_role("ingest_long_context")
+            == MODEL_LAYER_COUNTS["ingest_long_context"]
+        )
 
     def test_retired_architect_role_has_no_active_layer_count(self):
         """Retired roles fall back to uniform KV compression."""
