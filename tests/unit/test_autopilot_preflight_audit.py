@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from scripts.autopilot import preflight_audit as _MOD
@@ -48,3 +49,38 @@ def test_model_server_targets_fallback_is_current(tmp_path: Path) -> None:
     assert "http://localhost:8071/health" not in health_urls
     assert "http://localhost:8086/health" in health_urls
     assert "http://localhost:8087/health" in health_urls
+
+
+def test_audit_blacklist_detects_superseded_corrupted_sources(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    script_dir = tmp_path / "scripts" / "autopilot"
+    orchestration_dir = tmp_path / "orchestration"
+    script_dir.mkdir(parents=True)
+    orchestration_dir.mkdir()
+    (script_dir / "failure_blacklist.yaml").write_text(
+        """
+blacklist:
+  - reason: manual
+    source_trial: -1
+  - reason: contaminated
+    source_trial: 2
+""",
+        encoding="utf-8",
+    )
+    rows = [
+        {"trial_id": 2, "bug_corrupted_by": ""},
+        {
+            "type": "supersession",
+            "target_trial_ids": [2],
+            "fields": {"bug_corrupted_by": "resource_contention"},
+        },
+    ]
+    (orchestration_dir / "autopilot_journal.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_MOD, "SCRIPT_DIR", script_dir)
+
+    assert _MOD.audit_blacklist() is False

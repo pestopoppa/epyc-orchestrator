@@ -22,6 +22,8 @@ from urllib.parse import urlparse
 
 import yaml
 
+from src.autopilot_core.journal_reconstruction import fold_supersession_events
+
 log = logging.getLogger("autopilot.preflight")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -261,12 +263,15 @@ def audit_blacklist() -> bool:
     manual = [e for e in entries if e.get("source_trial", 0) == -1]
     corrupted_trials = set()
     if journal_path.exists():
+        journal_rows: list[dict] = []
         for line_num, line in enumerate(open(journal_path), 1):
             try:
-                entry = json.loads(line)
+                journal_rows.append(json.loads(line))
             except Exception:
                 log.debug("Skipping malformed journal line %d", line_num)
                 continue
+        folded_rows, _ = fold_supersession_events(journal_rows)
+        for entry in folded_rows:
             if entry.get("bug_corrupted_by"):
                 corrupted_trials.add(entry.get("trial_id"))
     contaminated = [
