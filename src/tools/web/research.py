@@ -45,6 +45,10 @@ _WORKER_TIMEOUT = 45  # seconds per synthesis call
 _FETCH_TIMEOUT = 15  # seconds per URL fetch
 _CRAWL4AI_DEFAULT_URL = "http://localhost:11235"
 _CRAWL4AI_TIMEOUT = 20  # seconds per browser-backed crawl
+_CRAWL4AI_CRAWL_DEFAULT_LIMIT = 5
+_CRAWL4AI_CRAWL_MAX_LIMIT = 20
+_CRAWL4AI_CRAWL_DEFAULT_DEPTH = 2
+_CRAWL4AI_CRAWL_MAX_DEPTH = 3
 _MAX_FETCH_WORKERS = 5
 _MAX_SYNTH_WORKERS = 3
 _CONTENT_PER_PAGE = 6000  # chars of page content to send to worker
@@ -229,6 +233,15 @@ def _crawl4ai_text_value(value: Any) -> str:
     return ""
 
 
+def _crawl4ai_node_markdown(node: dict[str, Any]) -> str:
+    """Extract Markdown/text directly attached to one Crawl4AI result node."""
+    for key in ("markdown", "fit_markdown", "raw_markdown", "text", "content", "cleaned_html", "html"):
+        text = _crawl4ai_text_value(node.get(key))
+        if text.strip():
+            return text.strip()
+    return ""
+
+
 def _extract_crawl4ai_markdown(data: Any) -> str:
     """Extract Markdown/text from common Crawl4AI REST response shapes."""
     pending: list[Any] = [data]
@@ -248,16 +261,137 @@ def _extract_crawl4ai_markdown(data: Any) -> str:
         if node.get("success") is False:
             continue
 
-        for key in ("markdown", "fit_markdown", "raw_markdown", "text", "content", "cleaned_html", "html"):
-            text = _crawl4ai_text_value(node.get(key))
-            if text.strip():
-                return text.strip()
+        text = _crawl4ai_node_markdown(node)
+        if text:
+            return text
 
         for key in ("result", "results", "data"):
             if key in node:
                 pending.append(node[key])
 
     return ""
+
+
+def _bounded_int(value: int, *, minimum: int, maximum: int) -> int:
+    """Clamp integer crawl bounds to conservative local limits."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = minimum
+    return max(minimum, min(maximum, number))
+
+
+def _crawl4ai_deep_crawl_payload(
+    url: str,
+    *,
+    limit: int = _CRAWL4AI_CRAWL_DEFAULT_LIMIT,
+    max_depth: int = _CRAWL4AI_CRAWL_DEFAULT_DEPTH,
+) -> dict[str, Any]:
+    """Build a bounded Crawl4AI BFS deep-crawl request payload."""
+    page_limit = _bounded_int(limit, minimum=1, maximum=_CRAWL4AI_CRAWL_MAX_LIMIT)
+    depth = _bounded_int(max_depth, minimum=0, maximum=_CRAWL4AI_CRAWL_MAX_DEPTH)
+    return {
+        "urls": [url],
+        "browser_config": {
+            "type": "BrowserConfig",
+            "params": {"headless": True},
+        },
+        "crawler_config": {
+            "type": "CrawlerRunConfig",
+            "params": {
+                "stream": False,
+                "cache_mode": "bypass",
+                "deep_crawl_strategy": {
+                    "type": "BFSDeepCrawlStrategy",
+                    "params": {
+                        "max_depth": depth,
+                        "max_pages": page_limit,
+                        "include_external": False,
+                    },
+                },
+            },
+        },
+    }
+
+
+def _crawl4ai_node_url(node: dict[str, Any], *, source_url: str) -> str:
+    """Extract and normalize a Crawl4AI result URL."""
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    for candidate in (
+        node.get("url"),
+        node.get("source_url"),
+        metadata.get("url"),
+    ):
+        if isinstance(candidate, str) and candidate.strip():
+            return urllib.parse.urljoin(source_url, candidate.strip())
+    return source_url
+
+
+def _crawl4ai_node_depth(node: dict[str, Any]) -> int:
+    """Extract a Crawl4AI result depth, defaulting to the seed page."""
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    for candidate in (node.get("depth"), metadata.get("depth")):
+        if isinstance(candidate, int):
+            return max(0, candidate)
+        if isinstance(candidate, str) and candidate.isdigit():
+            return int(candidate)
+    return 0
+
+
+def _extract_crawl4ai_pages(
+    data: Any,
+    *,
+    source_url: str,
+    limit: int,
+    max_length: int,
+    retrieved: str,
+) -> list[dict[str, Any]]:
+    """Extract bounded page records from common Crawl4AI crawl response shapes."""
+    page_limit = _bounded_int(limit, minimum=1, maximum=_CRAWL4AI_CRAWL_MAX_LIMIT)
+    pending: list[Any] = [data]
+    seen_nodes: set[int] = set()
+    seen_urls: set[str] = set()
+    pages: list[dict[str, Any]] = []
+
+    while pending and len(pages) < page_limit:
+        node = pending.pop(0)
+        node_id = id(node)
+        if node_id in seen_nodes:
+            continue
+        seen_nodes.add(node_id)
+
+        if isinstance(node, list):
+            pending.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        if node.get("success") is False:
+            continue
+
+        content = _crawl4ai_node_markdown(node)
+        if content.strip() and not _is_blocked_page(content):
+            page_url = _crawl4ai_node_url(node, source_url=source_url)
+            if page_url not in seen_urls:
+                seen_urls.add(page_url)
+                pages.append(
+                    {
+                        "url": page_url,
+                        "content": content[:max_length],
+                        "success": True,
+                        "retrieved": retrieved,
+                        "content_sha256": _sha256_text(content),
+                        "fetch_backend": "crawl4ai_crawl",
+                        "depth": _crawl4ai_node_depth(node),
+                    }
+                )
+                if len(pages) >= page_limit:
+                    break
+
+        for key in ("result", "results", "data"):
+            if key in node:
+                pending.append(node[key])
+
+    return pages
 
 
 def _poll_crawl4ai_task(
@@ -341,6 +475,83 @@ def _fetch_page_crawl4ai(
         start=start,
         backend="crawl4ai",
     )
+
+
+def _fetch_docs_crawl_crawl4ai(
+    url: str,
+    *,
+    limit: int = _CRAWL4AI_CRAWL_DEFAULT_LIMIT,
+    max_depth: int = _CRAWL4AI_CRAWL_DEFAULT_DEPTH,
+    max_length: int = _CONTENT_PER_PAGE,
+) -> dict[str, Any]:
+    """Run an opt-in, bounded Crawl4AI BFS crawl for documentation-like sites."""
+    start = time.perf_counter()
+    retrieved = _utc_timestamp()
+    payload = _crawl4ai_deep_crawl_payload(url, limit=limit, max_depth=max_depth)
+    req = urllib.request.Request(
+        f"{_crawl4ai_base_url()}/crawl",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=_crawl4ai_timeout_seconds()) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+
+        pages = _extract_crawl4ai_pages(
+            response_data,
+            source_url=url,
+            limit=limit,
+            max_length=max_length,
+            retrieved=retrieved,
+        )
+        if not pages:
+            task_id = (
+                response_data.get("task_id")
+                or response_data.get("job_id")
+                or response_data.get("id")
+                if isinstance(response_data, dict)
+                else None
+            )
+            if task_id:
+                response_data = _poll_crawl4ai_task(str(task_id))
+                pages = _extract_crawl4ai_pages(
+                    response_data,
+                    source_url=url,
+                    limit=limit,
+                    max_length=max_length,
+                    retrieved=retrieved,
+                )
+        if not pages:
+            raise ValueError("Crawl4AI returned no extractable crawl pages")
+
+        elapsed = (time.perf_counter() - start) * 1000
+        return {
+            "url": url,
+            "success": True,
+            "pages": pages,
+            "page_count": len(pages),
+            "elapsed_ms": elapsed,
+            "fetch_backend": "crawl4ai_crawl",
+            "limit": _bounded_int(limit, minimum=1, maximum=_CRAWL4AI_CRAWL_MAX_LIMIT),
+            "max_depth": _bounded_int(
+                max_depth,
+                minimum=0,
+                maximum=_CRAWL4AI_CRAWL_MAX_DEPTH,
+            ),
+        }
+    except Exception as e:
+        elapsed = (time.perf_counter() - start) * 1000
+        return {
+            "url": url,
+            "success": False,
+            "pages": [],
+            "page_count": 0,
+            "error": str(e),
+            "elapsed_ms": elapsed,
+            "fetch_backend": "crawl4ai_crawl",
+        }
 
 
 def _fetch_page_urllib(

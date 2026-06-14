@@ -135,3 +135,99 @@ def test_poll_crawl4ai_task_returns_completed_result(monkeypatch) -> None:
 
     assert result["status"] == "completed"
     assert calls == ["http://localhost:11235/job/crawl_123"]
+
+
+def test_fetch_docs_crawl_crawl4ai_posts_bounded_bfs_payload(monkeypatch) -> None:
+    calls = []
+
+    def fake_urlopen(req, timeout):
+        calls.append((req, timeout))
+        assert req.full_url == "http://localhost:11235/crawl"
+        payload = json.loads(req.data.decode("utf-8"))
+        deep_crawl = payload["crawler_config"]["params"]["deep_crawl_strategy"]
+        assert deep_crawl["type"] == "BFSDeepCrawlStrategy"
+        assert deep_crawl["params"] == {
+            "max_depth": 2,
+            "max_pages": 5,
+            "include_external": False,
+        }
+        return _Response(
+            {
+                "success": True,
+                "results": [
+                    {
+                        "success": True,
+                        "url": "https://docs.example.test/",
+                        "metadata": {"depth": 0},
+                        "markdown": "# Docs home\n\nWelcome to the docs.",
+                    },
+                    {
+                        "success": True,
+                        "url": "/guide",
+                        "metadata": {"depth": 1},
+                        "markdown": "Guide page content",
+                    },
+                ],
+            }
+        )
+
+    monkeypatch.delenv("ORCHESTRATOR_CRAWL4AI_URL", raising=False)
+    monkeypatch.setattr(research.urllib.request, "urlopen", fake_urlopen)
+
+    result = research._fetch_docs_crawl_crawl4ai(
+        "https://docs.example.test/",
+        limit=5,
+        max_depth=2,
+        max_length=12,
+    )
+
+    assert result["success"] is True
+    assert result["fetch_backend"] == "crawl4ai_crawl"
+    assert result["page_count"] == 2
+    assert result["limit"] == 5
+    assert result["max_depth"] == 2
+    assert result["pages"][0]["url"] == "https://docs.example.test/"
+    assert result["pages"][0]["content"] == "# Docs home\n"
+    assert result["pages"][0]["depth"] == 0
+    assert result["pages"][1]["url"] == "https://docs.example.test/guide"
+    assert result["pages"][1]["depth"] == 1
+    assert result["pages"][1]["content_sha256"]
+    assert len(calls) == 1
+
+
+def test_fetch_docs_crawl_crawl4ai_polls_async_task(monkeypatch) -> None:
+    calls = []
+
+    def fake_urlopen(req, timeout):
+        calls.append(req.full_url)
+        if req.full_url == "http://localhost:11235/crawl":
+            return _Response({"task_id": "crawl_123", "status": "pending"})
+        return _Response(
+            {
+                "status": "completed",
+                "result": {
+                    "results": [
+                        {
+                            "success": True,
+                            "url": "https://docs.example.test/api",
+                            "metadata": {"depth": "2"},
+                            "markdown": "API reference",
+                        }
+                    ]
+                },
+            }
+        )
+
+    monkeypatch.delenv("ORCHESTRATOR_CRAWL4AI_URL", raising=False)
+    monkeypatch.setattr(research.urllib.request, "urlopen", fake_urlopen)
+
+    result = research._fetch_docs_crawl_crawl4ai("https://docs.example.test/")
+
+    assert result["success"] is True
+    assert result["page_count"] == 1
+    assert result["pages"][0]["url"] == "https://docs.example.test/api"
+    assert result["pages"][0]["depth"] == 2
+    assert calls == [
+        "http://localhost:11235/crawl",
+        "http://localhost:11235/job/crawl_123",
+    ]
