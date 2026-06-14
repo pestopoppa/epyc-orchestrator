@@ -108,3 +108,172 @@ surfaces:
     review_cadence: every stack change
     evidence_command: uv run python scripts/validate/stack_change_guard.py
     drift_response: derive summaries from stack_manifest or stack priors
+
+consumer_surfaces:
+  - surface_id: q_scorer_priors
+    classification: typed_consumer
+    owner: stack-change-governance
+    consumer_scope: q_scorer throughput, quality, and memory priors for live roles
+    source_of_truth: orchestration/derived/stack_priors.yaml q_scorer records
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run python scripts/registry/stack_change_pipeline.py check --run-promotion-gate
+    implementation_refs:
+      - orchestration/repl_memory/q_scorer.py
+      - tests/unit/test_q_scorer.py
+    drift_response: restore stack-prior provenance or mark fallback as explicit degraded mode
+  - surface_id: seeding_reward_priors
+    classification: typed_consumer
+    owner: stack-change-governance
+    consumer_scope: seeding role discovery, reward throughput, and cost priors
+    source_of_truth: orchestration/derived/stack_priors.yaml live role records
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run pytest -q tests/unit/test_seeding_infra.py tests/unit/test_seeding_infra_additional.py tests/unit/test_seeding_infra_branching.py tests/unit/test_seed_specialist_routing_main_and_retry.py
+    implementation_refs:
+      - scripts/benchmark/seeding_types.py
+      - scripts/benchmark/seeding_rewards.py
+      - scripts/benchmark/seeding_infra.py
+    drift_response: derive reward and preflight priors from generated stack priors
+  - surface_id: routing_prior_consumers
+    classification: typed_consumer
+    owner: routing-governance
+    consumer_scope: routing priors, action spaces, classifiers, and replay role labels
+    source_of_truth: generated stack priors plus explicit legacy-label remapping APIs
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run pytest -q tests/unit/test_routing_models.py tests/unit/test_routing_graph.py tests/unit/test_analyze_routing_policy.py
+    implementation_refs:
+      - orchestration/repl_memory/routing_classifier.py
+      - scripts/graph_router/action_space.py
+      - src/api/services/routing_models.py
+    drift_response: migrate static live-role lists to stack-prior helpers or explicit legacy replay remaps
+  - surface_id: admission_policy
+    classification: typed_consumer
+    owner: admission-governance
+    consumer_scope: Pareto/archive admission and representative-selection policy
+    source_of_truth: generated stack priors for live model facts plus archive evidence schemas
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run pytest -q tests/unit/test_admission.py tests/unit/test_pareto_representative_admission.py
+    implementation_refs:
+      - src/api/admission.py
+      - orchestration/repl_memory/q_scorer.py
+    drift_response: move model-specific thresholds to generated priors or typed policy inputs
+  - surface_id: lock_tap_policy
+    classification: typed_consumer
+    owner: runtime-governance
+    consumer_scope: inference lock and tap policy keyed by role, model, or stack topology
+    source_of_truth: generated stack priors and runtime feature flags
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run pytest -q tests/unit/test_inference_lock.py tests/unit/test_inference_tap.py
+    implementation_refs:
+      - src/runtime/inference_lock.py
+      - src/runtime/inference_tap.py
+      - src/inference_lock.py
+      - src/inference_tap.py
+    drift_response: replace static role/model policy tables with stack-prior derived policy inputs
+  - surface_id: config_model_catalog
+    classification: typed_consumer
+    owner: config-governance
+    consumer_scope: model catalog, URLs, timeouts, and compatibility aliases
+    source_of_truth: generated stack priors, model descriptors, and lean registry compatibility APIs
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run pytest -q tests/unit/test_config.py tests/unit/test_session_models.py tests/unit/test_registry_loader.py
+    implementation_refs:
+      - src/config/models.py
+      - src/session/models.py
+      - src/registry/stack_priors.py
+    drift_response: regenerate model catalog facts or label fallback compatibility explicitly
+  - surface_id: health_preflight_probes
+    classification: generated
+    owner: stack-change-governance
+    consumer_scope: health probes used by status, launch, and AutoPilot preflight
+    source_of_truth: stack priors serving ports plus stack manifest auxiliary services
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run pytest -q tests/unit/test_autopilot_preflight_audit.py tests/unit/test_orchestrator_stack_reload.py tests/unit/test_stack_processes.py
+    implementation_refs:
+      - scripts/autopilot/preflight_audit.py
+      - scripts/server/stack_commands.py
+      - scripts/server/stack_processes.py
+    drift_response: derive probe targets from generated serving records and manifest-owned auxiliaries
+  - surface_id: launch_maps
+    classification: generated
+    owner: stack-change-governance
+    consumer_scope: production launch maps, port maps, aliases, runtime requirements, and command args
+    source_of_truth: stack_manifest computed topology projected into stack priors
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run pytest -q tests/unit/test_build_server_command_helpers.py tests/unit/test_stack_manifest_imports.py tests/unit/test_orchestrator_stack_reload.py
+    implementation_refs:
+      - scripts/server/stack_manifest.py
+      - scripts/server/orchestrator_stack.py
+      - scripts/server/stack_commands.py
+    drift_response: regenerate launch witnesses and remove static launch topology tables
+  - surface_id: dashboard_status_system_cards
+    classification: generated
+    owner: operator-surface-governance
+    consumer_scope: dashboard/status views and AutoPilot system card live-stack rows
+    source_of_truth: docs/generated/current_stack_summary.md and stack-prior serving records
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run pytest -q tests/unit/test_dashboard_helpers.py tests/unit/test_dashboard_route_html.py tests/unit/test_autopilot_system_card.py
+    implementation_refs:
+      - src/api/routes/dashboard.py
+      - src/api/routes/dashboard_topology.py
+      - scripts/autopilot/gen_system_card.py
+    drift_response: regenerate live stack rows from stack priors or label output as historical
+  - surface_id: planner_prompt_guidance
+    classification: generated
+    owner: autopilot-instrumentation
+    consumer_scope: AutoPilot planner prompts, program guidance, and operator stack hints
+    source_of_truth: generated stack summary and stack-prior endpoint/tier data
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run python scripts/validate/stack_change_guard.py --all-hardcoded-surfaces --surface-summary-only
+    implementation_refs:
+      - scripts/autopilot/program.md
+      - scripts/autopilot/gen_system_card.py
+    drift_response: regenerate prompt-visible stack guidance from stack priors
+  - surface_id: procedure_role_enums
+    classification: generated
+    owner: procedure-governance
+    consumer_scope: model/procedure role enums and procedure schema choices
+    source_of_truth: generated stack priors live role set
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run python scripts/registry/sync_procedure_role_enums.py --check
+    implementation_refs:
+      - orchestration/procedures/add_model_to_registry.yaml
+      - orchestration/procedure.schema.json
+      - scripts/registry/sync_procedure_role_enums.py
+    drift_response: resync procedure enums from generated live roles
+  - surface_id: generated_stack_docs
+    classification: generated
+    owner: documentation-governance
+    consumer_scope: current operator stack summaries, runbooks, and planner-facing docs
+    source_of_truth: docs/generated/current_stack_summary.md rendered from stack priors
+    promotion_blocker: true
+    review_cadence: every stack change
+    validation_command: uv run python scripts/registry/render_stack_summary.py --check
+    implementation_refs:
+      - docs/generated/current_stack_summary.md
+      - scripts/registry/render_stack_summary.py
+      - docs/reference/stack-truth-precedence.md
+    drift_response: regenerate current summaries or mark stale text as historical
+  - surface_id: runtime_attestation
+    classification: generated
+    owner: stack-change-governance
+    consumer_scope: live process, port, model, projector, and runtime flag attestation
+    source_of_truth: generated stack-prior launch requirements and runtime witness records
+    promotion_blocker: true
+    review_cadence: every stack change and before clean inference windows
+    validation_command: uv run python scripts/registry/stack_change_pipeline.py check --run-promotion-gate
+    implementation_refs:
+      - scripts/server/stack_commands.py
+      - scripts/registry/stack_change_pipeline.py
+      - tests/unit/test_orchestrator_stack_reload.py
+    drift_response: stop/restart stale listeners or regenerate stack-prior launch witnesses before promotion

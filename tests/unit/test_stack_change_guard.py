@@ -11,6 +11,7 @@ import yaml
 import scripts.validate.stack_change_guard as stack_change_guard
 from scripts.validate.stack_change_guard import (
     HARDCODED_SURFACE_RULES,
+    REQUIRED_CONSUMER_SURFACE_IDS,
     GuardResult,
     HardcodedSurfaceRule,
     hardcoded_surface_rule_inventory,
@@ -26,6 +27,21 @@ from src.registry.stack_priors import STACK_PRIORS_VERSION, stack_priors_contrac
 def _write_yaml(path: Path, data: dict) -> Path:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return path
+
+
+def _consumer_surface(surface_id: str = "unit_consumer") -> dict:
+    return {
+        "surface_id": surface_id,
+        "classification": "typed_consumer",
+        "owner": "stack-change-governance",
+        "consumer_scope": "unit consumer surface",
+        "source_of_truth": "generated stack priors",
+        "promotion_blocker": True,
+        "review_cadence": "every stack change",
+        "validation_command": "uv run pytest -q tests/unit/test_stack_change_guard.py",
+        "implementation_refs": ["src/unit.py"],
+        "drift_response": "derive from generated truth",
+    }
 
 
 def _sha(path: Path) -> str:
@@ -456,6 +472,7 @@ def test_hardcoded_surface_rule_inventory_is_machine_readable() -> None:
 
     assert inventory["version"] == 1
     assert inventory["rule_count"] == len(HARDCODED_SURFACE_RULES)
+    assert inventory["consumer_surface_count"] == 0
     assert len(rule_ids) == len(set(rule_ids))
     assert "production_blocker" in inventory["categories"]
     assert any(
@@ -465,6 +482,27 @@ def test_hardcoded_surface_rule_inventory_is_machine_readable() -> None:
         for rule in inventory["rules"]
     )
     assert all("ownership" in rule for rule in inventory["rules"])
+
+
+def test_hardcoded_surface_rule_inventory_includes_consumer_surfaces() -> None:
+    inventory = hardcoded_surface_rule_inventory(
+        ownership_manifest={
+            "consumer_surfaces": [
+                _consumer_surface("q_scorer_priors"),
+                _consumer_surface("runtime_attestation"),
+            ]
+        }
+    )
+
+    assert inventory["consumer_surface_count"] == 2
+    assert [surface["surface_id"] for surface in inventory["consumer_surfaces"]] == [
+        "q_scorer_priors",
+        "runtime_attestation",
+    ]
+    assert all(
+        surface["classification"] == "typed_consumer"
+        for surface in inventory["consumer_surfaces"]
+    )
 
 
 def test_validate_surface_manifest_accepts_complete_rule_ownership(tmp_path: Path) -> None:
@@ -495,6 +533,127 @@ def test_validate_surface_manifest_accepts_complete_rule_ownership(tmp_path: Pat
     )
 
     assert validate_surface_manifest(manifest, rules=(rule,)) == []
+
+
+def test_validate_surface_manifest_accepts_consumer_surface_ownership(tmp_path: Path) -> None:
+    rule = HardcodedSurfaceRule(
+        rule_id="unit_rule",
+        category="production_blocker",
+        pattern=r"\bunit\b",
+        path_globs=("src/**/*.py",),
+        remediation="derive from generated truth",
+    )
+    manifest = _write_yaml(
+        tmp_path / "surface_manifest.yaml",
+        {
+            "version": 1,
+            "surfaces": [
+                {
+                    "rule_id": "unit_rule",
+                    "category": "production_blocker",
+                    "owner": "stack-change-governance",
+                    "consumer_scope": "unit scanner surface",
+                    "promotion_blocker": True,
+                    "review_cadence": "every stack change",
+                    "evidence_command": "uv run python scripts/validate/stack_change_guard.py",
+                    "drift_response": "remove stale hardcode",
+                }
+            ],
+            "consumer_surfaces": [_consumer_surface()],
+        },
+    )
+
+    assert validate_surface_manifest(
+        manifest,
+        rules=(rule,),
+        required_consumer_surface_ids=frozenset({"unit_consumer"}),
+    ) == []
+
+
+def test_validate_surface_manifest_rejects_missing_consumer_surface(
+    tmp_path: Path,
+) -> None:
+    rule = HardcodedSurfaceRule(
+        rule_id="unit_rule",
+        category="production_blocker",
+        pattern=r"\bunit\b",
+        path_globs=("src/**/*.py",),
+        remediation="derive from generated truth",
+    )
+    manifest = _write_yaml(
+        tmp_path / "surface_manifest.yaml",
+        {
+            "version": 1,
+            "surfaces": [
+                {
+                    "rule_id": "unit_rule",
+                    "category": "production_blocker",
+                    "owner": "stack-change-governance",
+                    "consumer_scope": "unit scanner surface",
+                    "promotion_blocker": True,
+                    "review_cadence": "every stack change",
+                    "evidence_command": "guard",
+                    "drift_response": "remove stale hardcode",
+                }
+            ],
+        },
+    )
+
+    errors = validate_surface_manifest(
+        manifest,
+        rules=(rule,),
+        required_consumer_surface_ids=frozenset({"unit_consumer"}),
+    )
+
+    assert any("'consumer_surfaces'" in error for error in errors)
+
+
+def test_validate_surface_manifest_rejects_consumer_surface_metadata_drift(
+    tmp_path: Path,
+) -> None:
+    rule = HardcodedSurfaceRule(
+        rule_id="unit_rule",
+        category="production_blocker",
+        pattern=r"\bunit\b",
+        path_globs=("src/**/*.py",),
+        remediation="derive from generated truth",
+    )
+    bad_surface = {
+        **_consumer_surface(),
+        "classification": "unknown",
+        "promotion_blocker": "yes",
+        "implementation_refs": [],
+    }
+    manifest = _write_yaml(
+        tmp_path / "surface_manifest.yaml",
+        {
+            "version": 1,
+            "surfaces": [
+                {
+                    "rule_id": "unit_rule",
+                    "category": "production_blocker",
+                    "owner": "stack-change-governance",
+                    "consumer_scope": "unit scanner surface",
+                    "promotion_blocker": True,
+                    "review_cadence": "every stack change",
+                    "evidence_command": "guard",
+                    "drift_response": "remove stale hardcode",
+                }
+            ],
+            "consumer_surfaces": [bad_surface, _consumer_surface()],
+        },
+    )
+
+    errors = validate_surface_manifest(
+        manifest,
+        rules=(rule,),
+        required_consumer_surface_ids=frozenset({"unit_consumer"}),
+    )
+
+    assert any("classification 'unknown'" in error for error in errors)
+    assert any("missing boolean 'promotion_blocker'" in error for error in errors)
+    assert any("implementation_refs" in error for error in errors)
+    assert any("surface_id 'unit_consumer' is duplicated" in error for error in errors)
 
 
 def test_validate_surface_manifest_rejects_missing_rule_ownership(tmp_path: Path) -> None:
@@ -595,6 +754,9 @@ def test_stack_change_guard_can_print_surface_rule_inventory_json(capsys) -> Non
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["rule_count"] == len(HARDCODED_SURFACE_RULES)
+    assert set(surface["surface_id"] for surface in payload["consumer_surfaces"]) == set(
+        REQUIRED_CONSUMER_SURFACE_IDS
+    )
     assert any(
         rule["rule_id"] == "stale_autopilot_program_stack_guidance"
         and rule["ownership"]["owner"] == "autopilot-instrumentation"

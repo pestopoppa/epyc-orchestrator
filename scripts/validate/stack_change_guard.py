@@ -231,15 +231,58 @@ HARDCODED_SURFACE_RULES: tuple[HardcodedSurfaceRule, ...] = (
 )
 
 
+CONSUMER_SURFACE_CLASSIFICATIONS = frozenset(
+    {
+        "generated",
+        "typed_consumer",
+        "explicit_degraded_fallback",
+        "legacy_test",
+        "historical_doc",
+        "open_production_blocker",
+    }
+)
+
+REQUIRED_CONSUMER_SURFACE_IDS = frozenset(
+    {
+        "admission_policy",
+        "config_model_catalog",
+        "dashboard_status_system_cards",
+        "generated_stack_docs",
+        "health_preflight_probes",
+        "launch_maps",
+        "lock_tap_policy",
+        "planner_prompt_guidance",
+        "procedure_role_enums",
+        "q_scorer_priors",
+        "routing_prior_consumers",
+        "runtime_attestation",
+        "seeding_reward_priors",
+    }
+)
+
+CONSUMER_SURFACE_TEXT_FIELDS = (
+    "surface_id",
+    "classification",
+    "owner",
+    "consumer_scope",
+    "source_of_truth",
+    "review_cadence",
+    "validation_command",
+    "drift_response",
+)
+
+
 def hardcoded_surface_rule_inventory(
     rules: tuple[HardcodedSurfaceRule, ...] = HARDCODED_SURFACE_RULES,
     ownership_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the curated model-specific surface rules as machine-readable data."""
     ownership_by_rule = _surface_manifest_by_rule(ownership_manifest)
+    consumer_surfaces = _surface_manifest_consumer_surfaces(ownership_manifest)
     return {
         "version": 1,
         "rule_count": len(rules),
+        "consumer_surface_count": len(consumer_surfaces),
         "categories": sorted({rule.category for rule in rules}),
         "rules": [
             {
@@ -254,6 +297,7 @@ def hardcoded_surface_rule_inventory(
             }
             for rule in rules
         ],
+        "consumer_surfaces": consumer_surfaces,
     }
 
 
@@ -285,6 +329,42 @@ def _surface_manifest_by_rule(manifest: dict[str, Any] | None) -> dict[str, dict
     return by_rule
 
 
+def _surface_manifest_consumer_surfaces(
+    manifest: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(manifest, dict):
+        return []
+    raw_surfaces = manifest.get("consumer_surfaces")
+    if not isinstance(raw_surfaces, list):
+        return []
+    surfaces: list[dict[str, Any]] = []
+    for raw_surface in raw_surfaces:
+        if not isinstance(raw_surface, dict):
+            continue
+        surface_id = raw_surface.get("surface_id")
+        if not isinstance(surface_id, str) or not surface_id:
+            continue
+        surfaces.append(
+            {
+                key: raw_surface[key]
+                for key in (
+                    "surface_id",
+                    "classification",
+                    "owner",
+                    "consumer_scope",
+                    "source_of_truth",
+                    "promotion_blocker",
+                    "review_cadence",
+                    "validation_command",
+                    "implementation_refs",
+                    "drift_response",
+                )
+                if key in raw_surface
+            }
+        )
+    return sorted(surfaces, key=lambda surface: str(surface.get("surface_id", "")))
+
+
 def load_surface_manifest(path: Path = DEFAULT_SURFACE_MANIFEST) -> tuple[dict[str, Any] | None, list[str]]:
     """Load the hardcoded-surface ownership manifest."""
     if not path.exists():
@@ -299,6 +379,7 @@ def validate_surface_manifest(
     path: Path = DEFAULT_SURFACE_MANIFEST,
     *,
     rules: tuple[HardcodedSurfaceRule, ...] = HARDCODED_SURFACE_RULES,
+    required_consumer_surface_ids: frozenset[str] | None = None,
 ) -> list[str]:
     """Validate scanner-rule ownership metadata for stack-change reviews."""
     manifest, errors = load_surface_manifest(path)
@@ -368,6 +449,89 @@ def validate_surface_manifest(
     if missing:
         errors.append(
             "hardcoded-surface ownership manifest missing rule_id(s): "
+            + ", ".join(missing)
+        )
+    if required_consumer_surface_ids is None:
+        required_consumer_surface_ids = (
+            REQUIRED_CONSUMER_SURFACE_IDS
+            if rules == HARDCODED_SURFACE_RULES
+            else frozenset()
+        )
+    errors.extend(
+        _validate_consumer_surface_manifest(
+            manifest,
+            required_consumer_surface_ids=required_consumer_surface_ids,
+        )
+    )
+    return errors
+
+
+def _validate_consumer_surface_manifest(
+    manifest: dict[str, Any],
+    *,
+    required_consumer_surface_ids: frozenset[str],
+) -> list[str]:
+    if not required_consumer_surface_ids:
+        return []
+    errors: list[str] = []
+    raw_surfaces = manifest.get("consumer_surfaces")
+    if not isinstance(raw_surfaces, list):
+        return [
+            "model-specific consumer surface manifest has no list-valued "
+            "'consumer_surfaces'"
+        ]
+
+    seen: dict[str, int] = {}
+    for index, raw_surface in enumerate(raw_surfaces, start=1):
+        prefix = f"consumer surface manifest entry #{index}"
+        if not isinstance(raw_surface, dict):
+            errors.append(f"{prefix} is not a mapping")
+            continue
+        for field in CONSUMER_SURFACE_TEXT_FIELDS:
+            value = raw_surface.get(field)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{prefix} missing non-empty {field!r}")
+        surface_id = raw_surface.get("surface_id")
+        if not isinstance(surface_id, str) or not surface_id.strip():
+            continue
+        surface_id = surface_id.strip()
+        if surface_id in seen:
+            errors.append(
+                f"consumer surface manifest surface_id {surface_id!r} is duplicated "
+                f"(entries {seen[surface_id]} and {index})"
+            )
+        seen[surface_id] = index
+        classification = raw_surface.get("classification")
+        if (
+            isinstance(classification, str)
+            and classification.strip() not in CONSUMER_SURFACE_CLASSIFICATIONS
+        ):
+            errors.append(
+                f"consumer surface manifest entry {surface_id!r} classification "
+                f"{classification!r} is not one of "
+                f"{sorted(CONSUMER_SURFACE_CLASSIFICATIONS)}"
+            )
+        promotion_blocker = raw_surface.get("promotion_blocker")
+        if not isinstance(promotion_blocker, bool):
+            errors.append(
+                f"consumer surface manifest entry {surface_id!r} missing boolean "
+                "'promotion_blocker'"
+            )
+        implementation_refs = raw_surface.get("implementation_refs")
+        if (
+            not isinstance(implementation_refs, list)
+            or not implementation_refs
+            or not all(isinstance(ref, str) and ref.strip() for ref in implementation_refs)
+        ):
+            errors.append(
+                f"consumer surface manifest entry {surface_id!r} missing non-empty "
+                "string list 'implementation_refs'"
+            )
+
+    missing = sorted(required_consumer_surface_ids - set(seen))
+    if missing:
+        errors.append(
+            "model-specific consumer surface manifest missing surface_id(s): "
             + ", ".join(missing)
         )
     return errors
