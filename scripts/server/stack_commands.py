@@ -67,6 +67,16 @@ from scripts.server.stack_state import ProcessInfo
 from src.registry_loader import RegistryLoader
 
 
+STACK_CHANGE_LAUNCH_GATE_COMMAND = (
+    "uv",
+    "run",
+    "python",
+    "scripts/registry/stack_change_pipeline.py",
+    "check",
+    "--run-promotion-gate",
+)
+
+
 def wait_for_health(
     port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str = "/health"
 ) -> bool:
@@ -140,6 +150,60 @@ def check_free_memory(*a, **kw):
 
 def _apply_orchestrator_profile(*a, **kw):
     return _orchestrator_stack()._apply_orchestrator_profile(*a, **kw)
+
+
+def _clip_gate_output(text: str, *, max_chars: int = 6000) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def _should_skip_stack_change_launch_gate(args: argparse.Namespace) -> str | None:
+    if getattr(args, "dev", False):
+        return "dev mode"
+    if getattr(args, "validate_only", False):
+        return "validate-only"
+    if getattr(args, "migrate_to", None) and getattr(args, "dry_run", False):
+        return "migration dry-run"
+    if getattr(args, "skip_stack_change_gate", False):
+        return "--skip-stack-change-gate"
+    if os.environ.get("ORCHESTRATOR_SKIP_STACK_CHANGE_GATE") == "1":
+        return "ORCHESTRATOR_SKIP_STACK_CHANGE_GATE=1"
+    return None
+
+
+def _run_stack_change_launch_gate(args: argparse.Namespace) -> bool:
+    """Run the canonical stack-change promotion gate before production launch."""
+    skip_reason = _should_skip_stack_change_launch_gate(args)
+    if skip_reason is not None:
+        print(f"[stack-change-gate] SKIPPED ({skip_reason})")
+        return True
+
+    command = list(STACK_CHANGE_LAUNCH_GATE_COMMAND)
+    print("[stack-change-gate] Running canonical launch gate...")
+    print("  " + " ".join(command))
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(_PATHS["project_root"]),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        print(f"[stack-change-gate] FATAL: could not launch gate: {exc}")
+        return False
+
+    if result.stdout:
+        print(_clip_gate_output(result.stdout.rstrip()))
+    if result.stderr:
+        print(_clip_gate_output(result.stderr.rstrip()))
+    if result.returncode == 0:
+        print("[stack-change-gate] OK")
+        return True
+
+    print(f"[stack-change-gate] FATAL: gate exited {result.returncode}; refusing launch")
+    return False
 
 
 def _find_pids_on_port(port: int) -> list[int]:
@@ -392,6 +456,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"[descriptor-compile] FATAL: {exc}")
             return 2
+
+    if not _run_stack_change_launch_gate(args):
+        return 2
 
     # DS-7 / NIB2-19: --migrate-to handler (runs before any start path)
     migrate_to = getattr(args, "migrate_to", None)

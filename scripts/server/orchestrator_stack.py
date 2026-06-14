@@ -1710,6 +1710,14 @@ def main() -> int:
         help="Skip host_prereq audit/apply (numa_balancing, THP, governor). NOT recommended for benchmarks.",
     )
     start_parser.add_argument(
+        "--skip-stack-change-gate",
+        action="store_true",
+        help=(
+            "Skip the canonical stack-change promotion gate before production launch. "
+            "Use only for emergency diagnostics; benchmarks and AutoPilot resumes should not bypass it."
+        ),
+    )
+    start_parser.add_argument(
         "--skip-page-cache-prewarm",
         action="store_true",
         help="Skip the [1.5] numactl --interleave=all GGUF prewarm step. "

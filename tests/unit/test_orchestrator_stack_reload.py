@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from argparse import Namespace
 from pathlib import Path
 
@@ -9,6 +10,62 @@ import yaml
 
 from scripts.server import orchestrator_stack as stack
 from scripts.server import stack_commands
+
+
+def _stack_gate_args(**overrides) -> Namespace:
+    defaults = {
+        "dev": False,
+        "validate_only": False,
+        "migrate_to": None,
+        "dry_run": False,
+        "skip_stack_change_gate": False,
+    }
+    defaults.update(overrides)
+    return Namespace(**defaults)
+
+
+def test_stack_change_launch_gate_runs_canonical_command(monkeypatch, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs["cwd"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="summary: ok\n", stderr="")
+
+    monkeypatch.setattr(stack_commands.subprocess, "run", fake_run)
+
+    assert stack_commands._run_stack_change_launch_gate(_stack_gate_args())
+
+    assert captured["cmd"] == list(stack_commands.STACK_CHANGE_LAUNCH_GATE_COMMAND)
+    assert str(captured["cwd"]).endswith("epyc-orchestrator")
+    out = capsys.readouterr().out
+    assert "stack-change-gate" in out
+    assert "summary: ok" in out
+
+
+def test_stack_change_launch_gate_failure_blocks_launch(monkeypatch, capsys) -> None:
+    def fake_run(cmd, **_kwargs):
+        return subprocess.CompletedProcess(cmd, 1, stdout="summary: failed\n", stderr="boom\n")
+
+    monkeypatch.setattr(stack_commands.subprocess, "run", fake_run)
+
+    assert not stack_commands._run_stack_change_launch_gate(_stack_gate_args())
+    out = capsys.readouterr().out
+    assert "summary: failed" in out
+    assert "boom" in out
+    assert "refusing launch" in out
+
+
+def test_stack_change_launch_gate_has_explicit_skip(monkeypatch, capsys) -> None:
+    def fake_run(*_args, **_kwargs):
+        raise AssertionError("gate subprocess should not run")
+
+    monkeypatch.setattr(stack_commands.subprocess, "run", fake_run)
+
+    assert stack_commands._run_stack_change_launch_gate(
+        _stack_gate_args(skip_stack_change_gate=True)
+    )
+    assert "SKIPPED (--skip-stack-change-gate)" in capsys.readouterr().out
 
 
 def test_reload_embedders_uses_listener_pid_helper(monkeypatch) -> None:
