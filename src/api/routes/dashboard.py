@@ -1114,6 +1114,7 @@ _AUTOPILOT_JOURNAL_PATH = Path(__file__).resolve().parents[3] / "orchestration" 
 _AUTOPILOT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 _EPHEMERAL_ACTION_KEYS = EPHEMERAL_ACTION_KEYS
 _WITHIN_NOISE_EXCL = WITHIN_NOISE_EXCLUSIONS
+_BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
 
 
 def _parse_journal_ts(value: Any) -> float | None:
@@ -1167,6 +1168,81 @@ def _shape_pareto_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _read_autopilot_journal_rows(path: Path | None = None) -> list[dict[str, Any]] | None:
+    path = path or _AUTOPILOT_JOURNAL_PATH
+    if not path.exists():
+        return None
+    rows: list[dict[str, Any]] = []
+    try:
+        with open(path) as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+    except Exception:
+        return None
+    return rows
+
+
+def _shape_baseline_promotion_event(event: dict[str, Any]) -> dict[str, Any]:
+    proof = event.get("proof") if isinstance(event.get("proof"), dict) else {}
+    result_metrics = (
+        event.get("result_metrics") if isinstance(event.get("result_metrics"), dict) else {}
+    )
+    previous_quality = event.get("previous_quality")
+    new_quality = event.get("new_quality")
+    try:
+        quality_delta = (
+            float(new_quality) - float(previous_quality)
+            if previous_quality is not None and new_quality is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        quality_delta = None
+    return {
+        "source_trial_id": event.get("source_trial_id"),
+        "tier": event.get("tier"),
+        "previous_quality": previous_quality,
+        "new_quality": new_quality,
+        "quality_delta": quality_delta,
+        "timestamp": event.get("timestamp", ""),
+        "reason": event.get("reason", ""),
+        "policy_version": event.get("policy_version", ""),
+        "actor": event.get("actor", ""),
+        "matrix_status": proof.get("matrix_status"),
+        "speed_metric_mode": proof.get("speed_metric_mode"),
+        "result_quality": result_metrics.get("quality"),
+        "result_speed": result_metrics.get("speed"),
+        "pareto_status": result_metrics.get("pareto_status"),
+    }
+
+
+def _baseline_promotion_summary(
+    rows: list[dict[str, Any]] | None,
+    *,
+    current_run_only: bool = True,
+    limit: int = 20,
+) -> dict[str, Any]:
+    selected_rows = list(rows or [])
+    if current_run_only:
+        selected_rows, _meta = _latest_journal_run_rows(selected_rows)
+    events = [
+        row for row in selected_rows
+        if row.get("type") == _BASELINE_PROMOTION_EVENT_TYPE
+    ]
+    events.sort(key=lambda row: _parse_journal_ts(row.get("timestamp")) or 0)
+    recent = [_shape_baseline_promotion_event(row) for row in events[-limit:]]
+    return {
+        "count": len(events),
+        "recent": recent,
+    }
+
+
 def _pareto_from_journal(
     session_start_ts: float | None,
     *,
@@ -1174,22 +1250,12 @@ def _pareto_from_journal(
     max_trial_id: int | None = None,
     deinflate_before_ts: float | None = None,
     deinflate_factor: float = 1.0,
+    rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Reconstruct Pareto data from the append-only journal."""
-    if not _AUTOPILOT_JOURNAL_PATH.exists():
-        return None
-
-    try:
-        with open(_AUTOPILOT_JOURNAL_PATH) as f:
-            rows = []
-            for line in f:
-                if not line.strip():
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except Exception:
-                    continue
-    except Exception:
+    if rows is None:
+        rows = _read_autopilot_journal_rows()
+    if rows is None:
         return None
 
     return reconstruct_archive_from_journal_rows(
@@ -1522,12 +1588,18 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
     # ~700 while the journal holds 1000 trials" report). `current_run_only` +
     # `pareto_epoch_ts` already scope to the live run, so the cap only ever
     # truncated real data. We now surface the divergence as a warning instead.
+    journal_rows = _read_autopilot_journal_rows()
+    baseline_promotions = _baseline_promotion_summary(
+        journal_rows,
+        current_run_only=True,
+    )
     journal_archive = _pareto_from_journal(
         None,
         current_run_only=True,
         max_trial_id=None,
         deinflate_before_ts=pareto_epoch_ts,
         deinflate_factor=deinflate_factor,
+        rows=journal_rows,
     )
     source = "journal_current_run"
     source_reason = "reconstructed from latest trial-id reset segment in autopilot_journal.jsonl"
@@ -1614,6 +1686,7 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         "state_trial_counter": state_trial_counter,
         "journal_max_trial_id": archive.get("journal_max_trial_id") if isinstance(archive, dict) else None,
         "exclusions": archive.get("exclusions") if isinstance(archive, dict) else None,
+        "baseline_promotions": baseline_promotions,
         "frontier": frontier,
         "frontiers_by_tier": frontiers_by_tier,
         "dominated": dominated_shaped,

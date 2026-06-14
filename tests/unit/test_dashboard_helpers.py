@@ -741,6 +741,59 @@ def test_dashboard_effective_journal_rows_fold_supersession_events() -> None:
     assert rows[1]["bug_corrupted_by"] == ""
 
 
+def test_dashboard_baseline_promotion_summary_scopes_to_current_run() -> None:
+    rows = [
+        {
+            "trial_id": 50,
+            "timestamp": "2026-05-28T08:59:00+00:00",
+        },
+        {
+            "type": "baseline_promotion",
+            "source_trial_id": 50,
+            "tier": 1,
+            "previous_quality": 1.0,
+            "new_quality": 1.1,
+            "timestamp": "2026-05-28T08:59:30+00:00",
+            "reason": "old run",
+        },
+        {
+            "trial_id": 0,
+            "timestamp": "2026-05-28T09:00:00+00:00",
+        },
+        {
+            "trial_id": 1,
+            "timestamp": "2026-05-28T09:01:00+00:00",
+        },
+        {
+            "type": "baseline_promotion",
+            "source_trial_id": 1,
+            "tier": 1,
+            "previous_quality": 1.1,
+            "new_quality": 1.4,
+            "timestamp": "2026-05-28T09:01:30+00:00",
+            "reason": "current run",
+            "proof": {
+                "matrix_status": "ok",
+                "speed_metric_mode": "aggregate_batch_tps",
+            },
+            "result_metrics": {
+                "quality": 1.4,
+                "speed": 42.0,
+                "pareto_status": "frontier",
+            },
+        },
+    ]
+
+    summary = dashboard._baseline_promotion_summary(rows, current_run_only=True)
+
+    assert summary["count"] == 1
+    event = summary["recent"][0]
+    assert event["source_trial_id"] == 1
+    assert round(event["quality_delta"], 3) == 0.3
+    assert event["matrix_status"] == "ok"
+    assert event["result_speed"] == 42.0
+
+
 def test_autopilot_progress_uses_superseded_journal_rows(
     tmp_path: Path,
     monkeypatch,
@@ -911,6 +964,21 @@ def test_pareto_endpoint_prefers_current_journal_run_over_old_rows_and_state(
             "reliability": 1.0,
             "bug_corrupted_by": "test",
         },
+        {
+            "type": "baseline_promotion",
+            "source_trial_id": 12,
+            "tier": 1,
+            "previous_quality": 1.0,
+            "new_quality": 1.2,
+            "timestamp": "2026-05-28T09:04:30+00:00",
+            "reason": "accepted",
+            "proof": {"matrix_status": "ok"},
+            "result_metrics": {
+                "quality": 1.2,
+                "speed": 9.0,
+                "pareto_status": "frontier",
+            },
+        },
     ]
     journal_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
     monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
@@ -929,6 +997,8 @@ def test_pareto_endpoint_prefers_current_journal_run_over_old_rows_and_state(
     assert [point["trial_id"] for point in payload["dominated"]] == [11, 0]
     assert payload["hypervolume_history"][-1][0] == 12
     assert payload["journal_run_start_trial_id"] == 0
+    assert payload["baseline_promotions"]["count"] == 1
+    assert payload["baseline_promotions"]["recent"][0]["source_trial_id"] == 12
 
 
 def test_pareto_endpoint_uses_current_run_when_restart_marker_is_newer(
