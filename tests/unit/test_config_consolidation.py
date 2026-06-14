@@ -575,6 +575,26 @@ class TestEnvVarOverrides:
             cfg = get_config()
             assert cfg.server_urls.frontdoor == "http://custom:9999"
 
+    def test_server_url_defaults_come_from_stack_priors(self, tmp_path: Path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  frontdoor:
+    serving:
+      ports: [9100, 9200]
+  worker_general:
+    serving:
+      ports: [9400, 9500]
+""".lstrip(),
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {"ORCHESTRATOR_PATHS_STACK_PRIORS_PATH": str(priors)}):
+            reset_config()
+            cfg = get_config()
+            assert cfg.server_urls.frontdoor == "full:http://localhost:9100,http://localhost:9200"
+            assert cfg.server_urls.worker == "full:http://localhost:9400,http://localhost:9500"
+
     def test_monitor_override(self):
         with patch.dict(os.environ, {"ORCHESTRATOR_MONITOR_ENTROPY_THRESHOLD": "5.0"}):
             reset_config()

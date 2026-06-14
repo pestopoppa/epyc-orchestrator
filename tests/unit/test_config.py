@@ -8,6 +8,7 @@ TimeoutsConfig defaults, and get_config() singleton behavior.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -25,6 +26,7 @@ from src.config import (
     _env_float,
     _env_int,
     get_config,
+    reset_config,
 )
 
 
@@ -291,6 +293,60 @@ class TestServerURLsConfig:
         cfg = ServerURLsConfig()
         assert "http://localhost:8083" in cfg.architect_general
         assert "architect_coding" not in cfg.as_dict()
+
+    def test_defaults_derive_from_stack_priors(self, tmp_path: Path) -> None:
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  frontdoor:
+    serving:
+      ports: [9100, 9200]
+  coder_escalation:
+    serving:
+      endpoint: http://localhost:9300
+      ports: [9300]
+  worker_general:
+    serving:
+      ports: [9400, 9500, 9600]
+  worker_explore:
+    serving:
+      ports: [9400, 9500]
+  worker_fast:
+    serving:
+      ports: [9902]
+""".lstrip(),
+            encoding="utf-8",
+        )
+
+        with patch.dict(os.environ, {"ORCHESTRATOR_PATHS_STACK_PRIORS_PATH": str(priors)}):
+            reset_config()
+            cfg = ServerURLsConfig()
+            assert cfg.frontdoor == "full:http://localhost:9100,http://localhost:9200"
+            assert cfg.coder == "http://localhost:9300"
+            assert cfg.worker == (
+                "full:http://localhost:9400,http://localhost:9500,http://localhost:9600"
+            )
+            assert cfg.worker_explore == "full:http://localhost:9400,http://localhost:9500"
+            assert cfg.worker_fast == "http://localhost:9902"
+            assert cfg.worker_coder == "http://localhost:9902"
+
+        reset_config()
+
+    def test_defaults_fall_back_when_stack_priors_missing(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {"ORCHESTRATOR_PATHS_STACK_PRIORS_PATH": str(tmp_path / "missing.yaml")},
+        ):
+            reset_config()
+            cfg = ServerURLsConfig()
+            assert "http://localhost:8080" in cfg.frontdoor
+            assert cfg.coder == "http://localhost:8070"
+            assert "8071" not in cfg.coder
+            assert cfg.worker_explore == "full:http://localhost:8072,http://localhost:8082"
+            assert cfg.worker_fast == "http://localhost:8102"
+
+        reset_config()
 
 
 # ============================================================================

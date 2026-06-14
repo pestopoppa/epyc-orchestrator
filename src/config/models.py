@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .validation import _registry_runtime_value, _registry_timeout
 
@@ -251,6 +252,115 @@ def _get_default_project_root() -> str:
     return os.environ.get("ORCHESTRATOR_PATHS_PROJECT_ROOT", f"{llm_root}/epyc-orchestrator")
 
 
+def _get_default_stack_priors_path() -> str:
+    return os.environ.get(
+        "ORCHESTRATOR_PATHS_STACK_PRIORS_PATH",
+        f"{_get_default_project_root()}/orchestration/derived/stack_priors.yaml",
+    )
+
+
+_LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
+    "frontdoor": (
+        "full:http://localhost:8070,http://localhost:8080,"
+        "http://localhost:8180,http://localhost:8280,http://localhost:8380"
+    ),
+    "coder": "http://localhost:8070",
+    "coder_escalation": "http://localhost:8070",
+    "worker": (
+        "full:http://localhost:8072,http://localhost:8082,"
+        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    ),
+    "worker_general": (
+        "full:http://localhost:8072,http://localhost:8082,"
+        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
+    ),
+    "worker_explore": "full:http://localhost:8072,http://localhost:8082",
+    "worker_math": "full:http://localhost:8072,http://localhost:8082",
+    "worker_vision": "http://localhost:8086",
+    "vision_escalation": (
+        "full:http://localhost:8087,http://localhost:8187,"
+        "http://localhost:8287,http://localhost:8387,http://localhost:8487"
+    ),
+    "worker_coder": "http://localhost:8102",
+    "worker_fast": "http://localhost:8102",
+    "worker_summarize": "http://localhost:8070",
+    "architect_general": "http://localhost:8083",
+    "ingest_long_context": (
+        "full:http://localhost:8085,http://localhost:8185,"
+        "http://localhost:8285,http://localhost:8385,http://localhost:8485"
+    ),
+    "api_url": "http://localhost:8000",
+    "ocr_server": "http://localhost:9001",
+    "vision_api": "http://localhost:8000/v1/vision/analyze",
+}
+
+_STACK_PRIOR_SERVER_URL_ALIASES: dict[str, str] = {
+    "coder": "coder_escalation",
+    "worker": "worker_general",
+    "worker_coder": "worker_fast",
+}
+_STACK_PRIOR_SERVER_URLS_CACHE: dict[str, str] | None = None
+
+
+def _format_stack_prior_url(serving: dict[str, Any]) -> str | None:
+    raw_ports = serving.get("ports")
+    ports = [port for port in raw_ports if isinstance(port, int)] if isinstance(raw_ports, list) else []
+    if ports:
+        urls = [f"http://localhost:{port}" for port in ports]
+        if len(urls) > 1:
+            urls[0] = f"full:{urls[0]}"
+        return ",".join(urls)
+    endpoint = serving.get("endpoint")
+    return endpoint if isinstance(endpoint, str) and endpoint.startswith("http") else None
+
+
+def _stack_prior_server_urls() -> dict[str, str]:
+    """Return role URLs derived from generated stack priors, if available."""
+    global _STACK_PRIOR_SERVER_URLS_CACHE
+    if _STACK_PRIOR_SERVER_URLS_CACHE is not None:
+        return _STACK_PRIOR_SERVER_URLS_CACHE
+
+    urls: dict[str, str] = {}
+    try:
+        import yaml
+
+        priors_path = Path(_get_default_stack_priors_path())
+        payload = yaml.safe_load(priors_path.read_text(encoding="utf-8")) or {}
+        roles = payload.get("roles")
+        if not isinstance(roles, dict):
+            _STACK_PRIOR_SERVER_URLS_CACHE = {}
+            return _STACK_PRIOR_SERVER_URLS_CACHE
+
+        for role, record in roles.items():
+            if not isinstance(role, str) or not isinstance(record, dict):
+                continue
+            serving = record.get("serving")
+            if not isinstance(serving, dict):
+                continue
+            url = _format_stack_prior_url(serving)
+            if url:
+                urls[role] = url
+
+        for alias, target in _STACK_PRIOR_SERVER_URL_ALIASES.items():
+            if target in urls:
+                urls[alias] = urls[target]
+    except Exception:
+        urls = {}
+
+    _STACK_PRIOR_SERVER_URLS_CACHE = urls
+    return _STACK_PRIOR_SERVER_URLS_CACHE
+
+
+def _server_url_default(name: str) -> str:
+    return _stack_prior_server_urls().get(name, _LEGACY_SERVER_URL_FALLBACKS[name])
+
+
+def reset_stack_prior_server_url_cache() -> None:
+    """Reset generated stack-prior server URL defaults."""
+    global _STACK_PRIOR_SERVER_URLS_CACHE
+    _STACK_PRIOR_SERVER_URLS_CACHE = None
+
+
 @dataclass
 class PathsConfig:
     """Configuration for file paths.
@@ -373,50 +483,41 @@ class ServerURLsConfig:
     """Server URL mapping for all orchestrator roles.
 
     Each field maps an orchestrator role to a llama-server URL.
+    Generated stack priors are the primary source of truth; literal values
+    remain as degraded fallbacks when the generated artifact is unavailable.
     """
 
-    # Tier A - Front Door (pre-warm: 1×96t full-speed + 4×48t concurrent)
-    # "full:" prefix triggers ConcurrencyAwareBackend (single→96t, concurrent→48t)
-    frontdoor: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
+    # Tier A - Front Door. "full:" prefix triggers ConcurrencyAwareBackend.
+    frontdoor: str = field(default_factory=lambda: _server_url_default("frontdoor"))
 
-    # Tier B - Specialists (pre-warm: 1×96t + 4×48t)
-    coder: str = "full:http://localhost:8071,http://localhost:8081,http://localhost:8181,http://localhost:8281,http://localhost:8381"
-    # 2026-05-09: coder_escalation consolidated onto frontdoor's process (same
-    # Qwen3.6-35B-A3B Q8 GGUF). URL must mirror frontdoor's port set, not the
-    # old :8071 family (which was the pre-consolidation independent server).
-    coder_escalation: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
+    # Tier B - Specialists. `coder` is a compatibility alias over coder_escalation.
+    coder: str = field(default_factory=lambda: _server_url_default("coder"))
+    coder_escalation: str = field(default_factory=lambda: _server_url_default("coder_escalation"))
 
-    # Tier C - Workers (pre-warm: 1×96t + 4×48t)
-    worker: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
-    worker_general: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
-    worker_explore: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
-    worker_math: str = "full:http://localhost:8072,http://localhost:8082,http://localhost:8182,http://localhost:8282,http://localhost:8382"
-    # 2026-05-24: vision_escalation upgraded to full+4×quarters following
-    # Phase 0.5 quarter-fit bench (20.09 t/s @ 48t — best quarter-throughput
-    # of any role). worker_vision reverted to single-instance (too small to
-    # benefit from quartering — see stack_numa.py for the bench data).
-    worker_vision: str = "http://localhost:8086"
-    vision_escalation: str = "full:http://localhost:8087,http://localhost:8187,http://localhost:8287,http://localhost:8387,http://localhost:8487"
-    worker_coder: str = "http://localhost:8102"
-    worker_fast: str = "http://localhost:8102"
-    # 2026-05-09: worker_summarize consolidated onto frontdoor's process. Mirror
-    # frontdoor's port set; old :8071 family no longer has a server.
-    worker_summarize: str = "full:http://localhost:8070,http://localhost:8080,http://localhost:8180,http://localhost:8280,http://localhost:8380"
+    # Tier C - Workers. `worker` and deprecated worker_* roles stay as
+    # compatibility aliases where stack priors do not expose that exact label.
+    worker: str = field(default_factory=lambda: _server_url_default("worker"))
+    worker_general: str = field(default_factory=lambda: _server_url_default("worker_general"))
+    worker_explore: str = field(default_factory=lambda: _server_url_default("worker_explore"))
+    worker_math: str = field(default_factory=lambda: _server_url_default("worker_math"))
+    worker_vision: str = field(default_factory=lambda: _server_url_default("worker_vision"))
+    vision_escalation: str = field(
+        default_factory=lambda: _server_url_default("vision_escalation")
+    )
+    worker_coder: str = field(default_factory=lambda: _server_url_default("worker_coder"))
+    worker_fast: str = field(default_factory=lambda: _server_url_default("worker_fast"))
+    worker_summarize: str = field(default_factory=lambda: _server_url_default("worker_summarize"))
 
-    # Tier B - Architect (1×96t canonical, NUMA_FULL + interleave=all)
-    # 2026-05-04 Probe B: consolidated from 2×cross-NUMA round-robin to single
-    # full instance; +184% per-request latency. NUMA_CONFIG[architect_general]
-    # has 1 instance @ 8083; the prior :8183 port is dead.
-    architect_general: str = "http://localhost:8083"
-    # 2026-05-24: ingest_long_context upgraded to full+4×quarters following
-    # Phase 0.5 quarter-fit bench (Qwen3-Next-80B Q4 = 12.34 t/s @ 48t/quarter,
-    # snug at 45 GB GGUF + KV but viable). Solo → full (8085), concurrent → quarters.
-    ingest_long_context: str = "full:http://localhost:8085,http://localhost:8185,http://localhost:8285,http://localhost:8385,http://localhost:8485"
+    # Tier B - Architect / long-context.
+    architect_general: str = field(default_factory=lambda: _server_url_default("architect_general"))
+    ingest_long_context: str = field(
+        default_factory=lambda: _server_url_default("ingest_long_context")
+    )
 
     # Services
-    api_url: str = "http://localhost:8000"
-    ocr_server: str = "http://localhost:9001"
-    vision_api: str = "http://localhost:8000/v1/vision/analyze"
+    api_url: str = field(default_factory=lambda: _server_url_default("api_url"))
+    ocr_server: str = field(default_factory=lambda: _server_url_default("ocr_server"))
+    vision_api: str = field(default_factory=lambda: _server_url_default("vision_api"))
 
     def as_dict(self) -> dict[str, str]:
         """Return role->URL mapping as dict (for LLMPrimitives compatibility).
