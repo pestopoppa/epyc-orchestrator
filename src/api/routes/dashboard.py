@@ -57,11 +57,11 @@ from src.api.routes.dashboard_tasks import (
     _task_text_snapshot,
 )
 from src.api.routes.dashboard_topology import (
-    _PORT_HINTS,
     role_aliases,
     _clean_model_name,
     _discover_llama_models,
     _discover_llama_ports,
+    _port_hint,
     _process_info_by_match,
     _role_color,
     base_role,
@@ -938,7 +938,7 @@ async def process_status() -> JSONResponse:
 @router.get("/dashboard/api/node/{port}")
 async def node_detail(port: int) -> JSONResponse:
     """Full detail for one topology node: health, slots, recent decisions routed to it."""
-    label = _PORT_HINTS.get(port, f"port_{port}")
+    label = _port_hint(port)
     # PID + cmd from ps
     proc_info: dict[str, Any] = {}
     try:

@@ -14,17 +14,18 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
-# Port-range hints used as fallback if registry doesn't resolve a port.
-_PORT_HINTS: dict[int, str] = {
+_DEFAULT_STACK_PRIORS_PATH = (
+    Path(__file__).resolve().parents[3] / "orchestration" / "derived" / "stack_priors.yaml"
+)
+
+# Service-only hints. Model-serving ports are projected from generated stack
+# priors below so dashboard labels follow the same launch contract as the stack.
+_SERVICE_PORT_HINTS: dict[int, str] = {
     8000: "orchestrator",
-    8070: "frontdoor",
-    8072: "worker_general",
-    8083: "architect_general",
-    8085: "ingest_long_context",
-    8086: "worker_vision",
-    8087: "vision_escalation",
     8088: "nextplaid-code",
     8089: "nextplaid-docs",
     8090: "embedder",
@@ -38,17 +39,85 @@ _PORT_HINTS: dict[int, str] = {
     9000: "whisper",
     9001: "document_formalizer",
 }
-# NUMA quarters share the parent role. Extended 2026-05-24 to cover
-# ingest_long_context (8185/8285/8385/8485) and vision_escalation (8187/8287/8387/8487)
-# that were added by Phase 1b of the cross-role-bw-aware-routing handoff.
-for _parent_base, _parent_role in (
-    (8080, "frontdoor"),
-    (8082, "worker_general"),
-    (8185, "ingest_long_context"),
-    (8187, "vision_escalation"),
-):
-    for _q in range(4):
-        _PORT_HINTS[_parent_base + _q * 100] = f"{_parent_role}.q{_q}"
+
+
+def _label_for_stack_prior_entry(role: str, entry: dict[str, Any]) -> tuple[int, str] | None:
+    if entry.get("alias"):
+        return None
+    primary_role = entry.get("primary_role")
+    if isinstance(primary_role, str) and primary_role and primary_role != role:
+        return None
+    port = entry.get("port")
+    if not isinstance(port, int):
+        return None
+    numa_instance = entry.get("numa_instance")
+    if isinstance(numa_instance, int) and numa_instance > 0:
+        return port, f"{role}.q{numa_instance - 1}"
+    return port, role
+
+
+def _stack_prior_port_hints(
+    stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH,
+) -> dict[int, str]:
+    """Project live model-serving port labels from generated stack priors."""
+    try:
+        payload = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    roles = payload.get("roles")
+    if not isinstance(roles, dict):
+        return {}
+
+    hints: dict[int, str] = {}
+    for role, record in sorted(roles.items()):
+        if not isinstance(role, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        serving = record.get("serving")
+        if not isinstance(serving, dict):
+            continue
+        launch = serving.get("launch")
+        launch = launch if isinstance(launch, dict) else {}
+        primary_roles = launch.get("primary_roles")
+        if isinstance(primary_roles, list) and primary_roles and role not in primary_roles:
+            continue
+
+        mapped = False
+        entries = launch.get("entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                label = _label_for_stack_prior_entry(role, entry)
+                if label is None:
+                    continue
+                port, name = label
+                hints[port] = name
+                mapped = True
+
+        if mapped:
+            continue
+        raw_ports = serving.get("ports")
+        ports = [port for port in raw_ports if isinstance(port, int)] if isinstance(raw_ports, list) else []
+        for index, port in enumerate(ports):
+            hints[port] = role if index == 0 else f"{role}.q{index - 1}"
+
+    return hints
+
+
+def _build_port_hints() -> dict[int, str]:
+    hints = dict(_SERVICE_PORT_HINTS)
+    hints.update(_stack_prior_port_hints())
+    return hints
+
+
+# Public compatibility map used by tests and dashboard callers.
+_PORT_HINTS: dict[int, str] = _build_port_hints()
+
+
+def _port_hint(port: int) -> str:
+    return _PORT_HINTS.get(port, f"port_{port}")
 
 # Per-role display colors (CSS hex).
 _ROLE_COLORS: dict[str, str] = {
@@ -147,7 +216,7 @@ def _discover_llama_ports() -> dict[int, str]:
         if not port_m:
             continue
         port = int(port_m.group(1))
-        role = _PORT_HINTS.get(port, f"port_{port}")
+        role = _port_hint(port)
         # If the cmd has -m, prefer a model-derived label as a fallback role hint
         if role == f"port_{port}":
             model_m = pid_model_re.search(line)

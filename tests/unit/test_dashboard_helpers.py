@@ -49,6 +49,79 @@ def test_port_hints_quarter_ports_generated() -> None:
     assert dashboard_topology._PORT_HINTS[8380] == "frontdoor.q3"
 
 
+def test_stack_prior_port_hints_skip_alias_records(tmp_path) -> None:
+    priors = tmp_path / "stack_priors.yaml"
+    priors.write_text(
+        json.dumps(
+            {
+                "roles": {
+                    "frontdoor": {
+                        "deployment_status": "live_stack",
+                        "serving": {
+                            "ports": [8070, 8080, 8180],
+                            "launch": {
+                                "primary_roles": ["frontdoor"],
+                                "entries": [
+                                    {
+                                        "port": 8070,
+                                        "primary_role": "frontdoor",
+                                        "alias": False,
+                                        "numa_instance": 0,
+                                    },
+                                    {
+                                        "port": 8080,
+                                        "primary_role": "frontdoor",
+                                        "alias": False,
+                                        "numa_instance": 1,
+                                    },
+                                    {
+                                        "port": 8180,
+                                        "primary_role": "frontdoor",
+                                        "alias": False,
+                                        "numa_instance": 2,
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                    "coder_escalation": {
+                        "deployment_status": "live_stack",
+                        "serving": {
+                            "ports": [8070],
+                            "launch": {
+                                "primary_roles": ["frontdoor"],
+                                "entries": [
+                                    {
+                                        "port": 8070,
+                                        "primary_role": "frontdoor",
+                                        "alias": True,
+                                        "numa_instance": 0,
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                    "candidate_only": {
+                        "deployment_status": "benchmark_or_candidate",
+                        "serving": {
+                            "ports": [9999],
+                            "launch": {"primary_roles": [], "entries": []},
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hints = dashboard_topology._stack_prior_port_hints(priors)
+    assert hints[8070] == "frontdoor"
+    assert hints[8080] == "frontdoor.q0"
+    assert hints[8180] == "frontdoor.q1"
+    assert 9999 not in hints
+    assert "coder_escalation" not in hints.values()
+
+
 def test_load_state_services_missing_file_returns_empty(tmp_path) -> None:
     services = dashboard_topology._load_state_services(tmp_path / "no_such.json")
     assert services == []
