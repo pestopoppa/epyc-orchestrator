@@ -9,8 +9,8 @@ def test_available_roles_falls_back_to_current_live_role_surface(monkeypatch):
         openai_compat,
         "HOT_SERVERS",
         [
-            {"port": 8070, "roles": ["frontdoor", "coder_escalation", "worker_summarize"]},
-            {"port": 8072, "roles": ["worker_general", "worker_math", "toolrunner"]},
+            {"port": 8070, "roles": ["frontdoor", "coder", "worker_summarize"]},
+            {"port": 8072, "roles": ["worker_fast", "worker_math", "toolrunner"]},
             {"port": 8083, "roles": ["architect_general"]},
             {"port": 8085, "roles": ["ingest_long_context"]},
             {"port": 8086, "roles": ["worker_vision"]},
@@ -70,6 +70,29 @@ def test_available_roles_uses_stack_prior_roles_when_present(monkeypatch):
     ]
 
 
+def test_available_roles_canonicalizes_live_stack_role_ids(monkeypatch):
+    monkeypatch.setattr(
+        openai_compat,
+        "_live_stack_role_ids",
+        lambda: [
+            "frontdoor",
+            "worker_fast",
+            "worker_general",
+            "coder",
+            "worker_general",
+        ],
+    )
+
+    assert openai_compat.available_roles() == [
+        "orchestrator",
+        "architect",
+        "worker",
+        "frontdoor",
+        "worker_general",
+        "coder_escalation",
+    ]
+
+
 def test_ordered_live_role_ids_uses_stack_prior_topology():
     def record(*ports: int) -> dict:
         return {"serving": {"ports": list(ports)}}
@@ -98,8 +121,8 @@ def test_degraded_available_roles_follow_server_lists_without_literal_port_map(
         openai_compat,
         "HOT_SERVERS",
         [
-            {"port": 8070, "roles": ["frontdoor", "coder_escalation"]},
-            {"port": 8072, "roles": ["worker_general", "worker_math", "toolrunner"]},
+            {"port": 8070, "roles": ["frontdoor", "coder", "worker_fast"]},
+            {"port": 8072, "roles": ["worker_coder", "worker_math", "toolrunner"]},
         ],
     )
     monkeypatch.setattr(

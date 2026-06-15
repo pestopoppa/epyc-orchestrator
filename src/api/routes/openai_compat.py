@@ -57,6 +57,11 @@ def _extract_text(content: str | list) -> str:
 COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
 
 
+def _canonical_role_name(role: str) -> str:
+    canonical = Role.from_string(role)
+    return canonical.value if canonical is not None else role
+
+
 def _degraded_available_roles() -> list[str]:
     """Return the degraded /models fallback from computed server lists."""
     preferred = (
@@ -84,7 +89,9 @@ def _degraded_available_roles() -> list[str]:
         ]
         if not visible_roles:
             continue
-        names_by_port.setdefault(port, []).extend(visible_roles)
+        names_by_port.setdefault(port, []).extend(
+            _canonical_role_name(role) for role in visible_roles
+        )
     available_roles = {role for names in names_by_port.values() for role in names}
     return [role for role in preferred if role in available_roles]
 
@@ -126,7 +133,7 @@ def _live_stack_role_ids() -> list[str]:
 
 def available_roles() -> list[str]:
     """Return OpenAI-compatible model IDs from live stack truth plus aliases."""
-    role_ids = _live_stack_role_ids() or _degraded_available_roles()
+    role_ids = [_canonical_role_name(role) for role in (_live_stack_role_ids() or _degraded_available_roles())]
     return list(dict.fromkeys([*COMPATIBILITY_MODEL_ALIASES, *role_ids]))
 
 
