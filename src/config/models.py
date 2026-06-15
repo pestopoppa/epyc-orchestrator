@@ -282,7 +282,6 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "full:http://localhost:8087,http://localhost:8187,"
         "http://localhost:8287,http://localhost:8387,http://localhost:8487"
     ),
-    "worker_coder": "http://localhost:8102",
     "worker_fast": "http://localhost:8102",
     "worker_summarize": "http://localhost:8070",
     "architect_general": "http://localhost:8083",
