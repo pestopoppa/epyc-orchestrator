@@ -334,7 +334,7 @@ roles:
             assert cfg.worker == (
                 "full:http://localhost:9400,http://localhost:9500,http://localhost:9600"
             )
-            assert cfg.worker_explore == "full:http://localhost:9400,http://localhost:9500"
+            assert cfg.worker_explore == cfg.worker_general
             assert cfg.worker_fast == "http://localhost:9902"
             assert cfg.worker_coder == "http://localhost:9902"
 
@@ -350,7 +350,7 @@ roles:
             assert "http://localhost:8080" in cfg.frontdoor
             assert cfg.coder == "http://localhost:8070"
             assert "8071" not in cfg.coder
-            assert cfg.worker_explore == "full:http://localhost:8072,http://localhost:8082"
+            assert cfg.worker_explore == cfg.worker_general
             assert cfg.worker_fast == "http://localhost:8102"
 
         reset_config()
