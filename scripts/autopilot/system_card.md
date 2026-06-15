@@ -6,7 +6,8 @@ Do not hand-edit this file; edit the source registries or constitution.
 ## Runtime State
 
 - paused: true
-- trial_counter: 813
+- trial_counter: 830
+- last_invalid_reason: critic rejected: Draft action uses prompt_mutation on architect_synthesis.md, but Available Actions only permit prompt_mutation on frontdoor.md.; frontdoor.md prompt_mutation is...
 
 ## Active Model-Serving Roles
 

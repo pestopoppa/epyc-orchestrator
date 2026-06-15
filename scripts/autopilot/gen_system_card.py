@@ -113,6 +113,19 @@ def _active_suite_line(baseline: dict[str, Any]) -> str:
     return "- Active T1 suites: " + ", ".join(suite_names)
 
 
+def _stack_prior_active_role_names(stack_priors: dict[str, Any]) -> set[str]:
+    roles = stack_priors.get("roles")
+    if not isinstance(roles, dict):
+        return set()
+    return {
+        str(name)
+        for name, record in roles.items()
+        if isinstance(name, str)
+        and isinstance(record, dict)
+        and record.get("deployment_status") == "live_stack"
+    }
+
+
 def _runtime_state_lines(state: dict[str, Any]) -> list[str]:
     if not state:
         return ["- AutoPilot state file not found or unreadable."]
@@ -184,11 +197,15 @@ def generate_system_card(
     if not role_rows:
         role_source = "orchestration/model_registry.yaml (degraded fallback)"
         role_rows = _registry_role_rows(registry)
-    active_role_names = {
-        row.split("|")[1].strip()
-        for row in role_rows
-        if row.startswith("|") and not row.startswith("| Role")
-    }
+    active_role_names = (
+        _stack_prior_active_role_names(stack_priors)
+        if role_source == "orchestration/derived/stack_priors.yaml"
+        else {
+            row.split("|")[1].strip()
+            for row in role_rows
+            if row.startswith("|") and not row.startswith("| Role")
+        }
+    )
 
     lines: list[str] = [
         "# AutoPilot Generated System Card",
