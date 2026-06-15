@@ -6,6 +6,8 @@ multi-loop delegation pipeline where architect formulates
 investigation briefs and specialists execute via ReAct or REPL.
 """
 
+# ruff: noqa: F401
+
 from __future__ import annotations
 
 import json
@@ -36,12 +38,12 @@ from src.repl_environment import REPLEnvironment
 # patches against e.g. chat_delegation._parse_architect_decision keep working.
 from .chat_delegation_config import (
     DelegationConfig,
-    _VALID_DELEGATE_ROLES,
     _delegation_config,
     _delegation_local,
     _delegation_specialist_turn_token_cap,
     _get_delegation_depth,
     _normalize_delegate_role,
+    _valid_delegate_roles,
 )
 from .chat_delegation_decision import (
     _apply_decision_guards,
@@ -69,6 +71,7 @@ if TYPE_CHECKING:
 
 
 # Valid delegation targets for architect briefs
+_VALID_DELEGATE_ROLES = _valid_delegate_roles()
 
 
 

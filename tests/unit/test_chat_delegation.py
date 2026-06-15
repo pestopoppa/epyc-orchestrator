@@ -2,7 +2,7 @@
 
 Tests cover: _strip_think, _extract_toon_decision, _parse_architect_decision,
 loop guards (_get_delegation_depth, semantic dedup, role repetition, token budget),
-and the module-level constants _VALID_DELEGATE_ROLES, _ARCHITECT_TOKEN_BUDGET,
+and the live delegate-role allowlist plus _ARCHITECT_TOKEN_BUDGET,
 _ARCHITECT_DECISION_BUDGET.
 """
 
@@ -14,12 +14,12 @@ from src.api.routes.chat_delegation import (
     _parse_architect_decision,
     _get_delegation_depth,
     _delegation_local,
-    _VALID_DELEGATE_ROLES,
 )
 from src.api.routes.chat_delegation_decision import (
     _ARCHITECT_TOKEN_BUDGET,
     _ARCHITECT_DECISION_BUDGET,
 )
+from src.api.routes.chat_delegation_config import _valid_delegate_roles
 from src.api.routes.chat_delegation_reports import _build_compact_specialist_prompt
 from src.constants import (
     DELEGATION_BRIEF_KEY_LEN,
@@ -222,7 +222,7 @@ class TestConstants:
             "worker_vision",
             "vision_escalation",
         }
-        assert _VALID_DELEGATE_ROLES == expected
+        assert _valid_delegate_roles() == expected
 
     def test_architect_token_budget_values(self):
         assert _ARCHITECT_TOKEN_BUDGET["architect_general"] == 768

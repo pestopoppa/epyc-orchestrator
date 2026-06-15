@@ -27,6 +27,7 @@ _VALID_DELEGATE_ROLE_FALLBACKS = frozenset(
     }
 )
 
+
 def _normalize_delegate_role(role: object) -> str:
     """Normalize legacy/model-generated delegate labels to live stack roles."""
     if not isinstance(role, str):
@@ -44,9 +45,6 @@ def _valid_delegate_roles() -> frozenset[str]:
     live_roles = live_stack_role_records()
     allowed = {role for role in _VALID_DELEGATE_ROLE_FALLBACKS if role in live_roles}
     return frozenset(allowed or _VALID_DELEGATE_ROLE_FALLBACKS)
-
-
-_VALID_DELEGATE_ROLES = _valid_delegate_roles()
 
 
 # Thread-local delegation depth counter to detect re-entrance
