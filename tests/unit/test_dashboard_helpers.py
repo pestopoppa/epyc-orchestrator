@@ -49,6 +49,15 @@ def test_port_hints_quarter_ports_generated() -> None:
     assert dashboard_topology._PORT_HINTS[8380] == "frontdoor.q3"
 
 
+def test_service_port_hints_use_manifest_worker_fast_port(monkeypatch) -> None:
+    from scripts.server import stack_manifest
+
+    monkeypatch.setitem(stack_manifest.PORT_MAP, "worker_fast", 9902)
+    hints = dashboard_topology._service_port_hints()
+    assert hints[9902] == "worker_fast"
+    assert 8102 not in hints
+
+
 def test_stack_prior_port_hints_skip_alias_records(tmp_path) -> None:
     priors = tmp_path / "stack_priors.yaml"
     priors.write_text(

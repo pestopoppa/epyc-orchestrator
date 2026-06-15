@@ -29,7 +29,7 @@ _DEFAULT_STACK_PRIORS_PATH = (
 
 # Service-only hints. Model-serving ports are projected from generated stack
 # priors below so dashboard labels follow the same launch contract as the stack.
-_SERVICE_PORT_HINTS: dict[int, str] = {
+_BASE_SERVICE_PORT_HINTS: dict[int, str] = {
     8000: "orchestrator",
     8088: "nextplaid-code",
     8089: "nextplaid-docs",
@@ -39,11 +39,23 @@ _SERVICE_PORT_HINTS: dict[int, str] = {
     8093: "embedder_3",
     8094: "embedder_4",
     8095: "embedder_5",
-    8102: "worker_fast",
     8190: "sd_server",
     9000: "whisper",
     9001: "document_formalizer",
 }
+
+
+def _service_port_hints() -> dict[int, str]:
+    hints = dict(_BASE_SERVICE_PORT_HINTS)
+    try:
+        from scripts.server.stack_manifest import PORT_MAP
+    except Exception:
+        worker_fast_port = 8102
+    else:
+        worker_fast_port = PORT_MAP.get("worker_fast", 8102)
+    if isinstance(worker_fast_port, int):
+        hints[worker_fast_port] = "worker_fast"
+    return hints
 
 
 def _label_for_stack_prior_entry(role: str, entry: dict[str, Any]) -> tuple[int, str] | None:
@@ -101,7 +113,7 @@ def _stack_prior_port_hints(
 
 
 def _build_port_hints() -> dict[int, str]:
-    hints = dict(_SERVICE_PORT_HINTS)
+    hints = _service_port_hints()
     hints.update(_stack_prior_port_hints())
     return hints
 
