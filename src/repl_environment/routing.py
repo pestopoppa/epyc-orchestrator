@@ -216,10 +216,10 @@ class _RoutingMixin:
 
         # Workers that Tier A/B can delegate to
         WORKER_ROLES = [
-            "worker_general",
-            "worker_math",
-            "worker_summarize",
-            "worker_vision",
+            str(Role.WORKER_GENERAL),
+            str(Role.WORKER_MATH),
+            str(Role.WORKER_SUMMARIZE),
+            str(Role.WORKER_VISION),
         ]
 
         delegate_targets: list[str] = []
@@ -375,12 +375,12 @@ class _RoutingMixin:
 
     # Roles that can be delegation targets (any role can delegate to these)
     _DELEGATABLE_ROLES: frozenset[str] = frozenset({
-        "worker_math",
-        "worker_general",
-        "worker_summarize",
-        "worker_vision",
+        str(Role.WORKER_MATH),
+        str(Role.WORKER_GENERAL),
+        str(Role.WORKER_SUMMARIZE),
+        str(Role.WORKER_VISION),
         "vision_escalation",
-        "coder_escalation",
+        str(Role.CODER_ESCALATION),
     })
 
     def _fetch_report(
