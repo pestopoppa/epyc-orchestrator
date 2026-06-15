@@ -8,6 +8,7 @@ from src.prompt_builders.resolver import (
     PROMPT_DIR,
     _get_variant,
     _safe_format,
+    get_direct_answer_prefix,
     resolve_prompt,
 )
 
@@ -175,7 +176,22 @@ class TestResolvePrompt:
         assert PROMPT_DIR.parent.name == "orchestration"
 
 
-# ── Integration: actual prompt files ─────────────────────────────────────
+class TestDirectAnswerPrefix:
+    def test_canonical_worker_aliases_share_direct_prefix(self):
+        assert get_direct_answer_prefix("worker_explore", "What is 2+2?").startswith(
+            "Answer with ONLY"
+        )
+        assert get_direct_answer_prefix("worker_general", "What is 2+2?").startswith(
+            "Answer with ONLY"
+        )
+
+    def test_frontdoor_keeps_direct_prefix(self):
+        assert get_direct_answer_prefix("frontdoor", "List exactly one item").startswith(
+            "Respond with only"
+        )
+
+    def test_non_eligible_roles_get_no_prefix(self):
+        assert get_direct_answer_prefix("coder_escalation", "What is 2+2?") == ""
 
 
 class TestPromptFilesExist:

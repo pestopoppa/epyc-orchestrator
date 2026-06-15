@@ -27,6 +27,8 @@ import os
 import re
 from pathlib import Path
 
+from src.roles import Role
+
 _log = logging.getLogger(__name__)
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent.parent / "orchestration" / "prompts"
@@ -145,7 +147,7 @@ def resolve_prompt(
     return _safe_format(fallback, template_vars) if template_vars else fallback
 
 
-_DIRECT_ANSWER_ROLES = frozenset({"worker_explore", "frontdoor"})
+_DIRECT_ANSWER_ROLES = frozenset({Role.FRONTDOOR.value, Role.WORKER_GENERAL.value})
 
 _TERSE_PREFIX = "Answer with ONLY the answer. No explanation.\n\n"
 _LIST_PREFIX = "Respond with only the requested items, comma-separated.\n\n"
@@ -165,7 +167,9 @@ def get_direct_answer_prefix(role: str, question: str = "") -> str:
     Very selective: only fires for pure arithmetic ("What is 2+3") and
     explicit list requests ("List exactly ..."). Default is NO prefix.
     """
-    if role not in _DIRECT_ANSWER_ROLES or not question:
+    normalized = Role.from_string(role)
+    role_value = normalized.value if normalized is not None else role
+    if role_value not in _DIRECT_ANSWER_ROLES or not question:
         return ""
     q = question.strip()
     if _WHAT_IS_ARITH.search(q):
