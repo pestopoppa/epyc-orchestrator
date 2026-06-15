@@ -534,6 +534,40 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
     assert q_priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.874)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
 
+    calls: list[dict[str, Any]] = []
+    original_run = pipeline.subprocess.run
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command != pipeline._promotion_gate_command():
+            return original_run(command, **kwargs)
+        calls.append({"command": command, **kwargs})
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="promotion gate ok\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    swap_check_config = StackChangePipelineConfig(
+        **{**approved_config.__dict__, "mode": "check", "run_promotion_gate": True}
+    )
+    swap_check_report = run_stack_change_pipeline(swap_check_config)
+
+    assert swap_check_report.ok
+    assert len(calls) == 1
+    assert calls[0]["command"] == pipeline._promotion_gate_command()
+    assert calls[0]["cwd"] == tmp_path
+    assert calls[0]["text"] is True
+    assert calls[0]["capture_output"] is True
+    assert calls[0]["check"] is False
+    promotion_step = next(step for step in swap_check_report.steps if step.name == "promotion_gate")
+    assert promotion_step.status == "ok"
+    assert any("promotion gate ok" in detail for detail in promotion_step.details)
+    assert any(step.name == "operator_summary" and step.status == "ok" for step in swap_check_report.steps)
+    assert any(step.name == "q_scorer_priors" and step.status == "ok" for step in swap_check_report.steps)
+    assert any(step.name == "runtime_attestation" and step.status == "ok" for step in swap_check_report.steps)
+
 
 def test_simulated_shared_runtime_aliases_compile_as_one_runtime_descriptor(
     tmp_path: Path,
