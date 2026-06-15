@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from src.config import get_config as _get_config
 from src.constants import TASK_IR_OBJECTIVE_LEN
+from src.roles import Role
 from src.task_ir import canonicalize_task_ir
 from src.prompt_builders import (
     build_review_verdict_prompt,
@@ -129,7 +130,8 @@ def _fast_revise(
 ) -> str:
     """Fast worker expands architect's corrections into full answer.
 
-    Uses worker_explore (port 8082, 44 t/s) — the fastest model in the stack.
+    Uses worker_general (the live canonical worker role) — the fastest model
+    in the stack after the worker-explore alias consolidation.
     7B is sufficient since the architect already specified exactly what to fix.
 
     Args:
@@ -145,7 +147,7 @@ def _fast_revise(
     try:
         result = primitives.llm_call(
             prompt,
-            role="worker_explore",
+            role=str(Role.WORKER_GENERAL),
             n_tokens=2000,
         )
         return result.strip() or original_answer

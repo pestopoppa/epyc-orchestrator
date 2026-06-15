@@ -268,7 +268,7 @@ class TestFastRevise:
         assert result == "original answer"
 
     def test_uses_worker_explore_role(self):
-        """Revision uses worker_explore role."""
+        """Revision uses the canonical live worker role."""
         primitives = MagicMock()
         primitives.llm_call.return_value = "revised"
 
@@ -276,7 +276,7 @@ class TestFastRevise:
             _fast_revise("q", "orig", "fix", primitives)
 
         call_kwargs = primitives.llm_call.call_args.kwargs
-        assert call_kwargs.get("role") == "worker_explore"
+        assert call_kwargs.get("role") == "worker_general"
 
 
 class TestNeedsPlanReview:
