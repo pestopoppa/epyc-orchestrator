@@ -212,6 +212,21 @@ class TestRoleMapping:
         assert "worker_general" in result.roles_used
         assert len(result.warnings) > 0
 
+    def test_map_worker_explore_alias_to_worker_general(self, minimal_registry: Path):
+        """Test that retired worker aliases normalize to the live worker role."""
+        registry = RegistryLoader(minimal_registry)
+        dispatcher = Dispatcher(registry=registry)
+
+        task_ir = {
+            "task_type": "general",
+            "agents": [{"role": "worker_explore"}],
+            "plan": {"steps": []},
+        }
+
+        result = dispatcher.dispatch(task_ir)
+        assert "worker_general" in result.roles_used
+        assert "worker_explore" not in result.roles_used
+
     def test_model_hint_override(self, minimal_registry: Path):
         """Test that model_hint overrides role mapping."""
         registry = RegistryLoader(minimal_registry)
@@ -225,6 +240,20 @@ class TestRoleMapping:
 
         result = dispatcher.dispatch(task_ir)
         assert "worker_general" in result.roles_used
+
+    def test_model_hint_alias_canonicalizes_to_worker_general(self, minimal_registry: Path):
+        """Test that alias model hints resolve through live worker roles."""
+        registry = RegistryLoader(minimal_registry)
+        dispatcher = Dispatcher(registry=registry)
+
+        task_ir = {
+            "task_type": "code",
+            "agents": [{"role": "coder", "model_hint": "worker_explore"}],
+            "plan": {"steps": []},
+        }
+
+        result = dispatcher.dispatch(task_ir)
+        assert result.roles_used == ["worker_general"]
 
 
 class TestSpeculativeDecoding:
@@ -283,6 +312,39 @@ class TestStepExecution:
         for step in result.steps:
             assert step.role_config is not None
             assert step.role_config.name in ["coder_escalation", "worker_general"]
+
+    def test_worker_explore_step_uses_live_worker_role(
+        self, minimal_registry: Path, sample_task_ir: dict
+    ):
+        """Test that worker aliases route steps through the live worker role."""
+        registry = RegistryLoader(minimal_registry)
+        dispatcher = Dispatcher(registry=registry)
+
+        task_ir = {
+            "task_id": "worker-alias-task",
+            "task_type": "general",
+            "priority": "interactive",
+            "objective": "Exercise worker alias dispatch",
+            "agents": [{"role": "worker_explore"}],
+            "plan": {
+                "steps": [
+                    {
+                        "id": "S1",
+                        "actor": "worker_explore",
+                        "action": "Review the change",
+                        "inputs": [],
+                        "outputs": ["review.md"],
+                        "depends_on": [],
+                    }
+                ]
+            },
+        }
+
+        result = dispatcher.dispatch(task_ir)
+
+        assert result.roles_used == ["worker_general"]
+        assert result.steps[0].role_config is not None
+        assert result.steps[0].role_config.name == "worker_general"
 
 
 class TestFileDispatch:

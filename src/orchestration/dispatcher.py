@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from src.registry_loader import RegistryLoader, RoleConfig
+from src.roles import Role
 from src.task_ir import canonicalize_task_ir
 
 logger = logging.getLogger(__name__)
@@ -200,12 +201,14 @@ class Dispatcher:
             ir_role = agent.get("role", "")
             model_hint = agent.get("model_hint")
 
-            # Use model_hint if provided, otherwise map from IR role
-            if model_hint and model_hint in self.registry.roles:
-                registry_role = model_hint
-            elif ir_role in self.ROLE_MAPPING:
-                registry_role = self.ROLE_MAPPING[ir_role]
-            else:
+            # Use model_hint if provided, otherwise resolve the TaskIR role
+            # through the canonical registry-role helper.
+            registry_role = None
+            if model_hint:
+                registry_role = self._resolve_registry_role_name(model_hint)
+            if registry_role is None:
+                registry_role = self._resolve_registry_role_name(ir_role)
+            if registry_role is None:
                 self._warnings.append(f"Unknown role '{ir_role}', defaulting to worker_general")
                 registry_role = "worker_general"
 
@@ -224,6 +227,8 @@ class Dispatcher:
                 roles = self.registry.route_task(task_ir)
                 self._routing_strategy = "rules"
 
+        roles = self._normalize_registry_roles(roles)
+
         # Always include draft model if using speculative decoding
         for role_name in list(roles):
             try:
@@ -236,6 +241,32 @@ class Dispatcher:
                 pass
 
         return roles
+
+    def _resolve_registry_role_name(self, candidate: str) -> str | None:
+        """Resolve a role or alias to a live registry role name."""
+        if candidate in self.registry.roles:
+            return candidate
+
+        mapped = self.ROLE_MAPPING.get(candidate)
+        if mapped and mapped in self.registry.roles:
+            return mapped
+
+        canonical = Role.from_string(candidate)
+        if canonical is not None and canonical.value in self.registry.roles:
+            return canonical.value
+
+        return None
+
+    def _normalize_registry_roles(self, roles: list[str]) -> list[str]:
+        """Canonicalize a role list against the live registry."""
+        normalized: list[str] = []
+        for role_name in roles:
+            resolved = self._resolve_registry_role_name(role_name)
+            if resolved is None:
+                resolved = role_name if role_name in self.registry.roles else None
+            if resolved is not None and resolved not in normalized:
+                normalized.append(resolved)
+        return normalized
 
     def _generate_steps(
         self, task_ir: dict[str, Any], roles_used: list[str]
@@ -288,6 +319,9 @@ class Dispatcher:
     def _map_actor_to_role(self, actor: str, roles_used: list[str]) -> str | None:
         """Map a step actor to a registry role name."""
         # Direct match in roles_used
+        resolved_actor = self._resolve_registry_role_name(actor)
+        if resolved_actor and resolved_actor in roles_used:
+            return resolved_actor
         if actor in roles_used:
             return actor
 
@@ -296,6 +330,9 @@ class Dispatcher:
             mapped = self.ROLE_MAPPING[actor]
             if mapped in roles_used or mapped in self.registry.roles:
                 return mapped
+
+        if resolved_actor and (resolved_actor in roles_used or resolved_actor in self.registry.roles):
+            return resolved_actor
 
         # Try to find a role in roles_used that matches
         for role_name in roles_used:
