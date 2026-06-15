@@ -437,7 +437,13 @@ class RoutingClassifier:
 
         save_dict = dict(self._weights)
         save_dict["_label_map_keys"] = np.array(list(self.label_map.keys()), dtype=np.int64)
-        save_dict["_label_map_vals"] = np.array(list(self.label_map.values()), dtype=object)
+        save_dict["_label_map_vals"] = np.array(
+            [
+                _canonicalize_action_label(label)
+                for label in self.label_map.values()
+            ],
+            dtype=object,
+        )
         save_dict["_config"] = np.array([
             self.input_dim, self.hidden1, self.hidden2, self.n_actions,
         ], dtype=np.int64)

@@ -310,3 +310,17 @@ class TestRoutingClassifier:
         assert len(loaded.class_thresholds) == 4
         for cls_idx in range(4):
             assert abs(loaded.class_thresholds[cls_idx] - clf.class_thresholds[cls_idx]) < 1e-5
+
+    def test_save_canonicalizes_legacy_action_labels(self, tmp_path):
+        from orchestration.repl_memory.routing_classifier import RoutingClassifier
+
+        clf = RoutingClassifier(
+            input_dim=1031,
+            n_actions=2,
+            label_map={0: "worker_explore", 1: "coder"},
+        )
+        path = tmp_path / "saved_legacy_labels.npz"
+        clf.save(path)
+
+        data = np.load(path, allow_pickle=True)
+        assert list(data["_label_map_vals"]) == ["worker_general", "coder_escalation"]
