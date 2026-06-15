@@ -273,8 +273,7 @@ def _find_section_by_objective(
     # syntactically-valid section from a different role can still contain the
     # objective substring while pairing it with the wrong response (observed
     # 2026-05-30: chat-83123001 routed to frontdoor but the global pass matched
-    # a worker_explore-alias section with an unrelated response). For chat-*
-    # tasks the
+    # an alias-labeled section with an unrelated response). For chat-* tasks the
     # structured-event lookup is the deterministic path; this fallback is for
     # legacy callers that lack producer-role telemetry.
     if canonical_expected_role:
