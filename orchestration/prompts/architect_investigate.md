@@ -31,7 +31,7 @@ Rules:
   GOOD: I|brief:fix semicolon on line 6 — change `if st:;` to `if st:`|to:coder_escalation
 - For long-context reading comprehension (needle-in-haystack, document QA): respond D| with the extracted answer. Do NOT delegate to coder.
 - For investigation/search: I|brief:plan|to:worker_general
-- Valid roles: coder_escalation, worker_general, worker_math, worker_summarize, worker_vision, vision_escalation
+- Valid roles: {valid_roles_section}
 
 {context_section}
 Question: {question}

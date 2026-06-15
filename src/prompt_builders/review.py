@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.prompt_builders.resolver import resolve_prompt
+from src.registry.stack_priors import live_stack_role_records
 
 
 # ── Fallback Constants ──────────────────────────────────────────────────────
@@ -57,13 +58,30 @@ Rules:
 - For code/algorithms/implementation: I|brief:<your design>|to:coder_escalation
 - For parallel coding subtasks or file-split implementation: I|brief:<task split>|to:coder_escalation
 - For investigation/search: I|brief:<plan>|to:worker_general
-- Valid roles: coder_escalation, worker_general, worker_math, worker_summarize, worker_vision, vision_escalation
+- Valid roles: {valid_roles_section}
 
 CRITICAL: Output the decision line ONLY. Stop generating after D|answer or I|brief:...|to:role. Do NOT explain your reasoning, justify your choice, or add any text after the decision.
 {context_section}
 Question: {question}
 
 Decision:"""
+
+_ARCHITECT_INVESTIGATE_ROLE_ORDER = (
+    "coder_escalation",
+    "worker_general",
+    "worker_math",
+    "worker_summarize",
+    "worker_vision",
+    "vision_escalation",
+)
+
+
+def _architect_investigate_valid_roles_section() -> str:
+    """Return the architect investigate allowlist from live stack truth."""
+    live_roles = live_stack_role_records()
+    allowed = [role for role in _ARCHITECT_INVESTIGATE_ROLE_ORDER if role in live_roles]
+    roles = allowed or list(_ARCHITECT_INVESTIGATE_ROLE_ORDER)
+    return ", ".join(roles)
 
 _ARCHITECT_SYNTHESIS_FALLBACK = """The specialist has investigated and reported back. Extract the answer from their report.
 
@@ -236,6 +254,7 @@ def build_architect_investigate_prompt(
     return resolve_prompt(
         "architect_investigate", _ARCHITECT_INVESTIGATE_FALLBACK,
         context_section=context_section,
+        valid_roles_section=_architect_investigate_valid_roles_section(),
         question=question[:2000],
     )
 
