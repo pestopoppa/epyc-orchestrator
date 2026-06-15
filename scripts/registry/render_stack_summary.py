@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -71,8 +71,8 @@ def nested(data: dict[str, Any], *keys: str) -> Any:
 def port_from_url(url: Any) -> str:
     if not url:
         return ""
-    match = re.search(r":(\d+)(?:/|$)", str(url))
-    return match.group(1) if match else ""
+    parsed = urlparse(str(url))
+    return str(parsed.port) if parsed.port else ""
 
 
 def format_number(value: Any) -> str:
@@ -114,6 +114,8 @@ def format_launch_requirements(requirements: Any) -> str:
 
 
 def stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
+    from src.registry.stack_priors import stack_prior_endpoint_port
+
     roles = stack_priors.get("roles")
     if not isinstance(roles, dict):
         return []
@@ -127,7 +129,10 @@ def stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
         ports = serving.get("ports")
         port_values = [str(port) for port in ports if isinstance(port, int)] if isinstance(ports, list) else []
         if not port_values:
-            endpoint_port = port_from_url(serving.get("endpoint"))
+            try:
+                endpoint_port = stack_prior_endpoint_port(serving)
+            except ValueError:
+                endpoint_port = None
             if endpoint_port:
                 port_values.append(endpoint_port)
         if not port_values:
