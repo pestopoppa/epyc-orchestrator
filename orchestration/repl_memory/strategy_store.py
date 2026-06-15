@@ -48,7 +48,7 @@ DEFAULT_STRATEGY_PATH = Path(
 DEFAULT_CONTEXT_FILES: tuple[Path, ...] = (
     Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml"),
     Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/frontdoor.md"),
-    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/roles/worker_explore.md"),
+    Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/prompts/roles/worker_general.md"),
 )
 
 # Reciprocal Rank Fusion default constant (Cormack et al. 2009).

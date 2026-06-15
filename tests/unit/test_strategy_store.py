@@ -248,6 +248,12 @@ class TestAP28HybridRetrieval:
         # we just need a non-NULL string value (incl. empty).
         assert row["context_hash"] is not None
 
+    def test_default_context_files_use_live_worker_prompt(self):
+        from orchestration.repl_memory.strategy_store import DEFAULT_CONTEXT_FILES
+
+        assert DEFAULT_CONTEXT_FILES[-1].name == "worker_general.md"
+        assert all(path.name != "worker_explore.md" for path in DEFAULT_CONTEXT_FILES)
+
     def test_bm25_exact_term_match(self, store):
         # FAISS via MockEmbedder is hash-based and has zero semantic fidelity.
         # BM25 must surface the entry that contains the exact query term.
