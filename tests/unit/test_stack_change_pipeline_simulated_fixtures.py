@@ -455,6 +455,7 @@ def test_simulated_update_does_not_write_real_operator_summary(tmp_path: Path) -
 
 def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     roles = {"frontdoor", "coder_escalation"}
     config = _config(tmp_path, mode="update", roles=roles)
@@ -513,6 +514,18 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
     }
     port_hints = _stack_prior_port_hints(config.stack_priors)
     assert port_hints[8070] in roles
+
+    from src.api.routes import chat_routing, openai_compat
+
+    monkeypatch.setattr(openai_compat, "live_stack_role_records", lambda: priors["roles"])
+    openai_roles = openai_compat.available_roles()
+    assert openai_roles[:3] == ["orchestrator", "architect", "worker"]
+    assert set(roles) <= set(openai_roles)
+    retired_architect_role = "architect" + "_coding"
+    assert retired_architect_role not in openai_roles
+
+    monkeypatch.setattr(chat_routing, "live_stack_role_records", lambda: priors["roles"])
+    assert set(chat_routing._live_heuristic_prior_roles()) == roles
 
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
     assert q_priors.baseline_tps_by_role["frontdoor"] == 18.5
