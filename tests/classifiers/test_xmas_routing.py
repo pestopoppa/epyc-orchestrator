@@ -194,6 +194,39 @@ def test_build_xmas_metadata_with_winner_table(tmp_path) -> None:
     assert meta["applied"] is False
 
 
+def test_enforce_metadata_requires_complete_winner_table(tmp_path) -> None:
+    table_path = tmp_path / "xmas.yaml"
+    table_path.write_text(
+        yaml.safe_dump(
+            {
+                "version": "xmas-test",
+                "fallback_role": "frontdoor",
+                "cells": {
+                    "code": {"refine": "coder_escalation"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = XmasRoutingConfig(
+        mode="enforce",
+        confidence_threshold=0.55,
+        winner_table_path=table_path,
+    )
+
+    meta = build_xmas_routing_metadata(
+        "Refactor this Python function and fix the bug.",
+        config=cfg,
+    )
+
+    assert meta is not None
+    assert meta["mode"] == "enforce"
+    assert meta["suggested_role"] is None
+    assert meta["winner_table_status"] == "invalid"
+    assert "missing 24 cells" in meta["winner_table_error"]
+    assert meta["applied"] is False
+
+
 def test_build_xmas_metadata_survives_missing_table(tmp_path) -> None:
     cfg = XmasRoutingConfig(
         mode="shadow",

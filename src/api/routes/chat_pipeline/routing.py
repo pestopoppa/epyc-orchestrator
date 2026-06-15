@@ -43,6 +43,46 @@ from src.api.structured_logging import task_extra
 
 log = logging.getLogger(__name__)
 
+
+def _apply_xmas_enforce_override(
+    request: ChatRequest,
+    routing_decision: list,
+    routing_strategy: str,
+    xmas_meta: dict | None,
+) -> tuple[list, str]:
+    """Apply a guarded X-MAS route override when metadata is enforce-ready."""
+    if not xmas_meta or xmas_meta.get("mode") != "enforce":
+        return routing_decision, routing_strategy
+    if request.force_role:
+        xmas_meta["applied"] = False
+        xmas_meta["apply_reason"] = "forced_role"
+        return routing_decision, routing_strategy
+    if xmas_meta.get("winner_table_status") != "loaded":
+        xmas_meta["applied"] = False
+        xmas_meta["apply_reason"] = "winner_table_not_loaded"
+        return routing_decision, routing_strategy
+    if not xmas_meta.get("is_confident"):
+        xmas_meta["applied"] = False
+        xmas_meta["apply_reason"] = "low_confidence"
+        return routing_decision, routing_strategy
+    suggested_role = xmas_meta.get("suggested_role")
+    if not suggested_role:
+        xmas_meta["applied"] = False
+        xmas_meta["apply_reason"] = "no_suggested_role"
+        return routing_decision, routing_strategy
+
+    previous_role = str(routing_decision[0]) if routing_decision else ""
+    xmas_meta["previous_role"] = previous_role
+    if suggested_role == previous_role:
+        xmas_meta["applied"] = False
+        xmas_meta["apply_reason"] = "already_selected"
+        return routing_decision, routing_strategy
+
+    xmas_meta["applied"] = True
+    xmas_meta["apply_reason"] = "enforced"
+    return [str(suggested_role)], f"xmas_enforce:{routing_strategy}"
+
+
 def _route_request(request: ChatRequest, state) -> RoutingResult:
     """Determine routing decision, strategy, and task metadata.
 
@@ -85,6 +125,12 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         xmas_meta = build_xmas_routing_metadata(
             request.prompt,
             request.context or "",
+        )
+        routing_decision, routing_strategy = _apply_xmas_enforce_override(
+            request,
+            routing_decision,
+            routing_strategy,
+            xmas_meta,
         )
     except Exception:
         xmas_meta = None

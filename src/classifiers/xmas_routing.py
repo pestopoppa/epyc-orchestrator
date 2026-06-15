@@ -396,9 +396,9 @@ def build_xmas_routing_metadata(
 ) -> dict[str, Any] | None:
     """Build passive X-MAS routing metadata, or None when default-off.
 
-    This function never mutates routing decisions. Even when ``mode`` is
-    ``enforce``, this first hook emits ``applied=false`` so downstream analysis
-    can be collected before any behavior change.
+    This function never mutates routing decisions. The chat routing pipeline is
+    responsible for deciding whether ``mode=enforce`` is allowed to apply the
+    suggested role after it verifies the table, confidence, and request state.
     """
     cfg = config or get_xmas_routing_config()
     if not cfg.enabled:
@@ -432,7 +432,7 @@ def build_xmas_routing_metadata(
     try:
         table = load_winner_table(
             cfg.winner_table_path,
-            require_complete=cfg.require_complete_table,
+            require_complete=cfg.require_complete_table or cfg.mode == "enforce",
         )
     except FileNotFoundError:
         meta["winner_table_status"] = "missing"
