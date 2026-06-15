@@ -229,10 +229,10 @@ def format_architect_result(
           tools: peek, grep
           peek: 200ms (ok)
           grep: 150ms (ok)
-          delegates: 2 (coder_escalation, worker_explore)
+          delegates: 2 (coder_escalation, worker_general)
           delegate: coder_escalation → ok (42300ms, 18.3 t/s, 774 tok)
-          delegate: worker_explore → ok (8200ms, 44.1 t/s, 362 tok)
-          chain: architect_general → coder_escalation → worker_explore
+          delegate: worker_general → ok (8200ms, 44.1 t/s, 362 tok)
+          chain: architect_general → coder_escalation → worker_general
     """
     status = _status_str(passed, error)
     tps = compute_tps(resp, elapsed)
@@ -309,9 +309,9 @@ def _format_delegation_events(events: list[dict]) -> list[str]:
     """Format delegation event lines with optional summary.
 
     Output (multiple delegates):
-        delegates: 3 (2x worker_explore, coder_escalation)
-        delegate: worker_explore → ok (8200ms, 44.1 t/s, 362 tok)
-        delegate: worker_explore → ok (7800ms, 42.3 t/s, 340 tok)
+        delegates: 3 (2x worker_general, coder_escalation)
+        delegate: worker_general → ok (8200ms, 44.1 t/s, 362 tok)
+        delegate: worker_general → ok (7800ms, 42.3 t/s, 340 tok)
         delegate: coder_escalation → ok (31500ms, 22.7 t/s, 715 tok)
 
     Output (single delegate):

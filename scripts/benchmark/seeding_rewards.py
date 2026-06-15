@@ -264,9 +264,9 @@ def detect_escalation_chains(
     """Detect cases where a cheap model fails but a more expensive one passes.
 
     Returns list of escalation chain dicts:
-      {"from_role": "worker_explore", "from_mode": "direct",
+      {"from_role": "worker_general", "from_mode": "direct",
        "to_role": "coder_escalation", "to_mode": "direct",
-       "action": "escalate:worker_explore->coder_escalation",
+       "action": "escalate:worker_general->coder_escalation",
        "reward": 0.8}
     """
     chains: list[dict[str, Any]] = []
