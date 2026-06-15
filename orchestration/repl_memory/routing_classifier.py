@@ -25,11 +25,19 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from src.roles import Role
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_WEIGHTS_PATH = Path(
     "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/routing_classifier_weights.npz"
 )
+
+
+def _canonicalize_action_label(label: str) -> str:
+    """Return the canonical live role for a loaded action label when known."""
+    role = Role.from_string(label)
+    return str(role) if role is not None else label
 
 
 def _relu(x: np.ndarray) -> np.ndarray:
@@ -464,7 +472,10 @@ class RoutingClassifier:
 
             keys = data["_label_map_keys"]
             vals = data["_label_map_vals"]
-            label_map = {int(k): str(v) for k, v in zip(keys, vals)}
+            label_map = {
+                int(k): _canonicalize_action_label(str(v))
+                for k, v in zip(keys, vals)
+            }
 
             clf = cls(
                 input_dim=input_dim,

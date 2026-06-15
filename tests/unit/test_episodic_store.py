@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -12,9 +10,9 @@ import pytest
 from orchestration.repl_memory.episodic_store import (
     EpisodicStore,
     GraphEnhancedStore,
-    MemoryEntry,
     extract_symptoms,
 )
+from src.roles import Role
 
 
 @pytest.fixture
@@ -223,8 +221,28 @@ class TestRoutingClassifier:
         assert loaded is not None
         dist2 = loaded.predict(x)
 
-        for key in dist1:
-            assert abs(dist1[key] - dist2[key]) < 1e-5
+        def _canonical(key: str) -> str:
+            role = Role.from_string(key)
+            return str(role) if role is not None else key
+
+        for key, value in dist1.items():
+            assert abs(value - dist2[_canonical(key)]) < 1e-5
+
+    def test_load_canonicalizes_legacy_action_labels(self, tmp_path):
+        from orchestration.repl_memory.routing_classifier import RoutingClassifier
+
+        clf = RoutingClassifier(
+            input_dim=1031,
+            n_actions=2,
+            label_map={0: "worker_explore", 1: "coder"},
+        )
+        path = tmp_path / "legacy_labels.npz"
+        clf.save(path)
+
+        loaded = RoutingClassifier.load(path)
+        assert loaded is not None
+        assert loaded.label_map[0] == "worker_general"
+        assert loaded.label_map[1] == "coder_escalation"
 
     def test_load_missing_returns_none(self):
         from orchestration.repl_memory.routing_classifier import RoutingClassifier
