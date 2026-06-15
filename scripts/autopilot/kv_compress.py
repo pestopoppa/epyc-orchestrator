@@ -28,6 +28,7 @@ from src.registry.stack_priors import (
     stack_prior_endpoint_port,
     stack_prior_serving,
 )
+from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP, ROLE_LAUNCH_META
 
 log = logging.getLogger(__name__)
 
@@ -418,18 +419,27 @@ def compress_slot_adaptive(
     )
 
 
-# Degraded fallback only. Runtime callers use production_ports(), which reads
-# generated stack priors so slot-compaction actions follow stack changes.
-_FALLBACK_PRODUCTION_PORTS = {
-    "frontdoor": 8070,
-    "coder_escalation": 8070,  # shares server with frontdoor (same Qwen3.6 Q8 GGUF)
-    "worker_general": 8072,
-    "architect_general": 8083,
-}
+def _fallback_production_ports_from_stack_manifest() -> dict[str, int]:
+    """Derive degraded KV-compression ports from the live stack manifest."""
+    ports: dict[str, int] = {}
+    for role in HOT_ROLES:
+        if not isinstance(role, str):
+            continue
+        launch_meta = ROLE_LAUNCH_META.get(role)
+        if not isinstance(launch_meta, dict):
+            continue
+        mode = launch_meta.get("mode")
+        if mode == "embedding":
+            continue
+        port = PORT_MAP.get(role)
+        if isinstance(port, int):
+            ports[role] = port
+    return dict(sorted(ports.items()))
+
 
 # Backward-compatible fallback for older imports/tests. New code should call
 # production_ports().
-PRODUCTION_PORTS = _FALLBACK_PRODUCTION_PORTS
+PRODUCTION_PORTS = _fallback_production_ports_from_stack_manifest()
 
 
 def _is_slot_server(serving: dict[str, Any]) -> bool:
@@ -498,7 +508,7 @@ def production_ports_from_stack_priors(
 def production_ports(*, include_aliases: bool = False) -> dict[str, int]:
     """Return live KV-compression ports, falling back only in degraded mode."""
     return production_ports_from_stack_priors(include_aliases=include_aliases) or dict(
-        _FALLBACK_PRODUCTION_PORTS
+        PRODUCTION_PORTS
     )
 
 

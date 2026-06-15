@@ -11,6 +11,7 @@ from scripts.autopilot.kv_compress import (
     _layer_count_for_role,
     _stack_prior_layer_count_for_role,
 )
+import scripts.autopilot.kv_compress as kv_compress
 
 LEGACY_ARCHITECT_ROLE = "architect" "_coding"
 
@@ -140,8 +141,13 @@ roles:
         assert "coder" not in PRODUCTION_PORTS
         assert "worker" not in PRODUCTION_PORTS
         assert LEGACY_ARCHITECT_ROLE not in PRODUCTION_PORTS
-        assert PRODUCTION_PORTS["coder_escalation"] == PRODUCTION_PORTS["frontdoor"]
+        assert "coder_escalation" not in PRODUCTION_PORTS
+        assert PRODUCTION_PORTS["frontdoor"] == 8070
         assert PRODUCTION_PORTS["worker_general"] == 8072
+        assert PRODUCTION_PORTS["architect_general"] == 8083
+        assert PRODUCTION_PORTS["ingest_long_context"] == 8085
+        assert PRODUCTION_PORTS["worker_vision"] == 8086
+        assert PRODUCTION_PORTS["vision_escalation"] == 8087
 
     def test_production_ports_from_stack_priors_use_primary_physical_ports(self, tmp_path):
         priors = tmp_path / "stack_priors.yaml"
@@ -235,6 +241,29 @@ roles:
             "coder_escalation": 8070,
             "frontdoor": 8070,
             "worker_math": 8072,
+        }
+
+    def test_fallback_production_ports_derive_from_stack_manifest(self, monkeypatch):
+        monkeypatch.setattr(kv_compress, "HOT_ROLES", ("frontdoor", "coder_escalation", "worker_general"))
+        monkeypatch.setattr(
+            kv_compress,
+            "PORT_MAP",
+            {"frontdoor": 8070, "coder_escalation": 8070, "worker_general": 8072},
+        )
+        monkeypatch.setattr(
+            kv_compress,
+            "ROLE_LAUNCH_META",
+            {
+                "frontdoor": {"mode": "default"},
+                "coder_escalation": {"mode": "default"},
+                "worker_general": {"mode": "default"},
+            },
+        )
+
+        assert kv_compress._fallback_production_ports_from_stack_manifest() == {
+            "frontdoor": 8070,
+            "coder_escalation": 8070,
+            "worker_general": 8072,
         }
 
     def test_production_ports_falls_back_when_stack_priors_missing(self, monkeypatch):
