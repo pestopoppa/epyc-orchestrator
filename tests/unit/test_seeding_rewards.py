@@ -299,9 +299,31 @@ def test_detect_escalation_chains_prefers_cheapest_passing_expensive_target():
     )
     assert len(chains) == 1
     chain = chains[0]
-    assert chain["from_role"] == "worker_explore"
+    assert chain["from_role"] == "worker_general"
     assert chain["to_role"] == "coder_escalation"
+    assert chain["action"] == "escalate:worker_general->coder_escalation"
     assert chain["reward"] == _MOD.ESCALATION_REWARD
+
+
+def test_detect_escalation_chains_canonicalizes_warm_worker_alias():
+    chains = _MOD.detect_escalation_chains(
+        {
+            "worker_fast:direct": _rr(role="worker_fast", mode="direct", passed=False, error=None),
+            "frontdoor:direct": _rr(role="frontdoor", mode="direct", passed=True),
+            "architect_general:direct": _rr(role="architect_general", mode="direct", passed=True),
+        }
+    )
+
+    assert chains == [
+        {
+            "from_role": "worker_general",
+            "from_mode": "direct",
+            "to_role": "frontdoor",
+            "to_mode": "direct",
+            "action": "escalate:worker_general->frontdoor",
+            "reward": _MOD.ESCALATION_REWARD,
+        }
+    ]
 
 
 def test_reward_injection_helpers_handle_success_non_200_and_exception():

@@ -273,6 +273,7 @@ def detect_escalation_chains(
     entries = []
     for key, rr in role_results.items():
         role, mode = key.split(":", 1)
+        role = _canonical_role_name(role)
         tier = ROLE_COST_TIER.get(role, 99)
         entries.append((tier, role, mode, rr))
 
