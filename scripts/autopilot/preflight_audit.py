@@ -29,6 +29,7 @@ from src.autopilot_core.journal_reconstruction import (
 )
 from src.autopilot_core.journal_snapshot_replay import build_snapshot_replay_diagnostic
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+from src.roles import Role
 from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
 
 log = logging.getLogger("autopilot.preflight")
@@ -55,7 +56,8 @@ STACK_CHANGE_GATE_COMMAND = [
 
 
 def _fallback_model_server_role_mode(role: str) -> str | None:
-    launch_meta = ROLE_LAUNCH_META.get(role)
+    canonical = Role.from_string(role) or role
+    launch_meta = ROLE_LAUNCH_META.get(str(canonical))
     if not isinstance(launch_meta, dict):
         return None
     mode = launch_meta.get("mode")
@@ -84,7 +86,7 @@ def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str
         if not isinstance(port, int) or not isinstance(roles, list):
             continue
         visible_roles = [
-            role
+            str(Role.from_string(role) or role)
             for role in roles
             if isinstance(role, str) and _fallback_model_server_includes_role(role)
         ]

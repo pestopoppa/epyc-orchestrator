@@ -148,6 +148,40 @@ def test_model_server_targets_fallback_excludes_embedding_mode_roles_from_manife
     ]
 
 
+def test_model_server_targets_fallback_canonicalizes_worker_aliases(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        _MOD,
+        "HOT_SERVERS",
+        [{"port": 9001, "roles": ["frontdoor"]}],
+    )
+    monkeypatch.setattr(
+        _MOD,
+        "WARM_SERVERS",
+        [{"port": 9002, "roles": ["worker_explore", "worker_fast", "embedder"]}],
+    )
+    monkeypatch.setattr(
+        _MOD,
+        "ROLE_LAUNCH_META",
+        {
+            "frontdoor": {"mode": "default"},
+            "worker_general": {"mode": "worker_pool"},
+            "worker_fast": {"mode": "worker_pool"},
+            "embedder": {"mode": "embedding"},
+        },
+    )
+
+    targets = _MOD._model_server_targets(tmp_path / "missing.yaml", "http://localhost:8002")
+
+    assert targets == [
+        ("API", "http://localhost:8002/health"),
+        ("frontdoor", "http://localhost:9001/health"),
+        ("worker_general", "http://localhost:9002/health"),
+    ]
+
+
 def test_model_server_targets_fallback_when_live_records_have_no_health_urls(
     tmp_path: Path,
 ) -> None:
