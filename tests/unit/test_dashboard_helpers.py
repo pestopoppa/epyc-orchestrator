@@ -762,6 +762,15 @@ def test_gate_inflight_maps_alias_roles_to_topology_busy_slots() -> None:
     assert gated[0]["live_state"] == "decoding"
 
 
+def test_gate_inflight_canonicalizes_worker_explore_alias_to_general() -> None:
+    task = [{"task_id": "chat-worker", "age_s": 45.0, "role": "worker_explore"}]
+    gated = dashboard._gate_inflight_by_live_slots(task, {"worker_general": 1})
+
+    assert len(gated) == 1
+    assert gated[0]["topology_role"] == "worker_general"
+    assert gated[0]["live_state"] == "decoding"
+
+
 def test_gate_inflight_strips_route_modifier_before_slot_match() -> None:
     task = [{"task_id": "chat-frontdoor", "age_s": 45.0, "role": "frontdoor:direct"}]
     gated = dashboard._gate_inflight_by_live_slots(task, {"frontdoor": 1})

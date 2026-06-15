@@ -30,6 +30,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from src.roles import Role
 from src.api.routes.dashboard_snapshot import (
     INFLIGHT_MAX_AGE_DEFAULT_S,
     count_log_events as _count_log_events_impl,
@@ -100,6 +101,11 @@ ORCHESTRATOR_STATE_PATH = ORCHESTRATOR_LOG_DIR / "orchestrator_state.json"
 def _load_state_services() -> list[dict[str, Any]]:
     """Wrapper supplying ORCHESTRATOR_STATE_PATH to dashboard_topology helper."""
     return _load_state_services_impl(ORCHESTRATOR_STATE_PATH)
+
+
+def _canonical_role_name(role: Any) -> str:
+    raw = str(role or "unknown").split(":", 1)[0]
+    return str(Role.from_string(raw) or raw)
 
 
 def _read_autopilot_phase() -> dict[str, Any]:
@@ -2030,12 +2036,9 @@ def _gate_inflight_by_live_slots(
     """
     alias_to_topology_role = alias_to_topology_role or {}
 
-    def _role_key(role: Any) -> str:
-        return str(role or "unknown").split(":", 1)[0]
-
     by_role: dict[str, list[dict[str, Any]]] = {}
     for t in tasks:
-        logical_role = _role_key(t.get("role") or "unknown")
+        logical_role = _canonical_role_name(t.get("role") or "unknown")
         topology_role = alias_to_topology_role.get(logical_role, logical_role)
         by_role.setdefault(topology_role, []).append(t)
     gated: list[dict[str, Any]] = []
@@ -2046,7 +2049,7 @@ def _gate_inflight_by_live_slots(
         for idx, task in enumerate(group[: max(busy, n_fresh)]):
             annotated = dict(task)
             raw_role = annotated.get("role") or "unknown"
-            logical_role = _role_key(raw_role)
+            logical_role = _canonical_role_name(raw_role)
             topology_role = alias_to_topology_role.get(logical_role, logical_role)
             if topology_role != str(raw_role):
                 annotated["topology_role"] = topology_role
@@ -2089,12 +2092,12 @@ async def snapshot() -> JSONResponse:
     role_busy: dict[str, int] = {}
     alias_to_topology_role: dict[str, str] = {}
     for role_label in set(port_roles.values()):
-        role = base_role(role_label)
+        role = _canonical_role_name(role_label)
         if not role:
             continue
         try:
             for alias in role_aliases(role):
-                alias_base = base_role(alias)
+                alias_base = _canonical_role_name(alias)
                 if alias_base:
                     alias_to_topology_role[alias_base] = role
         except Exception:
@@ -2103,7 +2106,7 @@ async def snapshot() -> JSONResponse:
     for port, slots in slots_by_port.items():
         n_total = len(slots)
         n_active = sum(1 for s in slots if s.get("is_processing"))
-        role = base_role(port_roles.get(port, ""))
+        role = _canonical_role_name(port_roles.get(port, ""))
         if role:
             role_busy[role] = role_busy.get(role, 0) + n_active
         active_slots: list[dict[str, Any]] = []
