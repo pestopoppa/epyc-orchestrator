@@ -17,8 +17,6 @@ DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration/derived/stack_priors.y
 
 logger = logging.getLogger(__name__)
 
-LEGACY_ARCHITECT_CODING = "architect" + "_coding"
-
 # Stable display/training order for known live roles. The role set is still
 # loaded from stack_priors.yaml; this only prevents harmless YAML ordering
 # changes from shifting historical frontdoor conventions.
@@ -52,7 +50,7 @@ ACTION_EXCLUDE_PREFIXES = ("persona:",)
 RAW_TO_LIVE_ACTION: dict[str, str] = {
     "frontdoor": "frontdoor",
     "architect_general": "architect_general",
-    LEGACY_ARCHITECT_CODING: "architect_general",
+    "architect_coding": "architect_general",
     "coder_escalation": "coder_escalation",
     "ingest_long_context": "ingest_long_context",
     "worker_explore": "worker_general",
@@ -65,7 +63,7 @@ RAW_TO_LIVE_ACTION: dict[str, str] = {
     "coder": "coder_escalation",
     "escalate:frontdoor->coder_escalation": "coder_escalation",
     "escalate:worker_general->coder_escalation": "coder_escalation",
-    f"escalate:coder_escalation->{LEGACY_ARCHITECT_CODING}": "architect_general",
+    "escalate:coder_escalation->architect_coding": "architect_general",
     "SELF": "frontdoor",
     "SELF:direct": "frontdoor",
     "SELF:repl": "frontdoor",
