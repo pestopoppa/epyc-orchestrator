@@ -266,12 +266,7 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "full:http://localhost:8070,http://localhost:8080,"
         "http://localhost:8180,http://localhost:8280,http://localhost:8380"
     ),
-    "coder": "http://localhost:8070",
     "coder_escalation": "http://localhost:8070",
-    "worker": (
-        "full:http://localhost:8072,http://localhost:8082,"
-        "http://localhost:8182,http://localhost:8282,http://localhost:8382"
-    ),
     "worker_general": (
         "full:http://localhost:8072,http://localhost:8082,"
         "http://localhost:8182,http://localhost:8282,http://localhost:8382"
