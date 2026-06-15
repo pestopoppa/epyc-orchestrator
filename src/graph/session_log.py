@@ -127,7 +127,7 @@ class ConsolidatedSegment:
     blocks that accumulate without re-processing.
 
     Tier 2 (deep): At consolidation boundaries, accumulated Tier 1 blocks are
-    consolidated into a dense paragraph via worker_explore (7B).
+    consolidated into a dense paragraph via the live worker path.
     """
 
     turn_range: tuple[int, int]  # (start_turn, end_turn) inclusive
