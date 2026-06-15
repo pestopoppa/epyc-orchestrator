@@ -363,7 +363,6 @@ SEEDING_EXCLUDED_ROLES = frozenset({
 # When renaming roles, update this mapping.
 _REGISTRY_KEY_TO_ROLE = {
     "worker": "worker_general",
-    "worker_explore": "worker_general",
 }
 
 
