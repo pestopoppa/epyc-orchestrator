@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from scripts.server import orchestrator_stack as oss
+from scripts.server import stack_commands
 
 
 def _stack_prior_role(role: str) -> dict[str, Any]:
@@ -155,6 +156,15 @@ def _assert_detached_popen(popen) -> None:
     assert kwargs["stdin"] is oss.subprocess.DEVNULL
     assert kwargs["start_new_session"] is True
     assert kwargs["close_fds"] is True
+
+
+def test_descriptor_active_roles_are_canonical_launch_roles() -> None:
+    active_roles = stack_commands._descriptor_active_roles()
+
+    assert "worker_general" in active_roles
+    assert "architect_general" in active_roles
+    assert "worker_explore" not in active_roles
+    assert "architect_coding" not in active_roles
 
 
 # -----------------------------------------------------------------------------

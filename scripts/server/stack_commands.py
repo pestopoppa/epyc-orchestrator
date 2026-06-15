@@ -72,6 +72,15 @@ STACK_CHANGE_LAUNCH_GATE_COMMAND = (
 )
 
 
+def _descriptor_active_roles() -> set[str]:
+    """Return canonical roles for descriptor compilation.
+
+    `write_model_descriptors()` expands shared aliases from registry state on its
+    own, so the launch helper only needs the canonical launch-role keys here.
+    """
+    return set(ROLE_LAUNCH_META.keys())
+
+
 def wait_for_health(
     port: int, timeout: int = _HEALTH_SERVER_STARTUP, path: str = "/health"
 ) -> bool:
@@ -687,11 +696,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         try:
             from src.registry.model_descriptors import write_model_descriptors
 
-            active_roles = set(ROLE_LAUNCH_META.keys())
-            for meta in ROLE_LAUNCH_META.values():
-                aliases = meta.get("shared_with_first_n") if isinstance(meta, dict) else None
-                if isinstance(aliases, list):
-                    active_roles.update(str(alias) for alias in aliases)
+            active_roles = _descriptor_active_roles()
             allow_incomplete = bool(getattr(args, "allow_incomplete_descriptors", False))
             print(f"[descriptor-compile] lean={_registry_yaml}")
             print(f"[descriptor-compile] research={_master_registry}")
