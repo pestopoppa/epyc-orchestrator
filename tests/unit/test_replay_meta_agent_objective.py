@@ -77,3 +77,31 @@ def test_recommend_promotion_uses_rm_softmax_delta_vs_baseline():
     assert rec is not None
     assert rec.candidate_id == "c2"
 
+
+def test_generate_candidate_swap_report_uses_archive_candidates():
+    workflow = MetaAgentWorkflow(archive=_StubArchive())
+    candidate = _candidate("swap-1", notes="candidate swap")
+    sentinels = {"trajectories": object()}
+
+    def _evaluate(candidates, trajectories=None, days=14, max_trajectories=1000):
+        assert candidates == [candidate]
+        assert trajectories is sentinels["trajectories"]
+        return [
+            (
+                candidate,
+                _metrics("swap-1", cumulative_reward=180.0, rm_softmax_score=0.61),
+            )
+        ]
+
+    workflow.evaluate_candidates = _evaluate  # type: ignore[method-assign]
+
+    report = workflow.generate_candidate_swap_report(
+        candidates=[candidate],
+        trajectories=sentinels["trajectories"],
+        days=3,
+        max_trajectories=7,
+    )
+
+    assert "# Routing-Decision Replay over Candidate Swaps" in report
+    assert "swap-1" in report
+    assert "0.610" in report

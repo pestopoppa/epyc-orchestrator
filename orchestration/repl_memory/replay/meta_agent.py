@@ -170,6 +170,42 @@ class MetaAgentWorkflow:
 
         return results
 
+    def generate_candidate_swap_report(
+        self,
+        candidates: Optional[List[DesignCandidate]] = None,
+        trajectories: Optional[List] = None,
+        days: int = 14,
+        max_trajectories: int = 1000,
+        candidate_limit: int = 2,
+    ) -> str:
+        """Generate a routing replay report for archive-backed candidate swaps."""
+        if trajectories is None:
+            extractor = TrajectoryExtractor(self.reader)
+            trajectories = extractor.extract_complete(days=days, max_trajectories=max_trajectories)
+
+        if candidates is None:
+            candidates = [
+                candidate
+                for candidate, _ in self.archive.get_top_candidates(limit=candidate_limit)
+            ]
+
+        if not candidates:
+            return (
+                "# Routing-Decision Replay over Candidate Swaps\n\n"
+                "No evaluated candidates available in archive."
+            )
+
+        results = self.evaluate_candidates(
+            candidates,
+            trajectories=trajectories,
+            days=days,
+            max_trajectories=max_trajectories,
+        )
+        return self.generate_report(
+            results,
+            title="# Routing-Decision Replay over Candidate Swaps",
+        )
+
     def recommend_promotion(
         self,
         results: List[Tuple[DesignCandidate, ReplayMetrics]],
@@ -212,11 +248,13 @@ class MetaAgentWorkflow:
     def generate_report(
         self,
         results: List[Tuple[DesignCandidate, ReplayMetrics]],
+        title: str = "# Replay Evaluation Report",
     ) -> str:
         """Generate a markdown comparison report.
 
         Args:
             results: Evaluated candidates with metrics.
+            title: Report title line.
 
         Returns:
             Markdown-formatted report string.
@@ -225,7 +263,7 @@ class MetaAgentWorkflow:
         baseline_metrics = baseline_result[1] if baseline_result else None
 
         lines = [
-            "# Replay Evaluation Report",
+            title,
             "",
             f"**Date**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
             f"**Candidates evaluated**: {len(results)}",
@@ -492,6 +530,17 @@ def main():
     parser.add_argument("--days", type=int, default=14, help="Days of log history")
     parser.add_argument("--max-trajectories", type=int, default=1000)
     parser.add_argument(
+        "--swap-replay",
+        action="store_true",
+        help="Replay archive-backed candidate swaps instead of prompting for reflection",
+    )
+    parser.add_argument(
+        "--candidate-limit",
+        type=int,
+        default=2,
+        help="Max archive candidates to include in swap replay mode",
+    )
+    parser.add_argument(
         "--archive-path",
         type=Path,
         default=DEFAULT_ARCHIVE_PATH,
@@ -503,6 +552,15 @@ def main():
     workflow = MetaAgentWorkflow(
         archive=DesignArchive(args.archive_path),
     )
+
+    if args.swap_replay:
+        report = workflow.generate_candidate_swap_report(
+            days=args.days,
+            max_trajectories=args.max_trajectories,
+            candidate_limit=args.candidate_limit,
+        )
+        print(report)
+        return
 
     # Build prompt
     prompt = workflow.build_reflection_prompt(
