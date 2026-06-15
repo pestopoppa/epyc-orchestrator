@@ -47,7 +47,15 @@ from src.registry.stack_priors import (
 from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
-FALLBACK_MODEL_ROLES = ("frontdoor", "worker_general", "architect_general")
+
+def _preferred_fallback_model_roles() -> tuple[str, ...]:
+    """Return the preferred fallback model order when live models are absent."""
+    preferred = ("frontdoor", "worker_general", "architect_general")
+    return tuple(
+        role
+        for role in preferred
+        if role in HOT_ROLES and isinstance(PORT_MAP.get(role), int)
+    )
 
 
 def _stack_prior_primary_port(serving: dict) -> int | None:
@@ -84,10 +92,8 @@ def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
 def _fallback_models() -> dict[str, dict]:
     """Return degraded model choices from the manifest, without copied model names."""
     models: dict[str, dict] = {}
-    for role in FALLBACK_MODEL_ROLES:
+    for role in _preferred_fallback_model_roles():
         port = PORT_MAP.get(role)
-        if role not in HOT_ROLES or not isinstance(port, int):
-            continue
         models[role] = {
             "port": port,
             "name": f"{role} (manifest fallback)",
@@ -97,7 +103,8 @@ def _fallback_models() -> dict[str, dict]:
 
 
 def _default_model_keys(models: dict[str, dict]) -> list[str]:
-    return [role for role in FALLBACK_MODEL_ROLES if role in models] or list(models.keys())
+    preferred = _preferred_fallback_model_roles()
+    return [role for role in preferred if role in models] or list(models.keys())
 
 
 MODELS = _load_live_models() or _fallback_models()

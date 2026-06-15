@@ -110,6 +110,21 @@ def test_fallback_models_derive_ports_from_manifest(monkeypatch) -> None:
     }
 
 
+def test_preferred_fallback_model_roles_filters_missing_manifest_entries(monkeypatch) -> None:
+    monkeypatch.setattr(
+        _MOD,
+        "PORT_MAP",
+        {"frontdoor": 9001, "worker_general": 9002},
+    )
+    monkeypatch.setattr(
+        _MOD,
+        "HOT_ROLES",
+        {"frontdoor", "worker_general"},
+    )
+
+    assert _MOD._preferred_fallback_model_roles() == ("frontdoor", "worker_general")
+
+
 def test_default_model_keys_are_valid_loaded_roles() -> None:
     models = {
         "frontdoor": {"port": 8070},
