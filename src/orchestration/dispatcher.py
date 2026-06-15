@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from src.registry_loader import RegistryLoader, RoleConfig
-from src.roles import Role
+from src.roles import Role, chain_name_to_role
 from src.task_ir import canonicalize_task_ir
 
 logger = logging.getLogger(__name__)
@@ -95,17 +95,15 @@ class DispatchError(Exception):
 class Dispatcher:
     """Dispatch TaskIR to appropriate models and generate execution plans."""
 
-    # Map TaskIR agent roles to registry role names
+    # Map TaskIR agent roles to registry role names.
+    #
+    # Generic chain names and enum-backed aliases resolve through
+    # Role.from_string() / chain_name_to_role(); this table keeps only the
+    # special spellings that are not already canonicalized elsewhere.
     ROLE_MAPPING = {
-        "frontdoor": "frontdoor",
-        "coder": "coder_escalation",
-        "ingest": "ingest_long_context",
-        "architect": "architect_general",
-        "worker": "worker_general",
         "docwriter": "worker_general",
         "math": "worker_math",
         "vision": "worker_vision",
-        "toolrunner": "toolrunner",
         "draft": "draft_qwen25_coder",
         # Document processing roles
         "doc": "document_formalizer",
@@ -247,13 +245,17 @@ class Dispatcher:
         if candidate in self.registry.roles:
             return candidate
 
-        mapped = self.ROLE_MAPPING.get(candidate)
-        if mapped and mapped in self.registry.roles:
-            return mapped
-
         canonical = Role.from_string(candidate)
         if canonical is not None and canonical.value in self.registry.roles:
             return canonical.value
+
+        chain_role = chain_name_to_role(candidate)
+        if chain_role is not None and chain_role.value in self.registry.roles:
+            return chain_role.value
+
+        mapped = self.ROLE_MAPPING.get(candidate)
+        if mapped and mapped in self.registry.roles:
+            return mapped
 
         return None
 

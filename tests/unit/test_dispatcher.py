@@ -81,6 +81,19 @@ def minimal_registry(tmp_path: Path) -> Path:
                 "performance": {"baseline_tps": 20.0},
                 "memory": {"residency": "hot"},
             },
+            "ingest_long_context": {
+                "tier": "B",
+                "description": "Ingest worker",
+                "model": {
+                    "name": "ingest-model",
+                    "path": "ingest.gguf",
+                    "quant": "Q4_K_M",
+                    "size_gb": 12.0,
+                },
+                "acceleration": {"type": "none"},
+                "performance": {"baseline_tps": 12.0},
+                "memory": {"residency": "hot"},
+            },
         },
         "routing_hints": [
             {"if": "task_type == 'code'", "use": ["coder_escalation"]},
@@ -151,7 +164,7 @@ class TestDispatcherBasic:
         dispatcher = Dispatcher(registry=registry, validate_paths=True)
 
         assert dispatcher.registry is not None
-        assert len(dispatcher.registry.roles) == 4
+        assert len(dispatcher.registry.roles) == 5
 
     def test_dispatch_simple_task(self, minimal_registry: Path, sample_task_ir: dict):
         """Test dispatching a simple task."""
@@ -240,6 +253,20 @@ class TestRoleMapping:
 
         result = dispatcher.dispatch(task_ir)
         assert "worker_general" in result.roles_used
+
+    def test_map_ingest_chain_name_to_ingest_long_context(self, minimal_registry: Path):
+        """Test that generic chain names resolve through the live ingest role."""
+        registry = RegistryLoader(minimal_registry)
+        dispatcher = Dispatcher(registry=registry)
+
+        task_ir = {
+            "task_type": "docs",
+            "agents": [{"role": "ingest"}],
+            "plan": {"steps": []},
+        }
+
+        result = dispatcher.dispatch(task_ir)
+        assert "ingest_long_context" in result.roles_used
 
     def test_model_hint_alias_canonicalizes_to_worker_general(self, minimal_registry: Path):
         """Test that alias model hints resolve through live worker roles."""
