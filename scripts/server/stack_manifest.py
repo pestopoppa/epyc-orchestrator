@@ -571,11 +571,10 @@ def validate_against_registry(
         for alias in meta.get("shared_with_first_n", []):
             target.add(alias)
 
-    # Production roles to cross-check — skip pure launcher-internal names.
-    # worker_explore is a legacy alias kept for backwards-compat; embedders
-    # aren't in the registry's process_layout (they're infrastructure roles);
-    # worker_fast is the deprecated worker_pool warm tier.
-    skip = {"worker_explore"} | {f"embedder_{i}" for i in range(6)} | {"embedder", "worker_fast"}
+    # Production roles to cross-check — skip launcher-only aliases not present
+    # in the registry process_layout. This keeps the validator aligned with the
+    # live hot/warm sets instead of a hand-maintained internal-name list.
+    skip = {role for role in launcher_hot if role not in reg_hot and role not in reg_warm}
     launcher_hot_filtered = {role for role in launcher_hot - skip if in_scope(role)}
     reg_hot_filtered = {role for role in reg_hot if in_scope(role)}
     reg_warm_filtered = {role for role in reg_warm if in_scope(role)}
