@@ -149,9 +149,9 @@ python scripts/server/orchestrator_stack.py stop --all
 |---------|------|-------|------|--------------|-------|
 | 8080,8180,8280,8380 | frontdoor (4x) | Qwen3.5-35B-A3B Q4_K_M | 4x48t quarters | MoE6+lookup, mlock | ~19.6 t/s/inst |
 | 8081,8181,8281,8381 | coder_escalation (4x) | Qwen2.5-Coder-32B f16 + 0.5B draft | 4x48t quarters | spec K=24 + lookup | ~6.6 t/s/inst |
-| 8082 | worker_explore, worker_math | Qwen2.5-7B-Instruct-f16 + 0.5B draft | Q0A pinned | spec K=24 | 46 t/s |
+| 8082 | worker_general, worker_math | Qwen2.5-7B-Instruct-f16 + 0.5B draft | Q0A pinned | spec K=24 | 46 t/s |
 | 8083 | architect_general | Qwen3.5-122B-A10B Q4_K_M + 0.8B draft | Node 0, 96t | MoE8+spec+lookup | 12.6 t/s |
-| 8084 | architect_coding | Qwen3-Coder-480B-A35B Q4_K_M | Node 0, 96t | tree dm=48 ps=0.05 | 3.82 t/s |
+| 8084 | architect_general | Qwen3-Coder-480B-A35B Q4_K_M | Node 0, 96t | tree dm=48 ps=0.05 | 3.82 t/s |
 | 8085 | ingest_long_context | Qwen3-Next-80B-A3B Q4_K_M | Node 0, 96t | None (SSM), mlock | ~12 t/s |
 | 8086 | worker_vision | Qwen2.5-VL-7B Q4_K_M + mmproj | Q0B pinned | None (VL) | ~15 t/s |
 | 8087 | vision_escalation | Qwen3-VL-30B-A3B Q4_K_M + mmproj | Node 1, 96t | MoE4 | ~10 t/s |
@@ -181,7 +181,7 @@ python scripts/server/orchestrator_stack.py stop --all
 ### Escalation Chains
 
 ```
-Code: coder_escalation (30B) → coder_escalation (32B) → architect_coding (480B)
+Code: coder_escalation (30B) → coder_escalation (32B) → architect_general (122B)
 General: frontdoor (35B) → architect_general (122B)
 Vision: worker_vision (7B, port 8086) → vision_escalation (30B, port 8087)
 ```
@@ -280,7 +280,7 @@ ALL long-context requests (>20K chars) now use a two-stage pipeline instead of R
 
 ```
 Phase 1: Worker Parallel Digest           Phase 2: Frontdoor Synthesis
-worker_explore (7B, 44 t/s)               frontdoor (30B, 18 t/s)
+worker_general (7B, 44 t/s)               frontdoor (30B, 18 t/s)
 ┌───────────────────────────┐            ┌─────────────────────────────┐
 │ Context → N chunks (~4K)  │            │ Worker digests + question   │
 │ Each chunk → worker       │  ───────►  │ Synthesize final answer     │
@@ -307,7 +307,7 @@ Net impact: ~1.9s average added latency (20% trigger rate × 30% revision rate).
 ### Split Pipeline (Exploration → Summarization)
 
 ```
-worker_explore (7B, 46 t/s)          worker_summarize (32B, 95 t/s)
+worker_general (7B, 46 t/s)          worker_summarize (32B, 95 t/s)
 ┌─────────────────────────┐         ┌─────────────────────────────┐
 │ • Crawl directories     │         │ • Synthesize findings       │
 │ • Grep for patterns     │ ──────► │ • Create executive summary  │
@@ -322,7 +322,7 @@ Models may generate natural-language role names. These are resolved automaticall
 
 | Model generates | Maps to |
 |----------------|---------|
-| `researcher_agent` | `worker_explore` |
+| `researcher_agent` | `worker_general` |
 | `coder_agent` | `coder_escalation` |
 | `reviewer_agent` | `architect_general` |
 | `math_agent` | `worker_math` |
