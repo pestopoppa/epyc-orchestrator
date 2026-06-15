@@ -12,6 +12,7 @@ import threading
 from dataclasses import dataclass
 
 from src.env_parsing import env_int as _env_int
+from src.roles import Role, chain_name_to_role
 
 
 _VALID_DELEGATE_ROLES = frozenset(
@@ -39,6 +40,13 @@ def _normalize_delegate_role(role: object) -> str:
     """Normalize legacy/model-generated delegate labels to live stack roles."""
     if not isinstance(role, str):
         return "coder_escalation"
+    normalized = Role.from_string(role)
+    if normalized is not None:
+        return normalized.value
+    if role in {"worker_coder", "worker_code"}:
+        return chain_name_to_role("coder").value
+    if role in {"worker_explore", "worker_fast", "researcher_agent", "researcher"}:
+        return chain_name_to_role("worker").value
     return _DELEGATE_ROLE_ALIASES.get(role, role)
 
 
