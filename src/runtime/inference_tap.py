@@ -89,7 +89,9 @@ _sentinel_cache: tuple[str, float] = ("", 0.0)
 
 # Fallback only: normally safe-mode non-stream roles come from stack-prior
 # model.mem_gb so stack changes do not require editing this module.
-_LEGACY_SAFE_NON_STREAM_ROLES: frozenset[str] = frozenset({"architect_general"})
+_LEGACY_SAFE_NON_STREAM_ROLES: frozenset[str] = frozenset(
+    {Role.ARCHITECT_GENERAL.value}
+)
 
 
 def _safe_non_stream_min_mem_gb() -> float:

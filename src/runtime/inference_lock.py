@@ -36,21 +36,25 @@ _SLOT_ERASE_CAPABILITY: dict[int, str | None | bool] = {}
 # Degraded fallback only. Normal startup derives lock roles from generated
 # stack priors so this table is used only when that artifact is missing or
 # invalid.
-_LEGACY_HEAVY_ROLES = frozenset({
-    "frontdoor",
-    "coder_escalation",
-    "architect_general",
-    "ingest_long_context",
-    "vision_escalation",
-    "worker_summarize",
-})
+_LEGACY_HEAVY_ROLES = frozenset(
+    {
+        Role.FRONTDOOR.value,
+        Role.CODER_ESCALATION.value,
+        Role.ARCHITECT_GENERAL.value,
+        Role.INGEST_LONG_CONTEXT.value,
+        "vision_escalation",
+        Role.WORKER_SUMMARIZE.value,
+    }
+)
 
-_LEGACY_LIGHT_ROLES = frozenset({
-    "worker_general",
-    "worker_math",
-    "toolrunner",
-    "worker_vision",
-})
+_LEGACY_LIGHT_ROLES = frozenset(
+    {
+        Role.WORKER_GENERAL.value,
+        Role.WORKER_MATH.value,
+        Role.TOOLRUNNER.value,
+        Role.WORKER_VISION.value,
+    }
+)
 
 
 def _launch_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
