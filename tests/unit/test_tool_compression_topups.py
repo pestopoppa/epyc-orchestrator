@@ -47,5 +47,16 @@ def test_summarize_reports_top_up_rate_and_gate() -> None:
     assert summary["followups"] == 1
     assert summary["top_up_rate"] == 0.5
     assert summary["passes_threshold"] is False
+    assert summary["ready_for_rollout_decision"] is True
+    assert summary["rollout_decision"] == "keep_optional_or_drop_candidate"
     assert summary["followup_reasons"] == {"file_view_after_listing": 1}
     assert summary["compressor_strategies"] == {"ls_summary": 1, "raw_passthrough": 1}
+
+
+def test_summarize_distinguishes_empty_observation_window() -> None:
+    summary = mod.summarize([])
+
+    assert summary["compressed_calls"] == 0
+    assert summary["passes_threshold"] is None
+    assert summary["ready_for_rollout_decision"] is False
+    assert summary["rollout_decision"] == "awaiting_compressed_calls"

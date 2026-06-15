@@ -51,13 +51,23 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     followups = [record for record in records if record.get("top_up_candidate") is True]
     reasons = Counter(str(record.get("followup_reason") or "unknown") for record in followups)
     strategies = Counter(str(record.get("compressor_strategy") or "unknown") for record in records)
+    passes_threshold = (len(followups) / compressed_calls) <= 0.10 if compressed_calls else None
+
+    if compressed_calls == 0:
+        rollout_decision = "awaiting_compressed_calls"
+    elif passes_threshold:
+        rollout_decision = "promote_candidate"
+    else:
+        rollout_decision = "keep_optional_or_drop_candidate"
 
     return {
         "compressed_calls": compressed_calls,
         "followups": len(followups),
         "top_up_rate": round(len(followups) / compressed_calls, 4) if compressed_calls else 0.0,
         "top_up_rate_threshold": 0.10,
-        "passes_threshold": (len(followups) / compressed_calls) <= 0.10 if compressed_calls else None,
+        "passes_threshold": passes_threshold,
+        "ready_for_rollout_decision": compressed_calls > 0,
+        "rollout_decision": rollout_decision,
         "followup_reasons": dict(sorted(reasons.items())),
         "compressor_strategies": dict(sorted(strategies.items())),
     }
@@ -72,10 +82,12 @@ def _format_markdown(summary: dict[str, Any], path: Path, days: int | None) -> s
         "",
         f"- Source: `{path}`",
         f"- Window: {window}",
+        f"- Telemetry status: `{summary.get('telemetry_status', 'unknown')}`",
         f"- Compressed calls: {summary['compressed_calls']}",
         f"- Follow-ups: {summary['followups']}",
         f"- Top-up rate: {summary['top_up_rate']:.2%}",
         f"- Gate (`<=10%`): {gate}",
+        f"- Rollout decision: `{summary['rollout_decision']}`",
     ]
     if summary["followup_reasons"]:
         lines.append("- Follow-up reasons:")
@@ -101,6 +113,12 @@ def main() -> int:
         since = datetime.now(timezone.utc) - timedelta(days=days)
 
     summary = summarize(load_records(args.path, since=since))
+    if not args.path.exists():
+        summary["telemetry_status"] = "missing_file"
+        summary["ready_for_rollout_decision"] = False
+        summary["rollout_decision"] = "awaiting_telemetry_file"
+    else:
+        summary["telemetry_status"] = "present"
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:
