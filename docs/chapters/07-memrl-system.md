@@ -333,7 +333,7 @@ reward = base_reward - total_cost_penalty
 | Qwen3-235B-A22B | architect_general | 0.94 |
 | Qwen2.5-Coder-32B | coder | 0.915 |
 | Qwen3-Coder-30B-A3B | orchestrator | 0.895 |
-| Qwen2.5-7B | worker_explore | 0.745 |
+| Qwen2.5-7B | worker_general | 0.745 |
 
 **Interpretation**: If a task is answered correctly by the 235B architect (quality=0.94), dimension 2 penalizes with `lambda * (0.94 - 0.75) = lambda * 0.19`. The same correct answer from 7B (quality=0.745) receives zero quality gap penalty. This teaches the system to prefer cheap models when they can solve the task.
 
@@ -345,12 +345,12 @@ reward = base_reward - total_cost_penalty
 The cost model drives a "try cheap first" routing strategy through Q-value convergence:
 
 ```
-Q(task_class, "worker_explore") learns from:
+Q(task_class, "worker_general") learns from:
   - Success → high reward (correct + zero quality gap penalty + HOT tier)
   - Failure → low reward → system escalates to coder/architect
 ```
 
-During orchestration, Phase B/C nodes check `Q(task_class, "worker_explore") > threshold` to decide whether to attempt the cheap model first. As Q-values converge, the system learns which task classes the 7B worker can handle — routing those directly — and which require immediate escalation, avoiding wasted cheap attempts.
+During orchestration, Phase B/C nodes check `Q(task_class, "worker_general") > threshold` to decide whether to attempt the cheap model first. As Q-values converge, the system learns which task classes the 7B worker can handle — routing those directly — and which require immediate escalation, avoiding wasted cheap attempts.
 
 </details>
 

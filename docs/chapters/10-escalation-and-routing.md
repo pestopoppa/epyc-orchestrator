@@ -325,7 +325,7 @@ Any role can now delegate (not just architects). Tier C restriction removed:
 
 ```python
 _DELEGATABLE_ROLES = frozenset({
-    "worker_explore", "worker_math", "worker_general",
+    "worker_general", "worker_math",
     "worker_summarize", "worker_vision",
     "coder_escalation",
 })
