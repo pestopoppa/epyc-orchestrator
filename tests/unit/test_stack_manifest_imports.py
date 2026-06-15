@@ -81,6 +81,14 @@ def test_manifest_name_reexported(name: str) -> None:
     assert hasattr(stack, name), f"{name} not re-exported from orchestrator_stack"
 
 
+def test_gate3_tool_telemetry_profile_sets_required_api_env() -> None:
+    stack = importlib.import_module("scripts.server.orchestrator_stack")
+    profile = stack.ORCHESTRATOR_PROFILES["gate3-tool-telemetry"]
+
+    assert profile["AUTOPILOT_TOOL_SENTINELS"] == "1"
+    assert profile["ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT"] == "1"
+
+
 # ----- path/binary constants re-exported from stack_paths via orchestrator_stack -----
 
 

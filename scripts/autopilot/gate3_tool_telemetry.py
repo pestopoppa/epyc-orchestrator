@@ -26,6 +26,9 @@ SOFT check (live structured-output probe via web_research; NEVER fails the gate)
     structured-envelope unwrap on the live path).
 
 Run during the deploy window (orchestrator + this driver started with the flag):
+  AUTOPILOT_TOOL_SENTINELS=1 \
+    uv run python scripts/server/orchestrator_stack.py reload orchestrator \
+      --profile gate3-tool-telemetry
   AUTOPILOT_TOOL_SENTINELS=1 AUTOPILOT_EVAL_CONCURRENCY=1 \
     .venv/bin/python scripts/autopilot/gate3_tool_telemetry.py
 
@@ -53,6 +56,11 @@ sys.path.insert(0, str(_ORCH_ROOT / "scripts" / "autopilot"))
 
 ORCHESTRATOR_URL = "http://localhost:8000"
 _MIN_GET_EVAL_SECRET = 3
+_GATE3_PROFILE_RELOAD = (
+    "AUTOPILOT_TOOL_SENTINELS=1 uv run python "
+    "scripts/server/orchestrator_stack.py reload orchestrator "
+    "--profile gate3-tool-telemetry"
+)
 
 
 def _gate_request_timeout(default_timeout: int) -> int:
@@ -226,6 +234,8 @@ def check_env() -> tuple[bool, list[str]]:
     lines: list[str] = []
     driver_ok = os.environ.get("AUTOPILOT_TOOL_SENTINELS") == "1"
     lines.append(f"[{'PASS' if driver_ok else 'FAIL'}] driver AUTOPILOT_TOOL_SENTINELS=1")
+    if not driver_ok:
+        lines.append("       hint: launch this driver with AUTOPILOT_TOOL_SENTINELS=1")
     pid = _orchestrator_pid()
     if pid is None:
         lines.append("[WARN] orchestrator :8000 PID not found — cannot confirm its env; verify manually")
@@ -235,6 +245,10 @@ def check_env() -> tuple[bool, list[str]]:
     s = env.get("ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT") == "1"
     lines.append(f"[{'PASS' if a else 'FAIL'}] orchestrator(pid={pid}) AUTOPILOT_TOOL_SENTINELS=1")
     lines.append(f"[{'PASS' if s else 'FAIL'}] orchestrator(pid={pid}) ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT=1")
+    if not a:
+        lines.append(f"       hint: reload the API for Gate-3 with `{_GATE3_PROFILE_RELOAD}`")
+    if not s:
+        lines.append("       hint: verify the API was launched through orchestrator_stack.py")
     return (driver_ok and a and s), lines
 
 

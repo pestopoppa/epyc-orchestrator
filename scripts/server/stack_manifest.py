@@ -274,6 +274,10 @@ ORCHESTRATOR_PROFILES: dict[str, dict[str, str]] = {
         "ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_EXCLUSIVE_S": "45",
         "ORCHESTRATOR_INFERENCE_LOCK_TIMEOUT_SHARED_S": "45",
     },
+    "gate3-tool-telemetry": {
+        "AUTOPILOT_TOOL_SENTINELS": "1",
+        "ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT": "1",
+    },
 }
 
 

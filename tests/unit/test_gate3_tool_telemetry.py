@@ -17,6 +17,7 @@ from gate3_tool_telemetry import (  # noqa: E402
     _gate_parallelism,
     _gate_request_timeout,
     _gate_skip_soft,
+    check_env,
     check_get_eval_secret_contract,
     check_isolation,
     classify_web_research,
@@ -156,3 +157,42 @@ def test_gate_parallelism_invalid_or_low_values_are_serial(monkeypatch):
 
     monkeypatch.setenv("AUTOPILOT_GATE3_PARALLELISM", "0")
     assert _gate_parallelism() == 1
+
+
+def test_check_env_suggests_gate3_profile_when_api_lacks_sentinel(monkeypatch):
+    import gate3_tool_telemetry as gate3
+
+    monkeypatch.setenv("AUTOPILOT_TOOL_SENTINELS", "1")
+    monkeypatch.setattr(gate3, "_orchestrator_pid", lambda: 12345)
+    monkeypatch.setattr(
+        gate3,
+        "_read_environ",
+        lambda _pid: {"ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT": "1"},
+    )
+
+    ok, lines = check_env()
+
+    assert not ok
+    text = " ".join(lines)
+    assert "gate3-tool-telemetry" in text
+    assert "reload orchestrator" in text
+
+
+def test_check_env_suggests_driver_env_when_driver_flag_missing(monkeypatch):
+    import gate3_tool_telemetry as gate3
+
+    monkeypatch.delenv("AUTOPILOT_TOOL_SENTINELS", raising=False)
+    monkeypatch.setattr(gate3, "_orchestrator_pid", lambda: 12345)
+    monkeypatch.setattr(
+        gate3,
+        "_read_environ",
+        lambda _pid: {
+            "AUTOPILOT_TOOL_SENTINELS": "1",
+            "ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT": "1",
+        },
+    )
+
+    ok, lines = check_env()
+
+    assert not ok
+    assert "launch this driver with AUTOPILOT_TOOL_SENTINELS=1" in " ".join(lines)

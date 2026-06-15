@@ -41,6 +41,26 @@ uv run python scripts/server/orchestrator_stack.py start --migrate-to <template>
 
 These modes skip the launch gate because they do not start the production stack.
 
+For Gate-3 tool telemetry smoke tests, reload the API with the dedicated
+sentinel profile before running the driver. A plain neutral reload drops
+`AUTOPILOT_TOOL_SENTINELS` from the API process and can turn the check into a
+false timeout diagnostic:
+
+```bash
+AUTOPILOT_TOOL_SENTINELS=1 \
+  uv run python scripts/server/orchestrator_stack.py reload orchestrator \
+    --profile gate3-tool-telemetry
+
+AUTOPILOT_TOOL_SENTINELS=1 \
+AUTOPILOT_GATE3_PARALLELISM=3 \
+AUTOPILOT_GATE3_SKIP_SOFT=1 \
+  uv run python scripts/autopilot/gate3_tool_telemetry.py
+```
+
+Treat parallel Gate-3 runs as functional plumbing smoke only, not throughput,
+planner, or calibration evidence. Reload the API neutrally after the smoke if
+subsequent work needs a non-sentinel serving process.
+
 ## Emergency Bypass
 
 The gate can be bypassed only for emergency diagnostics, never for benchmarks, AutoPilot resumes, or claimed production readiness:
