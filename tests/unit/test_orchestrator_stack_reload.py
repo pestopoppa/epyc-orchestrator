@@ -468,6 +468,30 @@ def test_runtime_attestation_warnings_report_runtime_flag_drift(monkeypatch) -> 
     ]
 
 
+def test_launch_contract_for_process_canonicalizes_alias_role() -> None:
+    info = stack_commands.ProcessInfo(
+        role="worker_explore",
+        pid=123,
+        port=9999,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="worker.log",
+    )
+    contracts = {
+        "worker_general": {
+            "requirements": {"model_path": "/models/current.gguf"},
+            "runtime": {"cache": {"context_tokens": 16384}},
+            "ports": [8072],
+        }
+    }
+
+    assert stack_commands._launch_contract_for_process(
+        "worker_explore",
+        info,
+        contracts,
+    ) == contracts["worker_general"]
+
+
 def test_runtime_attestation_warnings_match_replica_by_port(monkeypatch) -> None:
     info = stack_commands.ProcessInfo(
         role="server",

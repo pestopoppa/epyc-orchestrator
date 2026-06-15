@@ -17,7 +17,6 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -36,32 +35,25 @@ from scripts.server.stack_host import apply_host_prerequisites
 from scripts.server.stack_manifest import (
     DOCKER_SERVICES,
     EMBEDDER_PORTS,
-    HOT_ROLES,
     HOT_SERVERS,
     NUMA_REPLICA_PORTS,
-    ORCHESTRATOR_PROFILES,
     PORT_MAP,
     ROLE_LAUNCH_META,
     WARM_SERVERS,
-    _build_servers_from_classification,
     _filter_by_numa_mode,
     validate_against_registry,
     validate_model_paths,
 )
-from scripts.server.stack_numa import MLOCK_ROLES, NUMA_CONFIG, _numa_prefix
 from scripts.server.stack_paths import (
     _HEALTH_SERVER_STARTUP,
-    _HEALTH_VISION_SERVER,
-    _HEALTH_WORKER_SERVER,
     LLAMA_MATH_TOOLS,
     _PATHS,
-    LLAMA_SERVER,
     LOG_DIR,
-    SLOT_SAVE_DIR,
     STATE_FILE,
 )
 from scripts.server.stack_prewarm import prewarm_all as _prewarm_all
 from scripts.server.stack_state import ProcessInfo
+from src.roles import Role
 from src.registry.stack_priors import (
     live_stack_role_records,
     stack_prior_serving,
@@ -535,6 +527,11 @@ def _launch_contract_for_process(
     direct = contracts_by_role.get(info.role) or contracts_by_role.get(name)
     if direct:
         return direct
+    canonical_role = str(Role.from_string(info.role) or info.role)
+    canonical_name = str(Role.from_string(name) or name)
+    direct = contracts_by_role.get(canonical_role) or contracts_by_role.get(canonical_name)
+    if direct:
+        return direct
     for contract in contracts_by_role.values():
         ports = contract.get("ports")
         if isinstance(ports, list) and info.port in ports:
@@ -741,7 +738,6 @@ def cmd_start(args: argparse.Namespace) -> int:
             from src.config.stack_templates import (
                 load_template,
                 validate_template,
-                _TEMPLATES_DIR,
             )
 
             print(f"[DS-7] Loading stack template: {stack_profile}")
