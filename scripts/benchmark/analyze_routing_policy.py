@@ -24,6 +24,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 from src.registry.stack_priors import live_stack_role_records
+from src.roles import Role
 
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 FALLBACK_SPECIALIST_ROLES = frozenset({
@@ -49,10 +50,14 @@ def _live_specialist_roles(stack_priors_path: Path = STACK_PRIORS_PATH) -> set[s
         record = roles[role_name]
         if not isinstance(record, dict):
             continue
-        role = str(role_name)
-        if role == "frontdoor" or role == "toolrunner" or role.startswith("worker_"):
+        role = Role.from_string(str(role_name))
+        if role is not None:
+            role_name = role.value
+        else:
+            role_name = str(role_name)
+        if role_name == "frontdoor" or role_name == "toolrunner" or role_name.startswith("worker_"):
             continue
-        specialists.add(role)
+        specialists.add(role_name)
 
     return specialists or set(FALLBACK_SPECIALIST_ROLES)
 

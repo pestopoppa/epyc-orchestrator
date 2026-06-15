@@ -28,6 +28,8 @@ roles:
     deployment_status: live_stack
   worker_general:
     deployment_status: live_stack
+  worker_explore:
+    deployment_status: live_stack
   toolrunner:
     deployment_status: live_stack
   architect_general:
