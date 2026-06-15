@@ -505,6 +505,15 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
         assert priors["roles"][role]["display_name"] in system_card
     assert "Qwen_Qwen3.6-35B-A3B-Q8_0" not in system_card
 
+    from src.api.routes.dashboard_topology import _stack_prior_port_hints
+    from src.api.routes.health import _stack_prior_backend_urls
+
+    assert _stack_prior_backend_urls(config.stack_priors) == {
+        "coder_escalation/frontdoor": "http://localhost:8070"
+    }
+    port_hints = _stack_prior_port_hints(config.stack_priors)
+    assert port_hints[8070] in roles
+
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
     assert q_priors.baseline_tps_by_role["frontdoor"] == 18.5
     assert q_priors.baseline_tps_by_role["coder_escalation"] == 18.5
