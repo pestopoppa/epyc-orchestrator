@@ -669,6 +669,7 @@ class TimeoutsConfig:
 
     def for_role(self, role: str) -> int:
         """Get timeout for a specific role, falling back to default."""
+        normalized = str(Role.from_string(role) or role)
         _role_map = {
             "worker_explore": self.worker_explore,
             "worker_math": self.worker_math,
@@ -684,25 +685,28 @@ class TimeoutsConfig:
             "ingest_long_context": self.ingest_long_context,
             "architect_general": self.architect_general,
         }
-        return _role_map.get(str(role), self.default_request)
+        if normalized in {"worker_explore", "worker_fast"}:
+            return self.worker_general
+        return _role_map.get(normalized, self.default_request)
 
     def role_timeouts_dict(self) -> dict[str, int]:
         """Return role->timeout dict (for backward compat with ROLE_TIMEOUTS)."""
-        return {
-            "worker_explore": self.worker_explore,
+        timeouts = {
+            "worker_explore": self.worker_general,
             "worker_math": self.worker_math,
             "worker_vision": self.worker_vision,
             "worker_summarize": self.worker_summarize,
             "worker_general": self.worker_general,
             "worker_coder": self.worker_coder,
             "worker_code": self.worker_code,
-            "worker_fast": self.worker_fast,
+            "worker_fast": self.worker_general,
             "frontdoor": self.frontdoor,
             "coder_escalation": self.coder_escalation,
             "vision_escalation": self.vision_escalation,
             "ingest_long_context": self.ingest_long_context,
             "architect_general": self.architect_general,
         }
+        return timeouts
 
 
 @dataclass

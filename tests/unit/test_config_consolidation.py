@@ -279,6 +279,10 @@ class TestTimeoutsDefaults:
                 cfg = TimeoutsConfig()
                 assert cfg.worker_explore == 77
                 assert cfg.worker_general == 77
+                assert cfg.for_role("worker_explore") == 77
+                assert cfg.for_role("worker_fast") == 77
+                assert cfg.role_timeouts_dict()["worker_explore"] == 77
+                assert cfg.role_timeouts_dict()["worker_fast"] == 77
             finally:
                 get_config.cache_clear()
 
