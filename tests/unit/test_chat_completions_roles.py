@@ -4,6 +4,7 @@ The chat route's template-skip logic and the backend router must agree on this s
 shared module they carried divergent inline defaults. The env var is unset in prod, so the
 generated stack-prior default is load-bearing.
 """
+from src.roles import Role
 from src.chat_completions_roles import chat_completions_roles
 
 
@@ -38,12 +39,12 @@ def test_degraded_fallback_is_narrow_when_priors_missing(monkeypatch):
     monkeypatch.setattr("src.chat_completions_roles._live_chat_completions_roles", lambda: set())
 
     assert chat_completions_roles() == {
-        "frontdoor",
-        "coder_escalation",
-        "worker_general",
-        "worker_math",
-        "worker_summarize",
-        "toolrunner",
+        str(Role.FRONTDOOR),
+        str(Role.CODER_ESCALATION),
+        str(Role.WORKER_GENERAL),
+        str(Role.WORKER_MATH),
+        str(Role.WORKER_SUMMARIZE),
+        str(Role.TOOLRUNNER),
     }
 
 

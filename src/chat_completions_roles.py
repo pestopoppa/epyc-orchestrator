@@ -15,18 +15,19 @@ from __future__ import annotations
 
 import os
 
+from src.roles import Role
 from src.registry.stack_priors import live_stack_role_records
 
 ENV_VAR = "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES"
 
 _DEGRADED_CHAT_COMPLETIONS_ROLES = frozenset(
     {
-        "frontdoor",
-        "coder_escalation",
-        "worker_general",
-        "worker_math",
-        "worker_summarize",
-        "toolrunner",
+        str(Role.FRONTDOOR),
+        str(Role.CODER_ESCALATION),
+        str(Role.WORKER_GENERAL),
+        str(Role.WORKER_MATH),
+        str(Role.WORKER_SUMMARIZE),
+        str(Role.TOOLRUNNER),
     }
 )
 
