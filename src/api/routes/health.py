@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 _DEFAULT_STACK_PRIORS_PATH = (
     Path(__file__).resolve().parents[3] / "orchestration" / "derived" / "stack_priors.yaml"
 )
-_FALLBACK_CORE_ROLES = ("frontdoor", "architect_general")
 
 # Cache knowledge tool status at module load to avoid repeated import checks
 _knowledge_tools_status: dict[str, Any] | None = None
@@ -156,18 +155,30 @@ def _stack_prior_backend_urls(
     }
 
 
+def _fallback_backend_role_names() -> tuple[str, ...]:
+    """Return the manifest-owned hot role set used for degraded health probes."""
+    try:
+        from scripts.server.stack_manifest import HOT_ROLES
+    except Exception:
+        return ("frontdoor", "architect_general")
+
+    role_names = tuple(sorted(role for role in HOT_ROLES if isinstance(role, str) and role))
+    return role_names or ("frontdoor", "architect_general")
+
+
 def _fallback_backend_urls() -> dict[str, str]:
     server_urls = get_config().server_urls.as_dict()
-    # Post-2026-05-09 consolidation: coder_escalation + worker_summarize share
-    # frontdoor's llama-server (same GGUF, same process at :8070), so probing
-    # frontdoor covers them. architect_coding was eliminated 2026-05-06.
-    # See orchestrator_stack.py:378 (shared_with_first_n) and progress 2026-05-06.
-    probes: dict[str, str] = {}
-    for role in _FALLBACK_CORE_ROLES:
+    # Degraded fallback uses the manifest-owned hot role set rather than a
+    # hand-maintained core-role tuple so shared URLs stay grouped by live truth.
+    probes_by_url: dict[str, list[str]] = {}
+    for role in _fallback_backend_role_names():
         url = server_urls.get(role)
         if isinstance(url, str) and url:
-            probes[role] = _first_backend_url(url)
-    return probes
+            probes_by_url.setdefault(_first_backend_url(url), []).append(role)
+    return {
+        "/".join(sorted(role_names)): url
+        for url, role_names in sorted(probes_by_url.items(), key=lambda item: item[0])
+    }
 
 
 async def _probe_core_backends(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -90,3 +91,31 @@ def test_probe_core_backends_uses_stack_prior_urls_once(
     assert seen == ["http://localhost:8070", "http://localhost:8083"]
     assert result["coder_escalation/frontdoor"]["ok"] is True
     assert result["architect_general"]["ok"] is True
+
+
+def test_fallback_backend_urls_use_manifest_hot_roles(monkeypatch) -> None:
+    monkeypatch.setattr(
+        health_route,
+        "_fallback_backend_role_names",
+        lambda: ("architect_general", "coder_escalation", "frontdoor", "worker_general"),
+    )
+    monkeypatch.setattr(
+        health_route,
+        "get_config",
+        lambda: SimpleNamespace(
+            server_urls=SimpleNamespace(
+                as_dict=lambda: {
+                    "frontdoor": "http://localhost:8070",
+                    "coder_escalation": "http://localhost:8070",
+                    "architect_general": "http://localhost:8083",
+                    "worker_general": "http://localhost:8072",
+                }
+            )
+        ),
+    )
+
+    assert health_route._fallback_backend_urls() == {
+        "coder_escalation/frontdoor": "http://localhost:8070",
+        "architect_general": "http://localhost:8083",
+        "worker_general": "http://localhost:8072",
+    }
