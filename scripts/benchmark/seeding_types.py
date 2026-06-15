@@ -366,13 +366,14 @@ _REGISTRY_KEY_TO_ROLE = {
     "worker_explore": "worker_general",
 }
 
-_ROLE_NAME_ALIASES = {
-    "worker_explore": "worker_general",
-}
-
 
 def _canonical_role_name(role_name: str) -> str:
-    return _ROLE_NAME_ALIASES.get(role_name, role_name)
+    try:
+        from src.roles import Role
+    except ImportError:
+        return role_name
+    canonical = Role.from_string(role_name)
+    return canonical.value if canonical is not None else role_name
 
 
 def discover_active_roles(
