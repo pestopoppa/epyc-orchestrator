@@ -130,7 +130,7 @@ class ProactiveDelegator:
         signals: ComplexitySignals,
     ) -> str:
         """Get the target role based on action and escalation flags."""
-        # The retired dedicated-thinking role falls through to architect_general.
+        # Retired thinking aliases fall through to architect_general.
         if signals.thinking_requested:
             return "architect_general"
 
@@ -296,8 +296,9 @@ class ProactiveDelegator:
         step.get("action", "")
 
         # Map actor to registry role.
-        # Canonical roles like worker_explore/worker_fast resolve to the live
-        # worker_general path before the legacy actor fallback is applied.
+        # Canonical worker aliases resolve through worker_general first; the
+        # legacy actor fallback stays as a single local branch if we ever need
+        # to reintroduce compatibility.
         canonical_actor = Role.from_string(actor)
         role_key = canonical_actor.value if canonical_actor is not None else actor
         role = ROLE_MAPPING.get(role_key, ROLE_MAPPING.get(actor, Role.WORKER_GENERAL.value))
