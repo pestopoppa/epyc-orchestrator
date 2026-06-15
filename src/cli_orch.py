@@ -29,6 +29,7 @@ from src.registry.stack_priors import (
     stack_prior_endpoint_port,
     stack_prior_serving,
 )
+from src.roles import Role
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ DEFAULT_STACK_PRIORS_PATH = Path(__file__).parent.parent / "orchestration" / "de
 
 
 def _fallback_status_role_mode(role: str) -> str | None:
-    launch_meta = ROLE_LAUNCH_META.get(role)
+    canonical = Role.from_string(role) or role
+    launch_meta = ROLE_LAUNCH_META.get(str(canonical))
     if not isinstance(launch_meta, dict):
         return None
     mode = launch_meta.get("mode")
@@ -57,7 +59,7 @@ def _fallback_status_targets() -> list[tuple[str, int]]:
         if not isinstance(port, int) or not isinstance(roles, list):
             continue
         visible_roles = [
-            role
+            str(Role.from_string(role) or role)
             for role in roles
             if isinstance(role, str) and _fallback_status_includes_role(role)
         ]

@@ -55,7 +55,8 @@ def test_fallback_status_targets_derive_alias_groups_from_manifest() -> None:
     targets = _fallback_status_targets()
 
     assert ("coder_escalation/frontdoor/worker_summarize", 8070) in targets
-    assert ("toolrunner/worker_explore/worker_general/worker_math", 8072) in targets
+    assert ("toolrunner/worker_general/worker_math", 8072) in targets
+    assert all("worker_explore" not in name for name, _ in targets)
     assert all(port != 8090 for _, port in targets)
 
 
