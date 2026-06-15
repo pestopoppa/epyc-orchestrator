@@ -50,6 +50,7 @@ sys.path.insert(0, str(ORCH_ROOT))
 import yaml
 
 from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import ParetoArchive, ParetoEntry, pareto_archive_from_journal_rows
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
@@ -1329,6 +1330,49 @@ def _merge_external_control_fields(
     return changed
 
 
+def _archive_entry_count(payload: object) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    entries = payload.get("all_entries")
+    return len(entries) if isinstance(entries, list) else 0
+
+
+def _sync_startup_archive_from_journal_authority(
+    state: dict[str, Any],
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+) -> bool:
+    """Repair startup archive drift before the run loop writes lifecycle state.
+
+    Preflight repairs archive authority from the append-only journal, but a
+    direct ``autopilot.py start`` must uphold the same invariant. Otherwise the
+    first startup save (fleet timestamp, pause-loop bookkeeping, etc.) can
+    preserve a stale ``state["pareto_archive"]`` before any trial runs.
+    """
+    if state.get("_allow_empty_frontier_rebase"):
+        return False
+    archive_payload = reconstruct_archive_from_journal_rows(
+        _journal_rows_for_archive(journal),
+        None,
+        current_run_only=False,
+    )
+    if archive_payload is None:
+        return False
+    current_payload = state.get("pareto_archive")
+    if current_payload == archive_payload:
+        return False
+    before_count = _archive_entry_count(current_payload)
+    state["pareto_archive"] = archive_payload
+    archive.load(state)
+    log.warning(
+        "Startup archive authority repaired from journal fold "
+        "(state_entries %d -> %d)",
+        before_count,
+        _archive_entry_count(archive_payload),
+    )
+    return True
+
+
 def learning_exclusion_criticism(
     learning_excluded_by: str,
     learning_excluded_reason: str,
@@ -1659,6 +1703,7 @@ def _run_loop_inner(
     trial_counter = _recover_from_in_flight_trial(
         state, journal, archive, trial_counter,
     )
+    _sync_startup_archive_from_journal_authority(state, journal, archive)
     # Bump the fleet-startup timestamp on every start (recovery path or
     # normal startup) so downstream watchers can detect autopilot
     # restarts the same way they detect orchestrator/llama restarts.

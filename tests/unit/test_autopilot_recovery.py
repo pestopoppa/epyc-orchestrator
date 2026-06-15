@@ -284,6 +284,51 @@ def test_merge_external_control_fields_noops_without_control_fields() -> None:
     assert state == {"trial_counter": 42, "paused": False}
 
 
+def test_startup_archive_sync_repairs_state_from_journal(
+    journal: ExperimentJournal, archive: ParetoArchive
+) -> None:
+    journal.record(_make_entry(1, quality=1.1))
+    journal.record(_make_entry(2, quality=1.2))
+    state = {
+        "trial_counter": 3,
+        "pareto_archive": {
+            "frontier": [],
+            "all_entries": [],
+            "hypervolume_history": [],
+        },
+    }
+
+    changed = autopilot._sync_startup_archive_from_journal_authority(
+        state, journal, archive,
+    )
+
+    assert changed is True
+    assert [e["trial_id"] for e in state["pareto_archive"]["all_entries"]] == [1, 2]
+    assert [entry.trial_id for entry in archive.frontier(tier=2)] == [2]
+
+
+def test_startup_archive_sync_skips_deliberate_empty_frontier_rebase(
+    journal: ExperimentJournal, archive: ParetoArchive
+) -> None:
+    journal.record(_make_entry(1, quality=1.1))
+    state = {
+        "trial_counter": 3,
+        "_allow_empty_frontier_rebase": True,
+        "pareto_archive": {
+            "frontier": [],
+            "all_entries": [],
+            "hypervolume_history": [],
+        },
+    }
+
+    changed = autopilot._sync_startup_archive_from_journal_authority(
+        state, journal, archive,
+    )
+
+    assert changed is False
+    assert state["pareto_archive"]["all_entries"] == []
+
+
 def test_save_state_drops_pause_reason_when_unpaused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
