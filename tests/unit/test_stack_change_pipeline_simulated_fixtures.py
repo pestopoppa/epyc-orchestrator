@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -363,6 +364,80 @@ def test_pipeline_report_names_simulated_fixture_target(tmp_path: Path) -> None:
     assert step.name == "simulated_fixtures"
     assert step.status == "reference"
     assert SIMULATED_FIXTURE_TARGET in step.details[0]
+
+
+def test_simulated_check_runs_promotion_gate_when_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
+    _base_frontdoor_registry(config.lean_registry)
+    assert run_stack_change_pipeline(config).ok
+    calls: list[dict[str, Any]] = []
+    original_run = pipeline.subprocess.run
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command != pipeline._promotion_gate_command():
+            return original_run(command, **kwargs)
+        calls.append({"command": command, **kwargs})
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="promotion gate ok\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    check_config = StackChangePipelineConfig(
+        **{**config.__dict__, "mode": "check", "run_promotion_gate": True}
+    )
+
+    report = run_stack_change_pipeline(check_config)
+
+    assert report.ok
+    assert len(calls) == 1
+    assert calls[0]["command"] == pipeline._promotion_gate_command()
+    assert calls[0]["cwd"] == tmp_path
+    assert calls[0]["text"] is True
+    assert calls[0]["capture_output"] is True
+    assert calls[0]["check"] is False
+    step = next(step for step in report.steps if step.name == "promotion_gate")
+    assert step.status == "ok"
+    assert any("promotion gate ok" in detail for detail in step.details)
+
+
+def test_simulated_check_fails_when_promotion_gate_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
+    _base_frontdoor_registry(config.lean_registry)
+    assert run_stack_change_pipeline(config).ok
+    original_run = pipeline.subprocess.run
+
+    def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        if command != pipeline._promotion_gate_command():
+            return original_run(command, **_)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=7,
+            stdout="partial output\n",
+            stderr="promotion gate failed\n",
+        )
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    check_config = StackChangePipelineConfig(
+        **{**config.__dict__, "mode": "check", "run_promotion_gate": True}
+    )
+
+    report = run_stack_change_pipeline(check_config)
+
+    assert not report.ok
+    step = next(step for step in report.steps if step.name == "promotion_gate")
+    assert step.status == "failed"
+    assert step.errors == ["promotion gate exited 7"]
+    assert any("partial output" in detail for detail in step.details)
+    assert any("promotion gate failed" in detail for detail in step.details)
 
 
 def test_simulated_update_does_not_write_real_operator_summary(tmp_path: Path) -> None:
