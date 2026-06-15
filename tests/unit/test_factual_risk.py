@@ -201,6 +201,7 @@ roles:
         missing = tmp_path / "missing_stack_priors.yaml"
 
         assert _role_tier_for_role("frontdoor", missing) == "tier_2"
+        assert _role_tier_for_role("worker_explore", missing) == "tier_3"
         assert _role_tier_for_role("worker_fast", missing) == "tier_3"
 
     def test_unknown_role_defaults_tier_3(self):

@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.roles import Role
+
 
 @dataclass
 class FactualRiskResult:
@@ -240,9 +242,11 @@ def _role_tier_for_role(
     role: str,
     stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
 ) -> str:
+    normalized = Role.from_string(role)
+    role_name = normalized.value if normalized is not None else str(role)
     return (
-        _stack_prior_role_tiers(stack_priors_path).get(role)
-        or _DEGRADED_ROLE_TO_TIER.get(role)
+        _stack_prior_role_tiers(stack_priors_path).get(role_name)
+        or _DEGRADED_ROLE_TO_TIER.get(role_name)
         or "tier_3"
     )
 
