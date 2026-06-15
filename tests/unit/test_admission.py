@@ -57,6 +57,24 @@ class TestAdmissionController:
         assert status["http://localhost:8086"]["limit"] == 2
         assert status["http://localhost:8087"]["limit"] == 1
 
+    def test_from_defaults_refreshes_live_loaded_limits(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.api.admission._load_default_limits",
+            lambda path=None: {"http://localhost:9000": 4},
+        )
+
+        ctrl = AdmissionController.from_defaults()
+        status = ctrl.get_status()
+        assert status == {
+            "http://localhost:9000": {
+                "limit": 4,
+                "available": 4,
+                "in_flight": 0,
+                "waiting_interactive": 0,
+                "waiting_background": 0,
+            }
+        }
+
     def test_limits_from_stack_priors_includes_shared_replica_ports(self, tmp_path: Path):
         priors = tmp_path / "stack_priors.yaml"
         priors.write_text(

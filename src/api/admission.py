@@ -127,7 +127,7 @@ class AdmissionController:
 
     @classmethod
     def from_defaults(cls) -> AdmissionController:
-        return cls(DEFAULT_LIMITS)
+        return cls(_load_default_limits())
 
     def _norm_priority(self, priority: str | None) -> str:
         p = str(priority or "interactive").strip().lower()
