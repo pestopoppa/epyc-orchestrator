@@ -18,7 +18,6 @@ DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration/derived/stack_priors.y
 logger = logging.getLogger(__name__)
 
 LEGACY_ARCHITECT_CODING = "architect" + "_coding"
-LEGACY_WORKER_EXPLORE = "worker" + "_explore"
 
 # Stable display/training order for known live roles. The role set is still
 # loaded from stack_priors.yaml; this only prevents harmless YAML ordering
@@ -56,7 +55,7 @@ RAW_TO_LIVE_ACTION: dict[str, str] = {
     LEGACY_ARCHITECT_CODING: "architect_general",
     "coder_escalation": "coder_escalation",
     "ingest_long_context": "ingest_long_context",
-    LEGACY_WORKER_EXPLORE: "worker_general",
+    "worker_explore": "worker_general",
     "worker_general": "worker_general",
     "worker_math": "worker_math",
     "worker_vision": "worker_vision",
