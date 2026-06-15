@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.registry.stack_priors import live_stack_role_records
+
 logger = logging.getLogger(__name__)
 
 # Default template search path (relative to epyc-orchestrator root)
@@ -38,10 +40,6 @@ MAX_STACK_RAM_GB = TOTAL_SYSTEM_RAM_GB - RESERVED_RAM_GB
 DEFAULT_MAX_MLOCK_GB = int(MAX_STACK_RAM_GB * 0.8)  # 744 GB
 DEFAULT_MAX_TOTAL_GB = MAX_STACK_RAM_GB             # 930 GB
 DEFAULT_RESERVE_KV_GB = 100                          # minimum headroom for KV caches
-
-# Roles that must not be represented as launchable stack-template entries.
-RETIRED_DEPLOYABLE_ROLES = frozenset({"architect_coding", "thinking_reasoning"})
-
 
 @dataclass
 class ResourceBudget:
@@ -258,6 +256,7 @@ def validate_template(
     """
     errors: list[str] = []
     warnings: list[str] = []
+    live_roles = set(live_stack_role_records().keys())
 
     # 1. Memory budget (fine-grained: HOT mlock vs total loaded vs KV reserve)
     budget = template.resource_budget
@@ -310,7 +309,9 @@ def validate_template(
 
     # 4. Tier consistency
     for role_name, role in template.roles.items():
-        if role_name in RETIRED_DEPLOYABLE_ROLES:
+        if live_roles and role_name not in live_roles and not (
+            role.alias_to or role.tier.upper() == "ALIAS"
+        ):
             errors.append(
                 f"Retired role '{role_name}' must not appear in stack templates; "
                 "route callers to the live replacement role instead"
