@@ -113,6 +113,41 @@ roles:
     assert "reap_25b_frontdoor" not in by_name
 
 
+def test_read_stack_prior_active_roles_canonicalizes_worker_explore(
+    tmp_path: Path,
+) -> None:
+    stack_priors = tmp_path / "stack_priors.yaml"
+    stack_priors.write_text(
+        """
+roles:
+  worker_explore:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:8072
+      ports: [8072]
+      server_role: worker_explore
+    priors:
+      memory_cost: 1.0
+""",
+        encoding="utf-8",
+    )
+
+    with patch.object(_MOD, "_read_registry_timeout", return_value=240):
+        roles = _MOD._read_stack_prior_active_roles(stack_priors)
+
+    assert roles == [
+        {
+            "name": "worker_general",
+            "registry_key": "worker_explore",
+            "model_role": "worker_general",
+            "port": 8072,
+            "is_heavy": False,
+            "cost_tier": 1,
+            "timeout_s": 240,
+        }
+    ]
+
+
 def test_read_stack_prior_topology_derives_primary_model_ports(tmp_path: Path) -> None:
     stack_priors = tmp_path / "stack_priors.yaml"
     stack_priors.write_text(

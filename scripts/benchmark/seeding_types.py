@@ -108,6 +108,7 @@ def _read_stack_prior_default_roles(
 
 
 def _cost_tier_from_stack_priors(role_name: str, record: dict[str, Any]) -> int:
+    role_name = _canonical_role_name(role_name)
     priors = record.get("priors")
     memory_cost = priors.get("memory_cost") if isinstance(priors, dict) else None
     try:
@@ -149,14 +150,15 @@ def _read_stack_prior_active_roles(
         if port is None:
             continue
 
+        canonical_role_name = _canonical_role_name(str(role_name))
         active.append({
-            "name": str(role_name),
+            "name": canonical_role_name,
             "registry_key": str(serving.get("server_role") or role_name),
-            "model_role": str(role_name),
+            "model_role": canonical_role_name,
             "port": port,
             "is_heavy": port in HEAVY_PORTS,
-            "cost_tier": _cost_tier_from_stack_priors(str(role_name), record),
-            "timeout_s": _read_registry_timeout("roles", str(role_name), DEFAULT_TIMEOUT),
+            "cost_tier": _cost_tier_from_stack_priors(canonical_role_name, record),
+            "timeout_s": _read_registry_timeout("roles", canonical_role_name, DEFAULT_TIMEOUT),
         })
 
     active.sort(key=lambda r: r["cost_tier"])
@@ -361,7 +363,16 @@ SEEDING_EXCLUDED_ROLES = frozenset({
 # When renaming roles, update this mapping.
 _REGISTRY_KEY_TO_ROLE = {
     "worker": "worker_general",
+    "worker_explore": "worker_general",
 }
+
+_ROLE_NAME_ALIASES = {
+    "worker_explore": "worker_general",
+}
+
+
+def _canonical_role_name(role_name: str) -> str:
+    return _ROLE_NAME_ALIASES.get(role_name, role_name)
 
 
 def discover_active_roles(
@@ -418,7 +429,7 @@ def discover_active_roles(
             continue
 
         # Resolve the role name the orchestrator accepts for force_role
-        role_name = _REGISTRY_KEY_TO_ROLE.get(role_key, role_key)
+        role_name = _canonical_role_name(_REGISTRY_KEY_TO_ROLE.get(role_key, role_key))
         model_role = role_def.get("model_role", role_name)
 
         # Get port from role definition or ROLE_PORT fallback
