@@ -265,6 +265,18 @@ class Role(str, Enum):
 _LEGACY_ROLE_ALIASES: dict[str, Role] = {
     # Split the retired literal so production hardcoded-surface scans keep their signal.
     "architect" "_coding": Role.ARCHITECT_GENERAL,
+    "coder": Role.CODER_ESCALATION,
+    "coder_agent": Role.CODER_ESCALATION,
+    "researcher_agent": Role.WORKER_GENERAL,
+    "researcher": Role.WORKER_GENERAL,
+    "reviewer_agent": Role.ARCHITECT_GENERAL,
+    "reviewer": Role.ARCHITECT_GENERAL,
+    "math_agent": Role.WORKER_MATH,
+    "vision_agent": Role.WORKER_VISION,
+    "summarizer_agent": Role.WORKER_SUMMARIZE,
+    "summarizer": Role.WORKER_SUMMARIZE,
+    "worker_explore": Role.WORKER_GENERAL,
+    "worker_fast": Role.WORKER_GENERAL,
 }
 
 

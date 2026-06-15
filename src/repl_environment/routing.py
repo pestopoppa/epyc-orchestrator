@@ -10,6 +10,7 @@ import json
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.delegation_reports import load_report
 from src.task_ir import canonicalize_task_ir
+from src.roles import Role
 
 
 class _RoutingMixin:
@@ -354,19 +355,8 @@ class _RoutingMixin:
 
     # Role alias mapping: model-generated role names -> actual backend roles
     _ROLE_ALIASES: dict[str, str] = {
-        "researcher_agent": "worker_general",
-        "researcher": "worker_general",
-        "coder_agent": "coder_escalation",
-        "reviewer_agent": "architect_general",
-        "reviewer": "architect_general",
-        "math_agent": "worker_math",
-        "vision_agent": "worker_vision",
-        "summarizer_agent": "worker_summarize",
-        "summarizer": "worker_summarize",
         "worker_coder": "coder_escalation",
         "worker_code": "coder_escalation",
-        "worker_explore": "worker_general",
-        "worker_fast": "worker_general",
     }
 
     def _resolve_role_alias(self, role: str) -> str:
@@ -378,6 +368,9 @@ class _RoutingMixin:
         Returns:
             Resolved role name that exists in the backend config.
         """
+        resolved = Role.from_string(role)
+        if resolved is not None:
+            return str(resolved)
         return self._ROLE_ALIASES.get(role, role)
 
     # Roles that can be delegation targets (any role can delegate to these)

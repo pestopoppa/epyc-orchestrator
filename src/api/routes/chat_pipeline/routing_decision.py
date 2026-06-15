@@ -21,11 +21,8 @@ _TIER_COST_WEIGHTS: dict[str, float] = {
 }
 
 _INGRESS_ROLE_ALIASES = {
-    "architect_coding": "architect_general",
-    "coder": "coder_escalation",
     "worker_coder": "worker_general",
     "worker_code": "worker_general",
-    "worker_fast": "worker_general",
 }
 
 
@@ -33,6 +30,9 @@ def normalize_ingress_role(role: object) -> object:
     """Normalize externally supplied role labels before config lookup."""
     if not isinstance(role, str):
         return role
+    normalized = Role.from_string(role)
+    if normalized is not None:
+        return normalized
     return _INGRESS_ROLE_ALIASES.get(role, role)
 
 

@@ -43,6 +43,8 @@ class TestRoleEnum:
         """Test Role.is_valid() validates strings."""
         assert Role.is_valid("frontdoor") is True
         assert Role.is_valid("coder_escalation") is True
+        assert Role.is_valid("coder") is True
+        assert Role.is_valid("worker_fast") is True
         assert Role.is_valid(_RETIRED_ARCHITECT_ROLE) is True
         assert Role.is_valid("invalid_role") is False
         assert Role.is_valid("") is False
@@ -54,6 +56,13 @@ class TestRoleEnum:
 
         role2 = Role.from_string("worker_math")
         assert role2 == Role.WORKER_MATH
+
+        assert Role.from_string("coder") == Role.CODER_ESCALATION
+        assert Role.from_string("coder_agent") == Role.CODER_ESCALATION
+        assert Role.from_string("researcher") == Role.WORKER_GENERAL
+        assert Role.from_string("reviewer") == Role.ARCHITECT_GENERAL
+        assert Role.from_string("worker_explore") == Role.WORKER_GENERAL
+        assert Role.from_string("worker_fast") == Role.WORKER_GENERAL
 
     def test_retired_architect_role_string_normalizes_to_live_architect(self):
         """Old serialized coding-architect role strings resolve to the live architect."""
