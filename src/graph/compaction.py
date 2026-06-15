@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from src.roles import Role
 from src.graph.state import TaskState
 
 log = logging.getLogger(__name__)
@@ -178,13 +179,13 @@ async def _maybe_compact_context(ctx: Any) -> None:
             if _use_inline_calls_in_tests():
                 index = ctx.deps.primitives.llm_call(
                     full_index_prompt,
-                    role="worker_explore",
+                    role=Role.WORKER_GENERAL.value,
                 )
             else:
                 index = await asyncio.to_thread(
                     ctx.deps.primitives.llm_call,
                     full_index_prompt,
-                    role="worker_explore",
+                    role=Role.WORKER_GENERAL.value,
                 )
         except Exception as exc:
             log.warning("Compaction index generation failed, using fallback index: %s", exc)

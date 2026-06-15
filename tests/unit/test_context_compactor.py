@@ -348,10 +348,10 @@ class TestMaybeCompactContext:
                 saved = f.read()
             assert saved == original_context
 
-            # LLM was called with worker_explore role
+            # LLM was called with the canonical worker_general role
             primitives.llm_call.assert_called_once()
             call_kwargs = primitives.llm_call.call_args
-            assert call_kwargs[1]["role"] == "worker_explore"
+            assert call_kwargs[1]["role"] == "worker_general"
 
             # Clean up
             os.unlink(ctx_path)
