@@ -274,6 +274,7 @@ planner prompts.
 - NUMA quarter assignments (currently optimal)
 - Acceleration flag combinations (already tuned per-model from isolated benchmarks)
 - **NOTE**: The active stack topology is compiled into `orchestration/derived/stack_priors.yaml` and summarized in the generated controller system card. Tier demotion is not an open exploration surface by default. Acceleration flags are the product of extensive isolated benchmarking — do not change without reading the benchmark data in `epyc-inference-research/data/`.
+ - **Planner source of truth**: when a prompt, memory, or handoff mentions a role, port, context window, throughput, memory footprint, or tier, treat the generated controller system card as the authoritative live view. Only quote literal values if they match that generated card; otherwise assume the literal is stale and refresh from stack priors before optimizing on it.
 
 ### Tier 6: StructuralLab Memory Mutations (hot-swap, NIB2-41 / intake-414 Token Savior)
 
@@ -332,7 +333,7 @@ These have been empirically tested and found non-viable:
 
 ### Infrastructure
 - **`tool_permissions` in legacy path**: No role has permissions defined. Cascading path (`cascading_tool_policy=True`) is the only viable path.
-- **Stack-prior cost/throughput drift**: Q-scorer role costs and throughput priors are generated from `orchestration/derived/stack_priors.yaml`. If a planner prompt, memory, or handoff cites literal model speeds/costs that disagree with the generated system card, treat the literal as stale and run the stack-change pipeline checks before optimizing on it.
+- **Stack-prior cost/throughput drift**: Q-scorer role costs and throughput priors are generated from `orchestration/derived/stack_priors.yaml`. If a planner prompt, memory, or handoff cites literal model speeds/costs that disagree with the generated system card, treat the literal as stale and run the stack-change pipeline checks before optimizing on it. The same rule applies to any role label, port, or memory class: system card first, literal text second, never the other way around.
 
 ---
 
