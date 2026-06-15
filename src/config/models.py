@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.roles import Role
 from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
 
 from .validation import _registry_runtime_value, _registry_timeout
@@ -290,9 +291,6 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
 }
 
 _STACK_PRIOR_SERVER_URL_ALIASES: dict[str, str] = {
-    "coder": "coder_escalation",
-    "worker": "worker_general",
-    "worker_explore": "worker_general",
     "worker_coder": "worker_fast",
 }
 _STACK_MANIFEST_SERVER_URL_ALIASES: dict[str, str] = {
@@ -303,6 +301,11 @@ _STACK_MANIFEST_SERVICE_ROLES: dict[str, str] = {
     "ocr_server": "document_formalizer",
 }
 _STACK_PRIOR_SERVER_URLS_CACHE: dict[str, str] | None = None
+_CANONICAL_SERVER_URL_ALIASES: dict[str, str] = {
+    "coder": "coder_escalation",
+    "worker": "worker_general",
+    "worker_explore": "worker_general",
+}
 
 
 def _localhost_url_from_port(port: Any) -> str | None:
@@ -376,14 +379,23 @@ def _stack_prior_server_urls() -> dict[str, str]:
     return _STACK_PRIOR_SERVER_URLS_CACHE
 
 
+def _canonical_server_url_name(name: str) -> str:
+    if name in {"worker_coder", "worker_fast"}:
+        return name
+    return _CANONICAL_SERVER_URL_ALIASES.get(name, str(Role.from_string(name) or name))
+
+
 def _server_url_default(name: str) -> str:
     urls = _stack_prior_server_urls()
-    if name in urls:
+    if name in {"worker_coder", "worker_fast"} and name in urls:
         return urls[name]
+    canonical = _canonical_server_url_name(name)
+    if canonical in urls:
+        return urls[canonical]
     alias = _STACK_PRIOR_SERVER_URL_ALIASES.get(name) or _STACK_MANIFEST_SERVER_URL_ALIASES.get(name)
     if alias and alias in urls:
         return urls[alias]
-    return _LEGACY_SERVER_URL_FALLBACKS[alias or name]
+    return _LEGACY_SERVER_URL_FALLBACKS[alias or canonical]
 
 
 def reset_stack_prior_server_url_cache() -> None:
