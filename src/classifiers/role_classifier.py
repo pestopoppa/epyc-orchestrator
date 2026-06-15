@@ -39,6 +39,7 @@ import re
 from dataclasses import dataclass
 
 from src.classifiers.role_taxonomy import TrinityRole
+from src.roles import Role
 
 # ── Keyword patterns ─────────────────────────────────────────────────
 # Compiled once at import. Word-boundary anchored to avoid substring drift
@@ -114,13 +115,20 @@ def _has_verifier_signal(prompt_lc: str) -> bool:
     return _PRIOR_CONTENT_RE.search(prompt_lc) is not None
 
 
+def _is_architect_role_name(role: str) -> bool:
+    canonical = Role.from_string(role)
+    if canonical is not None:
+        return canonical == Role.ARCHITECT_GENERAL or canonical.value.startswith("architect_")
+    return role.startswith(_ARCHITECT_ROLE_PREFIXES)
+
+
 def _has_architect_role(routing_decision: list | None, force_role: str | None) -> bool:
     """True if routing or force_role names an architect-class model."""
-    if force_role and any(force_role.startswith(p) for p in _ARCHITECT_ROLE_PREFIXES):
+    if force_role and _is_architect_role_name(str(force_role)):
         return True
     if routing_decision:
         head = str(routing_decision[0])
-        if any(head.startswith(p) for p in _ARCHITECT_ROLE_PREFIXES):
+        if _is_architect_role_name(head):
             return True
     return False
 

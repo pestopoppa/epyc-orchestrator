@@ -63,6 +63,14 @@ class TestThinkerRule:
         assert out.role == TrinityRole.THINKER.value
         assert out.reason == "thinker_architect_role"
 
+    def test_architect_routing_canonicalizes_retired_alias(self):
+        out = classify_role(
+            "Find the largest prime factor.",
+            routing_decision=[_RETIRED_ARCHITECT_ROLE],
+        )
+        assert out.role == TrinityRole.THINKER.value
+        assert out.reason == "thinker_architect_role"
+
     def test_force_role_retired_architect(self):
         out = classify_role("Quick task.", force_role=_RETIRED_ARCHITECT_ROLE)
         assert out.role == TrinityRole.THINKER.value
