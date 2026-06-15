@@ -1,7 +1,7 @@
 # Orchestration Routing Topology
 
-> Auto-generated from `src/roles.py` and `src/escalation.py`
-> Last updated: 2026-02-07
+> Generated from `src/roles.py` and `src/orchestration/escalation.py`
+> Last updated: 2026-06-15
 
 ## Complete Routing Graph
 
@@ -33,7 +33,6 @@ flowchart TB
         ILC[ingest_long_context]
         THR[thinking_reasoning]
         AG[architect_general]
-        AC[architect_coding]
     end
 
     subgraph TierD["Tier D: Draft Models"]
@@ -76,7 +75,7 @@ flowchart TB
 
     %% Coder escalation
     CP -->|"escalate"| AG
-    CE -->|"escalate"| AC
+    CE -->|"escalate"| AG
     THR -->|"escalate"| AG
 
     %% Ingest escalation (direct to architect)
@@ -84,7 +83,6 @@ flowchart TB
 
     %% Architects are terminal (no escalation)
     AG -->|"terminal"| END([Response])
-    AC -->|"terminal"| END
 
     %% Draft models support spec decode (not escalation)
     DC -.->|"spec decode"| CP
@@ -119,7 +117,7 @@ flowchart TB
     classDef terminal fill:#F44336,color:white
 
     class FD tierA
-    class CP,CE,ILC,THR,AG,AC tierB
+    class CP,CE,ILC,THR,AG tierB
     class WG,WM,WS,WV,TR tierC
     class DC,DG tierD
     class EP,HG,FG,TPR memrl
@@ -131,11 +129,11 @@ flowchart TB
 ```mermaid
 flowchart LR
     subgraph Chain1["Worker Chain"]
-        W1[worker_*] --> C1[coder_escalation] --> A1[architect_coding]
+        W1[worker_*] --> C1[coder_escalation] --> A1[architect_general]
     end
 
     subgraph Chain2["Coder Chain"]
-        C2[coder_escalation] --> A2[architect_coding]
+        C2[coder_escalation] --> A2[architect_general]
     end
 
     subgraph Chain4["Ingest Chain"]
@@ -143,7 +141,7 @@ flowchart LR
     end
 
     subgraph Chain5["Frontdoor Chain"]
-        F1[frontdoor] --> C3[coder_escalation] --> A4[architect_coding]
+        F1[frontdoor] --> C3[coder_escalation] --> A4[architect_general]
     end
 ```
 
