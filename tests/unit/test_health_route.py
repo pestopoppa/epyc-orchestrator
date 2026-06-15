@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -119,3 +120,19 @@ def test_fallback_backend_urls_use_manifest_hot_roles(monkeypatch) -> None:
         "architect_general": "http://localhost:8083",
         "worker_general": "http://localhost:8072",
     }
+
+
+def test_fallback_backend_role_names_reads_manifest_hot_roles(monkeypatch) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "scripts.server.stack_manifest",
+        SimpleNamespace(
+            HOT_ROLES={"worker_general", "frontdoor", "architect_general"}
+        ),
+    )
+
+    assert health_route._fallback_backend_role_names() == (
+        "architect_general",
+        "frontdoor",
+        "worker_general",
+    )

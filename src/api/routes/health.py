@@ -160,10 +160,10 @@ def _fallback_backend_role_names() -> tuple[str, ...]:
     try:
         from scripts.server.stack_manifest import HOT_ROLES
     except Exception:
-        return ("frontdoor", "architect_general")
+        return ()
 
     role_names = tuple(sorted(role for role in HOT_ROLES if isinstance(role, str) and role))
-    return role_names or ("frontdoor", "architect_general")
+    return role_names
 
 
 def _fallback_backend_urls() -> dict[str, str]:
