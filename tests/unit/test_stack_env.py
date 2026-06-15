@@ -58,6 +58,12 @@ def test_arch_alias_fallthrough_toolrunner_inherits_worker() -> None:
     assert aliased == expected
 
 
+def test_worker_explore_alias_inherits_worker() -> None:
+    aliased = _role_env_overrides("worker_explore")
+    expected = _ROLE_ENV_BLOCKS["worker"]
+    assert aliased == expected
+
+
 def test_unknown_role_returns_empty_overrides() -> None:
     assert _role_env_overrides("nonexistent_role_xyz") == {}
 

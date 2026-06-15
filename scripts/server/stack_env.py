@@ -9,6 +9,8 @@ so existing call sites keep working.
 
 from __future__ import annotations
 
+from src.roles import Role
+
 
 # =============================================================================
 # Per-role env blocks — applied to every llama-server launch.
@@ -112,8 +114,9 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
 def _role_env_overrides(role: str) -> dict[str, str]:
     """Return per-role env block for a given role. Empty dict if role not registered.
     Falls back through arch-class aliases (e.g. coder_escalation → worker)."""
-    if role in _ROLE_ENV_BLOCKS:
-        return dict(_ROLE_ENV_BLOCKS[role])
+    normalized = str(Role.from_string(role) or role)
+    if normalized in _ROLE_ENV_BLOCKS:
+        return dict(_ROLE_ENV_BLOCKS[normalized])
     # Aliases — production roles that map to v5 arch_class names.
     # 2026-05-06: coder_escalation + worker_summarize now use the SAME GGUF as frontdoor
     # (Qwen3.6-35B-A3B Q8) and should inherit frontdoor's EP-stack env block.
@@ -125,13 +128,12 @@ def _role_env_overrides(role: str) -> dict[str, str]:
         "coder_escalation": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
         "worker_summarize": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
         "worker_general": "worker",         # gemma4-26B-A4B Q4_K_M MTP — GGML_* env stripped at launch when binary_override is in effect (ik_llama.cpp PR #1744 forked at different ggml commit)
-        "worker_explore": "worker",         # Legacy alias for worker_general
         "general_gemma_3_27b_it_qat": "dense_q4",
         "ingest_long_context": "hybrid_ssm_moe",  # Qwen3-Next-80B-A3B
         "formalizer": "dense_q8",                 # MathSmith-Qwen3-8B Q8 dense; NOT MoE at all
         "toolrunner": "worker",                   # gemma4-26B-A4B Q4_K_M MTP (shares with worker_general)
     }
-    aliased = arch_aliases.get(role)
+    aliased = arch_aliases.get(normalized)
     if aliased and aliased in _ROLE_ENV_BLOCKS:
         return dict(_ROLE_ENV_BLOCKS[aliased])
     return {}
