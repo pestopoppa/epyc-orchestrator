@@ -189,7 +189,6 @@ _DEGRADED_ROLE_TO_TIER: dict[str, str] = {
     "worker_summarize": "tier_2",
     "vision_escalation": "tier_2",
     "worker_general": "tier_3",
-    "worker_explore": "tier_3",
     "worker_math": "tier_3",
     "worker_vision": "tier_3",
     "toolrunner": "tier_3",
