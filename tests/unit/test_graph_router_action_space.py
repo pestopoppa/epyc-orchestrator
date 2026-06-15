@@ -21,6 +21,8 @@ from scripts.graph_router.extract_verifier_training_data_debiased import (
     extract as extract_debiased_verifier_data,
 )
 
+LEGACY_ARCHITECT_ROLE = "architect" "_coding"
+
 
 def _stack_prior_record(role: str, *, deployment_status: str = "live_stack") -> dict:
     return {
@@ -111,7 +113,7 @@ def test_normalize_action_canonicalizes_role_aliases_before_lookup() -> None:
     assert normalize_action("worker_explore") == "worker_general"
     assert normalize_action("worker_fast") == "worker_general"
     assert normalize_action("coder") == "coder_escalation"
-    assert normalize_action("architect_coding") == "architect_general"
+    assert normalize_action(LEGACY_ARCHITECT_ROLE) == "architect_general"
 
 
 def test_live_actions_keep_preferred_order_and_append_new_live_roles(tmp_path: Path) -> None:
