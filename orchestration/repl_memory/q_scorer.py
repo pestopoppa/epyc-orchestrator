@@ -60,7 +60,6 @@ FALLBACK_BASELINE_TPS_BY_ROLE: Dict[str, float] = {
     "coder_escalation": 10.8,
     "architect_general": 4.3,
     "ingest_long_context": 12.0,
-    "worker_explore": 50.0,
     "worker_general": 50.0,
     "worker_math": 50.0,
     "toolrunner": 50.0,
@@ -72,7 +71,7 @@ BASELINE_QUALITY_BY_ROLE: Dict[str, float] = {
     "frontdoor": 0.895,
     "coder_escalation": 0.915,
     "architect_general": 0.94,
-    "worker_explore": 0.745,
+    "worker_general": 0.745,
     "worker_math": 0.85,
     "worker_vision": 0.81,
 }
@@ -82,7 +81,6 @@ FALLBACK_MEMORY_COST_BY_ROLE: Dict[str, float] = {
     "coder_escalation": 1.0,
     "architect_general": 1.0,
     "ingest_long_context": 1.0,
-    "worker_explore": 1.0,
     "worker_general": 1.0,
     "worker_math": 1.0,
     "toolrunner": 1.0,
@@ -123,6 +121,39 @@ PRIOR_SOURCE_REGISTRY = "registry"
 PRIOR_SOURCE_DEGRADED_FALLBACK = "degraded_fallback"
 
 
+def _materialize_q_scorer_role_aliases(values: Dict[str, Any]) -> Dict[str, Any]:
+    materialized = dict(values)
+    for canonical_role, aliases in STACK_PRIOR_SCORER_ROLE_ALIASES.items():
+        if canonical_role not in materialized:
+            continue
+        canonical_value = materialized[canonical_role]
+        for alias in aliases:
+            materialized.setdefault(alias, canonical_value)
+    return materialized
+
+
+def _materialize_q_scorer_priors(priors: QScorerPriors) -> QScorerPriors:
+    return QScorerPriors(
+        baseline_tps_by_role=_materialize_q_scorer_role_aliases(
+            priors.baseline_tps_by_role
+        ),
+        baseline_quality_by_role=_materialize_q_scorer_role_aliases(
+            priors.baseline_quality_by_role
+        ),
+        memory_cost_by_role=_materialize_q_scorer_role_aliases(priors.memory_cost_by_role),
+        baseline_tps_source_by_role=_materialize_q_scorer_role_aliases(
+            priors.baseline_tps_source_by_role
+        ),
+        baseline_quality_source_by_role=_materialize_q_scorer_role_aliases(
+            priors.baseline_quality_source_by_role
+        ),
+        memory_cost_source_by_role=_materialize_q_scorer_role_aliases(
+            priors.memory_cost_source_by_role
+        ),
+        degraded_reason=priors.degraded_reason,
+    )
+
+
 @dataclass(frozen=True)
 class QScorerPriors:
     """Descriptor-aware scorer priors with registry-backed fallbacks."""
@@ -147,22 +178,24 @@ class QScorerPriors:
 
 
 def _fallback_q_scorer_priors(*, degraded_reason: str | None = None) -> QScorerPriors:
-    return QScorerPriors(
-        baseline_tps_by_role=dict(FALLBACK_BASELINE_TPS_BY_ROLE),
-        baseline_quality_by_role=dict(BASELINE_QUALITY_BY_ROLE),
-        memory_cost_by_role=dict(FALLBACK_MEMORY_COST_BY_ROLE),
-        baseline_tps_source_by_role={
-            role: PRIOR_SOURCE_DEGRADED_FALLBACK
-            for role in FALLBACK_BASELINE_TPS_BY_ROLE
-        },
-        baseline_quality_source_by_role={
-            role: PRIOR_SOURCE_DEGRADED_FALLBACK for role in BASELINE_QUALITY_BY_ROLE
-        },
-        memory_cost_source_by_role={
-            role: PRIOR_SOURCE_DEGRADED_FALLBACK
-            for role in FALLBACK_MEMORY_COST_BY_ROLE
-        },
-        degraded_reason=degraded_reason,
+    return _materialize_q_scorer_priors(
+        QScorerPriors(
+            baseline_tps_by_role=dict(FALLBACK_BASELINE_TPS_BY_ROLE),
+            baseline_quality_by_role=dict(BASELINE_QUALITY_BY_ROLE),
+            memory_cost_by_role=dict(FALLBACK_MEMORY_COST_BY_ROLE),
+            baseline_tps_source_by_role={
+                role: PRIOR_SOURCE_DEGRADED_FALLBACK
+                for role in FALLBACK_BASELINE_TPS_BY_ROLE
+            },
+            baseline_quality_source_by_role={
+                role: PRIOR_SOURCE_DEGRADED_FALLBACK for role in BASELINE_QUALITY_BY_ROLE
+            },
+            memory_cost_source_by_role={
+                role: PRIOR_SOURCE_DEGRADED_FALLBACK
+                for role in FALLBACK_MEMORY_COST_BY_ROLE
+            },
+            degraded_reason=degraded_reason,
+        )
     )
 
 
@@ -293,13 +326,15 @@ def stack_prior_q_scorer_priors_by_role(
                 memory_by_role[target_role] = float(memory_cost)
                 memory_sources[target_role] = PRIOR_SOURCE_STACK_PRIORS
 
-    return QScorerPriors(
-        baseline_tps_by_role=tps_by_role,
-        baseline_quality_by_role=quality_by_role,
-        memory_cost_by_role=memory_by_role,
-        baseline_tps_source_by_role=tps_sources,
-        baseline_quality_source_by_role=quality_sources,
-        memory_cost_source_by_role=memory_sources,
+    return _materialize_q_scorer_priors(
+        QScorerPriors(
+            baseline_tps_by_role=tps_by_role,
+            baseline_quality_by_role=quality_by_role,
+            memory_cost_by_role=memory_by_role,
+            baseline_tps_source_by_role=tps_sources,
+            baseline_quality_source_by_role=quality_sources,
+            memory_cost_source_by_role=memory_sources,
+        )
     )
 
 
@@ -435,13 +470,15 @@ def descriptor_q_scorer_priors_by_role(
                 quality_by_role[role] = quality
                 quality_sources[role] = PRIOR_SOURCE_MODEL_DESCRIPTORS
 
-    return QScorerPriors(
-        baseline_tps_by_role=tps_by_role,
-        baseline_quality_by_role=quality_by_role,
-        memory_cost_by_role=memory_by_role,
-        baseline_tps_source_by_role=tps_sources,
-        baseline_quality_source_by_role=quality_sources,
-        memory_cost_source_by_role=memory_sources,
+    return _materialize_q_scorer_priors(
+        QScorerPriors(
+            baseline_tps_by_role=tps_by_role,
+            baseline_quality_by_role=quality_by_role,
+            memory_cost_by_role=memory_by_role,
+            baseline_tps_source_by_role=tps_sources,
+            baseline_quality_source_by_role=quality_sources,
+            memory_cost_source_by_role=memory_sources,
+        )
     )
 
 
@@ -494,7 +531,7 @@ def registry_baseline_tps_by_role(
         data = yaml.safe_load(registry_path.read_text()) or {}
     except Exception as exc:
         logger.warning("Using fallback q_scorer TPS baselines; registry load failed: %s", exc)
-        return baselines
+        return _materialize_q_scorer_role_aliases(baselines)
 
     server_mode = data.get("server_mode", {})
     if isinstance(server_mode, dict):
@@ -518,7 +555,7 @@ def registry_baseline_tps_by_role(
             if tps is not None:
                 baselines[target_role] = tps
 
-    return baselines
+    return _materialize_q_scorer_role_aliases(baselines)
 
 
 def registry_memory_cost_by_role(
@@ -537,7 +574,7 @@ def registry_memory_cost_by_role(
         data = yaml.safe_load(registry_path.read_text()) or {}
     except Exception as exc:
         logger.warning("Using fallback q_scorer memory costs; registry load failed: %s", exc)
-        return costs
+        return _materialize_q_scorer_role_aliases(costs)
 
     roles = _registry_role_records(data)
     if roles is not None:
@@ -564,7 +601,7 @@ def registry_memory_cost_by_role(
             for role in target_roles:
                 costs[role] = cost
 
-    return costs
+    return _materialize_q_scorer_role_aliases(costs)
 
 
 @dataclass

@@ -44,6 +44,7 @@ from orchestration.repl_memory.q_scorer import (
     FALLBACK_MEMORY_COST_BY_ROLE,
     PRIOR_SOURCE_DEGRADED_FALLBACK,
     PRIOR_SOURCE_STACK_PRIORS,
+    STACK_PRIOR_SCORER_ROLE_ALIASES,
     ScoringConfig,
     QScorer,
     descriptor_q_scorer_priors_by_role,
@@ -83,6 +84,17 @@ def _scorer(config: ScoringConfig | None = None) -> QScorer:
         reader=MagicMock(),
         config=config or ScoringConfig(),
     )
+
+
+def _with_q_scorer_aliases(values: dict[str, Any]) -> dict[str, Any]:
+    expanded = dict(values)
+    for canonical_role, aliases in STACK_PRIOR_SCORER_ROLE_ALIASES.items():
+        if canonical_role not in expanded:
+            continue
+        canonical_value = expanded[canonical_role]
+        for alias in aliases:
+            expanded.setdefault(alias, canonical_value)
+    return expanded
 
 
 def _minimal_stack_prior_record(
@@ -285,8 +297,14 @@ class TestScoringConfigDefaults:
 
         priors = stack_prior_q_scorer_priors_by_role(missing)
 
-        assert priors.baseline_tps_by_role == FALLBACK_BASELINE_TPS_BY_ROLE
-        assert priors.memory_cost_by_role == FALLBACK_MEMORY_COST_BY_ROLE
+        assert "worker_explore" not in FALLBACK_BASELINE_TPS_BY_ROLE
+        assert "worker_explore" not in FALLBACK_MEMORY_COST_BY_ROLE
+        assert priors.baseline_tps_by_role == _with_q_scorer_aliases(
+            FALLBACK_BASELINE_TPS_BY_ROLE
+        )
+        assert priors.memory_cost_by_role == _with_q_scorer_aliases(
+            FALLBACK_MEMORY_COST_BY_ROLE
+        )
         assert priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_DEGRADED_FALLBACK
         assert priors.memory_cost_source_by_role["frontdoor"] == PRIOR_SOURCE_DEGRADED_FALLBACK
         assert priors.degraded_reason is not None
@@ -300,12 +318,16 @@ class TestScoringConfigDefaults:
     def test_baseline_tps_falls_back_when_registry_missing(self, tmp_path):
         missing = tmp_path / "missing.yaml"
 
-        assert registry_baseline_tps_by_role(missing) == FALLBACK_BASELINE_TPS_BY_ROLE
+        assert registry_baseline_tps_by_role(missing) == _with_q_scorer_aliases(
+            FALLBACK_BASELINE_TPS_BY_ROLE
+        )
 
     def test_memory_cost_falls_back_when_registry_missing(self, tmp_path):
         missing = tmp_path / "missing.yaml"
 
-        assert registry_memory_cost_by_role(missing) == FALLBACK_MEMORY_COST_BY_ROLE
+        assert registry_memory_cost_by_role(missing) == _with_q_scorer_aliases(
+            FALLBACK_MEMORY_COST_BY_ROLE
+        )
 
     def test_memory_cost_loads_current_hot_registry_roles(self, tmp_path):
         registry_path = tmp_path / "model_registry.yaml"
