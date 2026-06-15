@@ -18,6 +18,103 @@ def _forge_with_prompt(tmp_path: Path, content: str = "Base prompt\n") -> Prompt
     return PromptForge(prompts_dir=tmp_path, auto_commit=False)
 
 
+def test_resolve_prompt_exact_flat_file_wins_over_roles_copy(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    (tmp_path / "frontdoor.md").write_text("flat\n")
+    (roles_dir / "frontdoor.md").write_text("roles\n")
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+
+    assert forge.read_prompt("frontdoor.md") == "flat\n"
+    forge.write_prompt("frontdoor.md", "updated\n")
+    assert (tmp_path / "frontdoor.md").read_text() == "updated\n"
+    assert (roles_dir / "frontdoor.md").read_text() == "roles\n"
+
+
+def test_resolve_prompt_bare_filename_falls_back_to_roles_dir(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    (roles_dir / "worker_general.md").write_text("worker\n")
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+
+    assert forge.read_prompt("worker_general.md") == "worker\n"
+    forge.write_prompt("worker_general.md", "updated worker\n")
+    assert (roles_dir / "worker_general.md").read_text() == "updated worker\n"
+
+
+def test_resolve_prompt_exact_roles_path_stays_in_roles_dir(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    (tmp_path / "frontdoor.md").write_text("flat\n")
+    (roles_dir / "frontdoor.md").write_text("roles\n")
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+
+    assert forge.read_prompt("roles/frontdoor.md") == "roles\n"
+    forge.write_prompt("roles/frontdoor.md", "updated roles\n")
+    assert (roles_dir / "frontdoor.md").read_text() == "updated roles\n"
+    assert (tmp_path / "frontdoor.md").read_text() == "flat\n"
+
+
+def test_resolve_prompt_path_component_strips_to_flat_basename(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    (tmp_path / "frontdoor.md").write_text("flat\n")
+    (roles_dir / "frontdoor.md").write_text("roles\n")
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+
+    assert forge.read_prompt("missing/frontdoor.md") == "flat\n"
+
+
+def test_resolve_prompt_path_component_strips_to_roles_basename(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    (roles_dir / "frontdoor.md").write_text("roles\n")
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+
+    assert forge.read_prompt("missing/frontdoor.md") == "roles\n"
+
+
+def test_resolve_prompt_missing_file_reports_original_joined_path(tmp_path: Path) -> None:
+    forge = PromptForge(prompts_dir=tmp_path, auto_commit=False)
+
+    try:
+        forge.read_prompt("missing/frontdoor.md")
+    except FileNotFoundError as exc:
+        assert str(tmp_path / "missing/frontdoor.md") in str(exc)
+    else:
+        raise AssertionError("expected missing prompt to raise FileNotFoundError")
+
+
+def test_resolve_prompt_rejects_parent_directory_escape(tmp_path: Path) -> None:
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (tmp_path / "outside.md").write_text("outside\n")
+    forge = PromptForge(prompts_dir=prompts_dir, auto_commit=False)
+
+    try:
+        forge.read_prompt("../outside.md")
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("expected parent traversal to be rejected")
+
+
+def test_resolve_prompt_rejects_symlink_escape(tmp_path: Path) -> None:
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside\n")
+    (prompts_dir / "linked.md").symlink_to(outside)
+    forge = PromptForge(prompts_dir=prompts_dir, auto_commit=False)
+
+    try:
+        forge.read_prompt("linked.md")
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("expected symlink escape to be rejected")
+
+
 def test_mutation_prompt_includes_negative_transfer_safety_block(tmp_path: Path) -> None:
     forge = _forge_with_prompt(tmp_path)
 
