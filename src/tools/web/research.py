@@ -8,7 +8,7 @@ bare search snippets.
 Architecture:
     1. web_search() → top N URLs + snippets
     2. ThreadPoolExecutor → fetch full page content in parallel
-    3. Worker model (explore, port 8082) → synthesize each page in parallel
+    3. Live worker_general target from stack priors → synthesize each page in parallel
     4. Return combined dense summaries to the calling model
 """
 
@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 
+from src.config import get_config
+from src.registry.stack_priors import live_stack_role_records
 from src.tool_registry import Tool, ToolCategory, ToolRegistry
 from src.tools.base import safe_execute
 from src.tools.web.fetch import _extract_content, _fetch_cache, _CACHE_TTL_SECONDS
@@ -34,13 +36,6 @@ from src.tools.web.search import web_search
 
 logger = logging.getLogger(__name__)
 
-# Worker endpoint for synthesis. Port 8082 in the current stack is
-# worker_general (gemma-4-26B-A4B-it Q4_K_M MTP via ik_llama.cpp PR #1744),
-# swapped from Qwen2.5-7B on 2026-05-08. Keep this model hint in sync with
-# the active stack — the chat template depends on it. Without the gemma
-# template, every synthesis call here silently returned 0 tokens.
-_WORKER_URL = "http://localhost:8082/completion"
-_WORKER_MODEL_HINT = "gemma-4-26B-A4B-it-Q4_K_M"
 _WORKER_TIMEOUT = 45  # seconds per synthesis call
 _FETCH_TIMEOUT = 15  # seconds per URL fetch
 _CRAWL4AI_DEFAULT_URL = "http://localhost:11235"
@@ -122,6 +117,23 @@ def _format_source_quarantine(
         f'{{url: "{url}", retrieved: "{retrieved}", sha256: "{sha12}"}}\n\n'
         f"{fence}text\n{text}\n{fence}"
     )
+
+
+def _worker_synthesis_target() -> tuple[str, str]:
+    """Return the live worker synthesis endpoint and chat-template hint."""
+    worker_url = f"{get_config().server_urls.worker_general.rstrip('/')}/completion"
+
+    worker_hint = "gemma-4-26B-A4B-it-Q4_K_M"
+    try:
+        record = live_stack_role_records().get("worker_general", {})
+        if isinstance(record, dict):
+            display_name = record.get("display_name")
+            if isinstance(display_name, str) and display_name.strip():
+                worker_hint = display_name.strip()
+    except Exception:
+        pass
+
+    return worker_url, worker_hint
 
 
 def _is_irrelevant_synthesis(synthesis: str) -> bool:
@@ -737,10 +749,10 @@ def _synthesize_page(
     # Concatenate system + user content into a single user-side block,
     # then apply per-model turn markers via the helper. Previously this
     # was hardcoded to Qwen ChatML (<|im_start|>...<|im_end|>), which
-    # silently broke after port 8082 was swapped from Qwen2.5-7B to
-    # gemma-4-26B-A4B-it (gemma uses <start_of_turn>...<end_of_turn>) —
-    # every synthesis call returned 0 tokens because gemma didn't
-    # recognize the Qwen markers.
+    # silently broke when the live worker_general model swapped from
+    # Qwen2.5-7B to gemma-4-26B-A4B-it (gemma uses
+    # <start_of_turn>...<end_of_turn>) — every synthesis call returned
+    # 0 tokens because gemma didn't recognize the Qwen markers.
     from src.api.routes.chat_utils import apply_chat_template_for_model
 
     body = (
@@ -757,7 +769,8 @@ def _synthesize_page(
         f"Synthesize the relevant information from this page. "
         f"Cite the source URL when stating specific facts.\n"
     )
-    prompt = apply_chat_template_for_model(_WORKER_MODEL_HINT, body)
+    worker_url, worker_model_hint = _worker_synthesis_target()
+    prompt = apply_chat_template_for_model(worker_model_hint, body)
 
     headers = {
         "Content-Type": "application/json",
@@ -771,7 +784,7 @@ def _synthesize_page(
     total_start = time.perf_counter()
     for attempt_idx, (attempt_label, n_predict) in enumerate(attempts):
         payload = _worker_completion_payload(prompt, n_predict=n_predict)
-        req = urllib.request.Request(_WORKER_URL, data=payload, headers=headers)
+        req = urllib.request.Request(worker_url, data=payload, headers=headers)
         attempt_start = time.perf_counter()
         try:
             with urllib.request.urlopen(req, timeout=_WORKER_TIMEOUT) as response:
@@ -798,7 +811,7 @@ def _synthesize_page(
                 "content_chars=%d n_predict=%d elapsed_ms=%.1f error=%s",
                 attempt_label,
                 url,
-                _WORKER_MODEL_HINT,
+                    worker_model_hint,
                 len(prompt),
                 len(content),
                 n_predict,
@@ -815,7 +828,7 @@ def _synthesize_page(
                 "content_chars=%d n_predict=%d elapsed_ms=%.1f error=%s",
                 attempt_label,
                 url,
-                _WORKER_MODEL_HINT,
+                    worker_model_hint,
                 len(prompt),
                 len(content),
                 n_predict,

@@ -3,6 +3,7 @@
 
 import io
 import json
+from types import SimpleNamespace
 from urllib.error import HTTPError
 
 from src.tools.web.research import (
@@ -338,10 +339,42 @@ class TestSourceQuarantine:
 class TestWorkerSynthesis:
     """Worker synthesis request robustness."""
 
+    def test_worker_synthesis_target_uses_live_stack_priors(self, monkeypatch):
+        monkeypatch.setattr(
+            research_mod,
+            "get_config",
+            lambda: SimpleNamespace(
+                server_urls=SimpleNamespace(worker_general="http://localhost:9911/")
+            ),
+        )
+        monkeypatch.setattr(
+            research_mod,
+            "live_stack_role_records",
+            lambda: {
+                "worker_general": {
+                    "display_name": "Gemma-Live-Model",
+                }
+            },
+        )
+
+        assert research_mod._worker_synthesis_target() == (
+            "http://localhost:9911/completion",
+            "Gemma-Live-Model",
+        )
+
     def test_synthesize_page_retries_http_5xx_with_reduced_cap(self, monkeypatch):
         from src.api.routes import chat_utils
 
-        monkeypatch.setattr(chat_utils, "apply_chat_template_for_model", lambda _hint, body: body)
+        monkeypatch.setattr(
+            chat_utils,
+            "apply_chat_template_for_model",
+            lambda hint, body: f"{hint}::{body}",
+        )
+        monkeypatch.setattr(
+            research_mod,
+            "_worker_synthesis_target",
+            lambda: ("http://localhost:9911/completion", "Gemma-Live-Model"),
+        )
         monkeypatch.setattr(research_mod, "_SYNTH_MAX_TOKENS", 512)
         monkeypatch.setattr(research_mod, "_SYNTH_RETRY_MAX_TOKENS", 256)
 
@@ -358,8 +391,10 @@ class TestWorkerSynthesis:
                 return json.dumps({"content": "Recovered synthesis."}).encode("utf-8")
 
         def fake_urlopen(req, timeout):
+            assert req.full_url == "http://localhost:9911/completion"
             payload = json.loads(req.data.decode("utf-8"))
             requested_caps.append(payload["n_predict"])
+            assert payload["prompt"].startswith("Gemma-Live-Model::")
             if len(requested_caps) == 1:
                 raise HTTPError(
                     req.full_url,
