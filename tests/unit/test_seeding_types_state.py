@@ -194,6 +194,33 @@ def test_default_roles_and_architect_roles_exclude_retired_architect_role():
     assert _RETIRED_ARCHITECT_ROLE not in _MOD.ROLE_COST_TIER
 
 
+def test_discover_default_roles_fallback_prefers_active_discovery(monkeypatch):
+    monkeypatch.setattr(
+        _MOD,
+        "discover_active_roles",
+        lambda registry_path=None: [
+            {"name": "worker_general"},
+            {"name": "worker_math"},
+            {"name": "toolrunner"},
+        ],
+    )
+
+    assert _MOD._discover_default_roles_fallback() == ["worker_general"]
+
+
+def test_discover_default_roles_fallback_uses_legacy_tuple_when_empty(monkeypatch):
+    monkeypatch.setattr(_MOD, "discover_active_roles", lambda registry_path=None: [])
+
+    assert _MOD._discover_default_roles_fallback() == [
+        "frontdoor",
+        "coder_escalation",
+        "worker_general",
+        "architect_general",
+        "worker_vision",
+        "vision_escalation",
+    ]
+
+
 def test_discover_active_roles_includes_registry_role_timeouts(tmp_path: Path):
     registry_path = tmp_path / "model_registry.yaml"
     registry_path.write_text(

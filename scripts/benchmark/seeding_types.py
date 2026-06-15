@@ -242,7 +242,24 @@ _DEFAULT_ROLES_FALLBACK = [
     "frontdoor", "coder_escalation", "worker_general",
     "architect_general", "worker_vision", "vision_escalation",
 ]
-DEFAULT_ROLES = _read_stack_prior_default_roles() or list(_DEFAULT_ROLES_FALLBACK)
+
+
+def _discover_default_roles_fallback() -> list[str]:
+    """Return a non-blank default role order when stack priors are missing."""
+    discovered = discover_active_roles()
+    if discovered:
+        roles: list[str] = []
+        for role in discovered:
+            name = str(role.get("name") or "")
+            if not name or name in STACK_PRIOR_SEEDING_EXCLUDED_ROLES:
+                continue
+            roles.append(name)
+        if roles:
+            return roles
+    return list(_DEFAULT_ROLES_FALLBACK)
+
+
+DEFAULT_ROLES = _read_stack_prior_default_roles() or _discover_default_roles_fallback()
 # NOTE: React mode has been unified into REPL with structured_mode=True.
 # "react" is no longer a separate mode - REPL is the universal superset.
 DEFAULT_MODES = ["direct", "repl"]
