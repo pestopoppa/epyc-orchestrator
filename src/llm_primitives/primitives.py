@@ -20,6 +20,7 @@ from .persona import PersonaMixin
 from .stats import StatsMixin
 from .tokens import TokensMixin
 from .types import CallLogEntry, LLMResult
+from src.roles import Role
 
 
 class LLMPrimitives(
@@ -40,9 +41,9 @@ class LLMPrimitives(
 
     # Task type to worker role mapping (for pool routing)
     WORKER_TASK_ROUTING = {
-        "explore": "worker_explore",
-        "summarize": "worker_explore",
-        "understand": "worker_explore",
+        "explore": str(Role.WORKER_GENERAL),
+        "summarize": str(Role.WORKER_GENERAL),
+        "understand": str(Role.WORKER_GENERAL),
         # coding bursts map to worker_coder semantic role (fast worker backend)
         "code": "worker_coder",
         "coder": "worker_coder",
@@ -54,7 +55,7 @@ class LLMPrimitives(
         "transform": "worker_coder",
     }
 
-    _DEFAULT_DEPTH_ROLE_OVERRIDES = {1: "worker_general"}
+    _DEFAULT_DEPTH_ROLE_OVERRIDES = {1: str(Role.WORKER_GENERAL)}
     _DEFAULT_DEPTH_OVERRIDE_MAX_DEPTH = 3
 
     def __init__(

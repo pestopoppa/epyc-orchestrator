@@ -61,6 +61,16 @@ class TestMockMode:
         assert result2 == "Esta es una traduccion."
 
 
+class TestWorkerTaskRouting:
+    """Task-to-role routing uses canonical worker targets."""
+
+    def test_task_routing_prefers_canonical_worker_general(self):
+        assert LLMPrimitives.WORKER_TASK_ROUTING["explore"] == "worker_general"
+        assert LLMPrimitives.WORKER_TASK_ROUTING["summarize"] == "worker_general"
+        assert LLMPrimitives.WORKER_TASK_ROUTING["understand"] == "worker_general"
+        assert LLMPrimitives._DEFAULT_DEPTH_ROLE_OVERRIDES[1] == "worker_general"
+
+
 class TestCallLogging:
     """Test call logging functionality."""
 
