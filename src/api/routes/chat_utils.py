@@ -80,9 +80,7 @@ class RoutingResult:
 
     def timeout_for_role(self, role: str) -> int:
         """Get timeout for a specific role (used during escalation)."""
-        if role == "worker_explore":
-            normalized = "worker_general"
-        elif role == "worker_fast":
+        if role == "worker_fast":
             normalized = "worker_fast"
         else:
             normalized = str(Role.from_string(role) or role)
