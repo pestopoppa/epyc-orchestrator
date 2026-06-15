@@ -868,7 +868,7 @@ function renderTopologyStrip() {
             : escapeHTML((parent.label || '').length > 22 ? parent.label.slice(0, 21) + '…' : (parent.label || ''));
         // Alias chip — same llama-server process also serves traffic for these
         // role names (e.g. frontdoor also handles coder_escalation + worker_summarize,
-        // worker_general also handles worker_explore + worker_math + toolrunner).
+        // worker_general also handles worker_explore aliases + worker_math + toolrunner).
         // Without this hint the operator can't tell where to look for those roles.
         let aliasChip = '';
         if (g.aliases && g.aliases.length) {

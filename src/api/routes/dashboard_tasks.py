@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.roles import Role
 from src.api.routes.dashboard_tap import (
     _INFERENCE_TAP_EVENTS_PATH,
     _INFERENCE_TAP_PATH,
@@ -258,6 +259,7 @@ def _find_section_by_objective(
     needles = [n for n in needles if n and not (n in seen or seen.add(n))]
     if not needles:
         return None
+    canonical_expected_role = str(Role.from_string(expected_role) or expected_role) if expected_role else None
 
     def _match(sections_iter, needle: str) -> dict | None:
         for s in sections_iter:
@@ -271,11 +273,12 @@ def _find_section_by_objective(
     # syntactically-valid section from a different role can still contain the
     # objective substring while pairing it with the wrong response (observed
     # 2026-05-30: chat-83123001 routed to frontdoor but the global pass matched
-    # a worker_explore record with an unrelated response). For chat-* tasks the
+    # a worker_explore-alias section with an unrelated response). For chat-*
+    # tasks the
     # structured-event lookup is the deterministic path; this fallback is for
     # legacy callers that lack producer-role telemetry.
-    if expected_role:
-        role_sections = [s for s in sections if (s.get("role") or "") == expected_role]
+    if canonical_expected_role:
+        role_sections = [s for s in sections if (s.get("role") or "") == canonical_expected_role]
         for n in needles:
             hit = _match(role_sections, n)
             if hit is not None:

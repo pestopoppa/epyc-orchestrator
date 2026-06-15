@@ -525,6 +525,19 @@ def test_find_section_by_objective_role_filtered_no_global_fallback(monkeypatch)
     assert out is None
 
 
+def test_find_section_by_objective_role_alias_canonicalizes_worker_explore(monkeypatch) -> None:
+    fake_sections = [
+        {"role": "worker_general", "prompt": "solve fizzbuzz now", "response": "ok"},
+    ]
+    monkeypatch.setattr(dashboard_tasks, "_read_tail", lambda *a, **kw: "irrelevant")
+    monkeypatch.setattr(dashboard_tasks, "_parse_inference_sections", lambda *a, **kw: fake_sections)
+    out = dashboard_tasks._find_section_by_objective(
+        "solve fizzbuzz", expected_role="worker_explore"
+    )
+    assert out is not None
+    assert out["role"] == "worker_general"
+
+
 def test_find_structured_request_by_task_id_matches_chat_id(monkeypatch) -> None:
     # Each chat task has its own derived request_id; resolving by task_id
     # gives a deterministic mapping for chat-* dashboard task ids.
