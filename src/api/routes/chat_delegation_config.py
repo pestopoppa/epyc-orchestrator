@@ -13,9 +13,10 @@ from dataclasses import dataclass
 
 from src.env_parsing import env_int as _env_int
 from src.roles import Role, chain_name_to_role
+from src.registry.stack_priors import live_stack_role_records
 
 
-_VALID_DELEGATE_ROLES = frozenset(
+_VALID_DELEGATE_ROLE_FALLBACKS = frozenset(
     {
         "coder_escalation",
         "worker_summarize",
@@ -48,6 +49,16 @@ def _normalize_delegate_role(role: object) -> str:
     if role in {"worker_explore", "worker_fast", "researcher_agent", "researcher"}:
         return chain_name_to_role("worker").value
     return _DELEGATE_ROLE_ALIASES.get(role, role)
+
+
+def _valid_delegate_roles() -> frozenset[str]:
+    """Return the live delegate-role allowlist from stack priors."""
+    live_roles = live_stack_role_records()
+    allowed = {role for role in _VALID_DELEGATE_ROLE_FALLBACKS if role in live_roles}
+    return frozenset(allowed or _VALID_DELEGATE_ROLE_FALLBACKS)
+
+
+_VALID_DELEGATE_ROLES = _valid_delegate_roles()
 
 
 # Thread-local delegation depth counter to detect re-entrance

@@ -17,9 +17,9 @@ if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
 
 from .chat_delegation_config import (
-    _VALID_DELEGATE_ROLES,
     _delegation_config,
     _normalize_delegate_role,
+    _valid_delegate_roles,
 )
 
 log = logging.getLogger(__name__)
@@ -200,7 +200,7 @@ def _parse_architect_decision(response: str) -> dict:
         delegate_mode = fields.get("mode", "react")
 
         # Clamp to valid role
-        if delegate_to not in _VALID_DELEGATE_ROLES:
+        if delegate_to not in _valid_delegate_roles():
             delegate_to = "coder_escalation"
         # Clamp to valid mode
         if delegate_mode not in ("react", "repl"):
@@ -229,7 +229,7 @@ def _parse_architect_decision(response: str) -> dict:
                 delegate_to = _normalize_delegate_role(
                     obj.get("delegate_to", obj.get("to", "coder_escalation"))
                 )
-                if delegate_to not in _VALID_DELEGATE_ROLES:
+                if delegate_to not in _valid_delegate_roles():
                     delegate_to = "coder_escalation"
                 delegate_mode = obj.get("delegate_mode", obj.get("mode_detail", "react"))
                 if delegate_mode not in ("react", "repl"):
