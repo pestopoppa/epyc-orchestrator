@@ -185,10 +185,11 @@ class TestTryCheapFirstEdgeCases:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_for_worker_explore_role(
-        self, base_request, base_routing, mock_primitives, mock_state
+    @pytest.mark.parametrize("initial_role", ["worker_general", "worker_explore"])
+    async def test_returns_none_for_live_worker_role(
+        self, base_request, base_routing, mock_primitives, mock_state, initial_role
     ):
-        """When initial_role is worker_explore, returns None (already cheap)."""
+        """When initial_role is a cheap worker role, returns None."""
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             result = await _try_cheap_first(
@@ -197,7 +198,7 @@ class TestTryCheapFirstEdgeCases:
                 mock_primitives,
                 mock_state,
                 time.perf_counter(),
-                "worker_explore",
+                initial_role,
                 "direct",
             )
             assert result is None

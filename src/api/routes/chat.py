@@ -266,7 +266,8 @@ async def _try_cheap_first(
             phase=cfg.try_cheap_first_phase,
         )
         return None
-    if str(initial_role) in {"worker_explore", "worker_math", "worker_vision"}:
+    normalized_initial_role = Role.from_string(str(initial_role)) if initial_role is not None else None
+    if normalized_initial_role in {Role.WORKER_GENERAL, Role.WORKER_MATH, Role.WORKER_VISION}:
         _log_cheap_first_counter(
             state,
             routing.task_id,
@@ -275,7 +276,7 @@ async def _try_cheap_first(
             reason="already_cheap_or_vision",
             cheap_role=cheap_role,
             phase=cfg.try_cheap_first_phase,
-            initial_role=str(initial_role),
+            initial_role=str(normalized_initial_role or initial_role),
         )
         return None  # Already cheap
     if execution_mode == "delegated":
@@ -315,7 +316,7 @@ async def _try_cheap_first(
                 }
                 task_ir = canonicalize_task_ir(task_ir)
                 results = state.hybrid_router.retriever.retrieve_for_routing(task_ir)
-                # Check if worker_explore Q-value is above threshold
+                # Check if the cheap role Q-value is above threshold
                 worker_q = 0.0
                 for r in results:
                     if r.memory.metadata.get("role") == cheap_role:
