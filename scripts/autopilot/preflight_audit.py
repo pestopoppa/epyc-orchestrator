@@ -29,7 +29,7 @@ from src.autopilot_core.journal_reconstruction import (
 )
 from src.autopilot_core.journal_snapshot_replay import build_snapshot_replay_diagnostic
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
-from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP, ROLE_LAUNCH_META
+from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
 
 log = logging.getLogger("autopilot.preflight")
 
@@ -75,23 +75,27 @@ def _health_url(endpoint: str) -> str | None:
 
 def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str]]:
     api_health = _health_url(orchestrator_url) or "http://localhost:8000/health"
-    hot_ports = {
-        PORT_MAP[role]
-        for role in HOT_ROLES
-        if _fallback_model_server_includes_role(role)
-        and isinstance(PORT_MAP.get(role), int)
-    }
     names_by_port: dict[int, list[str]] = {}
-    for role, port in sorted(PORT_MAP.items()):
-        if not _fallback_model_server_includes_role(role):
+    for server in HOT_SERVERS + WARM_SERVERS:
+        if not isinstance(server, dict):
             continue
-        if isinstance(port, int) and port in hot_ports:
-            names_by_port.setdefault(port, []).append(role)
+        port = server.get("port")
+        roles = server.get("roles")
+        if not isinstance(port, int) or not isinstance(roles, list):
+            continue
+        visible_roles = [
+            role
+            for role in roles
+            if isinstance(role, str) and _fallback_model_server_includes_role(role)
+        ]
+        if not visible_roles:
+            continue
+        names_by_port.setdefault(port, []).extend(visible_roles)
 
     return [
         ("API", api_health),
         *[
-            ("/".join(sorted(names)), f"http://localhost:{port}/health")
+            ("/".join(sorted(set(names))), f"http://localhost:{port}/health")
             for port, names in sorted(names_by_port.items())
         ],
     ]

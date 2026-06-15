@@ -87,18 +87,13 @@ def test_model_server_targets_fallback_follows_manifest_without_literal_port_lis
 ) -> None:
     monkeypatch.setattr(
         _MOD,
-        "PORT_MAP",
-        {
-            "frontdoor": 9001,
-            "coder_escalation": 9001,
-            "worker_general": 9002,
-            "embedder": 9090,
-        },
+        "HOT_SERVERS",
+        [{"port": 9001, "roles": ["frontdoor", "coder_escalation"]}],
     )
     monkeypatch.setattr(
         _MOD,
-        "HOT_ROLES",
-        {"frontdoor", "coder_escalation", "worker_general", "embedder"},
+        "WARM_SERVERS",
+        [{"port": 9002, "roles": ["worker_general", "embedder"]}],
     )
     monkeypatch.setattr(
         _MOD,
@@ -125,18 +120,13 @@ def test_model_server_targets_fallback_excludes_embedding_mode_roles_from_manife
 ) -> None:
     monkeypatch.setattr(
         _MOD,
-        "PORT_MAP",
-        {
-            "frontdoor": 9001,
-            "worker_general": 9002,
-            "embedder": 9090,
-            "embedder_1": 9091,
-        },
+        "HOT_SERVERS",
+        [{"port": 9001, "roles": ["frontdoor"]}],
     )
     monkeypatch.setattr(
         _MOD,
-        "HOT_ROLES",
-        {"frontdoor", "worker_general", "embedder", "embedder_1"},
+        "WARM_SERVERS",
+        [{"port": 9002, "roles": ["worker_general", "embedder", "embedder_1"]}],
     )
     monkeypatch.setattr(
         _MOD,

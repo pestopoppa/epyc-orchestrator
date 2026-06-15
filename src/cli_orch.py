@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP, ROLE_LAUNCH_META
+from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
 from src.registry.stack_priors import (
     live_stack_role_records,
     stack_prior_endpoint_port,
@@ -48,20 +48,24 @@ def _fallback_status_includes_role(role: str) -> bool:
 
 
 def _fallback_status_targets() -> list[tuple[str, int]]:
-    hot_ports = {
-        PORT_MAP[role]
-        for role in HOT_ROLES
-        if _fallback_status_includes_role(role)
-        and isinstance(PORT_MAP.get(role), int)
-    }
     names_by_port: dict[int, list[str]] = {}
-    for role, port in sorted(PORT_MAP.items()):
-        if not _fallback_status_includes_role(role):
+    for server in HOT_SERVERS + WARM_SERVERS:
+        if not isinstance(server, dict):
             continue
-        if isinstance(port, int) and port in hot_ports:
-            names_by_port.setdefault(port, []).append(role)
+        port = server.get("port")
+        roles = server.get("roles")
+        if not isinstance(port, int) or not isinstance(roles, list):
+            continue
+        visible_roles = [
+            role
+            for role in roles
+            if isinstance(role, str) and _fallback_status_includes_role(role)
+        ]
+        if not visible_roles:
+            continue
+        names_by_port.setdefault(port, []).extend(visible_roles)
     return [
-        ("/".join(sorted(names)), port)
+        ("/".join(sorted(set(names))), port)
         for port, names in sorted(names_by_port.items())
     ]
 

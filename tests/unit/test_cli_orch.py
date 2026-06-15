@@ -64,18 +64,13 @@ def test_fallback_status_targets_follow_manifest_without_literal_port_list(
 ) -> None:
     monkeypatch.setattr(
         cli_orch,
-        "PORT_MAP",
-        {
-            "frontdoor": 9001,
-            "coder_escalation": 9001,
-            "worker_general": 9002,
-            "embedder": 9090,
-        },
+        "HOT_SERVERS",
+        [{"port": 9001, "roles": ["frontdoor", "coder_escalation"]}],
     )
     monkeypatch.setattr(
         cli_orch,
-        "HOT_ROLES",
-        {"frontdoor", "coder_escalation", "worker_general", "embedder"},
+        "WARM_SERVERS",
+        [{"port": 9002, "roles": ["worker_general", "embedder"]}],
     )
     monkeypatch.setattr(
         cli_orch,
@@ -100,18 +95,13 @@ def test_fallback_status_targets_exclude_embedding_mode_roles_from_manifest(
 ) -> None:
     monkeypatch.setattr(
         cli_orch,
-        "PORT_MAP",
-        {
-            "frontdoor": 9001,
-            "worker_general": 9002,
-            "embedder": 9090,
-            "embedder_1": 9091,
-        },
+        "HOT_SERVERS",
+        [{"port": 9001, "roles": ["frontdoor"]}],
     )
     monkeypatch.setattr(
         cli_orch,
-        "HOT_ROLES",
-        {"frontdoor", "worker_general", "embedder", "embedder_1"},
+        "WARM_SERVERS",
+        [{"port": 9002, "roles": ["worker_general", "embedder", "embedder_1"]}],
     )
     monkeypatch.setattr(
         cli_orch,
