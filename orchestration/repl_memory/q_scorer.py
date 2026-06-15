@@ -465,6 +465,17 @@ def _performance_tps(role_record: dict[str, Any]) -> float | None:
     return _coerce_tps(perf.get("optimized_tps")) or _coerce_tps(perf.get("baseline_tps"))
 
 
+def _registry_role_records(registry: dict[str, Any]) -> dict[str, dict[str, Any]] | None:
+    roles = registry.get("roles", {})
+    if not isinstance(roles, dict):
+        return None
+    return {
+        role: record
+        for role, record in roles.items()
+        if isinstance(role, str) and isinstance(record, dict)
+    }
+
+
 def registry_baseline_tps_by_role(
     registry_path: Path = DEFAULT_MODEL_REGISTRY_PATH,
 ) -> Dict[str, float]:
@@ -497,11 +508,11 @@ def registry_baseline_tps_by_role(
             for role in target_roles:
                 baselines[role] = tps
 
-    roles = data.get("roles", {})
-    if isinstance(roles, dict):
+    roles = _registry_role_records(data)
+    if roles is not None:
         for target_role, registry_role in ROLE_PERFORMANCE_TPS_FALLBACKS.items():
-            record = roles.get(registry_role, {})
-            if not isinstance(record, dict):
+            record = roles.get(registry_role)
+            if record is None:
                 continue
             tps = _performance_tps(record)
             if tps is not None:
@@ -528,11 +539,11 @@ def registry_memory_cost_by_role(
         logger.warning("Using fallback q_scorer memory costs; registry load failed: %s", exc)
         return costs
 
-    roles = data.get("roles", {})
-    if isinstance(roles, dict):
+    roles = _registry_role_records(data)
+    if roles is not None:
         known_roles = set(costs)
         for role, record in roles.items():
-            if role not in known_roles or not isinstance(record, dict):
+            if role not in known_roles:
                 continue
             memory = record.get("memory", {})
             if not isinstance(memory, dict):
