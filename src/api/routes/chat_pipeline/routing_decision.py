@@ -21,8 +21,8 @@ _TIER_COST_WEIGHTS: dict[str, float] = {
 }
 
 _INGRESS_ROLE_ALIASES = {
-    "worker_coder": "worker_general",
-    "worker_code": "worker_general",
+    "worker_coder": str(Role.WORKER_GENERAL),
+    "worker_code": str(Role.WORKER_GENERAL),
 }
 
 
