@@ -9,6 +9,11 @@ Consumers must not infer live model, memory, speed, or serving facts from prose,
 comments, or role names. They must consume generated artifacts or structured
 APIs that record source evidence and precedence.
 
+Validation tools such as `scripts/validate/stack_change_guard.py` and
+`scripts/registry/stack_change_pipeline.py` are consumers of this topology
+evidence. They enforce drift checks against the sources below; they are not
+alternate sources of truth for ports, roles, model identity, or runtime flags.
+
 ## Precedence Order
 
 1. **Live serving topology**

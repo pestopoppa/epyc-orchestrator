@@ -649,6 +649,12 @@ def _runtime_attestation_warnings() -> list[str]:
     return runtime_attestation_warnings()
 
 
+def _stack_manifest_registry_warnings(config: StackChangePipelineConfig) -> list[str]:
+    from scripts.server.stack_manifest import validate_against_registry
+
+    return validate_against_registry(str(config.lean_registry), roles=config.roles)
+
+
 def _q_scorer_prior_sources_step(
     config: StackChangePipelineConfig,
     *,
@@ -695,6 +701,38 @@ def _runtime_attestation_step(*, prior_ok: bool) -> PipelineStep:
         name="runtime_attestation",
         status="ok",
         details=["no concrete live process drift detected"],
+    )
+
+
+def _stack_manifest_registry_step(
+    config: StackChangePipelineConfig,
+    *,
+    prior_ok: bool,
+) -> PipelineStep:
+    if not prior_ok:
+        return PipelineStep(
+            name="stack_manifest_registry",
+            status="skipped",
+            warnings=["skipped because earlier stack-change checks failed"],
+        )
+    try:
+        warnings = _stack_manifest_registry_warnings(config)
+    except Exception as exc:  # noqa: BLE001
+        return PipelineStep(
+            name="stack_manifest_registry",
+            status="failed",
+            errors=[f"stack manifest registry check failed to run: {exc}"],
+        )
+    if warnings:
+        return PipelineStep(
+            name="stack_manifest_registry",
+            status="failed",
+            errors=[f"stack manifest registry drift: {warning}" for warning in warnings],
+        )
+    return PipelineStep(
+        name="stack_manifest_registry",
+        status="ok",
+        details=["stack manifest launch roles match registry process_layout/server_mode"],
     )
 
 
@@ -801,6 +839,7 @@ def run_stack_change_pipeline(config: StackChangePipelineConfig) -> PipelineRepo
             allow_known_gaps=config.allow_known_gaps,
         )
     )
+    report.steps.append(_stack_manifest_registry_step(config, prior_ok=report.ok))
     report.steps.append(_q_scorer_prior_sources_step(config, prior_ok=report.ok))
     report.steps.append(_runtime_attestation_step(prior_ok=report.ok))
     report.steps.append(

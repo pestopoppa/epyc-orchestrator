@@ -522,7 +522,11 @@ _validate_role_classification()
 HOT_SERVERS, WARM_SERVERS = _build_servers_from_classification()
 
 
-def validate_against_registry(registry_yaml_path: str | None = None) -> list[str]:
+def validate_against_registry(
+    registry_yaml_path: str | None = None,
+    *,
+    roles: set[str] | None = None,
+) -> list[str]:
     """Cross-check ROLE_LAUNCH_META against orchestration/model_registry.yaml.
 
     Returns list of warning strings (empty if everything is consistent).
@@ -536,6 +540,11 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
             Path(__file__).parent.parent.parent / "orchestration" / "model_registry.yaml"
         )
     warnings: list[str] = []
+    role_scope = set(roles) if roles is not None else None
+
+    def in_scope(role: str) -> bool:
+        return role_scope is None or role in role_scope
+
     try:
         import yaml
 
@@ -545,8 +554,11 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
         return [f"could not load registry from {registry_yaml_path}: {e}"]
 
     pl = registry.get("process_layout", {})
-    reg_hot = set(pl.get("hot_resident", []))
-    reg_warm = set(pl.get("warm_mmap", []))
+    has_process_layout = isinstance(pl, dict) and any(
+        key in pl for key in ("hot_resident", "warm_mmap")
+    )
+    reg_hot = set(pl.get("hot_resident", [])) if isinstance(pl, dict) else set()
+    reg_warm = set(pl.get("warm_mmap", [])) if isinstance(pl, dict) else set()
 
     # Compute launcher's HOT tier including aliases (shared_with_first_n).
     # Aliases share the same process as their primary, so for tier comparison
@@ -564,16 +576,23 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
     # aren't in the registry's process_layout (they're infrastructure roles);
     # worker_fast is the deprecated worker_pool warm tier.
     skip = {"worker_explore"} | {f"embedder_{i}" for i in range(6)} | {"embedder", "worker_fast"}
-    launcher_hot_filtered = launcher_hot - skip
+    launcher_hot_filtered = {role for role in launcher_hot - skip if in_scope(role)}
+    reg_hot_filtered = {role for role in reg_hot if in_scope(role)}
+    reg_warm_filtered = {role for role in reg_warm if in_scope(role)}
 
-    only_in_launcher = launcher_hot_filtered - reg_hot - reg_warm
-    only_in_registry_hot = reg_hot - launcher_hot - launcher_warm
+    if has_process_layout:
+        only_in_launcher = launcher_hot_filtered - reg_hot_filtered - reg_warm_filtered
+        only_in_registry_hot = reg_hot_filtered - launcher_hot - launcher_warm
 
-    for r in sorted(only_in_launcher):
-        warnings.append(f"role '{r}' is HOT in launcher but absent from registry process_layout")
-    for r in sorted(only_in_registry_hot):
-        # Roles that the registry says should be hot but launcher doesn't classify hot
-        warnings.append(f"role '{r}' is hot_resident in registry but not in launcher's HOT tier")
+        for r in sorted(only_in_launcher):
+            warnings.append(
+                f"role '{r}' is HOT in launcher but absent from registry process_layout"
+            )
+        for r in sorted(only_in_registry_hot):
+            # Roles that the registry says should be hot but launcher doesn't classify hot
+            warnings.append(
+                f"role '{r}' is hot_resident in registry but not in launcher's HOT tier"
+            )
 
     # Cross-check legacy/direct role port hints against computed launch roles.
     # PORT_MAP is still used by targeted reload/status compatibility paths; it
@@ -586,6 +605,8 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
         for role in server.get("roles", []):
             computed_role_ports.setdefault(str(role), port)
     for role, port in PORT_MAP.items():
+        if not in_scope(role):
+            continue
         computed_port = computed_role_ports.get(role)
         if computed_port is not None and port != computed_port:
             warnings.append(
@@ -597,6 +618,15 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
     sm = registry.get("server_mode", {})
     for role, srv in sm.items():
         if not isinstance(srv, dict):
+            continue
+        covered_roles = {str(role)}
+        model_role = srv.get("model_role")
+        if isinstance(model_role, str):
+            covered_roles.add(model_role)
+        shared_with = srv.get("shared_with")
+        if isinstance(shared_with, list):
+            covered_roles.update(str(item) for item in shared_with if isinstance(item, str))
+        if role_scope is not None and not covered_roles & role_scope:
             continue
         reg_port = srv.get("port")
         if reg_port is None:
@@ -617,14 +647,9 @@ def validate_against_registry(registry_yaml_path: str | None = None) -> list[str
                     f"but launcher ROLE_LAUNCH_META says port {meta.get('port')}"
                 )
             if not meta:
-                covered_roles = {str(role)}
-                model_role = srv.get("model_role")
-                if isinstance(model_role, str):
-                    covered_roles.add(model_role)
-                shared_with = srv.get("shared_with")
-                if isinstance(shared_with, list):
-                    covered_roles.update(str(item) for item in shared_with if isinstance(item, str))
                 for covered_role in sorted(covered_roles):
+                    if not in_scope(covered_role):
+                        continue
                     computed_port = computed_role_ports.get(covered_role)
                     if computed_port is not None and reg_port != computed_port:
                         warnings.append(

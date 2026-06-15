@@ -54,6 +54,10 @@ def _registry(path: Path, *, throughput: float = 24.3) -> Path:
     return _write_yaml(
         path,
         {
+            "process_layout": {
+                "hot_resident": ["frontdoor"],
+                "warm_mmap": [],
+            },
             "server_mode": {
                 "frontdoor": {
                     "url": "http://localhost:8070",
@@ -159,6 +163,10 @@ def test_update_merges_shared_alias_mismatch_into_runtime_descriptor(tmp_path: P
     _write_yaml(
         config.lean_registry,
         {
+            "process_layout": {
+                "hot_resident": ["worker_general", "worker_math"],
+                "warm_mmap": [],
+            },
             "server_mode": {
                 "worker": {
                     "url": "http://localhost:8072",
@@ -358,11 +366,16 @@ def test_update_then_check_succeeds_with_known_gaps_allowed(tmp_path: Path) -> N
         "guard",
         "guard_all_surfaces",
         "guard_strict",
+        "stack_manifest_registry",
         "q_scorer_priors",
         "runtime_attestation",
         "simulated_fixtures",
         "promotion_gate",
     }
+    manifest_step = next(
+        step for step in check_report.steps if step.name == "stack_manifest_registry"
+    )
+    assert manifest_step.status == "ok"
     q_scorer_step = next(step for step in check_report.steps if step.name == "q_scorer_priors")
     assert q_scorer_step.status == "ok"
     runtime_step = next(step for step in check_report.steps if step.name == "runtime_attestation")
@@ -563,6 +576,47 @@ def test_runtime_attestation_warnings_block_promotion_gate(
     assert runtime_step.errors == [
         "live process drift: frontdoor pid 123 expected current.gguf; live cmdline has stale.gguf"
     ]
+    assert promotion_step.status == "skipped"
+
+
+def test_stack_manifest_registry_warnings_block_promotion_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    update_config = _config(tmp_path, mode="update")
+    assert run_stack_change_pipeline(update_config).ok
+    monkeypatch.setattr(
+        pipeline,
+        "_stack_manifest_registry_warnings",
+        lambda _config: ["role 'frontdoor': PORT_MAP says port 8071"],
+    )
+
+    def fake_run(cmd, **_kwargs):
+        if cmd[:4] == ["uv", "run", "pytest", "-q"]:
+            raise AssertionError("promotion gate should be skipped on manifest drift")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    config = StackChangePipelineConfig(
+        **{
+            **update_config.__dict__,
+            "run_promotion_gate": True,
+            "mode": "check",
+        }
+    )
+    report = run_stack_change_pipeline(config)
+
+    manifest_step = next(
+        step for step in report.steps if step.name == "stack_manifest_registry"
+    )
+    q_scorer_step = next(step for step in report.steps if step.name == "q_scorer_priors")
+    promotion_step = next(step for step in report.steps if step.name == "promotion_gate")
+    assert not report.ok
+    assert manifest_step.status == "failed"
+    assert manifest_step.errors == [
+        "stack manifest registry drift: role 'frontdoor': PORT_MAP says port 8071"
+    ]
+    assert q_scorer_step.status == "skipped"
     assert promotion_step.status == "skipped"
 
 
