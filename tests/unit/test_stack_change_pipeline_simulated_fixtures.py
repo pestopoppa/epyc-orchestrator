@@ -498,6 +498,13 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
         assert priors["roles"][role]["display_name"] in operator_summary
     assert "Qwen_Qwen3.6-35B-A3B-Q8_0" not in operator_summary
 
+    system_card = gen_system_card.generate_system_card(config.repo_root, state_override={})
+    assert "Source: orchestration/derived/stack_priors.yaml" in system_card
+    for role in roles:
+        assert f"| {role} |" in system_card
+        assert priors["roles"][role]["display_name"] in system_card
+    assert "Qwen_Qwen3.6-35B-A3B-Q8_0" not in system_card
+
     q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
     assert q_priors.baseline_tps_by_role["frontdoor"] == 18.5
     assert q_priors.baseline_tps_by_role["coder_escalation"] == 18.5
