@@ -63,6 +63,30 @@ def _read_registry_timeout(category: str, key: str, fallback: int) -> int:
         return fallback
 
 
+def _load_live_stack_prior_roles(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> dict[str, dict[str, Any]]:
+    """Return live stack-prior role records keyed by role name."""
+    try:
+        with stack_priors_path.open() as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+    roles = data.get("roles", {})
+    if not isinstance(roles, dict):
+        return {}
+
+    live: dict[str, dict[str, Any]] = {}
+    for role_name, record in sorted(roles.items()):
+        if not isinstance(role_name, str) or not isinstance(record, dict):
+            continue
+        if record.get("deployment_status") != "live_stack":
+            continue
+        live[role_name] = record
+    return live
+
+
 def _read_stack_prior_default_roles(
     stack_priors_path: Path = STACK_PRIORS_PATH,
 ) -> list[str]:
@@ -72,20 +96,9 @@ def _read_stack_prior_default_roles(
     the lightest safe interface for keeping CLI defaults aligned with stack
     changes.
     """
-    try:
-        with stack_priors_path.open() as f:
-            data = yaml.safe_load(f) or {}
-    except (OSError, yaml.YAMLError):
-        return []
-    roles = data.get("roles", {})
-    if not isinstance(roles, dict):
-        return []
-
     active: list[str] = []
-    for role_name, record in sorted(roles.items()):
-        if role_name in STACK_PRIOR_SEEDING_EXCLUDED_ROLES or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
+    for role_name, record in _load_live_stack_prior_roles(stack_priors_path).items():
+        if role_name in STACK_PRIOR_SEEDING_EXCLUDED_ROLES:
             continue
         serving = record.get("serving")
         if not isinstance(serving, dict) or not serving.get("endpoint"):
@@ -112,25 +125,12 @@ def _read_stack_prior_active_roles(
     stack_priors_path: Path = STACK_PRIORS_PATH,
 ) -> list[dict[str, Any]]:
     """Read active seeding role metadata from generated stack priors."""
-    try:
-        with stack_priors_path.open() as f:
-            data = yaml.safe_load(f) or {}
-    except (OSError, yaml.YAMLError):
-        return []
-
-    roles = data.get("roles", {})
-    if not isinstance(roles, dict):
-        return []
-
     active: list[dict[str, Any]] = []
-    for role_name, record in sorted(roles.items()):
+    for role_name, record in _load_live_stack_prior_roles(stack_priors_path).items():
         if (
             role_name in STACK_PRIOR_SEEDING_EXCLUDED_ROLES
             or role_name in SEEDING_EXCLUDED_ROLES
-            or not isinstance(record, dict)
         ):
-            continue
-        if record.get("deployment_status") != "live_stack":
             continue
         serving = record.get("serving")
         if not isinstance(serving, dict) or not serving.get("endpoint"):
@@ -192,24 +192,10 @@ def _read_stack_prior_topology(
     stack_priors_path: Path = STACK_PRIORS_PATH,
 ) -> dict[str, Any]:
     """Read benchmark topology constants from generated stack priors."""
-    try:
-        with stack_priors_path.open() as f:
-            data = yaml.safe_load(f) or {}
-    except (OSError, yaml.YAMLError):
-        return {}
-
-    roles = data.get("roles", {})
-    if not isinstance(roles, dict):
-        return {}
-
     role_port: dict[str, int] = {}
     model_ports: set[int] = set()
     heavy_ports: set[int] = set()
-    for role_name, record in sorted(roles.items()):
-        if not isinstance(role_name, str) or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
+    for role_name, record in _load_live_stack_prior_roles(stack_priors_path).items():
         serving = record.get("serving")
         if not isinstance(serving, dict):
             continue
