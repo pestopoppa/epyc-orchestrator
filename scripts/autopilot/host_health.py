@@ -33,6 +33,12 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.registry.stack_priors import (
+    DEFAULT_OUTPUT as STACK_PRIORS_PATH,
+    live_stack_role_records,
+    stack_prior_serving,
+)
+
 log = logging.getLogger("autopilot.host_health")
 
 # Canonical drop_caches path — root-owned wrapper installed via the sudoers
@@ -328,24 +334,34 @@ def is_throttled() -> tuple[bool, list[str]]:
 # Any trial that DID complete during the window gets tagged with
 # DeficiencyCategory.EXOGENOUS_CACHE_FLUSH by the safety_gate wire-in.
 
-# Active role GGUFs to rewarm post-flush. The live target list is resolved from
-# the same launcher collector used by stack startup; this tuple is only the
-# degraded fallback for standalone/partial environments where those modules
-# cannot be imported.
-# Models too small to need NUMA-interleave rewarm (embedders, drafters) are
-# omitted — bare `cat` on a 4 GB file is fine.
-_FALLBACK_REWARM_GGUFS = (
-    "/mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf",                              # frontdoor / coder_escalation / worker_summarize
-    "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",                              # worker_general
-    "/mnt/raid0/llm/lmstudio/models/unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf",  # architect_general (multipart; cat pulls all 3 via mmap follow)
-    "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf",  # ingest_long_context
-    "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/Qwen3-VL-30B-A3B-Instruct-Q4_K_M.gguf",      # vision_escalation
-    "/mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf",            # worker_vision
-)
+def _fallback_rewarm_ggufs_from_stack_priors(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> tuple[str, ...]:
+    """Derive degraded rewarm GGUF paths from the generated stack priors."""
+    try:
+        roles = live_stack_role_records(stack_priors_path)
+    except Exception as exc:
+        log.warning("using fallback rewarm GGUF list; stack priors unavailable: %s", exc)
+        return ()
 
-# Backward-compatible degraded fallback for older wrappers/tests that import
-# this private constant. Runtime defaults use _default_rewarm_ggufs().
-_DEFAULT_REWARM_GGUFS = _FALLBACK_REWARM_GGUFS
+    paths: list[str] = []
+    seen: set[str] = set()
+    for role_name, record in sorted(roles.items()):
+        serving = stack_prior_serving(record)
+        launch = serving.get("launch")
+        if not isinstance(launch, dict):
+            continue
+        requirements = launch.get("requirements")
+        if not isinstance(requirements, dict):
+            continue
+        model_path = requirements.get("model_path")
+        if not isinstance(model_path, str) or not model_path:
+            continue
+        if model_path in seen:
+            continue
+        seen.add(model_path)
+        paths.append(model_path)
+    return tuple(paths)
 
 
 def _stack_rewarm_ggufs() -> tuple[str, ...]:
@@ -365,17 +381,25 @@ def _stack_rewarm_ggufs() -> tuple[str, ...]:
     )
 
 
-def _default_rewarm_ggufs() -> tuple[str, ...]:
+def _default_rewarm_ggufs(
+    stack_priors_path: Path = STACK_PRIORS_PATH,
+) -> tuple[str, ...]:
     """Resolve live rewarm targets, falling back only in degraded standalone mode."""
     try:
         ggufs = _stack_rewarm_ggufs()
     except Exception as exc:
         log.warning("using fallback rewarm GGUF list; launcher target resolution failed: %s", exc)
-        return _FALLBACK_REWARM_GGUFS
-    if not ggufs:
+    else:
+        if ggufs:
+            return ggufs
         log.warning("using fallback rewarm GGUF list; launcher target resolution returned no targets")
-        return _FALLBACK_REWARM_GGUFS
-    return ggufs
+
+    fallback = _fallback_rewarm_ggufs_from_stack_priors(stack_priors_path)
+    if fallback:
+        return fallback
+
+    log.warning("using degraded fallback rewarm GGUF list; stack priors returned no model paths")
+    return ()
 
 
 def _numa_interleave_rewarm(gguf_paths: tuple[str, ...] | None = None,

@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -27,6 +29,65 @@ experiment_journal = importlib.import_module("experiment_journal")
 
 def _write_state(path: Path, paused: bool, trial_counter: int = 1) -> None:
     path.write_text(json.dumps({"paused": paused, "trial_counter": trial_counter}, indent=2))
+
+
+def _write_stack_priors(path: Path, roles: dict[str, dict]) -> Path:
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "stack_priors_version": 4,
+                "contract": {"schema": "epyc.stack_priors", "version": 4},
+                "compiled_at": "2026-06-15T00:00:00Z",
+                "status": "compiled",
+                "coverage_scope": "unit",
+                "precedence_spec": "unit",
+                "source_artifacts": {},
+                "roles": roles,
+                "known_global_gaps": {},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _stack_prior_record(role: str, model_path: str) -> dict:
+    return {
+        "role": role,
+        "deployment_status": "live_stack",
+        "status": "compiled",
+        "model_id": f"{role}-model",
+        "display_name": role,
+        "serving": {
+            "endpoint": "http://localhost:9999",
+            "server_role": role,
+            "binding": "unit",
+            "ports": [9999],
+            "slots": 1,
+            "tier": "hot",
+            "binary": "llama.cpp",
+            "binary_dir": None,
+            "numa_policy": "unit",
+            "shared_mmap": False,
+            "launch": {
+                "entries": [],
+                "primary_roles": [role],
+                "modes": ["default"],
+                "requirements": {"model_path": model_path},
+                "runtime": {},
+            },
+        },
+        "priors": {
+            "throughput_tps": 1.0,
+            "quality_overall": 0.5,
+            "memory_cost": 1.0,
+        },
+        "acceleration": {},
+        "model": {"mem_gb": 1.0, "modalities": ["text"]},
+        "evidence": {},
+        "known_gaps": [],
+    }
 
 
 def test_exogenous_cache_flush_category_exists() -> None:
@@ -87,19 +148,35 @@ def test_default_rewarm_paths_derive_from_launcher_targets(monkeypatch) -> None:
     assert host_health._default_rewarm_ggufs() == derived
 
 
-def test_default_rewarm_paths_fall_back_when_launcher_targets_fail(monkeypatch) -> None:
+def test_default_rewarm_paths_fall_back_to_stack_priors_when_launcher_targets_fail(
+    monkeypatch, tmp_path: Path
+) -> None:
+    priors = _write_stack_priors(
+        tmp_path / "stack_priors.yaml",
+        {
+            "frontdoor": _stack_prior_record("frontdoor", "/models/frontdoor.gguf"),
+            "vision_escalation": _stack_prior_record("vision_escalation", "/models/vision.gguf"),
+            "worker_general": _stack_prior_record("worker_general", "/models/worker.gguf"),
+        },
+    )
+
     def _raise() -> tuple[str, ...]:
         raise RuntimeError("registry unavailable")
 
     monkeypatch.setattr(host_health, "_stack_rewarm_ggufs", _raise)
+    assert host_health._default_rewarm_ggufs(stack_priors_path=priors) == (
+        "/models/frontdoor.gguf",
+        "/models/vision.gguf",
+        "/models/worker.gguf",
+    )
 
-    assert host_health._default_rewarm_ggufs() == host_health._FALLBACK_REWARM_GGUFS
-
-
-def test_default_rewarm_paths_fall_back_when_launcher_targets_empty(monkeypatch) -> None:
+def test_default_rewarm_paths_fall_back_to_empty_tuple_when_no_stack_priors_exist(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(host_health, "_stack_rewarm_ggufs", lambda: ())
+    monkeypatch.setattr(host_health, "_fallback_rewarm_ggufs_from_stack_priors", lambda *args, **kwargs: ())
 
-    assert host_health._default_rewarm_ggufs() == host_health._FALLBACK_REWARM_GGUFS
+    assert host_health._default_rewarm_ggufs(stack_priors_path=tmp_path / "missing.yaml") == ()
 
 
 def test_numa_rewarm_resolves_default_paths_lazily(monkeypatch) -> None:
