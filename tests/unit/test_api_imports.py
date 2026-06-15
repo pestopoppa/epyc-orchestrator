@@ -250,6 +250,7 @@ class TestRoutingResult:
         r = RoutingResult(task_id="t", task_ir={}, use_mock=False)
         # Differentiated timeouts by role size/speed
         assert r.timeout_for_role("worker_explore") == 60
+        assert r.timeout_for_role("worker_fast") == 60
         assert r.timeout_for_role("architect_general") == 600
         assert r.timeout_for_role("frontdoor") == 180
 

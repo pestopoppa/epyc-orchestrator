@@ -80,7 +80,8 @@ class RoutingResult:
 
     def timeout_for_role(self, role: str) -> int:
         """Get timeout for a specific role (used during escalation)."""
-        return ROLE_TIMEOUTS.get(str(role), DEFAULT_TIMEOUT_S)
+        normalized = str(Role.from_string(role) or role)
+        return ROLE_TIMEOUTS.get(normalized, DEFAULT_TIMEOUT_S)
 
 
 # Three-stage summarization configuration — values sourced from centralized config
