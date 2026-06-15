@@ -1,0 +1,354 @@
+{
+  "core_id": "core_v2_preview_5rows",
+  "eligible_items": 33,
+  "generated_at": "2026-06-15T07:53:53Z",
+  "observed_items": 300,
+  "parameters": {
+    "include_partitions": [
+      "core"
+    ],
+    "max_per_suite": 0,
+    "min_attempts": 2,
+    "p_max": 0.8,
+    "p_min": 0.2,
+    "target_size": 40
+  },
+  "schema_version": 1,
+  "selected": [
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "39039707ce7534b0",
+      "suite": "agentic"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "416539f2f502e61d",
+      "suite": "bigcodebench"
+    },
+    {
+      "attempts": 5,
+      "correct": 1,
+      "p_correct": 0.2,
+      "partitions": [
+        "core"
+      ],
+      "qid": "e0033654a1ed4ad7",
+      "suite": "coder"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "282fcdb925d68429",
+      "suite": "cruxeval"
+    },
+    {
+      "attempts": 5,
+      "correct": 3,
+      "p_correct": 0.6,
+      "partitions": [
+        "core"
+      ],
+      "qid": "652cfbc52bce9193",
+      "suite": "debugbench"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "431fd4225050171c",
+      "suite": "general"
+    },
+    {
+      "attempts": 5,
+      "correct": 3,
+      "p_correct": 0.6,
+      "partitions": [
+        "core"
+      ],
+      "qid": "45e94e0a666ed423",
+      "suite": "gpqa"
+    },
+    {
+      "attempts": 5,
+      "correct": 3,
+      "p_correct": 0.6,
+      "partitions": [
+        "core"
+      ],
+      "qid": "52b2767c1dc8a8d9",
+      "suite": "hotpotqa"
+    },
+    {
+      "attempts": 5,
+      "correct": 1,
+      "p_correct": 0.2,
+      "partitions": [
+        "core"
+      ],
+      "qid": "c10c844a1b5048a2",
+      "suite": "instruction_precision"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "f73e614fc8575fb0",
+      "suite": "livecodebench"
+    },
+    {
+      "attempts": 5,
+      "correct": 2,
+      "p_correct": 0.4,
+      "partitions": [
+        "core"
+      ],
+      "qid": "178c97a56749c564",
+      "suite": "long_context"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "524b8469b9273563",
+      "suite": "math"
+    },
+    {
+      "attempts": 5,
+      "correct": 2,
+      "p_correct": 0.4,
+      "partitions": [
+        "core"
+      ],
+      "qid": "c1023e38f939dc7d",
+      "suite": "mode_advantage"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "01102fa71c66501e",
+      "suite": "mode_advantage_hard"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "191e7e1a35895240",
+      "suite": "skill_transfer"
+    },
+    {
+      "attempts": 5,
+      "correct": 2,
+      "p_correct": 0.4,
+      "partitions": [
+        "core"
+      ],
+      "qid": "92f9ff0223f148cb",
+      "suite": "thinking"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "fa1c9c13e8a0c195",
+      "suite": "vl"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "47595e7b4fb81cc1",
+      "suite": "cruxeval"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "0d7134267a7ab8ea",
+      "suite": "debugbench"
+    },
+    {
+      "attempts": 5,
+      "correct": 3,
+      "p_correct": 0.6,
+      "partitions": [
+        "core"
+      ],
+      "qid": "4e9c2db80bcd5631",
+      "suite": "gpqa"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "7446c98411d4c4d2",
+      "suite": "hotpotqa"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "72d3b6761d28b01c",
+      "suite": "instruction_precision"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "fc59f5498b1e960f",
+      "suite": "math"
+    },
+    {
+      "attempts": 5,
+      "correct": 3,
+      "p_correct": 0.6,
+      "partitions": [
+        "core"
+      ],
+      "qid": "f888d44ee00d396c",
+      "suite": "mode_advantage"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "1a0e5d208db92d89",
+      "suite": "mode_advantage_hard"
+    },
+    {
+      "attempts": 5,
+      "correct": 2,
+      "p_correct": 0.4,
+      "partitions": [
+        "core"
+      ],
+      "qid": "b8298eb5f8dd1fae",
+      "suite": "thinking"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "ce400a63fcce2f2f",
+      "suite": "debugbench"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "8a8f239270a8c74a",
+      "suite": "instruction_precision"
+    },
+    {
+      "attempts": 5,
+      "correct": 1,
+      "p_correct": 0.2,
+      "partitions": [
+        "core"
+      ],
+      "qid": "d602a211056789dc",
+      "suite": "mode_advantage"
+    },
+    {
+      "attempts": 5,
+      "correct": 2,
+      "p_correct": 0.4,
+      "partitions": [
+        "core"
+      ],
+      "qid": "d280e3b0072a8855",
+      "suite": "thinking"
+    },
+    {
+      "attempts": 5,
+      "correct": 1,
+      "p_correct": 0.2,
+      "partitions": [
+        "core"
+      ],
+      "qid": "e1a429e0c32fdb45",
+      "suite": "mode_advantage"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "f23fb8d052e417fe",
+      "suite": "thinking"
+    },
+    {
+      "attempts": 5,
+      "correct": 4,
+      "p_correct": 0.8,
+      "partitions": [
+        "core"
+      ],
+      "qid": "7cfe7d5d6f524cf4",
+      "suite": "mode_advantage"
+    }
+  ],
+  "selected_count": 33,
+  "shortfall": 7,
+  "source_rows": 5,
+  "unresolved_selected": [],
+  "unresolved_selected_count": 0
+}
