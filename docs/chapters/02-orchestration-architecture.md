@@ -376,7 +376,7 @@ Models sometimes generate natural-language role names in `delegate()` and `escal
 
 | Model Generates | Maps To |
 |----------------|---------|
-| `researcher_agent` | `worker_explore` |
+| `researcher_agent` | `worker_general` |
 | `coder_agent` | `coder_escalation` |
 | `reviewer_agent` | `architect_general` |
 | `math_agent` | `worker_math` |
@@ -411,7 +411,7 @@ Request
    │
    ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  SPECULATIVE PRE-FILTER (worker_explore, 7B @ 44 t/s)      │
+│  SPECULATIVE PRE-FILTER (worker_general, 7B @ 44 t/s)     │
 │                                                             │
 │  • Single-turn attempt, no REPL, no escalation              │
 │  • Quality gate: MemRL Q-score + length/coherence checks    │
@@ -521,7 +521,7 @@ Two-stage context pressure management in `src/graph/helpers.py`:
 
 2. **C1: Context Externalization** (60% of max_context) — "virtual memory" pattern instead of lossy summarization:
    - Dumps full verbatim `state.context` to a writable tmp path (`ORCHESTRATOR_PATHS_TMP_DIR` / configured tmp / `/mnt/raid0/llm/epyc-orchestrator/tmp` / system tmp fallback) (zero information loss)
-   - Generates a structured index via `worker_explore` (7B, not SERIAL_ROLES gated) using hot-swappable prompt (`orchestration/prompts/compaction_index.md`) with line coordinates for one-shot `read_file(path, offset=N, limit=M)` retrieval
+   - Generates a structured index via `worker_general` (7B, not SERIAL_ROLES gated) using hot-swappable prompt (`orchestration/prompts/compaction_index.md`) with line coordinates for one-shot `read_file(path, offset=N, limit=M)` retrieval
    - If index generation fails (timeout/contention), compaction still proceeds using a deterministic fallback index
    - Index prompt now generates a **"Current Execution State"** block as the first section (what the system is working on, key values, next action) — inspired by the Markovian property from Delethink (arXiv:2510.06557)
    - Keeps recent context verbatim (configurable ratio, default 20%, min 3000 chars)

@@ -656,7 +656,7 @@ _TIER_MAP = {
     "architect_general": "B",
     "ingest_long_context": "B",
     "worker_general": "C", "worker_math": "C",
-    "worker_explore": "C", "worker_summarize": "C",
+    "worker_general": "C", "worker_summarize": "C",
     "worker_vision": "C",
 }
 # architect_coding removed from _TIER_MAP alongside the role on 2026-05-06.  # stack-change-guard: allow historical retired-role note
@@ -890,7 +890,7 @@ The pre-filter inserts as Stage 7.9, BEFORE the existing execution stages. The d
 # src/config.py — ChatConfig
 try_cheap_first_enabled: bool = True
 try_cheap_first_phase: str = "A"        # A=try all, B=Q-value guided, C=fully learned
-try_cheap_first_role: str = "worker_explore"
+try_cheap_first_role: str = "worker_general"
 try_cheap_first_max_tokens: int = 1024  # Keep short to minimize waste
 try_cheap_first_quality_threshold: float = 0.6
 try_cheap_first_q_threshold: float = 0.65  # Min Q-value for Phase B/C
@@ -902,7 +902,7 @@ try_cheap_first_q_threshold: float = 0.65  # Min Q-value for Phase B/C
 
 The pre-filter is bypassed when any of these hold:
 - `force_mode` or `force_role` is set on the request
-- The initial role is already a cheap worker (`worker_explore`, `worker_math`, `worker_vision`)
+- The initial role is already a cheap worker (`worker_general`, `worker_math`, `worker_vision`)
 - Execution mode is `delegated`
 - Phase B/C: MemRL Q-value for the cheap role is below `try_cheap_first_q_threshold`
 

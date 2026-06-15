@@ -45,7 +45,7 @@ All servers run on a single AMD EPYC 9655 via the `production-consolidated-v5` l
 |---|---|---|---|---|
 | frontdoor / coder_escalation / worker_summarize | Qwen3.6-35B-A3B | Q8_0 (37 GB) | 8070, 8080, 8180, 8280, 8380 | Shared GGUF mmap. `enable_thinking=False` mandatory. +33pp accuracy + 80% t/s vs prior Qwen3.5-35B Q4_K_M baseline. |
 | worker_general | gemma-4-26B-A4B | Q4_K_M (16 GB) | 8082, 8182, 8282, 8382 | ik_llama.cpp PR #1744 MTP. +18pp tool_compliance, 76.5 t/s solo. Needs `KMP_BLOCKTIME=10` (OMP idle-spin fix). |
-| worker_explore / worker_math / toolrunner | Qwen3-Coder-30B-A3B-Instruct | Q4_K_M (17 GB) | 8072 | Secondary worker pool. |
+| worker_general / worker_math / toolrunner | Qwen3-Coder-30B-A3B-Instruct | Q4_K_M (17 GB) | 8072 | Secondary worker pool. |
 | architect_general | Qwen3.5-122B-A10B | Q4_K_M (69 GB) | 8083 | Hybrid MoE. `enable_thinking=False`. |
 | ingest_long_context | Qwen3-Next-80B-A3B-Instruct | Q4_K_M (45 GB) | 8085 | SSM+MoE hybrid. Thinking ON (exception to the Qwen3.x default). |
 | worker_vision | Qwen2.5-VL-7B-Instruct | Q4_K_M (4 GB) | 8086 | |
