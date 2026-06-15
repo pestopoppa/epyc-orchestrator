@@ -33,7 +33,7 @@ from src.prompt_builders import (
     auto_wrap_final,
 )
 from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
-from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
+from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
 from src.repl_environment import REPLEnvironment
 from src.roles import Role
 
@@ -58,7 +58,7 @@ COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
 
 
 def _degraded_available_roles() -> list[str]:
-    """Return the degraded /models fallback from live manifest membership."""
+    """Return the degraded /models fallback from computed server lists."""
     preferred = (
         "frontdoor",
         "coder_escalation",
@@ -71,11 +71,22 @@ def _degraded_available_roles() -> list[str]:
         "vision_escalation",
         "worker_summarize",
     )
-    return [
-        role
-        for role in preferred
-        if role in HOT_ROLES and isinstance(PORT_MAP.get(role), int)
-    ]
+    names_by_port: dict[int, list[str]] = {}
+    for server in HOT_SERVERS + WARM_SERVERS:
+        if not isinstance(server, dict):
+            continue
+        port = server.get("port")
+        roles = server.get("roles")
+        if not isinstance(port, int) or not isinstance(roles, list):
+            continue
+        visible_roles = [
+            role for role in roles if isinstance(role, str) and role not in {"orchestrator"}
+        ]
+        if not visible_roles:
+            continue
+        names_by_port.setdefault(port, []).extend(visible_roles)
+    available_roles = {role for names in names_by_port.values() for role in names}
+    return [role for role in preferred if role in available_roles]
 
 
 def _primary_stack_prior_port(record: dict) -> int:

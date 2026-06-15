@@ -7,35 +7,20 @@ def test_available_roles_falls_back_to_current_live_role_surface(monkeypatch):
     monkeypatch.setattr(openai_compat, "_live_stack_role_ids", lambda: [])
     monkeypatch.setattr(
         openai_compat,
-        "HOT_ROLES",
-        {
-            "frontdoor",
-            "coder_escalation",
-            "architect_general",
-            "worker_general",
-            "worker_math",
-            "toolrunner",
-            "worker_vision",
-            "ingest_long_context",
-            "vision_escalation",
-            "worker_summarize",
-        },
+        "HOT_SERVERS",
+        [
+            {"port": 8070, "roles": ["frontdoor", "coder_escalation", "worker_summarize"]},
+            {"port": 8072, "roles": ["worker_general", "worker_math", "toolrunner"]},
+            {"port": 8083, "roles": ["architect_general"]},
+            {"port": 8085, "roles": ["ingest_long_context"]},
+            {"port": 8086, "roles": ["worker_vision"]},
+            {"port": 8087, "roles": ["vision_escalation"]},
+        ],
     )
     monkeypatch.setattr(
         openai_compat,
-        "PORT_MAP",
-        {
-            "frontdoor": 8070,
-            "coder_escalation": 8070,
-            "architect_general": 8083,
-            "worker_general": 8072,
-            "worker_math": 8072,
-            "toolrunner": 8072,
-            "worker_vision": 8086,
-            "ingest_long_context": 8085,
-            "vision_escalation": 8087,
-            "worker_summarize": 8070,
-        },
+        "WARM_SERVERS",
+        [{"port": 8070, "roles": ["frontdoor"]}],
     )
 
     roles = openai_compat.available_roles()
@@ -103,4 +88,41 @@ def test_ordered_live_role_ids_uses_stack_prior_topology():
         "toolrunner",
         "worker_general",
         "vision_escalation",
+    ]
+
+
+def test_degraded_available_roles_follow_server_lists_without_literal_port_map(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        openai_compat,
+        "HOT_SERVERS",
+        [
+            {"port": 8070, "roles": ["frontdoor", "coder_escalation"]},
+            {"port": 8072, "roles": ["worker_general", "worker_math", "toolrunner"]},
+        ],
+    )
+    monkeypatch.setattr(
+        openai_compat,
+        "WARM_SERVERS",
+        [
+            {"port": 8083, "roles": ["architect_general"]},
+            {"port": 8086, "roles": ["worker_vision"]},
+            {"port": 8085, "roles": ["ingest_long_context"]},
+            {"port": 8087, "roles": ["vision_escalation"]},
+            {"port": 8070, "roles": ["worker_summarize", "embedder"]},
+        ],
+    )
+
+    assert openai_compat._degraded_available_roles() == [
+        "frontdoor",
+        "coder_escalation",
+        "architect_general",
+        "worker_general",
+        "worker_math",
+        "toolrunner",
+        "worker_vision",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_summarize",
     ]
