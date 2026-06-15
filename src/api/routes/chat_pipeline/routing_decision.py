@@ -20,10 +20,7 @@ _TIER_COST_WEIGHTS: dict[str, float] = {
     "D": 0.2,
 }
 
-_INGRESS_ROLE_ALIASES = {
-    "worker_coder": str(Role.WORKER_GENERAL),
-    "worker_code": str(Role.WORKER_GENERAL),
-}
+_INGRESS_ROLE_ALIASES = frozenset({"worker_coder", "worker_code"})
 
 
 def normalize_ingress_role(role: object) -> object:
@@ -33,7 +30,9 @@ def normalize_ingress_role(role: object) -> object:
     normalized = Role.from_string(role)
     if normalized is not None:
         return normalized
-    return _INGRESS_ROLE_ALIASES.get(role, role)
+    if role in _INGRESS_ROLE_ALIASES:
+        return Role.WORKER_GENERAL
+    return role
 
 
 def assess_factual_risk(prompt: str, role: str, task_id: str) -> tuple[float, str]:

@@ -379,6 +379,11 @@ def test_normalize_ingress_role_legacy_aliases() -> None:
     assert normalize_ingress_role("architect_general") == "architect_general"
 
 
+def test_normalize_ingress_role_returns_canonical_worker_general_enum() -> None:
+    assert normalize_ingress_role("worker_coder") == Role.WORKER_GENERAL
+    assert normalize_ingress_role("worker_code") == Role.WORKER_GENERAL
+
+
 class TestPreprocess:
     """Tests for _preprocess (Stage 2)."""
 
