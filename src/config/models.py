@@ -685,8 +685,6 @@ class TimeoutsConfig:
 
     def _normalize_timeout_role(self, role: str) -> str:
         """Normalize a timeout lookup role without changing compatibility aliases."""
-        if role == "worker_explore":
-            return "worker_general"
         if role == "worker_fast":
             return "worker_fast"
         canonical = Role.from_string(role)
