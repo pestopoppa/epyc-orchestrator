@@ -12,7 +12,7 @@ import threading
 from dataclasses import dataclass
 
 from src.env_parsing import env_int as _env_int
-from src.roles import Role, chain_name_to_role
+from src.roles import Role
 from src.registry.stack_priors import live_stack_role_records
 
 
@@ -27,16 +27,6 @@ _VALID_DELEGATE_ROLE_FALLBACKS = frozenset(
     }
 )
 
-_DELEGATE_ROLE_ALIASES = {
-    "worker_coder": "coder_escalation",
-    "worker_code": "coder_escalation",
-    "worker_explore": "worker_general",
-    "worker_fast": "worker_general",
-    "researcher_agent": "worker_general",
-    "researcher": "worker_general",
-}
-
-
 def _normalize_delegate_role(role: object) -> str:
     """Normalize legacy/model-generated delegate labels to live stack roles."""
     if not isinstance(role, str):
@@ -45,10 +35,8 @@ def _normalize_delegate_role(role: object) -> str:
     if normalized is not None:
         return normalized.value
     if role in {"worker_coder", "worker_code"}:
-        return chain_name_to_role("coder").value
-    if role in {"worker_explore", "worker_fast", "researcher_agent", "researcher"}:
-        return chain_name_to_role("worker").value
-    return _DELEGATE_ROLE_ALIASES.get(role, role)
+        return Role.CODER_ESCALATION.value
+    return role
 
 
 def _valid_delegate_roles() -> frozenset[str]:
