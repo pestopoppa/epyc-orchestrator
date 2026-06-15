@@ -6,16 +6,19 @@ Phase 2 refactor. chat_delegation.py re-exports every public name here.
 
 from __future__ import annotations
 
-import hashlib as _hashlib
-from typing import TYPE_CHECKING, Any
+import logging
+from typing import TYPE_CHECKING
 
 from src.delegation_reports import store_report
+from src.roles import Role
 
 from .chat_delegation_config import (
     DelegationConfig,
     _delegation_config,
     _normalize_delegate_role,
 )
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.llm_primitives import LLMPrimitives
@@ -58,8 +61,8 @@ def _to_report_handle_text(handle: dict[str, str], summary: str) -> str:
     )
 
 
-_CODER_ROLES = frozenset({"coder_escalation"})
-_SEARCH_ROLES = frozenset({"worker_general"})
+_CODER_ROLES = frozenset({str(Role.CODER_ESCALATION)})
+_SEARCH_ROLES = frozenset({str(Role.WORKER_GENERAL)})
 
 _CODER_PREAMBLE = "You are {role}. Execute the delegated coding task quickly.\n\n"
 
