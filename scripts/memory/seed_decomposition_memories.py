@@ -70,7 +70,7 @@ DECOMPOSITION_PATTERNS = {
             "steps": [
                 {"role": "tool_logs", "task": "Gather relevant logs and metrics"},
                 {"role": "coder_escalation", "task": "Analyze error patterns and stack traces"},
-                {"role": "architect_coding", "task": "Identify potential root causes"},
+                {"role": "architect_coding", "task": "Identify potential root causes"},  # stack-change-guard: allow legacy retired-role seed fixture
                 {"role": "coder_escalation", "task": "Implement and test fix"},
                 {"role": "tool_monitoring", "task": "Verify fix in monitoring"},
             ],
@@ -100,7 +100,7 @@ DECOMPOSITION_PATTERNS = {
             "steps": [
                 {"role": "architect_general", "task": "Define requirements and constraints"},
                 {"role": "architect_general", "task": "Design high-level architecture"},
-                {"role": "architect_coding", "task": "Design key component interfaces"},
+                {"role": "architect_coding", "task": "Design key component interfaces"},  # stack-change-guard: allow legacy retired-role seed fixture
                 {"role": "tool_diagram", "task": "Create architecture diagrams"},
                 {"role": "architect_general", "task": "Identify risks and trade-offs"},
                 {"role": "formalizer", "task": "Create implementation roadmap"},
@@ -159,7 +159,7 @@ DECOMPOSITION_PATTERNS = {
                 {"role": "architect_general", "task": "Define audit scope and criteria"},
                 {"role": "tool_security", "task": "Run automated security scans"},
                 {"role": "coder_escalation", "task": "Review code for vulnerabilities"},
-                {"role": "architect_coding", "task": "Analyze authentication/authorization"},
+                {"role": "architect_coding", "task": "Analyze authentication/authorization"},  # stack-change-guard: allow legacy retired-role seed fixture
                 {"role": "frontdoor", "task": "Document findings and recommendations"},
             ],
         },
@@ -211,8 +211,8 @@ DECOMPOSITION_PATTERNS = {
         "plan": {
             "type": "refactoring",
             "steps": [
-                {"role": "architect_coding", "task": "Analyze current structure and identify issues"},
-                {"role": "architect_coding", "task": "Design target architecture"},
+                {"role": "architect_coding", "task": "Analyze current structure and identify issues"},  # stack-change-guard: allow legacy retired-role seed fixture
+                {"role": "architect_coding", "task": "Design target architecture"},  # stack-change-guard: allow legacy retired-role seed fixture
                 {"role": "worker_general", "task": "Add tests for existing behavior"},
                 {"role": "coder_escalation", "task": "Implement refactoring in small steps"},
                 {"role": "worker_general", "task": "Verify tests still pass"},

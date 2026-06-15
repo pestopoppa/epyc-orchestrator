@@ -144,7 +144,7 @@ def generate_routing_patterns(model_reg: Dict) -> List[SuccessPattern]:
             },
             "q": 0.88,
         },
-        "architect_coding": {
+        "architect_coding": {  # stack-change-guard: allow legacy retired-role seed fixture
             "tasks": ["debug this complex concurrency issue",
                      "optimize this critical algorithm",
                      "design a lock-free data structure",
@@ -326,7 +326,7 @@ def generate_escalation_patterns() -> List[SuccessPattern]:
         {
             "task": "This requires deep {domain} expertise",
             "from_role": "frontdoor",
-            "to_role": "architect_coding",
+            "to_role": "architect_coding",  # stack-change-guard: allow legacy retired-role seed fixture
             "reason": "Specialist domain knowledge needed",
             "vars": {"domain": ["systems programming", "distributed systems",
                                "compiler design", "cryptography"]},

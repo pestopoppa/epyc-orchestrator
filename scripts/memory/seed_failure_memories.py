@@ -84,7 +84,7 @@ FAILURE_PATTERNS = {
         ],
         "wrong_action": "worker_general",  # Same tier, no escalation
         "failure_reason": "Kept retrying at same tier instead of escalating - wasted cycles, no progress",
-        "correct_action": "architect_coding",  # Should escalate
+        "correct_action": "architect_coding",  # Should escalate; stack-change-guard: allow legacy retired-role seed fixture
         "q_value": 0.0,
     },
     "premature_escalation": {

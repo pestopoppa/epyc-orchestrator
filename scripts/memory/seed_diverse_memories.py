@@ -54,7 +54,7 @@ TASK_TEMPLATES = {
     },
     "architect_code": {
         "task_type": "code",
-        "routing": "architect_coding",
+        "routing": "architect_coding",  # stack-change-guard: allow legacy retired-role seed fixture
         "templates": [
             "Design the class hierarchy for {domain}",
             "What design pattern should we use for {problem}",
