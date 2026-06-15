@@ -563,6 +563,7 @@ def _check_operator_summary(config: StackChangePipelineConfig) -> PipelineStep:
     expected = render_current_stack_summary(
         stack_priors_path=config.stack_priors,
         registry_path=config.lean_registry,
+        descriptor_path=config.descriptors,
     )
     try:
         current = config.operator_summary.read_text(encoding="utf-8")
@@ -590,6 +591,7 @@ def _update_operator_summary(config: StackChangePipelineConfig) -> PipelineStep:
             config.operator_summary,
             stack_priors_path=config.stack_priors,
             registry_path=config.lean_registry,
+            descriptor_path=config.descriptors,
         )
     except OSError as exc:
         return PipelineStep(

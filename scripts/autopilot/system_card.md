@@ -26,7 +26,7 @@ Do not hand-edit this file; edit the source registries or constitution.
 | worker_summarize | 8070 | Qwen3.6-35B-A3B-Q8_0 | hot | none (lookup=false) | none | 24.3 | live_stack; binding=stack_manifest.alias->server_mode.direct; status=compiled |
 | worker_vision | 8086 | Qwen2.5-VL-7B-Instruct | hot | baseline | mmproj=mmproj-model-f16.gguf | 20 | live_stack; binding=stack_manifest.role; status=compiled |
 
-- architect_coding is historical only; use architect_general as the live architect server role and port.
+- architect_coding is historical only; use architect_general as the live architect server role and port. architect_coding is not an active server role.
 
 ## Evaluation Instrument
 

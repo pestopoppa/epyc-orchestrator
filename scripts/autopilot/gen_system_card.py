@@ -18,7 +18,11 @@ if str(DEFAULT_ROOT) not in sys.path:
     sys.path.insert(0, str(DEFAULT_ROOT))
 
 from scripts.registry.render_stack_summary import (  # noqa: E402
+    COMPILED_REGISTRY_FALLBACK_SOURCE,
+    DEGRADED_REGISTRY_FALLBACK_SOURCE,
+    STACK_PRIORS_SOURCE,
     clean_cell as _clean,
+    compiled_registry_role_rows as _compiled_registry_role_rows,
     format_number as _format_number,
     load_stack_priors as _load_stack_priors,
     registry_role_rows as _registry_role_rows,
@@ -192,14 +196,20 @@ def generate_system_card(
         root_path / "orchestration" / "autopilot_state.json"
     )
     baseline, baseline_source = _baseline_payload(root_path, state_override)
-    role_source = "orchestration/derived/stack_priors.yaml"
+    role_source = STACK_PRIORS_SOURCE
     role_rows = _stack_prior_role_rows(stack_priors)
     if not role_rows:
-        role_source = "orchestration/model_registry.yaml (degraded fallback)"
+        role_source = COMPILED_REGISTRY_FALLBACK_SOURCE
+        role_rows = _compiled_registry_role_rows(
+            registry_path=root_path / "orchestration" / "model_registry.yaml",
+            descriptor_path=root_path / "orchestration" / "model_descriptors.yaml",
+        )
+    if not role_rows:
+        role_source = DEGRADED_REGISTRY_FALLBACK_SOURCE
         role_rows = _registry_role_rows(registry)
     active_role_names = (
         _stack_prior_active_role_names(stack_priors)
-        if role_source == "orchestration/derived/stack_priors.yaml"
+        if role_source == STACK_PRIORS_SOURCE
         else {
             row.split("|")[1].strip()
             for row in role_rows
@@ -239,7 +249,8 @@ def generate_system_card(
             [
                 "",
                 f"- {legacy_architect_role} is historical only; use {live_architect_role} "
-                "as the live architect server role and port.",
+                f"as the live architect server role and port. {legacy_architect_role} "
+                "is not an active server role.",
             ]
         )
 

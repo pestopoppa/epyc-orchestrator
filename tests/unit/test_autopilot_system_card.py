@@ -14,6 +14,7 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 
 gen_system_card = importlib.import_module("gen_system_card")
 autopilot = importlib.import_module("autopilot")
+render_stack_summary = importlib.import_module("scripts.registry.render_stack_summary")
 
 LEGACY_ARCHITECT_ROLE = "architect" "_coding"
 
@@ -122,6 +123,63 @@ per_suite_quality_by_tier:
     )
 
 
+def _write_minimal_descriptors(tmp_path: Path) -> None:
+    (tmp_path / "orchestration" / "model_descriptors.yaml").write_text(
+        """
+models:
+  - model_id: qwen36-frontdoor
+    display_name: frontdoor-compiled.gguf
+    family: qwen
+    arch: moe
+    params_b: 35
+    active_b: 3
+    quant: Q8_0
+    mem_gb: 37
+    ctx_max: 131072
+    modalities: [text]
+    role_bindings:
+      roles: [frontdoor]
+      server_roles: [frontdoor]
+    quality:
+      suite_vector: {overall: 0.93}
+      measured: []
+    speed:
+      solo_96t_tps: 24.3
+      measured: []
+    acceleration: {spec_type: none}
+    serving:
+      ports: [8070]
+      binary: llama.cpp
+    known_gaps: []
+  - model_id: gemma-worker
+    display_name: worker-compiled.gguf
+    family: gemma
+    arch: dense
+    params_b: 26
+    active_b: 4
+    quant: Q4_K_M
+    mem_gb: 16
+    ctx_max: 16384
+    modalities: [text]
+    role_bindings:
+      roles: [worker_general]
+      server_roles: [worker]
+    quality:
+      suite_vector: {overall: 0.84}
+      measured: []
+    speed:
+      quarter_48t_tps: 60.7
+      measured: []
+    acceleration: {spec_type: mtp, draft_max: 2}
+    serving:
+      ports: [8072]
+      binary: ik-pr1744
+    known_gaps: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
 def test_system_card_uses_stack_priors_not_registry_or_removed_role(tmp_path: Path) -> None:
     _write_minimal_root(tmp_path)
     card = gen_system_card.generate_system_card(
@@ -148,6 +206,56 @@ def test_system_card_uses_stack_priors_not_registry_or_removed_role(tmp_path: Pa
         f"{LEGACY_ARCHITECT_ROLE} is historical only; use architect_general "
         "as the live architect server role and port."
     ) in card
+
+
+def test_system_card_compiles_fallback_rows_when_stack_priors_missing(tmp_path: Path) -> None:
+    _write_minimal_root(tmp_path)
+    _write_minimal_descriptors(tmp_path)
+    (tmp_path / "orchestration" / "derived" / "stack_priors.yaml").unlink()
+
+    card = gen_system_card.generate_system_card(tmp_path, state_override={})
+
+    assert (
+        "Source: orchestration/model_registry.yaml + "
+        "orchestration/model_descriptors.yaml (compiled fallback)"
+    ) in card
+    assert (
+        "| frontdoor | 8070, 8080, 8180, 8280, 8380 | "
+        "frontdoor-compiled.gguf |"
+    ) in card
+    assert (
+        "| worker_general | 8072, 8082, 8182, 8282, 8382 | "
+        "worker-compiled.gguf |"
+    ) in card
+    assert "worker.gguf" not in card
+    assert f"| {LEGACY_ARCHITECT_ROLE} |" not in card
+
+
+def test_renderer_compiles_fallback_rows_when_stack_priors_missing(tmp_path: Path) -> None:
+    _write_minimal_root(tmp_path)
+    _write_minimal_descriptors(tmp_path)
+    stack_priors_path = tmp_path / "orchestration" / "derived" / "stack_priors.yaml"
+    stack_priors_path.unlink()
+
+    summary = render_stack_summary.render_current_stack_summary(
+        stack_priors_path=stack_priors_path,
+        registry_path=tmp_path / "orchestration" / "model_registry.yaml",
+        descriptor_path=tmp_path / "orchestration" / "model_descriptors.yaml",
+    )
+
+    assert (
+        "Source: `orchestration/model_registry.yaml + "
+        "orchestration/model_descriptors.yaml (compiled fallback)`"
+    ) in summary
+    assert (
+        "| frontdoor | 8070, 8080, 8180, 8280, 8380 | "
+        "frontdoor-compiled.gguf |"
+    ) in summary
+    assert (
+        "| worker_general | 8072, 8082, 8182, 8282, 8382 | "
+        "worker-compiled.gguf |"
+    ) in summary
+    assert "worker.gguf" not in summary
 
 
 def test_system_card_prefers_state_baseline_over_yaml(tmp_path: Path) -> None:

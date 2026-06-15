@@ -17,7 +17,14 @@ if str(DEFAULT_ROOT) not in sys.path:
 
 DEFAULT_STACK_PRIORS = DEFAULT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 DEFAULT_REGISTRY = DEFAULT_ROOT / "orchestration" / "model_registry.yaml"
+DEFAULT_DESCRIPTORS = DEFAULT_ROOT / "orchestration" / "model_descriptors.yaml"
 DEFAULT_OUTPUT = DEFAULT_ROOT / "docs" / "generated" / "current_stack_summary.md"
+STACK_PRIORS_SOURCE = "orchestration/derived/stack_priors.yaml"
+COMPILED_REGISTRY_FALLBACK_SOURCE = (
+    "orchestration/model_registry.yaml + orchestration/model_descriptors.yaml "
+    "(compiled fallback)"
+)
+DEGRADED_REGISTRY_FALLBACK_SOURCE = "orchestration/model_registry.yaml (degraded fallback)"
 
 TRANSLATION = str.maketrans(
     {
@@ -162,6 +169,26 @@ def stack_prior_role_rows(stack_priors: dict[str, Any]) -> list[str]:
     return rows
 
 
+def compiled_registry_role_rows(
+    *,
+    registry_path: Path = DEFAULT_REGISTRY,
+    descriptor_path: Path = DEFAULT_DESCRIPTORS,
+) -> list[str]:
+    if not registry_path.exists() or not descriptor_path.exists():
+        return []
+    try:
+        from src.registry.stack_priors import compile_stack_priors
+
+        compiled = compile_stack_priors(
+            registry_path=registry_path,
+            descriptor_path=descriptor_path,
+            allow_incomplete=True,
+        )
+    except (OSError, ValueError):
+        return []
+    return stack_prior_role_rows(compiled)
+
+
 def registry_role_rows(registry: dict[str, Any]) -> list[str]:
     server_mode = registry.get("server_mode") or {}
     roles = registry.get("roles") or {}
@@ -235,13 +262,20 @@ def render_current_stack_summary(
     *,
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
     registry_path: Path = DEFAULT_REGISTRY,
+    descriptor_path: Path = DEFAULT_DESCRIPTORS,
 ) -> str:
     stack_priors = load_stack_priors(stack_priors_path)
     registry = load_yaml(registry_path)
-    source = "orchestration/derived/stack_priors.yaml"
+    source = STACK_PRIORS_SOURCE
     rows = stack_prior_role_rows(stack_priors)
     if not rows:
-        source = "orchestration/model_registry.yaml (degraded fallback)"
+        source = COMPILED_REGISTRY_FALLBACK_SOURCE
+        rows = compiled_registry_role_rows(
+            registry_path=registry_path,
+            descriptor_path=descriptor_path,
+        )
+    if not rows:
+        source = DEGRADED_REGISTRY_FALLBACK_SOURCE
         rows = registry_role_rows(registry)
 
     lines = [
@@ -265,12 +299,14 @@ def write_current_stack_summary(
     *,
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
     registry_path: Path = DEFAULT_REGISTRY,
+    descriptor_path: Path = DEFAULT_DESCRIPTORS,
 ) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         render_current_stack_summary(
             stack_priors_path=stack_priors_path,
             registry_path=registry_path,
+            descriptor_path=descriptor_path,
         ),
         encoding="utf-8",
     )
@@ -281,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stack-priors", type=Path, default=DEFAULT_STACK_PRIORS)
     parser.add_argument("--registry", type=Path, default=DEFAULT_REGISTRY)
+    parser.add_argument("--descriptors", type=Path, default=DEFAULT_DESCRIPTORS)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--stdout", action="store_true")
@@ -289,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     text = render_current_stack_summary(
         stack_priors_path=args.stack_priors,
         registry_path=args.registry,
+        descriptor_path=args.descriptors,
     )
     if args.stdout:
         print(text, end="")
@@ -306,6 +344,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output,
         stack_priors_path=args.stack_priors,
         registry_path=args.registry,
+        descriptor_path=args.descriptors,
     )
     print(args.output)
     return 0
