@@ -162,6 +162,16 @@ class TestResolvePrompt:
         result = resolve_prompt("nonexistent_role", "fallback text", subdir="roles")
         assert result == "fallback text"
 
+    def test_alias_role_uses_canonical_family_fallback(self, tmp_path, monkeypatch):
+        """Legacy aliases should resolve through canonical family fallback."""
+        monkeypatch.setattr("src.prompt_builders.resolver.PROMPT_DIR", tmp_path)
+        roles_dir = tmp_path / "roles"
+        roles_dir.mkdir()
+        (roles_dir / "worker_general.md").write_text("Worker general prompt")
+        result = resolve_prompt("worker_explore", "fallback", subdir="roles")
+        assert result.startswith("Worker general prompt")
+        assert "Do NOT self-correct" in result
+
     def test_no_template_vars_no_interpolation(self, tmp_path, monkeypatch):
         """Without template vars, literal braces in file are preserved."""
         monkeypatch.setattr("src.prompt_builders.resolver.PROMPT_DIR", tmp_path)

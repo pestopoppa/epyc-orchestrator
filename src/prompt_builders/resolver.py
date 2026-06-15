@@ -127,21 +127,30 @@ def resolve_prompt(
     except OSError:
         _log.debug("Prompt file not found: %s, using fallback", default_path)
 
-    # Try family fallback: worker_explore → worker_general, architect_coding → architect_general
+    # Try family fallback using canonical role truth first, then a structural
+    # fallback for names that still only exist as legacy aliases.
+    candidate_families: list[str] = []
+    normalized = Role.from_string(name)
+    if normalized is not None:
+        family = normalized.value
+        if family != name:
+            candidate_families.append(family)
     if "_" in name:
         family = name.rsplit("_", 1)[0] + "_general"
-        if family != name:
-            family_path = base_dir / f"{family}.md"
-            try:
-                template = family_path.read_text()
-                _log.debug("Loaded family fallback prompt: %s", family_path)
-                # Anti-self-correction: worker roles via family fallback
-                # generate 3x rewrites ("Let me clarify", "I apologize").
-                if name.startswith("worker_"):
-                    template += "\n\nGive ONE answer. Do NOT self-correct, revise, or produce multiple versions. Do NOT say \"Let me clarify\" or \"I apologize\"."
-                return _safe_format(template, template_vars) if template_vars else template
-            except OSError:
-                pass
+        if family != name and family not in candidate_families:
+            candidate_families.append(family)
+    for family in candidate_families:
+        family_path = base_dir / f"{family}.md"
+        try:
+            template = family_path.read_text()
+            _log.debug("Loaded family fallback prompt: %s", family_path)
+            # Anti-self-correction: worker roles via family fallback
+            # generate 3x rewrites ("Let me clarify", "I apologize").
+            if name.startswith("worker_"):
+                template += "\n\nGive ONE answer. Do NOT self-correct, revise, or produce multiple versions. Do NOT say \"Let me clarify\" or \"I apologize\"."
+            return _safe_format(template, template_vars) if template_vars else template
+        except OSError:
+            continue
 
     # Fallback to constant
     return _safe_format(fallback, template_vars) if template_vars else fallback
