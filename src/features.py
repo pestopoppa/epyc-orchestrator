@@ -50,7 +50,7 @@ import json
 import os
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -467,7 +467,7 @@ class Features:
     final_schema_validation: bool = False  # Validate FINAL() value against caller JSON Schema
 
     # Pipeline monitoring: model-graded subjective evals
-    model_grading: bool = False  # Post-hoc model-graded evals via worker_explore
+    model_grading: bool = False  # Post-hoc model-graded evals via the live worker-general path
 
     # HSD: Hierarchical Self-Speculation
     self_speculation: bool = False  # Self-speculation with layer-exit draft
