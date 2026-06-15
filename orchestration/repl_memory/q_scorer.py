@@ -266,17 +266,13 @@ def stack_prior_q_scorer_priors_by_role(
             degraded_reason=f"stack-priors load failed: {exc}"
         )
 
-    roles = data.get("roles", {})
-    if not isinstance(roles, dict):
+    live_role_records = _live_stack_q_scorer_role_records(data)
+    if live_role_records is None:
         return _fallback_q_scorer_priors(
             degraded_reason="stack-priors roles section is not a mapping"
         )
 
-    for role, record in roles.items():
-        if not isinstance(role, str) or not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
+    for role, record in live_role_records.items():
         priors = record.get("priors", {})
         if not isinstance(priors, dict):
             continue
@@ -322,16 +318,28 @@ def _load_valid_stack_priors(stack_priors_path: Path) -> dict[str, Any]:
     return data
 
 
-def _live_stack_q_scorer_roles(stack_priors: dict[str, Any]) -> set[str]:
+def _live_stack_q_scorer_role_records(
+    stack_priors: dict[str, Any],
+) -> dict[str, dict[str, Any]] | None:
     roles = stack_priors.get("roles", {})
     if not isinstance(roles, dict):
-        return set()
-    live_roles: set[str] = set()
+        return None
+    live_roles: dict[str, dict[str, Any]] = {}
     for role, record in roles.items():
         if not isinstance(role, str) or not isinstance(record, dict):
             continue
         if record.get("deployment_status") != "live_stack":
             continue
+        live_roles[role] = record
+    return live_roles
+
+
+def _live_stack_q_scorer_roles(stack_priors: dict[str, Any]) -> set[str]:
+    live_role_records = _live_stack_q_scorer_role_records(stack_priors)
+    if live_role_records is None:
+        return set()
+    live_roles: set[str] = set()
+    for role in live_role_records:
         live_roles.add(role)
         live_roles.update(STACK_PRIOR_SCORER_ROLE_ALIASES.get(role, ()))
     return live_roles
