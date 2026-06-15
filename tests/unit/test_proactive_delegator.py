@@ -285,6 +285,40 @@ class TestDelegateWorkflow:
         assert primitives.llm_call.call_args.kwargs["role"] == "worker_general"
 
     @pytest.mark.asyncio
+    async def test_delegate_canonicalizes_worker_chain_actor(self):
+        """Test generic worker chain names resolve through the live worker role."""
+        registry = Mock()
+        primitives = Mock()
+        primitives.llm_call.return_value = "Task completed"
+
+        delegator = ProactiveDelegator(registry, primitives)
+
+        delegator.review_service.review = Mock(
+            return_value=Mock(
+                decision=ReviewDecision.APPROVE,
+                approved_output="Task completed",
+                feedback="",
+            )
+        )
+
+        task_ir = {
+            "task_id": "test123",
+            "objective": "Single step task",
+            "plan": {
+                "steps": [
+                    {"id": "S1", "actor": "worker", "action": "Write tests"},
+                ]
+            },
+        }
+
+        with patch("src.features.features") as mock_features:
+            mock_features.return_value.parallel_execution = False
+
+            await delegator.delegate(task_ir)
+
+        assert primitives.llm_call.call_args.kwargs["role"] == "worker_general"
+
+    @pytest.mark.asyncio
     async def test_delegate_with_progress_logger(self):
         """Test delegation with progress logging."""
         registry = Mock()

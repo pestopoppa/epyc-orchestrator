@@ -44,14 +44,12 @@ THINKING_TRIGGERS = [
 ]
 
 
-# Role mapping for TaskIR agents to registry roles
+# Role mapping for TaskIR agents to registry roles.
+#
+# Generic chain names and enum-backed aliases canonicalize through
+# src.roles.Role and chain_name_to_role in the delegator. This table keeps only
+# the non-standard spellings that are not already live role names.
 ROLE_MAPPING = {
-    "frontdoor": Role.FRONTDOOR.value,
-    "coder": Role.CODER_ESCALATION.value,
-    "ingest": Role.INGEST_LONG_CONTEXT.value,
-    "architect": Role.ARCHITECT_GENERAL.value,
-    "worker": Role.WORKER_GENERAL.value,
-    "worker_general": Role.WORKER_GENERAL.value,
     "docwriter": Role.WORKER_GENERAL.value,
     "math": Role.WORKER_MATH.value,
     "vision": Role.WORKER_VISION.value,

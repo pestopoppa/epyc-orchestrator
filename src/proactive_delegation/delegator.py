@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any, TYPE_CHECKING
 
-from src.roles import Role
+from src.roles import Role, chain_name_to_role
 from src.proactive_delegation.types import (
     AggregatedResult,
     ComplexitySignals,
@@ -69,6 +69,10 @@ class ProactiveDelegator:
             max_iterations=max_iterations,
             max_total_iterations=max_total_iterations,
         )
+
+    def _registry_has_role(self, role_name: str) -> bool:
+        roles = getattr(self.registry, "roles", None)
+        return isinstance(roles, dict) and role_name in roles
 
     def route_by_complexity(
         self,
@@ -296,12 +300,21 @@ class ProactiveDelegator:
         step.get("action", "")
 
         # Map actor to registry role.
-        # Canonical worker aliases resolve through worker_general first; the
-        # legacy actor fallback stays as a single local branch if we ever need
-        # to reintroduce compatibility.
+        # Canonical roles resolve first, then generic chain names such as
+        # worker/ingest/architect fall through the shared chain helper. The
+        # remaining compatibility table only keeps non-standard spellings.
         canonical_actor = Role.from_string(actor)
-        role_key = canonical_actor.value if canonical_actor is not None else actor
-        role = ROLE_MAPPING.get(role_key, ROLE_MAPPING.get(actor, Role.WORKER_GENERAL.value))
+        if canonical_actor is None:
+            canonical_actor = chain_name_to_role(actor)
+
+        if canonical_actor is not None and self._registry_has_role(canonical_actor.value):
+            role = canonical_actor.value
+        else:
+            resolved_key = canonical_actor.value if canonical_actor is not None else actor
+            role = ROLE_MAPPING.get(
+                resolved_key,
+                ROLE_MAPPING.get(actor, Role.WORKER_GENERAL.value),
+            )
 
         # Build prompt for specialist
         prompt = self._build_specialist_prompt(task_ir, step)
