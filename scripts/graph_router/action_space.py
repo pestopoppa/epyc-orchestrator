@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from src.roles import Role
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration/derived/stack_priors.yaml"
 
@@ -50,17 +52,14 @@ ACTION_EXCLUDE_PREFIXES = ("persona:",)
 RAW_TO_LIVE_ACTION: dict[str, str] = {
     "frontdoor": "frontdoor",
     "architect_general": "architect_general",
-    "architect_coding": "architect_general",
     "coder_escalation": "coder_escalation",
     "ingest_long_context": "ingest_long_context",
-    "worker_explore": "worker_general",
     "worker_general": "worker_general",
     "worker_math": "worker_math",
     "worker_vision": "worker_vision",
     "worker_summarize": "worker_summarize",
     "toolrunner": "toolrunner",
     "vision_escalation": "vision_escalation",
-    "coder": "coder_escalation",
     "escalate:frontdoor->coder_escalation": "coder_escalation",
     "escalate:worker_general->coder_escalation": "coder_escalation",
     "escalate:coder_escalation->architect_coding": "architect_general",
@@ -141,6 +140,12 @@ def normalize_action(
         return None
     if "\n" in raw_action or "FINAL(" in raw_action:
         return None
+
+    canonical_role = Role.from_string(raw_action)
+    if canonical_role is not None:
+        canonical = RAW_TO_LIVE_ACTION.get(str(canonical_role))
+        if canonical is not None:
+            return canonical
 
     canonical = RAW_TO_LIVE_ACTION.get(raw_action)
     if canonical is None:

@@ -107,6 +107,13 @@ def test_live_actions_derive_from_stack_priors_and_normalize_legacy_labels(
     assert normalize_action("frontdoor:direct", include_seeded_frontdoor=True) == "frontdoor"
 
 
+def test_normalize_action_canonicalizes_role_aliases_before_lookup() -> None:
+    assert normalize_action("worker_explore") == "worker_general"
+    assert normalize_action("worker_fast") == "worker_general"
+    assert normalize_action("coder") == "coder_escalation"
+    assert normalize_action("architect_coding") == "architect_general"
+
+
 def test_live_actions_keep_preferred_order_and_append_new_live_roles(tmp_path: Path) -> None:
     priors = _write_stack_priors(
         tmp_path / "stack_priors.yaml",
