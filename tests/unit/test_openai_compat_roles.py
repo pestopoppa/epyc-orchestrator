@@ -5,6 +5,38 @@ from src.api.routes import openai_compat
 
 def test_available_roles_falls_back_to_current_live_role_surface(monkeypatch):
     monkeypatch.setattr(openai_compat, "_live_stack_role_ids", lambda: [])
+    monkeypatch.setattr(
+        openai_compat,
+        "HOT_ROLES",
+        {
+            "frontdoor",
+            "coder_escalation",
+            "architect_general",
+            "worker_general",
+            "worker_math",
+            "toolrunner",
+            "worker_vision",
+            "ingest_long_context",
+            "vision_escalation",
+            "worker_summarize",
+        },
+    )
+    monkeypatch.setattr(
+        openai_compat,
+        "PORT_MAP",
+        {
+            "frontdoor": 8070,
+            "coder_escalation": 8070,
+            "architect_general": 8083,
+            "worker_general": 8072,
+            "worker_math": 8072,
+            "toolrunner": 8072,
+            "worker_vision": 8086,
+            "ingest_long_context": 8085,
+            "vision_escalation": 8087,
+            "worker_summarize": 8070,
+        },
+    )
 
     roles = openai_compat.available_roles()
 
@@ -22,6 +54,18 @@ def test_available_roles_falls_back_to_current_live_role_surface(monkeypatch):
         "vision_escalation",
         "worker_summarize",
     } <= set(roles)
+    assert openai_compat._degraded_available_roles() == [
+        "frontdoor",
+        "coder_escalation",
+        "architect_general",
+        "worker_general",
+        "worker_math",
+        "toolrunner",
+        "worker_vision",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_summarize",
+    ]
 
 
 def test_available_roles_uses_stack_prior_roles_when_present(monkeypatch):

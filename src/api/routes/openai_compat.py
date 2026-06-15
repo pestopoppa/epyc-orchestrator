@@ -33,6 +33,7 @@ from src.prompt_builders import (
     auto_wrap_final,
 )
 from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
 from src.repl_environment import REPLEnvironment
 from src.roles import Role
 
@@ -54,20 +55,27 @@ def _extract_text(content: str | list) -> str:
     return ""
 
 COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
-# Explicit degraded fallback only. Normal /models output is ordered from
-# generated stack-prior launch topology so stack swaps do not require code edits.
-DEGRADED_AVAILABLE_ROLES = (
-    "frontdoor",
-    "coder_escalation",
-    "architect_general",
-    "worker_general",
-    "worker_math",
-    "toolrunner",
-    "worker_vision",
-    "ingest_long_context",
-    "vision_escalation",
-    "worker_summarize",
-)
+
+
+def _degraded_available_roles() -> list[str]:
+    """Return the degraded /models fallback from live manifest membership."""
+    preferred = (
+        "frontdoor",
+        "coder_escalation",
+        "architect_general",
+        "worker_general",
+        "worker_math",
+        "toolrunner",
+        "worker_vision",
+        "ingest_long_context",
+        "vision_escalation",
+        "worker_summarize",
+    )
+    return [
+        role
+        for role in preferred
+        if role in HOT_ROLES and isinstance(PORT_MAP.get(role), int)
+    ]
 
 
 def _primary_stack_prior_port(record: dict) -> int:
@@ -107,7 +115,7 @@ def _live_stack_role_ids() -> list[str]:
 
 def available_roles() -> list[str]:
     """Return OpenAI-compatible model IDs from live stack truth plus aliases."""
-    role_ids = _live_stack_role_ids() or list(DEGRADED_AVAILABLE_ROLES)
+    role_ids = _live_stack_role_ids() or _degraded_available_roles()
     return list(dict.fromkeys([*COMPATIBILITY_MODEL_ALIASES, *role_ids]))
 
 
