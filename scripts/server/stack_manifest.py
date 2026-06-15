@@ -251,7 +251,6 @@ LAUNCH_KV_QUANT_CONFIGS = {
     "coder_escalation": ("q8_0", "q8_0"),
     "worker_summarize": ("q8_0", "q8_0"),
     "worker_general": WORKER_MTP_KV_TYPES,
-    "worker_explore": WORKER_MTP_KV_TYPES,
     "worker_math": WORKER_MTP_KV_TYPES,
     "toolrunner": WORKER_MTP_KV_TYPES,
     "architect_general": ("q4_0", "f16"),

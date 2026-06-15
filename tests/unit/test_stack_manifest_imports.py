@@ -175,6 +175,13 @@ def test_port_map_aliases_match_computed_launch_servers() -> None:
         assert PORT_MAP[role] == computed_role_ports[role]
 
 
+def test_launch_kv_quant_configs_keep_canonical_worker_roles_only() -> None:
+    from scripts.server.stack_manifest import LAUNCH_KV_QUANT_CONFIGS
+
+    assert "worker_explore" not in LAUNCH_KV_QUANT_CONFIGS
+    assert LAUNCH_KV_QUANT_CONFIGS["worker_general"] == ("q8_0", "q8_0")
+
+
 def test_validate_against_registry_checks_port_map_alias_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

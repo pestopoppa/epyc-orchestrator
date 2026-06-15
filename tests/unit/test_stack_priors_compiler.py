@@ -12,6 +12,7 @@ from src.registry.stack_priors import (
     StackPriorsCompileError,
     compile_stack_priors,
     live_role_primary_ports,
+    _launch_runtime_record,
     live_stack_role_records,
     live_warm_worker_slots,
     load_stack_priors_artifact,
@@ -362,6 +363,27 @@ def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
     assert priors["roles"]["worker_math"]["serving"]["launch"]["runtime"] == (
         priors["roles"]["worker_general"]["serving"]["launch"]["runtime"]
     )
+
+
+def test_launch_runtime_record_canonicalizes_worker_explore_kv_types() -> None:
+    runtime = _launch_runtime_record(
+        role="worker_explore",
+        descriptor={},
+        server_cfg=None,
+        role_cfg=None,
+        launch_cfg={
+            "launch": {
+                "primary_roles": ["worker_explore"],
+                "modes": ["worker_pool"],
+                "requirements": {"model_path": "/models/gemma.gguf"},
+                "runtime": {},
+            }
+        },
+    )
+
+    assert runtime["cache"]["kv_type_k"] == "q8_0"
+    assert runtime["cache"]["kv_type_v"] == "q8_0"
+    assert runtime["cache"]["slots"] == 1
 
 
 def test_compile_preserves_conflicts_as_gaps_when_allowed(tmp_path: Path) -> None:

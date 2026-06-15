@@ -715,6 +715,7 @@ def _launch_runtime_record(
         )
         from scripts.server.stack_numa import MLOCK_ROLES
         from scripts.server.stack_paths import LLAMA_SERVER, LLAMA_SERVER_V2, SLOT_SAVE_DIR, _V2_ROLES
+        from src.roles import Role
     except Exception:
         return {}
 
@@ -747,7 +748,12 @@ def _launch_runtime_record(
     else:
         slots = 1 if primary_role in SERIAL_ROLES else 2
 
-    kv_types = LAUNCH_KV_QUANT_CONFIGS.get(primary_role) or LAUNCH_KV_QUANT_CONFIGS.get(role)
+    canonical_primary_role = str(Role.from_string(primary_role, default=None) or primary_role)
+    canonical_role = str(Role.from_string(role, default=None) or role)
+    kv_types = (
+        LAUNCH_KV_QUANT_CONFIGS.get(canonical_primary_role)
+        or LAUNCH_KV_QUANT_CONFIGS.get(canonical_role)
+    )
     override_kv = ["qwen3vlmoe.expert_used_count=int:4"] if vision_type == "escalation" else []
     override_kv.extend(_override_kv_args(acceleration))
     override_kv = sorted(set(override_kv))
