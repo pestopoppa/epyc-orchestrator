@@ -523,10 +523,10 @@ def _build_worker_fast_command(port: int, model_path: str) -> list[str]:
     ]
 
 
-def _build_worker_explore_command(
+def _build_worker_general_command(
     port: int, model_path: str, binary_override: str | None, numa_instance: int = 0
 ) -> list[str]:
-    """Explore worker: gemma4-26B-A4B Q4_K_M MTP via ik_llama.cpp PR #1744.
+    """Worker-general MTP path: gemma4-26B-A4B Q4_K_M via ik_llama.cpp PR #1744.
 
     Swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4_K_M. Tool_compliance 96% vs 78%
     prior, +36% tps. `binary_override` comes from `server_mode.worker.runtime_requirements.binary_dir`
@@ -609,6 +609,13 @@ def _build_worker_explore_command(
     ]
 
 
+def _build_worker_explore_command(
+    port: int, model_path: str, binary_override: str | None, numa_instance: int = 0
+) -> list[str]:
+    """Compatibility wrapper for the retired worker_explore name."""
+    return _build_worker_general_command(port, model_path, binary_override, numa_instance)
+
+
 def _build_dev_command(port: int) -> list[str]:
     """Dev mode: single 0.5B Qwen2.5-Coder model for fast iteration."""
     return [
@@ -659,7 +666,7 @@ def _resolve_thread_count(role_name: str, numa_instance: int = 0) -> str:
     which instance was being launched. The launcher therefore always passed
     `-t 96` to every frontdoor quarter (which intends `-t 48`), `-t 48` to
     every worker_general quarter (which intends `-t 48` correctly only because
-    worker_general had a manual workaround in `_build_worker_explore_command`),
+    worker_general had a manual workaround in the worker-general MTP helper),
     and so on. Threading `numa_instance` through lets each instance get the
     thread count its NUMA_CONFIG entry actually specifies.
     """
@@ -888,9 +895,9 @@ def build_server_command(
 ) -> list[str]:
     """Dispatch to the per-mode command builder.
 
-    `binary_override`: when set, replaces `LLAMA_SERVER` for the worker_pool explore
-    branch (used by worker_general / gemma4 MTP to launch ik_llama.cpp PR #1744).
-    Other branches ignore this argument today.
+    `binary_override`: when set, replaces `LLAMA_SERVER` for the worker_pool
+    general branch (used by worker_general / gemma4 MTP to launch ik_llama.cpp
+    PR #1744). Other branches ignore this argument today.
 
     `numa_instance`: which instance in NUMA_CONFIG[role]["instances"] is being
     launched (0 = full/primary, 1..N = quarters). Used by `_build_role_command`
@@ -907,7 +914,7 @@ def build_server_command(
             raise ValueError(f"Unknown worker type: {worker_type}")
         if worker_type == "fast":
             return _build_worker_fast_command(port, model_path)
-        return _build_worker_explore_command(port, model_path, binary_override, numa_instance)
+        return _build_worker_general_command(port, model_path, binary_override, numa_instance)
     if dev_mode:
         return _build_dev_command(port)
     return _build_role_command(role_config, port, numa_instance)

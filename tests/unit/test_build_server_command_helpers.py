@@ -262,8 +262,8 @@ def test_build_worker_fast_command_uses_4_slots() -> None:
     assert cmd[cmd.index("-c") + 1] == "16384"
 
 
-def test_build_worker_explore_command_engages_mtp_path() -> None:
-    cmd = oss._build_worker_explore_command(
+def test_build_worker_general_command_engages_mtp_path() -> None:
+    cmd = oss._build_worker_general_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
     # MTP-specific flags must all be present
@@ -278,13 +278,13 @@ def test_build_worker_explore_command_engages_mtp_path() -> None:
     assert cmd[cmd.index("--reasoning") + 1] == "off"
 
 
-def test_build_worker_explore_command_matches_stack_prior_launch_witness() -> None:
+def test_build_worker_general_command_matches_stack_prior_launch_witness() -> None:
     role_record = _stack_prior_role("worker_general")
     launch = role_record["serving"]["launch"]
     requirements = launch["requirements"]
     runtime = launch["runtime"]
 
-    cmd = oss._build_worker_explore_command(
+    cmd = oss._build_worker_general_command(
         port=8072,
         model_path=requirements["model_path"],
         binary_override=runtime["binary_path"],
@@ -295,7 +295,7 @@ def test_build_worker_explore_command_matches_stack_prior_launch_witness() -> No
     assert _command_runtime_signature(cmd) == _stack_prior_runtime_signature(runtime)
 
 
-def test_build_worker_explore_command_prefers_stack_prior_runtime(
+def test_build_worker_general_command_prefers_stack_prior_runtime(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -334,7 +334,7 @@ def test_build_worker_explore_command_prefers_stack_prior_runtime(
     )
     monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
 
-    cmd = oss._build_worker_explore_command(
+    cmd = oss._build_worker_general_command(
         port=8072,
         model_path="/fallback/gemma.gguf",
         binary_override=None,
@@ -355,7 +355,7 @@ def test_build_worker_explore_command_prefers_stack_prior_runtime(
     assert "--flash-attn" not in cmd
 
 
-def test_build_worker_explore_command_rejects_boolean_runtime_numbers(
+def test_build_worker_general_command_rejects_boolean_runtime_numbers(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -392,7 +392,7 @@ def test_build_worker_explore_command_rejects_boolean_runtime_numbers(
     )
     monkeypatch.setattr(oss, "STACK_PRIORS_PATH", priors)
 
-    cmd = oss._build_worker_explore_command(
+    cmd = oss._build_worker_general_command(
         port=8072,
         model_path="/fallback/gemma.gguf",
         binary_override=None,
@@ -406,36 +406,36 @@ def test_build_worker_explore_command_rejects_boolean_runtime_numbers(
     assert _flag_value(cmd, "--threads-draft") == str(oss.WORKER_MTP_THREADS_DRAFT)
 
 
-def test_build_worker_explore_command_uses_binary_override_when_set() -> None:
-    cmd = oss._build_worker_explore_command(
+def test_build_worker_general_command_uses_binary_override_when_set() -> None:
+    cmd = oss._build_worker_general_command(
         port=8072, model_path="/m/gemma4.gguf",
         binary_override="/opt/ik_llama.cpp/build/bin/llama-server",
     )
     assert cmd[0] == "/opt/ik_llama.cpp/build/bin/llama-server"
 
 
-def test_build_worker_explore_command_prefers_live_stack_prior_binary() -> None:
-    cmd = oss._build_worker_explore_command(
+def test_build_worker_general_command_prefers_live_stack_prior_binary() -> None:
+    cmd = oss._build_worker_general_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
     runtime = _stack_prior_role("worker_general")["serving"]["launch"]["runtime"]
     assert cmd[0] == runtime["binary_path"]
 
 
-def test_build_worker_explore_command_falls_back_to_llama_server_without_priors(
+def test_build_worker_general_command_falls_back_to_llama_server_without_priors(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(oss, "STACK_PRIORS_PATH", tmp_path / "missing.yaml")
 
-    cmd = oss._build_worker_explore_command(
+    cmd = oss._build_worker_general_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
 
     assert cmd[0] == str(oss.LLAMA_SERVER)
 
 
-def test_build_worker_explore_command_uses_numa_thread_count_for_port() -> None:
+def test_build_worker_general_command_uses_numa_thread_count_for_port() -> None:
     """Quarter instances must get the per-instance thread count from NUMA_CONFIG, not 96.
 
     Post-da1aed6 the thread count is resolved by ``numa_instance`` *index* (not by
@@ -447,7 +447,7 @@ def test_build_worker_explore_command_uses_numa_thread_count_for_port() -> None:
     instances = oss.NUMA_CONFIG["worker_general"]["instances"]
     for idx, inst in enumerate(instances):
         port, expected_threads = inst[1], inst[2]
-        cmd = oss._build_worker_explore_command(
+        cmd = oss._build_worker_general_command(
             port=port, model_path="/m/gemma4.gguf", binary_override=None,
             numa_instance=idx,
         )
@@ -459,11 +459,18 @@ def test_build_worker_explore_command_uses_numa_thread_count_for_port() -> None:
     assert instances[0][2] == 96
 
 
-def test_build_worker_explore_command_unknown_port_uses_fallback_96() -> None:
-    cmd = oss._build_worker_explore_command(
+def test_build_worker_general_command_unknown_port_uses_fallback_96() -> None:
+    cmd = oss._build_worker_general_command(
         port=9999, model_path="/m/gemma4.gguf", binary_override=None,
     )
     assert cmd[cmd.index("-t") + 1] == "96"
+
+
+def test_build_worker_explore_command_keeps_compatibility_wrapper() -> None:
+    cmd = oss._build_worker_explore_command(
+        port=8072, model_path="/m/gemma4.gguf", binary_override=None,
+    )
+    assert cmd[cmd.index("--spec-type") + 1] == "mtp"
 
 
 # -----------------------------------------------------------------------------
@@ -666,8 +673,8 @@ def test_dispatcher_routes_worker_fast() -> None:
     assert m.call_args.args[0] == 8102
 
 
-def test_dispatcher_routes_worker_explore_with_binary_override() -> None:
-    with patch.object(oss, "_build_worker_explore_command", return_value=["GEMMA"]) as m:
+def test_dispatcher_routes_worker_general_with_binary_override() -> None:
+    with patch.object(oss, "_build_worker_general_command", return_value=["GEMMA"]) as m:
         out = oss.build_server_command(
             None, 8072, worker_pool_mode=True, worker_type="explore",
             binary_override="/opt/ik/llama-server",
