@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
+from src.roles import Role
 from src.registry.stack_priors import live_stack_role_records
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,6 @@ DEGRADED_STACK_PRIOR_MODEL_FEATURES = {
     "coder_escalation": {"params_b": 35, "is_moe": True, "quant_bits": 8},
     "architect_general": {"params_b": 122, "is_moe": True, "quant_bits": 4},
     "worker_general": {"params_b": 26, "is_moe": True, "quant_bits": 4},
-    "worker_explore": {"params_b": 26, "is_moe": True, "quant_bits": 4},
     "worker_math": {"params_b": 26, "is_moe": True, "quant_bits": 4},
     "toolrunner": {"params_b": 26, "is_moe": True, "quant_bits": 4},
     "ingest_long_context": {"params_b": 80, "is_moe": True, "quant_bits": 4},
@@ -115,6 +115,11 @@ def _stack_prior_model_features(
     return features
 
 
+def _canonical_role_name(role: str) -> str:
+    canonical = Role.from_string(role)
+    return canonical.value if canonical is not None else role
+
+
 def extract_model_features(
     scoring_config,
     stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
@@ -135,15 +140,16 @@ def extract_model_features(
     stack_features = _stack_prior_model_features(stack_priors_path)
 
     for role in tps:
+        canonical_role = _canonical_role_name(role)
         specs = stack_features.get(
-            role,
+            canonical_role,
             DEGRADED_STACK_PRIOR_MODEL_FEATURES.get(
-                role,
+                canonical_role,
                 {"params_b": 30.0, "is_moe": False, "quant_bits": 4.0},
             ),
         )
-        features[role] = ModelFeatures(
-            role=role,
+        features[canonical_role] = ModelFeatures(
+            role=canonical_role,
             baseline_tps=tps.get(role, 10.0),
             baseline_quality=quality.get(role, 0.75),
             memory_cost=memory.get(role, 1.0),
@@ -213,7 +219,10 @@ class BilinearScorer:
         learning_rate: float = 0.01,
         weight_decay: float = 0.001,
     ):
-        self.model_features = model_features
+        self.model_features = {
+            _canonical_role_name(role): feature
+            for role, feature in model_features.items()
+        }
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
 
@@ -234,6 +243,7 @@ class BilinearScorer:
         Returns:
             Q-value in [0, 1].
         """
+        role = _canonical_role_name(role)
         if role not in self.model_features:
             return 0.5  # Neutral for unknown roles
 
@@ -273,6 +283,7 @@ class BilinearScorer:
         Returns:
             Updated Q-value prediction.
         """
+        role = _canonical_role_name(role)
         if role not in self.model_features:
             return 0.5
 

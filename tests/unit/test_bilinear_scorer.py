@@ -42,6 +42,8 @@ class TestModelFeatures:
         features = extract_model_features(cfg)
         assert "frontdoor" in features
         assert "architect_general" in features
+        assert "worker_general" in features
+        assert "worker_explore" not in features
         assert features["frontdoor"].baseline_tps == 24.3
         assert features["frontdoor"].is_moe == 1.0
         assert features["frontdoor"].quant_bits == 8.0
@@ -82,16 +84,16 @@ roles:
 
     def test_extract_model_features_uses_degraded_fallback_when_priors_missing(self, tmp_path: Path):
         cfg = ScoringConfig(
-            baseline_tps_by_role={"coder_escalation": 24.3},
-            baseline_quality_by_role={"coder_escalation": 0.9},
-            memory_cost_by_role={"coder_escalation": 1.0},
+            baseline_tps_by_role={"worker_general": 60.7},
+            baseline_quality_by_role={"worker_general": 0.745},
+            memory_cost_by_role={"worker_general": 1.0},
         )
 
         features = extract_model_features(cfg, stack_priors_path=tmp_path / "missing.yaml")
 
-        assert features["coder_escalation"].param_count_log == pytest.approx(np.log2(35))
-        assert features["coder_escalation"].is_moe == 1.0
-        assert features["coder_escalation"].quant_bits == 8.0
+        assert features["worker_general"].param_count_log == pytest.approx(np.log2(26))
+        assert features["worker_general"].is_moe == 1.0
+        assert features["worker_general"].quant_bits == 4.0
 
 
 class TestPromptFeatures:
@@ -136,8 +138,8 @@ class TestBilinearScorer:
                 role="architect_general", baseline_tps=4.3, baseline_quality=0.94,
                 memory_cost=3.0, param_count_log=6.93, is_moe=1.0, quant_bits=4.0,
             ),
-            "worker_explore": ModelFeatures(
-                role="worker_explore", baseline_tps=39.1, baseline_quality=0.745,
+            "worker_general": ModelFeatures(
+                role="worker_general", baseline_tps=39.1, baseline_quality=0.745,
                 memory_cost=0.5, param_count_log=4.91, is_moe=1.0, quant_bits=4.0,
             ),
         }
@@ -159,9 +161,22 @@ class TestBilinearScorer:
         scorer = self._make_scorer()
         prompt = np.random.randn(PROMPT_FEATURE_DIM).astype(np.float32)
         scores = scorer.predict_all(prompt)
-        assert set(scores.keys()) == {"frontdoor", "architect_general", "worker_explore"}
+        assert set(scores.keys()) == {"frontdoor", "architect_general", "worker_general"}
         for q in scores.values():
             assert 0.0 <= q <= 1.0
+
+    def test_legacy_worker_explore_alias_canonicalizes_to_worker_general(self):
+        scorer = self._make_scorer()
+        prompt = extract_prompt_features({"objective": "Solve a complex proof"})
+
+        for _ in range(10):
+            scorer.update(prompt, "worker_explore", reward=1.0)
+
+        assert "worker_explore" not in scorer.model_features
+        assert scorer.predict(prompt, "worker_explore") == pytest.approx(
+            scorer.predict(prompt, "worker_general")
+        )
+        assert scorer.predict_all(prompt).keys() == {"frontdoor", "architect_general", "worker_general"}
 
     def test_update_changes_prediction(self):
         scorer = self._make_scorer()
@@ -182,13 +197,13 @@ class TestBilinearScorer:
 
         # First push Q up
         for _ in range(20):
-            scorer.update(prompt, "worker_explore", reward=1.0)
-        q_high = scorer.predict(prompt, "worker_explore")
+            scorer.update(prompt, "worker_general", reward=1.0)
+        q_high = scorer.predict(prompt, "worker_general")
 
         # Then push Q down
         for _ in range(50):
-            scorer.update(prompt, "worker_explore", reward=-1.0)
-        q_low = scorer.predict(prompt, "worker_explore")
+            scorer.update(prompt, "worker_general", reward=-1.0)
+        q_low = scorer.predict(prompt, "worker_general")
 
         assert q_low < q_high
 
@@ -199,7 +214,7 @@ class TestBilinearScorer:
         # Train one role to be clearly best, others clearly worst
         for _ in range(200):
             scorer.update(prompt, "frontdoor", reward=1.0)
-            scorer.update(prompt, "worker_explore", reward=-1.0)
+            scorer.update(prompt, "worker_general", reward=-1.0)
             scorer.update(prompt, "architect_general", reward=-1.0)
 
         best = scorer.get_best_role(prompt)
