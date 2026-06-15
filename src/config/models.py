@@ -666,36 +666,9 @@ class TimeoutsConfig:
         default_factory=lambda: float(_registry_timeout("services", "gradio_client", 300.0))
     )
 
-    def for_role(self, role: str) -> int:
-        """Get timeout for a specific role, falling back to default."""
-        if role == "worker_explore":
-            normalized = "worker_general"
-        elif role == "worker_fast":
-            normalized = "worker_fast"
-        else:
-            normalized = str(Role.from_string(role) or role)
-        _role_map = {
-            "worker_explore": self.worker_explore,
-            "worker_math": self.worker_math,
-            "worker_vision": self.worker_vision,
-            "worker_summarize": self.worker_summarize,
-            "worker_general": self.worker_general,
-            "worker_coder": self.worker_coder,
-            "worker_code": self.worker_code,
-            "worker_fast": self.worker_fast,
-            "frontdoor": self.frontdoor,
-            "coder_escalation": self.coder_escalation,
-            "vision_escalation": self.vision_escalation,
-            "ingest_long_context": self.ingest_long_context,
-            "architect_general": self.architect_general,
-        }
-        if normalized == "worker_explore":
-            return self.worker_general
-        return _role_map.get(normalized, self.default_request)
-
-    def role_timeouts_dict(self) -> dict[str, int]:
-        """Return role->timeout dict (for backward compat with ROLE_TIMEOUTS)."""
-        timeouts = {
+    def _timeout_role_map(self) -> dict[str, int]:
+        """Return the canonical role->timeout mapping used by lookup helpers."""
+        return {
             "worker_explore": self.worker_general,
             "worker_math": self.worker_math,
             "worker_vision": self.worker_vision,
@@ -710,7 +683,24 @@ class TimeoutsConfig:
             "ingest_long_context": self.ingest_long_context,
             "architect_general": self.architect_general,
         }
-        return timeouts
+
+    def _normalize_timeout_role(self, role: str) -> str:
+        """Normalize a timeout lookup role without changing compatibility aliases."""
+        if role == "worker_explore":
+            return "worker_general"
+        if role == "worker_fast":
+            return "worker_fast"
+        canonical = Role.from_string(role)
+        return canonical.value if canonical is not None else role
+
+    def for_role(self, role: str) -> int:
+        """Get timeout for a specific role, falling back to default."""
+        normalized = self._normalize_timeout_role(role)
+        return self._timeout_role_map().get(normalized, self.default_request)
+
+    def role_timeouts_dict(self) -> dict[str, int]:
+        """Return role->timeout dict (for backward compat with ROLE_TIMEOUTS)."""
+        return self._timeout_role_map()
 
 
 @dataclass

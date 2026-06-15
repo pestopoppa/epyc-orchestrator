@@ -418,6 +418,14 @@ class TestTimeoutsConfig:
         # Should not contain service timeouts
         assert "ocr_single_page" not in d
 
+    def test_role_timeouts_dict_shares_canonical_worker_aliases(self) -> None:
+        cfg = TimeoutsConfig()
+        d = cfg.role_timeouts_dict()
+        assert d["worker_explore"] == cfg.worker_general
+        assert d["worker_fast"] == cfg.worker_fast
+        assert cfg.for_role("worker_explore") == cfg.worker_general
+        assert cfg.for_role("worker_fast") == cfg.worker_fast
+
     def test_service_timeouts_are_positive(self) -> None:
         cfg = TimeoutsConfig()
         assert cfg.ocr_single_page > 0
