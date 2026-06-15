@@ -303,7 +303,6 @@ _STACK_PRIOR_SERVER_URLS_CACHE: dict[str, str] | None = None
 _CANONICAL_SERVER_URL_ALIASES: dict[str, str] = {
     "coder": "coder_escalation",
     "worker": "worker_general",
-    "worker_explore": "worker_general",
 }
 
 
