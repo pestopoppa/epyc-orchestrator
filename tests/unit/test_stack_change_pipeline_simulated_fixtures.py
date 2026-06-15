@@ -237,6 +237,77 @@ def _swapped_frontdoor_registry(path: Path, *, throughput: float = 18.5) -> Path
     )
 
 
+def _swapped_worker_registry(path: Path, *, throughput: float = 66.2) -> Path:
+    return _write_yaml(
+        path,
+        {
+            "server_mode": {
+                "worker": {
+                    "url": "http://localhost:8072",
+                    "port": 8072,
+                    "tier": "hot",
+                    "slots": 1,
+                    "model": "gemma-4-26B-A4B-it-Q8_0.gguf",
+                    "model_path": "/models/gemma-4-26B-A4B-it-Q8_0.gguf",
+                    "model_role": "worker_general",
+                    "shared_with": ["worker_math", "toolrunner"],
+                    "memory_gb": 30,
+                    "throughput": throughput,
+                    "benchmark_score": "92%",
+                    "runtime_requirements": {
+                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
+                        "ld_library_path": [
+                            "/mnt/raid0/llm/ik_llama.cpp/build/src",
+                            "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
+                            "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+                        ],
+                    },
+                    "numa_instances": 4,
+                    "numa_ports": [8082, 8182, 8282, 8382],
+                }
+            },
+            "roles": {
+                "worker_general": {
+                    "model": {
+                        "name": "gemma-4-26B-A4B-it-Q8_0",
+                        "quant": "Q8_0",
+                        "architecture": "gemma4",
+                        "size_gb": 30,
+                        "ctx_max": 16384,
+                    },
+                    "performance": {"quality_pct": 90, "baseline_tps": throughput},
+                    "acceleration": {"type": "speculative_decoding", "spec_type": "mtp"},
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
+                "worker_math": {
+                    "model": {
+                        "name": "Qwen2.5-Math-7B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "dense",
+                        "size_gb": 4.4,
+                        "ctx_max": 32768,
+                    },
+                    "performance": {"quality_pct": 88, "baseline_tps": 12.4},
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
+                "toolrunner": {
+                    "model": {
+                        "name": "Qwen3-Coder-30B-A3B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "qwen3coder",
+                        "size_gb": 16,
+                        "ctx_max": 32768,
+                    },
+                    "performance": {"quality_pct": 84, "baseline_tps": 39.1},
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
+            },
+        },
+    )
+
+
 def _worker_alias_registry(
     path: Path,
     *,
@@ -532,6 +603,100 @@ def test_simulated_frontdoor_swap_updates_generated_consumers_with_approval(
     assert q_priors.baseline_tps_by_role["coder_escalation"] == 18.5
     assert q_priors.baseline_tps_source_by_role["frontdoor"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["frontdoor"] == pytest.approx(0.874)
+    assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
+
+    calls: list[dict[str, Any]] = []
+    original_run = pipeline.subprocess.run
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command != pipeline._promotion_gate_command():
+            return original_run(command, **kwargs)
+        calls.append({"command": command, **kwargs})
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="promotion gate ok\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    swap_check_config = StackChangePipelineConfig(
+        **{**approved_config.__dict__, "mode": "check", "run_promotion_gate": True}
+    )
+    swap_check_report = run_stack_change_pipeline(swap_check_config)
+
+    assert swap_check_report.ok
+    assert len(calls) == 1
+    assert calls[0]["command"] == pipeline._promotion_gate_command()
+    assert calls[0]["cwd"] == tmp_path
+    assert calls[0]["text"] is True
+    assert calls[0]["capture_output"] is True
+    assert calls[0]["check"] is False
+    promotion_step = next(step for step in swap_check_report.steps if step.name == "promotion_gate")
+    assert promotion_step.status == "ok"
+    assert any("promotion gate ok" in detail for detail in promotion_step.details)
+    assert any(step.name == "operator_summary" and step.status == "ok" for step in swap_check_report.steps)
+    assert any(step.name == "q_scorer_priors" and step.status == "ok" for step in swap_check_report.steps)
+    assert any(step.name == "runtime_attestation" and step.status == "ok" for step in swap_check_report.steps)
+
+
+def test_simulated_worker_swap_updates_generated_consumers_with_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roles = {"worker_general", "worker_math", "toolrunner"}
+    config = _config(tmp_path, mode="update", roles=roles)
+    _worker_alias_registry(config.lean_registry)
+    assert run_stack_change_pipeline(config).ok
+    descriptors_before = config.descriptors.read_text(encoding="utf-8")
+    priors_before = config.stack_priors.read_text(encoding="utf-8")
+    _swapped_worker_registry(config.lean_registry)
+
+    check_config = StackChangePipelineConfig(**{**config.__dict__, "mode": "check"})
+    check_report = run_stack_change_pipeline(check_config)
+
+    assert not check_report.ok
+    descriptor_step = next(step for step in check_report.steps if step.name == "descriptors")
+    assert any("descriptor artifact is stale:" in error for error in descriptor_step.errors)
+    assert any("descriptor update would remove existing model_id" in error for error in descriptor_step.errors)
+    assert config.descriptors.read_text(encoding="utf-8") == descriptors_before
+    assert config.stack_priors.read_text(encoding="utf-8") == priors_before
+
+    approved_config = StackChangePipelineConfig(
+        **{**config.__dict__, "allow_descriptor_model_removal": True}
+    )
+    update_report = run_stack_change_pipeline(approved_config)
+
+    assert update_report.ok
+    descriptors = yaml.safe_load(config.descriptors.read_text(encoding="utf-8"))
+    assert [model["model_id"] for model in descriptors["models"]] == [
+        "gemma4-26b-a4b-q8_0"
+    ]
+    priors = yaml.safe_load(config.stack_priors.read_text(encoding="utf-8"))
+    assert set(priors["roles"]) == roles
+    for role in roles:
+        assert priors["roles"][role]["model_id"] == "gemma4-26b-a4b-q8_0"
+        assert priors["roles"][role]["priors"]["throughput_tps"] == 66.2
+        assert priors["roles"][role]["priors"]["quality_overall"] == pytest.approx(0.9)
+
+    operator_summary = config.operator_summary.read_text(encoding="utf-8")
+    assert "Source: `orchestration/derived/stack_priors.yaml`" in operator_summary
+    for role in roles:
+        assert f"| {role}" in operator_summary
+        assert priors["roles"][role]["display_name"] in operator_summary
+    assert "gemma-4-26B-A4B-it-Q4_K_M" not in operator_summary
+
+    system_card = gen_system_card.generate_system_card(config.repo_root, state_override={})
+    assert "Source: orchestration/derived/stack_priors.yaml" in system_card
+    for role in roles:
+        assert f"| {role} |" in system_card
+        assert priors["roles"][role]["display_name"] in system_card
+    assert "gemma-4-26B-A4B-it-Q4_K_M" not in system_card
+
+    q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
+    assert q_priors.baseline_tps_by_role["worker_general"] == 66.2
+    assert q_priors.baseline_tps_source_by_role["worker_general"] == PRIOR_SOURCE_STACK_PRIORS
+    assert q_priors.baseline_quality_by_role["worker_general"] == pytest.approx(0.9)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
 
     calls: list[dict[str, Any]] = []
