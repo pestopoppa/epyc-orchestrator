@@ -91,28 +91,19 @@ def _clean_throughput_mapping(values: Any) -> dict[str, float]:
     return cleaned
 
 
-def _read_stack_priors(path: Path | None = None) -> dict[str, Any]:
+def _live_stack_role_records(path: Path | None = None) -> dict[str, dict[str, Any]]:
     stack_priors_path = path or STACK_PRIORS_PATH
     try:
-        from src.registry.stack_priors import load_stack_priors_artifact
+        from src.registry.stack_priors import live_stack_role_records
     except ImportError:
         return {}
-    data = load_stack_priors_artifact(stack_priors_path) or {}
-    return data if isinstance(data, dict) else {}
+    return live_stack_role_records(stack_priors_path)
 
 
 def stack_prior_throughput_by_role(path: Path | None = None) -> dict[str, float]:
     """Read live per-role throughput from generated stack priors."""
-    roles = _read_stack_priors(path).get("roles", {})
-    if not isinstance(roles, dict):
-        return {}
-
     throughput: dict[str, float] = {}
-    for role, record in roles.items():
-        if not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
+    for role, record in _live_stack_role_records(path).items():
         priors = record.get("priors")
         if not isinstance(priors, dict):
             continue
@@ -124,16 +115,8 @@ def stack_prior_throughput_by_role(path: Path | None = None) -> dict[str, float]
 
 def stack_prior_architect_reward_roles(path: Path | None = None) -> set[str]:
     """Return live roles that map onto the 3-way ARCHITECT action."""
-    roles = _read_stack_priors(path).get("roles", {})
-    if not isinstance(roles, dict):
-        return set()
-
     architect_roles: set[str] = set()
-    for role, record in roles.items():
-        if not isinstance(record, dict):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
+    for role, record in _live_stack_role_records(path).items():
         role_name = str(role)
         if role_name.startswith("architect_") or role_name == "vision_escalation":
             architect_roles.add(role_name)
