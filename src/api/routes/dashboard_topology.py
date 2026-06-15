@@ -50,9 +50,8 @@ def _service_port_hints() -> dict[int, str]:
     try:
         from scripts.server.stack_manifest import PORT_MAP
     except Exception:
-        worker_fast_port = 8102
-    else:
-        worker_fast_port = PORT_MAP.get("worker_fast", 8102)
+        return hints
+    worker_fast_port = PORT_MAP.get("worker_fast")
     if isinstance(worker_fast_port, int):
         hints[worker_fast_port] = "worker_fast"
     return hints
