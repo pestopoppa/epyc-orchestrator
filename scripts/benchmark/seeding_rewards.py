@@ -12,6 +12,8 @@ from typing import Any
 
 from urllib.parse import urlparse
 
+from src.roles import Role
+
 from seeding_types import (
     ACTION_ARCHITECT,
     ACTION_SELF_DIRECT,
@@ -54,7 +56,6 @@ FALLBACK_THROUGHPUT_BY_ROLE: dict[str, float] = {
     "architect_general": 12.19,
     "ingest_long_context": 20.8,
     "toolrunner": 60.7,
-    "worker_explore": 60.7,
     "worker_general": 60.7,
     "worker_math": 60.7,
     "worker_vision": 20.0,
@@ -87,8 +88,13 @@ def _clean_throughput_mapping(values: Any) -> dict[str, float]:
     for role, value in values.items():
         number = _positive_float(value)
         if number is not None:
-            cleaned[str(role)] = number
+            cleaned[_canonical_role_name(str(role))] = number
     return cleaned
+
+
+def _canonical_role_name(role: str) -> str:
+    canonical = Role.from_string(role)
+    return canonical.value if canonical is not None else role
 
 
 def _live_stack_role_records(path: Path | None = None) -> dict[str, dict[str, Any]]:
@@ -235,7 +241,7 @@ def compute_comparative_rewards(
             rewards[key] = -0.5
         elif result.passed and baseline_passed:
             base = 0.5
-            role_tps = throughput_by_role.get(result.role, 0)
+            role_tps = throughput_by_role.get(_canonical_role_name(result.role), 0)
             gen_elapsed = result.generation_ms / 1000.0 if result.generation_ms > 0 else 0
             actual_elapsed = gen_elapsed if gen_elapsed > 0 else result.elapsed_seconds
             if (role_tps > 0 and result.tokens_generated > 0
@@ -487,9 +493,14 @@ def _has_delegation(rr: RoleResult) -> bool:
 
     # Check role_history for worker involvement
     if rr.role_history and len(rr.role_history) > 1:
-        worker_roles = {"worker_explore", "worker_math", "worker_vision", "worker_summarize"}
+        worker_roles = {
+            Role.WORKER_GENERAL.value,
+            Role.WORKER_MATH.value,
+            Role.WORKER_VISION.value,
+            Role.WORKER_SUMMARIZE.value,
+        }
         for role in rr.role_history:
-            if any(wr in role.lower() for wr in worker_roles):
+            if _canonical_role_name(role) in worker_roles:
                 return True
 
     return False

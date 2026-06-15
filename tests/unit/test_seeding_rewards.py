@@ -199,6 +199,33 @@ def test_throughput_prior_provenance_marks_degraded_fallback(tmp_path: Path):
     assert provenance["stack_priors_path"] == str(missing)
     assert provenance["uses_degraded_fallback"] is True
     assert provenance["reason"] == "stack_priors_missing_or_no_live_throughput"
+    assert "worker_general" in provenance["roles"]
+    assert "worker_explore" not in provenance["roles"]
+
+
+def test_compute_comparative_rewards_canonicalizes_worker_explore_degraded_fallback(
+    tmp_path: Path,
+):
+    missing = tmp_path / "missing.yaml"
+
+    rewards = _MOD.compute_comparative_rewards(
+        {
+            "frontdoor:direct": _rr(role="frontdoor", passed=True),
+            "worker_explore:direct": _rr(
+                role="worker_explore",
+                passed=True,
+                generation_ms=2000,
+                tokens_generated=100,
+                elapsed_seconds=2.0,
+            ),
+        },
+        cost_config={
+            "stack_priors_path": missing,
+            "allow_degraded_fallback": True,
+        },
+    )
+
+    assert 0.4 < rewards["worker_explore:direct"] < 0.5
 
 
 def test_compute_comparative_rewards_without_baseline_defaults_to_binary_success():
