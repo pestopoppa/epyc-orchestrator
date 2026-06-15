@@ -814,7 +814,7 @@ class ChatPipelineConfig:
     try_cheap_first_enabled: bool = True
     try_cheap_first_phase: str = "A"
     """A = try all non-forced, B = Q-value guided, C = fully learned."""
-    try_cheap_first_role: str = "worker_explore"
+    try_cheap_first_role: str = "worker_general"
     """Role used for cheap attempts (fastest HOT model)."""
     try_cheap_first_max_tokens: int = 1024
     """Token budget for cheap attempt (keep short to minimize waste)."""

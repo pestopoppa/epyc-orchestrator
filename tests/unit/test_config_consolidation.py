@@ -369,6 +369,10 @@ class TestChatPipelineDefaults:
         assert cfg.plan_review_phase_c_min_total == 100
         assert cfg.plan_review_phase_c_skip_rate == 0.90
 
+    def test_try_cheap_first_role_default(self):
+        cfg = ChatPipelineConfig()
+        assert cfg.try_cheap_first_role == "worker_general"
+
 
 # ── VisionConfig defaults match src/vision/config.py ─────────────────────
 

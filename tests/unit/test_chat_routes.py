@@ -230,7 +230,7 @@ class TestTryCheapFirstEdgeCases:
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             mock_cfg.return_value.chat.try_cheap_first_phase = "A"
-            mock_cfg.return_value.chat.try_cheap_first_role = "worker_explore"
+            mock_cfg.return_value.chat.try_cheap_first_role = "worker_general"
             mock_cfg.return_value.chat.try_cheap_first_max_tokens = 1024
             result = await _try_cheap_first(
                 base_request,
@@ -253,7 +253,7 @@ class TestTryCheapFirstEdgeCases:
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             mock_cfg.return_value.chat.try_cheap_first_phase = "A"
-            mock_cfg.return_value.chat.try_cheap_first_role = "worker_explore"
+            mock_cfg.return_value.chat.try_cheap_first_role = "worker_general"
             mock_cfg.return_value.chat.try_cheap_first_max_tokens = 1024
             result = await _try_cheap_first(
                 base_request,
@@ -281,7 +281,7 @@ class TestTryCheapFirstEdgeCases:
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             mock_cfg.return_value.chat.try_cheap_first_phase = "A"
-            mock_cfg.return_value.chat.try_cheap_first_role = "worker_explore"
+            mock_cfg.return_value.chat.try_cheap_first_role = "worker_general"
             mock_cfg.return_value.chat.try_cheap_first_max_tokens = 1024
             result = await _try_cheap_first(
                 base_request,
@@ -306,7 +306,7 @@ class TestTryCheapFirstEdgeCases:
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             mock_cfg.return_value.chat.try_cheap_first_phase = "A"
-            mock_cfg.return_value.chat.try_cheap_first_role = "worker_explore"
+            mock_cfg.return_value.chat.try_cheap_first_role = "worker_general"
             mock_cfg.return_value.chat.try_cheap_first_max_tokens = 1024
             with patch(
                 "src.api.routes.chat_review._detect_output_quality_issue",
@@ -325,7 +325,7 @@ class TestTryCheapFirstEdgeCases:
                 assert isinstance(result, ChatResponse)
                 assert result.cheap_first_attempted is True
                 assert result.cheap_first_passed is True
-                assert result.routed_to == "worker_explore"
+                assert result.routed_to == "worker_general"
                 assert "cheap_first" in result.routing_strategy
                 entry = mock_state.progress_logger.log.call_args.args[0]
                 assert entry.event_type.value == "routing_fallback"
@@ -343,7 +343,7 @@ class TestTryCheapFirstEdgeCases:
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             mock_cfg.return_value.chat.try_cheap_first_phase = "A"
-            mock_cfg.return_value.chat.try_cheap_first_role = "worker_explore"
+            mock_cfg.return_value.chat.try_cheap_first_role = "worker_general"
             mock_cfg.return_value.chat.try_cheap_first_max_tokens = 1024
             result = await _try_cheap_first(
                 base_request,
@@ -367,7 +367,7 @@ class TestTryCheapFirstEdgeCases:
         with patch("src.api.routes.chat.get_config") as mock_cfg:
             mock_cfg.return_value.chat.try_cheap_first_enabled = True
             mock_cfg.return_value.chat.try_cheap_first_phase = "A"
-            mock_cfg.return_value.chat.try_cheap_first_role = "worker_explore"
+            mock_cfg.return_value.chat.try_cheap_first_role = "worker_general"
             mock_cfg.return_value.chat.try_cheap_first_max_tokens = 1024
             with patch(
                 "src.api.routes.chat_review._detect_output_quality_issue",
