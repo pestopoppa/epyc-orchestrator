@@ -406,7 +406,7 @@ Recent successes: 78%
 
 The 3-way evaluation mode uses a distinct action vocabulary that maps to routing decisions. These keys are stored in episodic memory and the HybridRouter's `route_3way()` method retrieves memories by them.
 
-> **Stack-consolidation distribution shift (2026-05-09):** The orchestrator stack consolidation on 2026-05-09 renamed several roles and removed `architect_coding` (folded into `architect_general`), producing a sharp distribution shift in live-db routing data. Pre-change memories show `architect_general` at 100% success over 1,640 routes and `architect_coding` at 100% over 1,589 routes; post-change (which is ~86% of the current corpus) shows `architect_general` at 9.1% over 5,101 routes, `architect_coding` absent, `worker_general` at 0.1% over 3,506 routes, and `ingest_long_context` at 99.6%. The seeding recommendations below assume a stable role distribution — when analyzing memory composition or tuning seeding mixes, account for the pre/post-2026-05-09 split and consider gating on `created_at`. See `/workspace/progress/2026-05/2026-05-21.md` Session 4 "Distribution shift findings" for the full table.
+> **Stack-consolidation distribution shift (2026-05-09):** The orchestrator stack consolidation on 2026-05-09 renamed several roles and removed `architect_coding` (folded into `architect_general`), producing a sharp distribution shift in live-db routing data. Pre-change memories show `architect_general` at 100% success over 1,640 routes and `architect_coding` at 100% over 1,589 routes; post-change (which is ~86% of the current corpus) shows `architect_general` at 9.1% over 5,101 routes, `architect_coding` absent, `worker_general` at 0.1% over 3,506 routes, and `ingest_long_context` at 99.6%. The seeding recommendations below assume a stable role distribution — when analyzing memory composition or tuning seeding mixes, account for the pre/post-2026-05-09 split and consider gating on `created_at`. See `/workspace/progress/2026-05/2026-05-21.md` Session 4 "Distribution shift findings" for the full table. <!-- stack-change-guard: allow historical retired-role note -->
 
 In parallel with forced 3-way seeding, the classifier + verifier gates introduced in 2026-05-21 (see [Ch07 Phases 8.1-8.2](07-memrl-system.md#routing-classifier-fast-path-phase-81)) now generate natural routing diversity at inference time — forced seeding is no longer the only mechanism for building memory. Where the classifier is highly confident, the `SPO_PLUS_EPSILON` exploration lever (above) is the complementary path for counterfactual data collection.
 
@@ -416,7 +416,7 @@ In parallel with forced 3-way seeding, the classifier + verifier gates introduce
 |------------|-------------------|-------------|------|
 | `SELF:direct` | Frontdoor without tools | frontdoor | direct |
 | `SELF:repl` | Frontdoor with tools | frontdoor | repl |
-| `ARCHITECT` | Architect with delegation | architect_general + architect_coding (best-of-two) | delegated |
+| `ARCHITECT` | Architect with delegation | architect_general + architect_coding (best-of-two) | delegated <!-- stack-change-guard: allow historical retired-role note --> |
 | `WORKER` | Worker models | via delegation | -- |
 
 </details>
@@ -427,7 +427,7 @@ Recent seeding regressions showed that a single stalled heavy-model request can 
 
 ## Architect Delegation in 3-Way Eval (2026-02-09)
 
-The 3-way ARCHITECT evaluation runs `architect_general` and `architect_coding` in delegated mode, where the architect decides via TOON whether to answer directly (`D|answer`) or delegate to a specialist (`I|brief:<spec>|to:coder_escalation`).
+The 3-way ARCHITECT evaluation runs `architect_general` and `architect_coding` in delegated mode, where the architect decides via TOON whether to answer directly (`D|answer`) or delegate to a specialist (`I|brief:<spec>|to:coder_escalation`). <!-- stack-change-guard: allow historical retired-role note -->
 
 <details><summary>Known issue, fix, and slot-erase details</summary>
 

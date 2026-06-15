@@ -54,7 +54,7 @@ APIs that record source evidence and precedence.
   `evidence.alias_overrides`. This is provenance for a resolved alias, not a
   `known_gaps` item.
 - Retired roles are absent from generated live priors unless explicitly marked
-  legacy, benchmark-only, or test-only. Example: `architect_coding` must not
+  legacy, benchmark-only, or test-only. Example: `architect_coding` must not <!-- stack-change-guard: allow historical retired-role note -->
   appear in active q_scorer priors, launch manifests, or active routing chains.
 - Descriptor rows with role-server conflicts are preserved with `known_gaps` so
   validators can report them, but production consumers must not silently learn

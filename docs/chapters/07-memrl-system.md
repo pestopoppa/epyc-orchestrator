@@ -318,7 +318,7 @@ quality_gap_penalty = cost_lambda_quality_gap * max(0, model_quality - 0.75)
 # Dimension 3: Memory tier penalty (new)
 memory_tier_penalty = cost_lambda_memory * (mem_cost - 1.0)
 # Applied only for WARM tier models (loaded on demand).
-# mem_cost normalized: HOT=1.0, architect_general=3.0, architect_coding=5.0
+# mem_cost normalized: HOT=1.0, architect_general=3.0, architect_coding=5.0  # stack-change-guard: allow historical retired-role note
 
 total_cost_penalty = latency_penalty + quality_gap_penalty + memory_tier_penalty
 reward = base_reward - total_cost_penalty

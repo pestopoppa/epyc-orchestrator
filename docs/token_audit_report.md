@@ -67,7 +67,7 @@ No duplicate tool entries found.
 |------|-------------|-------|
 | frontdoor.md | 161 | 124 |
 | coder_escalation.md | 144 | 111 |
-| architect_coding.md | 86 | 66 |
+| architect_coding.md | 86 | 66 <!-- stack-change-guard: allow historical retired-role note --> |
 | architect_general.md | 83 | 64 |
 | worker_general.md | 77 | 59 |
 | worker_math.md | 68 | 52 |

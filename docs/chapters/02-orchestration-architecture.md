@@ -261,7 +261,7 @@ User: "Download the file, parse it, and upload results to S3"
 
 The Tier B layout underwent two material changes in May 2026 that the diagrams above already reflect; the rationale is captured here for operators reading the current state.
 
-- **architect_coding role eliminated (2026-05-06)**. REAP-246B benchmarking showed 70% on the coder suite — worse than worker_general at 77% and far worse than frontdoor at 97%. The role and its 139 GB warm-tier footprint were removed. Hard coding escalations now terminate at coder_escalation rather than escalating further. The escalation chain shortened by one (max_escalations went from 2 to 1 for coder paths).
+- **architect_coding role eliminated (2026-05-06)**. REAP-246B benchmarking showed 70% on the coder suite — worse than worker_general at 77% and far worse than frontdoor at 97%. The role and its 139 GB warm-tier footprint were removed. Hard coding escalations now terminate at coder_escalation rather than escalating further. The escalation chain shortened by one (max_escalations went from 2 to 1 for coder paths). <!-- stack-change-guard: allow historical retired-role note -->
 - **frontdoor + coder_escalation consolidated onto a single server (2026-05-09)**. Both roles run the same Qwen3.6-35B-A3B Q8 GGUF since the 2026-05-06 swap, so the dedicated port-8071 server was retired. They now share one mmap on port 8070 (full-mode) or 8080/8180/8280/8380 (quarter-mode), with separate admission slots so routing remains deterministic. Net savings: ~36 GB of duplicate mlock plus a competing 96-thread OMP team.
 - **worker_general swapped to gemma-4-26B-A4B-it Q4_K_M with MTP (2026-05-08)** via ik_llama.cpp PR #1744. Per-instance throughput rose from 39.1 t/s (Qwen3-Coder-30B-A3B Q4) to 60.7 t/s, with +18pp tool_compliance and +6pp full suite per Claude-as-Judge. Worker now lives on port 8072 (full-mode) or 8082/8182/8282/8382 (quarter-mode).
 - **OMP idle-spin (2026-05-09)**. The gemma-4 worker exhibited a load-spike regression (420 → 9 t/s on saturated workloads) traced to `OMP_WAIT_POLICY=passive` in the launch env. Production now keeps the default active wait policy on the ik_llama.cpp PR #1744 binary.
@@ -509,7 +509,7 @@ When a backend is circuit-open or times out, same-tier alternatives are tried be
 | frontdoor | (none) |
 | worker_vision | (none) |
 
-**Note**: `architect_coding` was eliminated 2026-05-06 and removed from the fallback map.
+**Note**: `architect_coding` was eliminated 2026-05-06 and removed from the fallback map. <!-- stack-change-guard: allow historical retired-role note -->
 
 `BackendHealthTracker.classify_failure()` maps error messages to `FailoverReason` (circuit_open, timeout, connection_error, oom). Feature flag: `model_fallback`.
 

@@ -148,7 +148,7 @@ class Role(Enum):
 - Ingest_long_context → Architect_general (long-context ingestion)
 - Architect_general → FAIL (no further escalation; terminal)
 
-The `architect_coding` role was eliminated on 2026-05-06 (REAP-246B Q4 scored 70% on the coder suite vs 97% for the frontdoor model on the same suite). With it went the corresponding tier of the escalation chain — `max_escalations` for coder paths dropped from 2 to 1, and hard coding escalations now terminate at coder_escalation rather than escalating to a dedicated coder-architect.
+The `architect_coding` role was eliminated on 2026-05-06 (REAP-246B Q4 scored 70% on the coder suite vs 97% for the frontdoor model on the same suite). With it went the corresponding tier of the escalation chain — `max_escalations` for coder paths dropped from 2 to 1, and hard coding escalations now terminate at coder_escalation rather than escalating to a dedicated coder-architect. <!-- stack-change-guard: allow historical retired-role note -->
 
 </details>
 
@@ -194,7 +194,7 @@ class ArchitectNode(BaseNode[TaskState, TaskDeps, TaskResult]):
 orchestration_graph = Graph(nodes=[all 6 classes])
 ```
 
-`ArchitectCodingNode` was removed alongside the `architect_coding` role on 2026-05-06; the union return type on `CoderEscalationNode` now terminates at `ArchitectNode` (or `End[TaskResult]`) rather than escalating to a separate coder-architect.
+`ArchitectCodingNode` was removed alongside the `architect_coding` role on 2026-05-06; the union return type on `CoderEscalationNode` now terminates at `ArchitectNode` (or `End[TaskResult]`) rather than escalating to a separate coder-architect. <!-- stack-change-guard: allow historical retired-role note -->
 
 </details>
 
@@ -269,7 +269,7 @@ The Unified Execution Model introduces 3-way confidence routing for faithful pro
 |----------|---------|---------|
 | **SELF:direct** | Handle without tools | `frontdoor` with `mode=direct` |
 | **SELF:repl** | Handle with tools, no delegation | `frontdoor` with `mode=repl`, `allow_delegation=False` |
-| **ARCHITECT** | Escalate for complex reasoning | `architect_general` (architect_coding removed 2026-05-06) |
+| **ARCHITECT** | Escalate for complex reasoning | `architect_general` (architect_coding removed 2026-05-06) <!-- stack-change-guard: allow historical retired-role note --> |
 | **WORKER** | Delegate to faster workers | Scored via canonical `DelegationEvent` telemetry |
 
 <details>
@@ -547,7 +547,7 @@ _FALLBACK_MAP: dict[Role, list[Role]] = {
 }
 ```
 
-`ARCHITECT_CODING` and `CODER_PRIMARY` were removed from the map alongside the `architect_coding` role on 2026-05-06.
+`ARCHITECT_CODING` and `CODER_PRIMARY` were removed from the map alongside the `architect_coding` role on 2026-05-06. <!-- stack-change-guard: allow historical retired-role note -->
 
 </details>
 
@@ -659,7 +659,7 @@ _TIER_MAP = {
     "worker_explore": "C", "worker_summarize": "C",
     "worker_vision": "C",
 }
-# architect_coding removed from _TIER_MAP alongside the role on 2026-05-06.
+# architect_coding removed from _TIER_MAP alongside the role on 2026-05-06.  # stack-change-guard: allow historical retired-role note
 ```
 
 </details>
@@ -1046,7 +1046,7 @@ This chapter's routing and escalation mechanics are grounded in several research
 
 `EscalationPrewarmer` (`src/services/escalation_prewarmer.py`) speculatively prefills architect KV cache when `classify_task_complexity()` returns COMPLEX at turn 1. Sends `n_predict=0, cache_prompt=true` to warm the system prompt prefix (~500 tokens) before escalation actually happens.
 
-**Validation**: The architect server (8083 general) confirmed receiving pre-warm requests; port 8084 (architect_coding) was decommissioned on 2026-05-06. Process-wide singleton via `get_shared_prewarmer()` with thread-safe hit/port telemetry.
+**Validation**: The architect server (8083 general) confirmed receiving pre-warm requests; port 8084 (architect_coding) was decommissioned on 2026-05-06. Process-wide singleton via `get_shared_prewarmer()` with thread-safe hit/port telemetry. <!-- stack-change-guard: allow historical retired-role note -->
 
 **Bug found and fixed**: `_check_slot_available()` checked `s.get("state") == 0` but modern llama-server uses `is_processing` (boolean). Also assumed `/slots` returns a list, but single-slot servers (`-np 1`) return a dict. Fixed to `not s.get("is_processing", True)` with `isinstance(data, list)` guard.
 

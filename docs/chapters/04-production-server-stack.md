@@ -28,10 +28,10 @@ The current role/port/model summary is generated from `orchestration/derived/sta
 | 8090-8095 | embedder (6x) | BGE-large-en-v1.5 F16 | unpinned | probe-first | — | ~4GB |
 
 **Notes**:
-- The former port 8084 (architect_coding, Qwen3-Coder-480B-A35B) was **removed on 2026-05-06**. REAP-246B scored 70% on the coder suite — worse than worker_general (77%) and far worse than the frontdoor model (97%); the role was eliminated and its 139 GB warm-tier footprint reclaimed. Hard coding escalations now terminate at coder_escalation.
+- The former port 8084 (architect_coding, Qwen3-Coder-480B-A35B) was **removed on 2026-05-06**. REAP-246B scored 70% on the coder suite — worse than worker_general (77%) and far worse than the frontdoor model (97%); the role was eliminated and its 139 GB warm-tier footprint reclaimed. Hard coding escalations now terminate at coder_escalation. <!-- stack-change-guard: allow historical retired-role note -->
 - The former port 8081 (separate coder_escalation instance) was retired on 2026-05-09. Since the 2026-05-06 swap both frontdoor and coder_escalation back onto the same Qwen3.6-35B-A3B Q8 GGUF, the dedicated server was redundant; they now share one mmap on port 8070 with separate admission slots (~36 GB of duplicate mlock + a competing 96-thread OMP team reclaimed).
 
-**Total HOT RAM**: ~600 GB (post-2026-05-09 consolidation: architect_coding removed, frontdoor+coder_escalation share GGUF, worker swapped to 16 GB gemma-4 Q4_K_M), leaving ~460 GB for KV cache and ~70 GB for OS/buffers.
+**Total HOT RAM**: ~600 GB (post-2026-05-09 consolidation: architect_coding removed, frontdoor+coder_escalation share GGUF, worker swapped to 16 GB gemma-4 Q4_K_M), leaving ~460 GB for KV cache and ~70 GB for OS/buffers. <!-- stack-change-guard: allow historical retired-role note -->
 
 ### Auxiliary Services
 
@@ -98,7 +98,7 @@ Total RAM: 1130GB
 └── OS + Buffers: ~70GB (6%)
 ```
 
-**Reclaimed since last revision**: architect_coding (~139 GB) removed 2026-05-06; coder_escalation duplicate mlock (~36 GB) removed 2026-05-09; worker swap to gemma-4 Q4_K_M dropped per-instance footprint from ~14 GB (Qwen2.5-7B f16) but is comparable per instance.
+**Reclaimed since last revision**: architect_coding (~139 GB) removed 2026-05-06; coder_escalation duplicate mlock (~36 GB) removed 2026-05-09; worker swap to gemma-4 Q4_K_M dropped per-instance footprint from ~14 GB (Qwen2.5-7B f16) but is comparable per instance. <!-- stack-change-guard: allow historical retired-role note -->
 
 </details>
 
@@ -387,7 +387,7 @@ Post-consolidation (2026-05-09), the sweep should be re-run: frontdoor now lives
 
 ### SERIAL_ROLES
 
-`SERIAL_ROLES` in `orchestrator_stack.py` forces `-np 1` for roles where concurrent slot contention degrades latency: `coder_escalation`, `worker_summarize`, `architect_general`, `ingest_long_context`. (`architect_coding` was removed from the set on 2026-05-06 along with the role itself.)
+`SERIAL_ROLES` in `orchestrator_stack.py` forces `-np 1` for roles where concurrent slot contention degrades latency: `coder_escalation`, `worker_summarize`, `architect_general`, `ingest_long_context`. (`architect_coding` was removed from the set on 2026-05-06 along with the role itself.) <!-- stack-change-guard: allow historical retired-role note -->
 
 ---
 
