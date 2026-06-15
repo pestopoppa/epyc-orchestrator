@@ -6,7 +6,6 @@ import time
 import pytest
 
 from src.graph.session_log import (
-    TurnRecord,
     ConsolidatedSegment,
     SegmentCache,
     RewardSignals,
@@ -163,6 +162,7 @@ def test_build_consolidation_prompt():
     prompt = build_consolidation_prompt(blocks)
     assert "3 entries" in prompt
     assert "T2 error" in prompt
+    assert "worker_explore" not in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +473,14 @@ def test_get_compaction_profile_known_role():
     p = get_compaction_profile("architect")
     assert p.max_compression_level == 1
     assert p.preserve_threshold == 0.7
+
+
+def test_get_compaction_profile_aliases_worker_explore_to_general():
+    assert get_compaction_profile("worker_explore") is COMPACTION_PROFILES["worker_general"]
+
+
+def test_get_compaction_profile_preserves_worker_fast_profile():
+    assert get_compaction_profile("worker_fast") is COMPACTION_PROFILES["worker_fast"]
 
 
 def test_get_compaction_profile_unknown_role():

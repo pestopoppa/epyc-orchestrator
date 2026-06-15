@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from src.roles import Role
+
 log = logging.getLogger(__name__)
 
 _session_log_lock = threading.Lock()
@@ -530,13 +532,7 @@ COMPACTION_PROFILES: dict[str, CompactionProfile] = {
         preserve_threshold=0.7,
         quality_check_interval=3,
     ),
-    "worker_coder": CompactionProfile(
-        max_compression_level=2,
-        free_zone_ratio=0.30,
-        preserve_threshold=0.5,
-        quality_check_interval=5,
-    ),
-    "worker_explore": CompactionProfile(
+    "worker_general": CompactionProfile(
         max_compression_level=3,
         free_zone_ratio=0.20,
         preserve_threshold=0.4,
@@ -555,7 +551,12 @@ DEFAULT_COMPACTION_PROFILE = CompactionProfile()
 
 def get_compaction_profile(role: str) -> CompactionProfile:
     """Get compaction profile for a role, with fallback to default."""
-    return COMPACTION_PROFILES.get(role, DEFAULT_COMPACTION_PROFILE)
+    if role == "worker_fast":
+        return COMPACTION_PROFILES["worker_fast"]
+    normalized = str(Role.from_string(role) or role)
+    if normalized == "worker_explore":
+        normalized = "worker_general"
+    return COMPACTION_PROFILES.get(normalized, DEFAULT_COMPACTION_PROFILE)
 
 
 @dataclass
@@ -635,7 +636,7 @@ def should_consolidate(
 
 
 def build_consolidation_prompt(granular_blocks: list[str]) -> str:
-    """Build prompt for Tier 2 deep consolidation via worker_explore."""
+    """Build prompt for Tier 2 deep consolidation via worker_general."""
     block_text = "\n".join(granular_blocks)
     return (
         "Consolidate this sequence of REPL session events into a dense 2-4 "
@@ -666,13 +667,13 @@ async def consolidate_segment(
     try:
         if inline:
             consolidated_text = primitives.llm_call(
-                prompt, role="worker_explore", n_tokens=300,
+                prompt, role="worker_general", n_tokens=300,
             )
         else:
             import asyncio
             consolidated_text = await asyncio.to_thread(
                 primitives.llm_call, prompt,
-                role="worker_explore", n_tokens=300,
+                role="worker_general", n_tokens=300,
             )
     except Exception as exc:
         log.debug("Tier 2 consolidation failed, using granular fallback: %s", exc)
