@@ -290,12 +290,11 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
     "vision_api": "http://localhost:8000/v1/vision/analyze",
 }
 
-_STACK_PRIOR_SERVER_URL_ALIASES: dict[str, str] = {
+_WORKER_CODER_SERVER_URL_ALIAS: dict[str, str] = {
     "worker_coder": "worker_fast",
 }
-_STACK_MANIFEST_SERVER_URL_ALIASES: dict[str, str] = {
-    "worker_coder": "worker_fast",
-}
+_STACK_PRIOR_SERVER_URL_ALIASES: dict[str, str] = dict(_WORKER_CODER_SERVER_URL_ALIAS)
+_STACK_MANIFEST_SERVER_URL_ALIASES: dict[str, str] = dict(_WORKER_CODER_SERVER_URL_ALIAS)
 _STACK_MANIFEST_SERVICE_ROLES: dict[str, str] = {
     "api_url": "orchestrator",
     "ocr_server": "document_formalizer",
