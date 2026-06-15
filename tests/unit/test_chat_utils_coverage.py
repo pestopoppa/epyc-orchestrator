@@ -404,7 +404,7 @@ class TestRoutingResult:
         assert isinstance(timeout, int)
         assert timeout > 0
         assert result.timeout_for_role("worker_explore") == 60
-        assert result.timeout_for_role("worker_fast") == 60
+        assert result.timeout_for_role("worker_fast") == 30
 
     def test_timeout_for_unknown_role(self):
         """Unknown role returns default timeout."""

@@ -669,7 +669,12 @@ class TimeoutsConfig:
 
     def for_role(self, role: str) -> int:
         """Get timeout for a specific role, falling back to default."""
-        normalized = str(Role.from_string(role) or role)
+        if role == "worker_explore":
+            normalized = "worker_general"
+        elif role == "worker_fast":
+            normalized = "worker_fast"
+        else:
+            normalized = str(Role.from_string(role) or role)
         _role_map = {
             "worker_explore": self.worker_explore,
             "worker_math": self.worker_math,
@@ -685,7 +690,7 @@ class TimeoutsConfig:
             "ingest_long_context": self.ingest_long_context,
             "architect_general": self.architect_general,
         }
-        if normalized in {"worker_explore", "worker_fast"}:
+        if normalized == "worker_explore":
             return self.worker_general
         return _role_map.get(normalized, self.default_request)
 
@@ -699,7 +704,7 @@ class TimeoutsConfig:
             "worker_general": self.worker_general,
             "worker_coder": self.worker_coder,
             "worker_code": self.worker_code,
-            "worker_fast": self.worker_general,
+            "worker_fast": self.worker_fast,
             "frontdoor": self.frontdoor,
             "coder_escalation": self.coder_escalation,
             "vision_escalation": self.vision_escalation,
