@@ -144,7 +144,10 @@ def test_system_card_uses_stack_priors_not_registry_or_removed_role(tmp_path: Pa
     assert "worker.gguf" not in card
     assert "candidate.gguf" not in card
     assert f"| {LEGACY_ARCHITECT_ROLE} |" not in card
-    assert f"{LEGACY_ARCHITECT_ROLE} is not an active server role" in card
+    assert (
+        f"{LEGACY_ARCHITECT_ROLE} is historical only; use architect_general "
+        "as the live architect server role and port."
+    ) in card
 
 
 def test_system_card_prefers_state_baseline_over_yaml(tmp_path: Path) -> None:

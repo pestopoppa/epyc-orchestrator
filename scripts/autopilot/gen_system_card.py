@@ -233,12 +233,13 @@ def generate_system_card(
     else:
         lines.append("- No active local server roles found in generated stack priors or registry.")
     legacy_architect_role = "architect" "_coding"
+    live_architect_role = "architect_general"
     if legacy_architect_role not in active_role_names:
         lines.extend(
             [
                 "",
-                f"- {legacy_architect_role} is not an active server role in stack priors; "
-                "do not target it as a live role or port.",
+                f"- {legacy_architect_role} is historical only; use {live_architect_role} "
+                "as the live architect server role and port.",
             ]
         )
 
