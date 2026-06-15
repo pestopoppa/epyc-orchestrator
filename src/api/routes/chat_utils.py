@@ -123,7 +123,8 @@ def _estimate_tokens(text: str) -> int:
 # unconditionally before sending to /completion. That broke silently after
 # the 2026-05-08 worker_general swap to gemma-4-26B-A4B-it (gemma uses
 # <start_of_turn>...<end_of_turn>, not <|im_start|>...<|im_end|>). Routes
-# to worker_explore/worker_general/worker_summarize started producing
+# to worker_general/worker_summarize (and worker_explore aliases via
+# worker_general) started producing
 # 0 tokens — gemma4 saw the Qwen markers as random tokens and refused to
 # generate, after which the orchestrator escalated to frontdoor (real cost:
 # ~60s of dead-loop time per request).
@@ -267,13 +268,14 @@ def apply_chat_template_for_role(
     """
     if not user_prompt or _is_already_templated(user_prompt):
         return user_prompt
+    canonical_role_name = str(Role.from_string(role_name) or role_name)
     if registry is None:
         # Legacy fallback: Qwen ChatML — matches pre-fix behavior for callers
         # that can't see the registry. The dominant stack is Qwen, so the
         # fallback is "right by default" for unknown-registry callers.
         return _TEMPLATE_QWEN_CHATML.format(user=user_prompt)
     try:
-        role = registry.get_role(role_name)  # type: ignore[attr-defined]
+        role = registry.get_role(canonical_role_name)  # type: ignore[attr-defined]
         model_name = getattr(role.model, "name", "") or ""
     except Exception as exc:
         log.warning(

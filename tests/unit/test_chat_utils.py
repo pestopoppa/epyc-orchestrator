@@ -4,6 +4,7 @@ Covers: _resolve_answer, _truncate_looped_answer, _is_stub_final,
 _strip_tool_outputs, _estimate_tokens, _should_formalize, RoutingResult.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
@@ -14,6 +15,7 @@ from src.api.routes.chat_utils import (
     _should_formalize,
     _strip_tool_outputs,
     _truncate_looped_answer,
+    apply_chat_template_for_role,
 )
 
 
@@ -162,6 +164,21 @@ class TestShouldFormalize:
         mock_detect.return_value = []
         should, spec = _should_formalize("Tell me a joke")
         assert should is False
+
+
+def test_apply_chat_template_for_role_canonicalizes_alias_before_registry_lookup():
+    registry = MagicMock()
+    registry.get_role.return_value = SimpleNamespace(model=SimpleNamespace(name="gemma4"))
+
+    with patch(
+        "src.api.routes.chat_utils.apply_chat_template_for_model",
+        return_value="templated",
+    ) as mock_template:
+        result = apply_chat_template_for_role("worker_explore", "Hello", registry)
+
+    registry.get_role.assert_called_once_with("worker_general")
+    mock_template.assert_called_once_with("gemma4", "Hello")
+    assert result == "templated"
 
 
 # ── RoutingResult ────────────────────────────────────────────────────────
