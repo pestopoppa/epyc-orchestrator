@@ -664,6 +664,12 @@ def test_base_role_normalization() -> None:
     assert dashboard_topology.base_role("") == ""
 
 
+def test_role_color_canonicalizes_worker_aliases() -> None:
+    assert dashboard_topology._role_color("worker_general") == "#10b981"
+    assert dashboard_topology._role_color("worker_explore") == "#10b981"
+    assert dashboard_topology._role_color("worker_explore.q1") == "#10b981"
+
+
 def test_scan_orchestrator_tasks_role_aware_inflight_cutoff(tmp_path) -> None:
     """Slow roles keep a wider in-flight ceiling; default roles are truncated."""
     log = tmp_path / "p.jsonl"

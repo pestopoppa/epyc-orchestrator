@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from src.roles import Role
 from src.registry.stack_priors import (
     live_stack_role_records,
     stack_prior_serving,
@@ -116,7 +117,6 @@ def _port_hint(port: int) -> str:
 _ROLE_COLORS: dict[str, str] = {
     "frontdoor": "#3b82f6",
     "worker_general": "#10b981",
-    "worker_explore": "#10b981",
     "worker_math": "#10b981",
     "architect_general": "#a855f7",
     "ingest_long_context": "#f59e0b",
@@ -160,6 +160,9 @@ def _role_color(role: str) -> str:
     m = re.match(r"^(.+?)_\d+$", base)
     if m and m.group(1) in _ROLE_COLORS:
         base = m.group(1)
+    canonical = Role.from_string(base)
+    if canonical is not None:
+        base = canonical.value
     return _ROLE_COLORS.get(base, "#64748b")
 
 
