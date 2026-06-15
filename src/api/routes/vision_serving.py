@@ -11,9 +11,6 @@ VISION_ROLES = frozenset({"worker_vision", "vision_escalation"})
 
 # Degraded fallback only. Normal vision serving discovery reads generated stack
 # priors first, then stack_manifest PORT_MAP before reaching this table.
-_LEGACY_VL_PORT_BY_ROLE = {"worker_vision": 8086, "vision_escalation": 8087}
-
-
 def manifest_vl_port_for_role(role: str) -> int | None:
     try:
         from scripts.server.stack_manifest import PORT_MAP
@@ -24,7 +21,10 @@ def manifest_vl_port_for_role(role: str) -> int | None:
 
 
 def fallback_vl_port_for_role(role: str) -> int:
-    return manifest_vl_port_for_role(role) or _LEGACY_VL_PORT_BY_ROLE.get(role, 8086)
+    port = manifest_vl_port_for_role(role)
+    if isinstance(port, int):
+        return port
+    return 8087 if role == "vision_escalation" else 8086
 
 
 def stack_prior_vl_ports(

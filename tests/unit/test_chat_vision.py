@@ -83,7 +83,16 @@ roles:
             "http://localhost:8087"
         )
 
-    def test_fallback_vl_port_uses_manifest_port(self):
+    def test_fallback_vl_port_prefers_manifest_port(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.api.routes.vision_serving.manifest_vl_port_for_role",
+            lambda role: 9991 if role == "worker_vision" else 9997,
+        )
+
+        assert _fallback_vl_port_for_role("worker_vision") == 9991
+        assert _fallback_vl_port_for_role("vision_escalation") == 9997
+
+    def test_fallback_vl_port_uses_legacy_fallback_when_manifest_missing(self):
         assert _fallback_vl_port_for_role("worker_vision") == 8086
         assert _fallback_vl_port_for_role("vision_escalation") == 8087
 
