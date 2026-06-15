@@ -54,14 +54,21 @@ def test_arch_alias_fallthrough_worker_summarize_inherits_frontdoor() -> None:
 
 def test_arch_alias_fallthrough_toolrunner_inherits_worker() -> None:
     aliased = _role_env_overrides("toolrunner")
-    expected = _ROLE_ENV_BLOCKS["worker"]
+    expected = _ROLE_ENV_BLOCKS["worker_general"]
     assert aliased == expected
 
 
 def test_worker_explore_alias_inherits_worker() -> None:
     aliased = _role_env_overrides("worker_explore")
-    expected = _ROLE_ENV_BLOCKS["worker"]
+    expected = _ROLE_ENV_BLOCKS["worker_general"]
     assert aliased == expected
+
+
+def test_worker_general_role_gets_ccd_stack_directly() -> None:
+    env = build_launch_env("worker_general", base_env={})
+    assert env["GGML_CCD_POOLS"] == "1"
+    assert env["GGML_CCD_WORK_DIST"] == "1"
+    assert env["GGML_BARRIER_LOCAL_BETWEEN_OPS"] == "1"
 
 
 def test_unknown_role_returns_empty_overrides() -> None:

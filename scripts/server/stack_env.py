@@ -63,7 +63,7 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     # MoE Q4 sync-bound (CPU1 stack +1.8% on Coder-30B Q4_K_M tg32, stable).
     # NB: GGML_NUMA_WEIGHTS deliberately excluded — DEPRECATED per CPU21 P3 isolation
     # (unstable, 19-22σ at warmed state). Uses 3-flag stable stack.
-    "worker": {
+    "worker_general": {
         "GGML_CCD_POOLS": "1",
         "GGML_CCD_WORK_DIST": "1",
         "GGML_BARRIER_LOCAL_BETWEEN_OPS": "1",
@@ -110,11 +110,15 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     "dense_q4": {},
 }
 
+_STACK_ENV_CANONICAL_ALIASES = {
+    "worker": "worker_general",
+}
+
 
 def _role_env_overrides(role: str) -> dict[str, str]:
     """Return per-role env block for a given role. Empty dict if role not registered.
     Falls back through arch-class aliases (e.g. coder_escalation → worker)."""
-    normalized = str(Role.from_string(role) or role)
+    normalized = _STACK_ENV_CANONICAL_ALIASES.get(role, str(Role.from_string(role) or role))
     if normalized in _ROLE_ENV_BLOCKS:
         return dict(_ROLE_ENV_BLOCKS[normalized])
     # Aliases — production roles that map to v5 arch_class names.
@@ -127,11 +131,10 @@ def _role_env_overrides(role: str) -> dict[str, str]:
     arch_aliases = {
         "coder_escalation": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
         "worker_summarize": "frontdoor",   # Qwen3.6-35B-A3B Q8 (same model as frontdoor since 2026-05-06 swap)
-        "worker_general": "worker",         # gemma4-26B-A4B Q4_K_M MTP — GGML_* env stripped at launch when binary_override is in effect (ik_llama.cpp PR #1744 forked at different ggml commit)
         "general_gemma_3_27b_it_qat": "dense_q4",
         "ingest_long_context": "hybrid_ssm_moe",  # Qwen3-Next-80B-A3B
         "formalizer": "dense_q8",                 # MathSmith-Qwen3-8B Q8 dense; NOT MoE at all
-        "toolrunner": "worker",                   # gemma4-26B-A4B Q4_K_M MTP (shares with worker_general)
+        "toolrunner": "worker_general",           # gemma4-26B-A4B Q4_K_M MTP (shares with worker_general)
     }
     aliased = arch_aliases.get(normalized)
     if aliased and aliased in _ROLE_ENV_BLOCKS:
