@@ -20,6 +20,7 @@ from typing import Any, Callable
 
 from src.config import get_config
 from src.env_parsing import env_float as _env_float
+from src.roles import Role
 from src.registry.stack_priors import (
     DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
     live_stack_role_records,
@@ -46,7 +47,6 @@ _LEGACY_HEAVY_ROLES = frozenset({
 
 _LEGACY_LIGHT_ROLES = frozenset({
     "worker_general",
-    "worker_explore",
     "worker_math",
     "toolrunner",
     "worker_vision",
@@ -401,10 +401,11 @@ def _lock_path(role: str) -> Path:
 
 
 def _is_heavy_role(role: str) -> bool:
-    if role in HEAVY_ROLES:
+    normalized = str(Role.from_string(role) or role)
+    if normalized in HEAVY_ROLES:
         return True
     # Default to heavy for unknown roles (safer for CPU contention)
-    return role not in LIGHT_ROLES
+    return normalized not in LIGHT_ROLES
 
 
 @contextmanager

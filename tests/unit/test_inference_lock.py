@@ -101,7 +101,6 @@ def test_lock_roles_missing_or_invalid_stack_priors_fails_closed(tmp_path):
 def test_degraded_fallback_roles_match_current_stack_shape():
     assert {
         "worker_general",
-        "worker_explore",
         "worker_math",
         "toolrunner",
         "worker_vision",
@@ -123,7 +122,9 @@ def test_is_heavy_role_uses_derived_sets_and_unknowns_fail_closed(monkeypatch):
 
     assert lock_mod._is_heavy_role("frontdoor") is True
     assert lock_mod._is_heavy_role("worker_general") is False
-    assert lock_mod._is_heavy_role("worker_fast") is True
+    assert lock_mod._is_heavy_role("worker_explore") is False
+    assert lock_mod._is_heavy_role("worker_fast") is False
+    assert lock_mod._is_heavy_role("made_up_role") is True
 
 
 def test_inference_lock_respects_explicit_shared_override(monkeypatch, tmp_path):
