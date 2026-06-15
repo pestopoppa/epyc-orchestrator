@@ -584,7 +584,7 @@ class TimeoutsConfig:
 
     # Role-specific request timeouts (read from registry.timeouts.roles.*)
     worker_explore: int = field(
-        default_factory=lambda: int(_registry_timeout("roles", "worker_explore", 60))
+        default_factory=lambda: int(_registry_timeout("roles", "worker_general", 60))
     )
     worker_math: int = field(
         default_factory=lambda: int(_registry_timeout("roles", "worker_math", 60))

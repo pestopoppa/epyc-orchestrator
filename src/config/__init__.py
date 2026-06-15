@@ -476,7 +476,7 @@ def _load_from_env() -> OrchestratorConfigData:
             # All defaults come from registry; env vars can override
             worker_explore=_env_int(
                 f"{P}TIMEOUTS_WORKER_EXPLORE",
-                int(_registry_timeout("roles", "worker_explore", 60)),
+                int(_registry_timeout("roles", "worker_general", 60)),
             ),
             worker_math=_env_int(
                 f"{P}TIMEOUTS_WORKER_MATH",

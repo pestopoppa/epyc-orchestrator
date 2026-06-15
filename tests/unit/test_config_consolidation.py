@@ -262,6 +262,26 @@ class TestTimeoutsDefaults:
         assert cfg.server_request == 600
         assert cfg.server_connect == 5
 
+    def test_worker_explore_timeout_canonicalizes_to_worker_general(self):
+        """worker_explore should inherit the live worker_general timeout."""
+        from src.config import get_config
+
+        def fake_registry_timeout(category: str, key: str, fallback: int | float) -> int | float:
+            if category == "roles" and key == "worker_general":
+                return 77
+            if category == "roles" and key == "worker_explore":
+                return 60
+            return fallback
+
+        with patch("src.config.models._registry_timeout", side_effect=fake_registry_timeout):
+            try:
+                get_config.cache_clear()
+                cfg = TimeoutsConfig()
+                assert cfg.worker_explore == 77
+                assert cfg.worker_general == 77
+            finally:
+                get_config.cache_clear()
+
 
 # ── MonitorConfigData defaults match generation_monitor.py ───────────────
 
