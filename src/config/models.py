@@ -276,7 +276,6 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
         "full:http://localhost:8072,http://localhost:8082,"
         "http://localhost:8182,http://localhost:8282,http://localhost:8382"
     ),
-    "worker_explore": "full:http://localhost:8072,http://localhost:8082",
     "worker_math": "full:http://localhost:8072,http://localhost:8082",
     "worker_vision": "http://localhost:8086",
     "vision_escalation": (
@@ -299,6 +298,7 @@ _LEGACY_SERVER_URL_FALLBACKS: dict[str, str] = {
 _STACK_PRIOR_SERVER_URL_ALIASES: dict[str, str] = {
     "coder": "coder_escalation",
     "worker": "worker_general",
+    "worker_explore": "worker_general",
     "worker_coder": "worker_fast",
 }
 _STACK_MANIFEST_SERVER_URL_ALIASES: dict[str, str] = {
@@ -383,7 +383,13 @@ def _stack_prior_server_urls() -> dict[str, str]:
 
 
 def _server_url_default(name: str) -> str:
-    return _stack_prior_server_urls().get(name, _LEGACY_SERVER_URL_FALLBACKS[name])
+    urls = _stack_prior_server_urls()
+    if name in urls:
+        return urls[name]
+    alias = _STACK_PRIOR_SERVER_URL_ALIASES.get(name) or _STACK_MANIFEST_SERVER_URL_ALIASES.get(name)
+    if alias and alias in urls:
+        return urls[alias]
+    return _LEGACY_SERVER_URL_FALLBACKS[alias or name]
 
 
 def reset_stack_prior_server_url_cache() -> None:

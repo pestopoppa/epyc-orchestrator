@@ -199,6 +199,7 @@ class TestServerURLsDefaults:
         assert "http://localhost:8080" in cfg.frontdoor
         assert "http://localhost:8070" in cfg.coder_escalation
         assert "http://localhost:8082" in cfg.worker_explore
+        assert cfg.worker_explore == cfg.worker_general
         # Single-instance roles keep simple URLs; quartered roles use full:.
         assert cfg.worker_vision == "http://localhost:8086"
         assert cfg.vision_escalation.startswith("full:http://localhost:8087")
@@ -621,6 +622,7 @@ roles:
             cfg = get_config()
             assert cfg.server_urls.worker_fast == "http://localhost:9902"
             assert cfg.server_urls.worker_coder == "http://localhost:9902"
+            assert cfg.server_urls.worker_explore == cfg.server_urls.worker_general
             assert cfg.server_urls.api_url == "http://localhost:9900"
             assert cfg.server_urls.ocr_server == "http://localhost:9901"
             assert cfg.server_urls.vision_api == "http://localhost:9900/v1/vision/analyze"
