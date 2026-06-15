@@ -95,6 +95,22 @@ class TestArithmeticInterceptor:
         assert result.matched
         assert "3.333" in result.result
 
+    def test_parabola_y_intercept_count(self):
+        result = try_intercept(
+            r"How many $y$-intercepts does the graph of the parabola "
+            r"$x = y^2 - 4y - 1$ have? Put your final answer in \boxed{}."
+        )
+        assert result.matched
+        assert result.pattern_name == "parabola_y_intercepts"
+        assert result.result == r"\boxed{2}"
+
+    def test_parabola_tangent_y_intercept_count(self):
+        result = try_intercept(
+            "How many y-intercepts does the graph of the parabola x = y^2 - 4y + 4 have?"
+        )
+        assert result.matched
+        assert result.result == "1"
+
     def test_rejects_non_numeric(self):
         """Expressions with letters should be rejected."""
         result = try_intercept("2 + x")

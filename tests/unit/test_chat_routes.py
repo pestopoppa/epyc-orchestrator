@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -597,6 +598,28 @@ class TestRewardEndpoint:
 
 class TestHandleChat:
     """Tests for _handle_chat dispatcher logic."""
+
+    @pytest.mark.asyncio
+    async def test_script_interception_returns_before_routing_when_enabled(self, mock_state):
+        request = ChatRequest(
+            prompt="How many y-intercepts does the graph of the parabola x = y^2 - 4y - 1 have?",
+            mock_mode=False,
+            real_mode=True,
+        )
+
+        with patch("src.api.routes.chat.features", return_value=SimpleNamespace(script_interception=True)), \
+             patch("src.api.routes.chat._route_request") as mock_route:
+            result = await _handle_chat(request, mock_state)
+
+        mock_route.assert_not_called()
+        mock_state.increment_request.assert_called_once_with(mock_mode=False, turns=0)
+        assert result.answer == "2"
+        assert result.turns == 0
+        assert result.tokens_used == 0
+        assert result.real_mode is False
+        assert result.routed_to == "local_script"
+        assert result.routing_strategy == "script_interception:parabola_y_intercepts"
+        assert result.mode == "script_interception"
 
     @pytest.mark.asyncio
     async def test_dispatches_to_execute_mock(self, mock_state):

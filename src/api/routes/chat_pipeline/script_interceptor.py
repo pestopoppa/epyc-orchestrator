@@ -112,6 +112,68 @@ def _handle_arithmetic(match: re.Match) -> str | None:
         return None  # eval failed — fall through
 
 
+def _parse_y_polynomial(rhs: str) -> tuple[float, float, float] | None:
+    """Parse a small polynomial in y into ay^2 + by + c coefficients."""
+    expr = rhs.replace(" ", "").replace("**", "^")
+    if not expr or not re.fullmatch(r"[+\-\d\.y\^*/]+", expr):
+        return None
+
+    coeffs = [0.0, 0.0, 0.0]
+    for term in re.findall(r"[+-]?[^+-]+", expr):
+        if not term:
+            continue
+        if "y^2" in term:
+            raw_coeff = term.replace("*", "").replace("y^2", "")
+            degree = 2
+        elif term.endswith("y") or "*y" in term:
+            raw_coeff = term.replace("*", "").replace("y", "")
+            degree = 1
+        else:
+            raw_coeff = term
+            degree = 0
+
+        if raw_coeff in ("", "+"):
+            value = 1.0
+        elif raw_coeff == "-":
+            value = -1.0
+        else:
+            try:
+                value = float(raw_coeff)
+            except ValueError:
+                return None
+        coeffs[2 - degree] += value
+    return tuple(coeffs)  # type: ignore[return-value]
+
+
+def _format_count_result(count: int, prompt: str) -> str:
+    if "boxed" in prompt.lower():
+        return rf"\boxed{{{count}}}"
+    return str(count)
+
+
+def _handle_parabola_y_intercept_count(match: re.Match) -> str | None:
+    """Count real y-intercepts for parabolas expressed as x = f(y)."""
+    prompt = match.string
+    parsed = _parse_y_polynomial(match.group("rhs"))
+    if parsed is None:
+        return None
+
+    a, b, c = parsed
+    if a == 0.0:
+        if b == 0.0:
+            return None
+        return _format_count_result(1, prompt)
+
+    discriminant = (b * b) - (4 * a * c)
+    if discriminant > 0:
+        count = 2
+    elif discriminant == 0:
+        count = 1
+    else:
+        count = 0
+    return _format_count_result(count, prompt)
+
+
 def _handle_uuid(match: re.Match) -> str:
     """Generate a UUID v4."""
     import uuid
@@ -152,6 +214,13 @@ register_interceptor(
     r"(?P<expr>[\d\(][\d\s\+\-\*\/\.\(\)%]{1,80}[\d\)])"
     r"(?:\s*[=?]?\s*)$",
     _handle_arithmetic,
+)
+
+register_interceptor(
+    "parabola_y_intercepts",
+    r"(?=.*(?:\$?y\$?-intercepts?))(?=.*\bparabola\b).*?"
+    r"\$?x\s*=\s*(?P<rhs>[-+*/\d\s.y\^]+?)(?:\s+(?:have|has)\b|[?$]|$)",
+    _handle_parabola_y_intercept_count,
 )
 
 register_interceptor(

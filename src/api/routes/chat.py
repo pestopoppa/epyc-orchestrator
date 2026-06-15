@@ -104,6 +104,7 @@ from src.api.routes.chat_pipeline import (
     _annotate_error,
     _attach_budget_diagnostics,
 )
+from src.api.routes.chat_pipeline.script_interceptor import try_intercept
 
 # Factual question prefixes that the coding cheap-first model handles poorly.
 # Prompts starting with these are routed past cheap-first to frontdoor/REPL
@@ -534,6 +535,7 @@ async def _handle_chat(
     independently testable stage functions.
 
     Pipeline:
+        0. try_intercept()      → zero-token local response (flag-gated)
         1. _route_request()     → RoutingResult (role, strategy, timeout)
         2. _preprocess()        → input formalization (mutates request)
         3. _execute_mock()      → ChatResponse (mock mode early return)
@@ -545,6 +547,26 @@ async def _handle_chat(
         9. _annotate_error()    → set error_code/error_detail on failures
     """
     start_time = time.perf_counter()
+
+    # Stage 0: zero-cost local resolution for deterministic prompts.
+    if features().script_interception:
+        interception = try_intercept(request.prompt)
+        if interception.matched:
+            elapsed = time.perf_counter() - start_time
+            state.increment_request(mock_mode=False, turns=0)
+            return ChatResponse(
+                answer=interception.result or "",
+                turns=0,
+                tokens_used=0,
+                elapsed_seconds=elapsed,
+                mock_mode=False,
+                real_mode=False,
+                routed_to="local_script",
+                role_history=["local_script"],
+                routing_strategy=f"script_interception:{interception.pattern_name}",
+                mode="script_interception",
+                generation_ms=interception.elapsed_ms,
+            )
 
     # Stage 1: Routing
     routing = _route_request(request, state)
