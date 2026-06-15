@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from src.roles import Role
 from src.proactive_delegation.types import (
     ComplexitySignals,
     TaskComplexity,
@@ -45,15 +46,16 @@ THINKING_TRIGGERS = [
 
 # Role mapping for TaskIR agents to registry roles
 ROLE_MAPPING = {
-    "frontdoor": "frontdoor",
-    "coder": "coder_escalation",
-    "ingest": "ingest_long_context",
-    "architect": "architect_general",
-    "worker": "worker_general",
-    "docwriter": "worker_general",
-    "math": "worker_math",
-    "vision": "worker_vision",
-    "toolrunner": "toolrunner",
+    "frontdoor": Role.FRONTDOOR.value,
+    "coder": Role.CODER_ESCALATION.value,
+    "ingest": Role.INGEST_LONG_CONTEXT.value,
+    "architect": Role.ARCHITECT_GENERAL.value,
+    "worker": Role.WORKER_GENERAL.value,
+    "worker_general": Role.WORKER_GENERAL.value,
+    "docwriter": Role.WORKER_GENERAL.value,
+    "math": Role.WORKER_MATH.value,
+    "vision": Role.WORKER_VISION.value,
+    "toolrunner": Role.TOOLRUNNER.value,
     "formalizer": "formalizer",
 }
 

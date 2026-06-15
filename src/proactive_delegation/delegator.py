@@ -7,6 +7,7 @@ import time
 import uuid
 from typing import Any, TYPE_CHECKING
 
+from src.roles import Role
 from src.proactive_delegation.types import (
     AggregatedResult,
     ComplexitySignals,
@@ -294,8 +295,12 @@ class ProactiveDelegator:
         actor = step.get("actor", "worker")
         step.get("action", "")
 
-        # Map actor to registry role
-        role = ROLE_MAPPING.get(actor, "worker_general")
+        # Map actor to registry role.
+        # Canonical roles like worker_explore/worker_fast resolve to the live
+        # worker_general path before the legacy actor fallback is applied.
+        canonical_actor = Role.from_string(actor)
+        role_key = canonical_actor.value if canonical_actor is not None else actor
+        role = ROLE_MAPPING.get(role_key, ROLE_MAPPING.get(actor, Role.WORKER_GENERAL.value))
 
         # Build prompt for specialist
         prompt = self._build_specialist_prompt(task_ir, step)
