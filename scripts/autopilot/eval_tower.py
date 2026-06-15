@@ -1091,6 +1091,8 @@ class EvalTower:
             "every_n_trials": max(
                 1, _env_int("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS", 1)
             ),
+            "shadow_only": os.environ.get("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "1")
+            != "0",
         }
 
         if configured_core_path and not configured_core_id:
@@ -1215,7 +1217,31 @@ class EvalTower:
         with httpx.Client(timeout=self.timeout) as client:
             results = self._eval_batch(questions, client, log_every=10, label="T1")
 
-        result = self._aggregate(results, tier=1)
+        full_result = self._aggregate(results, tier=1)
+        # W6 audit rows are an overfit/generalization signal. Keep them in the
+        # per-question ledger, but keep decision metrics paired-core-only by default.
+        if audit_policy["active"] and audit_policy["shadow_only"]:
+            decision_results = [
+                r for r in results if (r.eval_partition or "core") != "audit"
+            ]
+            result = self._aggregate(decision_results, tier=1)
+            result.question_results = full_result.question_results
+            for key in (
+                "partition_quality",
+                "partition_counts",
+                "partition_suite_quality",
+            ):
+                result.details[key] = full_result.details.get(key, {})
+            result.details.update(
+                {
+                    "audit_shadow_only": True,
+                    "audit_shadow_total_n_questions": full_result.n_questions,
+                    "audit_shadow_decision_n_questions": result.n_questions,
+                    "audit_shadow_excluded_partitions": ["audit"],
+                }
+            )
+        else:
+            result = full_result
         result.core_id = core_id
         result.details.update(
             {

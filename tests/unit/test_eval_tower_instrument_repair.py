@@ -543,7 +543,7 @@ def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
                 suite=q["suite"],
                 prompt=q["prompt"],
                 expected=q["expected"],
-                correct=True,
+                correct=q["eval_partition"] == "core",
                 tokens_generated=1,
                 elapsed_s=1.0,
                 eval_partition=q["eval_partition"],
@@ -561,15 +561,90 @@ def test_eval_t1_w6_audit_block_appends_trial_seeded_questions(
         ("audit-math", "audit"),
     ]
     assert result.core_id == "core_v2"
-    assert result.n_questions == 3
+    assert result.n_questions == 1
+    assert result.quality == 3.0
     assert result.details["base_core_questions"] == 1
     assert result.details["base_audit_questions"] == 2
     assert result.details["audit_policy"]["active"] is True
+    assert result.details["audit_policy"]["shadow_only"] is True
     assert result.details["audit_policy"]["trial_id"] == 17
     assert result.details["audit_policy"]["actual_n"] == 2
+    assert result.details["audit_shadow_only"] is True
+    assert result.details["audit_shadow_total_n_questions"] == 3
+    assert result.details["audit_shadow_decision_n_questions"] == 1
     assert result.details["partition_counts"] == {"core": 1, "audit": 2}
+    assert result.details["partition_quality"] == {"core": 3.0, "audit": 0.0}
+    assert len(result.question_results) == 3
     audit_rows = [row for row in result.question_results if row["partition"] == "audit"]
     assert {row["suite"] for row in audit_rows} == {"math", "coder"}
+
+
+def test_eval_t1_w6_audit_block_can_count_audit_in_decision_metrics(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    core_path = tmp_path / "core_v2.jsonl"
+    rows = [
+        {"__core_metadata__": True, "core_id": "core_v2"},
+        {
+            "id": "core-a",
+            "suite": "math",
+            "prompt": "2+2?",
+            "expected": "4",
+            "scoring_method": "exact_match",
+        },
+    ]
+    core_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_ID", "core_v2")
+    monkeypatch.setenv("AUTOPILOT_T1_CORE_PATH", str(core_path))
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_BLOCK", "1")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_N", "2")
+    monkeypatch.setenv("AUTOPILOT_W6_AUDIT_SHADOW_ONLY", "0")
+    tower = EvalTower()
+    tower._pool = {
+        "math": [
+            {
+                "id": "audit-math",
+                "suite": "math",
+                "prompt": "3+4?",
+                "expected": "7",
+                "scoring_method": "exact_match",
+            },
+        ],
+        "coder": [
+            {
+                "id": "audit-coder",
+                "suite": "coder",
+                "prompt": "Return x",
+                "expected": "x",
+                "scoring_method": "exact_match",
+            },
+        ],
+    }
+
+    def _fake_eval_batch(self, questions, client, **_kwargs):  # noqa: ANN001, ARG001
+        return [
+            QuestionResult(
+                question_id=q["id"],
+                suite=q["suite"],
+                prompt=q["prompt"],
+                expected=q["expected"],
+                correct=q["eval_partition"] == "core",
+                tokens_generated=1,
+                elapsed_s=1.0,
+                eval_partition=q["eval_partition"],
+            )
+            for q in questions
+        ]
+
+    monkeypatch.setattr(EvalTower, "_eval_batch", _fake_eval_batch)
+
+    result = tower.eval_t1(n=999, seed=123, trial_id=17)
+
+    assert result.n_questions == 3
+    assert result.quality == 1.0
+    assert result.details["audit_policy"]["shadow_only"] is False
+    assert "audit_shadow_only" not in result.details
 
 
 def test_eval_t1_w6_audit_block_honors_cadence(tmp_path, monkeypatch) -> None:
