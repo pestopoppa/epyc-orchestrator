@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.roles import Role
 from src.registry.stack_priors import (
     DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
     live_stack_role_records,
@@ -195,7 +196,8 @@ def should_stream_role(role: str) -> bool:
         return False
     if mode == "force":
         return True
-    return role not in SAFE_NON_STREAM_ROLES
+    normalized = str(Role.from_string(role) or role)
+    return normalized not in SAFE_NON_STREAM_ROLES
 
 
 def _topology_hash() -> str:

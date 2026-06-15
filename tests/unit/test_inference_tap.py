@@ -58,6 +58,8 @@ class TestStreamPolicy:
         assert should_stream_role("architect_general") is False
         assert should_stream_role("vision_escalation") is True
         assert should_stream_role("ingest_long_context") is True
+        assert should_stream_role("worker_explore") is True
+        assert should_stream_role("worker_fast") is True
 
     def test_safe_non_stream_roles_derive_from_stack_priors(self, tmp_path, monkeypatch):
         import src.runtime.inference_tap as tap
@@ -99,9 +101,15 @@ class TestStreamPolicy:
         import src.runtime.inference_tap as tap
 
         monkeypatch.setenv("INFERENCE_TAP_STREAM_MODE", "safe")
-        monkeypatch.setattr(tap, "SAFE_NON_STREAM_ROLES", frozenset({"huge_role"}))
+        monkeypatch.setattr(
+            tap,
+            "SAFE_NON_STREAM_ROLES",
+            frozenset({"worker_general", "huge_role"}),
+        )
 
         assert should_stream_role("huge_role") is False
+        assert should_stream_role("worker_explore") is False
+        assert should_stream_role("worker_fast") is False
         assert should_stream_role("architect_general") is True
 
     def test_should_stream_role_force_mode(self, monkeypatch):
