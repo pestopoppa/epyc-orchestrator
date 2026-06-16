@@ -232,6 +232,8 @@ class WinnerTable:
     fallback_role: str = DEFAULT_FALLBACK_ROLE
     source: Path | None = None
     version: str = "xmas-v1"
+    provenance: dict[str, Any] = field(default_factory=dict)
+    evidence: dict[XmasCell, dict[str, Any]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _validate_role(self.fallback_role)
@@ -269,6 +271,30 @@ class WinnerTable:
             keys = ", ".join(cell.key for cell in missing)
             raise ValueError(f"winner table is missing {len(missing)} cells: {keys}")
 
+    def missing_evidence_cells(self) -> list[XmasCell]:
+        """Return complete-table cells without usable eval evidence."""
+        return [
+            cell
+            for cell in [
+                XmasCell(domain=domain, function=function)
+                for domain in XMAS_DOMAINS
+                for function in XMAS_FUNCTIONS
+            ]
+            if not _is_cell_evidence_backed(cell, self.cells.get(cell), self.evidence.get(cell))
+        ]
+
+    def require_evidence_backed(self) -> None:
+        """Raise unless every 5x5 cell has provenance-backed evidence."""
+        self.require_complete()
+        if not _is_provenance_backed(self.provenance):
+            raise ValueError("winner table is missing evidence provenance.source_results")
+        missing = self.missing_evidence_cells()
+        if missing:
+            keys = ", ".join(cell.key for cell in missing)
+            raise ValueError(
+                f"winner table is missing evidence for {len(missing)} cells: {keys}"
+            )
+
     @classmethod
     def from_mapping(
         cls,
@@ -276,6 +302,7 @@ class WinnerTable:
         *,
         source: Path | None = None,
         require_complete: bool = False,
+        require_evidence: bool = False,
     ) -> "WinnerTable":
         """Build a winner table from a parsed JSON/YAML payload."""
         if not isinstance(payload, dict):
@@ -300,14 +327,42 @@ class WinnerTable:
                 _validate_role(role)
                 cells[XmasCell(domain=domain, function=function)] = role
 
+        raw_evidence = payload.get("evidence", {})
+        if raw_evidence is None:
+            raw_evidence = {}
+        if not isinstance(raw_evidence, dict):
+            raise ValueError("winner table evidence must be a mapping")
+        evidence: dict[XmasCell, dict[str, Any]] = {}
+        for raw_domain, function_map in raw_evidence.items():
+            domain = str(raw_domain)
+            _validate_domain(domain)
+            if not isinstance(function_map, dict):
+                raise ValueError(f"evidence.{domain} must be a mapping")
+            for raw_function, raw_cell_evidence in function_map.items():
+                function = str(raw_function)
+                _validate_function(function)
+                if not isinstance(raw_cell_evidence, dict):
+                    raise ValueError(f"evidence.{domain}.{function} must be a mapping")
+                evidence[XmasCell(domain=domain, function=function)] = raw_cell_evidence
+
+        raw_provenance = payload.get("provenance", {})
+        if raw_provenance is None:
+            raw_provenance = {}
+        if not isinstance(raw_provenance, dict):
+            raise ValueError("winner table provenance must be a mapping")
+
         table = cls(
             cells=cells,
             fallback_role=fallback_role,
             source=source,
             version=version,
+            provenance=raw_provenance,
+            evidence=evidence,
         )
         if require_complete:
             table.require_complete()
+        if require_evidence:
+            table.require_evidence_backed()
         return table
 
 
@@ -433,6 +488,7 @@ def build_xmas_routing_metadata(
         table = load_winner_table(
             cfg.winner_table_path,
             require_complete=cfg.require_complete_table or cfg.mode == "enforce",
+            require_evidence=cfg.mode == "enforce",
         )
     except FileNotFoundError:
         meta["winner_table_status"] = "missing"
@@ -446,7 +502,12 @@ def build_xmas_routing_metadata(
     return meta
 
 
-def load_winner_table(path: str | Path, *, require_complete: bool = False) -> WinnerTable:
+def load_winner_table(
+    path: str | Path,
+    *,
+    require_complete: bool = False,
+    require_evidence: bool = False,
+) -> WinnerTable:
     """Load an X-MAS winner table from JSON or YAML."""
     table_path = Path(path)
     try:
@@ -459,6 +520,7 @@ def load_winner_table(path: str | Path, *, require_complete: bool = False) -> Wi
         payload,
         source=table_path,
         require_complete=require_complete,
+        require_evidence=require_evidence,
     )
 
 
@@ -527,6 +589,43 @@ def _clamped_float(value: object, fallback: float) -> float:
     if parsed > 1.0:
         return 1.0
     return parsed
+
+
+def _is_provenance_backed(provenance: dict[str, Any]) -> bool:
+    source_results = provenance.get("source_results")
+    if isinstance(source_results, list):
+        return all(isinstance(item, str) and item.strip() for item in source_results)
+    return isinstance(source_results, str) and bool(source_results.strip())
+
+
+def _is_cell_evidence_backed(
+    cell: XmasCell,
+    winner: str | None,
+    cell_evidence: dict[str, Any] | None,
+) -> bool:
+    if winner is None or cell_evidence is None:
+        return False
+    if str(cell_evidence.get("winner") or "") != winner:
+        return False
+    source_summary_path = cell_evidence.get("source_summary_path")
+    if not isinstance(source_summary_path, str) or not source_summary_path.strip():
+        return False
+    sample_count = cell_evidence.get("sample_count")
+    if not isinstance(sample_count, int) or sample_count <= 0:
+        return False
+    candidates = cell_evidence.get("candidates")
+    if not isinstance(candidates, dict) or winner not in candidates:
+        return False
+    winner_metrics = candidates.get(winner)
+    if not isinstance(winner_metrics, dict):
+        return False
+    total = winner_metrics.get("total")
+    correct = winner_metrics.get("correct")
+    if not isinstance(total, int) or total <= 0:
+        return False
+    if not isinstance(correct, int):
+        return False
+    return cell_evidence.get("cell") in {None, cell.key}
 
 
 def _validate_domain(domain: str) -> None:

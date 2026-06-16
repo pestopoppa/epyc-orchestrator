@@ -4,6 +4,8 @@ import pytest
 import yaml
 
 from src.classifiers.xmas_routing import (
+    XMAS_DOMAINS,
+    XMAS_FUNCTIONS,
     WinnerTable,
     XmasRoutingConfig,
     XmasCell,
@@ -13,6 +15,45 @@ from src.classifiers.xmas_routing import (
     load_winner_table,
 )
 from src.classifiers.config_loader import reset_classifier_config
+
+
+def _complete_evidence_backed_table_payload() -> dict:
+    cells = {
+        domain: {function: "frontdoor" for function in XMAS_FUNCTIONS}
+        for domain in XMAS_DOMAINS
+    }
+    evidence = {
+        domain: {
+            function: {
+                "cell": f"{domain}:{function}",
+                "winner": "frontdoor",
+                "sample_count": 3,
+                "source_summary_path": f"summary.table.{domain}.frontdoor",
+                "candidates": {
+                    "frontdoor": {
+                        "correct": 3,
+                        "total": 3,
+                        "accuracy": 1.0,
+                        "wall_mean_s": 1.0,
+                    }
+                },
+            }
+            for function in XMAS_FUNCTIONS
+        }
+        for domain in XMAS_DOMAINS
+    }
+    return {
+        "version": "xmas-test",
+        "fallback_role": "frontdoor",
+        "provenance": {
+            "source_results": [
+                "data/research/2026-05-20-xmas-v3-25tasks-nothink/results.json"
+            ],
+            "generator": "scripts/research/xmas_winner_table.py",
+        },
+        "cells": cells,
+        "evidence": evidence,
+    }
 
 
 def test_classify_math_verify_cell() -> None:
@@ -116,6 +157,32 @@ def test_winner_table_can_require_complete_5x5_table() -> None:
             },
             require_complete=True,
         )
+
+
+def test_winner_table_can_require_evidence_backed_5x5_table() -> None:
+    table = WinnerTable.from_mapping(
+        _complete_evidence_backed_table_payload(),
+        require_evidence=True,
+    )
+
+    assert table.winner_for("knowledge", "solve") == "frontdoor"
+    assert table.provenance["generator"] == "scripts/research/xmas_winner_table.py"
+
+
+def test_winner_table_requires_evidence_provenance() -> None:
+    payload = _complete_evidence_backed_table_payload()
+    payload["provenance"] = {}
+
+    with pytest.raises(ValueError, match="provenance.source_results"):
+        WinnerTable.from_mapping(payload, require_evidence=True)
+
+
+def test_winner_table_requires_cell_evidence_matching_winner() -> None:
+    payload = _complete_evidence_backed_table_payload()
+    payload["evidence"]["math"]["solve"]["winner"] = "architect_general"
+
+    with pytest.raises(ValueError, match="missing evidence for 1 cells: math:solve"):
+        WinnerTable.from_mapping(payload, require_evidence=True)
 
 
 def test_xmas_config_defaults_off(monkeypatch, tmp_path) -> None:
@@ -225,6 +292,52 @@ def test_enforce_metadata_requires_complete_winner_table(tmp_path) -> None:
     assert meta["winner_table_status"] == "invalid"
     assert "missing 24 cells" in meta["winner_table_error"]
     assert meta["applied"] is False
+
+
+def test_enforce_metadata_requires_evidence_backed_winner_table(tmp_path) -> None:
+    table_path = tmp_path / "xmas.yaml"
+    payload = _complete_evidence_backed_table_payload()
+    payload.pop("evidence")
+    table_path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    cfg = XmasRoutingConfig(
+        mode="enforce",
+        confidence_threshold=0.55,
+        winner_table_path=table_path,
+    )
+
+    meta = build_xmas_routing_metadata(
+        "Refactor this Python function and fix the bug.",
+        config=cfg,
+    )
+
+    assert meta is not None
+    assert meta["mode"] == "enforce"
+    assert meta["suggested_role"] is None
+    assert meta["winner_table_status"] == "invalid"
+    assert "missing evidence for 25 cells" in meta["winner_table_error"]
+
+
+def test_enforce_metadata_loads_complete_evidence_backed_table(tmp_path) -> None:
+    table_path = tmp_path / "xmas.yaml"
+    table_path.write_text(
+        yaml.safe_dump(_complete_evidence_backed_table_payload()),
+        encoding="utf-8",
+    )
+    cfg = XmasRoutingConfig(
+        mode="enforce",
+        confidence_threshold=0.55,
+        winner_table_path=table_path,
+    )
+
+    meta = build_xmas_routing_metadata(
+        "Refactor this Python function and fix the bug.",
+        config=cfg,
+    )
+
+    assert meta is not None
+    assert meta["mode"] == "enforce"
+    assert meta["suggested_role"] == "frontdoor"
+    assert meta["winner_table_status"] == "loaded"
 
 
 def test_build_xmas_metadata_survives_missing_table(tmp_path) -> None:

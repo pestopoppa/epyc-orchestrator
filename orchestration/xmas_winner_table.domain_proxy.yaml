@@ -1,0 +1,767 @@
+version: xmas-v1-domain-proxy
+fallback_role: frontdoor
+provenance:
+  generated_at: '2026-06-16T00:05:27Z'
+  generator: scripts/research/xmas_winner_table.py
+  source_results:
+  - data/research/2026-05-20-xmas-v3-25tasks-nothink/results.json
+  source_started_at: '2026-05-20T12:18:51Z'
+  source_n_tasks: 25
+  source_n_models: 4
+  winner_rule: correct_desc_then_wall_mean_s_asc
+  derivation_mode: domain_winner_reused_for_function
+  domains:
+  - math
+  - code
+  - knowledge
+  - long_context
+  - reasoning
+  functions:
+  - solve
+  - verify
+  - plan
+  - refine
+  - extract
+  domain_winners:
+    math: worker_general
+    code: worker_general
+    knowledge: frontdoor
+    long_context: worker_general
+    reasoning: frontdoor
+cells:
+  math:
+    solve: worker_general
+    verify: worker_general
+    plan: worker_general
+    refine: worker_general
+    extract: worker_general
+  code:
+    solve: worker_general
+    verify: worker_general
+    plan: worker_general
+    refine: worker_general
+    extract: worker_general
+  knowledge:
+    solve: frontdoor
+    verify: frontdoor
+    plan: frontdoor
+    refine: frontdoor
+    extract: frontdoor
+  long_context:
+    solve: worker_general
+    verify: worker_general
+    plan: worker_general
+    refine: worker_general
+    extract: worker_general
+  reasoning:
+    solve: frontdoor
+    verify: frontdoor
+    plan: frontdoor
+    refine: frontdoor
+    extract: frontdoor
+evidence:
+  math:
+    solve:
+      cell: math:solve
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: math
+      source_summary_path: summary.table.math.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 31.56183244700078
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 6.2505485647998285
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 33.10967554859817
+        ingest_long_context:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 76.81913372319832
+    verify:
+      cell: math:verify
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: math
+      source_summary_path: summary.table.math.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 31.56183244700078
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 6.2505485647998285
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 33.10967554859817
+        ingest_long_context:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 76.81913372319832
+    plan:
+      cell: math:plan
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: math
+      source_summary_path: summary.table.math.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 31.56183244700078
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 6.2505485647998285
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 33.10967554859817
+        ingest_long_context:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 76.81913372319832
+    refine:
+      cell: math:refine
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: math
+      source_summary_path: summary.table.math.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 31.56183244700078
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 6.2505485647998285
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 33.10967554859817
+        ingest_long_context:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 76.81913372319832
+    extract:
+      cell: math:extract
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: math
+      source_summary_path: summary.table.math.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 31.56183244700078
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 6.2505485647998285
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 33.10967554859817
+        ingest_long_context:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 76.81913372319832
+  code:
+    solve:
+      cell: code:solve
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: code
+      source_summary_path: summary.table.code.worker_general
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 41.00742522780202
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 9.404123993200482
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.520195190404775
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 42.74948091839906
+    verify:
+      cell: code:verify
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: code
+      source_summary_path: summary.table.code.worker_general
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 41.00742522780202
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 9.404123993200482
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.520195190404775
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 42.74948091839906
+    plan:
+      cell: code:plan
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: code
+      source_summary_path: summary.table.code.worker_general
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 41.00742522780202
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 9.404123993200482
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.520195190404775
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 42.74948091839906
+    refine:
+      cell: code:refine
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: code
+      source_summary_path: summary.table.code.worker_general
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 41.00742522780202
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 9.404123993200482
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.520195190404775
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 42.74948091839906
+    extract:
+      cell: code:extract
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: code
+      source_summary_path: summary.table.code.worker_general
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 41.00742522780202
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 9.404123993200482
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.520195190404775
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 42.74948091839906
+  knowledge:
+    solve:
+      cell: knowledge:solve
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: knowledge
+      source_summary_path: summary.table.knowledge.frontdoor
+      candidates:
+        frontdoor:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 1.6749701782042394
+        worker_general:
+          correct: 0
+          total: 5
+          accuracy: 0.0
+          wall_mean_s: 15.641905455398955
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 4.478690437602927
+        ingest_long_context:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.575277487799758
+    verify:
+      cell: knowledge:verify
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: knowledge
+      source_summary_path: summary.table.knowledge.frontdoor
+      candidates:
+        frontdoor:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 1.6749701782042394
+        worker_general:
+          correct: 0
+          total: 5
+          accuracy: 0.0
+          wall_mean_s: 15.641905455398955
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 4.478690437602927
+        ingest_long_context:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.575277487799758
+    plan:
+      cell: knowledge:plan
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: knowledge
+      source_summary_path: summary.table.knowledge.frontdoor
+      candidates:
+        frontdoor:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 1.6749701782042394
+        worker_general:
+          correct: 0
+          total: 5
+          accuracy: 0.0
+          wall_mean_s: 15.641905455398955
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 4.478690437602927
+        ingest_long_context:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.575277487799758
+    refine:
+      cell: knowledge:refine
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: knowledge
+      source_summary_path: summary.table.knowledge.frontdoor
+      candidates:
+        frontdoor:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 1.6749701782042394
+        worker_general:
+          correct: 0
+          total: 5
+          accuracy: 0.0
+          wall_mean_s: 15.641905455398955
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 4.478690437602927
+        ingest_long_context:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.575277487799758
+    extract:
+      cell: knowledge:extract
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: knowledge
+      source_summary_path: summary.table.knowledge.frontdoor
+      candidates:
+        frontdoor:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 1.6749701782042394
+        worker_general:
+          correct: 0
+          total: 5
+          accuracy: 0.0
+          wall_mean_s: 15.641905455398955
+        architect_general:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 4.478690437602927
+        ingest_long_context:
+          correct: 1
+          total: 5
+          accuracy: 0.2
+          wall_mean_s: 2.575277487799758
+  long_context:
+    solve:
+      cell: long_context:solve
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: long_context
+      source_summary_path: summary.table.long_context.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 10.783774673601147
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 4.340458169602789
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 22.724478595799884
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 17.818677917399327
+    verify:
+      cell: long_context:verify
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: long_context
+      source_summary_path: summary.table.long_context.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 10.783774673601147
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 4.340458169602789
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 22.724478595799884
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 17.818677917399327
+    plan:
+      cell: long_context:plan
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: long_context
+      source_summary_path: summary.table.long_context.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 10.783774673601147
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 4.340458169602789
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 22.724478595799884
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 17.818677917399327
+    refine:
+      cell: long_context:refine
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: long_context
+      source_summary_path: summary.table.long_context.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 10.783774673601147
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 4.340458169602789
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 22.724478595799884
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 17.818677917399327
+    extract:
+      cell: long_context:extract
+      winner: worker_general
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: long_context
+      source_summary_path: summary.table.long_context.worker_general
+      candidates:
+        frontdoor:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 10.783774673601147
+        worker_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 4.340458169602789
+        architect_general:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 22.724478595799884
+        ingest_long_context:
+          correct: 5
+          total: 5
+          accuracy: 1.0
+          wall_mean_s: 17.818677917399327
+  reasoning:
+    solve:
+      cell: reasoning:solve
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: reasoning
+      source_summary_path: summary.table.reasoning.frontdoor
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 24.69159019679937
+        worker_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.5404137265955796
+        architect_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.7423281037976267
+        ingest_long_context:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 74.3674727015954
+    verify:
+      cell: reasoning:verify
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: reasoning
+      source_summary_path: summary.table.reasoning.frontdoor
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 24.69159019679937
+        worker_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.5404137265955796
+        architect_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.7423281037976267
+        ingest_long_context:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 74.3674727015954
+    plan:
+      cell: reasoning:plan
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: reasoning
+      source_summary_path: summary.table.reasoning.frontdoor
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 24.69159019679937
+        worker_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.5404137265955796
+        architect_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.7423281037976267
+        ingest_long_context:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 74.3674727015954
+    refine:
+      cell: reasoning:refine
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: reasoning
+      source_summary_path: summary.table.reasoning.frontdoor
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 24.69159019679937
+        worker_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.5404137265955796
+        architect_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.7423281037976267
+        ingest_long_context:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 74.3674727015954
+    extract:
+      cell: reasoning:extract
+      winner: frontdoor
+      sample_count: 5
+      derivation: domain_winner_reused_for_function
+      source_domain: reasoning
+      source_summary_path: summary.table.reasoning.frontdoor
+      candidates:
+        frontdoor:
+          correct: 4
+          total: 5
+          accuracy: 0.8
+          wall_mean_s: 24.69159019679937
+        worker_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.5404137265955796
+        architect_general:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 0.7423281037976267
+        ingest_long_context:
+          correct: 2
+          total: 5
+          accuracy: 0.4
+          wall_mean_s: 74.3674727015954
