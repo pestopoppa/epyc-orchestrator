@@ -1,0 +1,357 @@
+schema_version: 1
+generated_at: "2026-06-12T20:56:32Z"
+status: "phase_1_measured_proxy"
+owner: "frontier-f1-real-task-corpus W1"
+purpose: >-
+  First-pass demand-side workload taxonomy for promotion, routing, and
+  real-suite design. Counts are measured from durable local logs, but this is
+  not yet a task-record ledger; use it as a prior until W2 passive capture
+  records per-task class/outcome events.
+
+measurement_window:
+  start_date: "2026-05-13"
+  end_date: "2026-06-12"
+  days: 30
+  timezone: "UTC"
+
+sources:
+  progress_markdown:
+    root: "/mnt/raid0/llm/epyc-root/progress"
+    files_counted: 33
+    top_level_sections_counted: 314
+    classified_sections: 247
+    excluded_sections:
+      other_session_admin: 67
+    method: >-
+      Counted top-level `##` progress sections in the 30-day window and
+      assigned a primary class from the heading and filename using transparent
+      keyword rules. Generic admin headings were counted but excluded from
+      demand shares.
+  orchestrator_progress_jsonl:
+    root: "/mnt/raid0/llm/epyc-orchestrator/logs/progress"
+    files_counted: 24
+    task_started_events: 49297
+    task_completed_events: 42941
+    task_failed_events: 2702
+    note: >-
+      Runtime task logs are dominated by benchmark/eval harness traffic and
+      repeated synthetic prompts. They are measured here as traffic pressure,
+      not as the real operator demand distribution.
+  hermes_agent_logs:
+    root: "/mnt/raid0/llm/hermes-agent"
+    durable_task_logs_found: 0
+    note: >-
+      No separate Hermes runtime task ledger was found in the 30-day window.
+      `datagen-config-examples/example_browser_tasks.jsonl` is example data
+      only and is not counted as observed demand.
+
+classification_rules:
+  unit: "top_level_progress_section"
+  precedence:
+    - research_intake_deep_dive
+    - code_change_implementation
+    - benchmark_eval_measurement
+    - debug_root_cause
+    - ops_deploy_process
+    - governance_docs_handoff
+    - planning_architecture_review
+  note: >-
+    Sections can contain multiple activities. The primary class is the first
+    matched class in precedence order; W2 task_record capture must replace this
+    proxy with explicit class labels.
+
+task_classes:
+  - id: "benchmark_eval_measurement"
+    display_name: "Benchmark, Eval, And Measurement"
+    observed_volume_30d:
+      progress_sections: 46
+      share_of_classified_progress: 0.186
+      structured_task_started_events_related: 49297
+    source_evidence:
+      - "progress headings with bench/eval/replay/measurement/calibration/matrix/gate/probe/J-package terms"
+      - "orchestrator structured task log: 49,297 task_started events, mostly eval harness traffic"
+    examples:
+      - "Frontdoor throughput investigation"
+      - "DCP/J7 replay and K-RAG K7 prep"
+      - "DAR-1 regret replay and task-rate/goodput replay"
+      - "placement/contention matrix probes"
+    routing_implications:
+      preferred_paths:
+        - "benchmark_analyst"
+        - "research_engineer"
+        - "sysadmin_for_host_state"
+      avoid_until_attested:
+        - "learned routing expansion"
+      notes:
+        - "Metric direction and baseline era must be explicit before action."
+        - "Running-state attestation should be attached to every measurement claim."
+    eval_implications:
+      real_suite_priority: "highest"
+      scoring: "structured metrics plus replayable artifacts"
+      exclude_from_autopilot_gate_until: "per-question ledger and sequential verdicts are live"
+
+  - id: "ops_deploy_process"
+    display_name: "Ops, Deployment, And Process Control"
+    observed_volume_30d:
+      progress_sections: 45
+      share_of_classified_progress: 0.182
+      structured_task_started_events_related: 0
+    source_evidence:
+      - "progress headings with restart/reload/deploy/stack/server/dashboard/ssh/worktree/resume/live-state terms"
+    examples:
+      - "AutoPilot restart and resume"
+      - "orchestrator stack reload"
+      - "dashboard/tunnel fixes"
+      - "process-health and branch/worktree hygiene"
+    routing_implications:
+      preferred_paths:
+        - "sysadmin"
+        - "lead_developer"
+      required_context:
+        - "current process table"
+        - "git worktree cleanliness"
+        - "running-state attestation"
+    eval_implications:
+      real_suite_priority: "high"
+      scoring: "procedural success, no stale process, no unintended resource impact"
+
+  - id: "code_change_implementation"
+    display_name: "Code Change And Integration"
+    observed_volume_30d:
+      progress_sections: 44
+      share_of_classified_progress: 0.178
+      structured_task_started_events_related: 3950
+    source_evidence:
+      - "progress headings with implementation/landed/wired/patch/feature/code/commit/files-changed terms"
+      - "structured synthetic code-eval prompts: 3,950 task_started events, 304 unique objectives"
+    examples:
+      - "orchestrator refactor tranches"
+      - "autopilot planner and eval-tower fixes"
+      - "registry/descriptor compiler scaffolding"
+      - "tooling and validation patches"
+    routing_implications:
+      preferred_paths:
+        - "lead_developer"
+        - "coder_escalation"
+        - "benchmark_analyst_for_test_design"
+      notes:
+        - "Use GitNexus impact before edits; isolate branches while AutoPilot owns main."
+    eval_implications:
+      real_suite_priority: "high"
+      scoring: "tests, diff check, focused replay when behavior-affecting"
+
+  - id: "debug_root_cause"
+    display_name: "Debugging And Root Cause"
+    observed_volume_30d:
+      progress_sections: 36
+      share_of_classified_progress: 0.146
+      structured_task_started_events_related: 0
+    source_evidence:
+      - "progress headings with root-cause/bug/incident/crash/failure/investigation/audit/regression terms"
+    examples:
+      - "trial failure root cause"
+      - "routing/delegation bugs"
+      - "vision/OCR trace"
+      - "dashboard/process-state defects"
+    routing_implications:
+      preferred_paths:
+        - "debugger"
+        - "lead_developer"
+        - "sysadmin_when_runtime"
+      notes:
+        - "Observe before diagnosing; preserve failing artifact and metric semantics."
+    eval_implications:
+      real_suite_priority: "high"
+      scoring: "reproduction, fix, regression test, post-fix attestation"
+
+  - id: "governance_docs_handoff"
+    display_name: "Governance, Docs, And Handoff Hygiene"
+    observed_volume_30d:
+      progress_sections: 35
+      share_of_classified_progress: 0.142
+      structured_task_started_events_related: 0
+    source_evidence:
+      - "progress headings with handoff/index/wrap-up/progress/docs/governance/portfolio/queue/master/memory terms"
+    examples:
+      - "master index rewrite"
+      - "handoff reprioritization"
+      - "measurement policy adoption"
+      - "daily progress and wrap-up records"
+    routing_implications:
+      preferred_paths:
+        - "research_writer"
+        - "lead_developer"
+      notes:
+        - "Treat indices as actionable coordination points, not passive navigation."
+    eval_implications:
+      real_suite_priority: "medium_high"
+      scoring: "traceability, stale-state avoidance, actionable next-step quality"
+
+  - id: "research_intake_deep_dive"
+    display_name: "Research Intake And Deep Dive"
+    observed_volume_30d:
+      progress_sections: 26
+      share_of_classified_progress: 0.105
+      structured_task_started_events_related: 0
+    source_evidence:
+      - "progress headings with intake/research/deep-dive/paper/arxiv/model-card/source/literature terms"
+    examples:
+      - "URL/paper/model-card intake"
+      - "contradicting-evidence search"
+      - "deep-dive synthesis"
+      - "handoff cross-reference updates"
+    routing_implications:
+      preferred_paths:
+        - "research_writer"
+        - "benchmark_analyst_when_eval_claims"
+      notes:
+        - "Do not dismiss sources as not applicable without explicit review."
+    eval_implications:
+      real_suite_priority: "medium_high"
+      scoring: "source quality, contradiction handling, concrete adoption/reject gates"
+
+  - id: "planning_architecture_review"
+    display_name: "Planning And Architecture Review"
+    observed_volume_30d:
+      progress_sections: 15
+      share_of_classified_progress: 0.061
+      structured_task_started_events_related: 0
+    source_evidence:
+      - "progress headings with plan/review/strategy/architecture/design/proposal/preflight/decision terms"
+    examples:
+      - "Fable5 architectural review"
+      - "implementation plan refinement"
+      - "portfolio triage"
+      - "preflight and decision gates"
+    routing_implications:
+      preferred_paths:
+        - "architect_general"
+        - "lead_developer"
+        - "research_writer"
+      notes:
+        - "Output should name blockers, decision gates, and evidence needed to change direction."
+    eval_implications:
+      real_suite_priority: "medium"
+      scoring: "strategic correctness, evidence grounding, downstream executability"
+
+traffic_profile:
+  structured_task_started_30d:
+    total: 49297
+    buckets:
+      uncategorized_chat_mostly_synthetic:
+        count: 20275
+        unique_objectives: 1241
+      synthetic_qa_knowledge:
+        count: 18180
+        unique_objectives: 1940
+      synthetic_code_eval:
+        count: 3950
+        unique_objectives: 304
+      synthetic_math_reasoning:
+        count: 3259
+        unique_objectives: 134
+      synthetic_instruction_following:
+        count: 2338
+        unique_objectives: 53
+      synthetic_tool_use:
+        count: 1295
+        unique_objectives: 17
+    interpretation: >-
+      The runtime task log is useful for load/routing traffic, but not for the
+      human demand model: repeated benchmark prompts swamp operator work. W2
+      must add explicit task_record capture before routing or promotion uses
+      these proportions as real demand.
+
+traffic_classes:
+  - id: "interactive"
+    display_name: "Interactive Operator Work"
+    expected_volume_share:
+      estimate: 0.55
+      range: [0.45, 0.70]
+      evidence: "2026-06-11 tally: frontdoor/operator work is the majority of non-forced-eval traffic, but exact shares await task_record capture."
+    latency_slo:
+      p50_s: 15
+      p95_s: 60
+      queue_budget_ms_default: 5000
+    throughput_slo:
+      objective: "preserve perceived responsiveness; throughput is secondary"
+      metric: "median accepted operator tasks per hour"
+    serving_class: "foreground_exclusive_or_low_contention"
+    contention_priority: "foreground"
+    consumers:
+      routing: "higher cost weight; prefer reliable roles and bounded queueing"
+      placement: "avoid background eval contention unless explicitly allowed by matrix"
+      autopilot: "not an optimization workload"
+
+  - id: "eval_batch"
+    display_name: "Evaluation Batch"
+    expected_volume_share:
+      estimate: 0.23
+      range: [0.20, 0.30]
+      evidence: "Seed from findings-04 §D: forced-eval traffic around 23%; runtime progress JSONL remains harness-dominated."
+    latency_slo:
+      p50_s: null
+      p95_s: null
+      queue_budget_ms_default: 90000
+    throughput_slo:
+      objective: "maximize valid questions/hour under measurement protocol"
+      metric: "per-question ledger goodput by suite and traffic class"
+    serving_class: "continuous_batch_or_idle_quarters"
+    contention_priority: "background"
+    consumers:
+      routing: "lower latency weight; require metric-direction and baseline era"
+      placement: "eligible for batch-friendly instance sets"
+      autopilot: "self-label eval_tower and seeding traffic as eval_batch"
+
+  - id: "campaign"
+    display_name: "Long-Running Campaign"
+    expected_volume_share:
+      estimate: 0.22
+      range: [0.10, 0.35]
+      evidence: "Residual traffic class for nightshift, bulk campaigns, K-RAG/build jobs, and long-running research automation."
+    latency_slo:
+      p50_s: null
+      p95_s: null
+      queue_budget_ms_default: 300000
+    throughput_slo:
+      objective: "maximize completed campaign units without corrupting foreground or eval measurements"
+      metric: "campaign units/hour plus contention exclusions"
+    serving_class: "scheduled_background"
+    contention_priority: "background_low"
+    consumers:
+      routing: "prefer durable resumability and resource attestation"
+      placement: "run only under explicit contention budget"
+      autopilot: "pause or exclude trials when campaign contention contaminates measurement"
+
+traffic_class_tagging:
+  explicit_field: "workload_class"
+  default: "interactive"
+  inference_rules:
+    - class: "eval_batch"
+      when: "eval_batch_id/concurrency_batch_id present, or source is eval_tower/seeding/benchmark"
+    - class: "campaign"
+      when: "campaign_id present, or source is nightshift/kbrag/research_campaign/autopilot_campaign"
+    - class: "interactive"
+      when: "default for operator-facing /chat traffic"
+
+downstream_contracts:
+  passive_capture_w2:
+    required_event: "task_record"
+    required_fields:
+      - "task_id"
+      - "class"
+      - "prompt_ref"
+      - "route_taken"
+      - "wall_s"
+      - "tokens"
+      - "outcome"
+      - "source"
+      - "privacy_class"
+    class_source: "one-keystroke explicit label with heuristic default"
+  real_suite_w3:
+    first_target_items: 50
+    sampling: "stratified by task_classes, not pooled by raw volume"
+    judge_policy: "rubric/llm_judge items are promotion/audit only"
+  routing_w4:
+    report_by_class: true
+    do_not_pool_classes: true
