@@ -1,0 +1,38 @@
+# X-MAS (domain x function) -> winner-model lookup, compiled from the measured
+# function-axis sweep (epyc-inference-research 4e3ee6c, 500 rows, all 25 cells).
+# Loaded by src/classifiers/xmas_routing.py; enforce path is default-OFF
+# (ORCHESTRATOR_XMAS_ROUTING_MODE) pending the live A/B. 4 models swept:
+# frontdoor, worker_general, architect_general, ingest_long_context.
+version: xmas-v1
+fallback_role: frontdoor
+cells:
+  math:
+    solve: worker_general
+    verify: architect_general
+    plan: worker_general
+    refine: worker_general
+    extract: worker_general
+  code:
+    solve: worker_general
+    verify: architect_general
+    plan: ingest_long_context
+    refine: worker_general
+    extract: worker_general
+  knowledge:
+    solve: worker_general
+    verify: worker_general
+    plan: worker_general
+    refine: worker_general
+    extract: worker_general
+  long_context:
+    solve: worker_general
+    verify: ingest_long_context
+    plan: worker_general
+    refine: worker_general
+    extract: worker_general
+  reasoning:
+    solve: worker_general
+    verify: worker_general
+    plan: worker_general
+    refine: architect_general
+    extract: frontdoor
