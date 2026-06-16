@@ -1,0 +1,246 @@
+# Capability Registry — schema scaffold
+#
+# This file declares the full schema for the capability registry (§C.1 of
+# fable5-findings-04-impl-plan.md). One row per tunable lever. Rows are
+# ungated schema placeholders only until evidence-plane Phase 1
+# (evidence-plane-ledger.md) certifies the measurement instrument.
+#
+# GATING RULE: do not flip `promotion_state` to `promoted` or set
+# `actionable_by` to `autopilot` until all four W4 preconditions are met:
+#   1. descriptor/applicator wired (W3 safe-role-restart applicator exists)
+#   2. range validated against measurement protocol
+#   3. kill condition written in this row
+#   4. one shadowed trial passes attestation
+#
+# FIELD DOCUMENTATION
+# ───────────────────
+# id:               (str, required) Snake-case unique lever identifier.
+#                   Duplicate ids are rejected by the loader.
+#
+# kind:             (str, required) One of:
+#                     env           — environment variable injected at server start
+#                     flag          — llama-server command-line flag
+#                     numeric       — numeric parameter (env or flag)
+#                     prompt        — system-prompt or chat-template parameter
+#                     registry-field — field in model_registry.yaml / orchestration yaml
+#                     restart-class — any change that requires a role restart
+#
+# surface:          (str, required) The exact env var name, flag name, or
+#                   registry field path used to apply the lever.
+#
+# applicator:       (str, required) How the change is applied. One of:
+#                     config_post    — POST /config hot-swap, no restart required
+#                     env_hotswap    — env var set before next request, no restart
+#                     role_restart   — requires orchestrator_stack.py reload <role>
+#                     stack_restart  — requires full stack restart (all roles)
+#
+# range:            (map, required) Valid parameter domain. Keys depend on kind:
+#                     type: int|float|bool|str
+#                     min, max: for numeric types
+#                     values: for enum types
+#
+# roles:            (list, required) Roles this lever applies to.
+#
+# evidence:         (map, required) Measurement evidence for the lever's effect.
+#                   Subfields:
+#                     measured:  human-readable description of observed effect
+#                     protocol:  protocol-id from MEASUREMENT.md (or "none" if ungated)
+#                     source:    handoff or document providing the evidence
+#
+# risk:             (str, required) Operator risk assessment. One of:
+#                     low | medium | high
+#
+# actionable_by:    (str, required) Current authorization level. One of:
+#                     autopilot            — autopilot may tune freely within range
+#                     operator             — requires explicit operator action
+#                     gated:<condition>    — blocked until named condition is met
+#
+# promotion_state:  (str, required) Lifecycle state. One of:
+#                     placeholder  — schema row; no evidence yet; not actionable
+#                     candidate    — evidence exists; applicator not yet wired
+#                     promoted     — all W4 preconditions met; ready for autopilot
+#
+# handoff:          (str, optional) Filename of the primary handoff tracking this lever.
+#
+# kill_condition:   (str, optional) Required before promotion. Defines the
+#                   observable state that triggers an automatic rollback.
+#                   Mandatory for promotion_state=promoted rows.
+#
+# notes:            (str, optional) Free-form operator notes.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# FIRST-COHORT MEMBER NAMES (commented placeholders — no live/promoted rows)
+# ─────────────────────────────────────────────────────────────────────────────
+# The five levers from §C.3 that will form the first promotion cohort once the
+# evidence-plane ledger certifies the instrument:
+#
+#   moe_spec_budget        — MoE speculative budget (LLAMA_ARG_MOE_SPEC_BUDGET)
+#   per_role_enable_thinking — per-role enable_thinking chat-template toggle
+#   ea_compaction_profiles — EA compaction profile selection (S8/S9)
+#   draft_max_p_split      — draft_max and p_split for roles with spec-dec on
+#   edit_transaction_routing — edit-transaction auto-routing mode
+#
+# Each is defined as a placeholder row below.
+# ─────────────────────────────────────────────────────────────────────────────
+
+capability_registry_version: 1
+schema_status: scaffold
+gating_note: >
+  All rows are promotion_state=placeholder. Promotion to candidate or promoted
+  requires evidence-plane Phase 1 (evidence-plane-ledger.md §W1 gate).
+
+capabilities:
+
+  # ── First-cohort member 1: MoE speculative budget ────────────────────────
+  - id: moe_spec_budget
+    kind: env
+    surface: LLAMA_ARG_MOE_SPEC_BUDGET
+    applicator: role_restart
+    range:
+      type: int
+      min: 0
+      max: 128
+    roles:
+      # Roles using MoE models that support the spec-budget override.
+      # Seed list from moe-spec-cpu-spec-dec-integration.md.
+      - architect_general
+      - coder_escalation
+      - frontdoor
+    evidence:
+      measured: "+7.3–15.2% tps observed in moe-spec handoff (pp32 batch)"
+      protocol: none  # protocol-id TBD; awaiting evidence-plane Phase 1
+      source: moe-spec-cpu-spec-dec-integration.md
+    risk: medium
+    actionable_by: "gated:evidence-plane-ledger.md Phase 1"
+    promotion_state: placeholder
+    kill_condition: null  # required before promotion; define as: tps regresses >5% vs pre-restart baseline
+    handoff: moe-spec-cpu-spec-dec-integration.md
+    notes: >
+      Same-GGUF roles share one llama-server; a role_restart bounces all
+      sibling roles on that process. The applicator must resolve role→process
+      and journal an exogenous_role_restart boundary for all co-hosted roles.
+
+  # ── First-cohort member 2: per-role enable_thinking toggle ───────────────
+  - id: per_role_enable_thinking
+    kind: prompt
+    surface: chat_template_kwargs.enable_thinking
+    applicator: config_post
+    range:
+      type: bool
+      values: [true, false]
+    roles:
+      # Roles where thinking mode is tunable via chat_template_kwargs.
+      # Qwen3-Next-80B (ingest_long_context) is intentionally excluded —
+      # it requires thinking ON per feedback_qwen3x_enable_thinking_false.
+      - architect_general
+      - coder_escalation
+      - frontdoor
+    evidence:
+      measured: "+33pp accuracy on frontdoor (47%→80%) when enable_thinking=False on Qwen3.6"
+      protocol: none  # protocol-id TBD; awaiting evidence-plane Phase 1
+      source: model_registry.yaml server_mode.frontdoor.chat_template_kwargs
+    risk: low
+    actionable_by: "gated:evidence-plane-ledger.md Phase 1"
+    promotion_state: placeholder
+    kill_condition: null  # required before promotion; define as: suite accuracy drops >5pp vs pre-change baseline
+    handoff: capability-registry-and-promotion.md
+    notes: >
+      Applicator is config_post (no restart needed for chat-template kwargs).
+      Per-role overrides are read from server_mode.<role>.chat_template_kwargs
+      in model_registry.yaml. The W4 promotion pass must validate that the
+      thinking=ON exception for ingest_long_context is not touched by autopilot.
+
+  # ── First-cohort member 3: EA compaction profiles ────────────────────────
+  - id: ea_compaction_profiles
+    kind: registry-field
+    surface: orchestration/model_registry.yaml:server_mode.<role>.compaction_profile
+    applicator: role_restart
+    range:
+      type: str
+      values: [S8, S9, default]
+    roles:
+      # Roles where EA compaction profiles have been benchmarked.
+      # Specific roles TBD pending evidence-plane Phase 1 measurement.
+      - architect_general
+      - frontdoor
+    evidence:
+      measured: "EA S8/S9 compaction profiles listed as first-cohort candidate in §C.3"
+      protocol: none  # protocol-id TBD; awaiting evidence-plane Phase 1
+      source: fable5-findings-04-impl-plan.md §C.3
+    risk: medium
+    actionable_by: "gated:evidence-plane-ledger.md Phase 1"
+    promotion_state: placeholder
+    kill_condition: null  # required before promotion; define as: latency p95 or quality score regresses beyond threshold
+    handoff: capability-registry-and-promotion.md
+    notes: >
+      EA = Expert Activation. S8/S9 refer to the compaction schedule variants.
+      Evidence measurement and role list must be populated from the evidence-plane
+      ledger before this row can advance to candidate.
+
+  # ── First-cohort member 4: draft_max / p_split for spec-dec roles ────────
+  - id: draft_max_p_split
+    kind: numeric
+    surface: orchestration/model_registry.yaml:server_mode.<role>.draft_max,p_split
+    applicator: role_restart
+    range:
+      type: composite
+      draft_max:
+        type: int
+        min: 1
+        max: 64
+      p_split:
+        type: float
+        min: 0.0
+        max: 1.0
+    roles:
+      # Roles with speculative decoding on (draft_compat non-empty in descriptors).
+      # At scaffold time: architect_general (Qwen3.5-122B + 0.8B drafter).
+      - architect_general
+    evidence:
+      measured: "draft_max=24 and p_split=0 are current production values for architect_general"
+      protocol: none  # protocol-id TBD; awaiting evidence-plane Phase 1
+      source: orchestration/model_registry.yaml server_mode.architect_general
+    risk: medium
+    actionable_by: "gated:evidence-plane-ledger.md Phase 1"
+    promotion_state: placeholder
+    kill_condition: null  # required before promotion; define as: spec acceptance rate drops below 40% or tps regresses >8%
+    handoff: capability-registry-and-promotion.md
+    notes: >
+      draft_max and p_split are strongly correlated; sweep both jointly.
+      Single-model vs NUMA-concurrent configs use different baselines
+      (feedback_psplit_default). Protocol must specify which operating point
+      is under test. Batched restart-class trial protocol: one restart, ≥5
+      trials, restore — enforced by dispatch gate (§C.2).
+
+  # ── First-cohort member 5: edit-transaction auto-routing ─────────────────
+  - id: edit_transaction_routing
+    kind: env
+    surface: ORCHESTRATOR_EDIT_TRANSACTION
+    applicator: env_hotswap
+    range:
+      type: bool
+      values: [true, false]
+    roles:
+      # Applies at the orchestrator routing layer, not a specific model role.
+      # Scoped via ORCHESTRATOR_EDIT_ROOT when enabled.
+      - frontdoor
+      - coder_escalation
+    evidence:
+      measured: >
+        edit-transaction auto-routing is a proven protocol fix for routine coding
+        edits per multi-file-coding-completion-capability.md. Not yet an autopilot
+        lever; requires A2 contract clean-window A/B + scoped-root attestation.
+      protocol: none  # protocol-id TBD; awaiting A2 contract evidence
+      source: multi-file-coding-completion-capability.md
+    risk: high
+    actionable_by: "gated:A2-contract-clean-window-ab"
+    promotion_state: placeholder
+    kill_condition: null  # required before promotion; missing ORCHESTRATOR_EDIT_ROOT must fail closed
+    handoff: multi-file-coding-completion-capability.md
+    notes: >
+      Production-safe surface is explicit force_mode="edit" only. Missing
+      ORCHESTRATOR_EDIT_TRANSACTION=1 or scoped ORCHESTRATOR_EDIT_ROOT must
+      continue to fail closed rather than falling back to REPL.
+      Seed as actionable_by=operator until A2 contract preconditions exist.
+      This lever's gate is NOT the evidence-plane ledger — it is the A2
+      clean-window A/B defined in the multi-file-coding handoff.
