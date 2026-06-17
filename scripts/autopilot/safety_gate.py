@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import statistics
 from collections import deque
 from dataclasses import dataclass, field, replace
@@ -21,6 +22,11 @@ from src.autopilot_core.tier_specs import (
 )
 
 log = logging.getLogger("autopilot.safety")
+
+
+def _env_truthy(name: str) -> bool:
+    """Return True when env var ``name`` is set to a truthy token."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 DEFAULT_BASELINE_PATH = (
     Path(__file__).resolve().parents[2] / "orchestration" / "autopilot_baseline.yaml"
@@ -162,6 +168,11 @@ class SafetyVerdict:
     violations: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)  # AP-14: deficiency categories
+    # LEDGER-W4: the anytime-valid sequential e-process journal block for this trial
+    # (E_quality, E_rate_noninf, k, z, joint state), populated only when the default-off
+    # AUTOPILOT_SEQ_VERDICT path runs and the caller supplies per-question results.
+    # None preserves the legacy verdict shape for every existing caller/fixture.
+    seq: dict[str, Any] | None = None
 
     def __bool__(self) -> bool:
         return self.passed
@@ -558,8 +569,20 @@ class SafetyGate:
         quality_history: list[float] | None = None,
         quality_history_by_tier: dict[str | int, list[float]] | None = None,
         baseline_state: dict[str, Any] | None = None,
+        use_sequential: bool | None = None,
     ):
         self.baseline = Baseline.load(baseline_path, state=baseline_state)
+        # LEDGER-W4 (01c §3): default-off anytime-valid sequential verdict path.
+        # Flag source precedence: explicit arg > AUTOPILOT_SEQ_VERDICT env > off.
+        # When off (the default), check()/update_baseline behave byte-identically to
+        # the pre-W4 MAD-only gate. Deploy is evidence-gated (flip-rate >= 30% over
+        # ~120 trusted vectors); flipping the env alone never changes behavior unless
+        # the caller also threads per-question results into check().
+        self.use_sequential = (
+            _env_truthy("AUTOPILOT_SEQ_VERDICT")
+            if use_sequential is None
+            else bool(use_sequential)
+        )
         self._consecutive_failures = consecutive_failures
         self._quality_history_by_tier: dict[int, deque[float]] = {}
         if quality_history_by_tier:
@@ -618,14 +641,137 @@ class SafetyGate:
         z_mad = abs(new_quality - median_q) / (mad * MAD_CONSISTENCY)
         return z_mad > MAD_Z_THRESHOLD, z_mad, median_q, mad
 
-    def check(self, result: EvalResult) -> SafetyVerdict:
-        """Run all safety checks on an eval result."""
+    def _sequential_verdict(
+        self,
+        result: EvalResult,
+        *,
+        question_results: Any,
+        task_rate: float | None,
+        baseline_profile: Any,
+        baseline_task_rate: float | None,
+        prior_quality_obs: Any = (),
+        prior_rate_obs: Any = (),
+        candidate: str = "",
+        core_id: str = "",
+    ) -> dict[str, Any]:
+        """Fold this trial into the candidate's anytime-valid e-processes (01c §3).
+
+        Pure given its inputs: rebuilds the candidate's prior quality (and, when a
+        task_rate + baseline_task_rate are supplied, rate-non-inferiority) e-process
+        from ``prior_*_obs``, applies one update for THIS trial, and returns the
+        ``journal_seq_block`` augmented with the JOINT state and a ``confirmed`` flag.
+
+        Joint rule (01c §3): ``confirmed`` iff E_quality >= confirm_e AND
+        E_rate_noninf >= confirm_e. ``refuted`` if EITHER axis is refuted. Otherwise
+        ``accumulating``. When no rate evidence is available the verdict can never be
+        ``confirmed`` (E_rate is absent) — conservative by design: a candidate cannot
+        ratchet the baseline on quality alone.
+        """
+        from src.autopilot_core.sequential_verdict import (
+            DEFAULT_POLICY,
+            STATE_REFUTED,
+            journal_seq_block,
+            quality_trial_statistic,
+            rate_noninferiority_z,
+            rebuild_candidate_view,
+        )
+
+        policy = DEFAULT_POLICY
+        cand = candidate or "candidate"
+        core = core_id or "core"
+        trial_id = getattr(result, "trial_id", None)
+
+        # Quality axis: center this trial's per-qid outcomes against the baseline
+        # profile, then fold into the candidate's prior quality e-process.
+        stat = quality_trial_statistic(question_results, baseline_profile)
+        q_view = rebuild_candidate_view(
+            candidate=cand, core_id=core, observations=prior_quality_obs, policy=policy
+        )
+        q_state, q_update = q_view.quality_state.update(
+            stat.z, policy=policy, trial_id=trial_id
+        )
+
+        # Rate-non-inferiority axis (only when a task_rate + positive baseline exist).
+        rate_state = None
+        rate_update = None
+        if (
+            task_rate is not None
+            and baseline_task_rate is not None
+            and baseline_task_rate > 0
+        ):
+            z_rate = rate_noninferiority_z(
+                float(task_rate),
+                float(baseline_task_rate),
+                margin=policy.rate_noninferiority_margin,
+            )
+            rate_view = rebuild_candidate_view(
+                candidate=cand,
+                core_id=core,
+                observations=prior_rate_obs,
+                policy=policy,
+                expected_axis="rate",
+            )
+            rate_state, rate_update = rate_view.quality_state.update(
+                z_rate, policy=policy, trial_id=trial_id
+            )
+
+        e_quality = q_state.wealth
+        e_rate = rate_state.wealth if rate_state is not None else None
+        q_name = q_state.state_name(policy)
+        rate_name = rate_state.state_name(policy) if rate_state is not None else None
+
+        if q_name == STATE_REFUTED or rate_name == STATE_REFUTED:
+            state = "refuted"
+        elif e_quality >= policy.confirm_e and (
+            e_rate is not None and e_rate >= policy.confirm_e
+        ):
+            state = "confirmed"
+        else:
+            state = "accumulating"
+
+        block = journal_seq_block(
+            candidate=cand,
+            core_id=core,
+            quality_update=q_update,
+            quality_state=q_state,
+            policy=policy,
+            rate_noninf_update=rate_update,
+        )
+        # journal_seq_block records the QUALITY-only state; override with the joint
+        # verdict so consumers (categories, update_baseline gate) read one decision.
+        block["state"] = state
+        block["confirmed"] = state == "confirmed"
+        return block
+
+    def check(
+        self,
+        result: EvalResult,
+        *,
+        question_results: Any = None,
+        task_rate: float | None = None,
+        baseline_profile: Any = None,
+        baseline_task_rate: float | None = None,
+        prior_quality_obs: Any = None,
+        prior_rate_obs: Any = None,
+        candidate: str = "",
+        core_id: str = "",
+    ) -> SafetyVerdict:
+        """Run all safety checks on an eval result.
+
+        LEDGER-W4: when ``self.use_sequential`` is on AND the caller supplies
+        ``question_results`` + ``baseline_profile``, the improvement branch uses the
+        anytime-valid sequential e-process verdict (01c §3) in place of the MAD noise
+        filter. All seq kwargs are keyword-only and default to ``None`` so every
+        existing caller (which passes only ``result``) is unaffected — the seq path
+        is inert unless both the flag and the per-question inputs are present.
+        """
         if result.gate_verdict is not None:
             return result.gate_verdict
 
         violations = []
         warnings = []
         categories = []  # AP-14: track which checks failed
+        seq_block: dict[str, Any] | None = None  # LEDGER-W4 journal block (default-off)
 
         # 1. Quality floor (tier-aware)
         quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
@@ -649,6 +795,44 @@ class SafetyGate:
                 warnings.append(
                     f"Slight quality drop: {result.quality:.3f} vs baseline {baseline_q:.3f} "
                     f"({relative_delta:+.1%})"
+                )
+            elif self.use_sequential and question_results is not None and baseline_profile:
+                # LEDGER-W4 (01c §3): when the default-off sequential path is active
+                # and the caller threads per-question results, the anytime-valid
+                # e-process verdict REPLACES the MAD noise filter as the "is this a
+                # real improvement?" significance test. It appends one of
+                # seq_accumulating / seq_confirmed / seq_refuted (consumed by
+                # classify_learning_exclusion) and records the full E-process journal
+                # block on the verdict. It never adds a violation — promotion is gated
+                # downstream in update_baseline(seq_confirmed=...), so a non-confirmed
+                # candidate is journaled but cannot ratchet the baseline.
+                seq_block = self._sequential_verdict(
+                    result,
+                    question_results=question_results,
+                    task_rate=task_rate,
+                    baseline_profile=baseline_profile,
+                    baseline_task_rate=baseline_task_rate,
+                    prior_quality_obs=prior_quality_obs or (),
+                    prior_rate_obs=prior_rate_obs or (),
+                    candidate=candidate,
+                    core_id=core_id,
+                )
+                categories.append("seq_" + seq_block["state"])
+                e_rate = seq_block.get("E_rate_noninf")
+                warnings.append(
+                    "Sequential verdict ({state}): E_quality={eq:.3f}, "
+                    "E_rate_noninf={er}, k={k} (LEDGER-W4, AUTOPILOT_SEQ_VERDICT); "
+                    "baseline promotion {gate}.".format(
+                        state=seq_block["state"],
+                        eq=seq_block.get("E_quality", float("nan")),
+                        er=f"{e_rate:.3f}" if e_rate is not None else "n/a",
+                        k=seq_block.get("k"),
+                        gate=(
+                            "permitted (confirmed)"
+                            if seq_block.get("confirmed")
+                            else "blocked until confirmed"
+                        ),
+                    )
                 )
             else:
                 # Improvement or no change — apply MAD noise filter (intake-421).
@@ -811,7 +995,13 @@ class SafetyGate:
         warnings.extend(self._proxy_check(result))
 
         passed = len(violations) == 0
-        verdict = SafetyVerdict(passed=passed, violations=violations, warnings=warnings, categories=categories)
+        verdict = SafetyVerdict(
+            passed=passed,
+            violations=violations,
+            warnings=warnings,
+            categories=categories,
+            seq=seq_block,
+        )
 
         # Track consecutive failures
         if not passed:
@@ -949,7 +1139,11 @@ class SafetyGate:
         return (3.0 / n) if n > 0 else None
 
     def update_baseline(
-        self, result: EvalResult, source_trial_id: int | None = None
+        self,
+        result: EvalResult,
+        source_trial_id: int | None = None,
+        *,
+        seq_confirmed: bool | None = None,
     ) -> BaselineUpdateResult:
         """Update same-tier baseline state with new production-best metrics — HARD-GATED on baseline eligibility
         (operator audit #3): refuses to write unless a recognized speed_metric_mode is set AND the
@@ -973,6 +1167,19 @@ class SafetyGate:
         if not eligible:
             log.warning("Baseline update REFUSED — baseline_eligible=false (%s) | proof=%s",
                         reason, proof)
+            return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
+        # LEDGER-W4 (01c §3): when the sequential path is active, a promotion requires
+        # a CONFIRMED joint e-process verdict (E_quality >= confirm_e AND
+        # E_rate_noninf >= confirm_e). This is the anti-ratchet: a monotonic quality
+        # uptick that has not cleared the anytime-valid thresholds is journaled but
+        # cannot move the baseline. Inert when the flag is off or when the caller does
+        # not pass seq_confirmed (the legacy promotion path is then unchanged).
+        if self.use_sequential and seq_confirmed is not None and not seq_confirmed:
+            reason = (
+                "sequential verdict not confirmed (E_quality/E_rate_noninf below the "
+                "confirm threshold); baseline promotion blocked (LEDGER-W4)"
+            )
+            log.info("Baseline update skipped — %s", reason)
             return BaselineUpdateResult(False, reason, tier, previous_quality, result.quality, proof)
         if tier < MIN_FRONTIER_EVAL_TIER:
             reason = f"tier {tier} is audit-only and cannot update production baselines"

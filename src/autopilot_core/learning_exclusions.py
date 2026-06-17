@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-BENIGN_LEARNING_EXCLUSIONS = frozenset({"reproduction_confirmed", "mad_noise"})
+BENIGN_LEARNING_EXCLUSIONS = frozenset(
+    {"reproduction_confirmed", "mad_noise", "seq_accumulating"}
+)
 WITHIN_NOISE_EXCLUSIONS = BENIGN_LEARNING_EXCLUSIONS
 
 
@@ -53,6 +55,26 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
             "quality improvement was within MAD noise band per safety_gate "
             "rolling-history significance test",
             "mad_noise",
+        )
+
+    # LEDGER-W4 (01c §3): the sequential e-process verdict, produced only when the
+    # default-off AUTOPILOT_SEQ_VERDICT path runs in safety_gate. Three states:
+    #   seq_accumulating — E below both confirm/refute thresholds: not-yet-decided,
+    #     within-noise → exclude from learning (benign, like mad_noise) until a
+    #     verdict resolves. Only honored when the verdict OTHERWISE PASSED, mirroring
+    #     the mad_noise guard above (a within-noise reading must not launder a failed
+    #     safety verdict into a trusted representative).
+    #   seq_confirmed — a confirmed improvement (E_quality>=20 AND E_rate_noninf>=20):
+    #     include normally (falls through to the empty include path below).
+    #   seq_refuted — a refuted experiment: handled by the normal failed-trial path
+    #     (deficiency from verdict.categories), so it is not special-cased here.
+    if "seq_accumulating" in categories and verdict_passed:
+        return (
+            "seq_accumulating",
+            "sequential e-process still accumulating evidence (wealth below the "
+            "confirm/refute thresholds); within-noise, excluded from learning "
+            "until the e-process resolves (LEDGER-W4, AUTOPILOT_SEQ_VERDICT)",
+            "seq_accumulating",
         )
 
     return "", "", ""
