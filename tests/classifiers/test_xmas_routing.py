@@ -65,6 +65,40 @@ def test_classify_math_verify_cell() -> None:
     assert "verify" in result.matched_terms["function"]
 
 
+def test_classify_function_axis_wrapper_uses_explicit_function() -> None:
+    result = classify_xmas_cell(
+        "Function: verify. Check whether the task's expected answer is consistent.\n\n"
+        "Prompt: Toulouse has twice as many sheep as Charleston. Charleston has 4 "
+        "times as many sheep as Seattle. How many sheep are there?"
+    )
+
+    assert result.cell == XmasCell(domain="math", function="verify")
+    assert "function:verify" in result.matched_terms["function"]
+    assert result.is_confident()
+
+
+def test_classify_function_axis_wrapper_strips_function_domain_noise() -> None:
+    result = classify_xmas_cell(
+        "Function: extract. Extract only the final answer.\n\n"
+        "Prompt: Read the following passage and answer the question. The medical "
+        "research facility conducts studies on various trial cohorts."
+    )
+
+    assert result.cell == XmasCell(domain="long_context", function="extract")
+    assert result.is_confident()
+
+
+def test_classify_science_reasoning_as_reasoning_domain() -> None:
+    result = classify_xmas_cell(
+        "Function: refine. Improve the draft answer.\n\n"
+        "Prompt: A coating is applied to a substrate resulting in a perfectly "
+        "smooth surface. The measured contact angles are compared."
+    )
+
+    assert result.cell == XmasCell(domain="reasoning", function="refine")
+    assert result.is_confident()
+
+
 def test_classify_code_refine_cell() -> None:
     result = classify_xmas_cell("Refactor this Python function and fix the bug.")
 

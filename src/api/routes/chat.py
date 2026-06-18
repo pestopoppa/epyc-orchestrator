@@ -680,7 +680,19 @@ async def _handle_chat(
         # Bypass cheap-first for: factual recall questions (coding model hallucinates),
         # and task types that require multi-step REPL execution (coder, agentic).
         _task_type = routing.task_ir.get("task_type")
-        if request.prompt.lower().startswith(_FACTUAL_QUESTION_PREFIXES) or _task_type in _REPL_ONLY_TASK_TYPES:
+        if routing.xmas_meta and routing.xmas_meta.get("applied") is True:
+            _log_cheap_first_counter(
+                state,
+                routing.task_id,
+                attempted=False,
+                passed=None,
+                reason="xmas_enforce",
+                cheap_role=get_config().chat.try_cheap_first_role,
+                phase=get_config().chat.try_cheap_first_phase,
+                detail="xmas_enforce_applied",
+            )
+            cheap_result = None
+        elif request.prompt.lower().startswith(_FACTUAL_QUESTION_PREFIXES) or _task_type in _REPL_ONLY_TASK_TYPES:
             _log_cheap_first_counter(
                 state,
                 routing.task_id,

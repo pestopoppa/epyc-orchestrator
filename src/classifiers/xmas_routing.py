@@ -52,6 +52,17 @@ _DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
         "aime",
         "gsm8k",
         "olympiad",
+        "how many",
+        "how much",
+        "cost",
+        "percent",
+        "percentage",
+        "twice",
+        "times as many",
+        "mph",
+        "overtime",
+        "$",
+        "%",
     ),
     "code": (
         "code",
@@ -72,6 +83,7 @@ _DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
     "knowledge": (
         "who",
+        "whose",
         "what",
         "when",
         "where",
@@ -88,10 +100,26 @@ _DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
         "document",
         "paper",
         "report",
+        "reports",
+        "documents",
+        "passage",
+        "passages",
         "transcript",
         "chapter",
         "long context",
         "context",
+        "read the following",
+        "following passage",
+        "read these",
+        "answer the question",
+        "technical specifications",
+        "server",
+        "server rack",
+        "slot",
+        "floor",
+        "patient",
+        "medical research",
+        "mrn",
         "summarize",
         "summarise",
         "extract from",
@@ -110,6 +138,26 @@ _DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
         "gpqa",
         "multiple choice",
         "mcq",
+        "quantum",
+        "chemistry",
+        "physics",
+        "molecular",
+        "gene",
+        "exons",
+        "energies",
+        "lifetime",
+        "quantum states",
+        "methyl",
+        "methylmagnesium",
+        "grignard",
+        "pyridinium chlorochromate",
+        "pyridinium",
+        "carbon count",
+        "compounds",
+        "substrate",
+        "coating",
+        "optical activity",
+        "contact angle",
     ),
 }
 
@@ -168,6 +216,11 @@ _FUNCTION_KEYWORDS: dict[str, tuple[str, ...]] = {
         "key points",
     ),
 }
+
+_FUNCTION_PREFIX_RE = re.compile(
+    r"^\s*Function:\s*(solve|verify|plan|refine|extract)\b[^\n]*(?:\n+|$)",
+    flags=re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -373,17 +426,23 @@ def classify_xmas_cell(prompt: str, context: str = "") -> XmasClassification:
     windows. It is a scaffold for the future embedding/bench-populated router,
     not a final capability claim.
     """
-    text = _normalize_text(f"{prompt}\n{context}")
+    explicit_function, prompt_for_domain = _extract_explicit_function_prefix(prompt)
+    text = _normalize_text(f"{prompt_for_domain}\n{context}")
     domain, domain_terms, domain_score = _best_axis(
         text,
         _DOMAIN_KEYWORDS,
         default=DEFAULT_DOMAIN,
     )
-    function, function_terms, function_score = _best_axis(
-        text,
-        _FUNCTION_KEYWORDS,
-        default=DEFAULT_FUNCTION,
-    )
+    if explicit_function is not None:
+        function = explicit_function
+        function_terms = [f"function:{explicit_function}"]
+        function_score = 3
+    else:
+        function, function_terms, function_score = _best_axis(
+            text,
+            _FUNCTION_KEYWORDS,
+            default=DEFAULT_FUNCTION,
+        )
 
     context_bonus = 1 if len(context) >= 8000 and domain == "long_context" else 0
     domain_score += context_bonus
@@ -401,6 +460,13 @@ def classify_xmas_cell(prompt: str, context: str = "") -> XmasClassification:
             "function": tuple(function_terms),
         },
     )
+
+
+def _extract_explicit_function_prefix(prompt: str) -> tuple[str | None, str]:
+    match = _FUNCTION_PREFIX_RE.match(prompt or "")
+    if not match:
+        return None, prompt
+    return match.group(1).lower(), prompt[match.end():]
 
 
 def get_xmas_routing_config() -> XmasRoutingConfig:

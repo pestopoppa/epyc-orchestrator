@@ -70,6 +70,10 @@ class RoutingResult:
     # compat with pre-TR-2 callers. Logged in shadow mode regardless of feature
     # flag; only acted on when ORCHESTRATOR_ROLE_AWARE_ROUTING=1.
     assigned_role: str = "worker"
+    # Passive/enforce X-MAS routing metadata, populated only when X-MAS config
+    # is enabled. Kept with the routing result so downstream execution gates can
+    # respect an applied enforce decision without parsing strategy strings.
+    xmas_meta: dict | None = None
 
     @property
     def role(self) -> str:

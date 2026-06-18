@@ -234,6 +234,7 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         difficulty_band=_difficulty_band,
         estimated_cost=_estimated_cost,
         assigned_role=_assigned_role,
+        xmas_meta=xmas_meta,
     )
 
 

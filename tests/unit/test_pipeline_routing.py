@@ -340,6 +340,7 @@ class TestRouteRequest:
 
         assert result.routing_decision == ["coder_escalation"]
         assert result.routing_strategy == "xmas_enforce:rules"
+        assert result.xmas_meta is xmas_meta
         call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
         assert call_kwargs["routing_meta"]["xmas"]["applied"] is True
         assert call_kwargs["routing_meta"]["xmas"]["apply_reason"] == "enforced"
