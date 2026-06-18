@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -306,6 +307,94 @@ def test_seq_promotion_state_queues_and_forces_one_fresh_eval() -> None:
     assert context is not None
     assert context["candidate"] == "candidate-a"
     assert state["seq_pending_promotion_fresh_eval"]["attempts"] == 1
+
+
+def test_seq_promotion_failed_fresh_eval_consumes_pending_attempt() -> None:
+    state = {
+        "seq_pending_promotion_fresh_eval": {
+            "candidate": "candidate-a",
+            "source_trial_id": 20,
+            "tier": 2,
+            "attempts": 1,
+        }
+    }
+    eval_result = autopilot.EvalResult(
+        tier=2,
+        quality=2.5,
+        speed=10.0,
+        cost=0.1,
+        reliability=1.0,
+    )
+
+    autopilot._update_seq_promotion_fresh_eval_state(
+        state,
+        seq={
+            "candidate": "candidate-a",
+            "confirmed": False,
+            "baseline_reference_state": "fresh",
+            "baseline_promotion_combined_E": 0.4,
+        },
+        action={"type": "deep_eval", "tier": 2},
+        eval_result=eval_result,
+        trial_counter=21,
+        is_fresh_eval=True,
+        finalized=False,
+    )
+
+    assert "seq_pending_promotion_fresh_eval" not in state
+    assert state["seq_last_promotion_blocked"] == {
+        "trial_id": 21,
+        "candidate": "candidate-a",
+        "reason": "fresh-eval did not confirm",
+        "combined_E": 0.4,
+    }
+
+
+def test_seq_promotion_finalized_requires_baseline_update_acceptance() -> None:
+    state = {
+        "seq_pending_promotion_fresh_eval": {
+            "candidate": "candidate-a",
+            "source_trial_id": 20,
+            "tier": 2,
+            "attempts": 1,
+        }
+    }
+    eval_result = autopilot.EvalResult(
+        tier=2,
+        quality=2.5,
+        speed=10.0,
+        cost=0.1,
+        reliability=1.0,
+    )
+
+    autopilot._update_seq_promotion_fresh_eval_state(
+        state,
+        seq={
+            "candidate": "candidate-a",
+            "confirmed": True,
+            "baseline_reference_state": "fresh",
+            "baseline_promotion_combined_E": 120.0,
+        },
+        action={"type": "deep_eval", "tier": 2},
+        eval_result=eval_result,
+        trial_counter=21,
+        is_fresh_eval=True,
+        finalized=True,
+        baseline_update=SimpleNamespace(
+            updated=False,
+            reason="not a monotonic same-tier improvement",
+        ),
+    )
+
+    assert "seq_pending_promotion_fresh_eval" not in state
+    assert "seq_last_promotion_finalized" not in state
+    assert state["seq_last_promotion_blocked"] == {
+        "trial_id": 21,
+        "candidate": "candidate-a",
+        "reason": "baseline-update-refused",
+        "baseline_update_reason": "not a monotonic same-tier improvement",
+        "combined_E": 120.0,
+    }
 
 
 def test_seq_promotion_fresh_eval_blacklist_suppresses_retry() -> None:

@@ -546,16 +546,29 @@ def _update_seq_promotion_fresh_eval_state(
     trial_counter: int,
     is_fresh_eval: bool,
     finalized: bool | None,
+    baseline_update: Any | None = None,
 ) -> None:
     """Maintain the bounded pending fresh-eval state for seq baseline promotion."""
     if not isinstance(seq, dict):
         return
+    baseline_update_reason = getattr(baseline_update, "reason", None)
     if finalized:
+        if baseline_update is not None and not bool(getattr(baseline_update, "updated", False)):
+            state.pop("seq_pending_promotion_fresh_eval", None)
+            state["seq_last_promotion_blocked"] = {
+                "trial_id": trial_counter,
+                "candidate": seq.get("candidate"),
+                "reason": "baseline-update-refused",
+                "baseline_update_reason": baseline_update_reason,
+                "combined_E": seq.get("baseline_promotion_combined_E"),
+            }
+            return
         state.pop("seq_pending_promotion_fresh_eval", None)
         state["seq_last_promotion_finalized"] = {
             "trial_id": trial_counter,
             "candidate": seq.get("candidate"),
             "combined_E": seq.get("baseline_promotion_combined_E"),
+            "baseline_update_reason": baseline_update_reason,
         }
         return
     if seq.get("baseline_reference_state") == "stale-reference":
@@ -566,16 +579,20 @@ def _update_seq_promotion_fresh_eval_state(
             "reason": "stale-reference",
         }
         return
-    if not seq.get("confirmed"):
-        return
     if is_fresh_eval:
         state.pop("seq_pending_promotion_fresh_eval", None)
         state["seq_last_promotion_blocked"] = {
             "trial_id": trial_counter,
             "candidate": seq.get("candidate"),
-            "reason": "fresh-eval did not reach finalization threshold",
+            "reason": (
+                "fresh-eval did not confirm"
+                if not seq.get("confirmed")
+                else "fresh-eval did not reach finalization threshold"
+            ),
             "combined_E": seq.get("baseline_promotion_combined_E"),
         }
+        return
+    if not seq.get("confirmed"):
         return
     state["seq_pending_promotion_fresh_eval"] = {
         "candidate": seq.get("candidate"),
@@ -3256,6 +3273,7 @@ def _run_loop_inner(
                 trial_counter=trial_counter,
                 is_fresh_eval=seq_fresh_eval_context is not None,
                 finalized=seq_finalized,
+                baseline_update=baseline_update,
             )
 
         # Extract hypothesis and expected mechanism from action/controller
