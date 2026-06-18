@@ -10,9 +10,11 @@ import yaml
 from src.registry.stack_priors import (
     STACK_PRIORS_VERSION,
     StackPriorsCompileError,
+    canonical_stack_role_id,
     compile_stack_priors,
     live_role_primary_ports,
     _launch_runtime_record,
+    live_stack_role_ids,
     live_stack_serving_slot_limits,
     live_stack_serving_url_values,
     live_stack_role_records,
@@ -37,6 +39,7 @@ def test_runtime_stack_prior_helpers_fail_closed_on_missing_artifact(tmp_path: P
 
     assert load_stack_priors_artifact(missing) is None
     assert live_stack_role_records(missing) == {}
+    assert live_stack_role_ids(missing) == []
     assert live_warm_worker_slots(missing) == {}
     assert live_role_primary_ports(frozenset({"worker_vision"}), missing) == {}
     assert live_stack_serving_url_values(missing) == {}
@@ -76,6 +79,18 @@ def test_runtime_stack_prior_helpers_project_live_roles(tmp_path: Path) -> None:
         "vision_escalation",
         "worker_batch",
         "worker_general",
+        "worker_vision",
+    ]
+    assert canonical_stack_role_id("worker_explore") == "worker_general"
+    assert canonical_stack_role_id(_RETIRED_ARCHITECT_ROLE) == "architect_general"
+    assert canonical_stack_role_id("unknown_role") is None
+    assert live_stack_role_ids(
+        priors,
+        preferred_order=["frontdoor", "worker_general", "vision_escalation"],
+    ) == [
+        "worker_general",
+        "vision_escalation",
+        "worker_batch",
         "worker_vision",
     ]
     assert live_warm_worker_slots(priors) == {"worker_batch": 4}

@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from src.roles import Role
+from src.registry.stack_priors import canonical_stack_role_id, live_stack_role_ids
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration/derived/stack_priors.yaml"
@@ -49,20 +49,7 @@ ACTION_EXCLUDE: set[str] = {
 }
 ACTION_EXCLUDE_PREFIXES = ("persona:",)
 
-RAW_TO_LIVE_ACTION: dict[str, str] = {
-    "frontdoor": "frontdoor",
-    "architect_general": "architect_general",
-    "coder_escalation": "coder_escalation",
-    "ingest_long_context": "ingest_long_context",
-    "worker_general": "worker_general",
-    "worker_math": "worker_math",
-    "worker_vision": "worker_vision",
-    "worker_summarize": "worker_summarize",
-    "toolrunner": "toolrunner",
-    "vision_escalation": "vision_escalation",
-    "escalate:frontdoor->coder_escalation": "coder_escalation",
-    "escalate:worker_general->coder_escalation": "coder_escalation",
-    "escalate:coder_escalation->architect_coding": "architect_general",
+LEGACY_FRONTDOOR_ACTIONS: dict[str, str] = {
     "SELF": "frontdoor",
     "SELF:direct": "frontdoor",
     "SELF:repl": "frontdoor",
@@ -71,23 +58,11 @@ RAW_TO_LIVE_ACTION: dict[str, str] = {
 }
 
 
-def _ordered_live_roles(roles: Mapping[str, Any]) -> list[str]:
-    live: list[str] = []
-    for role_id, record in roles.items():
-        if not isinstance(record, Mapping):
-            continue
-        if record.get("deployment_status") != "live_stack":
-            continue
-        role = str(record.get("role") or role_id)
-        live.append(role)
-
-    if not live:
-        return []
-
-    live_set = set(live)
-    ordered = [role for role in PREFERRED_ACTION_ORDER if role in live_set]
-    ordered.extend(role for role in live if role not in set(ordered))
-    return ordered
+def _normalize_escalation_action(raw_action: str) -> str | None:
+    if not raw_action.startswith("escalate:") or "->" not in raw_action:
+        return None
+    _, _, target = raw_action.partition("->")
+    return canonical_stack_role_id(target)
 
 
 def load_live_canonical_actions(
@@ -99,7 +74,7 @@ def load_live_canonical_actions(
     contract cannot be read or contains no live roles.
     """
     try:
-        from src.registry.stack_priors import load_stack_priors_artifact, live_stack_role_records
+        from src.registry.stack_priors import load_stack_priors_artifact
     except Exception as exc:
         logger.warning("Using degraded GraphRouter actions; stack priors unavailable: %s", exc)
         return DEGRADED_CANONICAL_ACTIONS.copy()
@@ -114,12 +89,10 @@ def load_live_canonical_actions(
         logger.warning("Using degraded GraphRouter actions; stack priors roles field is invalid")
         return DEGRADED_CANONICAL_ACTIONS.copy()
 
-    roles = live_stack_role_records(stack_priors_path)
-    if not isinstance(roles, Mapping):
-        logger.warning("Using degraded GraphRouter actions; stack priors roles field is invalid")
-        return DEGRADED_CANONICAL_ACTIONS.copy()
-
-    actions = _ordered_live_roles(roles)
+    actions = live_stack_role_ids(
+        stack_priors_path,
+        preferred_order=PREFERRED_ACTION_ORDER,
+    )
     if not actions:
         logger.warning("Using degraded GraphRouter actions; no live stack roles found")
         return DEGRADED_CANONICAL_ACTIONS.copy()
@@ -141,13 +114,13 @@ def normalize_action(
     if "\n" in raw_action or "FINAL(" in raw_action:
         return None
 
-    canonical_role = Role.from_string(raw_action)
+    canonical_role = canonical_stack_role_id(raw_action)
     if canonical_role is not None:
-        canonical = RAW_TO_LIVE_ACTION.get(str(canonical_role))
-        if canonical is not None:
-            return canonical
+        return canonical_role
 
-    canonical = RAW_TO_LIVE_ACTION.get(raw_action)
+    canonical = _normalize_escalation_action(raw_action)
+    if canonical is None:
+        canonical = LEGACY_FRONTDOOR_ACTIONS.get(raw_action)
     if canonical is None:
         logger.warning("Unknown action '%s' - excluding from training", raw_action[:80])
     return canonical

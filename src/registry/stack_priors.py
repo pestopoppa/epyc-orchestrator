@@ -13,6 +13,7 @@ import hashlib
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -254,6 +255,46 @@ def live_stack_role_records(path: Path = DEFAULT_OUTPUT) -> dict[str, dict[str, 
             continue
         live[role] = record
     return live
+
+
+def canonical_stack_role_id(role_name: str) -> str | None:
+    """Return the canonical role ID for a known stack role or alias."""
+    from src.roles import Role
+
+    role = Role.from_string(str(role_name))
+    return role.value if role is not None else None
+
+
+def live_stack_role_ids(
+    path: Path = DEFAULT_OUTPUT,
+    *,
+    preferred_order: Sequence[str] = (),
+) -> list[str]:
+    """Return canonical live stack role IDs in a stable preferred order."""
+    live_records = live_stack_role_records(path)
+    if not live_records:
+        return []
+
+    live: list[str] = []
+    for role_id, record in live_records.items():
+        raw_role = record.get("role") if isinstance(record, dict) else None
+        role_name = raw_role if isinstance(raw_role, str) and raw_role else role_id
+        live.append(canonical_stack_role_id(role_name) or str(role_name))
+
+    live = list(dict.fromkeys(live))
+    if not live:
+        return []
+
+    live_set = set(live)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for role in preferred_order:
+        canonical = canonical_stack_role_id(str(role)) or str(role)
+        if canonical in live_set and canonical not in seen:
+            ordered.append(canonical)
+            seen.add(canonical)
+    ordered.extend(role for role in live if role not in seen)
+    return ordered
 
 
 def stack_prior_serving(record: dict[str, Any]) -> dict[str, Any]:

@@ -12,6 +12,7 @@ import yaml
 
 from scripts.graph_router.action_space import (
     DEGRADED_CANONICAL_ACTIONS,
+    canonical_actions_from_label_map,
     load_live_canonical_actions,
     normalize_action,
 )
@@ -22,6 +23,19 @@ from scripts.graph_router.extract_verifier_training_data_debiased import (
 )
 
 LEGACY_ARCHITECT_ROLE = "architect" "_coding"
+
+EXPECTED_ACTION_ORDER = [
+    "frontdoor",
+    "architect_general",
+    "coder_escalation",
+    "worker_general",
+    "worker_math",
+    "worker_vision",
+    "ingest_long_context",
+    "worker_summarize",
+    "toolrunner",
+    "vision_escalation",
+]
 
 
 def _stack_prior_record(role: str, *, deployment_status: str = "live_stack") -> dict:
@@ -114,6 +128,16 @@ def test_normalize_action_canonicalizes_role_aliases_before_lookup() -> None:
     assert normalize_action("worker_fast") == "worker_general"
     assert normalize_action("coder") == "coder_escalation"
     assert normalize_action(LEGACY_ARCHITECT_ROLE) == "architect_general"
+    assert normalize_action(f"escalate:coder_escalation->{LEGACY_ARCHITECT_ROLE}") == (
+        "architect_general"
+    )
+
+
+def test_degraded_actions_pin_serialized_classifier_order() -> None:
+    assert DEGRADED_CANONICAL_ACTIONS == EXPECTED_ACTION_ORDER
+    assert canonical_actions_from_label_map(_label_map(DEGRADED_CANONICAL_ACTIONS)) == (
+        EXPECTED_ACTION_ORDER
+    )
 
 
 def test_live_actions_keep_preferred_order_and_append_new_live_roles(tmp_path: Path) -> None:
