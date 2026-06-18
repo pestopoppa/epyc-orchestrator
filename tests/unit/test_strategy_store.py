@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -111,6 +112,60 @@ class TestStrategyStore:
         results = store.retrieve("Legacy evidence", k=10, excluded_trial_ids={5})
 
         assert results == []
+
+    def test_excluded_strategy_evidence_trial_ids_prefers_folded_view(self):
+        from orchestration.repl_memory.strategy_store import (
+            excluded_strategy_evidence_trial_ids,
+        )
+
+        class FakeJournal:
+            def all_entries(self):
+                return [
+                    SimpleNamespace(
+                        trial_id=1,
+                        bug_corrupted_by="raw_only",
+                    )
+                ]
+
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=1, bug_corrupted_by=""),
+                    SimpleNamespace(trial_id=2, bug_corrupted_by="resource_contention"),
+                    SimpleNamespace(trial_id=3, outcome_status="error"),
+                    SimpleNamespace(trial_id=4, keep_revert_decision="excluded"),
+                    SimpleNamespace(
+                        trial_id=5,
+                        eval_details={"learning_exclusion": {"by": "seq_accumulating"}},
+                    ),
+                    SimpleNamespace(trial_id="not-an-int", bug_corrupted_by="bad-row"),
+                ]
+
+        assert excluded_strategy_evidence_trial_ids(FakeJournal()) == {2, 3, 4, 5}
+
+    def test_excluded_strategy_evidence_trial_ids_falls_back_to_all_entries(self):
+        from orchestration.repl_memory.strategy_store import (
+            excluded_strategy_evidence_trial_ids,
+        )
+
+        class FakeJournal:
+            def all_entries(self):
+                return [
+                    SimpleNamespace(trial_id=7, bug_corrupted_by="operator_scrub"),
+                    SimpleNamespace(trial_id=8, bug_corrupted_by=""),
+                ]
+
+        assert excluded_strategy_evidence_trial_ids(FakeJournal()) == {7}
+
+    def test_excluded_strategy_evidence_trial_ids_tolerates_load_errors(self):
+        from orchestration.repl_memory.strategy_store import (
+            excluded_strategy_evidence_trial_ids,
+        )
+
+        class BrokenJournal:
+            def all_entries(self):
+                raise RuntimeError("journal unavailable")
+
+        assert excluded_strategy_evidence_trial_ids(BrokenJournal()) == set()
 
     def test_metadata_roundtrip(self, store):
         meta = {"key": "value", "nested": {"a": 1}}

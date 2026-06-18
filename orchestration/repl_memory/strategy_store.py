@@ -105,6 +105,49 @@ def _insight_format(
     }
 
 
+def _journal_trial_id(entry: Any) -> int | None:
+    try:
+        return int(getattr(entry, "trial_id"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _journal_entry_excludes_strategy_evidence(entry: Any) -> bool:
+    """True when a journal row should quarantine strategy evidence it cites."""
+    if getattr(entry, "bug_corrupted_by", ""):
+        return True
+    if getattr(entry, "outcome_status", "ok") != "ok":
+        return True
+    if getattr(entry, "keep_revert_decision", "") == "excluded":
+        return True
+    eval_details = getattr(entry, "eval_details", {}) or {}
+    return isinstance(eval_details, dict) and bool(eval_details.get("learning_exclusion"))
+
+
+def excluded_strategy_evidence_trial_ids(journal: Any) -> set[int]:
+    """Return trial IDs whose strategy evidence should not be retrieved.
+
+    Prefer the folded append-only journal view when available so supersession
+    events and learning exclusions quarantine downstream StrategyStore rows
+    without mutating the persisted strategy database.
+    """
+    try:
+        entries = (
+            journal.entries_with_supersessions()
+            if hasattr(journal, "entries_with_supersessions")
+            else journal.all_entries()
+        )
+    except Exception:
+        return set()
+
+    excluded: set[int] = set()
+    for entry in entries:
+        trial_id = _journal_trial_id(entry)
+        if trial_id is not None and _journal_entry_excludes_strategy_evidence(entry):
+            excluded.add(trial_id)
+    return excluded
+
+
 @dataclass
 class StrategyEntry:
     """A single strategy memory entry."""

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from controller_io import validate_single_variable
+from orchestration.repl_memory.strategy_store import excluded_strategy_evidence_trial_ids
 from safety_gate import EvalResult, SafetyGate
 
 
@@ -265,30 +266,7 @@ def _build_mutation_context(
     # B1: Strategy store retrieval — add past strategy insights
     if ctx.strategy_store is not None:
         query = f"{target} {mutation_type} {description}"
-        excluded_trial_ids: set[int] = set()
-        try:
-            entries = (
-                ctx.journal.entries_with_supersessions()
-                if hasattr(ctx.journal, "entries_with_supersessions")
-                else ctx.journal.all_entries()
-            )
-            excluded_trial_ids = {
-                int(e.trial_id)
-                for e in entries
-                if (
-                    getattr(e, "bug_corrupted_by", "")
-                    or getattr(e, "outcome_status", "ok") != "ok"
-                    or getattr(e, "keep_revert_decision", "") == "excluded"
-                    or (
-                        isinstance(getattr(e, "eval_details", {}) or {}, dict)
-                        and (getattr(e, "eval_details", {}) or {}).get(
-                            "learning_exclusion"
-                        )
-                    )
-                )
-            }
-        except Exception:
-            excluded_trial_ids = set()
+        excluded_trial_ids = excluded_strategy_evidence_trial_ids(ctx.journal)
         strategies = ctx.strategy_store.retrieve(
             query,
             k=3,
