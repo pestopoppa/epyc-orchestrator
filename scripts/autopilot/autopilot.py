@@ -89,7 +89,11 @@ from src.autopilot_core.learning_exclusions import (
     BENIGN_LEARNING_EXCLUSIONS,
     classify_learning_exclusion,
 )
-from src.autopilot_core.planner_evidence import format_planner_evidence_section
+from src.autopilot_core.planner_evidence import (
+    DEFAULT_EVIDENCE_CORE_ID,
+    format_planner_evidence_section,
+)
+from src.autopilot_core.sequential_verdict import baseline_profile_from_trials
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
@@ -100,6 +104,7 @@ from src.autopilot_core.tier_specs import (
     spec_for,
     task_rate_objectives_from,
     task_rate_qph_from,
+    task_rate_qph_from_row,
 )
 from src.autopilot_core.baseline_ledger import (
     format_baseline_ledger_summary,
@@ -155,6 +160,10 @@ PRIOR_DECISION_DIGEST_CAP = int(
     os.environ.get("AUTOPILOT_PRIOR_DECISION_DIGEST_CAP", "8")
 )
 ORCHESTRATOR_URL = "http://localhost:8000"
+SEQ_BASELINE_PROFILE_LIMIT = int(
+    os.environ.get("AUTOPILOT_SEQ_BASELINE_PROFILE_LIMIT", "120")
+)
+SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120"))
 
 # 2026-05-23 constrained-creativity planner knobs (gated on stagnation).
 # Lean prompt is the default; the rich rubric+synthesis fragment activates
@@ -224,6 +233,95 @@ def _blacklisted_action_skip(action: dict[str, Any], blocked_reason: str) -> Ski
     """Convert a pre-dispatch blacklist hit into journalable planner feedback."""
     action_type = str(action.get("type") or "unknown")
     return SkipOutcome("invalid", f"action blacklisted: {blocked_reason}", action_type)
+
+
+def _question_outcome_map(question_results: Any) -> dict[str, bool]:
+    """Normalize compact question result rows into a sequential verdict map."""
+    if not isinstance(question_results, list):
+        return {}
+    outcomes: dict[str, bool] = {}
+    for item in question_results:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("qid") or item.get("question_id") or "").strip()
+        if not qid:
+            continue
+        outcomes[qid] = bool(item.get("correct"))
+    return outcomes
+
+
+def _seq_inputs_for_trial(
+    *,
+    journal: ExperimentJournal,
+    action: dict[str, Any],
+    tier: int,
+) -> dict[str, Any]:
+    """Build default-off W4 shadow inputs from trusted prior journal evidence."""
+    candidate = _config_fingerprint(action)
+    prior_quality_obs: list[tuple[int | None, float]] = []
+    prior_rate_obs: list[tuple[int | None, float]] = []
+    baseline_trials: list[dict[str, bool]] = []
+    baseline_task_rates: list[float] = []
+
+    for entry in reversed(journal.entries_with_supersessions()):
+        if getattr(entry, "bug_corrupted_by", ""):
+            continue
+        if getattr(entry, "outcome_status", "ok") in {"invalid", "skipped"}:
+            continue
+        try:
+            if int(getattr(entry, "tier", -1)) != int(tier):
+                continue
+        except (TypeError, ValueError):
+            continue
+        eval_details = getattr(entry, "eval_details", {}) or {}
+        if not isinstance(eval_details, dict):
+            continue
+
+        outcome_map = _question_outcome_map(eval_details.get("question_results"))
+        if outcome_map and len(baseline_trials) < SEQ_BASELINE_PROFILE_LIMIT:
+            baseline_trials.append(outcome_map)
+        if len(baseline_task_rates) < SEQ_BASELINE_PROFILE_LIMIT:
+            row = {
+                "quality": getattr(entry, "quality", 0.0),
+                "n_questions": len(outcome_map),
+                "eval_details": eval_details,
+            }
+            task_rate = task_rate_qph_from_row(row)
+            if task_rate > 0.0:
+                baseline_task_rates.append(task_rate)
+
+        seq = getattr(entry, "seq", {}) or {}
+        if not isinstance(seq, dict):
+            continue
+        if str(seq.get("candidate") or "") != candidate:
+            continue
+        if str(seq.get("core_id") or DEFAULT_EVIDENCE_CORE_ID) != DEFAULT_EVIDENCE_CORE_ID:
+            continue
+        if len(prior_quality_obs) < SEQ_PRIOR_OBS_LIMIT and "z" in seq:
+            try:
+                prior_quality_obs.append((entry.trial_id, float(seq["z"])))
+            except (TypeError, ValueError):
+                pass
+        if len(prior_rate_obs) < SEQ_PRIOR_OBS_LIMIT and "z_rate" in seq:
+            try:
+                prior_rate_obs.append((entry.trial_id, float(seq["z_rate"])))
+            except (TypeError, ValueError):
+                pass
+
+    baseline_profile = baseline_profile_from_trials(reversed(baseline_trials))
+    baseline_task_rate = (
+        sum(baseline_task_rates) / len(baseline_task_rates)
+        if baseline_task_rates
+        else None
+    )
+    return {
+        "candidate": candidate,
+        "core_id": DEFAULT_EVIDENCE_CORE_ID,
+        "baseline_profile": baseline_profile,
+        "baseline_task_rate": baseline_task_rate,
+        "prior_quality_obs": list(reversed(prior_quality_obs)),
+        "prior_rate_obs": list(reversed(prior_rate_obs)),
+    }
 
 
 def _format_blacklist_pattern(pattern: Any) -> str:
@@ -2552,7 +2650,22 @@ def _run_loop_inner(
             )
         else:
             # Safety gate
-            verdict = gate.check(eval_result)
+            seq_inputs = _seq_inputs_for_trial(
+                journal=journal,
+                action=action,
+                tier=eval_result.tier,
+            )
+            verdict = gate.check(
+                eval_result,
+                question_results=list(getattr(eval_result, "question_results", []) or []),
+                task_rate=task_rate_qph_from(eval_result),
+                baseline_profile=seq_inputs["baseline_profile"],
+                baseline_task_rate=seq_inputs["baseline_task_rate"],
+                prior_quality_obs=seq_inputs["prior_quality_obs"],
+                prior_rate_obs=seq_inputs["prior_rate_obs"],
+                candidate=seq_inputs["candidate"],
+                core_id=seq_inputs["core_id"],
+            )
             failure_analysis = gate.analyze_failure(eval_result, verdict)
             if not verdict:
                 log.warning(
@@ -2681,7 +2794,16 @@ def _run_loop_inner(
                     reasoning=json.dumps(action),
                 )
             )
-            baseline_update = gate.update_baseline(eval_result, source_trial_id=trial_counter)
+            seq_confirmed = (
+                bool(verdict.seq.get("confirmed"))
+                if verdict.seq is not None
+                else None
+            )
+            baseline_update = gate.update_baseline(
+                eval_result,
+                source_trial_id=trial_counter,
+                seq_confirmed=seq_confirmed,
+            )
             if baseline_update.updated:
                 log.info(
                     "Trial %d: T%d baseline auto-raised %.3f → %.3f",
@@ -2915,6 +3037,7 @@ def _run_loop_inner(
                 metric_schema_version=metric_schema_version,
                 harness_metrics=harness_metrics,
                 oracle_adequacy=oracle_adequacy,
+                seq=verdict.seq or {},
                 reasoning=json.dumps(action),
                 hypothesis=hypothesis,
                 expected_mechanism=expected_mechanism,

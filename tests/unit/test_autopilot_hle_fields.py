@@ -85,6 +85,14 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
         metric_schema_version=1,
         harness_metrics={"planning_stability": {"score": 0.6, "evidence_event_ids": [42]}},
         oracle_adequacy={"coding_sentinel": {"oracle_type": "pytest", "deterministic": True}},
+        seq={
+            "candidate": "fp-a",
+            "core_id": "core_v1",
+            "z": 0.25,
+            "z_rate": 0.1,
+            "state": "accumulating",
+            "policy_version": "seq-v1",
+        },
     )
 
     journal.record(entry)
@@ -94,6 +102,8 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
     assert raw["eval_details"]["question_results"][0]["qid"] == "q-stable"
     assert raw["harness_metrics"]["planning_stability"]["score"] == 0.6
     assert raw["oracle_adequacy"]["coding_sentinel"]["oracle_type"] == "pytest"
+    assert raw["seq"]["candidate"] == "fp-a"
+    assert raw["seq"]["z_rate"] == 0.1
 
     reloaded = ExperimentJournal(journal_dir=tmp_path)
     loaded = reloaded.all_entries()[0]
@@ -101,6 +111,7 @@ def test_journal_round_trips_hle_fields_in_jsonl(tmp_path: Path) -> None:
     assert loaded.harness_metrics == entry.harness_metrics
     assert loaded.oracle_adequacy == entry.oracle_adequacy
     assert loaded.eval_details["question_results"][0]["qid"] == "q-stable"
+    assert loaded.seq == entry.seq
 
 
 def test_journal_loads_hle_fields_from_legacy_eval_details(tmp_path: Path) -> None:

@@ -1,10 +1,53 @@
-# X-MAS (domain x function) -> winner-model lookup, compiled from the measured
-# function-axis sweep (epyc-inference-research 4e3ee6c, 500 rows, all 25 cells).
-# Loaded by src/classifiers/xmas_routing.py; enforce path is default-OFF
-# (ORCHESTRATOR_XMAS_ROUTING_MODE) pending the live A/B. 4 models swept:
-# frontdoor, worker_general, architect_general, ingest_long_context.
 version: xmas-v1
 fallback_role: frontdoor
+provenance:
+  generated_at: '2026-06-18T11:08:12Z'
+  generator: scripts/research/xmas_winner_table.py
+  source_results:
+  - /mnt/raid0/llm/epyc-inference-research/data/research/2026-06-16-xmas-function-axis-winner-table-FULL.json
+  source_started_at: '2026-06-16T22:50:52Z'
+  source_n_tasks: 125
+  source_n_models: 4
+  winner_rule: correct_desc_then_wall_mean_s_asc
+  derivation_mode: function_axis_sweep
+  domains:
+  - math
+  - code
+  - knowledge
+  - long_context
+  - reasoning
+  functions:
+  - solve
+  - verify
+  - plan
+  - refine
+  - extract
+  cell_winners:
+    math:solve: worker_general
+    math:verify: architect_general
+    math:plan: worker_general
+    math:refine: worker_general
+    math:extract: worker_general
+    code:solve: worker_general
+    code:verify: architect_general
+    code:plan: ingest_long_context
+    code:refine: worker_general
+    code:extract: worker_general
+    knowledge:solve: worker_general
+    knowledge:verify: worker_general
+    knowledge:plan: worker_general
+    knowledge:refine: worker_general
+    knowledge:extract: worker_general
+    long_context:solve: worker_general
+    long_context:verify: ingest_long_context
+    long_context:plan: worker_general
+    long_context:refine: worker_general
+    long_context:extract: worker_general
+    reasoning:solve: worker_general
+    reasoning:verify: worker_general
+    reasoning:plan: worker_general
+    reasoning:refine: architect_general
+    reasoning:extract: frontdoor
 cells:
   math:
     solve: worker_general
@@ -36,3 +79,945 @@ cells:
     plan: worker_general
     refine: architect_general
     extract: frontdoor
+evidence:
+  math:
+    solve:
+      cell: math:solve
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: math
+      source_function: solve
+      source_summary_path: summary.table.math.solve.worker_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 26.618632674915716
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 18.903771578567103
+        ingest_long_context:
+          accuracy: 0.8
+          correct: 4
+          failures:
+            empty_content: 1
+          ok: 4
+          total: 5
+          wall_mean_s: 32.76936210631393
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.5695961638819425
+    verify:
+      cell: math:verify
+      winner: architect_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: math
+      source_function: verify
+      source_summary_path: summary.table.math.verify.architect_general
+      candidates:
+        architect_general:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.47737298454158
+        frontdoor:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 12.768447104236111
+        ingest_long_context:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 8.973736103065312
+        worker_general:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 3.829363386752084
+    plan:
+      cell: math:plan
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: math
+      source_function: plan
+      source_summary_path: summary.table.math.plan.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.8
+          correct: 4
+          failures:
+            rubric_unscored: 1
+          ok: 5
+          total: 5
+          wall_mean_s: 8.540219733351842
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 4.660665318230167
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 7.211810044571758
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.950767610548064
+    refine:
+      cell: math:refine
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: math
+      source_function: refine
+      source_summary_path: summary.table.math.refine.worker_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 25.346335166785867
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 12.751460004458204
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 24.39312868542038
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.334828875213861
+    extract:
+      cell: math:extract
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: math
+      source_function: extract
+      source_summary_path: summary.table.math.extract.worker_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 24.531631906237454
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 12.585870270803571
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 21.289061185065655
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 4.743294685613364
+  code:
+    solve:
+      cell: code:solve
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: code
+      source_function: solve
+      source_summary_path: summary.table.code.solve.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.733314681472257
+        frontdoor:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 8.486042424337938
+        ingest_long_context:
+          accuracy: 0.2
+          correct: 1
+          failures:
+            empty_content: 2
+          ok: 3
+          total: 5
+          wall_mean_s: 62.305162378167736
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 9.562430110387504
+    verify:
+      cell: code:verify
+      winner: architect_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: code
+      source_function: verify
+      source_summary_path: summary.table.code.verify.architect_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 6.917099184542894
+        frontdoor:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 9.644134606979787
+        ingest_long_context:
+          accuracy: 0.4
+          correct: 2
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 38.50273775919341
+        worker_general:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 3.1472830389626325
+    plan:
+      cell: code:plan
+      winner: ingest_long_context
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: code
+      source_function: plan
+      source_summary_path: summary.table.code.plan.ingest_long_context
+      candidates:
+        architect_general:
+          accuracy: 0.4
+          correct: 2
+          failures:
+            rubric_unscored: 3
+          ok: 5
+          total: 5
+          wall_mean_s: 7.733030516840517
+        frontdoor:
+          accuracy: 0.8
+          correct: 4
+          failures:
+            rubric_unscored: 1
+          ok: 5
+          total: 5
+          wall_mean_s: 4.910296941874549
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 12.142153485585004
+        worker_general:
+          accuracy: 0.8
+          correct: 4
+          failures:
+            rubric_unscored: 1
+          ok: 5
+          total: 5
+          wall_mean_s: 5.202610079199076
+    refine:
+      cell: code:refine
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: code
+      source_function: refine
+      source_summary_path: summary.table.code.refine.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.4
+          correct: 2
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 29.0426767103374
+        frontdoor:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 10.023153498163447
+        ingest_long_context:
+          accuracy: 0.4
+          correct: 2
+          failures:
+            empty_content: 1
+          ok: 4
+          total: 5
+          wall_mean_s: 45.541224632645026
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 8.325216174172237
+    extract:
+      cell: code:extract
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: code
+      source_function: extract
+      source_summary_path: summary.table.code.extract.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.772104702424258
+        frontdoor:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.4788758074399084
+        ingest_long_context:
+          accuracy: 0.2
+          correct: 1
+          failures:
+            empty_content: 1
+          ok: 4
+          total: 5
+          wall_mean_s: 56.762417253293094
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 8.411416830588132
+  knowledge:
+    solve:
+      cell: knowledge:solve
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: knowledge
+      source_function: solve
+      source_summary_path: summary.table.knowledge.solve.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.0783602206967773
+        frontdoor:
+          accuracy: 0.0
+          correct: 0
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 0.9534464040305466
+        ingest_long_context:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.6397750841453673
+        worker_general:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.4181384141556919
+    verify:
+      cell: knowledge:verify
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: knowledge
+      source_function: verify
+      source_summary_path: summary.table.knowledge.verify.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 21.057364012952895
+        frontdoor:
+          accuracy: 0.4
+          correct: 2
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 10.143176208343357
+        ingest_long_context:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.868435914209113
+        worker_general:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 0.9000294683966785
+    plan:
+      cell: knowledge:plan
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: knowledge
+      source_function: plan
+      source_summary_path: summary.table.knowledge.plan.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.8
+          correct: 4
+          failures:
+            rubric_unscored: 1
+          ok: 5
+          total: 5
+          wall_mean_s: 9.988845231989398
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.881113738985732
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 7.094425736647099
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.2355873624328524
+    refine:
+      cell: knowledge:refine
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: knowledge
+      source_function: refine
+      source_summary_path: summary.table.knowledge.refine.worker_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.0978010863531384
+        frontdoor:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.762390581564978
+        ingest_long_context:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.665831454144791
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.3167033831123263
+    extract:
+      cell: knowledge:extract
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: knowledge
+      source_function: extract
+      source_summary_path: summary.table.knowledge.extract.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.0
+          correct: 0
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.7877120754215867
+        frontdoor:
+          accuracy: 0.0
+          correct: 0
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.5544789704028517
+        ingest_long_context:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.935894339811057
+        worker_general:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.5877673315815628
+  long_context:
+    solve:
+      cell: long_context:solve
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: long_context
+      source_function: solve
+      source_summary_path: summary.table.long_context.solve.worker_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 4.226832797797397
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.7872092702426015
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.5799353057984264
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.5042745178565382
+    verify:
+      cell: long_context:verify
+      winner: ingest_long_context
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: long_context
+      source_function: verify
+      source_summary_path: summary.table.long_context.verify.ingest_long_context
+      candidates:
+        architect_general:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 6.90206970977597
+        frontdoor:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 3.5655403655953704
+        ingest_long_context:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.832896273769438
+        worker_general:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.275284828338772
+    plan:
+      cell: long_context:plan
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: long_context
+      source_function: plan
+      source_summary_path: summary.table.long_context.plan.worker_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 11.567435864405706
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 6.143254153430462
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 7.24410528014414
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.152851558569819
+    refine:
+      cell: long_context:refine
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: long_context
+      source_function: refine
+      source_summary_path: summary.table.long_context.refine.worker_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 6.615745764365419
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 4.475021535251289
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 6.469407582236454
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.8934577180538326
+    extract:
+      cell: long_context:extract
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: long_context
+      source_function: extract
+      source_summary_path: summary.table.long_context.extract.worker_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 4.479915907653049
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 2.74799305642955
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.062523365393281
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.4168871336616575
+  reasoning:
+    solve:
+      cell: reasoning:solve
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: reasoning
+      source_function: solve
+      source_summary_path: summary.table.reasoning.solve.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.4
+          correct: 2
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 0.6466590080410242
+        frontdoor:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 21.270892077172174
+        ingest_long_context:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 38.93535726503469
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 16.54619940817356
+    verify:
+      cell: reasoning:verify
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: reasoning
+      source_function: verify
+      source_summary_path: summary.table.reasoning.verify.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 25.940469739073887
+        frontdoor:
+          accuracy: 0.4
+          correct: 2
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 8.140126380464062
+        ingest_long_context:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 39.54352795197629
+        worker_general:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 5.146102563245222
+    plan:
+      cell: reasoning:plan
+      winner: worker_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: reasoning
+      source_function: plan
+      source_summary_path: summary.table.reasoning.plan.worker_general
+      candidates:
+        architect_general:
+          accuracy: 0.0
+          correct: 0
+          failures:
+            rubric_unscored: 5
+          ok: 5
+          total: 5
+          wall_mean_s: 1.219175994815305
+        frontdoor:
+          accuracy: 0.8
+          correct: 4
+          failures:
+            rubric_unscored: 1
+          ok: 5
+          total: 5
+          wall_mean_s: 11.190181715553626
+        ingest_long_context:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 14.211223996151238
+        worker_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 3.2349780245684086
+    refine:
+      cell: reasoning:refine
+      winner: architect_general
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: reasoning
+      source_function: refine
+      source_summary_path: summary.table.reasoning.refine.architect_general
+      candidates:
+        architect_general:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.2212589134462177
+        frontdoor:
+          accuracy: 1.0
+          correct: 5
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 38.77584072779864
+        ingest_long_context:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 34.93209260501899
+        worker_general:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 15.193165952572599
+    extract:
+      cell: reasoning:extract
+      winner: frontdoor
+      sample_count: 5
+      derivation: function_axis_sweep
+      source_domain: reasoning
+      source_function: extract
+      source_summary_path: summary.table.reasoning.extract.frontdoor
+      candidates:
+        architect_general:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 1.6876361635513604
+        frontdoor:
+          accuracy: 0.8
+          correct: 4
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 49.38075718558393
+        ingest_long_context:
+          accuracy: 0.6
+          correct: 3
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 17.140575646189973
+        worker_general:
+          accuracy: 0.2
+          correct: 1
+          failures: {}
+          ok: 5
+          total: 5
+          wall_mean_s: 12.919067178992554

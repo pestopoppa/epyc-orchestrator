@@ -224,6 +224,7 @@ def journal_seq_block(
     }
     if rate_noninf_update is not None:
         block["E_rate_noninf"] = round(rate_noninf_update.wealth, 6)
+        block["z_rate"] = round(rate_noninf_update.z, 6)
     return block
 
 

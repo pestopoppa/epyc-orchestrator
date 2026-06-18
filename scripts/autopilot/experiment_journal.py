@@ -155,6 +155,7 @@ class JournalEntry:
     metric_schema_version: int = 1  # HLE-4 observe-only schema version.
     harness_metrics: dict[str, Any] = field(default_factory=dict)
     oracle_adequacy: dict[str, Any] = field(default_factory=dict)
+    seq: dict[str, Any] = field(default_factory=dict)
     failure_analysis: str = ""
     hypothesis: str = ""
     expected_mechanism: str = ""
@@ -343,6 +344,7 @@ class ExperimentJournal:
                             "oracle_adequacy",
                             data.get("eval_details", {}).get("oracle_adequacy", {}),
                         ),
+                        seq=data.get("seq", {}),
                         failure_analysis=data.get("failure_analysis", ""),
                         hypothesis=data.get("hypothesis", ""),
                         expected_mechanism=data.get("expected_mechanism", ""),
