@@ -113,12 +113,21 @@ def main() -> int:
         action="store_true",
         help="only require a complete 5x5 table when validating --table directly",
     )
+    parser.add_argument(
+        "--require-function-axis",
+        action="store_true",
+        help=(
+            "when validating --table directly, reject domain-proxy artifacts and "
+            "require true 5x5 function-axis evidence"
+        ),
+    )
     args = parser.parse_args()
 
     if args.table:
         errors = validate_table(
             args.table,
             require_evidence=not args.allow_unevidenced,
+            require_function_axis=args.require_function_axis,
         )
     else:
         errors = validate_config(args.config)

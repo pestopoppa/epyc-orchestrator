@@ -127,6 +127,7 @@ def validate_table(table_path: Path) -> None:
         "scripts/validate/validate_xmas_winner_table.py",
         "--table",
         str(table_path),
+        "--require-function-axis",
     ]
     result = subprocess.run(cmd, cwd=ORCH, capture_output=True, text=True, timeout=60)
     if result.returncode != 0:

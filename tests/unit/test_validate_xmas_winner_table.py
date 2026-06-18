@@ -140,3 +140,28 @@ def test_validate_table_can_accept_domain_proxy_artifact_directly(tmp_path: Path
         "winner table uses domain-proxy evidence; mode=enforce requires "
         "true function-axis 5x5 sweep evidence"
     ]
+
+
+def test_cli_table_validation_can_require_function_axis(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    table = tmp_path / "winner.yaml"
+    payload = _complete_evidence_backed_table_payload()
+    payload["provenance"]["derivation_mode"] = "domain_winner_reused_for_function"
+    table.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "validate_xmas_winner_table.py",
+            "--table",
+            str(table),
+            "--require-function-axis",
+        ],
+    )
+
+    assert validate_xmas.main() == 1
+
+    captured = capsys.readouterr()
+    assert "winner table uses domain-proxy evidence" in captured.err

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "benchmark" / "xmas_live_ab.py"
 SPEC = importlib.util.spec_from_file_location("xmas_live_ab", MODULE_PATH)
@@ -25,6 +26,27 @@ def test_reload_env_sets_launch_time_xmas_flags(tmp_path: Path) -> None:
     candidate = xmas_live_ab.reload_env("xmas", table)
     assert candidate["ORCHESTRATOR_XMAS_ROUTING_MODE"] == "enforce"
     assert candidate["ORCHESTRATOR_XMAS_WINNER_TABLE_PATH"] == str(table)
+
+
+def test_validate_table_requires_function_axis(monkeypatch, tmp_path: Path) -> None:
+    table = tmp_path / "xmas_winner_table.yaml"
+    table.write_text("version: test\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, *, cwd, capture_output, text, timeout):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["capture_output"] = capture_output
+        captured["text"] = text
+        captured["timeout"] = timeout
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(xmas_live_ab.subprocess, "run", fake_run)
+
+    xmas_live_ab.validate_table(table)
+
+    assert "--require-function-axis" in captured["cmd"]
+    assert captured["cwd"] == xmas_live_ab.ORCH
 
 
 def test_load_prompts_accepts_builtin_json_and_jsonl(tmp_path: Path) -> None:
