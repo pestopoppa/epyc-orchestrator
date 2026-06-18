@@ -416,6 +416,72 @@ def _swapped_vision_registry(path: Path) -> Path:
     )
 
 
+def _ingest_registry(
+    path: Path,
+    *,
+    model: str = "Qwen3-Next-80B-A3B-Instruct-Q4_K_M",
+    memory_gb: int = 46,
+    throughput: float = 20.8,
+    quality_pct: float = 92.59,
+    quant: str = "Q4_K_M",
+    ctx_max: int = 262144,
+    benchmark_date: str = "2026-05-04",
+) -> Path:
+    gguf = f"{model}.gguf"
+    return _write_yaml(
+        path,
+        {
+            "server_mode": {
+                "ingest_long_context": {
+                    "url": "http://localhost:8085",
+                    "port": 8085,
+                    "tier": "hot",
+                    "slots": 1,
+                    "model": gguf,
+                    "model_path": f"/models/{gguf}",
+                    "model_role": "ingest_long_context",
+                    "memory_gb": memory_gb,
+                    "throughput": throughput,
+                    "benchmark_score": f"{quality_pct:g}%",
+                    "benchmark_date": benchmark_date,
+                }
+            },
+            "roles": {
+                "ingest_long_context": {
+                    "model": {
+                        "name": model,
+                        "quant": quant,
+                        "architecture": "qwen3next",
+                        "size_gb": memory_gb,
+                        "ctx_max": ctx_max,
+                    },
+                    "performance": {
+                        "quality_pct": quality_pct,
+                        "baseline_tps": throughput,
+                        "long_context_quality": f"{quality_pct:g}%",
+                        "benchmark_date": benchmark_date,
+                    },
+                    "acceleration": {"type": "none", "lookup": False},
+                    "memory": {"pinned": True, "residency": "hot"},
+                }
+            },
+        },
+    )
+
+
+def _swapped_ingest_registry(path: Path) -> Path:
+    return _ingest_registry(
+        path,
+        model="Qwen3-Next-80B-A3B-Instruct-Q8_0",
+        memory_gb=82,
+        throughput=14.2,
+        quality_pct=96.3,
+        quant="Q8_0",
+        ctx_max=262144,
+        benchmark_date="2026-06-13",
+    )
+
+
 def _worker_alias_registry(
     path: Path,
     *,
@@ -949,6 +1015,111 @@ def test_simulated_vision_swap_updates_generated_consumers_with_approval(
     assert calls[0]["text"] is True
     assert calls[0]["capture_output"] is True
     assert calls[0]["check"] is False
+    promotion_step = next(step for step in swap_check_report.steps if step.name == "promotion_gate")
+    assert promotion_step.status == "ok"
+    assert any("promotion gate ok" in detail for detail in promotion_step.details)
+    assert any(step.name == "operator_summary" and step.status == "ok" for step in swap_check_report.steps)
+    assert any(step.name == "q_scorer_priors" and step.status == "ok" for step in swap_check_report.steps)
+    assert any(step.name == "runtime_attestation" and step.status == "ok" for step in swap_check_report.steps)
+
+
+def test_simulated_ingest_swap_updates_generated_consumers_with_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roles = {"ingest_long_context"}
+    config = _config(tmp_path, mode="update", roles=roles)
+    _ingest_registry(config.lean_registry)
+    assert run_stack_change_pipeline(config).ok
+    descriptors_before = config.descriptors.read_text(encoding="utf-8")
+    priors_before = config.stack_priors.read_text(encoding="utf-8")
+    _swapped_ingest_registry(config.lean_registry)
+
+    check_config = StackChangePipelineConfig(**{**config.__dict__, "mode": "check"})
+    check_report = run_stack_change_pipeline(check_config)
+
+    assert not check_report.ok
+    descriptor_step = next(step for step in check_report.steps if step.name == "descriptors")
+    assert any("descriptor artifact is stale:" in error for error in descriptor_step.errors)
+    assert any("descriptor update would remove existing model_id" in error for error in descriptor_step.errors)
+    assert config.descriptors.read_text(encoding="utf-8") == descriptors_before
+    assert config.stack_priors.read_text(encoding="utf-8") == priors_before
+
+    approved_config = StackChangePipelineConfig(
+        **{**config.__dict__, "allow_descriptor_model_removal": True}
+    )
+    update_report = run_stack_change_pipeline(approved_config)
+
+    assert update_report.ok
+    descriptors = yaml.safe_load(config.descriptors.read_text(encoding="utf-8"))
+    assert [model["model_id"] for model in descriptors["models"]] == [
+        "qwen3-next-80b-a3b-q8_0"
+    ]
+    priors = yaml.safe_load(config.stack_priors.read_text(encoding="utf-8"))
+    role = priors["roles"]["ingest_long_context"]
+    assert set(priors["roles"]) == roles
+    assert role["model_id"] == "qwen3-next-80b-a3b-q8_0"
+    assert role["priors"]["throughput_tps"] == 14.2
+    assert role["priors"]["quality_overall"] == pytest.approx(0.963)
+    assert role["model"]["ctx_max"] == 262144
+    assert role["serving"]["effective_context_tokens"] == 32768
+    assert role["serving"]["launch"]["runtime"]["cache"]["context_tokens"] == 32768
+
+    operator_summary = config.operator_summary.read_text(encoding="utf-8")
+    assert "Source: `orchestration/derived/stack_priors.yaml`" in operator_summary
+    assert "| ingest_long_context" in operator_summary
+    assert role["display_name"] in operator_summary
+    assert "Qwen3-Next-80B-A3B-Instruct-Q4_K_M" not in operator_summary
+
+    system_card = gen_system_card.generate_system_card(config.repo_root, state_override={})
+    assert "Source: orchestration/derived/stack_priors.yaml" in system_card
+    assert "| ingest_long_context |" in system_card
+    assert role["display_name"] in system_card
+    assert "Qwen3-Next-80B-A3B-Instruct-Q4_K_M" not in system_card
+
+    from src.api.routes.dashboard_topology import _stack_prior_port_hints
+    from src.api.routes.health import _stack_prior_backend_urls
+
+    assert _stack_prior_backend_urls(config.stack_priors) == {
+        "ingest_long_context": "http://localhost:8085"
+    }
+    port_hints = _stack_prior_port_hints(config.stack_priors)
+    assert port_hints[8085] == "ingest_long_context"
+    assert port_hints[8185] == "ingest_long_context.q0"
+    assert port_hints[8285] == "ingest_long_context.q1"
+    assert port_hints[8385] == "ingest_long_context.q2"
+    assert port_hints[8485] == "ingest_long_context.q3"
+
+    q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
+    assert q_priors.baseline_tps_by_role["ingest_long_context"] == 14.2
+    assert q_priors.baseline_tps_source_by_role["ingest_long_context"] == PRIOR_SOURCE_STACK_PRIORS
+    assert q_priors.baseline_quality_by_role["ingest_long_context"] == pytest.approx(0.963)
+    assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
+
+    calls: list[dict[str, Any]] = []
+    original_run = pipeline.subprocess.run
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command != pipeline._promotion_gate_command():
+            return original_run(command, **kwargs)
+        calls.append({"command": command, **kwargs})
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="promotion gate ok\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    swap_check_config = StackChangePipelineConfig(
+        **{**approved_config.__dict__, "mode": "check", "run_promotion_gate": True}
+    )
+    swap_check_report = run_stack_change_pipeline(swap_check_config)
+
+    assert swap_check_report.ok
+    assert len(calls) == 1
+    assert calls[0]["command"] == pipeline._promotion_gate_command()
+    assert calls[0]["cwd"] == tmp_path
     promotion_step = next(step for step in swap_check_report.steps if step.name == "promotion_gate")
     assert promotion_step.status == "ok"
     assert any("promotion gate ok" in detail for detail in promotion_step.details)
