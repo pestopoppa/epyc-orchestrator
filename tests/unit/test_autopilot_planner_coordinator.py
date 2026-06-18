@@ -124,6 +124,97 @@ def test_primary_failure_falls_back_to_secondary() -> None:
     assert len(codex.calls) == 1
 
 
+def test_fallback_draft_gets_independent_primary_critique() -> None:
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(provider="claude", role="draft", ok=True, text="no json"),
+            PlannerProviderResult(
+                provider="claude",
+                role="critique",
+                ok=True,
+                text=_critique_text(
+                    {
+                        "decision": "approve",
+                        "confidence": 0.86,
+                        "issues": ["fallback draft is independently reviewed"],
+                    }
+                ),
+            ),
+        ],
+        supports_resume=True,
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id="old",
+        planner_state={},
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.draft_provider == "codex"
+    assert decision.critic_provider == "claude"
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert [call["role"] for call in claude.calls] == ["draft", "critique"]
+    assert [call["role"] for call in codex.calls] == ["draft"]
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
+
+
+def test_fallback_draft_pauses_when_independent_primary_critique_fails() -> None:
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(provider="claude", role="draft", ok=True, text="no json"),
+            PlannerProviderResult(
+                provider="claude",
+                role="critique",
+                ok=False,
+                text="",
+                error="empty response",
+            ),
+        ],
+        supports_resume=True,
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="draft",
+                ok=True,
+                text=_action_text({"type": "numeric_trial", "surface": "memrl_retrieval"}),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id="old",
+        planner_state={},
+        settings=PlannerSettings(mode="draft_critique", critique_policy="always"),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.draft_provider == "codex"
+    assert decision.critic_provider == "claude"
+    assert decision.critique is not None
+    assert decision.critique.decision == "unavailable"
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == "critic_unavailable"
+
+
 def test_nonresumable_primary_clears_persisted_session_id() -> None:
     action = {"type": "seed_batch", "n_questions": 10}
     claude = FakeProvider(

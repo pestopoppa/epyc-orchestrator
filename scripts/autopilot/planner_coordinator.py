@@ -239,9 +239,23 @@ def plan_with_providers(
         return decision
 
     if _should_critique(settings, action, stagnation_signal):
+        active_critique = settings.mode.strip().lower() == "draft_critique"
+        critique_provider_name = critic_name
         if draft.provider == critic_name:
-            degraded = True
-        elif _circuit_is_open(planner_state, critic_name):
+            # A fallback draft from the configured critic provider is not
+            # independently reviewed yet. Try the original primary as the
+            # reviewer if it is available; otherwise keep fail-closed behavior.
+            if fallback_reason and primary_name != draft.provider and not _circuit_is_open(
+                planner_state,
+                primary_name,
+            ):
+                critique_provider_name = primary_name
+            else:
+                degraded = True
+
+        if degraded and critique is None:
+            pass
+        elif _circuit_is_open(planner_state, critique_provider_name):
             # Critic circuit is open (it failed repeatedly and is cooling down),
             # but the PRIMARY draft succeeded. Treat as critic-unavailable on a
             # TRUSTED draft: keep the draft and let the dispatch gate proceed for
@@ -251,12 +265,11 @@ def plan_with_providers(
             degraded = True
             critique = PlannerCritique(
                 decision="unavailable",
-                provider=critic_name,
+                provider=critique_provider_name,
                 parse_error="critic circuit open",
             )
         else:
-            active_critique = settings.mode.strip().lower() == "draft_critique"
-            critic_provider = provider_factory(critic_name)
+            critic_provider = provider_factory(critique_provider_name)
             critique_prompt = build_critique_prompt(prompt, draft.text, action, rationale)
             critique_result = critic_provider.invoke(
                 critique_prompt,
@@ -381,6 +394,10 @@ def uncritiqued_dispatch_block_reason(
         return "critic_unavailable"
     # Case B — trusted primary draft, but the binding critic could not review it.
     if crit.decision == "unavailable":
+        # A fallback draft whose independent reviewer was also unavailable is not
+        # a trusted-primary draft. Keep the stricter Case-A gate.
+        if decision.fallback_reason:
+            return "" if action.get("type") in OBSERVATIONAL_ACTIONS else "critic_unavailable"
         if decision.mode.strip().lower() != "draft_critique":
             return ""  # shadow / non-binding: advisory critic, never blocks
         atype = action.get("type", "")
