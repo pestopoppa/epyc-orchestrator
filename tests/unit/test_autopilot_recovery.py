@@ -79,7 +79,24 @@ def _make_entry(
     )
 
 
-def test_archive_for_read_command_defaults_to_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_archive_for_read_command_defaults_to_journal_snapshot() -> None:
+    class FakeJournal:
+        def all_entries(self):
+            return [_make_entry(1, quality=1.4, speed=40.0)]
+
+        def supersession_events(self):
+            return []
+
+    archive, source = autopilot._archive_for_read_command(journal=FakeJournal())
+
+    assert source == autopilot.ARCHIVE_SOURCE_JOURNAL_ALL
+    assert archive.read_only is True
+    assert [entry.trial_id for entry in archive.frontier(tier=2)] == [1]
+
+
+def test_archive_for_read_command_explicit_state_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     sentinel = object()
     monkeypatch.setattr(autopilot, "ParetoArchive", lambda: sentinel)
 
@@ -284,7 +301,7 @@ def test_merge_external_control_fields_noops_without_control_fields() -> None:
     assert state == {"trial_counter": 42, "paused": False}
 
 
-def test_startup_archive_sync_repairs_state_from_journal(
+def test_startup_archive_sync_removes_cached_state_archive(
     journal: ExperimentJournal, archive: ParetoArchive
 ) -> None:
     journal.record(_make_entry(1, quality=1.1))
@@ -303,7 +320,7 @@ def test_startup_archive_sync_repairs_state_from_journal(
     )
 
     assert changed is True
-    assert [e["trial_id"] for e in state["pareto_archive"]["all_entries"]] == [1, 2]
+    assert "pareto_archive" not in state
     assert [entry.trial_id for entry in archive.frontier(tier=2)] == [2]
 
 
@@ -329,7 +346,7 @@ def test_startup_archive_sync_skips_deliberate_empty_frontier_rebase(
     assert state["pareto_archive"]["all_entries"] == []
 
 
-def test_save_state_with_journal_archive_authority_uses_journal_fold(
+def test_save_state_with_journal_archive_authority_removes_state_cache(
     journal: ExperimentJournal,
     archive: ParetoArchive,
     monkeypatch: pytest.MonkeyPatch,
@@ -361,9 +378,9 @@ def test_save_state_with_journal_archive_authority_uses_journal_fold(
     )
 
     assert used_journal is True
-    assert [e["trial_id"] for e in state["pareto_archive"]["all_entries"]] == [1, 2]
+    assert "pareto_archive" not in state
     assert [entry.trial_id for entry in archive.frontier(tier=2)] == [2]
-    assert saved and saved[-1]["pareto_archive"] == state["pareto_archive"]
+    assert saved and "pareto_archive" not in saved[-1]
 
 
 def test_save_state_drops_pause_reason_when_unpaused(

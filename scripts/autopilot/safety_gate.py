@@ -10,7 +10,7 @@ import math
 import os
 import statistics
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -87,16 +87,38 @@ BASELINE_PROMOTION_REPRO_MIN = 3  # replicated cluster members before baseline r
 DEFAULT_BASELINE_QUALITY = 1.16  # Documented 2026-04-04 T2 calibration fallback
 
 
+def _pareto_archive_for_safety_guard() -> Any | None:
+    """Journal-authoritative archive view for baseline safety checks."""
+    try:
+        from scripts.autopilot.experiment_journal import ExperimentJournal
+        from scripts.autopilot.pareto_archive import (
+            ParetoArchive,
+            pareto_archive_from_journal_rows,
+        )
+
+        journal = ExperimentJournal()
+        rows = [asdict(entry) for entry in journal.all_entries()]
+        if hasattr(journal, "supersession_events"):
+            rows.extend(journal.supersession_events())
+        archive = pareto_archive_from_journal_rows(
+            rows,
+            None,
+            current_run_only=False,
+        )
+        return archive if archive is not None else ParetoArchive()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Archive-max guard: could not read Pareto frontier (%s)", exc)
+        return None
+
+
 def _pareto_frontier_context(tier: int | None = None) -> tuple[float, frozenset[int]] | None:
     """(best_quality, frozenset of same-tier frontier trial_ids) for the live Pareto archive, or None
     if it is empty/unreadable. Lazy import + fail-soft so a missing archive (fresh bootstrap)
     never blocks a baseline load or write; the caller treats None as "cannot verify → skip"."""
-    try:
-        from scripts.autopilot.pareto_archive import ParetoArchive
-        frontier = ParetoArchive().frontier(tier=tier)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Archive-max guard: could not read Pareto frontier (%s)", exc)
+    archive = _pareto_archive_for_safety_guard()
+    if archive is None:
         return None
+    frontier = archive.frontier(tier=tier)
     if not frontier:
         return None
     best_q = max(e.objectives[0] for e in frontier)
@@ -1109,19 +1131,17 @@ class SafetyGate:
         """Same-tier frontier entry for source_trial_id, reduced to stable evidence fields."""
         if source_trial_id is None:
             return None
-        try:
-            from scripts.autopilot.pareto_archive import ParetoArchive
-
-            for entry in ParetoArchive().frontier(tier=tier):
-                if int(entry.trial_id) == int(source_trial_id):
-                    return {
-                        "trial_id": int(entry.trial_id),
-                        "objectives": tuple(float(x) for x in entry.objectives),
-                        "n_reproductions": int(getattr(entry, "n_reproductions", 1) or 1),
-                        "config_fingerprint": getattr(entry, "config_fingerprint", ""),
-                    }
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Baseline repro guard: could not read Pareto frontier (%s)", exc)
+        archive = _pareto_archive_for_safety_guard()
+        if archive is None:
+            return None
+        for entry in archive.frontier(tier=tier):
+            if int(entry.trial_id) == int(source_trial_id):
+                return {
+                    "trial_id": int(entry.trial_id),
+                    "objectives": tuple(float(x) for x in entry.objectives),
+                    "n_reproductions": int(getattr(entry, "n_reproductions", 1) or 1),
+                    "config_fingerprint": getattr(entry, "config_fingerprint", ""),
+                }
         return None
 
     @staticmethod

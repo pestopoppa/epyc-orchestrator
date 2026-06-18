@@ -61,7 +61,7 @@ def _write_state_and_journal(
     return state_path, journal_path
 
 
-def test_build_repaired_state_replaces_only_archive_payload() -> None:
+def test_build_repaired_state_removes_only_archive_cache() -> None:
     state = {
         "trial_counter": 3,
         "paused": True,
@@ -77,10 +77,7 @@ def test_build_repaired_state_replaces_only_archive_payload() -> None:
     assert result.after["ok"] is True
     assert repaired["trial_counter"] == 3
     assert repaired["paused"] is True
-    assert [entry["trial_id"] for entry in repaired["pareto_archive"]["all_entries"]] == [
-        1,
-        2,
-    ]
+    assert "pareto_archive" not in repaired
 
 
 def test_repair_state_file_dry_run_does_not_write(tmp_path: Path) -> None:
@@ -118,10 +115,7 @@ def test_repair_state_file_write_creates_backup_and_aligns(tmp_path: Path) -> No
     assert result.after["ok"] is True
     assert result.backup_path
     assert Path(result.backup_path).exists()
-    assert [entry["trial_id"] for entry in loaded["pareto_archive"]["all_entries"]] == [
-        1,
-        2,
-    ]
+    assert "pareto_archive" not in loaded
 
 
 def test_repair_state_file_refuses_trial_counter_mismatch(tmp_path: Path) -> None:

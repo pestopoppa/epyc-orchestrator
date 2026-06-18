@@ -50,12 +50,25 @@ def test_report_marks_aligned_archive_ok() -> None:
     )
 
     assert report["ok"] is True
+    assert report["state_archive_present"] is True
     assert report["diagnostic"]["status"] == "match"
     assert report["entry_id_delta"]["state_only_count"] == 0
     assert report["entry_id_delta"]["journal_only_count"] == 0
     assert report["frontier_id_delta"]["state_only_count"] == 0
     assert report["frontier_id_delta"]["journal_only_count"] == 0
     assert report["entry_mismatches"]["count"] == 0
+
+
+def test_report_accepts_absent_state_cache_as_journal_authoritative() -> None:
+    rows = [_row(1, quality=1.2)]
+    report = build_archive_authority_report({"trial_counter": 2}, rows)
+
+    assert report["ok"] is True
+    assert report["state_archive_present"] is False
+    assert report["diagnostic"]["status"] == "match"
+    assert report["entry_id_delta"]["journal_only_count"] == 0
+    rendered = render_markdown(report)
+    assert "- State archive cache: absent (journal-authoritative)" in rendered
 
 
 def test_report_summarizes_id_and_value_drift() -> None:

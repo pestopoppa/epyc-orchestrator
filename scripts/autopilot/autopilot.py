@@ -1447,19 +1447,17 @@ def _apply_journal_archive_authority(
     journal: ExperimentJournal,
     archive: ParetoArchive,
 ) -> bool | None:
-    """Apply the append-only journal archive fold to state and memory.
+    """Apply the append-only journal archive fold to memory.
 
-    Returns True when the payload changed, False when it already matched, and
+    Returns True when cached state changed, False when it already matched, and
     None when the journal has no archive-bearing rows.
     """
     archive_payload = _journal_archive_payload_for_authority(journal)
     if archive_payload is None:
         return None
-    current_payload = state.get("pareto_archive")
-    changed = current_payload != archive_payload
-    if changed:
-        state["pareto_archive"] = archive_payload
-    archive.load(state)
+    changed = "pareto_archive" in state
+    state.pop("pareto_archive", None)
+    archive.load_archive_payload(archive_payload)
     return changed
 
 
@@ -1468,24 +1466,25 @@ def _sync_startup_archive_from_journal_authority(
     journal: ExperimentJournal,
     archive: ParetoArchive,
 ) -> bool:
-    """Repair startup archive drift before the run loop writes lifecycle state.
+    """Remove stale startup archive cache before writing lifecycle state.
 
     Preflight repairs archive authority from the append-only journal, but a
     direct ``autopilot.py start`` must uphold the same invariant. Otherwise the
     first startup save (fleet timestamp, pause-loop bookkeeping, etc.) can
-    preserve a stale ``state["pareto_archive"]`` before any trial runs.
+    preserve a stale cached ``state["pareto_archive"]`` before any trial runs.
     """
     if state.get("_allow_empty_frontier_rebase"):
         return False
     before_count = _archive_entry_count(state.get("pareto_archive"))
+    journal_count = _archive_entry_count(_journal_archive_payload_for_authority(journal))
     changed = _apply_journal_archive_authority(state, journal, archive)
     if changed is not True:
         return False
     log.warning(
-        "Startup archive authority repaired from journal fold "
-        "(state_entries %d -> %d)",
+        "Startup archive cache removed; journal fold is authoritative "
+        "(cached_state_entries %d, journal_entries %d)",
         before_count,
-        _archive_entry_count(state.get("pareto_archive")),
+        journal_count,
     )
     return True
 
@@ -1497,7 +1496,7 @@ def _save_state_with_journal_archive_authority(
     *,
     context: str,
 ) -> bool:
-    """Persist state with `pareto_archive` sourced from the journal fold."""
+    """Persist state without a cached `pareto_archive` when journal fold exists."""
     changed = _apply_journal_archive_authority(state, journal, archive)
     if changed is None:
         log.warning(
@@ -1508,7 +1507,7 @@ def _save_state_with_journal_archive_authority(
         archive.save(state)
     else:
         if changed:
-            log.info("State archive refreshed from journal fold during %s", context)
+            log.info("State archive cache removed during %s", context)
         save_state(state)
     return changed is not None
 
@@ -1748,7 +1747,11 @@ def _run_loop_inner(
     """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
     state = load_state()
     journal = ExperimentJournal()
-    archive = ParetoArchive()
+    archive_payload = _journal_archive_payload_for_authority(journal)
+    if archive_payload is not None and not state.get("_allow_empty_frontier_rebase"):
+        archive = ParetoArchive.from_archive_payload(archive_payload, read_only=False)
+    else:
+        archive = ParetoArchive()
     # Clear the deliberate-rebase bypass ONLY once the frontier has actually rebuilt
     # (a prior run admitted >=1 point). Clearing it at startup while the frontier is
     # still empty would re-arm the frontier-lost guard before the bootstrap lands —
@@ -3385,12 +3388,12 @@ def _journal_rows_for_archive(journal: ExperimentJournal) -> list[dict[str, Any]
 def _archive_for_read_command(
     journal: ExperimentJournal,
     *,
-    source: str = ARCHIVE_SOURCE_STATE,
+    source: str = ARCHIVE_SOURCE_JOURNAL_ALL,
 ) -> tuple[ParetoArchive, str]:
     """Archive view for operator read commands.
 
-    The live trial loop remains state-backed. Journal reconstruction is explicit
-    diagnostics-only until the archive cutover protocol is validated separately.
+    Journal reconstruction is the default read path. The explicit ``state``
+    source remains a legacy fallback for one release.
     """
     if source == ARCHIVE_SOURCE_STATE:
         return ParetoArchive(), ARCHIVE_SOURCE_STATE
@@ -3454,7 +3457,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     journal = ExperimentJournal()
     archive, archive_source = _archive_for_read_command(
         journal,
-        source=getattr(args, "archive_source", ARCHIVE_SOURCE_STATE),
+        source=getattr(args, "archive_source", ARCHIVE_SOURCE_JOURNAL_ALL),
     )
 
     print("AutoPilot Status")
@@ -3492,7 +3495,7 @@ def cmd_report(args: argparse.Namespace) -> None:
     journal = ExperimentJournal()
     archive, archive_source = _archive_for_read_command(
         journal,
-        source=getattr(args, "archive_source", ARCHIVE_SOURCE_STATE),
+        source=getattr(args, "archive_source", ARCHIVE_SOURCE_JOURNAL_ALL),
     )
 
     print("# AutoPilot Optimization Report")
@@ -3561,11 +3564,10 @@ def cmd_digest(args: argparse.Namespace) -> None:
     writer works without waiting for the next trial-loop iteration.
     """
     state = load_state()
-    archive = ParetoArchive()
-    archive.load(state)
+    journal = ExperimentJournal()
+    archive, _archive_source = _archive_for_read_command(journal)
     swarm = NumericSwarm()
     lab = StructuralLab()
-    journal = ExperimentJournal()
     path = generate_digest(
         swarm=swarm, lab=lab, archive=archive, state=state, journal=journal,
     )
@@ -3795,10 +3797,10 @@ def main() -> None:
     p_status.add_argument(
         "--archive-source",
         choices=ARCHIVE_SOURCE_CHOICES,
-        default=ARCHIVE_SOURCE_STATE,
+        default=ARCHIVE_SOURCE_JOURNAL_ALL,
         help=(
             "Archive read source for this operator command only. "
-            "journal-current-run/journal-all are read-only diagnostics."
+            "Defaults to journal-all; state is a legacy fallback."
         ),
     )
     p_status.set_defaults(func=cmd_status)
@@ -3814,10 +3816,10 @@ def main() -> None:
     p_report.add_argument(
         "--archive-source",
         choices=ARCHIVE_SOURCE_CHOICES,
-        default=ARCHIVE_SOURCE_STATE,
+        default=ARCHIVE_SOURCE_JOURNAL_ALL,
         help=(
             "Archive read source for this operator command only. "
-            "journal-current-run/journal-all are read-only diagnostics."
+            "Defaults to journal-all; state is a legacy fallback."
         ),
     )
     p_report.set_defaults(func=cmd_report)

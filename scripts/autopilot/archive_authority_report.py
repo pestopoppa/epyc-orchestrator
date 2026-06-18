@@ -108,7 +108,8 @@ def build_archive_authority_report(
     """Build a structured no-inference report for state/journal archive drift."""
     diagnostic = archive_authority_diagnostic(state, journal_rows)
     state_archive = state.get("pareto_archive")
-    if not isinstance(state_archive, dict):
+    state_archive_present = isinstance(state_archive, dict) and bool(state_archive)
+    if not state_archive_present:
         state_archive = {}
     journal_archive = reconstruct_archive_from_journal_rows(
         journal_rows,
@@ -116,8 +117,12 @@ def build_archive_authority_report(
         current_run_only=False,
     ) or {}
 
-    state_view = _archive_authority_view(state_archive)
     journal_view = _archive_authority_view(journal_archive)
+    state_view = (
+        _archive_authority_view(state_archive)
+        if state_archive_present
+        else journal_view
+    )
     entry_delta = _id_delta(
         state_view.get("all_entries", []),
         journal_view.get("all_entries", []),
@@ -138,6 +143,7 @@ def build_archive_authority_report(
     return {
         "ok": ok,
         "diagnostic": diagnostic,
+        "state_archive_present": state_archive_present,
         "entry_id_delta": entry_delta,
         "frontier_id_delta": frontier_delta,
         "entry_mismatches": mismatches,
@@ -165,6 +171,10 @@ def render_markdown(report: dict[str, Any]) -> str:
             "- State/journal trial bounds: "
             f"state_trial_counter={report.get('state_trial_counter')}, "
             f"journal_max_trial_id={report.get('journal_max_trial_id')}"
+        ),
+        (
+            "- State archive cache: "
+            f"{'present' if report.get('state_archive_present') else 'absent (journal-authoritative)'}"
         ),
         (
             "- Entry counts: "

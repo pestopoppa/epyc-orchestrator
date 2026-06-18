@@ -298,9 +298,24 @@ def test_archive_authority_diagnostic_matches_reconstructed_state() -> None:
     diagnostic = _MOD.archive_authority_diagnostic(state, rows)
 
     assert diagnostic["status"] == "match"
+    assert diagnostic["state_archive_present"] is True
     assert diagnostic["state_entry_count"] == 1
     assert diagnostic["journal_entry_count"] == 1
     assert diagnostic["state_frontier_count"] == 1
+    assert diagnostic["journal_frontier_count"] == 1
+
+
+def test_archive_authority_diagnostic_accepts_missing_state_cache() -> None:
+    rows = [_journal_row(1, quality=1.2)]
+    state = {"trial_counter": 2}
+
+    diagnostic = _MOD.archive_authority_diagnostic(state, rows)
+
+    assert diagnostic["status"] == "match"
+    assert diagnostic["state_archive_present"] is False
+    assert diagnostic["state_entry_count"] == 0
+    assert diagnostic["journal_entry_count"] == 1
+    assert diagnostic["state_frontier_count"] == 0
     assert diagnostic["journal_frontier_count"] == 1
 
 

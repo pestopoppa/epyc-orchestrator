@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repair AutoPilot state archive authority from append-only journal replay."""
+"""Remove stale AutoPilot state archive cache in favor of journal replay."""
 
 from __future__ import annotations
 
@@ -47,13 +47,16 @@ def build_repaired_state(
     *,
     max_examples: int = 20,
 ) -> tuple[dict[str, Any], ArchiveRepairResult]:
-    """Return state with pareto_archive replaced by journal reconstruction."""
+    """Return state with the legacy pareto_archive cache removed."""
     before = build_archive_authority_report(
         state,
         journal_rows,
         max_examples=max_examples,
     )
-    if before["ok"]:
+    state_archive_present = isinstance(state.get("pareto_archive"), dict) and bool(
+        state.get("pareto_archive")
+    )
+    if before["ok"] and not state_archive_present:
         return state, ArchiveRepairResult(status="already_aligned", before=before)
 
     archive = reconstruct_archive_from_journal_rows(
@@ -69,7 +72,7 @@ def build_repaired_state(
         )
 
     repaired = dict(state)
-    repaired["pareto_archive"] = archive
+    repaired.pop("pareto_archive", None)
     after = build_archive_authority_report(
         repaired,
         journal_rows,
@@ -100,7 +103,7 @@ def repair_state_file(
     expect_trial_counter: int | None = None,
     max_examples: int = 20,
 ) -> ArchiveRepairResult:
-    """Build and optionally write a journal-authoritative state archive repair."""
+    """Build and optionally write a journal-authoritative state-cache removal."""
     state = _load_state(state_path)
     actual_counter = state.get("trial_counter")
     if expect_trial_counter is not None and actual_counter != expect_trial_counter:
@@ -170,8 +173,8 @@ def _summary_lines(result: ArchiveRepairResult) -> list[str]:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Dry-run by default. With --write, replace only "
-            "autopilot_state.json:pareto_archive using append-only journal replay."
+            "Dry-run by default. With --write, remove only the legacy "
+            "autopilot_state.json:pareto_archive cache after journal replay verifies."
         )
     )
     parser.add_argument("--state", type=Path, default=STATE_PATH)

@@ -212,6 +212,11 @@ class ParetoArchive:
         self._require_mutable()
         self._load_archive_payload((state or {}).get("pareto_archive", {}) or {})
 
+    def load_archive_payload(self, archive_data: dict[str, Any]) -> None:
+        """Load a raw archive payload without requiring a state wrapper."""
+        self._require_mutable()
+        self._load_archive_payload(archive_data or {})
+
     def save(self, state: dict[str, Any] | None = None) -> None:
         """Atomically save archive to state file, merging with existing state.
 

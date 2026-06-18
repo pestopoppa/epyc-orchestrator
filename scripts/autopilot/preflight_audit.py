@@ -270,14 +270,7 @@ def _archive_authority_view(payload: dict) -> dict:
 
 
 def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
-    """Compare state-backed archive authority with journal reconstruction."""
-    state_archive = state.get("pareto_archive")
-    if not isinstance(state_archive, dict) or not state_archive:
-        return {
-            "status": "missing_state_archive",
-            "warnings": ["autopilot_state.json has no pareto_archive payload"],
-        }
-
+    """Check journal archive authority and any legacy state cache."""
     trial_ids = [_trial_id(row) for row in journal_rows]
     journal_max_trial_id = max((trial_id for trial_id in trial_ids if trial_id is not None), default=None)
     try:
@@ -309,6 +302,8 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
             "warnings": warnings + ["journal rows did not reconstruct an archive"],
         }
 
+    state_archive = state.get("pareto_archive")
+    state_archive_present = isinstance(state_archive, dict) and bool(state_archive)
     ledger_events = [
         row for row in journal_rows
         if row.get("type") and "trial_id" not in row
@@ -317,11 +312,28 @@ def archive_authority_diagnostic(state: dict, journal_rows: list[dict]) -> dict:
     if snapshot_diagnostic.bounded_replay_readiness == "prefix_invalidated":
         warnings.append("latest journal snapshot prefix is invalidated")
 
-    state_view = _archive_authority_view(state_archive)
     journal_view = _archive_authority_view(journal_archive)
+    if not state_archive_present:
+        status = "match" if not warnings else "drift"
+        return {
+            "status": status,
+            "state_archive_present": False,
+            "state_trial_counter": state_trial_counter,
+            "journal_max_trial_id": journal_max_trial_id,
+            "state_entry_count": 0,
+            "journal_entry_count": len(journal_view["all_entries"]),
+            "state_frontier_count": 0,
+            "journal_frontier_count": len(journal_view["frontier"]),
+            "snapshot_readiness": snapshot_diagnostic.bounded_replay_readiness,
+            "snapshot_replay_status": snapshot_diagnostic.status,
+            "warnings": warnings,
+        }
+
+    state_view = _archive_authority_view(state_archive)
     status = "match" if state_view == journal_view and not warnings else "drift"
     return {
         "status": status,
+        "state_archive_present": True,
         "state_trial_counter": state_trial_counter,
         "journal_max_trial_id": journal_max_trial_id,
         "state_entry_count": len(state_view["all_entries"]),
