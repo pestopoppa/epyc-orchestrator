@@ -11,7 +11,7 @@ AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
-from short_term_memory import ShortTermMemory  # noqa: E402
+from short_term_memory import MEMORY_PATH, ShortTermMemory  # noqa: E402
 from stm_generated_view import main, render_generated_stm  # noqa: E402
 
 
@@ -57,6 +57,11 @@ def test_render_generated_stm_does_not_write_memory_file(tmp_path: Path) -> None
     assert "[t1] Try a narrower prompt -- confirmed" in text
     assert "[t1] tighten routing" in text
     assert "[t1] reduce retries" in text
+
+
+def test_default_memory_path_is_runtime_state_not_source_tree() -> None:
+    assert MEMORY_PATH == ROOT / "orchestration" / "autopilot_short_term_memory.md"
+    assert "scripts/autopilot" not in MEMORY_PATH.as_posix()
 
 
 def test_short_term_memory_refresh_rebuilds_from_folded_journal(tmp_path: Path) -> None:

@@ -13,7 +13,8 @@ from os import replace
 from pathlib import Path
 from typing import Any
 
-MEMORY_PATH = Path(__file__).resolve().parent / "short_term_memory.md"
+ORCH_ROOT = Path(__file__).resolve().parents[2]
+MEMORY_PATH = ORCH_ROOT / "orchestration" / "autopilot_short_term_memory.md"
 
 
 class ShortTermMemory:

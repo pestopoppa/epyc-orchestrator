@@ -106,6 +106,7 @@ orchestration/archived_backups/
 orchestration/autopilot_checkpoints/
 orchestration/autopilot_journal.*
 orchestration/autopilot_plots/
+orchestration/autopilot_short_term_memory.md
 orchestration/autopilot_state.json*
 
 # One-off local observation helpers from contention/autopilot experiments.
