@@ -20,6 +20,7 @@ def test_workload_class_inference_uses_existing_metadata() -> None:
     assert infer_workload_class(source="chat") == "interactive"
     assert infer_workload_class(priority="background") == "eval_batch"
     assert infer_workload_class(batch_id="b1") == "eval_batch"
+    assert infer_workload_class(concurrency_batch_id="cb1") == "eval_batch"
     assert infer_workload_class(source="eval_tower") == "eval_batch"
     assert infer_workload_class(campaign_id="k7") == "campaign"
     assert infer_workload_class(source="kbrag") == "campaign"

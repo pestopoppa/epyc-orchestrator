@@ -66,6 +66,7 @@ def infer_workload_class(
     priority: str | None = None,
     source: str | None = None,
     batch_id: str | None = None,
+    concurrency_batch_id: str | None = None,
     eval_batch_id: str | None = None,
     campaign_id: str | None = None,
 ) -> str:
@@ -85,7 +86,7 @@ def infer_workload_class(
         "research_campaign",
     }:
         return "campaign"
-    if eval_batch_id or batch_id or priority_norm in {"batch", "background"}:
+    if eval_batch_id or concurrency_batch_id or batch_id or priority_norm in {"batch", "background"}:
         return "eval_batch"
     if any(marker in source_norm for marker in ("eval", "seeding", "benchmark")):
         return "eval_batch"

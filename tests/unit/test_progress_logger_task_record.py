@@ -20,6 +20,7 @@ def test_task_completion_embeds_task_record_v1(tmp_path):
         task_id="chat-abc12345",
         task_ir={
             "task_type": "code",
+            "workload_class": "campaign",
             "objective": "Implement a safe parser",
             "priority": "interactive",
         },
@@ -43,10 +44,12 @@ def test_task_completion_embeds_task_record_v1(tmp_path):
         "routing_decision",
         "task_completed",
     ]
+    assert events[0]["data"]["workload_class"] == "campaign"
     record = events[-1]["data"]["task_record_v1"]
     assert record["schema_version"] == "task_record.v1"
     assert record["task_id"] == "chat-abc12345"
     assert record["class"] == "code"
+    assert record["workload_class"] == "campaign"
     assert record["prompt_ref"].startswith("progress-text-sha256:")
     assert record["prompt_ref"] != "Implement a safe parser"
     assert record["prompt_chars"] == len("Implement a safe parser")
@@ -96,6 +99,7 @@ def test_task_record_sums_prompt_and_completion_tokens(tmp_path):
     logger.flush()
 
     record = _read_events(tmp_path)[-1]["data"]["task_record_v1"]
+    assert record["workload_class"] == "interactive"
     assert record["tokens"] == 15
 
 
@@ -124,4 +128,5 @@ def test_task_completion_embeds_operator_verdict_refs(tmp_path):
     record = terminal_event["data"]["task_record_v1"]
     assert record["operator_verdict"] == "accepted"
     assert record["operator_verdict_source"] == "explicit_operator"
+    assert record["workload_class"] == "interactive"
     assert "operator_verdict_details_ref" in record

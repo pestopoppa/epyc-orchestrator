@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from src.constants import TASK_IR_OBJECTIVE_LEN
+from src.workload_model import infer_workload_class
 
 MAX_CONTEXT_PREVIEW_LEN = 400
 MAX_LIST_ITEMS = 8
@@ -39,11 +40,23 @@ def _as_string_list(value: Any, *, item_limit: int, max_items: int) -> list[str]
 def canonicalize_task_ir(task_ir: dict[str, Any] | None) -> dict[str, Any]:
     """Return a normalized, bounded TaskIR dictionary."""
     src = task_ir or {}
+    task_type = _clean_text(src.get("task_type", "chat"), 40) or "chat"
+    priority = _clean_text(src.get("priority", "interactive"), 24) or "interactive"
+    workload_class = infer_workload_class(
+        explicit=src.get("workload_class"),
+        priority=priority,
+        source=str(src.get("source") or task_type),
+        batch_id=src.get("batch_id"),
+        concurrency_batch_id=src.get("concurrency_batch_id"),
+        eval_batch_id=src.get("eval_batch_id"),
+        campaign_id=src.get("campaign_id"),
+    )
 
     out: dict[str, Any] = {
-        "task_type": _clean_text(src.get("task_type", "chat"), 40) or "chat",
+        "task_type": task_type,
+        "workload_class": workload_class,
         "objective": _clean_text(src.get("objective", src.get("prompt", "")), TASK_IR_OBJECTIVE_LEN),
-        "priority": _clean_text(src.get("priority", "interactive"), 24) or "interactive",
+        "priority": priority,
     }
 
     task_id = _clean_text(src.get("task_id", ""), 64)

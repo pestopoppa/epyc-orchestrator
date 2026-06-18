@@ -27,6 +27,7 @@ def test_canonicalize_task_ir_applies_budgets():
 
     assert len(out["objective"]) <= 200
     assert len(out["context_preview"]) <= 400
+    assert out["workload_class"] == "interactive"
     assert len(out["constraints"]) <= 8
     assert len(out["invariants"]) <= 8
     assert len(out["retrieval_snippets"]) <= 4
@@ -37,6 +38,7 @@ def test_canonicalize_task_ir_applies_budgets():
 def test_canonicalize_task_ir_keeps_step_files_with_limits():
     task_ir = {
         "task_type": "chat",
+        "priority": "batch",
         "objective": "Do thing",
         "plan": {
             "steps": [
@@ -51,8 +53,22 @@ def test_canonicalize_task_ir_keeps_step_files_with_limits():
     }
     out = canonicalize_task_ir(task_ir)
     files = out["plan"]["steps"][0]["files"]
+    assert out["workload_class"] == "eval_batch"
     assert len(files) == 8
     assert files[0] == "src/file_0.py"
+
+
+def test_canonicalize_task_ir_preserves_explicit_workload_class():
+    out = canonicalize_task_ir(
+        {
+            "task_type": "chat",
+            "workload_class": "campaign",
+            "objective": "Do thing",
+            "priority": "interactive",
+        }
+    )
+
+    assert out["workload_class"] == "campaign"
 
 
 def test_canonicalize_task_ir_json_is_deterministic():

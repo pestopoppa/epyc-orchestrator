@@ -18,6 +18,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.workload_model import infer_workload_class
+
 logger = logging.getLogger(__name__)
 
 # Default log path (on RAID array, or fallback to workspace for devcontainer)
@@ -227,6 +229,29 @@ class ProgressLogger:
         normalized = value.strip().lower().replace(" ", "_")
         return normalized or None
 
+    @staticmethod
+    def _task_workload_class(task_ir: Dict[str, Any]) -> str:
+        task_type = task_ir.get("task_type")
+        priority = task_ir.get("priority")
+        source = task_ir.get("source") or task_type
+        return infer_workload_class(
+            explicit=task_ir.get("workload_class"),
+            priority=priority if isinstance(priority, str) else None,
+            source=str(source) if source else None,
+            batch_id=task_ir.get("batch_id") if isinstance(task_ir.get("batch_id"), str) else None,
+            concurrency_batch_id=(
+                task_ir.get("concurrency_batch_id")
+                if isinstance(task_ir.get("concurrency_batch_id"), str)
+                else None
+            ),
+            eval_batch_id=(
+                task_ir.get("eval_batch_id") if isinstance(task_ir.get("eval_batch_id"), str) else None
+            ),
+            campaign_id=(
+                task_ir.get("campaign_id") if isinstance(task_ir.get("campaign_id"), str) else None
+            ),
+        )
+
     def _remember_task_record_start(
         self,
         task_id: str,
@@ -239,10 +264,12 @@ class ProgressLogger:
         if len(cache) >= _TASK_RECORD_CACHE_LIMIT:
             cache.pop(next(iter(cache)), None)
         objective = task_ir.get("objective", "")
+        workload_class = self._task_workload_class(task_ir)
         cache[task_id] = {
             "schema_version": TASK_RECORD_SCHEMA_VERSION,
             "task_id": task_id,
             "class": task_ir.get("task_type") or "unknown",
+            "workload_class": workload_class,
             "prompt_ref": self._text_ref(objective),
             "prompt_chars": len(objective) if isinstance(objective, str) else None,
             "route_taken": [str(role) for role in routing_decision],
@@ -338,6 +365,7 @@ class ProgressLogger:
             task_id=task_id,
             data={
                 "task_type": task_ir.get("task_type"),
+                "workload_class": self._task_workload_class(task_ir),
                 "objective": task_ir.get("objective", "")[:200],
                 "priority": task_ir.get("priority"),
             },

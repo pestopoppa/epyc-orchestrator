@@ -35,6 +35,11 @@
       "enum": ["chat", "doc", "code", "ingest", "manage"],
       "description": "Primary task category for routing"
     },
+    "workload_class": {
+      "type": "string",
+      "enum": ["interactive", "eval_batch", "campaign"],
+      "description": "Explicit traffic class used for demand, placement, and capture tagging"
+    },
     "priority": {
       "type": "string",
       "enum": ["interactive", "batch"],
