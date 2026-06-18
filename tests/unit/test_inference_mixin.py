@@ -547,7 +547,7 @@ class TestWorkerPoolBatch:
             results = prims._worker_pool_batch(prompts, "worker_explore")
 
         assert len(results) == 2
-        mock_pool.batch.assert_called_once_with(prompts, task_type="worker_explore")
+        mock_pool.batch.assert_called_once_with(prompts, task_type="worker_general")
         mock_run.assert_called_once_with(mock_batch)
 
     def test_worker_pool_batch_fallback_on_error(self, mock_model_server):

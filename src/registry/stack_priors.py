@@ -303,6 +303,96 @@ def stack_prior_serving(record: dict[str, Any]) -> dict[str, Any]:
     return serving if isinstance(serving, dict) else {}
 
 
+def stack_prior_launch(record: dict[str, Any]) -> dict[str, Any]:
+    """Return the mapping-valued ``serving.launch`` block from a role record."""
+    launch = stack_prior_serving(record).get("launch")
+    return launch if isinstance(launch, dict) else {}
+
+
+def stack_prior_launch_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return mapping-valued launch entries from a stack-prior role record."""
+    entries = stack_prior_launch(record).get("entries")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def stack_prior_launch_modes(record: dict[str, Any]) -> set[str]:
+    """Return string launch modes from a stack-prior role record."""
+    modes = stack_prior_launch(record).get("modes")
+    if not isinstance(modes, list):
+        return set()
+    return {mode for mode in modes if isinstance(mode, str)}
+
+
+def stack_prior_uses_shared_worker_launch(record: dict[str, Any]) -> bool:
+    """Return True when stack-prior launch metadata identifies shared worker use."""
+    if "worker_pool" in stack_prior_launch_modes(record):
+        return True
+    for entry in stack_prior_launch_entries(record):
+        if entry.get("mode") == "worker_pool":
+            return True
+        if entry.get("vision_type") == "worker":
+            return True
+    return False
+
+
+def stack_prior_model_mem_gb(record: dict[str, Any]) -> float | None:
+    """Return numeric model memory from a stack-prior role record, if present."""
+    model = record.get("model")
+    mem_gb = model.get("mem_gb") if isinstance(model, dict) else None
+    if not isinstance(mem_gb, (int, float)):
+        return None
+    return float(mem_gb)
+
+
+def live_stack_lock_role_sets(
+    path: Path = DEFAULT_OUTPUT,
+) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Derive exclusive/shared lock role sets from generated live stack priors."""
+    roles = live_stack_role_records(path)
+    if not roles:
+        return None
+
+    heavy: set[str] = set()
+    light: set[str] = set()
+    for role, record in roles.items():
+        if stack_prior_uses_shared_worker_launch(record):
+            light.add(role)
+        else:
+            heavy.add(role)
+
+    if not heavy and not light:
+        return None
+    return frozenset(heavy), frozenset(light)
+
+
+def live_stack_safe_non_stream_roles(
+    path: Path = DEFAULT_OUTPUT,
+    *,
+    min_mem_gb: float,
+) -> frozenset[str] | None:
+    """Derive safe-mode non-stream roles from generated live stack-prior memory."""
+    roles = live_stack_role_records(path)
+    if not roles:
+        return None
+
+    threshold = max(0.0, float(min_mem_gb))
+    derived: set[str] = set()
+    saw_live_memory = False
+    for role, record in roles.items():
+        mem_gb = stack_prior_model_mem_gb(record)
+        if mem_gb is None:
+            continue
+        saw_live_memory = True
+        if mem_gb >= threshold:
+            derived.add(role)
+
+    if not saw_live_memory:
+        return None
+    return frozenset(derived)
+
+
 def stack_prior_endpoint_port(serving: dict[str, Any]) -> int | None:
     """Return the endpoint port from a stack-prior serving block, if present."""
     endpoint = serving.get("endpoint")

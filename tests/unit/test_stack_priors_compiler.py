@@ -14,15 +14,21 @@ from src.registry.stack_priors import (
     compile_stack_priors,
     live_role_primary_ports,
     _launch_runtime_record,
+    live_stack_lock_role_sets,
     live_stack_role_ids,
+    live_stack_role_records,
+    live_stack_safe_non_stream_roles,
     live_stack_serving_slot_limits,
     live_stack_serving_url_values,
-    live_stack_role_records,
     live_warm_worker_slots,
     load_stack_priors_artifact,
     stack_prior_endpoint_port,
+    stack_prior_launch_entries,
+    stack_prior_launch_modes,
+    stack_prior_model_mem_gb,
     stack_prior_serving_url_value,
     stack_prior_serving_ports,
+    stack_prior_uses_shared_worker_launch,
     validate_stack_priors_contract,
 )
 
@@ -42,6 +48,8 @@ def test_runtime_stack_prior_helpers_fail_closed_on_missing_artifact(tmp_path: P
     assert live_stack_role_ids(missing) == []
     assert live_warm_worker_slots(missing) == {}
     assert live_role_primary_ports(frozenset({"worker_vision"}), missing) == {}
+    assert live_stack_lock_role_sets(missing) is None
+    assert live_stack_safe_non_stream_roles(missing, min_mem_gb=64.0) is None
     assert live_stack_serving_url_values(missing) == {}
     assert live_stack_serving_slot_limits(missing) == {}
 
@@ -116,6 +124,60 @@ def test_runtime_stack_prior_helpers_project_live_roles(tmp_path: Path) -> None:
         "http://localhost:9123": 4,
         "http://localhost:8072": 4,
     }
+
+
+def test_runtime_stack_prior_policy_helpers_project_launch_and_memory(tmp_path: Path) -> None:
+    priors = _write_yaml(
+        tmp_path / "stack_priors.yaml",
+        {
+            "roles": {
+                "frontdoor": {
+                    "deployment_status": "live_stack",
+                    "serving": {"launch": {"modes": ["default"], "entries": []}},
+                    "model": {"mem_gb": 37.0},
+                },
+                "worker_general": {
+                    "deployment_status": "live_stack",
+                    "serving": {"launch": {"modes": ["worker_pool"], "entries": []}},
+                    "model": {"mem_gb": 16.0},
+                },
+                "worker_vision": {
+                    "deployment_status": "live_stack",
+                    "serving": {"launch": {"entries": [{"vision_type": "worker"}]}},
+                    "model": {"mem_gb": 22.0},
+                },
+                "architect_general": {
+                    "deployment_status": "live_stack",
+                    "serving": {"launch": {"modes": ["default"], "entries": []}},
+                    "model": {"mem_gb": 69.0},
+                },
+                "candidate_large": {
+                    "deployment_status": "benchmark_or_candidate",
+                    "serving": {"launch": {"modes": ["worker_pool"], "entries": []}},
+                    "model": {"mem_gb": 120.0},
+                },
+            }
+        },
+    )
+    records = live_stack_role_records(priors)
+
+    assert stack_prior_launch_modes(records["worker_general"]) == {"worker_pool"}
+    assert stack_prior_launch_entries(records["worker_vision"]) == [{"vision_type": "worker"}]
+    assert stack_prior_uses_shared_worker_launch(records["worker_general"]) is True
+    assert stack_prior_uses_shared_worker_launch(records["worker_vision"]) is True
+    assert stack_prior_uses_shared_worker_launch(records["frontdoor"]) is False
+    assert stack_prior_model_mem_gb(records["architect_general"]) == 69.0
+
+    lock_roles = live_stack_lock_role_sets(priors)
+    assert lock_roles is not None
+    heavy, light = lock_roles
+    assert {"frontdoor", "architect_general"} <= heavy
+    assert {"worker_general", "worker_vision"} <= light
+    assert "candidate_large" not in heavy
+    assert "candidate_large" not in light
+    assert live_stack_safe_non_stream_roles(priors, min_mem_gb=64.0) == frozenset(
+        {"architect_general"}
+    )
 
 
 def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path: Path) -> None:

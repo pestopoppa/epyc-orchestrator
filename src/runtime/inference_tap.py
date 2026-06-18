@@ -31,7 +31,7 @@ from typing import Any
 from src.roles import Role
 from src.registry.stack_priors import (
     DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
-    live_stack_role_records,
+    live_stack_safe_non_stream_roles,
 )
 
 try:
@@ -109,25 +109,10 @@ def _safe_non_stream_roles_from_stack_priors(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
 ) -> frozenset[str] | None:
     """Derive tap safe-mode non-stream roles from generated stack-prior memory."""
-    roles = live_stack_role_records(stack_priors_path)
-    if not roles:
-        return None
-
-    min_mem_gb = _safe_non_stream_min_mem_gb()
-    derived: set[str] = set()
-    saw_live_memory = False
-    for role, record in roles.items():
-        model = record.get("model")
-        mem_gb = model.get("mem_gb") if isinstance(model, dict) else None
-        if not isinstance(mem_gb, int | float):
-            continue
-        saw_live_memory = True
-        if float(mem_gb) >= min_mem_gb:
-            derived.add(role)
-
-    if not saw_live_memory:
-        return None
-    return frozenset(derived)
+    return live_stack_safe_non_stream_roles(
+        stack_priors_path,
+        min_mem_gb=_safe_non_stream_min_mem_gb(),
+    )
 
 
 _DERIVED_SAFE_NON_STREAM_ROLES = _safe_non_stream_roles_from_stack_priors()

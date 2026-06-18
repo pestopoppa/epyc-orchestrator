@@ -16,15 +16,14 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from src.config import get_config
 from src.env_parsing import env_float as _env_float
 from src.roles import Role
 from src.registry.stack_priors import (
     DEFAULT_OUTPUT as DEFAULT_STACK_PRIORS,
-    live_stack_role_records,
-    stack_prior_serving,
+    live_stack_lock_role_sets,
 )
 
 log = logging.getLogger(__name__)
@@ -57,59 +56,11 @@ _LEGACY_LIGHT_ROLES = frozenset(
 )
 
 
-def _launch_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
-    serving = stack_prior_serving(record)
-    launch = serving.get("launch")
-    if not isinstance(launch, dict):
-        return []
-    entries = launch.get("entries")
-    if not isinstance(entries, list):
-        return []
-    return [entry for entry in entries if isinstance(entry, dict)]
-
-
-def _launch_modes(record: dict[str, Any]) -> set[str]:
-    serving = stack_prior_serving(record)
-    launch = serving.get("launch")
-    if not isinstance(launch, dict):
-        return set()
-    modes = launch.get("modes")
-    if not isinstance(modes, list):
-        return set()
-    return {mode for mode in modes if isinstance(mode, str)}
-
-
-def _is_stack_prior_shared_role(record: dict[str, Any]) -> bool:
-    """Return True for live stack roles that should use the shared lock."""
-    if "worker_pool" in _launch_modes(record):
-        return True
-    for entry in _launch_entries(record):
-        if entry.get("mode") == "worker_pool":
-            return True
-        if entry.get("vision_type") == "worker":
-            return True
-    return False
-
-
 def _lock_roles_from_stack_priors(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
 ) -> tuple[frozenset[str], frozenset[str]] | None:
     """Derive exclusive/shared lock roles from the generated live stack priors."""
-    roles = live_stack_role_records(stack_priors_path)
-    if not roles:
-        return None
-
-    heavy: set[str] = set()
-    light: set[str] = set()
-    for role, record in roles.items():
-        if _is_stack_prior_shared_role(record):
-            light.add(role)
-        else:
-            heavy.add(role)
-
-    if not heavy and not light:
-        return None
-    return frozenset(heavy), frozenset(light)
+    return live_stack_lock_role_sets(stack_priors_path)
 
 
 _DERIVED_LOCK_ROLES = _lock_roles_from_stack_priors()
