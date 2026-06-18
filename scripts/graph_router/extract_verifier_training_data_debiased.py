@@ -39,10 +39,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.graph_router.action_space import (
+    action_index_for_raw_label,
     canonical_actions_from_npz,
     infer_n_actions,
     load_live_canonical_actions,
-    normalize_action,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -123,13 +123,13 @@ def extract(
     )
 
     # ── Recompute canonical action label from raw; do not trust stale y_full. ──
-    action_to_idx = {action: idx for idx, action in enumerate(canonical_actions)}
     action_idx = np.full(N, -1, dtype=np.int64)
     for k, raw in enumerate(raw_actions_arr):
-        canonical = normalize_action(str(raw), include_seeded_frontdoor=True)
-        if canonical is None:
-            continue
-        idx = action_to_idx.get(canonical)
+        idx = action_index_for_raw_label(
+            str(raw),
+            canonical_actions,
+            include_seeded_frontdoor=True,
+        )
         if idx is None:
             continue
         action_idx[k] = idx

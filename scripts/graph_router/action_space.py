@@ -130,7 +130,8 @@ def canonical_actions_from_label_map(label_map_raw: Any) -> list[str]:
     """Recover canonical action order from a saved classifier label_map array."""
     entries: list[tuple[int, str]] = []
     for row in label_map_raw:
-        entries.append((int(row[0]), str(row[1])))
+        raw_action = str(row[1])
+        entries.append((int(row[0]), normalize_action(raw_action) or raw_action))
     if not entries:
         return []
     max_idx = max(idx for idx, _ in entries)
@@ -158,3 +159,28 @@ def infer_n_actions(src: Any, y: Any) -> int:
     if actions:
         return len(actions)
     return int(y.max()) + 1 if len(y) else 0
+
+
+def action_index_map(canonical_actions: list[str]) -> dict[str, int]:
+    """Build canonical action->index mapping without changing classifier width/order."""
+    return {action: idx for idx, action in enumerate(canonical_actions) if action}
+
+
+def action_index_for_raw_label(
+    raw_action: str,
+    canonical_actions: list[str],
+    *,
+    include_seeded_frontdoor: bool = False,
+) -> int | None:
+    """Return a classifier index for a raw action label using canonical aliases.
+
+    The returned index is from the provided action list; this deliberately does
+    not sort, compact, or otherwise renumber classifier label maps.
+    """
+    canonical = normalize_action(
+        raw_action,
+        include_seeded_frontdoor=include_seeded_frontdoor,
+    )
+    if canonical is None:
+        return None
+    return action_index_map(canonical_actions).get(canonical)

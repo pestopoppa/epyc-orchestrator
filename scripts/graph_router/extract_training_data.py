@@ -29,6 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.graph_router.action_space import (
     DEFAULT_STACK_PRIORS_PATH,
+    action_index_map,
     load_live_canonical_actions,
     normalize_action,
 )
@@ -87,7 +88,7 @@ def extract(
     t0 = time.time()
 
     canonical_actions = load_live_canonical_actions(stack_priors_path)
-    action_to_idx = {a: i for i, a in enumerate(canonical_actions)}
+    action_to_idx = action_index_map(canonical_actions)
     label_map = {i: a for i, a in enumerate(canonical_actions)}
 
     # Build feature matrix and labels with normalization
@@ -116,7 +117,8 @@ def extract(
             if canonical is None:
                 stats["excluded"] += 1
                 continue
-            if canonical not in action_to_idx:
+            action_idx = action_to_idx.get(canonical)
+            if action_idx is None:
                 stats["unknown"] += 1
                 continue
 
@@ -133,7 +135,7 @@ def extract(
 
             features = np.concatenate([emb, tt_vec, [norm_ctx_len], [has_images]])
             X_list.append(features)
-            y_list.append(action_to_idx[canonical])
+            y_list.append(action_idx)
             q_list.append(max(0.01, float(q_values[i])))
     else:
         # ── Legacy path: load from EpisodicStore + FAISS ──
@@ -166,7 +168,8 @@ def extract(
             if canonical is None:
                 stats["excluded"] += 1
                 continue
-            if canonical not in action_to_idx:
+            action_idx = action_to_idx.get(canonical)
+            if action_idx is None:
                 stats["unknown"] += 1
                 continue
             if mem.embedding is None:
@@ -186,7 +189,7 @@ def extract(
 
             features = np.concatenate([emb, tt_vec, [norm_ctx_len], [has_images]])
             X_list.append(features)
-            y_list.append(action_to_idx[canonical])
+            y_list.append(action_idx)
             q_list.append(max(0.01, mem.q_value))
 
     if not X_list:

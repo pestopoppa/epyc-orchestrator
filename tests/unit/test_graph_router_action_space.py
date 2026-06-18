@@ -12,6 +12,7 @@ import yaml
 
 from scripts.graph_router.action_space import (
     DEGRADED_CANONICAL_ACTIONS,
+    action_index_for_raw_label,
     canonical_actions_from_label_map,
     load_live_canonical_actions,
     normalize_action,
@@ -138,6 +139,17 @@ def test_degraded_actions_pin_serialized_classifier_order() -> None:
     assert canonical_actions_from_label_map(_label_map(DEGRADED_CANONICAL_ACTIONS)) == (
         EXPECTED_ACTION_ORDER
     )
+
+
+def test_saved_label_map_canonicalizes_without_renumbering() -> None:
+    retired_architect = "architect" + "_coding"
+    actions = canonical_actions_from_label_map(
+        _label_map(["frontdoor", "worker_explore", retired_architect])
+    )
+
+    assert actions == ["frontdoor", "worker_general", "architect_general"]
+    assert action_index_for_raw_label("worker_fast", actions) == 1
+    assert action_index_for_raw_label(retired_architect, actions) == 2
 
 
 def test_live_actions_keep_preferred_order_and_append_new_live_roles(tmp_path: Path) -> None:
