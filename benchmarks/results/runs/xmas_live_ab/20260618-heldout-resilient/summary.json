@@ -1,0 +1,29 @@
+{
+  "arms": {
+    "baseline": {
+      "median_latency_s": 8.051,
+      "n": 25,
+      "routed_to_counts": {
+        "coder_escalation": 18,
+        "ingest_long_context": 1,
+        "worker_general": 4,
+        "worker_vision": 1
+      },
+      "score_rate": 0.65,
+      "scored_n": 20,
+      "xmas_applied_n": 0
+    },
+    "xmas": {
+      "median_latency_s": 60.789,
+      "n": 25,
+      "routed_to_counts": {
+        "worker_general": 25
+      },
+      "score_rate": 0.3,
+      "scored_n": 20,
+      "xmas_applied_n": 22
+    }
+  },
+  "latency_delta_xmas_minus_baseline_s": 52.738,
+  "score_delta_xmas_minus_baseline": -0.35000000000000003
+}

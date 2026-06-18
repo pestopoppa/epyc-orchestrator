@@ -1,0 +1,66 @@
+{
+  "selected": {
+    "code": [
+      "cruxeval_output_0005",
+      "cruxeval_output_0006",
+      "cruxeval_output_0007",
+      "cruxeval_output_0008",
+      "cruxeval_output_0009"
+    ],
+    "knowledge": [
+      "simpleqa_general_00000",
+      "simpleqa_general_00001",
+      "simpleqa_general_00002",
+      "simpleqa_general_00003",
+      "simpleqa_general_00004"
+    ],
+    "long_context": [
+      "needle_006",
+      "needle_007",
+      "needle_008",
+      "needle_009",
+      "needle_010"
+    ],
+    "math": [
+      "gsm8k_00005",
+      "gsm8k_00006",
+      "gsm8k_00007",
+      "gsm8k_00008",
+      "gsm8k_00009"
+    ],
+    "reasoning": [
+      "gpqa_Molecular Biology_0000",
+      "gpqa_Physics (general)_0001",
+      "gpqa_Organic Chemistry_0002",
+      "gpqa_Organic Chemistry_0003",
+      "gpqa_Chemistry (general)_0004"
+    ]
+  },
+  "used_excluded": [
+    "cruxeval_output_0000",
+    "cruxeval_output_0001",
+    "cruxeval_output_0002",
+    "cruxeval_output_0003",
+    "cruxeval_output_0004",
+    "gpqa_Chemistry (general)_0432",
+    "gpqa_High-energy particle physics_0156",
+    "gpqa_High-energy particle physics_0437",
+    "gpqa_Organic Chemistry_0115",
+    "gpqa_Organic Chemistry_0388",
+    "gsm8k_00000",
+    "gsm8k_00001",
+    "gsm8k_00002",
+    "gsm8k_00003",
+    "gsm8k_00004",
+    "needle_001",
+    "needle_002",
+    "needle_003",
+    "needle_004",
+    "needle_005",
+    "simpleqa_general_01111",
+    "simpleqa_general_01587",
+    "simpleqa_general_01896",
+    "simpleqa_general_02351",
+    "simpleqa_general_03756"
+  ]
+}
