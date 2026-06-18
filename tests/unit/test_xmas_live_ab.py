@@ -52,6 +52,29 @@ def test_score_answer_supports_common_methods() -> None:
     assert xmas_live_ab.score_answer("anything", {}) is None
 
 
+def test_chat_records_http_errors(monkeypatch) -> None:
+    class FailingClient:
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def post(self, url: str, json: dict):
+            raise xmas_live_ab.httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(xmas_live_ab.httpx, "Client", FailingClient)
+
+    result = xmas_live_ab.chat("prompt", timeout_s=1.0, session_id="s", max_turns=1)
+
+    assert result["status"] == 0
+    assert result["body"]["answer"] == ""
+    assert result["body"]["error_code"] == "ReadTimeout"
+
+
 def test_summarize_reports_routes_scores_and_xmas_apply_count() -> None:
     rows = [
         {

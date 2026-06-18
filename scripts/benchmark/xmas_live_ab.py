@@ -21,6 +21,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 ORCH = Path("/mnt/raid0/llm/epyc-orchestrator")
 API_URL = os.environ.get("ORCHESTRATOR_API_URL", "http://127.0.0.1:8000")
 DEFAULT_TABLE = ORCH / "orchestration" / "xmas_winner_table.yaml"
@@ -169,8 +171,6 @@ def restart_orchestrator(env: dict[str, str]) -> str:
 
 def chat(prompt: str, *, timeout_s: float, session_id: str, max_turns: int) -> dict[str, Any]:
     """Send one real /chat request."""
-    import httpx
-
     payload = {
         "prompt": prompt,
         "mode": "direct",
@@ -181,10 +181,22 @@ def chat(prompt: str, *, timeout_s: float, session_id: str, max_turns: int) -> d
         "max_turns": max_turns,
     }
     start = time.monotonic()
-    with httpx.Client(timeout=timeout_s) as client:
-        response = client.post(f"{API_URL}/chat", json=payload)
-    elapsed = time.monotonic() - start
-    body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    try:
+        with httpx.Client(timeout=timeout_s) as client:
+            response = client.post(f"{API_URL}/chat", json=payload)
+        elapsed = time.monotonic() - start
+        body = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+    except Exception as exc:
+        elapsed = time.monotonic() - start
+        return {
+            "status": 0,
+            "elapsed_s": round(elapsed, 3),
+            "body": {
+                "answer": "",
+                "error_code": type(exc).__name__,
+                "error_detail": str(exc),
+            },
+        }
     return {
         "status": response.status_code,
         "elapsed_s": round(elapsed, 3),
