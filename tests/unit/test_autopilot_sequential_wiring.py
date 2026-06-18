@@ -153,7 +153,7 @@ def test_maybe_force_seq_baseline_draw_marks_rationale_and_state(
         enabled=True,
     )
 
-    assert forced == {"type": "seed_batch", "n_questions": 12}
+    assert forced == {"type": "seed_batch", "n_questions": 14}
     assert rationale == {
         "source": "test",
         "seq_baseline_reference_draw": True,
@@ -174,7 +174,7 @@ def test_maybe_force_seq_baseline_draw_respects_blacklist(tmp_path: Path) -> Non
         journal=journal,
         tier=1,
         blacklist=[
-            {"pattern": {"type": "seed_batch", "n_questions": 12}, "reason": "test"}
+            {"pattern": {"type": "seed_batch", "n_questions": 14}, "reason": "test"}
         ],
         rationale=None,
         trial_counter=9,
@@ -192,7 +192,7 @@ def test_maybe_force_seq_baseline_draw_respects_blacklist(tmp_path: Path) -> Non
         journal=journal,
         tier=1,
         blacklist=[
-            {"pattern": {"type": "seed_batch", "n_questions": 12}, "reason": "test"}
+            {"pattern": {"type": "seed_batch", "n_questions": 14}, "reason": "test"}
         ],
         rationale=None,
         trial_counter=10,

@@ -367,9 +367,9 @@ def _seq_baseline_draw_action() -> dict[str, Any]:
                 return parsed
         except json.JSONDecodeError:
             log.warning("Invalid AUTOPILOT_SEQ_BASELINE_DRAW_ACTION JSON; using default")
-    # n=12 avoids known blacklisted seed_batch sizes while still collecting a
+    # n=14 avoids known blacklisted seed_batch sizes while still collecting a
     # small reference draw through the standard metric-collecting path.
-    return {"type": "seed_batch", "n_questions": 12}
+    return {"type": "seed_batch", "n_questions": 14}
 
 
 def _seq_baseline_reference_block_key(reference: dict[str, Any]) -> str:
