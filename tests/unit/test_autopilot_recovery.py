@@ -329,6 +329,43 @@ def test_startup_archive_sync_skips_deliberate_empty_frontier_rebase(
     assert state["pareto_archive"]["all_entries"] == []
 
 
+def test_save_state_with_journal_archive_authority_uses_journal_fold(
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(1, quality=1.1))
+    journal.record(_make_entry(2, quality=1.2))
+    state = {
+        "trial_counter": 3,
+        "pareto_archive": {
+            "frontier": [],
+            "all_entries": [],
+            "hypervolume_history": [],
+        },
+    }
+    saved: list[dict] = []
+
+    monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
+    monkeypatch.setattr(
+        archive,
+        "save",
+        lambda _state: pytest.fail("legacy archive.save should not run"),
+    )
+
+    used_journal = autopilot._save_state_with_journal_archive_authority(
+        state,
+        journal,
+        archive,
+        context="unit-test",
+    )
+
+    assert used_journal is True
+    assert [e["trial_id"] for e in state["pareto_archive"]["all_entries"]] == [1, 2]
+    assert [entry.trial_id for entry in archive.frontier(tier=2)] == [2]
+    assert saved and saved[-1]["pareto_archive"] == state["pareto_archive"]
+
+
 def test_save_state_drops_pause_reason_when_unpaused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -556,3 +593,19 @@ def test_reimport_adds_missing_valid_entry(
     assert re_imported.trial_id == 42
     # Convention check: ParetoEntry.objectives uses (quality, speed, -cost, reliability)
     assert re_imported.objectives == (0.85, 55.0, -0.25, 0.95)
+
+
+def test_reimport_does_not_persist_archive_before_journal_authority_sync(
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(trial_id=43))
+    monkeypatch.setattr(
+        archive,
+        "save",
+        lambda _state: pytest.fail("re-import should not write legacy archive snapshot"),
+    )
+
+    assert autopilot._maybe_reimport_pareto_from_journal(archive, journal, 43) is True
+    assert [entry.trial_id for entry in archive._all_entries] == [43]

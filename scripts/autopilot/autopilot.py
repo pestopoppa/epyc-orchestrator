@@ -1266,12 +1266,9 @@ def _maybe_reimport_pareto_from_journal(
     log.info(
         "Pareto re-import: trial %d added (status=%s)", trial_id, new_status
     )
-    # Persist the re-imported entry immediately so a subsequent crash
-    # doesn't lose it again.
-    try:
-        archive.save({"trial_counter": max(trial_id + 1, 0)})
-    except Exception as exc:
-        log.warning("Pareto re-import: archive.save failed: %s", exc)
+    # The startup journal-authority sync persists the reconstructed archive
+    # after recovery finishes. Do not write a one-off archive snapshot here;
+    # it can diverge from the folded append-only journal view.
     return True
 
 
@@ -1435,6 +1432,37 @@ def _archive_entry_count(payload: object) -> int:
     return len(entries) if isinstance(entries, list) else 0
 
 
+def _journal_archive_payload_for_authority(
+    journal: ExperimentJournal,
+) -> dict[str, Any] | None:
+    return reconstruct_archive_from_journal_rows(
+        _journal_rows_for_archive(journal),
+        None,
+        current_run_only=False,
+    )
+
+
+def _apply_journal_archive_authority(
+    state: dict[str, Any],
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+) -> bool | None:
+    """Apply the append-only journal archive fold to state and memory.
+
+    Returns True when the payload changed, False when it already matched, and
+    None when the journal has no archive-bearing rows.
+    """
+    archive_payload = _journal_archive_payload_for_authority(journal)
+    if archive_payload is None:
+        return None
+    current_payload = state.get("pareto_archive")
+    changed = current_payload != archive_payload
+    if changed:
+        state["pareto_archive"] = archive_payload
+    archive.load(state)
+    return changed
+
+
 def _sync_startup_archive_from_journal_authority(
     state: dict[str, Any],
     journal: ExperimentJournal,
@@ -1449,26 +1477,40 @@ def _sync_startup_archive_from_journal_authority(
     """
     if state.get("_allow_empty_frontier_rebase"):
         return False
-    archive_payload = reconstruct_archive_from_journal_rows(
-        _journal_rows_for_archive(journal),
-        None,
-        current_run_only=False,
-    )
-    if archive_payload is None:
+    before_count = _archive_entry_count(state.get("pareto_archive"))
+    changed = _apply_journal_archive_authority(state, journal, archive)
+    if changed is not True:
         return False
-    current_payload = state.get("pareto_archive")
-    if current_payload == archive_payload:
-        return False
-    before_count = _archive_entry_count(current_payload)
-    state["pareto_archive"] = archive_payload
-    archive.load(state)
     log.warning(
         "Startup archive authority repaired from journal fold "
         "(state_entries %d -> %d)",
         before_count,
-        _archive_entry_count(archive_payload),
+        _archive_entry_count(state.get("pareto_archive")),
     )
     return True
+
+
+def _save_state_with_journal_archive_authority(
+    state: dict[str, Any],
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+    *,
+    context: str,
+) -> bool:
+    """Persist state with `pareto_archive` sourced from the journal fold."""
+    changed = _apply_journal_archive_authority(state, journal, archive)
+    if changed is None:
+        log.warning(
+            "Journal archive authority unavailable during %s; falling back to "
+            "legacy archive.save(state)",
+            context,
+        )
+        archive.save(state)
+    else:
+        if changed:
+            log.info("State archive refreshed from journal fold during %s", context)
+        save_state(state)
+    return changed is not None
 
 
 def learning_exclusion_criticism(
@@ -3162,8 +3204,12 @@ def _run_loop_inner(
                 "Preserved external control state before trial-end save: %s",
                 ", ".join(merged_control),
             )
-        archive.save(state)
-        save_state(state)
+        _save_state_with_journal_archive_authority(
+            state,
+            journal,
+            archive,
+            context=f"trial {trial_counter} final save",
+        )
         try:
             _append_baseline_promotion_event(
                 journal=journal,
@@ -3236,8 +3282,12 @@ def _run_loop_inner(
     async_tasks.reap(logger=log)
     async_tasks.shutdown()
     log.info("AutoPilot shutting down (trial=%d)", trial_counter)
-    archive.save(state)
-    save_state(state)
+    _save_state_with_journal_archive_authority(
+        state,
+        journal,
+        archive,
+        context="shutdown",
+    )
     # Final synchronous plot render so the operator's last view reflects the
     # final completed trial. Covers SIGTERM/SIGINT and the max-trials break (both
     # exit the loop to here); the %N-boundary regen almost never lands on the
