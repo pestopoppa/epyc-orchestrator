@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 BENIGN_LEARNING_EXCLUSIONS = frozenset(
-    {"reproduction_confirmed", "mad_noise", "seq_accumulating"}
+    {"reproduction_confirmed", "mad_noise", "seq_accumulating", "seq_stale_reference"}
 )
 WITHIN_NOISE_EXCLUSIONS = BENIGN_LEARNING_EXCLUSIONS
 
@@ -68,6 +68,13 @@ def classify_learning_exclusion(verdict: Any, eval_result: Any) -> tuple[str, st
     #     include normally (falls through to the empty include path below).
     #   seq_refuted — a refuted experiment: handled by the normal failed-trial path
     #     (deficiency from verdict.categories), so it is not special-cased here.
+    if "seq_stale_reference" in categories and verdict_passed:
+        return (
+            "seq_stale_reference",
+            "sequential e-process reference profile is stale; excluded from learning "
+            "until a baseline-reference draw refreshes the profile (LEDGER-W4)",
+            "seq_stale_reference",
+        )
     if "seq_accumulating" in categories and verdict_passed:
         return (
             "seq_accumulating",

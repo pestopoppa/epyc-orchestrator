@@ -243,3 +243,26 @@ def test_learning_exclusion_seq_accumulating_not_laundered_on_fail():
 def test_learning_exclusion_seq_confirmed_includes_normally():
     by, _, _ = classify_learning_exclusion(_Verdict(["seq_confirmed"]), _Eval())
     assert by == "", "a confirmed improvement is learned from, not excluded"
+
+
+def test_learning_exclusion_seq_stale_reference_is_benign():
+    assert "seq_stale_reference" in BENIGN_LEARNING_EXCLUSIONS
+    by, reason, override = classify_learning_exclusion(_Verdict(["seq_stale_reference"]), _Eval())
+    assert by == "seq_stale_reference"
+    assert override == "seq_stale_reference"
+    assert "reference profile is stale" in reason
+
+
+def test_learning_exclusion_seq_stale_reference_takes_precedence():
+    by, reason, override = classify_learning_exclusion(
+        _Verdict(["seq_accumulating", "seq_stale_reference"]),
+        _Eval(),
+    )
+    assert by == "seq_stale_reference"
+    assert override == "seq_stale_reference"
+    assert "reference profile is stale" in reason
+
+
+def test_learning_exclusion_seq_stale_reference_not_laundered_on_fail():
+    by, _, _ = classify_learning_exclusion(_Verdict(["seq_stale_reference"], passed=False), _Eval())
+    assert by == ""

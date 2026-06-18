@@ -164,6 +164,18 @@ SEQ_BASELINE_PROFILE_LIMIT = int(
     os.environ.get("AUTOPILOT_SEQ_BASELINE_PROFILE_LIMIT", "120")
 )
 SEQ_PRIOR_OBS_LIMIT = int(os.environ.get("AUTOPILOT_SEQ_PRIOR_OBS_LIMIT", "120"))
+SEQ_BASELINE_REFRESH_CADENCE = int(
+    os.environ.get("AUTOPILOT_SEQ_BASELINE_REFRESH_CADENCE", "10")
+)
+SEQ_BASELINE_REFERENCE_STALE_AFTER_S = float(
+    os.environ.get("AUTOPILOT_SEQ_BASELINE_REFERENCE_STALE_AFTER_S", str(48 * 3600))
+)
+SEQ_PROMOTION_FINAL_CONFIRM_E = float(
+    os.environ.get("AUTOPILOT_SEQ_PROMOTION_FINAL_CONFIRM_E", "100")
+)
+SEQ_PROMOTION_FRESH_EVAL_TIER = int(
+    os.environ.get("AUTOPILOT_SEQ_PROMOTION_FRESH_EVAL_TIER", "2")
+)
 
 # 2026-05-23 constrained-creativity planner knobs (gated on stagnation).
 # Lean prompt is the default; the rich rubric+synthesis fragment activates
@@ -250,14 +262,341 @@ def _question_outcome_map(question_results: Any) -> dict[str, bool]:
     return outcomes
 
 
+def _parse_journal_timestamp(timestamp: Any) -> float | None:
+    if not timestamp:
+        return None
+    try:
+        text = str(timestamp)
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _seq_baseline_reference_state(
+    journal: ExperimentJournal,
+    *,
+    tier: int,
+    now_ts: float | None = None,
+) -> dict[str, Any]:
+    """Return freshness/cadence state for the seq baseline reference profile."""
+    now = time.time() if now_ts is None else float(now_ts)
+    trusted_profile_trials = 0
+    trials_since_reference = 0
+    latest_profile_trial_id = None
+    latest_reference_trial_id = None
+    latest_reference_ts = None
+
+    for entry in reversed(journal.entries_with_supersessions()):
+        if getattr(entry, "bug_corrupted_by", ""):
+            continue
+        if getattr(entry, "outcome_status", "ok") in {"invalid", "skipped"}:
+            continue
+        try:
+            if int(getattr(entry, "tier", -1)) != int(tier):
+                continue
+        except (TypeError, ValueError):
+            continue
+        eval_details = getattr(entry, "eval_details", {}) or {}
+        if not isinstance(eval_details, dict):
+            continue
+        if not _question_outcome_map(eval_details.get("question_results")):
+            continue
+
+        trusted_profile_trials += 1
+        entry_ts = _parse_journal_timestamp(getattr(entry, "timestamp", ""))
+        if latest_profile_trial_id is None:
+            latest_profile_trial_id = getattr(entry, "trial_id", None)
+
+        if latest_reference_trial_id is None and eval_details.get(
+            "seq_baseline_reference_draw"
+        ):
+            latest_reference_trial_id = getattr(entry, "trial_id", None)
+            latest_reference_ts = entry_ts
+        elif latest_reference_trial_id is None:
+            trials_since_reference += 1
+
+    age_s = (
+        max(0.0, now - latest_reference_ts)
+        if latest_reference_ts is not None
+        else None
+    )
+    stale_reference = (
+        age_s is not None and age_s > SEQ_BASELINE_REFERENCE_STALE_AFTER_S
+    )
+    due = (
+        SEQ_BASELINE_REFRESH_CADENCE > 0
+        and (
+            latest_reference_trial_id is None
+            or trials_since_reference >= SEQ_BASELINE_REFRESH_CADENCE
+            or stale_reference
+        )
+    )
+    reason = ""
+    if latest_reference_trial_id is None:
+        reason = "no marked seq baseline-reference draw"
+    elif stale_reference:
+        reason = f"baseline reference age {age_s:.0f}s exceeds stale threshold"
+    elif trials_since_reference >= SEQ_BASELINE_REFRESH_CADENCE:
+        reason = (
+            f"{trials_since_reference} trusted profile trials since baseline "
+            "reference draw"
+        )
+
+    return {
+        "tier": int(tier),
+        "trusted_profile_trials": trusted_profile_trials,
+        "latest_profile_trial_id": latest_profile_trial_id,
+        "latest_reference_trial_id": latest_reference_trial_id,
+        "latest_reference_age_s": age_s,
+        "latest_reference_ts": latest_reference_ts,
+        "trials_since_reference": trials_since_reference,
+        "stale_reference": bool(stale_reference),
+        "due": bool(due),
+        "reason": reason,
+    }
+
+
+def _seq_baseline_draw_action() -> dict[str, Any]:
+    raw = os.environ.get("AUTOPILOT_SEQ_BASELINE_DRAW_ACTION", "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and parsed.get("type"):
+                return parsed
+        except json.JSONDecodeError:
+            log.warning("Invalid AUTOPILOT_SEQ_BASELINE_DRAW_ACTION JSON; using default")
+    # n=12 avoids known blacklisted seed_batch sizes while still collecting a
+    # small reference draw through the standard metric-collecting path.
+    return {"type": "seed_batch", "n_questions": 12}
+
+
+def _seq_baseline_reference_block_key(reference: dict[str, Any]) -> str:
+    ref_id = reference.get("latest_reference_trial_id")
+    ref_token = "none" if ref_id is None else str(ref_id)
+    return f"tier={reference.get('tier')}:reference={ref_token}"
+
+
+def _maybe_force_seq_baseline_draw(
+    action: dict[str, Any],
+    *,
+    state: dict[str, Any],
+    journal: ExperimentJournal,
+    tier: int,
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    trial_counter: int,
+    enabled: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    """Force the 01c baseline-reference cadence when seq shadowing is enabled."""
+    if not enabled:
+        return action, rationale, None
+    reference = _seq_baseline_reference_state(journal, tier=tier)
+    if not reference["due"]:
+        return action, rationale, None
+
+    forced = _seq_baseline_draw_action()
+    reference_key = _seq_baseline_reference_block_key(reference)
+    blocked_state = state.get("seq_baseline_draw_blocked")
+    if (
+        isinstance(blocked_state, dict)
+        and blocked_state.get("reference_key") == reference_key
+        and blocked_state.get("action") == forced
+    ):
+        return action, rationale, None
+    blocked_reason = check_blacklist(forced, blacklist)
+    if blocked_reason:
+        state["seq_baseline_draw_blocked"] = {
+            "trial_id": trial_counter,
+            "action": forced,
+            "reason": blocked_reason,
+            "reference": reference,
+            "reference_key": reference_key,
+        }
+        log.warning(
+            "Seq baseline-reference draw due but forced action is blacklisted: %s",
+            blocked_reason,
+        )
+        return action, rationale, None
+
+    next_rationale = dict(rationale or {})
+    next_rationale["seq_baseline_reference_draw"] = True
+    next_rationale["seq_baseline_reference_reason"] = reference["reason"]
+    state["seq_baseline_draw_blocked"] = None
+    state["seq_baseline_draw_forced"] = {
+        "trial_id": trial_counter,
+        "action": forced,
+        "reference": reference,
+    }
+    log.info(
+        "Forcing seq baseline-reference draw at trial %d: %s",
+        trial_counter,
+        reference["reason"],
+    )
+    return forced, next_rationale, reference
+
+
+def _seq_combined_e(seq: dict[str, Any] | None) -> float | None:
+    if not isinstance(seq, dict):
+        return None
+    try:
+        e_quality = float(seq["E_quality"])
+        e_rate = float(seq["E_rate_noninf"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return min(e_quality, e_rate)
+
+
+def _annotate_seq_promotion_finalization(
+    seq: dict[str, Any] | None,
+    *,
+    baseline_reference: dict[str, Any] | None,
+    is_fresh_eval: bool,
+    fresh_eval_context: dict[str, Any] | None = None,
+) -> bool | None:
+    """Add baseline-promotion finalization metadata to a seq journal block."""
+    if not isinstance(seq, dict):
+        return None
+    reference = baseline_reference or {}
+    combined_e = _seq_combined_e(seq)
+    stale_reference = bool(reference.get("stale_reference"))
+    seq["baseline_reference"] = {
+        "tier": reference.get("tier"),
+        "latest_reference_trial_id": reference.get("latest_reference_trial_id"),
+        "latest_reference_age_s": reference.get("latest_reference_age_s"),
+        "trials_since_reference": reference.get("trials_since_reference"),
+        "stale_reference": stale_reference,
+    }
+    seq["baseline_reference_state"] = (
+        "stale-reference" if stale_reference else "fresh"
+    )
+    seq["baseline_promotion_required_E"] = SEQ_PROMOTION_FINAL_CONFIRM_E
+    seq["baseline_promotion_fresh_eval"] = bool(is_fresh_eval)
+    if combined_e is not None:
+        seq["baseline_promotion_combined_E"] = round(combined_e, 6)
+    if fresh_eval_context:
+        seq["baseline_promotion_fresh_eval_for"] = {
+            "candidate": fresh_eval_context.get("candidate"),
+            "source_trial_id": fresh_eval_context.get("source_trial_id"),
+        }
+    finalized = (
+        bool(seq.get("confirmed"))
+        and bool(is_fresh_eval)
+        and not stale_reference
+        and combined_e is not None
+        and combined_e >= SEQ_PROMOTION_FINAL_CONFIRM_E
+    )
+    seq["baseline_promotion_finalized"] = finalized
+    return finalized
+
+
+def _maybe_force_seq_promotion_fresh_eval(
+    action: dict[str, Any],
+    *,
+    state: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None,
+    trial_counter: int,
+    enabled: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    """Force one large fresh eval for a pending seq-confirmed promotion."""
+    pending = state.get("seq_pending_promotion_fresh_eval")
+    if not enabled or not isinstance(pending, dict):
+        return action, rationale, None
+    attempts = int(pending.get("attempts", 0) or 0)
+    if attempts >= 1:
+        return action, rationale, None
+    tier = max(MIN_FRONTIER_EVAL_TIER, int(pending.get("tier") or SEQ_PROMOTION_FRESH_EVAL_TIER))
+    forced = {"type": "deep_eval", "tier": tier}
+    blocked_reason = check_blacklist(forced, blacklist)
+    if blocked_reason:
+        pending["attempts"] = attempts + 1
+        pending["blocked_reason"] = blocked_reason
+        pending["blocked_at_trial"] = trial_counter
+        pending["blocked_action"] = forced
+        state["seq_pending_promotion_fresh_eval"] = pending
+        log.warning(
+            "Seq promotion fresh eval due but forced action is blacklisted: %s",
+            blocked_reason,
+        )
+        return action, rationale, None
+
+    pending["attempts"] = attempts + 1
+    pending["forced_trial_id"] = trial_counter
+    state["seq_pending_promotion_fresh_eval"] = pending
+    next_rationale = dict(rationale or {})
+    next_rationale["seq_promotion_fresh_eval"] = True
+    next_rationale["seq_promotion_candidate"] = pending.get("candidate")
+    log.info(
+        "Forcing seq promotion fresh eval at trial %d for candidate %s",
+        trial_counter,
+        pending.get("candidate"),
+    )
+    return forced, next_rationale, dict(pending)
+
+
+def _update_seq_promotion_fresh_eval_state(
+    state: dict[str, Any],
+    *,
+    seq: dict[str, Any] | None,
+    action: dict[str, Any],
+    eval_result: EvalResult,
+    trial_counter: int,
+    is_fresh_eval: bool,
+    finalized: bool | None,
+) -> None:
+    """Maintain the bounded pending fresh-eval state for seq baseline promotion."""
+    if not isinstance(seq, dict):
+        return
+    if finalized:
+        state.pop("seq_pending_promotion_fresh_eval", None)
+        state["seq_last_promotion_finalized"] = {
+            "trial_id": trial_counter,
+            "candidate": seq.get("candidate"),
+            "combined_E": seq.get("baseline_promotion_combined_E"),
+        }
+        return
+    if seq.get("baseline_reference_state") == "stale-reference":
+        state.pop("seq_pending_promotion_fresh_eval", None)
+        state["seq_last_promotion_blocked"] = {
+            "trial_id": trial_counter,
+            "candidate": seq.get("candidate"),
+            "reason": "stale-reference",
+        }
+        return
+    if not seq.get("confirmed"):
+        return
+    if is_fresh_eval:
+        state.pop("seq_pending_promotion_fresh_eval", None)
+        state["seq_last_promotion_blocked"] = {
+            "trial_id": trial_counter,
+            "candidate": seq.get("candidate"),
+            "reason": "fresh-eval did not reach finalization threshold",
+            "combined_E": seq.get("baseline_promotion_combined_E"),
+        }
+        return
+    state["seq_pending_promotion_fresh_eval"] = {
+        "candidate": seq.get("candidate"),
+        "core_id": seq.get("core_id") or DEFAULT_EVIDENCE_CORE_ID,
+        "source_trial_id": trial_counter,
+        "tier": int(getattr(eval_result, "tier", DEFAULT_FRONTIER_TIER) or DEFAULT_FRONTIER_TIER),
+        "action": dict(action),
+        "combined_E": seq.get("baseline_promotion_combined_E"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "attempts": 0,
+    }
+
+
 def _seq_inputs_for_trial(
     *,
     journal: ExperimentJournal,
     action: dict[str, Any],
     tier: int,
+    candidate_override: str | None = None,
 ) -> dict[str, Any]:
     """Build default-off W4 shadow inputs from trusted prior journal evidence."""
-    candidate = _config_fingerprint(action)
+    candidate = candidate_override or _config_fingerprint(action)
     prior_quality_obs: list[tuple[int | None, float]] = []
     prior_rate_obs: list[tuple[int | None, float]] = []
     baseline_trials: list[dict[str, bool]] = []
@@ -321,6 +660,7 @@ def _seq_inputs_for_trial(
         "baseline_task_rate": baseline_task_rate,
         "prior_quality_obs": list(reversed(prior_quality_obs)),
         "prior_rate_obs": list(reversed(prior_rate_obs)),
+        "baseline_reference": _seq_baseline_reference_state(journal, tier=tier),
     }
 
 
@@ -2433,6 +2773,28 @@ def _run_loop_inner(
             action, state, memory_count, rationale, trial_counter,
         )
 
+        seq_fresh_eval_context: dict[str, Any] | None = None
+        action, rationale, seq_fresh_eval_context = _maybe_force_seq_promotion_fresh_eval(
+            action,
+            state=state,
+            blacklist=blacklist,
+            rationale=rationale,
+            trial_counter=trial_counter,
+            enabled=gate.use_sequential,
+        )
+        seq_baseline_draw_reference: dict[str, Any] | None = None
+        if seq_fresh_eval_context is None:
+            action, rationale, seq_baseline_draw_reference = _maybe_force_seq_baseline_draw(
+                action,
+                state=state,
+                journal=journal,
+                tier=DEFAULT_FRONTIER_TIER,
+                blacklist=blacklist,
+                rationale=rationale,
+                trial_counter=trial_counter,
+                enabled=gate.use_sequential,
+            )
+
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch
         pre_dispatch_skip: SkipOutcome | None = None
@@ -2700,6 +3062,11 @@ def _run_loop_inner(
                 journal=journal,
                 action=action,
                 tier=eval_result.tier,
+                candidate_override=(
+                    str(seq_fresh_eval_context.get("candidate"))
+                    if seq_fresh_eval_context
+                    else None
+                ),
             )
             verdict = gate.check(
                 eval_result,
@@ -2712,6 +3079,16 @@ def _run_loop_inner(
                 candidate=seq_inputs["candidate"],
                 core_id=seq_inputs["core_id"],
             )
+            seq_finalized = _annotate_seq_promotion_finalization(
+                verdict.seq,
+                baseline_reference=seq_inputs.get("baseline_reference"),
+                is_fresh_eval=seq_fresh_eval_context is not None,
+                fresh_eval_context=seq_fresh_eval_context,
+            )
+            if verdict.seq is not None and verdict.seq.get(
+                "baseline_reference_state"
+            ) == "stale-reference":
+                verdict.categories.append("seq_stale_reference")
             failure_analysis = gate.analyze_failure(eval_result, verdict)
             if not verdict:
                 log.warning(
@@ -2841,7 +3218,7 @@ def _run_loop_inner(
                 )
             )
             seq_confirmed = (
-                bool(verdict.seq.get("confirmed"))
+                bool(verdict.seq.get("baseline_promotion_finalized"))
                 if verdict.seq is not None
                 else None
             )
@@ -2864,6 +3241,15 @@ def _run_loop_inner(
                     trial_counter,
                     baseline_update.reason,
                 )
+            _update_seq_promotion_fresh_eval_state(
+                state,
+                seq=verdict.seq,
+                action=action,
+                eval_result=eval_result,
+                trial_counter=trial_counter,
+                is_fresh_eval=seq_fresh_eval_context is not None,
+                finalized=seq_finalized,
+            )
 
         # Extract hypothesis and expected mechanism from action/controller
         hypothesis = action.get("description", "")
@@ -3058,6 +3444,16 @@ def _run_loop_inner(
                 "n_external_restart": getattr(eval_result, "n_external_restart", 0),
                 "question_ids": list(getattr(eval_result, "exogenous_question_ids", [])),
                 "marker_observations": list(getattr(eval_result, "exogenous_marker_log", [])),
+            }
+        if seq_baseline_draw_reference is not None:
+            eval_details_dict["seq_baseline_reference_draw"] = True
+            eval_details_dict["seq_baseline_reference_reason"] = (
+                seq_baseline_draw_reference.get("reason", "")
+            )
+        if seq_fresh_eval_context is not None:
+            eval_details_dict["seq_promotion_fresh_eval"] = {
+                "candidate": seq_fresh_eval_context.get("candidate"),
+                "source_trial_id": seq_fresh_eval_context.get("source_trial_id"),
             }
 
         journal.record(
