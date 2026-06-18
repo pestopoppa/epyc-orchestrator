@@ -1077,11 +1077,19 @@ _NO_STORE_HEADERS = {
 # value as long as the marker exists before uvicorn's Popen — which the launch
 # script guarantees.
 try:
-    from scripts.server.fleet_markers import read_orchestrator_marker as _read_orch_marker
-    _marker_val = _read_orch_marker()
-    _SERVER_STARTED_AT = _marker_val if _marker_val is not None else time.time()
+    from scripts.server.fleet_markers import (
+        read_orchestrator_marker_metadata as _read_orch_marker_metadata,
+    )
+    _marker_meta = _read_orch_marker_metadata()
+    _SERVER_STARTED_AT = (
+        _marker_meta["started_at"] if _marker_meta is not None else time.time()
+    )
+    _SERVER_LAUNCH_GIT_SHA = (
+        _marker_meta.get("git_sha") if _marker_meta is not None else None
+    )
 except Exception:
     _SERVER_STARTED_AT = time.time()
+    _SERVER_LAUNCH_GIT_SHA = None
 
 
 def _read_git_short_sha() -> str | None:
@@ -1733,6 +1741,7 @@ async def version() -> JSONResponse:
             change (would require an orchestrator API reload to take effect,
             but useful to surface in case the file changed without restart)
         server_started_at: float epoch seconds; bumps on orchestrator restart
+        server_launch_git_sha: short SHA stamped by the launcher at restart
     """
     def mtime(p: Path) -> float | None:
         try:
@@ -1745,6 +1754,7 @@ async def version() -> JSONResponse:
         "dashboard_html_mtime": mtime(_DASHBOARD_HTML_FOR_VERSION),
         "dashboard_py_mtime": mtime(_DASHBOARD_PY_FOR_VERSION),
         "server_started_at": _SERVER_STARTED_AT,
+        "server_launch_git_sha": _SERVER_LAUNCH_GIT_SHA,
     })
 
 

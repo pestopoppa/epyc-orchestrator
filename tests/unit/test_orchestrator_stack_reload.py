@@ -43,6 +43,37 @@ def test_stack_change_launch_gate_runs_canonical_command(monkeypatch, capsys) ->
     assert "summary: ok" in out
 
 
+def test_repo_short_sha_uses_repo_root(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="abcdef1\n", stderr="")
+
+    monkeypatch.setattr(stack.subprocess, "run", fake_run)
+
+    assert stack._repo_short_sha(tmp_path) == "abcdef1"
+    assert captured["cmd"] == [
+        "git",
+        "-C",
+        str(tmp_path),
+        "rev-parse",
+        "--short",
+        "HEAD",
+    ]
+    assert captured["timeout"] == 5
+
+
+def test_repo_short_sha_returns_none_on_git_failure(monkeypatch, tmp_path: Path) -> None:
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="not a repo")
+
+    monkeypatch.setattr(stack.subprocess, "run", fake_run)
+
+    assert stack._repo_short_sha(tmp_path) is None
+
+
 def test_stack_change_launch_gate_failure_blocks_launch(monkeypatch, capsys) -> None:
     def fake_run(cmd, **_kwargs):
         return subprocess.CompletedProcess(cmd, 1, stdout="summary: failed\n", stderr="boom\n")

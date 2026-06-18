@@ -32,6 +32,7 @@ from scripts.server.fleet_markers import (  # noqa: E402
     orchestrator_marker_path,
     read_llama_marker,
     read_orchestrator_marker,
+    read_orchestrator_marker_metadata,
     write_llama_marker,
     write_orchestrator_marker,
 )
@@ -48,11 +49,25 @@ from orchestrator_watch import (  # noqa: E402
 
 
 def test_orchestrator_marker_round_trip(tmp_path: Path) -> None:
-    path = write_orchestrator_marker(tmp_dir=tmp_path)
+    path = write_orchestrator_marker(tmp_dir=tmp_path, git_sha="abc1234")
     assert path.exists()
     val = read_orchestrator_marker(tmp_dir=tmp_path)
     assert isinstance(val, float)
     assert val > 0
+    metadata = read_orchestrator_marker_metadata(tmp_dir=tmp_path)
+    assert metadata is not None
+    assert metadata["started_at"] == val
+    assert metadata["git_sha"] == "abc1234"
+
+
+def test_orchestrator_marker_metadata_accepts_legacy_one_line_marker(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "orchestrator_fleet_started_at").write_text("123.5\n")
+
+    metadata = read_orchestrator_marker_metadata(tmp_dir=tmp_path)
+
+    assert metadata == {"started_at": 123.5, "git_sha": None}
 
 
 def test_llama_marker_round_trip_with_roles(tmp_path: Path) -> None:

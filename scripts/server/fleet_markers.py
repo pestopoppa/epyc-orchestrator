@@ -10,6 +10,7 @@ Marker file format (text, atomic-rename writes):
 
   Orchestrator marker (/mnt/raid0/llm/tmp/orchestrator_fleet_started_at):
     line 1: <float_epoch_seconds>
+    line 2: <git_short_sha>             optional; launcher repo HEAD at Popen time
 
   Llama-server marker (/mnt/raid0/llm/tmp/llama_<port>_started_at):
     line 1: <float_epoch_seconds>
@@ -83,7 +84,10 @@ def _atomic_write(path: Path, content: str) -> None:
     os.replace(tmp, path)
 
 
-def write_orchestrator_marker(tmp_dir: Path | None = None) -> Path:
+def write_orchestrator_marker(
+    tmp_dir: Path | None = None,
+    git_sha: str | None = None,
+) -> Path:
     """Write the orchestrator fleet-startup marker.
 
     Called by scripts/server/orchestrator_stack.start_orchestrator()
@@ -93,7 +97,10 @@ def write_orchestrator_marker(tmp_dir: Path | None = None) -> Path:
     Returns the marker path so callers can log it.
     """
     path = orchestrator_marker_path(tmp_dir)
-    _atomic_write(path, f"{time.time()}\n")
+    lines = [str(time.time())]
+    if git_sha:
+        lines.append(git_sha)
+    _atomic_write(path, "\n".join(lines) + "\n")
     return path
 
 
@@ -132,6 +139,26 @@ def read_orchestrator_marker(tmp_dir: Path | None = None) -> float | None:
     try:
         line = path.read_text().splitlines()[0].strip()
         return float(line)
+    except Exception:
+        return None
+
+
+def read_orchestrator_marker_metadata(tmp_dir: Path | None = None) -> dict | None:
+    """Read orchestrator startup metadata from the fleet marker.
+
+    Returns ``{"started_at": float, "git_sha": str | None}`` when the first
+    line is valid. Older one-line markers remain valid and simply have no
+    launch git SHA.
+    """
+    path = orchestrator_marker_path(tmp_dir)
+    try:
+        lines = path.read_text().splitlines()
+        started_at = float(lines[0].strip())
+        git_sha = lines[1].strip() if len(lines) >= 2 and lines[1].strip() else None
+        return {
+            "started_at": started_at,
+            "git_sha": git_sha,
+        }
     except Exception:
         return None
 

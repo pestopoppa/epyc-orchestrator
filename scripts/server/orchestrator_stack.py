@@ -169,6 +169,24 @@ from src.registry_loader import RegistryLoader
 STACK_PRIORS_PATH = _PATHS["project_root"] / "orchestration/derived/stack_priors.yaml"
 
 
+def _repo_short_sha(path: Path | None = None) -> str | None:
+    repo = path or _PATHS["project_root"]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
 def _stack_prior_launch(role_name: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return generated launch requirements/runtime for a live role, if usable."""
     from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
@@ -1401,7 +1419,10 @@ def start_orchestrator(profile: str | None = None) -> ProcessInfo | None:
     # would see spurious restart signals depending on which worker the
     # load balancer routed each request to.
     try:
-        marker_path = _write_orchestrator_marker(tmp_dir=_PATHS["tmp_dir"])
+        marker_path = _write_orchestrator_marker(
+            tmp_dir=_PATHS["tmp_dir"],
+            git_sha=_repo_short_sha(),
+        )
         print(f"    Fleet marker: {marker_path}")
     except Exception as exc:
         print(f"    [WARN] Failed to write orchestrator fleet marker: {exc}")
