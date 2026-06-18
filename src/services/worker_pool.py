@@ -98,6 +98,7 @@ class WorkerConfig:
     slots: int = 2
     task_types: list[str] = field(default_factory=list)
     launch_flags: list[str] = field(default_factory=list)
+    managed_process: bool = True
 
 
 @dataclass
@@ -182,8 +183,12 @@ class WorkerPoolManager:
         self._initialized = False
 
     def _load_default_config(self) -> WorkerPoolConfig:
-        """Load default configuration (can be overridden by registry)."""
+        """Load default configuration, preferring generated stack-prior truth."""
         from src.config import get_config
+
+        derived = self._load_stack_prior_config()
+        if derived is not None:
+            return derived
 
         model_base = str(get_config().paths.model_base)
         return WorkerPoolConfig(
@@ -215,6 +220,72 @@ class WorkerPoolManager:
                     slots=4,
                     task_types=["boilerplate", "transform", "parallel_burst"],
                 ),
+            }
+        )
+
+    def _load_stack_prior_config(self) -> WorkerPoolConfig | None:
+        """Build a pool config that attaches to live stack-prior workers.
+
+        The production stack owns those llama-server processes. WorkerPoolManager
+        should use them as HTTP backends, not restart or kill their ports.
+        """
+        try:
+            from src.registry.stack_priors import (
+                live_stack_role_records,
+                stack_prior_endpoint_port,
+                stack_prior_launch,
+                stack_prior_serving_ports,
+            )
+        except Exception:
+            return None
+
+        records = live_stack_role_records()
+        worker = records.get("worker_general")
+        if not isinstance(worker, dict):
+            return None
+
+        serving = worker.get("serving")
+        if not isinstance(serving, dict):
+            return None
+        ports = stack_prior_serving_ports(serving)
+        port = ports[0] if ports else stack_prior_endpoint_port(serving)
+        if not isinstance(port, int):
+            return None
+
+        launch = stack_prior_launch(worker)
+        requirements = launch.get("requirements")
+        model_path = (
+            requirements.get("model_path")
+            if isinstance(requirements, dict)
+            else None
+        )
+        if not isinstance(model_path, str) or not model_path:
+            return None
+
+        slots = serving.get("slots")
+        return WorkerPoolConfig(
+            workers={
+                "worker_general": WorkerConfig(
+                    name="worker_general",
+                    port=port,
+                    model_path=model_path,
+                    tier=WorkerTier.HOT,
+                    slots=slots if isinstance(slots, int) and slots > 0 else 1,
+                    task_types=[
+                        "explore",
+                        "summarize",
+                        "understand",
+                        "code",
+                        "code_impl",
+                        "refactor",
+                        "test_gen",
+                        "fast",
+                        "boilerplate",
+                        "transform",
+                        "parallel_burst",
+                    ],
+                    managed_process=False,
+                )
             }
         )
 
@@ -278,6 +349,25 @@ class WorkerPoolManager:
         if instance.is_running:
             logger.info(f"Worker {config.name} already running on port {config.port}")
             return True
+
+        if not config.managed_process:
+            if await self._check_port_in_use(config.port) and await self._wait_for_health(
+                config.port,
+                timeout=5,
+            ):
+                instance._healthy = True
+                logger.info(
+                    "Worker %s attached to stack-managed port %s",
+                    config.name,
+                    config.port,
+                )
+                return True
+            logger.warning(
+                "Stack-managed worker %s is not healthy on port %s",
+                config.name,
+                config.port,
+            )
+            return False
 
         # Check if port is already in use
         if await self._check_port_in_use(config.port):

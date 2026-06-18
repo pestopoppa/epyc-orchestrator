@@ -204,6 +204,41 @@ class TestWorkerPoolManager:
         assert pool_manager.config == pool_config
         assert pool_manager._initialized is False
 
+    def test_default_config_derives_worker_general_from_stack_priors(self, monkeypatch):
+        """Default pool attaches to live stack-prior worker_general when available."""
+        from src.registry import stack_priors
+
+        monkeypatch.setattr(
+            stack_priors,
+            "live_stack_role_records",
+            lambda: {
+                "worker_general": {
+                    "deployment_status": "live_stack",
+                    "serving": {
+                        "endpoint": "http://localhost:8072",
+                        "ports": [8072, 8082],
+                        "slots": 1,
+                        "launch": {
+                            "requirements": {
+                                "model_path": "/models/gemma-4-26B-A4B-it-Q4_K_M.gguf"
+                            }
+                        },
+                    },
+                }
+            },
+        )
+
+        config = WorkerPoolManager().config
+
+        assert list(config.workers) == ["worker_general"]
+        worker = config.workers["worker_general"]
+        assert worker.port == 8072
+        assert worker.model_path == "/models/gemma-4-26B-A4B-it-Q4_K_M.gguf"
+        assert worker.slots == 1
+        assert worker.tier is WorkerTier.HOT
+        assert worker.managed_process is False
+        assert {"explore", "code", "fast", "parallel_burst"} <= set(worker.task_types)
+
     @pytest.mark.asyncio
     async def test_initialize(self, pool_manager):
         """Test pool initialization."""
@@ -291,6 +326,33 @@ class TestWorkerPoolManager:
         assert "8102" in cmd
         assert "-t" in cmd
         assert "16" in cmd  # threads for consolidated fast worker
+
+    @pytest.mark.asyncio
+    async def test_start_unmanaged_stack_worker_attaches_without_killing_port(self, pool_manager):
+        """Stack-prior workers are stack-owned HTTP backends, not pool-owned processes."""
+        config = WorkerConfig(
+            name="worker_general",
+            port=8072,
+            model_path="/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+            tier=WorkerTier.HOT,
+            managed_process=False,
+        )
+        instance = WorkerInstance(config=config)
+        pool_manager._http_session = MagicMock()
+
+        with (
+            patch.object(pool_manager, "_check_port_in_use", new=AsyncMock(return_value=True)),
+            patch.object(pool_manager, "_wait_for_health", new=AsyncMock(return_value=True)),
+            patch.object(pool_manager, "_kill_port", new=AsyncMock()) as kill_port,
+            patch.object(pool_manager, "_build_launch_command") as build_command,
+            patch("src.services.worker_pool.subprocess.Popen") as popen,
+        ):
+            assert await pool_manager._start_worker(instance) is True
+
+        assert instance._healthy is True
+        kill_port.assert_not_called()
+        build_command.assert_not_called()
+        popen.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_stop_all(self, pool_manager):
