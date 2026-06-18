@@ -97,6 +97,13 @@ class TestStreamPolicy:
 
         assert tap._safe_non_stream_roles_from_stack_priors(tmp_path / "missing.yaml") is None
 
+    def test_degraded_safe_non_stream_roles_derive_from_stack_manifest(self):
+        import src.runtime.inference_tap as tap
+
+        assert tap._degraded_safe_non_stream_roles_from_stack_manifest() == frozenset(
+            {"architect_general"}
+        )
+
     def test_should_stream_role_safe_mode_uses_derived_policy(self, monkeypatch):
         import src.runtime.inference_tap as tap
 

@@ -98,22 +98,15 @@ def test_lock_roles_missing_or_invalid_stack_priors_fails_closed(tmp_path):
     assert lock_mod._lock_roles_from_stack_priors(invalid) is None
 
 
-def test_degraded_fallback_roles_match_current_stack_shape():
-    assert {
-        "worker_general",
-        "worker_math",
-        "toolrunner",
-        "worker_vision",
-    } <= lock_mod._LEGACY_LIGHT_ROLES
-    assert "worker_fast" not in lock_mod._LEGACY_LIGHT_ROLES
-    assert {
-        "frontdoor",
-        "coder_escalation",
-        "architect_general",
-        "ingest_long_context",
-        "vision_escalation",
-        "worker_summarize",
-    } <= lock_mod._LEGACY_HEAVY_ROLES
+def test_degraded_lock_roles_derive_from_stack_manifest():
+    roles = lock_mod._degraded_lock_roles_from_stack_manifest()
+
+    assert roles is not None
+    heavy, light = roles
+    assert {"worker_general", "worker_math", "toolrunner", "worker_vision"} <= light
+    assert {"frontdoor", "coder_escalation", "architect_general"} <= heavy
+    assert {"ingest_long_context", "vision_escalation", "worker_summarize"} <= heavy
+    assert "embedder" not in heavy
 
 
 def test_is_heavy_role_uses_derived_sets_and_unknowns_fail_closed(monkeypatch):

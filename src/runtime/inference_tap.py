@@ -87,12 +87,6 @@ _TOPOLOGY_HASH_CACHE: str | None = None
 # so 5-second staleness is fine and avoids per-request I/O.
 _sentinel_cache: tuple[str, float] = ("", 0.0)
 
-# Fallback only: normally safe-mode non-stream roles come from stack-prior
-# model.mem_gb so stack changes do not require editing this module.
-_LEGACY_SAFE_NON_STREAM_ROLES: frozenset[str] = frozenset(
-    {Role.ARCHITECT_GENERAL.value}
-)
-
 
 def _safe_non_stream_min_mem_gb() -> float:
     raw = os.environ.get(
@@ -115,12 +109,22 @@ def _safe_non_stream_roles_from_stack_priors(
     )
 
 
+def _degraded_safe_non_stream_roles_from_stack_manifest() -> frozenset[str] | None:
+    """Derive a compatibility safe-mode policy from the live stack manifest."""
+    try:
+        from scripts.server.stack_manifest import NO_SPEC_DECODE_ROLES
+    except Exception:
+        return None
+    return frozenset(NO_SPEC_DECODE_ROLES)
+
+
 _DERIVED_SAFE_NON_STREAM_ROLES = _safe_non_stream_roles_from_stack_priors()
-SAFE_NON_STREAM_ROLES: frozenset[str] = (
-    _LEGACY_SAFE_NON_STREAM_ROLES
-    if _DERIVED_SAFE_NON_STREAM_ROLES is None
-    else _DERIVED_SAFE_NON_STREAM_ROLES
-)
+if _DERIVED_SAFE_NON_STREAM_ROLES is None:
+    SAFE_NON_STREAM_ROLES = (
+        _degraded_safe_non_stream_roles_from_stack_manifest() or frozenset()
+    )
+else:
+    SAFE_NON_STREAM_ROLES = _DERIVED_SAFE_NON_STREAM_ROLES
 
 
 def _read_sentinel() -> str:

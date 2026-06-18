@@ -32,30 +32,6 @@ log = logging.getLogger(__name__)
 _SLOT_ERASE_CAPABILITY: dict[int, str | None | bool] = {}
 
 
-# Degraded fallback only. Normal startup derives lock roles from generated
-# stack priors so this table is used only when that artifact is missing or
-# invalid.
-_LEGACY_HEAVY_ROLES = frozenset(
-    {
-        Role.FRONTDOOR.value,
-        Role.CODER_ESCALATION.value,
-        Role.ARCHITECT_GENERAL.value,
-        Role.INGEST_LONG_CONTEXT.value,
-        "vision_escalation",
-        Role.WORKER_SUMMARIZE.value,
-    }
-)
-
-_LEGACY_LIGHT_ROLES = frozenset(
-    {
-        Role.WORKER_GENERAL.value,
-        Role.WORKER_MATH.value,
-        Role.TOOLRUNNER.value,
-        Role.WORKER_VISION.value,
-    }
-)
-
-
 def _lock_roles_from_stack_priors(
     stack_priors_path: Path = DEFAULT_STACK_PRIORS,
 ) -> tuple[frozenset[str], frozenset[str]] | None:
@@ -63,10 +39,44 @@ def _lock_roles_from_stack_priors(
     return live_stack_lock_role_sets(stack_priors_path)
 
 
+def _degraded_lock_roles_from_stack_manifest() -> tuple[frozenset[str], frozenset[str]] | None:
+    """Derive a compatibility lock policy from the live launcher manifest."""
+    try:
+        from scripts.server.stack_manifest import HOT_ROLES, ROLE_LAUNCH_META, SERIAL_ROLES
+    except Exception:
+        return None
+
+    light_roles = frozenset(
+        {
+            Role.WORKER_GENERAL.value,
+            Role.WORKER_MATH.value,
+            Role.TOOLRUNNER.value,
+            Role.WORKER_VISION.value,
+        }
+    )
+
+    heavy: set[str] = set()
+    for role in HOT_ROLES | SERIAL_ROLES:
+        if role in light_roles:
+            continue
+        meta = ROLE_LAUNCH_META.get(role)
+        if isinstance(meta, dict) and (meta.get("no_numa") or meta.get("mode") == "embedding"):
+            continue
+        heavy.add(role)
+
+    if not heavy and not light_roles:
+        return None
+    return frozenset(heavy), light_roles
+
+
 _DERIVED_LOCK_ROLES = _lock_roles_from_stack_priors()
 if _DERIVED_LOCK_ROLES is None:
-    HEAVY_ROLES = _LEGACY_HEAVY_ROLES
-    LIGHT_ROLES = _LEGACY_LIGHT_ROLES
+    _DEGRADED_LOCK_ROLES = _degraded_lock_roles_from_stack_manifest()
+    if _DEGRADED_LOCK_ROLES is None:
+        HEAVY_ROLES = frozenset()
+        LIGHT_ROLES = frozenset()
+    else:
+        HEAVY_ROLES, LIGHT_ROLES = _DEGRADED_LOCK_ROLES
 else:
     HEAVY_ROLES, LIGHT_ROLES = _DERIVED_LOCK_ROLES
 
