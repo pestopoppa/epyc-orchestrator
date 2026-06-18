@@ -44,7 +44,10 @@ def test_load_prompts_accepts_builtin_json_and_jsonl(tmp_path: Path) -> None:
 def test_score_answer_supports_common_methods() -> None:
     assert xmas_live_ab.score_answer("The answer is 36.", {"expected": "36"}) is True
     assert xmas_live_ab.score_answer("36", {"expected": "36", "scoring": "exact_match"}) is True
+    assert xmas_live_ab.score_answer("<answer>valid</answer>", {"expected": "valid", "scoring": "exact_match"}) is True
+    assert xmas_live_ab.score_answer("<answer>42</answer>", {"expected": "42"}) is True
     assert xmas_live_ab.score_answer("Answer: A", {"expected": "A", "scoring": "multiple_choice"}) is True
+    assert xmas_live_ab.score_answer("<answer>A</answer>", {"expected": "A", "scoring": "multiple_choice"}) is True
     assert xmas_live_ab.score_answer("Answer: B", {"expected": "A", "scoring": "multiple_choice"}) is False
     assert xmas_live_ab.score_answer("anything", {}) is None
 

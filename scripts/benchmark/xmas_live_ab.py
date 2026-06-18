@@ -87,19 +87,21 @@ def score_answer(answer: str, spec: dict[str, Any]) -> bool | None:
         return None
     expected_s = str(expected).strip()
     answer_s = (answer or "").strip()
+    tagged = re.search(r"<answer>(.*?)</answer>", answer_s, flags=re.IGNORECASE | re.DOTALL)
+    comparable_s = tagged.group(1).strip() if tagged else answer_s
     method = str(spec.get("scoring") or spec.get("scoring_method") or "substring")
     if method == "exact_match":
-        return answer_s.casefold() == expected_s.casefold()
+        return comparable_s.casefold() == expected_s.casefold()
     if method == "multiple_choice":
         letter = expected_s[:1].upper()
         if not letter:
             return False
-        answer_u = answer_s.upper()
+        answer_u = comparable_s.upper()
         explicit = re.search(r"\b(?:ANSWER|OPTION)\s*[:\-]?\s*([A-D])\b", answer_u)
         if explicit:
             return explicit.group(1) == letter
         return bool(re.search(rf"(?:^|[\s\(\[\*]){re.escape(letter)}(?:[\s\)\]\*\.\,\:]|$)", answer_u))
-    return expected_s.casefold() in answer_s.casefold()
+    return expected_s.casefold() in comparable_s.casefold()
 
 
 def reload_env(arm: str, table_path: Path) -> dict[str, str]:
