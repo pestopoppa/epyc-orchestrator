@@ -19,6 +19,7 @@ single-variable scope validation.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +44,9 @@ PLANNER_TAP_PATH = Path("/mnt/raid0/llm/tmp/planner_tap.log")
 PLANNER_ARCHIVE_PATH = Path(
     "/mnt/raid0/llm/epyc-orchestrator/logs/planner_archive.jsonl"
 )
+PLANNER_SUBPROCESS_STATUS_PATH = Path(
+    "/mnt/raid0/llm/tmp/autopilot_planner_subprocess.json"
+)
 
 # Do not inherit the operator's last interactive Claude model. Fable access is
 # metered/temporary, and a stale global default can brick AutoPilot planning.
@@ -53,6 +57,41 @@ _NUMERIC_SURFACES = {"memrl_retrieval", "think_harder", "monitor", "escalation"}
 _PROMPT_MUTATIONS = {"targeted_fix", "compress", "few_shot_evolution"}
 _CODE_MUTATIONS = {"targeted_fix"}
 _SLOT_SCORERS = {"expected_attention", "knorm"}
+
+
+def _write_planner_subprocess_status(
+    *,
+    status: str,
+    prompt: str,
+    cmd: list[str],
+    child_pid: int | None,
+    started_at: float,
+    returncode: int | None = None,
+    error: str = "",
+) -> None:
+    """Best-effort heartbeat for planner subprocess lifetime diagnostics."""
+    payload = {
+        "status": status,
+        "provider": "claude",
+        "parent_pid": os.getpid(),
+        "child_pid": child_pid,
+        "started_at": started_at,
+        "updated_at": time.time(),
+        "duration_s": max(0.0, time.time() - started_at),
+        "prompt_chars": len(prompt),
+        "prompt_sha256_16": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+        "cmd": [cmd[0], *["<prompt>" if item == prompt else item for item in cmd[1:]]],
+        "returncode": returncode,
+        "error": error[:1000],
+    }
+    try:
+        PLANNER_SUBPROCESS_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PLANNER_SUBPROCESS_STATUS_PATH.write_text(
+            json.dumps(payload, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        log.debug("planner subprocess heartbeat write failed", exc_info=True)
 
 _ACTION_SCHEMAS: dict[str, dict[str, Any]] = {
     "seed_batch": {
@@ -376,6 +415,13 @@ def invoke_controller(
             bufsize=1,  # line-buffered
             cwd=str(cwd) if cwd else None,
         )
+        _write_planner_subprocess_status(
+            status="running",
+            prompt=prompt,
+            cmd=cmd,
+            child_pid=proc.pid,
+            started_at=session_start_ts,
+        )
 
         reader_thread = threading.Thread(target=_drain_stdout, args=(proc,), daemon=True)
         reader_thread.start()
@@ -385,6 +431,15 @@ def invoke_controller(
         except subprocess.TimeoutExpired:
             proc.kill()
             log.error("Controller timed out after %ds", timeout)
+            _write_planner_subprocess_status(
+                status="timeout",
+                prompt=prompt,
+                cmd=cmd,
+                child_pid=proc.pid,
+                started_at=session_start_ts,
+                returncode=proc.returncode,
+                error=f"timeout after {timeout}s",
+            )
             if tap is not None:
                 try:
                     tap.write(f"[TIMEOUT after {timeout}s]\n{'=' * 72}\n")
@@ -403,6 +458,15 @@ def invoke_controller(
         if proc.returncode != 0:
             stderr = proc.stderr.read() if proc.stderr else ""
             log.error("Controller failed (rc=%d): %s", proc.returncode, stderr[:500])
+            _write_planner_subprocess_status(
+                status="process_failed",
+                prompt=prompt,
+                cmd=cmd,
+                child_pid=proc.pid,
+                started_at=session_start_ts,
+                returncode=proc.returncode,
+                error=stderr,
+            )
             if tap is not None:
                 try:
                     tap.write(f"[FAIL rc={proc.returncode}] {stderr[:400]}\n{'=' * 72}\n")
@@ -463,11 +527,27 @@ def invoke_controller(
 
         # Archive write (persistent JSONL, survives /tmp wipe)
         _archive_controller_call(status="success", ok=True)
+        _write_planner_subprocess_status(
+            status="success",
+            prompt=prompt,
+            cmd=cmd,
+            child_pid=proc.pid,
+            started_at=session_start_ts,
+            returncode=proc.returncode,
+        )
 
         return result_text, final_session_id
 
     except FileNotFoundError:
         log.error("Claude CLI not found")
+        _write_planner_subprocess_status(
+            status="missing_cli",
+            prompt=prompt,
+            cmd=cmd,
+            child_pid=None,
+            started_at=session_start_ts,
+            error="Claude CLI not found",
+        )
         _archive_controller_call(
             status="missing_cli",
             ok=False,

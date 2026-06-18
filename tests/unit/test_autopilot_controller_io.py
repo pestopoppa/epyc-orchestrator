@@ -313,10 +313,13 @@ def test_unwrap_action_dict_without_type_none() -> None:
 
 def test_invoke_controller_archives_timeout_before_return(monkeypatch) -> None:
     records = []
+    statuses = []
 
     class FakeTimeoutProcess:
         stdout = iter(())
         stderr = None
+        pid = 12345
+        returncode = None
 
         def wait(self, timeout):
             raise controller_io.subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
@@ -327,6 +330,11 @@ def test_invoke_controller_archives_timeout_before_return(monkeypatch) -> None:
     monkeypatch.setattr(controller_io.subprocess, "Popen", lambda *a, **k: FakeTimeoutProcess())
     monkeypatch.setattr(controller_io, "_open_planner_tap", lambda: None)
     monkeypatch.setattr(controller_io, "_append_planner_archive", records.append)
+    monkeypatch.setattr(
+        controller_io,
+        "_write_planner_subprocess_status",
+        lambda **kwargs: statuses.append(kwargs),
+    )
 
     text, session_id = controller_io.invoke_controller(
         "prompt",
@@ -342,6 +350,8 @@ def test_invoke_controller_archives_timeout_before_return(monkeypatch) -> None:
     assert records[0]["status"] == "timeout"
     assert records[0]["ok"] is False
     assert records[0]["resume_session_id"] == "old-session"
+    assert [status["status"] for status in statuses] == ["running", "timeout"]
+    assert statuses[0]["child_pid"] == 12345
 
 
 def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
@@ -350,6 +360,8 @@ def test_invoke_controller_pins_planner_model_args(monkeypatch) -> None:
     class FakeTimeoutProcess:
         stdout = iter(())
         stderr = None
+        pid = 12345
+        returncode = None
 
         def wait(self, timeout):
             raise controller_io.subprocess.TimeoutExpired(cmd="claude", timeout=timeout)
