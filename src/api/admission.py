@@ -45,9 +45,7 @@ import threading
 import time
 
 from src.registry.stack_priors import (
-    live_stack_role_records,
-    stack_prior_serving,
-    stack_prior_serving_ports,
+    live_stack_serving_slot_limits,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,25 +69,8 @@ FALLBACK_LIMITS: dict[str, int] = {
 # Embedding servers (8090-8095) are not gated — they're lightweight.
 
 
-def _merge_limit(limits: dict[str, int], url: str, slots: int) -> None:
-    if not url or slots <= 0:
-        return
-    limits[url] = max(slots, limits.get(url, 0))
-
-
 def _limits_from_stack_priors(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
-    limits: dict[str, int] = {}
-    for record in live_stack_role_records(path).values():
-        serving = stack_prior_serving(record)
-        slots = serving.get("slots")
-        if not isinstance(slots, int) or slots <= 0:
-            continue
-        endpoint = serving.get("endpoint")
-        if isinstance(endpoint, str):
-            _merge_limit(limits, endpoint, slots)
-        for port in stack_prior_serving_ports(serving):
-            _merge_limit(limits, f"http://localhost:{port}", slots)
-    return limits
+    return live_stack_serving_slot_limits(path)
 
 
 def _load_default_limits(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:

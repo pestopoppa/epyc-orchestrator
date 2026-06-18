@@ -13,10 +13,13 @@ from src.registry.stack_priors import (
     compile_stack_priors,
     live_role_primary_ports,
     _launch_runtime_record,
+    live_stack_serving_slot_limits,
+    live_stack_serving_url_values,
     live_stack_role_records,
     live_warm_worker_slots,
     load_stack_priors_artifact,
     stack_prior_endpoint_port,
+    stack_prior_serving_url_value,
     stack_prior_serving_ports,
     validate_stack_priors_contract,
 )
@@ -36,6 +39,8 @@ def test_runtime_stack_prior_helpers_fail_closed_on_missing_artifact(tmp_path: P
     assert live_stack_role_records(missing) == {}
     assert live_warm_worker_slots(missing) == {}
     assert live_role_primary_ports(frozenset({"worker_vision"}), missing) == {}
+    assert live_stack_serving_url_values(missing) == {}
+    assert live_stack_serving_slot_limits(missing) == {}
 
 
 def test_runtime_stack_prior_helpers_project_live_roles(tmp_path: Path) -> None:
@@ -80,6 +85,22 @@ def test_runtime_stack_prior_helpers_project_live_roles(tmp_path: Path) -> None:
     ) == {"worker_vision": 9101, "vision_escalation": 9107}
     assert stack_prior_endpoint_port({"endpoint": "http://localhost:1234/v1"}) == 1234
     assert stack_prior_serving_ports({"ports": [1, "2", 3, None]}) == [1, 3]
+    assert stack_prior_serving_url_value({"ports": [9100, 9200]}) == (
+        "full:http://localhost:9100,http://localhost:9200"
+    )
+    assert stack_prior_serving_url_value({"endpoint": "http://localhost:9300"}) == (
+        "http://localhost:9300"
+    )
+    assert live_stack_serving_url_values(priors) == {
+        "worker_batch": "http://localhost:9123",
+        "worker_general": "http://localhost:8072",
+        "worker_vision": "http://localhost:9999",
+        "vision_escalation": "http://localhost:9107",
+    }
+    assert live_stack_serving_slot_limits(priors) == {
+        "http://localhost:9123": 4,
+        "http://localhost:8072": 4,
+    }
 
 
 def test_compile_prefers_server_mode_for_shared_role_memory_and_serving(tmp_path: Path) -> None:

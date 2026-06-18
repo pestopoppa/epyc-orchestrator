@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.roles import Role
-from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+from src.registry.stack_priors import live_stack_serving_url_values
 
 from .validation import _registry_runtime_value, _registry_timeout
 
@@ -310,18 +310,6 @@ def _localhost_url_from_port(port: Any) -> str | None:
     return f"http://localhost:{port}" if isinstance(port, int) and port > 0 else None
 
 
-def _format_stack_prior_url(serving: dict[str, Any]) -> str | None:
-    raw_ports = serving.get("ports")
-    ports = [port for port in raw_ports if isinstance(port, int)] if isinstance(raw_ports, list) else []
-    if ports:
-        urls = [f"http://localhost:{port}" for port in ports]
-        if len(urls) > 1:
-            urls[0] = f"full:{urls[0]}"
-        return ",".join(urls)
-    endpoint = serving.get("endpoint")
-    return endpoint if isinstance(endpoint, str) and endpoint.startswith("http") else None
-
-
 def _stack_manifest_server_urls() -> dict[str, str]:
     """Return compatibility/service URLs derived from stack manifest ports."""
     try:
@@ -358,11 +346,7 @@ def _stack_prior_server_urls() -> dict[str, str]:
     urls: dict[str, str] = {}
     try:
         priors_path = Path(_get_default_stack_priors_path())
-        for role, record in live_stack_role_records(priors_path).items():
-            serving = stack_prior_serving(record)
-            url = _format_stack_prior_url(serving)
-            if url:
-                urls[role] = url
+        urls.update(live_stack_serving_url_values(priors_path))
 
         for alias, target in _STACK_PRIOR_SERVER_URL_ALIASES.items():
             if target in urls:

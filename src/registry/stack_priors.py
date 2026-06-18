@@ -278,6 +278,45 @@ def stack_prior_serving_ports(serving: dict[str, Any]) -> list[int]:
     return [port for port in ports if isinstance(port, int)]
 
 
+def stack_prior_serving_url_value(serving: dict[str, Any]) -> str | None:
+    """Return the config-compatible URL value for a serving block."""
+    ports = stack_prior_serving_ports(serving)
+    if ports:
+        urls = [f"http://localhost:{port}" for port in ports]
+        if len(urls) > 1:
+            urls[0] = f"full:{urls[0]}"
+        return ",".join(urls)
+    endpoint = serving.get("endpoint")
+    return endpoint if isinstance(endpoint, str) and endpoint.startswith("http") else None
+
+
+def live_stack_serving_url_values(path: Path = DEFAULT_OUTPUT) -> dict[str, str]:
+    """Return config-compatible URL values keyed by live stack role."""
+    urls: dict[str, str] = {}
+    for role, record in live_stack_role_records(path).items():
+        url = stack_prior_serving_url_value(stack_prior_serving(record))
+        if url:
+            urls[role] = url
+    return urls
+
+
+def live_stack_serving_slot_limits(path: Path = DEFAULT_OUTPUT) -> dict[str, int]:
+    """Return per-serving-URL admission slot limits from live stack priors."""
+    limits: dict[str, int] = {}
+    for record in live_stack_role_records(path).values():
+        serving = stack_prior_serving(record)
+        slots = serving.get("slots")
+        if not isinstance(slots, int) or slots <= 0:
+            continue
+        endpoint = serving.get("endpoint")
+        if isinstance(endpoint, str):
+            limits[endpoint] = max(slots, limits.get(endpoint, 0))
+        for port in stack_prior_serving_ports(serving):
+            url = f"http://localhost:{port}"
+            limits[url] = max(slots, limits.get(url, 0))
+    return limits
+
+
 def live_role_primary_ports(
     role_names: set[str] | frozenset[str],
     path: Path = DEFAULT_OUTPUT,
