@@ -3918,8 +3918,11 @@ def cmd_report(args: argparse.Namespace) -> None:
 
 def cmd_plot(args: argparse.Namespace) -> None:
     """Generate plots."""
-    archive = ParetoArchive()
     journal = ExperimentJournal()
+    archive, _archive_source = _archive_for_read_command(
+        journal,
+        source=ARCHIVE_SOURCE_JOURNAL_ALL,
+    )
     state = load_state()
     td_errors = [(i, e) for i, e in enumerate(state.get("td_errors", []))]
     try:

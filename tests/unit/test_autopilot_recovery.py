@@ -152,6 +152,41 @@ def test_archive_for_read_command_falls_back_when_journal_empty(
     assert source == "journal-current-run->state-empty-fallback"
 
 
+def test_cmd_plot_uses_journal_archive_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeJournal:
+        def all_entries(self):
+            return [_make_entry(1, quality=1.4, speed=40.0)]
+
+        def supersession_events(self):
+            return []
+
+    def _state_archive_should_not_load():
+        raise AssertionError("cmd_plot must not load legacy state archive directly")
+
+    captured: dict[str, object] = {}
+
+    def _generate_all_plots(archive, journal, td_errors, *, raise_on_error):
+        captured["archive"] = archive
+        captured["journal"] = journal
+        captured["td_errors"] = td_errors
+        captured["raise_on_error"] = raise_on_error
+        return []
+
+    monkeypatch.setattr(autopilot, "ExperimentJournal", FakeJournal)
+    monkeypatch.setattr(autopilot, "ParetoArchive", _state_archive_should_not_load)
+    monkeypatch.setattr(autopilot, "load_state", lambda: {"td_errors": [0.25]})
+    monkeypatch.setattr(autopilot, "generate_all_plots", _generate_all_plots)
+
+    autopilot.cmd_plot(SimpleNamespace())
+
+    archive = captured["archive"]
+    assert archive.read_only is True
+    assert [entry.trial_id for entry in archive.frontier(tier=2)] == [1]
+    assert isinstance(captured["journal"], FakeJournal)
+    assert captured["td_errors"] == [(0, 0.25)]
+    assert captured["raise_on_error"] is True
+
+
 def test_append_baseline_promotion_event_only_for_updated_baseline(
     tmp_path: Path,
 ) -> None:
