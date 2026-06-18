@@ -60,6 +60,8 @@ _RECENCY_SIGMA_DAYS_DEFAULT = _env_float("KB_RAG_RECENCY_SIGMA_DAYS", 90.0)
 _RERANK_DEFAULT = _env_flag("KB_RAG_RERANK")
 _RERANK_WEIGHT_DEFAULT = _env_float("KB_RAG_RERANK_WEIGHT", 0.3)
 _RERANK_POOL_MULT_DEFAULT = _env_float("KB_RAG_RERANK_POOL_MULT", 4.0)
+_LEXICAL_WEIGHT_DEFAULT = _env_float("KB_RAG_LEXICAL_WEIGHT", 0.0)
+_LEXICAL_POOL_MULT_DEFAULT = _env_float("KB_RAG_LEXICAL_POOL_MULT", 4.0)
 
 
 def _recency_score(mtime: float, now: float, sigma_days: float) -> float:
@@ -72,6 +74,13 @@ def _recency_score(mtime: float, now: float, sigma_days: float) -> float:
         return 1.0
     age_days = max(0.0, (now - mtime) / 86400.0)
     return math.exp(-0.5 * (age_days / sigma_days) ** 2)
+
+
+def _sanitize_fts_query(text: str) -> str:
+    """Normalize a free-form query into an FTS5-safe token string."""
+    return " ".join(
+        tok for tok in "".join(c if c.isalnum() else " " for c in text).split() if tok
+    )
 
 _CATALOG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS chunk (
@@ -121,6 +130,59 @@ def _ensure_catalog(index_dir: Path) -> sqlite3.Connection:
     conn.executescript(_CATALOG_SCHEMA)
     conn.commit()
     return conn
+
+
+def _ensure_fts(conn: sqlite3.Connection) -> bool:
+    """Create the optional lexical index if SQLite was built with FTS5."""
+    try:
+        conn.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts
+            USING fts5(file_path, heading_path, text, tokenize='porter')
+            """
+        )
+        conn.commit()
+        return True
+    except sqlite3.OperationalError:
+        logger.info("FTS5 not available — KB-RAG lexical signal disabled")
+        return False
+
+
+def _sync_chunk_fts_row(
+    cur: sqlite3.Cursor,
+    chunk_id: int,
+    file_path: str,
+    heading_path: list[str],
+    text: str,
+    fts_enabled: bool,
+) -> None:
+    if not fts_enabled:
+        return
+    cur.execute("DELETE FROM chunk_fts WHERE rowid = ?", (chunk_id,))
+    cur.execute(
+        "INSERT INTO chunk_fts(rowid, file_path, heading_path, text) VALUES (?, ?, ?, ?)",
+        (chunk_id, file_path, json.dumps(heading_path), text),
+    )
+
+
+def _lexical_scores(
+    conn: sqlite3.Connection,
+    text: str,
+    limit: int,
+) -> dict[int, float]:
+    """Return reciprocal-rank lexical scores from FTS5 matches."""
+    query = _sanitize_fts_query(text)
+    if not query:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH ? "
+            "ORDER BY bm25(chunk_fts) LIMIT ?",
+            (query, limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {int(row[0]): 1.0 / float(idx + 1) for idx, row in enumerate(rows)}
 
 
 def _walk_corpus(config: CorpusConfig) -> list[Path]:
@@ -182,6 +244,8 @@ def build_index(
         return {"ok": False, "error": "encoder failed to load"}
 
     conn = _ensure_catalog(index_dir)
+    conn.row_factory = sqlite3.Row
+    fts_enabled = _ensure_fts(conn)
     cur = conn.cursor()
 
     files = _walk_corpus(config)
@@ -207,6 +271,14 @@ def build_index(
             ).fetchone()
             if existing and not force:
                 n_chunks_skipped += 1
+                _sync_chunk_fts_row(
+                    cur,
+                    int(existing["chunk_id"]),
+                    str(f),
+                    ch.heading_path,
+                    ch.text,
+                    fts_enabled,
+                )
                 continue
 
             emb = colbert_encoder.encode(ch.text, _DOC_MAX_TOKENS)
@@ -236,6 +308,14 @@ def build_index(
                     int(emb.shape[0]),
                 ),
             )
+            _sync_chunk_fts_row(
+                cur,
+                int(cur.lastrowid),
+                str(f),
+                ch.heading_path,
+                ch.text,
+                fts_enabled,
+            )
             n_chunks_encoded += 1
 
         if file_idx % 25 == 0:
@@ -250,6 +330,12 @@ def build_index(
     current_files = {str(f) for f in files}
     stale = catalog_files - current_files
     for stale_file in stale:
+        if fts_enabled:
+            for row in cur.execute(
+                "SELECT chunk_id FROM chunk WHERE file_path = ?",
+                (stale_file,),
+            ).fetchall():
+                cur.execute("DELETE FROM chunk_fts WHERE rowid = ?", (int(row["chunk_id"]),))
         cur.execute("DELETE FROM chunk WHERE file_path = ?", (stale_file,))
     conn.commit()
     conn.close()
@@ -283,6 +369,8 @@ def update_files(
         return {"ok": False, "error": "encoder failed to load"}
 
     conn = _ensure_catalog(index_dir)
+    conn.row_factory = sqlite3.Row
+    fts_enabled = _ensure_fts(conn)
     cur = conn.cursor()
 
     # Resolve which paths actually belong to corpus.
@@ -292,6 +380,13 @@ def update_files(
         p = Path(raw_path).resolve()
         if str(p) not in corpus_files:
             continue
+        if fts_enabled:
+            for row in cur.execute(
+                "SELECT chunk_id, heading_path, line_start, line_end, text_preview "
+                "FROM chunk WHERE file_path = ?",
+                (str(p),),
+            ).fetchall():
+                cur.execute("DELETE FROM chunk_fts WHERE rowid = ?", (int(row["chunk_id"]),))
         cur.execute("DELETE FROM chunk WHERE file_path = ?", (str(p),))
         chunks = chunk_file(p, max_chars=config.max_chunk_chars)
         mtime = p.stat().st_mtime
@@ -320,6 +415,14 @@ def update_files(
                     int(emb.shape[0]),
                 ),
             )
+            _sync_chunk_fts_row(
+                cur,
+                int(cur.lastrowid),
+                str(p),
+                ch.heading_path,
+                ch.text,
+                fts_enabled,
+            )
             encoded += 1
     conn.commit()
     conn.close()
@@ -334,6 +437,7 @@ def query(
     recency_sigma_days: float | None = None,
     rerank: bool | None = None,
     rerank_weight: float | None = None,
+    lexical_weight: float | None = None,
 ) -> list[dict[str, Any]]:
     """Top-K hybrid retrieval against the indexed corpus.
 
@@ -342,11 +446,14 @@ def query(
       `final = (1 - recency_weight) * maxsim + recency_weight * recency`.
     Stage 3 (K9, opt-in): cross-encoder rerank of the top `top_k * pool_mult`
       candidates, blended `(1 - rerank_weight) * score + rerank_weight * ce`.
+    Stage 4 (K11, opt-in): blend a lexical FTS5 signal over the chunk text,
+      file path, and heading path. Default weight is zero, so the path remains
+      MaxSim-only unless a caller explicitly opts in.
 
-    All three stages default to a no-op (recency_weight=0, rerank off) so the
-    default result is identical to plain MaxSim; defaults come from env vars
-    (KB_RAG_RECENCY_WEIGHT / _SIGMA_DAYS, KB_RAG_RERANK / _WEIGHT /
-    _POOL_MULT) so the K7 eval harness can sweep without code edits. Tuning +
+    All optional stages default to a no-op so the default result is identical
+    to plain MaxSim; defaults come from env vars (KB_RAG_RECENCY_WEIGHT /
+    _SIGMA_DAYS, KB_RAG_RERANK / _WEIGHT / _POOL_MULT, KB_RAG_LEXICAL_WEIGHT
+    / _POOL_MULT) so the K7 eval harness can sweep without code edits. Tuning +
     win-validation is gated on K7 (inference). See
     research/deep-dives/2026-05-27-agent-memory-cluster.md.
 
@@ -359,6 +466,7 @@ def query(
     )
     rerank = _RERANK_DEFAULT if rerank is None else rerank
     rerank_weight = _RERANK_WEIGHT_DEFAULT if rerank_weight is None else rerank_weight
+    lexical_weight = _LEXICAL_WEIGHT_DEFAULT if lexical_weight is None else lexical_weight
 
     index_dir = Path(index_dir)
     catalog_path = index_dir / "catalog.sqlite"
@@ -379,10 +487,15 @@ def query(
         "SELECT chunk_id, file_path, heading_path, line_start, line_end, "
         "       content_hash, emb_path, text_preview, mtime FROM chunk"
     ).fetchall()
-    conn.close()
+
+    lexical_scores = (
+        _lexical_scores(conn, text, max(top_k, int(top_k * _LEXICAL_POOL_MULT_DEFAULT)))
+        if lexical_weight > 0.0
+        else {}
+    )
 
     now = time.time()
-    scored: list[tuple[float, float, sqlite3.Row]] = []  # (blended, recency, row)
+    scored: list[tuple[float, float, float, sqlite3.Row]] = []  # (blended, recency, lexical, row)
     for r in rows:
         emb_path = index_dir / r["emb_path"]
         if not emb_path.exists():
@@ -398,8 +511,13 @@ def query(
             if recency_weight > 0.0
             else 0.0
         )
-        blended = (1.0 - recency_weight) * s + recency_weight * rec if recency_weight > 0.0 else s
-        scored.append((blended, rec, r))
+        lexical = lexical_scores.get(int(r["chunk_id"]), 0.0)
+        blended = s
+        if recency_weight > 0.0:
+            blended = (1.0 - recency_weight) * blended + recency_weight * rec
+        if lexical_weight > 0.0:
+            blended = (1.0 - lexical_weight) * blended + lexical_weight * lexical
+        scored.append((blended, rec, lexical, r))
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
@@ -407,7 +525,7 @@ def query(
     pool_size = max(top_k, int(top_k * _RERANK_POOL_MULT_DEFAULT)) if rerank else top_k
 
     results = []
-    for blended, rec, r in scored[:pool_size]:
+    for blended, rec, lexical, r in scored[:pool_size]:
         item = {
             "file": r["file_path"],
             "heading_path": json.loads(r["heading_path"]),
@@ -418,6 +536,8 @@ def query(
         }
         if recency_weight > 0.0:
             item["recency"] = round(rec, 4)
+        if lexical_weight > 0.0:
+            item["lexical"] = round(lexical, 4)
         results.append(item)
 
     if rerank and rerank_weight > 0.0 and results:
@@ -425,6 +545,7 @@ def query(
             text, results, text_key="snippet", weight=rerank_weight, base_key="score"
         )
 
+    conn.close()
     return results[:top_k]
 
 

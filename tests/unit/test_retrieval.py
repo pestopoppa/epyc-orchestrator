@@ -330,6 +330,60 @@ def test_kb_rag_query_recency_reorders_on_tie(tmp_path: Path) -> None:
     assert "recency" not in baseline[0]
 
 
+# ─── K11: FTS5 lexical signal ────────────────────────────────────────────────
+
+def test_kb_rag_query_lexical_signal_backfills_on_rebuild(tmp_path: Path) -> None:
+    """FTS5 stays optional, but rebuilds must repopulate it for unchanged rows."""
+    import sqlite3
+
+    from src.retrieval import kb_rag
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    a = corpus_root / "a.md"
+    b = corpus_root / "b.md"
+    a.write_text("# A\n\nshared body\n")
+    b.write_text("# B\n\nneedle only here\n")
+
+    cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
+    index_dir = tmp_path / "idx"
+
+    def fake_encode(text, max_tokens):
+        return np.eye(2, 4, dtype=np.float32)
+
+    with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "ensure_loaded", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "encode", side_effect=fake_encode):
+        first = kb_rag.build_index(cfg, index_dir=index_dir)
+        baseline = kb_rag.query("needle", top_k=2, index_dir=index_dir)
+
+    assert first["chunks_encoded"] >= 2
+    assert "a.md" in baseline[0]["file"]
+
+    catalog_path = index_dir / "catalog.sqlite"
+    conn = sqlite3.connect(str(catalog_path))
+    has_fts = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_fts'"
+    ).fetchone()
+    if has_fts is None:
+        conn.close()
+        pytest.skip("SQLite FTS5 is unavailable in this environment")
+    conn.execute("DROP TABLE chunk_fts")
+    conn.commit()
+    conn.close()
+
+    with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "ensure_loaded", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "encode", side_effect=fake_encode):
+        second = kb_rag.build_index(cfg, index_dir=index_dir)
+        results = kb_rag.query("needle", top_k=2, index_dir=index_dir, lexical_weight=1.0)
+
+    assert second["chunks_skipped_unchanged"] >= 2
+    assert "b.md" in results[0]["file"]
+    assert results[0]["lexical"] == 1.0
+    assert results[0]["score"] >= results[1]["score"]
+
+
 # ─── K9: cross-encoder rerank stage ───────────────────────────────────────────
 
 def test_cross_encoder_rerank_noop_when_unavailable() -> None:
