@@ -251,6 +251,11 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 def run(args: argparse.Namespace) -> int:
     table_path = args.table.resolve()
+    if not args.dry_run and args.prompts is None:
+        raise SystemExit(
+            "REFUSING real run: pass --prompts with a held-out prompt manifest; "
+            "the built-in smoke set is dry-run only"
+        )
     prompts = load_prompts(args.prompts)
     if args.sample_size is not None:
         prompts = prompts[: args.sample_size]

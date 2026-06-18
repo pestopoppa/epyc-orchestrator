@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -61,6 +62,60 @@ def test_load_prompts_accepts_builtin_json_and_jsonl(tmp_path: Path) -> None:
     jsonl_path = tmp_path / "prompts.jsonl"
     jsonl_path.write_text('{"id": "a", "prompt": "A"}\n{"id": "b", "prompt": "B"}\n', encoding="utf-8")
     assert [item["id"] for item in xmas_live_ab.load_prompts(jsonl_path)] == ["a", "b"]
+
+
+def test_real_run_requires_explicit_prompt_manifest(tmp_path: Path) -> None:
+    args = SimpleNamespace(
+        table=tmp_path / "xmas_winner_table.yaml",
+        prompts=None,
+        dry_run=False,
+    )
+
+    try:
+        xmas_live_ab.run(args)
+    except SystemExit as exc:
+        assert "pass --prompts with a held-out prompt manifest" in str(exc)
+    else:
+        raise AssertionError("real X-MAS A/B must reject built-in smoke prompts")
+
+
+def test_dry_run_can_use_builtin_smoke_set_without_inference(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    called = {"chat": False, "restart": False}
+
+    def fail_chat(*args, **kwargs):
+        called["chat"] = True
+        raise AssertionError("dry-run must not call chat")
+
+    def fail_restart(*args, **kwargs):
+        called["restart"] = True
+        raise AssertionError("dry-run must not restart orchestrator")
+
+    monkeypatch.setattr(xmas_live_ab, "validate_table", lambda _table: None)
+    monkeypatch.setattr(xmas_live_ab, "chat", fail_chat)
+    monkeypatch.setattr(xmas_live_ab, "restart_orchestrator", fail_restart)
+    output = tmp_path / "dryrun"
+    args = SimpleNamespace(
+        table=tmp_path / "xmas_winner_table.yaml",
+        prompts=None,
+        sample_size=1,
+        reps=1,
+        output=output,
+        max_turns=1,
+        dry_run=True,
+        host_quiet_confirmed=False,
+        timeout_s=1.0,
+        restore_baseline=True,
+    )
+
+    assert xmas_live_ab.run(args) == 0
+    assert called == {"chat": False, "restart": False}
+    assert json.loads((output / "meta.json").read_text())["prompt_manifest"] == (
+        "builtin_smoke"
+    )
+    assert json.loads((output / "summary.json").read_text())["dry_run"] is True
 
 
 def test_score_answer_supports_common_methods() -> None:
