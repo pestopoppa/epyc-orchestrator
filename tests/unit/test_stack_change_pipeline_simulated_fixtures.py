@@ -308,6 +308,114 @@ def _swapped_worker_registry(path: Path, *, throughput: float = 66.2) -> Path:
     )
 
 
+def _vision_registry(
+    path: Path,
+    *,
+    worker_model: str = "Qwen2.5-VL-7B-Instruct-Q4_K_M",
+    worker_memory_gb: int = 7,
+    worker_throughput: float = 20.0,
+    worker_quality_pct: float = 81.0,
+    worker_quant: str = "Q4_K_M",
+    escalation_model: str = "Qwen3-VL-30B-A3B-Instruct-Q4_K_M",
+    escalation_memory_gb: int = 20,
+    escalation_throughput: float = 8.0,
+    escalation_quality_pct: float = 90.0,
+    escalation_quant: str = "Q4_K_M",
+    benchmark_date: str = "2026-05-04",
+) -> Path:
+    worker_gguf = f"{worker_model}.gguf"
+    escalation_gguf = f"{escalation_model}.gguf"
+    return _write_yaml(
+        path,
+        {
+            "server_mode": {
+                "worker_vision": {
+                    "url": "http://localhost:8086",
+                    "port": 8086,
+                    "tier": "hot",
+                    "slots": 2,
+                    "model": worker_gguf,
+                    "model_path": f"/models/{worker_gguf}",
+                    "model_role": "worker_vision",
+                    "memory_gb": worker_memory_gb,
+                    "throughput": worker_throughput,
+                    "benchmark_score": f"{worker_quality_pct:g}%",
+                    "benchmark_date": benchmark_date,
+                    "mmproj": f"/models/{worker_model}-mmproj.gguf",
+                },
+                "vision_escalation": {
+                    "url": "http://localhost:8087",
+                    "port": 8087,
+                    "tier": "hot",
+                    "slots": 1,
+                    "model": escalation_gguf,
+                    "model_path": f"/models/{escalation_gguf}",
+                    "model_role": "vision_escalation",
+                    "memory_gb": escalation_memory_gb,
+                    "throughput": escalation_throughput,
+                    "benchmark_score": f"{escalation_quality_pct:g}%",
+                    "benchmark_date": benchmark_date,
+                    "mmproj": f"/models/{escalation_model}-mmproj.gguf",
+                },
+            },
+            "roles": {
+                "worker_vision": {
+                    "model": {
+                        "name": worker_model,
+                        "quant": worker_quant,
+                        "architecture": "qwen2vl",
+                        "size_gb": worker_memory_gb,
+                        "ctx_max": 8192,
+                    },
+                    "performance": {
+                        "quality_pct": worker_quality_pct,
+                        "baseline_tps": worker_throughput,
+                        "benchmark_date": benchmark_date,
+                    },
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
+                "vision_escalation": {
+                    "model": {
+                        "name": escalation_model,
+                        "quant": escalation_quant,
+                        "architecture": "qwen3vlmoe",
+                        "size_gb": escalation_memory_gb,
+                        "ctx_max": 16384,
+                    },
+                    "performance": {
+                        "quality_pct": escalation_quality_pct,
+                        "baseline_tps": escalation_throughput,
+                        "benchmark_date": benchmark_date,
+                    },
+                    "acceleration": {
+                        "type": "moe_expert_reduction",
+                        "override_key": "qwen3vlmoe.expert_used_count",
+                        "experts": 4,
+                    },
+                    "memory": {"pinned": True, "residency": "hot"},
+                },
+            },
+        },
+    )
+
+
+def _swapped_vision_registry(path: Path) -> Path:
+    return _vision_registry(
+        path,
+        worker_model="Qwen2.5-VL-7B-Instruct-Q8_0",
+        worker_memory_gb=13,
+        worker_throughput=14.5,
+        worker_quality_pct=84.0,
+        worker_quant="Q8_0",
+        escalation_model="Qwen3-VL-30B-A3B-Instruct-Q8_0",
+        escalation_memory_gb=38,
+        escalation_throughput=5.9,
+        escalation_quality_pct=92.0,
+        escalation_quant="Q8_0",
+        benchmark_date="2026-06-13",
+    )
+
+
 def _worker_alias_registry(
     path: Path,
     *,
@@ -697,6 +805,121 @@ def test_simulated_worker_swap_updates_generated_consumers_with_approval(
     assert q_priors.baseline_tps_by_role["worker_general"] == 66.2
     assert q_priors.baseline_tps_source_by_role["worker_general"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["worker_general"] == pytest.approx(0.9)
+    assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
+
+    calls: list[dict[str, Any]] = []
+    original_run = pipeline.subprocess.run
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command != pipeline._promotion_gate_command():
+            return original_run(command, **kwargs)
+        calls.append({"command": command, **kwargs})
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="promotion gate ok\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(pipeline.subprocess, "run", fake_run)
+    swap_check_config = StackChangePipelineConfig(
+        **{**approved_config.__dict__, "mode": "check", "run_promotion_gate": True}
+    )
+    swap_check_report = run_stack_change_pipeline(swap_check_config)
+
+    assert swap_check_report.ok
+    assert len(calls) == 1
+    assert calls[0]["command"] == pipeline._promotion_gate_command()
+    assert calls[0]["cwd"] == tmp_path
+    assert calls[0]["text"] is True
+    assert calls[0]["capture_output"] is True
+    assert calls[0]["check"] is False
+    promotion_step = next(step for step in swap_check_report.steps if step.name == "promotion_gate")
+    assert promotion_step.status == "ok"
+    assert any("promotion gate ok" in detail for detail in promotion_step.details)
+    assert any(step.name == "operator_summary" and step.status == "ok" for step in swap_check_report.steps)
+    assert any(step.name == "q_scorer_priors" and step.status == "ok" for step in swap_check_report.steps)
+    assert any(step.name == "runtime_attestation" and step.status == "ok" for step in swap_check_report.steps)
+
+
+def test_simulated_vision_swap_updates_generated_consumers_with_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roles = {"worker_vision", "vision_escalation"}
+    config = _config(tmp_path, mode="update", roles=roles)
+    _vision_registry(config.lean_registry)
+    assert run_stack_change_pipeline(config).ok
+    descriptors_before = config.descriptors.read_text(encoding="utf-8")
+    priors_before = config.stack_priors.read_text(encoding="utf-8")
+    _swapped_vision_registry(config.lean_registry)
+
+    check_config = StackChangePipelineConfig(**{**config.__dict__, "mode": "check"})
+    check_report = run_stack_change_pipeline(check_config)
+
+    assert not check_report.ok
+    descriptor_step = next(step for step in check_report.steps if step.name == "descriptors")
+    assert any("descriptor artifact is stale:" in error for error in descriptor_step.errors)
+    assert any("descriptor update would remove existing model_id" in error for error in descriptor_step.errors)
+    assert config.descriptors.read_text(encoding="utf-8") == descriptors_before
+    assert config.stack_priors.read_text(encoding="utf-8") == priors_before
+
+    approved_config = StackChangePipelineConfig(
+        **{**config.__dict__, "allow_descriptor_model_removal": True}
+    )
+    update_report = run_stack_change_pipeline(approved_config)
+
+    assert update_report.ok
+    descriptors = yaml.safe_load(config.descriptors.read_text(encoding="utf-8"))
+    assert {model["model_id"] for model in descriptors["models"]} == {
+        "qwen2.5-vl-7b-q8_0",
+        "qwen3-vl-30b-a3b-q8_0",
+    }
+    priors = yaml.safe_load(config.stack_priors.read_text(encoding="utf-8"))
+    assert set(priors["roles"]) == roles
+    assert priors["roles"]["worker_vision"]["model_id"] == "qwen2.5-vl-7b-q8_0"
+    assert priors["roles"]["worker_vision"]["priors"]["throughput_tps"] == 14.5
+    assert priors["roles"]["worker_vision"]["priors"]["quality_overall"] == pytest.approx(0.84)
+    assert priors["roles"]["vision_escalation"]["model_id"] == "qwen3-vl-30b-a3b-q8_0"
+    assert priors["roles"]["vision_escalation"]["priors"]["throughput_tps"] == 5.9
+    assert priors["roles"]["vision_escalation"]["priors"]["quality_overall"] == pytest.approx(0.92)
+
+    operator_summary = config.operator_summary.read_text(encoding="utf-8")
+    assert "Source: `orchestration/derived/stack_priors.yaml`" in operator_summary
+    for role in roles:
+        assert f"| {role}" in operator_summary
+        assert priors["roles"][role]["display_name"] in operator_summary
+    assert "Qwen2.5-VL-7B-Instruct-Q4_K_M" not in operator_summary
+    assert "Qwen3-VL-30B-A3B-Instruct-Q4_K_M" not in operator_summary
+
+    system_card = gen_system_card.generate_system_card(config.repo_root, state_override={})
+    assert "Source: orchestration/derived/stack_priors.yaml" in system_card
+    for role in roles:
+        assert f"| {role} |" in system_card
+        assert priors["roles"][role]["display_name"] in system_card
+    assert "Qwen2.5-VL-7B-Instruct-Q4_K_M" not in system_card
+    assert "Qwen3-VL-30B-A3B-Instruct-Q4_K_M" not in system_card
+
+    from src.api.routes.chat_pipeline.vision_stage import _vl_port_for_role
+    from src.api.routes.chat_vision import _vl_url_for_port, _vl_url_for_role
+    from src.api.routes.vision_serving import stack_prior_vl_ports
+
+    assert stack_prior_vl_ports(config.stack_priors) == {
+        "worker_vision": 8086,
+        "vision_escalation": 8087,
+    }
+    assert _vl_port_for_role("worker_vision", config.stack_priors) == 8086
+    assert _vl_port_for_role("vision_escalation", config.stack_priors) == 8087
+    assert _vl_url_for_role("worker_vision", config.stack_priors) == "http://localhost:8086"
+    assert _vl_url_for_role("vision_escalation", config.stack_priors) == "http://localhost:8087"
+    assert _vl_url_for_port(8086, config.stack_priors) == "http://localhost:8086"
+    assert _vl_url_for_port(8087, config.stack_priors) == "http://localhost:8087"
+
+    q_priors = stack_prior_q_scorer_priors_by_role(config.stack_priors)
+    assert q_priors.baseline_tps_by_role["worker_vision"] == 14.5
+    assert q_priors.baseline_tps_by_role["vision_escalation"] == 5.9
+    assert q_priors.baseline_tps_source_by_role["worker_vision"] == PRIOR_SOURCE_STACK_PRIORS
+    assert q_priors.baseline_quality_by_role["vision_escalation"] == pytest.approx(0.92)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
 
     calls: list[dict[str, Any]] = []
