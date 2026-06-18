@@ -1,9 +1,10 @@
-"""Tests for read-only baseline promotion ledger reconciliation."""
+"""Tests for baseline promotion ledger reconciliation."""
 
 from __future__ import annotations
 
 from src.autopilot_core.baseline_ledger import (
     BASELINE_PROMOTION_EVENT_TYPE,
+    apply_baseline_ledger_authority,
     format_baseline_ledger_summary,
     reconcile_baseline_ledger,
 )
@@ -92,17 +93,14 @@ def test_reconcile_reports_drift() -> None:
     ]
 
 
-def test_reconcile_blocks_cutover_when_state_baseline_missing() -> None:
+def test_reconcile_accepts_ledger_authority_when_state_baseline_missing() -> None:
     result = reconcile_baseline_ledger([_event(1, new_quality=1.8)], None)
 
-    assert result.status == "missing_state_baseline"
-    assert not result.cutover_ready
-    assert result.cutover_blockers == [
-        "ledger fold does not match current state baseline (missing_state_baseline)"
-    ]
-    assert format_baseline_ledger_summary(result)[-1] == (
-        "Baseline fold blocker: ledger fold does not match current state "
-        "baseline (missing_state_baseline)"
+    assert result.status == "ledger_authoritative"
+    assert result.cutover_ready
+    assert result.cutover_blockers == []
+    assert format_baseline_ledger_summary(result)[2] == (
+        "Baseline ledger state status: ledger_authoritative"
     )
 
 
@@ -150,3 +148,39 @@ def test_reconcile_quality_mismatch_is_warning_only() -> None:
     assert result.warnings == [
         "event new_quality 1.800 differs from baseline_state.baselines_by_tier[1] 1.700"
     ]
+
+
+def test_apply_baseline_ledger_authority_removes_matching_state_cache() -> None:
+    state = {"baseline_state": {"baselines_by_tier": {"1": 1.8}}}
+
+    changed = apply_baseline_ledger_authority(state, [_event(1, new_quality=1.8)])
+
+    assert changed is True
+    assert "baseline_state" not in state
+
+
+def test_apply_baseline_ledger_authority_keeps_cold_start_state() -> None:
+    state = {"baseline_state": {"baselines_by_tier": {"1": 1.8}}}
+
+    changed = apply_baseline_ledger_authority(state, [])
+
+    assert changed is None
+    assert state["baseline_state"] == {"baselines_by_tier": {"1": 1.8}}
+
+
+def test_apply_baseline_ledger_authority_keeps_drifted_state() -> None:
+    state = {"baseline_state": {"baselines_by_tier": {"1": 1.7}}}
+
+    changed = apply_baseline_ledger_authority(state, [_event(1, new_quality=1.8)])
+
+    assert changed is False
+    assert state["baseline_state"] == {"baselines_by_tier": {"1": 1.7}}
+
+
+def test_apply_baseline_ledger_authority_noops_when_cache_already_absent() -> None:
+    state = {"trial_counter": 12}
+
+    changed = apply_baseline_ledger_authority(state, [_event(1, new_quality=1.8)])
+
+    assert changed is False
+    assert state == {"trial_counter": 12}

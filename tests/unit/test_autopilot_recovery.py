@@ -418,6 +418,90 @@ def test_save_state_with_journal_archive_authority_removes_state_cache(
     assert saved and "pareto_archive" not in saved[-1]
 
 
+def test_save_state_with_journal_authority_removes_baseline_cache(
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(1, quality=1.1))
+    journal.append_baseline_promotion_event(
+        source_trial_id=8,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8},
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+        actor="unit-test",
+    )
+    state = {
+        "trial_counter": 9,
+        "baseline_state": {"baselines_by_tier": {"1": 1.8}},
+    }
+    saved: list[dict] = []
+
+    monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
+    monkeypatch.setattr(
+        archive,
+        "save",
+        lambda _state: pytest.fail("legacy archive.save should not run"),
+    )
+
+    used_journal = autopilot._save_state_with_journal_archive_authority(
+        state,
+        journal,
+        archive,
+        context="unit-test",
+    )
+
+    assert used_journal is True
+    assert "baseline_state" not in state
+    assert saved and "baseline_state" not in saved[-1]
+
+
+def test_save_state_with_journal_authority_keeps_drifted_baseline_cache(
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(1, quality=1.1))
+    journal.append_baseline_promotion_event(
+        source_trial_id=8,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8},
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+        actor="unit-test",
+    )
+    state = {
+        "trial_counter": 9,
+        "baseline_state": {"baselines_by_tier": {"1": 1.7}},
+    }
+    saved: list[dict] = []
+
+    monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
+    monkeypatch.setattr(
+        archive,
+        "save",
+        lambda _state: pytest.fail("legacy archive.save should not run"),
+    )
+
+    used_journal = autopilot._save_state_with_journal_archive_authority(
+        state,
+        journal,
+        archive,
+        context="unit-test",
+    )
+
+    assert used_journal is True
+    assert state["baseline_state"] == {"baselines_by_tier": {"1": 1.7}}
+    assert saved[-1]["baseline_state"] == {"baselines_by_tier": {"1": 1.7}}
+
+
 def test_save_state_drops_pause_reason_when_unpaused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

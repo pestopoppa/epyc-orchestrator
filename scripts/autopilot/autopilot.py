@@ -107,6 +107,7 @@ from src.autopilot_core.tier_specs import (
     task_rate_qph_from_row,
 )
 from src.autopilot_core.baseline_ledger import (
+    apply_baseline_ledger_authority,
     format_baseline_ledger_summary,
     reconcile_baseline_ledger,
 )
@@ -1836,9 +1837,13 @@ def _save_state_with_journal_archive_authority(
     *,
     context: str,
 ) -> bool:
-    """Persist state without a cached `pareto_archive` when journal fold exists."""
-    changed = _apply_journal_archive_authority(state, journal, archive)
-    if changed is None:
+    """Persist state with append-only journal folds as cache authority."""
+    archive_changed = _apply_journal_archive_authority(state, journal, archive)
+    baseline_changed = apply_baseline_ledger_authority(
+        state,
+        journal.baseline_promotion_events(),
+    )
+    if archive_changed is None:
         log.warning(
             "Journal archive authority unavailable during %s; falling back to "
             "legacy archive.save(state)",
@@ -1846,10 +1851,12 @@ def _save_state_with_journal_archive_authority(
         )
         archive.save(state)
     else:
-        if changed:
+        if archive_changed:
             log.info("State archive cache removed during %s", context)
         save_state(state)
-    return changed is not None
+    if baseline_changed:
+        log.info("State baseline cache removed during %s", context)
+    return archive_changed is not None
 
 
 def learning_exclusion_criticism(
@@ -3576,19 +3583,14 @@ def _run_loop_inner(
         state["consecutive_failures"] = gate.consecutive_failures
         state["quality_history"] = gate.quality_history
         state["quality_history_by_tier"] = gate.quality_history_by_tier
-        state["baseline_state"] = gate.baseline.to_state_dict()
+        baseline_state = gate.baseline.to_state_dict()
+        state["baseline_state"] = baseline_state
         merged_control = _merge_external_control_fields(state)
         if merged_control:
             log.info(
                 "Preserved external control state before trial-end save: %s",
                 ", ".join(merged_control),
             )
-        _save_state_with_journal_archive_authority(
-            state,
-            journal,
-            archive,
-            context=f"trial {trial_counter} final save",
-        )
         try:
             _append_baseline_promotion_event(
                 journal=journal,
@@ -3596,7 +3598,7 @@ def _run_loop_inner(
                 eval_result=eval_result,
                 source_trial_id=trial_counter - 1,
                 pareto_status=pareto_status,
-                baseline_state=state.get("baseline_state", {}),
+                baseline_state=baseline_state,
             )
         except Exception as exc:  # noqa: BLE001
             log.warning(
@@ -3604,6 +3606,12 @@ def _run_loop_inner(
                 trial_counter - 1,
                 exc,
             )
+        _save_state_with_journal_archive_authority(
+            state,
+            journal,
+            archive,
+            context=f"trial {trial_counter} final save",
+        )
 
         # Phase 6b — clear in_flight_trial marker AFTER final save_state.
         # This is the closing half of the WAL pattern: a crash between
@@ -3618,7 +3626,12 @@ def _run_loop_inner(
                 "Preserved external control state before in-flight clear: %s",
                 ", ".join(merged_control),
             )
-        save_state(state)
+        _save_state_with_journal_archive_authority(
+            state,
+            journal,
+            archive,
+            context=f"trial {trial_counter} in-flight clear",
+        )
 
         log.info(
             "Trial %d complete: q=%.3f s=%.1f → %s (HV=%.4f)",

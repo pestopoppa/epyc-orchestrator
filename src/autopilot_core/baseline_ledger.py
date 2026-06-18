@@ -1,9 +1,8 @@
-"""Read-only baseline promotion ledger reconciliation.
+"""Baseline promotion ledger reconciliation and authority helpers.
 
-The live safety gate still reads ``autopilot_state.json:baseline_state``.
-This module only folds append-only ``baseline_promotion`` events for diagnostics
-so operators can see whether ledger evidence matches current state before any
-future baseline-as-fold cutover.
+The live safety gate still needs an in-memory baseline object. Persistence is
+allowed to drop ``autopilot_state.json:baseline_state`` only after append-only
+``baseline_promotion`` events can reconstruct the same state without warnings.
 """
 
 from __future__ import annotations
@@ -123,7 +122,7 @@ def reconcile_baseline_ledger(
         else None
     )
     if canonical_state is None:
-        status = "missing_state_baseline"
+        status = "ledger_authoritative"
     elif canonical_state == folded_state:
         status = "match"
     else:
@@ -136,7 +135,7 @@ def reconcile_baseline_ledger(
             f"{missing_snapshot_count} promotion event(s) lack usable "
             "baseline_state snapshots"
         )
-    if status != "match":
+    if status not in {"match", "ledger_authoritative"}:
         cutover_blockers.append(
             f"ledger fold does not match current state baseline ({status})"
         )
@@ -154,6 +153,35 @@ def reconcile_baseline_ledger(
         state_baseline=canonical_state,
         warnings=warnings,
     )
+
+
+def apply_baseline_ledger_authority(
+    state: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> bool | None:
+    """Apply baseline-as-ledger persistence authority to ``state``.
+
+    Returns True when cached ``baseline_state`` was removed, False when the
+    journal fold existed but state was unchanged, and None when no usable
+    promotion ledger exists yet. Drift, missing snapshots, and warning
+    diagnostics deliberately keep the cache in place.
+    """
+    reconciliation = reconcile_baseline_ledger(
+        events,
+        (
+            state.get("baseline_state")
+            if isinstance(state.get("baseline_state"), dict)
+            else None
+        ),
+    )
+    if reconciliation.status in {"no_events", "unreconstructable"}:
+        return None
+    if not reconciliation.cutover_ready:
+        return False
+    if "baseline_state" not in state:
+        return False
+    state.pop("baseline_state", None)
+    return True
 
 
 def _format_optional_metric(value: Any) -> str:
