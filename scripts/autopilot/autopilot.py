@@ -62,7 +62,7 @@ import peaf
 from species import Seeder, NumericSwarm, PromptForge, StructuralLab, EvolutionManager
 from species.prompt_forge import CODE_MUTATION_ALLOWLIST
 from digest import generate_digest, should_generate_today
-from short_term_memory import ShortTermMemory, TrialOutcome
+from short_term_memory import ShortTermMemory
 from self_criticism import SelfCriticism, generate_self_criticism
 from phase_status import AsyncTaskRunner, PhaseTracker
 
@@ -1801,6 +1801,7 @@ def _run_loop_inner(
 
     # AP-22: Short-term memory (accumulated learnings across trials)
     memory = ShortTermMemory()
+    memory.refresh_from_journal(journal)
     last_criticism_text = "(first trial — no prior criticism)"
 
     # B1: Strategy store for species memory
@@ -2264,7 +2265,7 @@ def _run_loop_inner(
                 insights_structured=insights_structured_text,
                 stagnation_signal=stagnation_signal,
                 exploration_block=exploration_block,
-                short_term_memory=memory.to_text(),  # AP-22
+                short_term_memory=memory.refresh_from_journal(journal),  # W5 generated STM
                 prior_planner_decisions=_build_prior_planner_decision_digest(),
                 last_criticism=last_criticism_text,  # AP-23
                 model_signatures=model_signatures_text,
@@ -3104,33 +3105,12 @@ def _run_loop_inner(
         # AP-16: Track last instruction ratio for structural pruning comparison
         state["_last_instruction_ratio"] = eval_result.instruction_token_ratio
 
-        # AP-22: Update short-term memory with trial outcome.
-        # Skip when learning_excluded_by is set — the trial is journaled
-        # for audit, but its outcome must not feed strategy memory
-        # (exogenous reload = partially-missing data; mad_noise =
-        # noise-level improvement that would inflate the memory with
-        # false positives per intake-421). Behavior change vs pre-2026-05-27:
-        # exogenous-reload trials used to update AP-22; they no longer do.
-        if not learning_excluded_by:
-            memory.update(TrialOutcome(
-                trial_id=trial_counter,
-                species=species_name,
-                action_type=action.get("type", ""),
-                quality=eval_result.quality,
-                speed=eval_result.speed,
-                passed=verdict.passed,
-                hypothesis=hypothesis,
-                failure_analysis=failure_analysis,
-                self_criticism=criticism.as_text(),
-                optimization_directions=criticism.directions_text(),
-                keep_revert=criticism.keep_or_revert,
-                per_suite_quality=eval_result.per_suite_quality or {},
-            ))
-        else:
-            log.info(
-                "Trial %d: AP-22 short-term memory SKIPPED (learning_excluded_by=%s)",
-                trial_counter, learning_excluded_by,
-            )
+        # W5: rebuild AP-22 prompt memory from the folded append-only journal view
+        # instead of mutating short_term_memory.md from in-memory trial state. The
+        # renderer applies the same trust filters for corrupted, non-ok, and
+        # learning-excluded rows, so excluded trials stay auditable in the ledger
+        # without feeding planner memory.
+        memory.refresh_from_journal(journal)
 
         # ── 6. Meta-learn ───────────────────────────────────────
         if meta.should_rebalance(trial_counter):

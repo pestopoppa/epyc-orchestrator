@@ -11,6 +11,7 @@ AUTOPILOT_DIR = ROOT / "scripts" / "autopilot"
 sys.path.insert(0, str(AUTOPILOT_DIR))
 
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
+from short_term_memory import ShortTermMemory  # noqa: E402
 from stm_generated_view import main, render_generated_stm  # noqa: E402
 
 
@@ -52,10 +53,34 @@ def test_render_generated_stm_does_not_write_memory_file(tmp_path: Path) -> None
     text = render_generated_stm([_entry(1, pareto_status="frontier")], last_n=5)
 
     assert not memory_file.exists()
-    assert "Journal-derived read-only preview" in text
+    assert "Journal-derived generated view" in text
     assert "[t1] Try a narrower prompt -- confirmed" in text
     assert "[t1] tighten routing" in text
     assert "[t1] reduce retries" in text
+
+
+def test_short_term_memory_refresh_rebuilds_from_folded_journal(tmp_path: Path) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path / "journal")
+    journal.record(_entry(1, hypothesis="KEEP_ME", pareto_status="frontier"))
+    journal.record(_entry(2, hypothesis="DROP_ME"))
+    journal.append_supersession_event(
+        target_trial_ids=[2],
+        fields={"bug_corrupted_by": "resource_contention"},
+        reason="synthetic contention",
+        policy_version="supersession-v1",
+        actor="unit-test",
+    )
+    memory_path = tmp_path / "short_term_memory.md"
+    memory_path.write_text("# stale\n- DROP_ME\n")
+    memory = ShortTermMemory(path=memory_path)
+
+    prompt_text = memory.refresh_from_journal(journal)
+
+    assert "KEEP_ME" in prompt_text
+    assert "DROP_ME" not in prompt_text
+    assert memory_path.exists()
+    assert "Journal-derived generated view" in memory_path.read_text()
+    assert "DROP_ME" not in memory.to_text()
 
 
 def test_render_generated_stm_excludes_superseded_corrupted_rows(tmp_path: Path) -> None:
@@ -131,4 +156,4 @@ def test_cli_renders_existing_explicit_journal_dir(tmp_path: Path, capsys) -> No
     rc = main(["--journal-dir", str(tmp_path), "--last-n", "5"])
 
     assert rc == 0
-    assert "Journal-derived read-only preview" in capsys.readouterr().out
+    assert "Journal-derived generated view" in capsys.readouterr().out

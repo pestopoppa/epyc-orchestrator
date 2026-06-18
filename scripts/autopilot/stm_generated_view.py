@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only journal-derived preview for AutoPilot short-term memory.
+"""Journal-derived renderer for AutoPilot short-term memory.
 
-This does not read or write ``short_term_memory.md`` and is not wired into the
-controller prompt. It is a W5 scaffold for comparing generated memory against
-the current mutable AP-22 file before a future ledger-backed cutover.
+The live AutoPilot loop uses this renderer to rebuild ``short_term_memory.md``
+from the folded append-only journal view instead of accumulating AP-22 state via
+read-modify-write updates.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ def render_generated_stm(
 
     lines = [
         "# AutoPilot Short-Term Memory",
-        "<!-- Journal-derived read-only preview; does not write short_term_memory.md -->",
+        "<!-- Journal-derived generated view from folded append-only ledger -->",
         "",
         "## Running Hypotheses",
         *[f"- {item}" for item in hypotheses],
@@ -147,7 +147,7 @@ def _entry_suite_quality(entry: JournalEntry) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Render journal-derived read-only AutoPilot STM preview."
+        description="Render journal-derived AutoPilot STM from folded ledger rows."
     )
     parser.add_argument(
         "--journal-dir",

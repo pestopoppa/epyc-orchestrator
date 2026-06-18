@@ -9,10 +9,11 @@ Source: MiniMax M2.7 3-component self-evolution harness (intake-328/329).
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from os import replace
 from pathlib import Path
+from typing import Any
 
 MEMORY_PATH = Path(__file__).resolve().parent / "short_term_memory.md"
 MAX_LINES = 120  # ~2000 tokens budget
@@ -47,6 +48,7 @@ class ShortTermMemory:
 
     def __init__(self, path: Path | None = None):
         self.path = path or MEMORY_PATH
+        self._generated_text: str | None = None
         self._hypotheses: list[str] = []
         self._directions: list[str] = []
         self._failure_patterns: list[str] = []
@@ -128,6 +130,30 @@ class ShortTermMemory:
         self._trim()
         self._save()
 
+    def refresh_from_journal(
+        self,
+        journal: Any,
+        *,
+        last_n: int = 30,
+        budget_tokens: int = 2000,
+    ) -> str:
+        """Rebuild memory from the folded append-only journal view."""
+        from stm_generated_view import render_generated_stm
+
+        entries = (
+            journal.entries_with_supersessions()
+            if hasattr(journal, "entries_with_supersessions")
+            else journal.all_entries()
+        )
+        text = render_generated_stm(
+            entries,
+            last_n=last_n,
+            budget_tokens=budget_tokens,
+        )
+        self._generated_text = text
+        self._write_generated_text(text)
+        return text
+
     def _trim(self) -> None:
         """Trim to MAX_LINES budget, keeping most recent entries."""
         max_per_section = MAX_LINES // 4
@@ -165,11 +191,22 @@ class ShortTermMemory:
 
         self.path.write_text("\n".join(lines))
 
+    def _write_generated_text(self, text: str) -> None:
+        """Atomically persist the ledger-derived memory projection."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.path.with_name(f".{self.path.name}.tmp")
+        tmp_path.write_text(text)
+        replace(tmp_path, self.path)
+
     def to_text(self) -> str:
         """Return memory content for controller prompt injection."""
-        if not self.path.exists():
+        text: str
+        if self._generated_text is not None:
+            text = self._generated_text
+        elif self.path.exists():
+            text = self.path.read_text()
+        else:
             return "(no memory yet — first trial)"
-        text = self.path.read_text()
         # Strip markdown header and HTML comments for prompt injection
         lines = [
             ln for ln in text.splitlines()
