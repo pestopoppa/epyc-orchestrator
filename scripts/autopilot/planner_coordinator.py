@@ -157,7 +157,8 @@ def plan_with_providers(
 
     draft_provider_name = primary_name
     fallback_reason = ""
-    if allow_fallback and _circuit_is_open(planner_state, primary_name):
+    primary_circuit_open_before_draft = _circuit_is_open(planner_state, primary_name)
+    if allow_fallback and primary_circuit_open_before_draft:
         draft_provider_name = fallback_name
         fallback_reason = f"{primary_name} circuit open"
 
@@ -241,21 +242,27 @@ def plan_with_providers(
     if _should_critique(settings, action, stagnation_signal):
         active_critique = settings.mode.strip().lower() == "draft_critique"
         critique_provider_name = critic_name
+        allow_primary_fallback_critique = False
         if draft.provider == critic_name:
             # A fallback draft from the configured critic provider is not
             # independently reviewed yet. Try the original primary as the
             # reviewer if it is available; otherwise keep fail-closed behavior.
-            if fallback_reason and primary_name != draft.provider and not _circuit_is_open(
-                planner_state,
-                primary_name,
-            ):
+            allow_primary_fallback_critique = (
+                fallback_reason
+                and primary_name != draft.provider
+                and not primary_circuit_open_before_draft
+            )
+            if allow_primary_fallback_critique:
                 critique_provider_name = primary_name
             else:
                 degraded = True
 
         if degraded and critique is None:
             pass
-        elif _circuit_is_open(planner_state, critique_provider_name):
+        elif (
+            _circuit_is_open(planner_state, critique_provider_name)
+            and not allow_primary_fallback_critique
+        ):
             # Critic circuit is open (it failed repeatedly and is cooling down),
             # but the PRIMARY draft succeeded. Treat as critic-unavailable on a
             # TRUSTED draft: keep the draft and let the dispatch gate proceed for

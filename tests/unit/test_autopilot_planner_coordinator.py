@@ -173,6 +173,61 @@ def test_fallback_draft_gets_independent_primary_critique() -> None:
     assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
 
 
+def test_fallback_draft_gets_primary_critique_even_when_draft_failure_opens_circuit() -> None:
+    claude = FakeProvider(
+        "claude",
+        [
+            PlannerProviderResult(provider="claude", role="draft", ok=True, text="no json"),
+            PlannerProviderResult(
+                provider="claude",
+                role="critique",
+                ok=True,
+                text=_critique_text(
+                    {
+                        "decision": "approve",
+                        "confidence": 0.86,
+                        "issues": [],
+                    }
+                ),
+            ),
+        ],
+        supports_resume=True,
+    )
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="draft",
+                ok=True,
+                text=_action_text(
+                    {"type": "structural_experiment", "flags": {"user_modeling": True}}
+                ),
+            )
+        ],
+    )
+
+    state = {"claude": {"failures": 1, "circuit_open_until": 0.0}}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id="old",
+        planner_state=state,
+        settings=PlannerSettings(
+            mode="draft_critique",
+            critique_policy="always",
+            circuit_failures=2,
+        ),
+        provider_factory=_factory({"claude": claude, "codex": codex}),
+    )
+
+    assert decision.draft_provider == "codex"
+    assert decision.critic_provider == "claude"
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert [call["role"] for call in claude.calls] == ["draft", "critique"]
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
+
+
 def test_fallback_draft_pauses_when_independent_primary_critique_fails() -> None:
     claude = FakeProvider(
         "claude",
