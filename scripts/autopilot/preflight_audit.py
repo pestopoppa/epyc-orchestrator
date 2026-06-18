@@ -21,7 +21,11 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_endpoint_port,
+    stack_prior_serving,
+)
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
     fold_supersession_events,
@@ -75,9 +79,29 @@ def _health_url(endpoint: str) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}/health"
 
 
-def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str]]:
+def _model_server_target_groups(
+    roles: dict[str, dict[str, object]],
+    orchestrator_url: str,
+) -> tuple[str, dict[str, list[str]]]:
     api_health = _health_url(orchestrator_url) or "http://localhost:8000/health"
-    names_by_port: dict[int, list[str]] = {}
+    names_by_health_url: dict[str, list[str]] = {}
+    for role_name, record in roles.items():
+        raw_display_role = record.get("role")
+        display_role = raw_display_role if isinstance(raw_display_role, str) else role_name
+        serving = stack_prior_serving(record)
+        endpoint = serving.get("endpoint")
+        health_url = _health_url(endpoint) if isinstance(endpoint, str) else None
+        if health_url is None:
+            endpoint_port = stack_prior_endpoint_port(serving)
+            if endpoint_port is None:
+                continue
+            health_url = f"http://localhost:{endpoint_port}/health"
+        names_by_health_url.setdefault(health_url, []).append(display_role)
+    return api_health, names_by_health_url
+
+
+def _fallback_model_server_records() -> dict[str, dict[str, object]]:
+    records: dict[str, dict[str, object]] = {}
     for server in HOT_SERVERS + WARM_SERVERS:
         if not isinstance(server, dict):
             continue
@@ -92,15 +116,34 @@ def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str
         ]
         if not visible_roles:
             continue
-        names_by_port.setdefault(port, []).extend(visible_roles)
+        endpoint = f"http://localhost:{port}"
+        for role_name in visible_roles:
+            records[f"{role_name}@{port}"] = {
+                "role": role_name,
+                "serving": {"endpoint": endpoint},
+            }
+    return records
 
+
+def _format_model_server_targets(
+    api_health: str,
+    names_by_health_url: dict[str, list[str]],
+) -> list[tuple[str, str]]:
     return [
         ("API", api_health),
         *[
-            ("/".join(sorted(set(names))), f"http://localhost:{port}/health")
-            for port, names in sorted(names_by_port.items())
+            ("/".join(sorted(set(names))), health_url)
+            for health_url, names in sorted(names_by_health_url.items())
         ],
     ]
+
+
+def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str]]:
+    api_health, names_by_health_url = _model_server_target_groups(
+        _fallback_model_server_records(),
+        orchestrator_url,
+    )
+    return _format_model_server_targets(api_health, names_by_health_url)
 
 
 def _model_server_targets(
@@ -112,26 +155,10 @@ def _model_server_targets(
     if not roles:
         return _fallback_model_server_targets(orchestrator_url)
 
-    names_by_health_url: dict[str, list[str]] = {}
-    api_health = _health_url(orchestrator_url) or "http://localhost:8000/health"
-    names_by_health_url[api_health] = ["API"]
-
-    for role_name, record in roles.items():
-        serving = stack_prior_serving(record)
-        endpoint = serving.get("endpoint")
-        if not isinstance(endpoint, str):
-            continue
-        health_url = _health_url(endpoint)
-        if health_url is None:
-            continue
-        names_by_health_url.setdefault(health_url, []).append(role_name)
-
-    if len(names_by_health_url) <= 1:
+    api_health, names_by_health_url = _model_server_target_groups(roles, orchestrator_url)
+    if not names_by_health_url:
         return _fallback_model_server_targets(orchestrator_url)
-    return [
-        ("/".join(sorted(names)), health_url)
-        for health_url, names in sorted(names_by_health_url.items())
-    ]
+    return _format_model_server_targets(api_health, names_by_health_url)
 
 
 def _header(title: str) -> None:
