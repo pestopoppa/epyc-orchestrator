@@ -115,6 +115,8 @@ def _validate_entry(entry: Any, idx: int) -> list[str]:
             f"{label}: invalid promotion_state {entry['promotion_state']!r}; "
             f"must be one of {sorted(_VALID_PROMOTION_STATE)}"
         )
+    elif entry.get("promotion_state") == "promoted" and not entry.get("kill_condition"):
+        errors.append(f"{label}: promoted rows must define a kill_condition")
 
     # roles must be a non-empty list
     if "roles" in entry:

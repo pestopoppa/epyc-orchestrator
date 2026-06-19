@@ -78,7 +78,7 @@
 #   per_role_enable_thinking — per-role enable_thinking chat-template toggle
 #   ea_compaction_profiles — EA compaction profile selection (S8/S9)
 #   draft_max_p_split      — draft_max and p_split for roles with spec-dec on
-#   edit_transaction_routing — edit-transaction auto-routing mode
+#   edit_transaction_auto_routing — edit-transaction auto-routing mode
 #
 # Each is defined as a placeholder row below.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ capabilities:
       trials, restore — enforced by dispatch gate (§C.2).
 
   # ── First-cohort member 5: edit-transaction auto-routing ─────────────────
-  - id: edit_transaction_routing
+  - id: edit_transaction_auto_routing
     kind: env
     surface: ORCHESTRATOR_EDIT_TRANSACTION
     applicator: env_hotswap
@@ -233,9 +233,13 @@ capabilities:
       protocol: none  # protocol-id TBD; awaiting A2 contract evidence
       source: multi-file-coding-completion-capability.md
     risk: high
-    actionable_by: "gated:A2-contract-clean-window-ab"
+    actionable_by: operator
     promotion_state: placeholder
-    kill_condition: null  # required before promotion; missing ORCHESTRATOR_EDIT_ROOT must fail closed
+    kill_condition: >
+      Disable auto-routing immediately if any request escapes ORCHESTRATOR_EDIT_ROOT,
+      rollback fails to restore pre-state, verifier-approved quality drops by
+      more than 1pp, edit-mode 412/422 exceeds 5% on eligible traffic, or an
+      unscoped repo root is detected.
     handoff: multi-file-coding-completion-capability.md
     notes: >
       Production-safe surface is explicit force_mode="edit" only. Missing

@@ -90,7 +90,7 @@ def test_repo_registry_contains_first_cohort_members() -> None:
         "per_role_enable_thinking",
         "ea_compaction_profiles",
         "draft_max_p_split",
-        "edit_transaction_routing",
+        "edit_transaction_auto_routing",
     }
     assert expected_ids <= ids, (
         f"missing first-cohort ids: {expected_ids - ids}"
@@ -108,6 +108,18 @@ def test_repo_registry_all_rows_are_placeholder() -> None:
     assert not non_placeholder, (
         f"rows must not be promoted until evidence-plane Phase 1: {non_placeholder}"
     )
+
+
+def test_edit_transaction_auto_routing_is_operator_only_placeholder() -> None:
+    """A2 routing stays operator-owned until clean-window evidence exists."""
+    caps = load_capability_registry()
+    edit_cap = next(
+        cap for cap in caps if cap["id"] == "edit_transaction_auto_routing"
+    )
+    assert edit_cap["actionable_by"] == "operator"
+    assert edit_cap["promotion_state"] == "placeholder"
+    assert edit_cap["risk"] == "high"
+    assert edit_cap["kill_condition"]
 
 
 def test_load_minimal_valid_registry(tmp_path: Path) -> None:
@@ -253,6 +265,15 @@ def test_invalid_risk_raises(tmp_path: Path) -> None:
 def test_invalid_promotion_state_raises(tmp_path: Path) -> None:
     path = _write_registry(tmp_path, [_minimal_entry(promotion_state="deployed")])
     with pytest.raises(CapabilityRegistryError, match="invalid promotion_state"):
+        load_capability_registry(path)
+
+
+def test_promoted_entry_requires_kill_condition(tmp_path: Path) -> None:
+    path = _write_registry(
+        tmp_path,
+        [_minimal_entry(promotion_state="promoted", kill_condition=None)],
+    )
+    with pytest.raises(CapabilityRegistryError, match="must define a kill_condition"):
         load_capability_registry(path)
 
 
