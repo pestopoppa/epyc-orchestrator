@@ -42,14 +42,53 @@ def test_available_roles_falls_back_to_current_live_role_surface(monkeypatch):
     assert openai_compat._degraded_available_roles() == [
         "frontdoor",
         "coder_escalation",
-        "architect_general",
+        "worker_summarize",
         "worker_general",
         "worker_math",
         "toolrunner",
-        "worker_vision",
+        "architect_general",
         "ingest_long_context",
+        "worker_vision",
         "vision_escalation",
+    ]
+
+
+def test_degraded_available_roles_follow_manifest_order(monkeypatch):
+    monkeypatch.setattr(
+        openai_compat,
+        "HOT_SERVERS",
+        [
+            {"port": 8070, "roles": ["frontdoor", "coder", "worker_summarize"]},
+            {"port": 8072, "roles": ["worker_fast", "worker_math", "toolrunner"]},
+            {"port": 8090, "roles": ["embedder"]},
+        ],
+    )
+    monkeypatch.setattr(
+        openai_compat,
+        "WARM_SERVERS",
+        [
+            {"port": 8083, "roles": ["architect_general"]},
+            {"port": 8085, "roles": ["ingest_long_context"]},
+        ],
+    )
+    monkeypatch.setattr(
+        openai_compat,
+        "ROLE_LAUNCH_META",
+        {
+            "embedder": {"mode": "embedding"},
+            "worker_fast": {"mode": "worker_pool"},
+        },
+    )
+
+    assert openai_compat._degraded_available_roles() == [
+        "frontdoor",
+        "coder_escalation",
         "worker_summarize",
+        "worker_general",
+        "worker_math",
+        "toolrunner",
+        "architect_general",
+        "ingest_long_context",
     ]
 
 
@@ -140,10 +179,10 @@ def test_degraded_available_roles_follow_server_lists_without_literal_port_map(
     assert openai_compat._degraded_available_roles() == [
         "frontdoor",
         "coder_escalation",
-        "architect_general",
         "worker_general",
         "worker_math",
         "toolrunner",
+        "architect_general",
         "worker_vision",
         "ingest_long_context",
         "vision_escalation",

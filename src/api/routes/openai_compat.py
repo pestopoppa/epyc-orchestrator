@@ -33,7 +33,7 @@ from src.prompt_builders import (
     auto_wrap_final,
 )
 from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
-from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
 from src.repl_environment import REPLEnvironment
 from src.roles import Role
 
@@ -58,42 +58,34 @@ COMPATIBILITY_MODEL_ALIASES = ("orchestrator", "architect", "worker")
 
 
 def _canonical_role_name(role: str) -> str:
-    canonical = Role.from_string(role)
-    return canonical.value if canonical is not None else role
+    canonical = normalize_ingress_role(role)
+    if isinstance(canonical, Role):
+        return canonical.value
+    return str(canonical)
 
 
 def _degraded_available_roles() -> list[str]:
-    """Return the degraded /models fallback from computed server lists."""
-    preferred = (
-        "frontdoor",
-        "coder_escalation",
-        "architect_general",
-        "worker_general",
-        "worker_math",
-        "toolrunner",
-        "worker_vision",
-        "ingest_long_context",
-        "vision_escalation",
-        "worker_summarize",
-    )
-    names_by_port: dict[int, list[str]] = {}
+    """Return the degraded /models fallback from computed model-serving lists."""
+    ordered_roles: list[str] = []
+    seen: set[str] = set()
     for server in HOT_SERVERS + WARM_SERVERS:
         if not isinstance(server, dict):
             continue
-        port = server.get("port")
         roles = server.get("roles")
-        if not isinstance(port, int) or not isinstance(roles, list):
+        if not isinstance(roles, list):
             continue
-        visible_roles = [
-            role for role in roles if isinstance(role, str) and role not in {"orchestrator"}
-        ]
-        if not visible_roles:
-            continue
-        names_by_port.setdefault(port, []).extend(
-            _canonical_role_name(role) for role in visible_roles
-        )
-    available_roles = {role for names in names_by_port.values() for role in names}
-    return [role for role in preferred if role in available_roles]
+        for role in roles:
+            if not isinstance(role, str) or role == "orchestrator":
+                continue
+            launch_meta = ROLE_LAUNCH_META.get(role)
+            if isinstance(launch_meta, dict) and launch_meta.get("mode") == "embedding":
+                continue
+            canonical = _canonical_role_name(role)
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            ordered_roles.append(canonical)
+    return ordered_roles
 
 
 def _primary_stack_prior_port(record: dict) -> int:
