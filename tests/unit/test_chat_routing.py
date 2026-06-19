@@ -187,13 +187,52 @@ class TestHeuristicRolePriors:
 
     def test_live_prior_roles_fall_back_when_priors_unavailable(self, monkeypatch):
         monkeypatch.setattr(chat_routing, "live_stack_role_records", lambda: {})
+        monkeypatch.setattr(
+            chat_routing,
+            "HOT_SERVERS",
+            [
+                {"roles": ["frontdoor", "coder_escalation", "worker_summarize"]},
+                {"roles": ["embedder"]},
+                {"roles": ["worker_general", "worker_math", "toolrunner"]},
+                {"roles": ["architect_general"]},
+            ],
+        )
+        monkeypatch.setattr(chat_routing, "WARM_SERVERS", [{"roles": ["worker_fast"]}])
+        monkeypatch.setattr(
+            chat_routing,
+            "ROLE_LAUNCH_META",
+            {
+                "frontdoor": {
+                    "mode": "default",
+                    "shared_with_first_n": ["coder_escalation", "worker_summarize"],
+                },
+                "worker_general": {
+                    "mode": "worker_pool",
+                    "shared_with_first_n": ["worker_math", "toolrunner"],
+                },
+                "architect_general": {"mode": "default"},
+                "worker_fast": {"mode": "worker_pool"},
+                "embedder": {"mode": "embedding"},
+            },
+        )
 
         assert _live_heuristic_prior_roles() == (
             "frontdoor",
-            "worker_general",
-            "architect_general",
             "coder_escalation",
+            "worker_summarize",
+            "worker_general",
+            "worker_math",
+            "toolrunner",
+            "architect_general",
         )
+
+    def test_live_prior_roles_emergency_fallback_when_manifest_empty(self, monkeypatch):
+        monkeypatch.setattr(chat_routing, "live_stack_role_records", lambda: {})
+        monkeypatch.setattr(chat_routing, "HOT_SERVERS", [])
+        monkeypatch.setattr(chat_routing, "WARM_SERVERS", [])
+        monkeypatch.setattr(chat_routing, "ROLE_LAUNCH_META", {})
+
+        assert _live_heuristic_prior_roles() == ("frontdoor",)
 
     @patch("src.classifiers.classify_and_route")
     def test_excludes_retired_roles(self, mock_classify, monkeypatch):
