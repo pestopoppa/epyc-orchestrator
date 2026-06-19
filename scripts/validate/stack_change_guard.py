@@ -1321,6 +1321,25 @@ def _surface_warning_for_finding(
     )
 
 
+def _unmatched_surface_exception_errors(
+    findings: list[SurfaceFinding],
+    exceptions: list[SurfaceException],
+) -> list[str]:
+    """Return errors for waivers that no longer match current scan findings."""
+    errors: list[str] = []
+    for index, exception in enumerate(exceptions, start=1):
+        if any(exception.matches(finding) for finding in findings):
+            continue
+        line_suffix = f":{exception.line}" if exception.line is not None else ""
+        errors.append(
+            "surface exception "
+            f"#{index} no longer matches a hardcoded-surface finding: "
+            f"{exception.category}.{exception.rule_id} "
+            f"{exception.path_glob}{line_suffix}; remove the stale waiver"
+        )
+    return errors
+
+
 def stack_prior_role_choices(priors: dict[str, Any]) -> list[str]:
     """Return model role choices that procedure inputs should accept."""
     roles = priors.get("roles")
@@ -1545,9 +1564,18 @@ def validate_stack_priors(
         )
         surface_exceptions: list[SurfaceException] = []
         if surface_exceptions_path is not None:
-            surface_exceptions, exception_errors = load_surface_exceptions(surface_exceptions_path)
-            errors.extend(exception_errors)
-        for finding in scan_hardcoded_surfaces(repo_root, categories=surface_categories):
+            default_exceptions_for_other_repo = (
+                surface_exceptions_path == DEFAULT_SURFACE_EXCEPTIONS
+                and repo_root.resolve() != REPO_ROOT.resolve()
+            )
+            if not default_exceptions_for_other_repo:
+                surface_exceptions, exception_errors = load_surface_exceptions(
+                    surface_exceptions_path
+                )
+                errors.extend(exception_errors)
+        surface_findings = scan_hardcoded_surfaces(repo_root, categories=surface_categories)
+        errors.extend(_unmatched_surface_exception_errors(surface_findings, surface_exceptions))
+        for finding in surface_findings:
             warnings.append(_surface_warning_for_finding(finding, surface_exceptions))
 
     if strict and warnings:
