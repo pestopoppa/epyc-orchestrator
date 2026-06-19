@@ -113,6 +113,71 @@ class TestStrategyStore:
 
         assert results == []
 
+    def test_store_frontier_journal_entry_is_idempotent(self, store):
+        entry = SimpleNamespace(
+            trial_id=7,
+            timestamp="2026-06-19T00:00:00Z",
+            species="prompt_forge",
+            action_type="code_mutation",
+            quality=1.2345,
+            speed=42.25,
+            pareto_status="frontier",
+            hypothesis="repair parser",
+            expected_mechanism="targeted_fix",
+            outcome_status="ok",
+            bug_corrupted_by="",
+            eval_details={},
+        )
+
+        sid = store.store_frontier_journal_entry(entry)
+        sid_again = store.store_frontier_journal_entry(entry)
+
+        assert sid == "journal-frontier-trial-7"
+        assert sid_again == sid
+        assert store.count() == 1
+        results = store.retrieve("repair parser", k=5)
+        assert len(results) == 1
+        assert results[0].id == sid
+        assert results[0].source_trial_id == 7
+        assert results[0].evidence_trial_ids == [7]
+        assert results[0].metadata["generated_from"] == "journal_frontier"
+        assert results[0].metadata["journal_trial_id"] == 7
+
+    def test_store_frontier_journal_entry_skips_unsafe_rows(self, store):
+        base = {
+            "trial_id": 8,
+            "timestamp": "2026-06-19T00:00:00Z",
+            "species": "prompt_forge",
+            "action_type": "code_mutation",
+            "quality": 1.0,
+            "speed": 10.0,
+            "pareto_status": "frontier",
+            "hypothesis": "repair parser",
+            "expected_mechanism": "targeted_fix",
+            "outcome_status": "ok",
+            "bug_corrupted_by": "",
+            "eval_details": {},
+        }
+
+        assert store.store_frontier_journal_entry(
+            SimpleNamespace(**{**base, "pareto_status": "dominated"})
+        ) is None
+        assert store.store_frontier_journal_entry(
+            SimpleNamespace(**{**base, "outcome_status": "skipped"})
+        ) is None
+        assert store.store_frontier_journal_entry(
+            SimpleNamespace(**{**base, "bug_corrupted_by": "resource_contention"})
+        ) is None
+        assert store.store_frontier_journal_entry(
+            SimpleNamespace(
+                **{
+                    **base,
+                    "eval_details": {"learning_exclusion": {"by": "mad_noise"}},
+                }
+            )
+        ) is None
+        assert store.count() == 0
+
     def test_retrieve_for_journal_applies_folded_evidence_exclusions(self, store):
         sid = store.store(
             "Strategy A",

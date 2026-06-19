@@ -82,6 +82,17 @@ def _specificity_flags(*parts: str) -> list[str]:
     return sorted(set(flags))
 
 
+def _journal_frontier_strategy_id(trial_id: int) -> str:
+    return f"journal-frontier-trial-{int(trial_id)}"
+
+
+def _metric_text(value: Any, precision: int) -> str:
+    try:
+        return f"{float(value):.{precision}f}"
+    except (TypeError, ValueError):
+        return "0" if precision == 0 else f"{0:.{precision}f}"
+
+
 def _insight_format(
     *,
     title: str | None,
@@ -566,6 +577,7 @@ class StrategyStore:
         evidence_trial_ids: list[int] | None = None,
         title: str | None = None,
         generalized_content: str | None = None,
+        entry_id: str | None = None,
     ) -> str:
         """Store a strategy entry. Returns the UUID.
 
@@ -578,7 +590,12 @@ class StrategyStore:
         ``(title, description, generalized_content)`` plus specificity flags.
         The SQLite text columns remain backward-compatible retrieval fields.
         """
-        entry_id = str(uuid.uuid4())
+        entry_id = entry_id or str(uuid.uuid4())
+        existing = self._conn.execute(
+            "SELECT id FROM strategies WHERE id = ?", (entry_id,)
+        ).fetchone()
+        if existing is not None:
+            return entry_id
         created_at = datetime.now(timezone.utc).isoformat()
         metadata = dict(metadata or {})
         format_meta = _insight_format(
@@ -627,6 +644,51 @@ class StrategyStore:
         self._conn.commit()
 
         return entry_id
+
+    def store_frontier_journal_entry(self, entry: Any) -> str | None:
+        """Project a journal frontier row into StrategyStore memory.
+
+        This is the journal-keyed path for B1 frontier strategy memory. The
+        strategy row is a deterministic projection of an already-persisted
+        journal row, so retry/restart syncs cannot create duplicate rows.
+        """
+        try:
+            trial_id = int(getattr(entry, "trial_id"))
+        except (TypeError, ValueError):
+            return None
+        if getattr(entry, "pareto_status", "") != "frontier":
+            return None
+        if getattr(entry, "outcome_status", "ok") != "ok":
+            return None
+        if getattr(entry, "bug_corrupted_by", ""):
+            return None
+        eval_details = getattr(entry, "eval_details", {}) or {}
+        if isinstance(eval_details, dict) and eval_details.get("learning_exclusion"):
+            return None
+
+        action_type = _compact_text(getattr(entry, "action_type", "")) or "trial"
+        hypothesis = _compact_text(getattr(entry, "hypothesis", "")) or action_type
+        mechanism = (
+            _compact_text(getattr(entry, "expected_mechanism", ""))
+            or action_type
+        )
+        return self.store(
+            description=f"{action_type}: {hypothesis}",
+            insight=(
+                f"q={_metric_text(getattr(entry, 'quality', 0.0), 3)} "
+                f"s={_metric_text(getattr(entry, 'speed', 0.0), 1)} "
+                f"mechanism={mechanism}"
+            ),
+            source_trial_id=trial_id,
+            species=_compact_text(getattr(entry, "species", "")) or "unknown",
+            metadata={
+                "generated_from": "journal_frontier",
+                "journal_trial_id": trial_id,
+                "journal_timestamp": _compact_text(getattr(entry, "timestamp", "")),
+            },
+            evidence_trial_ids=[trial_id],
+            entry_id=_journal_frontier_strategy_id(trial_id),
+        )
 
     def _evidence_trial_ids_for_row(self, row: sqlite3.Row) -> list[int]:
         ids: list[int] = []

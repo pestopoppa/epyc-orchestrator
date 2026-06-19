@@ -3521,23 +3521,6 @@ def _run_loop_inner(
             action.get("mutation", "") or action.get("surface", "") or action.get("type", "")
         )
 
-        # B1: Store strategy on Pareto frontier improvements
-        if (
-            pareto_status == "frontier"
-            and strategy_store is not None
-            and not learning_excluded_by
-            and verdict.passed
-        ):
-            try:
-                strategy_store.store(
-                    description=f"{action.get('type', '')}: {hypothesis}",
-                    insight=f"q={eval_result.quality:.3f} s={eval_result.speed:.1f} mechanism={expected_mechanism}",
-                    source_trial_id=trial_counter,
-                    species=species_name,
-                )
-            except Exception as e:
-                log.warning("Strategy store write failed: %s", e)
-
         # B3: Capture execution traces for next PromptForge iteration
         recent_trace_text = state.get("last_traces", "")
         if not dry_run:
@@ -3709,50 +3692,54 @@ def _run_loop_inner(
                 "source_trial_id": seq_fresh_eval_context.get("source_trial_id"),
             }
 
-        journal.record(
-            JournalEntry(
-                trial_id=trial_counter,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                species=species_name,
-                action_type=action.get("type", ""),
-                tier=eval_result.tier,
-                quality=eval_result.quality,
-                speed=eval_result.speed,
-                cost=eval_result.cost,
-                reliability=eval_result.reliability,
-                pareto_status=pareto_status,
-                git_tag=git_tag,
-                config_snapshot=action,
-                config_diff=config_diff,
-                parent_trial=parent_trial_id,
-                memory_count=memory_count,
-                active_flags=active_flags_list,
-                failure_analysis=failure_analysis,
-                eval_details=eval_details_dict,
-                metric_schema_version=metric_schema_version,
-                harness_metrics=harness_metrics,
-                oracle_adequacy=oracle_adequacy,
-                seq=verdict.seq or {},
-                reasoning=json.dumps(action),
-                hypothesis=hypothesis,
-                expected_mechanism=expected_mechanism,
-                deficiency_category=deficiency_category,
-                instruction_token_count=eval_result.instruction_token_count,
-                instruction_token_ratio=eval_result.instruction_token_ratio,
-                self_criticism=criticism.as_text(),  # AP-23
-                keep_revert_decision=criticism.keep_or_revert,  # AP-24
-                optimization_directions=criticism.directions_text(),  # AP-24
-                predicted_objectives=predicted_objectives,  # PEAF (intake-571 spike)
-                surprise_score=peaf.compute_surprise(
-                    predicted_objectives, peaf.actual_objectives_from_eval(eval_result)
-                ),
-                falsifier=rationale.get("falsifier", ""),
-                rubric_scores=rationale.get("rubric_scores", {}),
-                stagnation_signal=stagnation_signal,
-                bug_corrupted_by=bug_corrupted_by,
-                bug_corrupted_reason=bug_corrupted_reason,
-            )
+        journal_entry = JournalEntry(
+            trial_id=trial_counter,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            species=species_name,
+            action_type=action.get("type", ""),
+            tier=eval_result.tier,
+            quality=eval_result.quality,
+            speed=eval_result.speed,
+            cost=eval_result.cost,
+            reliability=eval_result.reliability,
+            pareto_status=pareto_status,
+            git_tag=git_tag,
+            config_snapshot=action,
+            config_diff=config_diff,
+            parent_trial=parent_trial_id,
+            memory_count=memory_count,
+            active_flags=active_flags_list,
+            failure_analysis=failure_analysis,
+            eval_details=eval_details_dict,
+            metric_schema_version=metric_schema_version,
+            harness_metrics=harness_metrics,
+            oracle_adequacy=oracle_adequacy,
+            seq=verdict.seq or {},
+            reasoning=json.dumps(action),
+            hypothesis=hypothesis,
+            expected_mechanism=expected_mechanism,
+            deficiency_category=deficiency_category,
+            instruction_token_count=eval_result.instruction_token_count,
+            instruction_token_ratio=eval_result.instruction_token_ratio,
+            self_criticism=criticism.as_text(),  # AP-23
+            keep_revert_decision=criticism.keep_or_revert,  # AP-24
+            optimization_directions=criticism.directions_text(),  # AP-24
+            predicted_objectives=predicted_objectives,  # PEAF (intake-571 spike)
+            surprise_score=peaf.compute_surprise(
+                predicted_objectives, peaf.actual_objectives_from_eval(eval_result)
+            ),
+            falsifier=rationale.get("falsifier", ""),
+            rubric_scores=rationale.get("rubric_scores", {}),
+            stagnation_signal=stagnation_signal,
+            bug_corrupted_by=bug_corrupted_by,
+            bug_corrupted_reason=bug_corrupted_reason,
         )
+        journal.record(journal_entry)
+        if strategy_store is not None:
+            try:
+                strategy_store.store_frontier_journal_entry(journal_entry)
+            except Exception as e:
+                log.warning("Strategy store journal projection failed: %s", e)
 
         # AP-16: Track last instruction ratio for structural pruning comparison
         state["_last_instruction_ratio"] = eval_result.instruction_token_ratio
