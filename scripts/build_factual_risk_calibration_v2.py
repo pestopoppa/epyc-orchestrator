@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import random
 import sys
@@ -151,10 +152,54 @@ def source_v1_dataset(path: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _path_resolves_to(path_entry: str, target: Path) -> bool:
+    try:
+        return Path(path_entry or ".").resolve() == target.resolve()
+    except OSError:
+        return False
+
+
+def _is_local_scripts_datasets(module: Any) -> bool:
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        return False
+    try:
+        return (SCRIPT_DIR / "datasets").resolve() in Path(module_file).resolve().parents
+    except OSError:
+        return False
+
+
+def _import_huggingface_datasets():
+    """Import HuggingFace datasets even when this script is run from scripts/.
+
+    Running ``python3 scripts/build_factual_risk_calibration_v2.py`` puts the
+    repo's ``scripts/`` directory on ``sys.path``. Without this guard,
+    ``import datasets`` can resolve to ``scripts/datasets`` instead of the
+    third-party HuggingFace package.
+    """
+    loaded = sys.modules.get("datasets")
+    if loaded is not None and _is_local_scripts_datasets(loaded):
+        del sys.modules["datasets"]
+
+    original_path = list(sys.path)
+    sys.path = [p for p in sys.path if not _path_resolves_to(p, SCRIPT_DIR)]
+    try:
+        module = importlib.import_module("datasets")
+    finally:
+        sys.path = original_path
+
+    if not hasattr(module, "load_dataset"):
+        raise ImportError(
+            "imported datasets module does not expose load_dataset; "
+            f"module={getattr(module, '__file__', module)!r}"
+        )
+    return module
+
+
 def source_aa_omniscience() -> list[dict[str, Any]]:
     """Load AA-Omniscience 600 public questions via HuggingFace datasets."""
     try:
-        import datasets as hf
+        hf = _import_huggingface_datasets()
         ds = hf.load_dataset(
             "ArtificialAnalysis/AA-Omniscience-Public", split="train",
         )
@@ -240,7 +285,7 @@ def add_risk_features(
             r = assess_risk(ex["prompt"])
             ex["risk_features"] = dict(r.risk_features)
             ex["risk_score_computed"] = round(r.risk_score, 4)
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             ex["risk_features"] = {}
             ex["risk_score_computed"] = None
 
@@ -273,7 +318,7 @@ def write_jsonl_streaming(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            f.write(json.dumps(r, ensure_ascii=True) + "\n")
 
 
 def summarize(examples: list[dict[str, Any]]) -> dict[str, Any]:
