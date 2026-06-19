@@ -787,8 +787,25 @@ class SafetyGate:
         existing caller (which passes only ``result``) is unaffected — the seq path
         is inert unless both the flag and the per-question inputs are present.
         """
-        if result.gate_verdict is not None:
-            return result.gate_verdict
+        seq_inputs_ready = (
+            self.use_sequential
+            and question_results is not None
+            and bool(baseline_profile)
+        )
+        cached_verdict = result.gate_verdict
+        record_side_effects = cached_verdict is None
+        if cached_verdict is not None:
+            can_upgrade_cached_seq = (
+                cached_verdict.passed
+                and cached_verdict.seq is None
+                and seq_inputs_ready
+                and not any(
+                    category.startswith("throughput_host_")
+                    for category in cached_verdict.categories
+                )
+            )
+            if not can_upgrade_cached_seq:
+                return cached_verdict
 
         violations = []
         warnings = []
@@ -1025,11 +1042,15 @@ class SafetyGate:
             seq=seq_block,
         )
 
-        # Track consecutive failures
-        if not passed:
-            self._consecutive_failures += 1
-        else:
-            self._consecutive_failures = 0
+        # Track consecutive failures only for the first gate pass over this
+        # EvalResult. The central AutoPilot loop may re-enter check() with W4
+        # per-question evidence after an action handler already cached a legacy
+        # verdict; that seq-aware upgrade must not double-count failures.
+        if record_side_effects:
+            if not passed:
+                self._consecutive_failures += 1
+            else:
+                self._consecutive_failures = 0
 
         # Record this trial's quality in the rolling window (after the verdict
         # so the current measurement doesn't bias its own significance test).
@@ -1041,7 +1062,12 @@ class SafetyGate:
         # band and helped mask a real reproduced gain). Narrow, deliberate:
         # bug-corrupted / killed trials never reach here with a clean
         # EvalResult, so they are already excluded from the window.
-        if passed and not math.isnan(result.quality) and result.quality >= 0:
+        if (
+            record_side_effects
+            and passed
+            and not math.isnan(result.quality)
+            and result.quality >= 0
+        ):
             self._history_for_tier(result.tier).append(result.quality)
             self._last_history_tier = int(result.tier)
 

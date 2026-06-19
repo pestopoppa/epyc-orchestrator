@@ -599,7 +599,10 @@ def test_repeated_meta_action_forces_metric_seed_batch() -> None:
         {"consecutive_meta_actions": 1},
         {"falsifier": "noop"},
     )
-    assert action == {"type": "seed_batch", "n_questions": 10}
+    assert action == {
+        "type": "seed_batch",
+        "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
+    }
     assert rationale == {
         "falsifier": "noop",
         "meta_action_forced_metric_trial": True,

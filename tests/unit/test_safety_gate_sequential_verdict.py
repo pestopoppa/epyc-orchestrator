@@ -109,6 +109,36 @@ def test_check_flag_on_but_no_inputs_is_inert(tmp_path):
     assert not any(c.startswith("seq_") for c in verdict.categories)
 
 
+def test_seq_aware_call_can_upgrade_cached_legacy_pass_without_side_effects(tmp_path):
+    """Action handlers run an early legacy gate check before the central loop threads
+    W4 per-question evidence. The central call must be able to replace that cached
+    pass with a seq-aware verdict without appending to the MAD history twice."""
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml", use_sequential=True)
+    result = _improvement_result()
+
+    legacy = g.check(result)
+    assert legacy.seq is None
+    assert result.gate_verdict is legacy
+    assert g.quality_history_for_tier(2) == [pytest.approx(result.quality)]
+
+    upgraded = g.check(
+        result,
+        question_results={"q1": True},
+        baseline_profile={"q1": 0.0},
+        task_rate=1.0,
+        baseline_task_rate=0.5,
+        prior_quality_obs=[(i, 1.2) for i in range(10)],
+        prior_rate_obs=[(i, 1.2) for i in range(10)],
+    )
+
+    assert upgraded is result.gate_verdict
+    assert upgraded is not legacy
+    assert upgraded.seq is not None
+    assert upgraded.seq["state"] == "confirmed"
+    assert "seq_confirmed" in upgraded.categories
+    assert g.quality_history_for_tier(2) == [pytest.approx(result.quality)]
+
+
 # ---------------------------------------------------------------------------
 # seq path through check() — the three joint states
 # ---------------------------------------------------------------------------
