@@ -2068,11 +2068,11 @@ def _save_state_with_journal_archive_authority(
     )
     if archive_changed is None:
         log.warning(
-            "Journal archive authority unavailable during %s; falling back to "
-            "legacy archive.save(state)",
+            "Journal archive authority unavailable during %s; saving lifecycle "
+            "state without a legacy archive cache",
             context,
         )
-        archive.save(state)
+        save_state(state)
     else:
         if archive_changed:
             log.info("State archive cache removed during %s", context)

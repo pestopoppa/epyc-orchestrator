@@ -419,6 +419,36 @@ def test_save_state_with_journal_archive_authority_removes_state_cache(
     assert saved and "pareto_archive" not in saved[-1]
 
 
+def test_save_state_with_empty_journal_does_not_write_legacy_archive(
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = {
+        "trial_counter": 0,
+        "paused": False,
+    }
+    saved: list[dict] = []
+
+    monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
+    monkeypatch.setattr(
+        archive,
+        "save",
+        lambda _state: pytest.fail("empty-journal lifecycle saves must not write legacy archive"),
+    )
+
+    used_journal = autopilot._save_state_with_journal_archive_authority(
+        state,
+        journal,
+        archive,
+        context="unit-test-empty-journal",
+    )
+
+    assert used_journal is False
+    assert saved == [{"trial_counter": 0, "paused": False}]
+    assert "pareto_archive" not in state
+
+
 def test_save_state_with_journal_authority_removes_baseline_cache(
     journal: ExperimentJournal,
     archive: ParetoArchive,
