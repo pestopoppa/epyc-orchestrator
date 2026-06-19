@@ -943,6 +943,7 @@ def _architect_delegated_answer_inner(
         _deleg_cache = _get_deleg_cache()
         _cache_key = _deleg_cache.make_key(brief, delegate_to)
         phase_tool_timings: list[dict] = []
+        specialist_repl_errors: list[dict] = []
         _cached = _deleg_cache.get(_cache_key)
         if _cached is not None:
             report = _cached.report
