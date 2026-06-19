@@ -26,6 +26,10 @@ import httpx
 ORCH = Path("/mnt/raid0/llm/epyc-orchestrator")
 API_URL = os.environ.get("ORCHESTRATOR_API_URL", "http://127.0.0.1:8000")
 DEFAULT_TABLE = ORCH / "orchestration" / "xmas_winner_table.yaml"
+DEFAULT_MIN_DECISION_PROMPTS = 25
+DEFAULT_MIN_SCORE_DELTA = 0.05
+DEFAULT_MAX_DOMAIN_REGRESSION = 0.0
+DEFAULT_MAX_LATENCY_RATIO = 1.10
 
 DEFAULT_PROMPTS: list[dict[str, Any]] = [
     {
@@ -80,6 +84,15 @@ def load_prompts(path: Path | None) -> list[dict[str, Any]]:
         if isinstance(items, list):
             return [dict(item) for item in items]
     raise ValueError(f"Unsupported prompt manifest shape: {path}")
+
+
+def load_result_rows(path: Path) -> list[dict[str, Any]]:
+    """Load previously emitted A/B result rows."""
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
 
 
 def score_answer(answer: str, spec: dict[str, Any]) -> bool | None:
@@ -210,29 +223,119 @@ def median(values: Iterable[float]) -> float | None:
     return statistics.median(vals) if vals else None
 
 
-def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _arm_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    scored = [row for row in rows if row.get("score") is not None]
+    passed = [row for row in scored if row.get("score") is True]
+    return {
+        "n": len(rows),
+        "scored_n": len(scored),
+        "score_rate": (len(passed) / len(scored)) if scored else None,
+        "median_latency_s": median(row["elapsed_s"] for row in rows if row.get("elapsed_s") is not None),
+        "xmas_applied_n": sum(
+            1
+            for row in rows
+            if str(row.get("routing_strategy", "")).startswith("xmas_enforce:")
+        ),
+        "routed_to_counts": {
+            role: sum(1 for row in rows if row.get("routed_to") == role)
+            for role in sorted({str(row.get("routed_to") or "") for row in rows})
+            if role
+        },
+    }
+
+
+def acceptance_report(
+    summary: dict[str, Any],
+    *,
+    min_prompts_per_arm: int = DEFAULT_MIN_DECISION_PROMPTS,
+    min_score_delta: float = DEFAULT_MIN_SCORE_DELTA,
+    max_domain_regression: float = DEFAULT_MAX_DOMAIN_REGRESSION,
+    max_latency_ratio: float = DEFAULT_MAX_LATENCY_RATIO,
+) -> dict[str, Any]:
+    """Convert A/B metrics into the explicit X-MAS promote/hold gate."""
+    blockers: list[str] = []
+    lift_domains: list[str] = []
+    regression_domains: list[str] = []
+    thresholds = {
+        "min_prompts_per_arm": min_prompts_per_arm,
+        "min_score_delta": min_score_delta,
+        "max_domain_regression": max_domain_regression,
+        "max_latency_ratio": max_latency_ratio,
+    }
+
+    arms = summary.get("arms", {})
+    baseline_n = int(arms.get("baseline", {}).get("n") or 0)
+    xmas_n = int(arms.get("xmas", {}).get("n") or 0)
+    if baseline_n < min_prompts_per_arm or xmas_n < min_prompts_per_arm:
+        blockers.append(
+            f"insufficient prompts per arm: baseline={baseline_n}, xmas={xmas_n}, "
+            f"required>={min_prompts_per_arm}"
+        )
+
+    score_delta = summary.get("score_delta_xmas_minus_baseline")
+    if score_delta is None:
+        blockers.append("missing scored quality delta")
+    elif float(score_delta) < min_score_delta:
+        blockers.append(
+            f"overall score delta {float(score_delta):.3f} < required {min_score_delta:.3f}"
+        )
+
+    latency_ratio = summary.get("latency_ratio_xmas_over_baseline")
+    if latency_ratio is None:
+        blockers.append("missing latency ratio")
+    elif float(latency_ratio) > max_latency_ratio:
+        blockers.append(
+            f"latency ratio {float(latency_ratio):.3f} > allowed {max_latency_ratio:.3f}"
+        )
+
+    comparable_domains = 0
+    for domain, metrics in sorted(summary.get("domains", {}).items()):
+        delta = metrics.get("score_delta_xmas_minus_baseline")
+        if delta is None:
+            continue
+        comparable_domains += 1
+        delta_f = float(delta)
+        if delta_f >= min_score_delta:
+            lift_domains.append(domain)
+        if delta_f < -max_domain_regression:
+            regression_domains.append(domain)
+    if comparable_domains == 0:
+        blockers.append("no comparable scored domains")
+    if not lift_domains:
+        blockers.append(f"no domain improved by >= {min_score_delta:.3f}")
+    if regression_domains:
+        blockers.append("domain regressions: " + ", ".join(regression_domains))
+
+    if blockers:
+        status = (
+            "insufficient_evidence"
+            if any(blocker.startswith("insufficient prompts per arm") for blocker in blockers)
+            else "hold"
+        )
+    else:
+        status = "promote_candidate"
+    return {
+        "status": status,
+        "thresholds": thresholds,
+        "blockers": blockers,
+        "lift_domains": lift_domains,
+        "regression_domains": regression_domains,
+    }
+
+
+def summarize(
+    rows: list[dict[str, Any]],
+    *,
+    min_prompts_per_arm: int = DEFAULT_MIN_DECISION_PROMPTS,
+    min_score_delta: float = DEFAULT_MIN_SCORE_DELTA,
+    max_domain_regression: float = DEFAULT_MAX_DOMAIN_REGRESSION,
+    max_latency_ratio: float = DEFAULT_MAX_LATENCY_RATIO,
+) -> dict[str, Any]:
     """Aggregate per-arm quality/routing/latency metrics."""
     summary: dict[str, Any] = {"arms": {}}
     for arm in ("baseline", "xmas"):
         arm_rows = [row for row in rows if row["arm"] == arm]
-        scored = [row for row in arm_rows if row.get("score") is not None]
-        passed = [row for row in scored if row.get("score") is True]
-        summary["arms"][arm] = {
-            "n": len(arm_rows),
-            "scored_n": len(scored),
-            "score_rate": (len(passed) / len(scored)) if scored else None,
-            "median_latency_s": median(row["elapsed_s"] for row in arm_rows if row.get("elapsed_s") is not None),
-            "xmas_applied_n": sum(
-                1
-                for row in arm_rows
-                if str(row.get("routing_strategy", "")).startswith("xmas_enforce:")
-            ),
-            "routed_to_counts": {
-                role: sum(1 for row in arm_rows if row.get("routed_to") == role)
-                for role in sorted({str(row.get("routed_to") or "") for row in arm_rows})
-                if role
-            },
-        }
+        summary["arms"][arm] = _arm_summary(arm_rows)
     base = summary["arms"].get("baseline", {})
     xmas = summary["arms"].get("xmas", {})
     if base.get("score_rate") is not None and xmas.get("score_rate") is not None:
@@ -241,6 +344,28 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         summary["latency_delta_xmas_minus_baseline_s"] = (
             xmas["median_latency_s"] - base["median_latency_s"]
         )
+        summary["latency_ratio_xmas_over_baseline"] = (
+            xmas["median_latency_s"] / base["median_latency_s"]
+        )
+    summary["domains"] = {}
+    domains = sorted({str(row.get("domain") or "") for row in rows if row.get("domain")})
+    for domain in domains:
+        domain_summary: dict[str, Any] = {"arms": {}}
+        for arm in ("baseline", "xmas"):
+            arm_rows = [row for row in rows if row["arm"] == arm and row.get("domain") == domain]
+            domain_summary["arms"][arm] = _arm_summary(arm_rows)
+        base_rate = domain_summary["arms"]["baseline"].get("score_rate")
+        xmas_rate = domain_summary["arms"]["xmas"].get("score_rate")
+        if base_rate is not None and xmas_rate is not None:
+            domain_summary["score_delta_xmas_minus_baseline"] = xmas_rate - base_rate
+        summary["domains"][domain] = domain_summary
+    summary["decision"] = acceptance_report(
+        summary,
+        min_prompts_per_arm=min_prompts_per_arm,
+        min_score_delta=min_score_delta,
+        max_domain_regression=max_domain_regression,
+        max_latency_ratio=max_latency_ratio,
+    )
     return summary
 
 
@@ -250,6 +375,25 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
+    output_dir = args.output
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = output_dir / "summary.json"
+
+    if args.summarize_results:
+        rows = load_result_rows(args.summarize_results)
+        summary = summarize(
+            rows,
+            min_prompts_per_arm=args.min_decision_prompts,
+            min_score_delta=args.min_score_delta,
+            max_domain_regression=args.max_domain_regression,
+            max_latency_ratio=args.max_latency_ratio,
+        )
+        summary["source_results"] = str(args.summarize_results)
+        write_json(summary_path, summary)
+        print(f"[xmas_live_ab] summarized {len(rows)} rows -> {summary_path}")
+        print(json.dumps(summary, indent=2, sort_keys=True))
+        return 0
+
     table_path = args.table.resolve()
     if not args.dry_run and args.prompts is None:
         raise SystemExit(
@@ -264,10 +408,7 @@ def run(args: argparse.Namespace) -> int:
 
     validate_table(table_path)
     sequence = arm_sequence(args.reps)
-    output_dir = args.output
-    output_dir.mkdir(parents=True, exist_ok=True)
     rows_path = output_dir / "results.jsonl"
-    summary_path = output_dir / "summary.json"
     meta_path = output_dir / "meta.json"
 
     meta = {
@@ -279,6 +420,12 @@ def run(args: argparse.Namespace) -> int:
         "arm_sequence": sequence,
         "reps": args.reps,
         "max_turns": args.max_turns,
+        "decision_thresholds": {
+            "min_prompts_per_arm": args.min_decision_prompts,
+            "min_score_delta": args.min_score_delta,
+            "max_domain_regression": args.max_domain_regression,
+            "max_latency_ratio": args.max_latency_ratio,
+        },
     }
     write_json(meta_path, meta)
 
@@ -340,7 +487,13 @@ def run(args: argparse.Namespace) -> int:
             print("[xmas_live_ab] restoring baseline X-MAS mode=off")
             restart_orchestrator(reload_env("baseline", table_path))
 
-    summary = summarize(rows)
+    summary = summarize(
+        rows,
+        min_prompts_per_arm=args.min_decision_prompts,
+        min_score_delta=args.min_score_delta,
+        max_domain_regression=args.max_domain_regression,
+        max_latency_ratio=args.max_latency_ratio,
+    )
     write_json(summary_path, summary)
     print(f"[xmas_live_ab] wrote {len(rows)} rows -> {rows_path}")
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -350,12 +503,17 @@ def run(args: argparse.Namespace) -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Live X-MAS routing A/B harness")
     parser.add_argument("--prompts", type=Path, default=None, help="JSON/JSONL prompt manifest; default is a 3-prompt smoke set")
+    parser.add_argument("--summarize-results", type=Path, default=None, help="Summarize an existing results.jsonl without reload/inference")
     parser.add_argument("--table", type=Path, default=DEFAULT_TABLE, help="Enforce-eligible X-MAS winner table")
     parser.add_argument("--output", type=Path, default=ORCH / "benchmarks" / "results" / "runs" / "xmas_live_ab" / str(int(time.time())))
     parser.add_argument("--reps", type=int, default=1, help="ABBA rep count; 2 gives baseline,xmas,xmas,baseline")
     parser.add_argument("--sample-size", type=int, default=None, help="Limit prompts after loading")
     parser.add_argument("--max-turns", type=int, default=1)
     parser.add_argument("--timeout-s", type=float, default=240.0)
+    parser.add_argument("--min-decision-prompts", type=int, default=DEFAULT_MIN_DECISION_PROMPTS)
+    parser.add_argument("--min-score-delta", type=float, default=DEFAULT_MIN_SCORE_DELTA)
+    parser.add_argument("--max-domain-regression", type=float, default=DEFAULT_MAX_DOMAIN_REGRESSION)
+    parser.add_argument("--max-latency-ratio", type=float, default=DEFAULT_MAX_LATENCY_RATIO)
     parser.add_argument("--dry-run", action="store_true", help="Validate inputs and write metadata without reload/inference")
     parser.add_argument("--host-quiet-confirmed", action="store_true", help="Required for real inference")
     parser.add_argument("--no-restore-baseline", dest="restore_baseline", action="store_false", help="Leave final arm env active")

@@ -64,10 +64,22 @@ def test_load_prompts_accepts_builtin_json_and_jsonl(tmp_path: Path) -> None:
     assert [item["id"] for item in xmas_live_ab.load_prompts(jsonl_path)] == ["a", "b"]
 
 
+def test_load_result_rows_accepts_jsonl(tmp_path: Path) -> None:
+    rows_path = tmp_path / "results.jsonl"
+    rows_path.write_text('{"arm": "baseline"}\n{"arm": "xmas"}\n', encoding="utf-8")
+
+    assert [row["arm"] for row in xmas_live_ab.load_result_rows(rows_path)] == [
+        "baseline",
+        "xmas",
+    ]
+
+
 def test_real_run_requires_explicit_prompt_manifest(tmp_path: Path) -> None:
     args = SimpleNamespace(
         table=tmp_path / "xmas_winner_table.yaml",
         prompts=None,
+        summarize_results=None,
+        output=tmp_path / "out",
         dry_run=False,
     )
 
@@ -100,6 +112,7 @@ def test_dry_run_can_use_builtin_smoke_set_without_inference(
     args = SimpleNamespace(
         table=tmp_path / "xmas_winner_table.yaml",
         prompts=None,
+        summarize_results=None,
         sample_size=1,
         reps=1,
         output=output,
@@ -107,6 +120,10 @@ def test_dry_run_can_use_builtin_smoke_set_without_inference(
         dry_run=True,
         host_quiet_confirmed=False,
         timeout_s=1.0,
+        min_decision_prompts=25,
+        min_score_delta=0.05,
+        max_domain_regression=0.0,
+        max_latency_ratio=1.10,
         restore_baseline=True,
     )
 
@@ -116,6 +133,75 @@ def test_dry_run_can_use_builtin_smoke_set_without_inference(
         "builtin_smoke"
     )
     assert json.loads((output / "summary.json").read_text())["dry_run"] is True
+
+
+def test_summarize_results_mode_does_not_reload_or_chat(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    called = {"chat": False, "restart": False, "validate": False}
+
+    def fail_chat(*args, **kwargs):
+        called["chat"] = True
+        raise AssertionError("summarize mode must not call chat")
+
+    def fail_restart(*args, **kwargs):
+        called["restart"] = True
+        raise AssertionError("summarize mode must not restart orchestrator")
+
+    def fail_validate(*args, **kwargs):
+        called["validate"] = True
+        raise AssertionError("summarize mode must not validate live table")
+
+    rows_path = tmp_path / "results.jsonl"
+    rows_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "arm": "baseline",
+                        "domain": "math",
+                        "score": False,
+                        "elapsed_s": 10.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "arm": "xmas",
+                        "domain": "math",
+                        "score": True,
+                        "elapsed_s": 9.0,
+                        "routing_strategy": "xmas_enforce:worker_general",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "summary"
+    monkeypatch.setattr(xmas_live_ab, "chat", fail_chat)
+    monkeypatch.setattr(xmas_live_ab, "restart_orchestrator", fail_restart)
+    monkeypatch.setattr(xmas_live_ab, "validate_table", fail_validate)
+
+    rc = xmas_live_ab.run(
+        SimpleNamespace(
+            summarize_results=rows_path,
+            output=output,
+            min_decision_prompts=1,
+            min_score_delta=0.05,
+            max_domain_regression=0.0,
+            max_latency_ratio=1.10,
+        )
+    )
+
+    assert rc == 0
+    assert called == {"chat": False, "restart": False, "validate": False}
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert summary["decision"]["status"] == "promote_candidate"
+    assert "source_results" in summary
+    assert "summarized 2 rows" in capsys.readouterr().out
 
 
 def test_score_answer_supports_common_methods() -> None:
@@ -194,3 +280,102 @@ def test_summarize_reports_routes_scores_and_xmas_apply_count() -> None:
         "worker_general": 1,
     }
     assert summary["score_delta_xmas_minus_baseline"] == 0.5
+
+
+def test_summarize_marks_promote_candidate_when_gates_pass() -> None:
+    rows = [
+        {
+            "arm": "baseline",
+            "prompt_id": "math_1",
+            "domain": "math",
+            "score": True,
+            "elapsed_s": 10.0,
+            "routing_strategy": "rules",
+            "routed_to": "frontdoor",
+        },
+        {
+            "arm": "baseline",
+            "prompt_id": "code_1",
+            "domain": "code",
+            "score": True,
+            "elapsed_s": 10.0,
+            "routing_strategy": "rules",
+            "routed_to": "coder_escalation",
+        },
+        {
+            "arm": "xmas",
+            "prompt_id": "math_1",
+            "domain": "math",
+            "score": True,
+            "elapsed_s": 9.0,
+            "routing_strategy": "xmas_enforce:worker_general",
+            "routed_to": "worker_general",
+        },
+        {
+            "arm": "xmas",
+            "prompt_id": "code_1",
+            "domain": "code",
+            "score": True,
+            "elapsed_s": 10.0,
+            "routing_strategy": "xmas_enforce:coder_escalation",
+            "routed_to": "coder_escalation",
+        },
+        {
+            "arm": "baseline",
+            "prompt_id": "math_2",
+            "domain": "math",
+            "score": False,
+            "elapsed_s": 10.0,
+            "routing_strategy": "rules",
+            "routed_to": "frontdoor",
+        },
+        {
+            "arm": "xmas",
+            "prompt_id": "math_2",
+            "domain": "math",
+            "score": True,
+            "elapsed_s": 9.0,
+            "routing_strategy": "xmas_enforce:worker_general",
+            "routed_to": "worker_general",
+        },
+    ]
+
+    summary = xmas_live_ab.summarize(
+        rows,
+        min_prompts_per_arm=3,
+        min_score_delta=0.05,
+        max_domain_regression=0.0,
+        max_latency_ratio=1.10,
+    )
+
+    assert summary["latency_ratio_xmas_over_baseline"] < 1.0
+    assert summary["domains"]["math"]["score_delta_xmas_minus_baseline"] == 0.5
+    assert summary["decision"]["status"] == "promote_candidate"
+    assert summary["decision"]["lift_domains"] == ["math"]
+    assert summary["decision"]["blockers"] == []
+
+
+def test_summarize_marks_insufficient_evidence_for_small_runs() -> None:
+    rows = [
+        {
+            "arm": "baseline",
+            "domain": "math",
+            "score": True,
+            "elapsed_s": 10.0,
+            "routing_strategy": "rules",
+            "routed_to": "frontdoor",
+        },
+        {
+            "arm": "xmas",
+            "domain": "math",
+            "score": True,
+            "elapsed_s": 10.0,
+            "routing_strategy": "xmas_enforce:worker_general",
+            "routed_to": "worker_general",
+        },
+    ]
+
+    summary = xmas_live_ab.summarize(rows, min_prompts_per_arm=25)
+
+    assert summary["decision"]["status"] == "insufficient_evidence"
+    assert summary["decision"]["blockers"][0].startswith("insufficient prompts per arm")
