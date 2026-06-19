@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -20,11 +21,22 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "autopilot"))
+sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "benchmark"))
 
 from orchestration.repl_memory.q_scorer import (  # noqa: E402
     PRIOR_SOURCE_STACK_PRIORS,
     stack_prior_q_scorer_priors_by_role,
     validate_live_q_scorer_prior_sources,
+)
+from seeding_rewards import (  # noqa: E402
+    ALLOW_DEGRADED_CONFIG_KEY,
+    MODEL_DESCRIPTORS_CONFIG_KEY,
+    PRIOR_SOURCE_MODEL_DESCRIPTORS,
+    STACK_PRIORS_CONFIG_KEY,
+    RoleResult,
+    compute_comparative_rewards,
+    descriptor_throughput_by_role,
+    throughput_prior_provenance,
 )
 from scripts.registry.stack_change_pipeline import (  # noqa: E402
     SIMULATED_FIXTURE_TARGET,
@@ -632,6 +644,54 @@ def _assert_text_stack_primary_port_consumers(
     )
 
 
+def _assert_seeding_descriptor_fallback_consumer(
+    descriptors_path: Path,
+    *,
+    expected_roles: set[str],
+    expected_tps: float,
+) -> None:
+    throughput = descriptor_throughput_by_role(descriptors_path)
+    assert {role: throughput[role] for role in expected_roles} == {
+        role: expected_tps for role in expected_roles
+    }
+
+    missing_stack_priors = descriptors_path.with_name("missing_stack_priors.yaml")
+    cost_config = {
+        STACK_PRIORS_CONFIG_KEY: missing_stack_priors,
+        MODEL_DESCRIPTORS_CONFIG_KEY: descriptors_path,
+        ALLOW_DEGRADED_CONFIG_KEY: True,
+    }
+    provenance = throughput_prior_provenance(cost_config)
+    assert provenance["source"] == PRIOR_SOURCE_MODEL_DESCRIPTORS
+    assert set(expected_roles) <= set(provenance["roles"])
+    assert provenance["model_descriptors_path"] == str(descriptors_path)
+
+    rewards = compute_comparative_rewards(
+        {
+            "frontdoor:direct": RoleResult(
+                role="frontdoor",
+                mode="direct",
+                answer="ok",
+                passed=True,
+                elapsed_seconds=1.0,
+            ),
+            "worker_general:direct": RoleResult(
+                role="worker_general",
+                mode="direct",
+                answer="ok",
+                passed=True,
+                elapsed_seconds=2.0,
+                generation_ms=2000,
+                tokens_generated=100,
+            ),
+        },
+        cost_config=cost_config,
+    )
+    expected_elapsed = 100 / expected_tps
+    expected_reward = 0.5 - 0.15 * max(0.0, (2.0 / expected_elapsed) - 1.0)
+    assert math.isclose(rewards["worker_general:direct"], expected_reward)
+
+
 def test_pipeline_report_names_simulated_fixture_target(tmp_path: Path) -> None:
     config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
     _base_frontdoor_registry(config.lean_registry)
@@ -905,6 +965,11 @@ def test_simulated_worker_swap_updates_generated_consumers_with_approval(
     assert q_priors.baseline_tps_source_by_role["worker_general"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["worker_general"] == pytest.approx(0.9)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
+    _assert_seeding_descriptor_fallback_consumer(
+        config.descriptors,
+        expected_roles=roles,
+        expected_tps=66.2,
+    )
     _assert_text_stack_primary_port_consumers(
         config.stack_priors,
         expected_roles=roles,
