@@ -101,7 +101,13 @@ class KnowledgeDistiller:
 
     # ── Public API ───────────────────────────────────────────────
 
-    def distill(self, trial_id: int) -> DistillationStats:
+    def distill(
+        self,
+        trial_id: int,
+        *,
+        journal: Any | None = None,
+        excluded_trial_ids: set[int] | None = None,
+    ) -> DistillationStats:
         """Run one full L1->L2->L3 consolidation cycle.
 
         Safe to call repeatedly — entries below MDL or below the species/
@@ -109,7 +115,11 @@ class KnowledgeDistiller:
         """
         stats = DistillationStats()
 
-        raw_entries = self._fetch_entries_by_type("raw")
+        raw_entries = self._fetch_entries_by_type(
+            "raw",
+            journal=journal,
+            excluded_trial_ids=excluded_trial_ids,
+        )
         if len(raw_entries) >= MDL_MIN_CLUSTER_SIZE:
             grouped = self._group_by(raw_entries, key="species")
             for species, entries in grouped.items():
@@ -120,7 +130,11 @@ class KnowledgeDistiller:
                 stats.raw_entries_consolidated += consolidated
                 stats.skipped_below_mdl += skipped
 
-        patterns = self._fetch_entries_by_type("pattern")
+        patterns = self._fetch_entries_by_type(
+            "pattern",
+            journal=journal,
+            excluded_trial_ids=excluded_trial_ids,
+        )
         if len(patterns) >= MDL_MIN_CLUSTER_SIZE:
             created, consolidated = self._extract_conventions(patterns, trial_id)
             stats.conventions_created += len(created)
@@ -139,13 +153,30 @@ class KnowledgeDistiller:
 
     # ── Internals ────────────────────────────────────────────────
 
-    def _fetch_entries_by_type(self, entry_type: str) -> list[dict[str, Any]]:
+    def _fetch_entries_by_type(
+        self,
+        entry_type: str,
+        *,
+        journal: Any | None = None,
+        excluded_trial_ids: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        if hasattr(self.store, "strategy_entries_for_distillation"):
+            return self.store.strategy_entries_for_distillation(
+                entry_type,
+                min_validity=self.min_validity,
+                journal=journal,
+                excluded_trial_ids=excluded_trial_ids,
+            )
+
         rows = self.store._conn.execute(
             "SELECT * FROM strategies WHERE entry_type = ?", (entry_type,)
         ).fetchall()
         # Filter by current validity score (skip already-quarantined / decayed)
         out: list[dict[str, Any]] = []
         for row in rows:
+            evidence_trial_ids = self.store._evidence_trial_ids_for_row(row)
+            if excluded_trial_ids and excluded_trial_ids.intersection(evidence_trial_ids):
+                continue
             sid = row["id"]
             validity = self.store._validity_score(sid)
             if validity < self.min_validity:
@@ -156,7 +187,7 @@ class KnowledgeDistiller:
                     "description": row["description"],
                     "insight": row["insight"],
                     "source_trial_id": row["source_trial_id"],
-                    "evidence_trial_ids": self.store._evidence_trial_ids_for_row(row),
+                    "evidence_trial_ids": evidence_trial_ids,
                     "species": row["species"],
                     "metadata": json.loads(row["metadata_json"] or "{}"),
                     "validity": validity,

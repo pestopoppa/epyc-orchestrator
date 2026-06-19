@@ -180,6 +180,46 @@ class TestStrategyStore:
 
         assert [row["source_trial_id"] for row in rows] == [3, 2]
 
+    def test_strategy_entries_for_distillation_applies_folded_evidence_exclusions(self, store):
+        excluded_id = store.store(
+            "Strategy A",
+            "Insight A",
+            source_trial_id=99,
+            species="alpha",
+            evidence_trial_ids=[1, 2],
+        )
+        kept_id = store.store(
+            "Strategy B",
+            "Insight B",
+            source_trial_id=3,
+            species="alpha",
+            evidence_trial_ids=[3],
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=2, bug_corrupted_by="superseded"),
+                ]
+
+        entries = store.strategy_entries_for_distillation("raw", journal=FakeJournal())
+
+        entry_ids = {entry["id"] for entry in entries}
+        assert excluded_id not in entry_ids
+        assert kept_id in entry_ids
+
+    def test_strategy_entries_for_distillation_filters_low_validity(self, store):
+        kept_id = store.store("Keep", "Insight", source_trial_id=1, species="alpha")
+        low_id = store.store("Drop", "Insight", source_trial_id=2, species="alpha")
+        for _ in range(30):
+            store.update_validity(low_id, failure=True)
+
+        entries = store.strategy_entries_for_distillation("raw", min_validity=0.10)
+
+        entry_ids = {entry["id"] for entry in entries}
+        assert kept_id in entry_ids
+        assert low_id not in entry_ids
+
     def test_excluded_strategy_evidence_trial_ids_prefers_folded_view(self):
         from orchestration.repl_memory.strategy_store import (
             excluded_strategy_evidence_trial_ids,

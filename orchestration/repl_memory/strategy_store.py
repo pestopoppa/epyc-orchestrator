@@ -689,6 +689,54 @@ class StrategyStore:
                 break
         return eligible
 
+    def strategy_entries_for_distillation(
+        self,
+        entry_type: str,
+        *,
+        min_validity: float = 0.10,
+        journal: Any | None = None,
+        excluded_trial_ids: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return strategy entries eligible for L1/L2/L3 distillation.
+
+        Distillation promotes existing rows into derived patterns and
+        conventions, so it must honor the same folded-journal evidence
+        quarantine as retrieval and compression.
+        """
+        excluded = set(excluded_trial_ids or set())
+        if journal is not None:
+            excluded.update(excluded_strategy_evidence_trial_ids(journal))
+
+        rows = self._conn.execute(
+            "SELECT * FROM strategies WHERE entry_type = ?", (entry_type,)
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            evidence_trial_ids = self._evidence_trial_ids_for_row(row)
+            if excluded.intersection(evidence_trial_ids):
+                continue
+            sid = row["id"]
+            validity = self._validity_score(sid)
+            if validity < min_validity:
+                continue
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+            out.append(
+                {
+                    "id": sid,
+                    "description": row["description"],
+                    "insight": row["insight"],
+                    "source_trial_id": row["source_trial_id"],
+                    "evidence_trial_ids": evidence_trial_ids,
+                    "species": row["species"],
+                    "metadata": metadata if isinstance(metadata, dict) else {},
+                    "validity": validity,
+                }
+            )
+        return out
+
     def retrieve(
         self,
         query_text: str,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -109,6 +110,38 @@ class TestKnowledgeDistiller:
         assert len(convention_rows) == 1
         assert convention_rows[0]["evidence_trial_ids"] == [100, 101, 102, 103]
         assert store.retrieve("alpha", k=10, excluded_trial_ids={102}) == []
+
+    def test_distill_skips_folded_journal_excluded_raw_evidence(self, store, distiller):
+        excluded_id = store.store(
+            description="alpha tag detailed strategy excluded long version",
+            insight="alpha tag insight excluded with extra explanatory detail",
+            source_trial_id=99,
+            species="prompt_forge",
+            evidence_trial_ids=[2],
+        )
+        for i in range(2):
+            store.store(
+                description=f"alpha tag detailed strategy kept index {i} long version",
+                insight=f"alpha tag insight kept {i} with extra explanatory detail",
+                source_trial_id=i,
+                species="prompt_forge",
+                evidence_trial_ids=[100 + i],
+            )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=2, bug_corrupted_by="superseded"),
+                ]
+
+        stats = distiller.distill(trial_id=21, journal=FakeJournal())
+
+        assert stats.patterns_created == 0
+        assert stats.raw_entries_consolidated == 0
+        row = store._conn.execute(
+            "SELECT entry_type FROM strategies WHERE id = ?", (excluded_id,)
+        ).fetchone()
+        assert row["entry_type"] == "raw"
 
     def test_pattern_skipped_when_not_compressible(self, store, distiller):
         # Cluster has one large seed and two tiny entries; the pattern row
