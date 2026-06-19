@@ -14,6 +14,7 @@ def _row(
     reliability: float = 0.98,
     corrupt: str = "",
     question_count: int = 50,
+    question_results: list[dict] | None = None,
 ) -> dict:
     return {
         "trial_id": trial_id,
@@ -24,7 +25,7 @@ def _row(
         "config_snapshot": config or {"type": "seed_batch", "n_questions": 10},
         "eval_details": {
             "eval_wall_s": 600.0,
-            "question_results": [
+            "question_results": question_results if question_results is not None else [
                 {"qid": f"q{i}", "correct": i % 2 == 0}
                 for i in range(question_count)
             ],
@@ -127,6 +128,44 @@ def test_missing_timing_fields_do_not_invent_task_rate() -> None:
     text = format_planner_evidence_section([row])
 
     assert "task_rate=0.0 goodput=0.0" in text
+
+
+def test_candidate_blocks_include_question_diff_and_provenance() -> None:
+    rows = [
+        _row(
+            50,
+            question_results=[
+                {"qid": "a", "suite": "math", "partition": "core", "correct": True},
+                {"qid": "b", "suite": "math", "partition": "core", "correct": False},
+                {"qid": "c", "suite": "coder", "partition": "core", "correct": True},
+            ],
+        ),
+        _row(
+            51,
+            question_results=[
+                {"qid": "a", "suite": "math", "partition": "core", "correct": False},
+                {"qid": "b", "suite": "math", "partition": "core", "correct": True},
+                {
+                    "qid": "d",
+                    "suite": "coder",
+                    "partition": "audit",
+                    "correct": True,
+                    "tools_used": 1,
+                    "partial": True,
+                    "retry_count": 1,
+                    "scoring_method": "programmatic",
+                },
+            ],
+        ),
+    ]
+
+    text = format_planner_evidence_section(rows)
+
+    assert "diff=prev#50 overlap=2 +correct=1 -correct=1 new=1 missing=1" in text
+    assert "questions=latest=3" in text
+    assert "suites=math:2,coder:1" in text
+    assert "partitions=core:2,audit:1" in text
+    assert "flags=partial:1,retry:1,scoring:programmatic:1,tools:1" in text
 
 
 def test_dataclass_rows_are_normalized_at_boundary() -> None:

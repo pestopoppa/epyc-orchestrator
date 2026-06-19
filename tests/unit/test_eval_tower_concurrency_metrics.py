@@ -163,6 +163,58 @@ def test_aggregate_emits_compact_stable_question_results() -> None:
     assert "answer" not in out.question_results[0]
 
 
+def test_aggregate_emits_truthy_question_provenance_flags() -> None:
+    tower = EvalTower()
+    out = tower._aggregate(
+        [
+            QuestionResult(
+                question_id="q1",
+                qid="stable-q1",
+                suite="coder",
+                prompt="Write a function",
+                expected="ok",
+                answer="timeout",
+                correct=False,
+                error="read_timeout",
+                elapsed_s=2.0,
+                route_used="frontdoor->worker_general",
+                scoring_method="programmatic",
+                partial=True,
+                degraded=True,
+                exogenous_recovered=True,
+                external_restart=True,
+                retry_count=1,
+                tools_used=1,
+                tools_called=["read_file"],
+                eval_partition="audit",
+            )
+        ],
+        tier=1,
+    )
+
+    assert out.question_results == [
+        {
+            "qid": "stable-q1",
+            "suite": "coder",
+            "partition": "audit",
+            "correct": False,
+            "latency_ms": 2000,
+            "tools_used": 1,
+            "scoring_method": "programmatic",
+            "route": "frontdoor->worker_general",
+            "tools_called": ["read_file"],
+            "error": True,
+            "partial": True,
+            "degraded": True,
+            "exogenous_recovered": True,
+            "external_restart": True,
+            "retry_count": 1,
+        }
+    ]
+    assert "prompt" not in out.question_results[0]
+    assert "answer" not in out.question_results[0]
+
+
 def test_eval_result_grep_lines_include_concurrency_metrics() -> None:
     tower = EvalTower()
     out = tower._aggregate(

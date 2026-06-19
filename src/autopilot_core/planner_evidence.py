@@ -6,7 +6,7 @@ blocks, touch safety gates, or change baseline/archive authority.
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from statistics import median
@@ -207,7 +207,82 @@ def _vector_note(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "no vector trials"
     q_counts = [len(_question_results(row)) for row in rows]
-    return f"vector-ready n={len(rows)} median_questions={int(median(q_counts))}"
+    parts = [
+        f"vector-ready n={len(rows)} median_questions={int(median(q_counts))}",
+        _question_diff_note(rows),
+        _question_provenance_note(max(rows, key=_latest_trial_id)),
+    ]
+    return "; ".join(part for part in parts if part)
+
+
+def _question_diff_note(rows: list[dict[str, Any]]) -> str:
+    vector_rows = [row for row in sorted(rows, key=_latest_trial_id) if _question_results(row)]
+    if len(vector_rows) < 2:
+        return "diff=single_vector"
+    previous = vector_rows[-2]
+    latest = vector_rows[-1]
+    prev_map = _question_outcome_map(previous)
+    latest_map = _question_outcome_map(latest)
+    overlap = set(prev_map) & set(latest_map)
+    gained = sum(1 for qid in overlap if not prev_map[qid] and latest_map[qid])
+    lost = sum(1 for qid in overlap if prev_map[qid] and not latest_map[qid])
+    return (
+        f"diff=prev#{_trial_id(previous)} overlap={len(overlap)} "
+        f"+correct={gained} -correct={lost} "
+        f"new={len(set(latest_map) - set(prev_map))} "
+        f"missing={len(set(prev_map) - set(latest_map))}"
+    )
+
+
+def _question_outcome_map(row: Mapping[str, Any]) -> dict[str, bool]:
+    outcomes: dict[str, bool] = {}
+    for item in _question_results(row):
+        qid = str(item.get("qid") or item.get("question_id") or "").strip()
+        if not qid:
+            continue
+        outcomes[qid] = bool(item.get("correct"))
+    return outcomes
+
+
+def _question_provenance_note(row: Mapping[str, Any]) -> str:
+    questions = _question_results(row)
+    if not questions:
+        return "questions=none"
+    suites = Counter(str(item.get("suite") or "unknown") for item in questions)
+    partitions = Counter(str(item.get("partition") or "core") for item in questions)
+    flags: Counter[str] = Counter()
+    for item in questions:
+        if _float(item.get("tools_used")) > 0:
+            flags["tools"] += 1
+        for key in (
+            "error",
+            "partial",
+            "degraded",
+            "exogenous_recovered",
+            "exogenous_unrecovered",
+            "external_restart",
+        ):
+            if item.get(key):
+                flags[key] += 1
+        if _float(item.get("retry_count")) > 0:
+            flags["retry"] += 1
+        scoring = str(item.get("scoring_method") or "").strip()
+        if scoring:
+            flags[f"scoring:{scoring}"] += 1
+    return (
+        f"questions=latest={len(questions)} suites={_format_counts(suites)} "
+        f"partitions={_format_counts(partitions)} flags={_format_counts(flags)}"
+    )
+
+
+def _format_counts(counts: Counter[str], *, limit: int = 4) -> str:
+    if not counts:
+        return "none"
+    pairs = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    rendered = ",".join(f"{key}:{count}" for key, count in pairs)
+    if len(counts) > limit:
+        rendered += ",..."
+    return rendered
 
 
 def _seq_note(

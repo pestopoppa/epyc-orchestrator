@@ -166,6 +166,38 @@ def _question_qid(q: dict[str, Any]) -> str:
     return _stable_question_qid(str(q.get("suite", "unknown")), str(q.get("prompt", "")))
 
 
+def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "qid": r.qid or _stable_question_qid(str(r.suite), str(r.prompt)),
+        "suite": r.suite,
+        "partition": r.eval_partition or "core",
+        "correct": bool(r.correct),
+        "latency_ms": int(round(max(0.0, r.elapsed_s) * 1000)),
+        "tools_used": int(r.tools_used or 0),
+    }
+    if r.scoring_method and r.scoring_method != "exact_match":
+        item["scoring_method"] = r.scoring_method
+    if r.route_used:
+        item["route"] = r.route_used
+    if r.tools_called:
+        item["tools_called"] = list(r.tools_called[:5])
+    if r.error:
+        item["error"] = True
+    if r.partial:
+        item["partial"] = True
+    if r.degraded:
+        item["degraded"] = True
+    if r.exogenous_recovered:
+        item["exogenous_recovered"] = True
+    if r.exogenous_unrecovered:
+        item["exogenous_unrecovered"] = True
+    if r.external_restart:
+        item["external_restart"] = True
+    if r.retry_count:
+        item["retry_count"] = int(r.retry_count)
+    return item
+
+
 def _annotate_partition(questions: list[dict], partition: str) -> list[dict]:
     annotated = []
     for q in questions:
@@ -842,17 +874,7 @@ class EvalTower:
         # threshold resolution-aware (3/n single-flip quantum) instead of false-
         # positiving the seeder loop into a critic-reject deadlock.
         per_suite_counts = {suite: len(vals) for suite, vals in suite_correct.items()}
-        question_results = [
-            {
-                "qid": r.qid or _stable_question_qid(str(r.suite), str(r.prompt)),
-                "suite": r.suite,
-                "partition": r.eval_partition or "core",
-                "correct": bool(r.correct),
-                "latency_ms": int(round(max(0.0, r.elapsed_s) * 1000)),
-                "tools_used": int(r.tools_used or 0),
-            }
-            for r in results
-        ]
+        question_results = [_compact_question_result(r) for r in results]
         partition_correct: dict[str, list[bool]] = {}
         partition_suite_correct: dict[str, dict[str, list[bool]]] = {}
         for r in results:
