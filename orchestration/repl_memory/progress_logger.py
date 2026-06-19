@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.workload_model import infer_workload_class
+from src.workload_model import capture_workload_class
 
 logger = logging.getLogger(__name__)
 
@@ -231,26 +231,7 @@ class ProgressLogger:
 
     @staticmethod
     def _task_workload_class(task_ir: Dict[str, Any]) -> str:
-        task_type = task_ir.get("task_type")
-        priority = task_ir.get("priority")
-        source = task_ir.get("source") or task_type
-        return infer_workload_class(
-            explicit=task_ir.get("workload_class"),
-            priority=priority if isinstance(priority, str) else None,
-            source=str(source) if source else None,
-            batch_id=task_ir.get("batch_id") if isinstance(task_ir.get("batch_id"), str) else None,
-            concurrency_batch_id=(
-                task_ir.get("concurrency_batch_id")
-                if isinstance(task_ir.get("concurrency_batch_id"), str)
-                else None
-            ),
-            eval_batch_id=(
-                task_ir.get("eval_batch_id") if isinstance(task_ir.get("eval_batch_id"), str) else None
-            ),
-            campaign_id=(
-                task_ir.get("campaign_id") if isinstance(task_ir.get("campaign_id"), str) else None
-            ),
-        )
+        return capture_workload_class(task_ir)
 
     def _remember_task_record_start(
         self,

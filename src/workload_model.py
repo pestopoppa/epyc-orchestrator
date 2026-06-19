@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
@@ -91,3 +91,25 @@ def infer_workload_class(
     if any(marker in source_norm for marker in ("eval", "seeding", "benchmark")):
         return "eval_batch"
     return "interactive"
+
+
+def capture_workload_class(task_ir: Mapping[str, Any] | None) -> str:
+    """Return the explicit workload class when present, else infer from legacy fields."""
+    src = task_ir or {}
+    priority = src.get("priority") if isinstance(src.get("priority"), str) else None
+    source = src.get("source") or src.get("task_type")
+    batch_id = src.get("batch_id") if isinstance(src.get("batch_id"), str) else None
+    concurrency_batch_id = (
+        src.get("concurrency_batch_id") if isinstance(src.get("concurrency_batch_id"), str) else None
+    )
+    eval_batch_id = src.get("eval_batch_id") if isinstance(src.get("eval_batch_id"), str) else None
+    campaign_id = src.get("campaign_id") if isinstance(src.get("campaign_id"), str) else None
+    return infer_workload_class(
+        explicit=src.get("workload_class"),
+        priority=priority,
+        source=str(source) if source else None,
+        batch_id=batch_id,
+        concurrency_batch_id=concurrency_batch_id,
+        eval_batch_id=eval_batch_id,
+        campaign_id=campaign_id,
+    )
