@@ -76,6 +76,33 @@ def _get_variant(name: str) -> str | None:
     return None
 
 
+def _path_within(base_dir: Path, filename: str) -> Path | None:
+    """Return a prompt path only if it stays under base_dir."""
+    base_resolved = base_dir.resolve(strict=False)
+    candidate = (base_resolved / filename).resolve(strict=False)
+    try:
+        candidate.relative_to(base_resolved)
+    except ValueError:
+        _log.warning("Rejected prompt path escape: base=%s candidate=%s", base_resolved, candidate)
+        return None
+    return candidate
+
+
+def _read_template(path: Path | None, *, label: str) -> str | None:
+    if path is None:
+        return None
+    try:
+        template = path.read_text()
+    except OSError:
+        _log.debug("Prompt file not found: %s", path)
+        return None
+    if not template.strip():
+        _log.warning("Prompt provenance=%s path=%s empty; using next fallback", label, path)
+        return None
+    _log.debug("Prompt provenance=%s path=%s", label, path)
+    return template
+
+
 def resolve_prompt(
     name: str,
     fallback: str,
@@ -106,26 +133,20 @@ def resolve_prompt(
 
     # Try variant file first
     if effective_variant:
-        variant_path = base_dir / f"{name}.{effective_variant}.md"
-        try:
-            template = variant_path.read_text()
-            _log.debug("Loaded variant prompt: %s", variant_path)
+        variant_path = _path_within(base_dir, f"{name}.{effective_variant}.md")
+        template = _read_template(variant_path, label="variant")
+        if template is not None:
             return _safe_format(template, template_vars) if template_vars else template
-        except OSError:
-            _log.debug("Variant file not found: %s", variant_path)
 
     # Try default file
-    default_path = base_dir / f"{name}.md"
-    try:
-        template = default_path.read_text()
-        _log.debug("Loaded prompt: %s", default_path)
+    default_path = _path_within(base_dir, f"{name}.md")
+    template = _read_template(default_path, label="default")
+    if template is not None:
         # Anti-self-correction for worker roles (primary path).
         # Without this, models generate 3x rewrites (389 tokens).
         if name.startswith("worker_"):
             template += '\n\nGive ONE answer. Do NOT self-correct, revise, or produce multiple versions. Write your final answer ONCE.'
         return _safe_format(template, template_vars) if template_vars else template
-    except OSError:
-        _log.debug("Prompt file not found: %s, using fallback", default_path)
 
     # Try family fallback using canonical role truth first, then a structural
     # fallback for names that still only exist as legacy aliases.
@@ -140,19 +161,17 @@ def resolve_prompt(
         if family != name and family not in candidate_families:
             candidate_families.append(family)
     for family in candidate_families:
-        family_path = base_dir / f"{family}.md"
-        try:
-            template = family_path.read_text()
-            _log.debug("Loaded family fallback prompt: %s", family_path)
+        family_path = _path_within(base_dir, f"{family}.md")
+        template = _read_template(family_path, label="family")
+        if template is not None:
             # Anti-self-correction: worker roles via family fallback
             # generate 3x rewrites ("Let me clarify", "I apologize").
             if name.startswith("worker_"):
                 template += "\n\nGive ONE answer. Do NOT self-correct, revise, or produce multiple versions. Do NOT say \"Let me clarify\" or \"I apologize\"."
             return _safe_format(template, template_vars) if template_vars else template
-        except OSError:
-            continue
 
     # Fallback to constant
+    _log.debug("Prompt provenance=fallback name=%s subdir=%s", name, subdir)
     return _safe_format(fallback, template_vars) if template_vars else fallback
 
 

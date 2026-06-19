@@ -118,6 +118,23 @@ class TestResolvePrompt:
         result = resolve_prompt("my_prompt", "fallback")
         assert result == "Default file"
 
+    def test_empty_variant_falls_to_default_file(self, tmp_path, monkeypatch):
+        """Empty variant files are ignored instead of returning empty prompts."""
+        monkeypatch.setattr("src.prompt_builders.resolver.PROMPT_DIR", tmp_path)
+        (tmp_path / "my_prompt.md").write_text("Default file")
+        (tmp_path / "my_prompt.v2.md").write_text("  \n")
+        monkeypatch.setenv("PROMPT_VARIANT__my_prompt", "v2")
+        result = resolve_prompt("my_prompt", "fallback")
+        assert result == "Default file"
+
+    def test_empty_default_file_falls_to_constant(self, tmp_path, monkeypatch):
+        """Empty default files fall back to the explicit caller constant."""
+        monkeypatch.setattr("src.prompt_builders.resolver.PROMPT_DIR", tmp_path)
+        monkeypatch.delenv("PROMPT_VARIANT", raising=False)
+        (tmp_path / "my_prompt.md").write_text("\n\t")
+        result = resolve_prompt("my_prompt", "fallback")
+        assert result == "fallback"
+
     def test_explicit_variant_param(self, tmp_path, monkeypatch):
         """Explicit variant= param overrides env var."""
         monkeypatch.setattr("src.prompt_builders.resolver.PROMPT_DIR", tmp_path)
@@ -171,6 +188,23 @@ class TestResolvePrompt:
         result = resolve_prompt("worker_explore", "fallback", subdir="roles")
         assert result.startswith("Worker general prompt")
         assert "Do NOT self-correct" in result
+
+    def test_name_path_escape_falls_to_constant(self, tmp_path, monkeypatch):
+        """Prompt names cannot escape PROMPT_DIR through path traversal."""
+        monkeypatch.setattr("src.prompt_builders.resolver.PROMPT_DIR", tmp_path)
+        outside = tmp_path.parent / "escaped.md"
+        outside.write_text("escaped")
+        result = resolve_prompt("../escaped", "fallback")
+        assert result == "fallback"
+
+    def test_symlink_escape_falls_to_constant(self, tmp_path, monkeypatch):
+        """Prompt symlinks cannot resolve outside PROMPT_DIR."""
+        monkeypatch.setattr("src.prompt_builders.resolver.PROMPT_DIR", tmp_path)
+        outside = tmp_path.parent / "outside_prompt.md"
+        outside.write_text("escaped")
+        (tmp_path / "unsafe.md").symlink_to(outside)
+        result = resolve_prompt("unsafe", "fallback")
+        assert result == "fallback"
 
     def test_no_template_vars_no_interpolation(self, tmp_path, monkeypatch):
         """Without template vars, literal braces in file are preserved."""
