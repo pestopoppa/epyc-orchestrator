@@ -22,6 +22,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import yaml
 
 # Ensure project root on path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -35,21 +36,7 @@ logger = logging.getLogger("train_graph_router")
 
 DEFAULT_WEIGHTS_PATH = PROJECT_ROOT / "orchestration/repl_memory/graph_router_weights.npz"
 DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration/derived/stack_priors.yaml"
-
-# Degraded/offline fallback only. Live training loads from stack_priors.yaml so
-# role retirements, shared ports, memory tier changes, and throughput updates are
-# data-only stack changes.
-DEGRADED_MODEL_FLEET = [
-    {"role_id": "frontdoor", "description": "Qwen3.6-35B-A3B Q8 frontdoor; shared HOT server; 24.3 t/s", "port": 8070, "tps": 24.3, "tier": "HOT", "gb": 37.0},
-    {"role_id": "coder_escalation", "description": "Qwen3.6-35B-A3B Q8 coder escalation; shares frontdoor HOT server; 24.3 t/s", "port": 8070, "tps": 24.3, "tier": "HOT", "gb": 37.0},
-    {"role_id": "worker_general", "description": "gemma-4-26B-A4B Q4 worker_general; HOT worker server with MTP; 60.7 t/s", "port": 8072, "tps": 60.7, "tier": "HOT", "gb": 16.0},
-    {"role_id": "worker_math", "description": "Qwen2.5-Math-7B math worker; HOT worker alias; 60.7 t/s serving prior", "port": 8072, "tps": 60.7, "tier": "HOT", "gb": 4.4},
-    {"role_id": "toolrunner", "description": "Qwen3-Coder-30B toolrunner; HOT worker alias; 60.7 t/s serving prior", "port": 8072, "tps": 60.7, "tier": "HOT", "gb": 16.0},
-    {"role_id": "architect_general", "description": "Qwen3.5-122B-A10B architect_general; HOT architect server; 12.19 t/s", "port": 8083, "tps": 12.19, "tier": "HOT", "gb": 69.0},
-    {"role_id": "ingest_long_context", "description": "Qwen3-Next-80B-A3B long-context ingest; HOT SSM-hybrid server; 20.8 t/s prior", "port": 8085, "tps": 20.8, "tier": "HOT", "gb": 46.0},
-    {"role_id": "worker_vision", "description": "Qwen2.5-VL-7B vision worker; HOT dedicated VL server; 20.0 t/s", "port": 8086, "tps": 20.0, "tier": "HOT", "gb": 4.4},
-    {"role_id": "vision_escalation", "description": "Qwen3-VL-30B-A3B vision escalation; HOT VL server; 27.6 t/s", "port": 8087, "tps": 27.6, "tier": "HOT", "gb": 18.0},
-]
+DEFAULT_REGISTRY_PATH = PROJECT_ROOT / "orchestration/model_registry.yaml"
 
 
 def _coerce_float(value, default: float) -> float:
@@ -79,7 +66,104 @@ def _role_description(role: str, record: dict) -> str:
     return "; ".join(pieces)
 
 
-def load_model_fleet(stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH) -> list[dict]:
+def _descriptor_role_description(role: str, descriptor: dict) -> str:
+    pieces = [
+        str(descriptor.get("display_name") or descriptor.get("model_id") or role),
+        f"role={role}",
+    ]
+    arch = descriptor.get("arch")
+    if arch:
+        pieces.append(f"arch={arch}")
+    speed = descriptor.get("speed")
+    if isinstance(speed, dict):
+        tps = speed.get("solo_96t_tps") or speed.get("optimized_tps")
+        if isinstance(tps, (int, float)):
+            pieces.append(f"{float(tps):g} t/s")
+    return "; ".join(pieces)
+
+
+def _registry_role_ids(registry_path: Path) -> set[str]:
+    try:
+        loaded = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return set()
+    roles = loaded.get("roles")
+    if not isinstance(roles, dict):
+        return set()
+    return {role for role in roles if isinstance(role, str)}
+
+
+def _compile_descriptors(registry_path: Path, active_roles: set[str] | None = None) -> dict:
+    from src.registry.model_descriptors import compile_model_descriptors
+
+    return compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles=active_roles,
+        allow_incomplete=True,
+    )
+
+
+def _descriptor_model_fleet(registry_path: Path = DEFAULT_REGISTRY_PATH) -> list[dict]:
+    try:
+        from src.roles import Role
+
+        descriptors = _compile_descriptors(registry_path)
+        models = descriptors.get("models")
+        if models == []:
+            descriptors = _compile_descriptors(
+                registry_path,
+                active_roles=_registry_role_ids(registry_path),
+            )
+    except Exception as exc:
+        logger.warning("Could not derive degraded GraphRouter fleet from descriptors: %s", exc)
+        return []
+
+    models = descriptors.get("models")
+    if not isinstance(models, list):
+        return []
+
+    fleet: list[dict] = []
+    seen: set[str] = set()
+    for descriptor in models:
+        if not isinstance(descriptor, dict):
+            continue
+        bindings = descriptor.get("role_bindings")
+        roles = bindings.get("roles") if isinstance(bindings, dict) else None
+        if not isinstance(roles, list):
+            continue
+        serving = descriptor.get("serving")
+        speed = descriptor.get("speed")
+        ports = serving.get("ports") if isinstance(serving, dict) else None
+        port = next((item for item in ports or () if isinstance(item, int)), 0)
+        tps = 0.0
+        if isinstance(speed, dict):
+            tps = _coerce_float(speed.get("solo_96t_tps") or speed.get("optimized_tps"), 0.0)
+        for role in roles:
+            if not isinstance(role, str):
+                continue
+            canonical = Role.from_string(role)
+            role_id = str(canonical) if canonical is not None else role
+            if role_id in seen:
+                continue
+            seen.add(role_id)
+            fleet.append(
+                {
+                    "role_id": role_id,
+                    "description": _descriptor_role_description(role_id, descriptor),
+                    "port": port,
+                    "tps": tps,
+                    "tier": "UNKNOWN",
+                    "gb": _coerce_float(descriptor.get("mem_gb"), 0.0),
+                }
+            )
+    return fleet
+
+
+def load_model_fleet(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+    registry_path: Path = DEFAULT_REGISTRY_PATH,
+) -> list[dict]:
     """Load live GraphRouter model nodes from the generated stack-priors contract."""
     try:
         from src.registry.stack_priors import (
@@ -92,25 +176,25 @@ def load_model_fleet(stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH) -> lis
         artifact = load_stack_priors_artifact(stack_priors_path)
         live_roles = live_stack_role_records(stack_priors_path)
     except Exception as exc:
-        logger.warning("Using degraded GraphRouter model fleet; stack priors unavailable: %s", exc)
-        return list(DEGRADED_MODEL_FLEET)
+        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors unavailable: %s", exc)
+        return _descriptor_model_fleet(registry_path)
 
     if not isinstance(artifact, dict):
-        logger.warning("Using degraded GraphRouter model fleet; stack priors unavailable: cannot load contract")
-        return list(DEGRADED_MODEL_FLEET)
+        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors unavailable: cannot load contract")
+        return _descriptor_model_fleet(registry_path)
 
     roles = artifact.get("roles")
     if roles is not None and not isinstance(roles, dict):
-        logger.warning("Using degraded GraphRouter model fleet; stack priors roles field is invalid")
-        return list(DEGRADED_MODEL_FLEET)
+        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid")
+        return _descriptor_model_fleet(registry_path)
 
     if not isinstance(roles, dict):
-        logger.warning("Using degraded GraphRouter model fleet; stack priors roles field is invalid")
-        return list(DEGRADED_MODEL_FLEET)
+        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid")
+        return _descriptor_model_fleet(registry_path)
 
     if not isinstance(live_roles, dict):
-        logger.warning("Using degraded GraphRouter model fleet; stack priors roles field is invalid")
-        return list(DEGRADED_MODEL_FLEET)
+        logger.warning("Using descriptor-derived GraphRouter model fleet; stack priors roles field is invalid")
+        return _descriptor_model_fleet(registry_path)
 
     fleet: list[dict] = []
     for role, record in sorted(live_roles.items()):
@@ -133,8 +217,8 @@ def load_model_fleet(stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH) -> lis
         )
 
     if not fleet:
-        logger.warning("Using degraded GraphRouter model fleet; no live stack roles found")
-        return list(DEGRADED_MODEL_FLEET)
+        logger.warning("Using descriptor-derived GraphRouter model fleet; no live stack roles found")
+        return _descriptor_model_fleet(registry_path)
     return fleet
 
 

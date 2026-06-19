@@ -8,7 +8,6 @@ import numpy as np
 import yaml
 
 from scripts.graph_router.train_graph_router import (
-    DEGRADED_MODEL_FLEET,
     load_model_fleet,
     populate_llm_roles,
 )
@@ -111,12 +110,49 @@ def test_load_model_fleet_uses_live_stack_priors_and_skips_candidates(tmp_path: 
     assert "candidate" not in {role["role_id"] for role in fleet}
 
 
-def test_degraded_model_fleet_excludes_retired_architect_coding() -> None:
-    role_ids = {role["role_id"] for role in DEGRADED_MODEL_FLEET}
-    retired_role = "architect" + "_coding"
+def test_load_model_fleet_degraded_fallback_uses_registry_descriptors(tmp_path: Path) -> None:
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(
+        """
+roles:
+  frontdoor:
+    model:
+      name: NovelRouter-42B-MoE-Q5_K_M
+      quant: Q5_K_M
+      size_gb: 42
+      architecture: custom_moe
+    performance:
+      baseline_tps: 12.5
+server_mode: {}
+""",
+        encoding="utf-8",
+    )
 
-    assert retired_role not in role_ids
-    assert {"frontdoor", "coder_escalation", "architect_general", "ingest_long_context"} <= role_ids
+    fleet = load_model_fleet(
+        tmp_path / "missing_stack_priors.yaml",
+        registry_path=registry_path,
+    )
+
+    assert fleet == [
+        {
+            "role_id": "frontdoor",
+            "description": "NovelRouter-42B-MoE-Q5_K_M; role=frontdoor; arch=custom_moe",
+            "port": 0,
+            "tps": 0.0,
+            "tier": "UNKNOWN",
+            "gb": 42.0,
+        }
+    ]
+
+
+def test_load_model_fleet_returns_empty_when_priors_and_registry_missing(tmp_path: Path) -> None:
+    assert (
+        load_model_fleet(
+            tmp_path / "missing_stack_priors.yaml",
+            registry_path=tmp_path / "missing_registry.yaml",
+        )
+        == []
+    )
 
 
 def test_populate_llm_roles_accepts_explicit_fleet() -> None:
