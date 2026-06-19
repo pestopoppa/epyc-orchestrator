@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from src.llm_primitives import LLMPrimitives
+from src.llm_primitives.inference import _extract_port, _primary_url
 from src.config import reset_config
 from src.model_server import InferenceRequest, InferenceResult
 
@@ -157,6 +158,14 @@ class TestInferenceMixinRealCall:
 class TestCallCachingBackend:
     """Tests for _call_caching_backend() method."""
 
+    def test_primary_url_strips_full_marker(self):
+        """The full-speed marker is config metadata, not part of the backend URL."""
+        assert (
+            _primary_url("full:http://localhost:8072,http://localhost:8082")
+            == "http://localhost:8072"
+        )
+        assert _extract_port("full:http://localhost:8072,http://localhost:8082") == 8072
+
     def test_call_caching_backend_success(self, mock_backend, mock_health_tracker):
         """Test successful call to caching backend."""
         prims = LLMPrimitives(
@@ -182,6 +191,33 @@ class TestCallCachingBackend:
         assert result == "def hello(): pass"
         assert prims.total_tokens_generated == 20
         mock_health_tracker.record_success.assert_called_once_with("http://localhost:8081")
+
+    def test_call_caching_backend_uses_concrete_url_for_full_speed_role(
+        self, mock_backend, mock_health_tracker
+    ):
+        """Circuit tracking uses the live endpoint, not the full-speed config marker."""
+        prims = LLMPrimitives(
+            mock_mode=False,
+            server_urls={"worker_general": "full:http://localhost:8072,http://localhost:8082"},
+            health_tracker=mock_health_tracker,
+        )
+
+        mock_backend.infer.return_value = InferenceResult(
+            role="worker_general",
+            output="ok",
+            tokens_generated=1,
+            generation_speed=1.0,
+            elapsed_time=0.1,
+            success=True,
+        )
+
+        result = prims._call_caching_backend(
+            mock_backend, "Test prompt", "worker_general", n_tokens=16
+        )
+
+        assert result == "ok"
+        mock_health_tracker.is_available.assert_called_once_with("http://localhost:8072")
+        mock_health_tracker.record_success.assert_called_once_with("http://localhost:8072")
 
     def test_call_caching_backend_records_inference_meta_for_non_frontdoor(
         self, mock_backend, mock_health_tracker

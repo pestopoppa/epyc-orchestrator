@@ -54,10 +54,13 @@ def _detect_streaming_repetition(text: str, min_block: int = 60, min_repeats: in
 
 
 def _primary_url(url_str: str) -> str:
-    """Extract the first URL from a potentially comma-separated list."""
+    """Extract the first concrete HTTP URL from a config URL list."""
     if not url_str:
         return ""
-    return url_str.split(",")[0].strip()
+    url = url_str.split(",")[0].strip()
+    if url.startswith("full:"):
+        url = url[len("full:") :]
+    return url
 
 
 def _extract_port(url: str) -> int | None:
