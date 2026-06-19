@@ -28,6 +28,7 @@ from scripts.registry.render_stack_summary import (  # noqa: E402
     registry_role_rows as _registry_role_rows,
     stack_prior_role_rows as _stack_prior_role_rows,
 )
+from src.autopilot_core.baseline_ledger import reconcile_baseline_ledger  # noqa: E402
 
 TRUST_BOUNDARY_FILES = [
     "scripts/benchmark/seed_specialist_routing.py",
@@ -55,17 +56,41 @@ def _load_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    except OSError:
+        return []
+    return rows
+
+
 def _baseline_payload(
     root: Path,
-    state_override: dict[str, Any] | None,
+    state: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
     baseline_yaml = _load_yaml(root / "orchestration" / "autopilot_baseline.yaml")
-    state = state_override if state_override is not None else _load_json(
-        root / "orchestration" / "autopilot_state.json"
-    )
     state_baseline = state.get("baseline_state") if isinstance(state, dict) else None
     if isinstance(state_baseline, dict) and state_baseline:
         return state_baseline, "orchestration/autopilot_state.json:baseline_state"
+    reconciliation = reconcile_baseline_ledger(
+        _load_jsonl(root / "orchestration" / "autopilot_journal.jsonl"),
+        None,
+    )
+    if reconciliation.cutover_ready and isinstance(reconciliation.folded_state, dict):
+        return (
+            reconciliation.folded_state,
+            "orchestration/autopilot_journal.jsonl:baseline_promotion fold",
+        )
     return baseline_yaml, "orchestration/autopilot_baseline.yaml"
 
 
@@ -195,7 +220,7 @@ def generate_system_card(
     state = state_override if state_override is not None else _load_json(
         root_path / "orchestration" / "autopilot_state.json"
     )
-    baseline, baseline_source = _baseline_payload(root_path, state_override)
+    baseline, baseline_source = _baseline_payload(root_path, state)
     role_source = STACK_PRIORS_SOURCE
     role_rows = _stack_prior_role_rows(stack_priors)
     if not role_rows:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -272,6 +273,36 @@ def test_system_card_prefers_state_baseline_over_yaml(tmp_path: Path) -> None:
 
     assert "Source: orchestration/autopilot_state.json:baseline_state" in card
     assert "T1: quality baseline 2.25" in card
+    assert "quality baseline 0.5" not in card
+
+
+def test_system_card_uses_baseline_ledger_fold_when_state_cache_absent(
+    tmp_path: Path,
+) -> None:
+    _write_minimal_root(tmp_path)
+    journal_path = tmp_path / "orchestration" / "autopilot_journal.jsonl"
+    journal_path.write_text(
+        json.dumps(
+            {
+                "type": "baseline_promotion",
+                "source_trial_id": 7,
+                "tier": 1,
+                "previous_quality": 0.5,
+                "new_quality": 2.75,
+                "baseline_state": {
+                    "baselines_by_tier": {"1": 2.75},
+                    "per_suite_quality_by_tier": {"1": {"coder": 2.5}},
+                },
+            }
+        )
+        + "\n"
+    )
+
+    card = gen_system_card.generate_system_card(tmp_path, state_override={})
+
+    assert "Source: orchestration/autopilot_journal.jsonl:baseline_promotion fold" in card
+    assert "T1: quality baseline 2.75" in card
+    assert "Active T1 suites: coder" in card
     assert "quality baseline 0.5" not in card
 
 
