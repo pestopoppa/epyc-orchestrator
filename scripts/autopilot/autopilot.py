@@ -49,7 +49,7 @@ sys.path.insert(0, str(ORCH_ROOT))
 
 import yaml
 
-from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+from src.registry.stack_priors import live_stack_slot_query_ports
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import ParetoArchive, ParetoEntry, pareto_archive_from_journal_rows
@@ -2185,37 +2185,7 @@ def _slot_query_ports_from_stack_priors(
     stack_priors_path: Path = STACK_PRIORS_PATH,
 ) -> dict[str, list[int]]:
     """Return primary live llama-server ports by role from generated stack priors."""
-    def _is_slot_server(serving: dict[str, Any]) -> bool:
-        binary = serving.get("binary")
-        if binary in {"llama.cpp", "ik-pr1744"}:
-            return True
-        launch = serving.get("launch")
-        runtime = launch.get("runtime") if isinstance(launch, dict) else None
-        binary_path = runtime.get("binary_path") if isinstance(runtime, dict) else None
-        return isinstance(binary_path, str) and Path(binary_path).name == "llama-server"
-
-    ports_by_role: dict[str, set[int]] = {}
-    for role, record in live_stack_role_records(stack_priors_path).items():
-        serving = stack_prior_serving(record)
-        if not _is_slot_server(serving):
-            continue
-        launch = serving.get("launch")
-        entries = launch.get("entries") if isinstance(launch, dict) else None
-        if not isinstance(entries, list):
-            continue
-        role_ports = ports_by_role.setdefault(role, set())
-        for entry in entries:
-            if not isinstance(entry, dict) or entry.get("alias") is True:
-                continue
-            port = entry.get("port")
-            if isinstance(port, int):
-                role_ports.add(port)
-
-    return {
-        role: sorted(ports)
-        for role, ports in sorted(ports_by_role.items())
-        if ports
-    }
+    return live_stack_slot_query_ports(stack_priors_path)
 
 
 def _slot_query_ports() -> dict[str, list[int]]:

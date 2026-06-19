@@ -20,6 +20,7 @@ from src.registry.stack_priors import (
     live_stack_safe_non_stream_roles,
     live_stack_serving_slot_limits,
     live_stack_serving_url_values,
+    live_stack_slot_query_ports,
     live_warm_worker_slots,
     load_stack_priors_artifact,
     stack_prior_endpoint_port,
@@ -129,6 +130,66 @@ def test_runtime_stack_prior_helpers_project_live_roles(tmp_path: Path) -> None:
     assert live_stack_serving_slot_limits(priors) == {
         "http://localhost:9123": 4,
         "http://localhost:8072": 4,
+    }
+
+
+def test_live_stack_slot_query_ports_filters_non_llama_and_aliases(tmp_path: Path) -> None:
+    priors = _write_yaml(
+        tmp_path / "stack_priors.yaml",
+        {
+            "roles": {
+                "frontdoor": {
+                    "deployment_status": "live_stack",
+                    "serving": {
+                        "binary": "llama.cpp",
+                        "launch": {
+                            "entries": [
+                                {"port": 8070, "alias": False},
+                                {"port": 8080, "alias": False},
+                            ]
+                        },
+                    },
+                },
+                "coder_escalation": {
+                    "deployment_status": "live_stack",
+                    "serving": {
+                        "binary": "llama.cpp",
+                        "launch": {"entries": [{"port": 8070, "alias": True}]},
+                    },
+                },
+                "worker_general": {
+                    "deployment_status": "live_stack",
+                    "serving": {
+                        "binary": "ik-pr1744",
+                        "launch": {
+                            "runtime": {
+                                "binary_path": "/mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server"
+                            },
+                            "entries": [{"port": 8072, "alias": False}],
+                        },
+                    },
+                },
+                "reap_candidate": {
+                    "deployment_status": "benchmark_only",
+                    "serving": {
+                        "binary": "llama.cpp",
+                        "launch": {"entries": [{"port": 8099, "alias": False}]},
+                    },
+                },
+                "embedder": {
+                    "deployment_status": "live_stack",
+                    "serving": {
+                        "binary": "embedding-server",
+                        "launch": {"entries": [{"port": 8090, "alias": False}]},
+                    },
+                },
+            }
+        },
+    )
+
+    assert live_stack_slot_query_ports(priors) == {
+        "frontdoor": [8070, 8080],
+        "worker_general": [8072],
     }
 
 

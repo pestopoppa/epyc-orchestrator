@@ -461,6 +461,38 @@ def live_stack_serving_slot_limits(path: Path = DEFAULT_OUTPUT) -> dict[str, int
     return limits
 
 
+def _stack_prior_serves_llama_slots(serving: dict[str, Any]) -> bool:
+    """Return True when a serving block identifies a llama-server slots API."""
+    binary = serving.get("binary")
+    if binary in {"llama.cpp", "ik-pr1744"}:
+        return True
+    launch = serving.get("launch")
+    runtime = launch.get("runtime") if isinstance(launch, dict) else None
+    binary_path = runtime.get("binary_path") if isinstance(runtime, dict) else None
+    return isinstance(binary_path, str) and Path(binary_path).name == "llama-server"
+
+
+def live_stack_slot_query_ports(path: Path = DEFAULT_OUTPUT) -> dict[str, list[int]]:
+    """Return live llama-server slot-query ports keyed by canonical role."""
+    ports_by_role: dict[str, set[int]] = {}
+    for role, record in live_stack_role_records(path).items():
+        serving = stack_prior_serving(record)
+        if not _stack_prior_serves_llama_slots(serving):
+            continue
+        for entry in stack_prior_launch_entries(record):
+            if entry.get("alias") is True:
+                continue
+            port = entry.get("port")
+            if isinstance(port, int):
+                ports_by_role.setdefault(role, set()).add(port)
+
+    return {
+        role: sorted(ports)
+        for role, ports in sorted(ports_by_role.items())
+        if ports
+    }
+
+
 def live_role_primary_ports(
     role_names: set[str] | frozenset[str],
     path: Path = DEFAULT_OUTPUT,
