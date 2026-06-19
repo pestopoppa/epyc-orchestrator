@@ -178,6 +178,136 @@ class TestStrategyStore:
         ) is None
         assert store.count() == 0
 
+    def test_frontier_journal_projection_report_finds_missing_and_unexpected(self, store):
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(
+                        trial_id=1,
+                        timestamp="2026-06-19T00:00:00Z",
+                        species="prompt_forge",
+                        action_type="code_mutation",
+                        quality=1.2,
+                        speed=40.0,
+                        pareto_status="frontier",
+                        hypothesis="repair parser",
+                        expected_mechanism="targeted_fix",
+                        outcome_status="ok",
+                        bug_corrupted_by="",
+                        eval_details={},
+                    ),
+                    SimpleNamespace(
+                        trial_id=2,
+                        timestamp="2026-06-19T00:00:00Z",
+                        species="prompt_forge",
+                        action_type="code_mutation",
+                        quality=1.0,
+                        speed=10.0,
+                        pareto_status="frontier",
+                        hypothesis="unsafe row",
+                        expected_mechanism="targeted_fix",
+                        outcome_status="ok",
+                        bug_corrupted_by="resource_contention",
+                        eval_details={},
+                    ),
+                ]
+
+        store.store(
+            "old unsafe projection",
+            "q=1.000 s=10.0 mechanism=targeted_fix",
+            source_trial_id=2,
+            species="prompt_forge",
+            metadata={"generated_from": "journal_frontier", "journal_trial_id": 2},
+            evidence_trial_ids=[2],
+            entry_id="journal-frontier-trial-2",
+        )
+
+        report = store.frontier_journal_projection_report(FakeJournal())
+
+        assert report["ok"] is False
+        assert report["expected_count"] == 1
+        assert report["projected_count"] == 1
+        assert report["missing"] == [
+            {"trial_id": 1, "strategy_id": "journal-frontier-trial-1"}
+        ]
+        assert report["unexpected"] == [
+            {"trial_id": 2, "strategy_id": "journal-frontier-trial-2"}
+        ]
+
+    def test_sync_frontier_journal_entries_inserts_missing_only(self, store):
+        entry = SimpleNamespace(
+            trial_id=9,
+            timestamp="2026-06-19T00:00:00Z",
+            species="prompt_forge",
+            action_type="code_mutation",
+            quality=1.2345,
+            speed=42.25,
+            pareto_status="frontier",
+            hypothesis="repair parser",
+            expected_mechanism="targeted_fix",
+            outcome_status="ok",
+            bug_corrupted_by="",
+            eval_details={},
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [entry]
+
+        dry = store.sync_frontier_journal_entries(FakeJournal(), dry_run=True)
+        assert dry["ok"] is False
+        assert dry["would_insert_count"] == 1
+        assert dry["inserted_count"] == 0
+        assert store.count() == 0
+
+        written = store.sync_frontier_journal_entries(FakeJournal(), dry_run=False)
+        assert written["ok"] is True
+        assert written["would_insert_count"] == 1
+        assert written["inserted_count"] == 1
+        assert store.count() == 1
+
+    def test_frontier_journal_projection_report_flags_mismatched_projection(self, store):
+        entry = SimpleNamespace(
+            trial_id=11,
+            timestamp="2026-06-19T00:00:00Z",
+            species="prompt_forge",
+            action_type="code_mutation",
+            quality=1.2345,
+            speed=42.25,
+            pareto_status="frontier",
+            hypothesis="repair parser",
+            expected_mechanism="targeted_fix",
+            outcome_status="ok",
+            bug_corrupted_by="",
+            eval_details={},
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [entry]
+
+        store.store(
+            "projection with bad evidence",
+            "q=1.000 s=10.0 mechanism=targeted_fix",
+            source_trial_id=11,
+            species="prompt_forge",
+            metadata={"generated_from": "legacy"},
+            evidence_trial_ids=[99],
+            entry_id="journal-frontier-trial-11",
+        )
+
+        report = store.frontier_journal_projection_report(FakeJournal())
+
+        assert report["ok"] is False
+        assert report["missing_count"] == 0
+        assert report["mismatch_count"] == 1
+        assert report["mismatches"][0]["trial_id"] == 11
+        assert set(report["mismatches"][0]["problems"]) == {
+            "evidence_trial_ids",
+            "metadata.generated_from",
+            "metadata.journal_trial_id",
+        }
+
     def test_retrieve_for_journal_applies_folded_evidence_exclusions(self, store):
         sid = store.store(
             "Strategy A",

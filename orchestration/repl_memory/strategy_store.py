@@ -135,6 +135,14 @@ def _journal_entry_excludes_strategy_evidence(entry: Any) -> bool:
     return isinstance(eval_details, dict) and bool(eval_details.get("learning_exclusion"))
 
 
+def _journal_entry_is_projectable_frontier_strategy(entry: Any) -> bool:
+    if _journal_trial_id(entry) is None:
+        return False
+    if getattr(entry, "pareto_status", "") != "frontier":
+        return False
+    return not _journal_entry_excludes_strategy_evidence(entry)
+
+
 def excluded_strategy_evidence_trial_ids(journal: Any) -> set[int]:
     """Return trial IDs whose strategy evidence should not be retrieved.
 
@@ -157,6 +165,32 @@ def excluded_strategy_evidence_trial_ids(journal: Any) -> set[int]:
         if trial_id is not None and _journal_entry_excludes_strategy_evidence(entry):
             excluded.add(trial_id)
     return excluded
+
+
+def _journal_entries_for_strategy_projection(journal: Any) -> list[Any]:
+    try:
+        entries = (
+            journal.entries_with_supersessions()
+            if hasattr(journal, "entries_with_supersessions")
+            else journal.all_entries()
+        )
+    except Exception:
+        return []
+    return list(entries)
+
+
+def _projection_trial_id_from_row(row: sqlite3.Row) -> int | None:
+    row_id = str(row["id"])
+    prefix = "journal-frontier-trial-"
+    if row_id.startswith(prefix):
+        try:
+            return int(row_id[len(prefix):])
+        except ValueError:
+            return None
+    try:
+        return int(row["source_trial_id"])
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -656,14 +690,7 @@ class StrategyStore:
             trial_id = int(getattr(entry, "trial_id"))
         except (TypeError, ValueError):
             return None
-        if getattr(entry, "pareto_status", "") != "frontier":
-            return None
-        if getattr(entry, "outcome_status", "ok") != "ok":
-            return None
-        if getattr(entry, "bug_corrupted_by", ""):
-            return None
-        eval_details = getattr(entry, "eval_details", {}) or {}
-        if isinstance(eval_details, dict) and eval_details.get("learning_exclusion"):
+        if not _journal_entry_is_projectable_frontier_strategy(entry):
             return None
 
         action_type = _compact_text(getattr(entry, "action_type", "")) or "trial"
@@ -689,6 +716,152 @@ class StrategyStore:
             evidence_trial_ids=[trial_id],
             entry_id=_journal_frontier_strategy_id(trial_id),
         )
+
+    def frontier_journal_projection_report(self, journal: Any) -> dict[str, Any]:
+        """Compare journal-derived frontier strategy projections with SQLite rows.
+
+        The report is read-only. It treats the folded journal as authoritative
+        for which deterministic ``journal-frontier-trial-<id>`` rows should
+        exist, then flags missing projections and stale/unsafe projected rows.
+        """
+        entries = _journal_entries_for_strategy_projection(journal)
+        expected_entries: dict[int, Any] = {}
+        skipped_trial_ids: list[int] = []
+        for entry in entries:
+            trial_id = _journal_trial_id(entry)
+            if trial_id is None:
+                continue
+            if _journal_entry_is_projectable_frontier_strategy(entry):
+                expected_entries[trial_id] = entry
+            else:
+                skipped_trial_ids.append(trial_id)
+
+        rows = self._conn.execute(
+            "SELECT id, source_trial_id, metadata_json, evidence_trial_ids "
+            "FROM strategies WHERE id LIKE 'journal-frontier-trial-%' "
+            "ORDER BY source_trial_id ASC"
+        ).fetchall()
+        projected_by_trial = {
+            trial_id: row
+            for row in rows
+            if (trial_id := _projection_trial_id_from_row(row)) is not None
+        }
+
+        missing = [
+            {
+                "trial_id": trial_id,
+                "strategy_id": _journal_frontier_strategy_id(trial_id),
+            }
+            for trial_id in sorted(set(expected_entries) - set(projected_by_trial))
+        ]
+        unexpected = [
+            {
+                "trial_id": trial_id,
+                "strategy_id": row["id"],
+            }
+            for trial_id, row in sorted(projected_by_trial.items())
+            if trial_id not in expected_entries
+        ]
+
+        mismatches: list[dict[str, Any]] = []
+        for trial_id in sorted(set(expected_entries) & set(projected_by_trial)):
+            row = projected_by_trial[trial_id]
+            problems: list[str] = []
+            if row["id"] != _journal_frontier_strategy_id(trial_id):
+                problems.append("id")
+            try:
+                source_trial_id = int(row["source_trial_id"])
+            except (TypeError, ValueError):
+                source_trial_id = None
+            if source_trial_id != trial_id:
+                problems.append("source_trial_id")
+            try:
+                evidence_trial_ids = json.loads(row["evidence_trial_ids"] or "[]")
+            except (TypeError, json.JSONDecodeError):
+                evidence_trial_ids = []
+            if evidence_trial_ids != [trial_id]:
+                problems.append("evidence_trial_ids")
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if metadata.get("generated_from") != "journal_frontier":
+                problems.append("metadata.generated_from")
+            if metadata.get("journal_trial_id") != trial_id:
+                problems.append("metadata.journal_trial_id")
+            if problems:
+                mismatches.append(
+                    {
+                        "trial_id": trial_id,
+                        "strategy_id": row["id"],
+                        "problems": problems,
+                    }
+                )
+
+        return {
+            "ok": not missing and not unexpected and not mismatches,
+            "journal_entries": len(entries),
+            "expected_count": len(expected_entries),
+            "projected_count": len(projected_by_trial),
+            "skipped_count": len(skipped_trial_ids),
+            "missing_count": len(missing),
+            "unexpected_count": len(unexpected),
+            "mismatch_count": len(mismatches),
+            "missing": missing,
+            "unexpected": unexpected,
+            "mismatches": mismatches,
+        }
+
+    def sync_frontier_journal_entries(
+        self,
+        journal: Any,
+        *,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Optionally insert missing journal-frontier projections.
+
+        Sync is intentionally one-way and conservative: missing safe rows may be
+        inserted with deterministic IDs, but stale or malformed existing rows
+        are only reported. Corrections to historical evidence still happen via
+        journal supersession and read-side folds, not destructive StrategyStore
+        mutation.
+        """
+        before = self.frontier_journal_projection_report(journal)
+        entries_by_id = {
+            _journal_frontier_strategy_id(trial_id): entry
+            for entry in _journal_entries_for_strategy_projection(journal)
+            if (trial_id := _journal_trial_id(entry)) is not None
+            and _journal_entry_is_projectable_frontier_strategy(entry)
+        }
+        inserted: list[dict[str, Any]] = []
+        if not dry_run:
+            for item in before["missing"]:
+                strategy_id = str(item["strategy_id"])
+                entry = entries_by_id.get(strategy_id)
+                if entry is None:
+                    continue
+                projected_id = self.store_frontier_journal_entry(entry)
+                if projected_id:
+                    inserted.append(
+                        {
+                            "trial_id": item["trial_id"],
+                            "strategy_id": projected_id,
+                        }
+                    )
+        after = (
+            before
+            if dry_run
+            else self.frontier_journal_projection_report(journal)
+        )
+        return {
+            **after,
+            "dry_run": dry_run,
+            "would_insert_count": before["missing_count"],
+            "inserted_count": len(inserted),
+            "inserted": inserted,
+        }
 
     def _evidence_trial_ids_for_row(self, row: sqlite3.Row) -> list[int]:
         ids: list[int] = []
