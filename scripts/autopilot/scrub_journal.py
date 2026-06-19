@@ -32,9 +32,8 @@ Examples:
 Notes:
     - Default mode is append-only: the journal gets a supersession event
       describing the override, and existing trial rows are not rewritten.
-    - Legacy `--rewrite-in-place` mode rewrites JSONL/TSV files from the
-      in-memory entries. A .bak-<timestamp> backup of every overwritten file
-      is created alongside the original.
+    - Legacy in-place JSONL/TSV rewriting is retired; use append-only
+      supersession events so historical trial rows remain immutable.
     - The Pareto archive in autopilot_state.json is NOT touched. Tagging
       a journal entry as corrupted does NOT remove the corresponding
       Pareto point — the operator can do that separately if needed.
@@ -44,23 +43,15 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
-import time
-from dataclasses import asdict
 from pathlib import Path
 
 # Allow running as a script: add the autopilot dir to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import csv
-import json
-
 from experiment_journal import (  # noqa: E402
     ExperimentJournal,
-    JournalEntry,
-    TSV_COLUMNS,
 )
 
 
@@ -101,58 +92,6 @@ def _autopilot_running_pids() -> list[int]:
     return pids
 
 
-def _backup(path: Path) -> Path | None:
-    if not path.exists():
-        return None
-    bak = path.with_suffix(path.suffix + f".bak-scrub-{int(time.time())}")
-    shutil.copy2(path, bak)
-    return bak
-
-
-def _rewrite_all(journal: ExperimentJournal) -> list[tuple[Path, Path | None]]:
-    """Rewrite all JSONL + TSV files from the journal's in-memory entries.
-
-    Splits entries into per-batch files (matching the existing
-    rotation semantics: MAX_TRIALS_PER_FILE per file). Returns a list of
-    (rewritten_path, backup_path or None) tuples for reporting.
-    """
-    from experiment_journal import MAX_TRIALS_PER_FILE
-    out: list[tuple[Path, Path | None]] = []
-
-    # Group by batch (trial_id // MAX_TRIALS_PER_FILE)
-    by_batch: dict[int, list[JournalEntry]] = {}
-    for e in journal._entries:
-        by_batch.setdefault(e.trial_id // MAX_TRIALS_PER_FILE, []).append(e)
-    events_by_batch = getattr(journal, "_ledger_events_by_batch", {})
-
-    for batch in sorted(set(by_batch) | set(events_by_batch)):
-        entries = by_batch.get(batch, [])
-        jsonl = journal._jsonl_path(batch)
-        tsv = journal._tsv_path(batch)
-        # Backups
-        jsonl_bak = _backup(jsonl)
-        tsv_bak = _backup(tsv)
-        # Rewrite JSONL
-        with open(jsonl, "w") as f:
-            for e in entries:
-                f.write(json.dumps(asdict(e), default=str) + "\n")
-            for event in events_by_batch.get(batch, []):
-                f.write(json.dumps(event, default=str) + "\n")
-        # Rewrite TSV (header + rows)
-        with open(tsv, "w", newline="") as f:
-            w = csv.writer(f, delimiter="\t")
-            w.writerow(TSV_COLUMNS)
-            for e in entries:
-                w.writerow([
-                    e.trial_id, e.timestamp, e.species, e.action_type, e.tier,
-                    e.quality, e.speed, e.cost, e.reliability, e.pareto_status,
-                    e.git_tag, e.reasoning_hash,
-                ])
-        out.append((jsonl, jsonl_bak))
-        out.append((tsv, tsv_bak))
-    return out
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__.split("\n", 2)[0],
@@ -176,14 +115,9 @@ def main() -> int:
                     help="report what would be tagged without writing")
     ap.add_argument("--append-event", action="store_true",
                     help="compatibility no-op; append-only supersession events are now the default")
-    ap.add_argument("--rewrite-in-place", action="store_true",
-                    help="legacy mode: rewrite JSONL/TSV trial rows instead of appending an event")
     ap.add_argument("--force-while-autopilot-alive", action="store_true",
                     help="skip the autopilot-running safety guard (rarely needed)")
     args = ap.parse_args()
-    if args.append_event and args.rewrite_in_place:
-        ap.error("--append-event and --rewrite-in-place are mutually exclusive")
-    append_mode = not args.rewrite_in_place
 
     if not any([args.trial_id_min, args.trial_id_max, args.since, args.until]):
         print(
@@ -217,23 +151,13 @@ def main() -> int:
         "bug_corrupted_by": args.commit_sha,
         "bug_corrupted_reason": (args.reason or "")[:200],
     }
-    if append_mode:
-        tagged_ids = journal.matching_trial_ids(
-            trial_id_min=args.trial_id_min,
-            trial_id_max=args.trial_id_max,
-            timestamp_min=args.since,
-            timestamp_max=args.until,
-        )
-        n_tagged = len(tagged_ids)
-    else:
-        n_tagged, tagged_ids = journal.apply_scrub(
-            commit_sha=args.commit_sha,
-            reason=args.reason,
-            trial_id_min=args.trial_id_min,
-            trial_id_max=args.trial_id_max,
-            timestamp_min=args.since,
-            timestamp_max=args.until,
-        )
+    tagged_ids = journal.matching_trial_ids(
+        trial_id_min=args.trial_id_min,
+        trial_id_max=args.trial_id_max,
+        timestamp_min=args.since,
+        timestamp_max=args.until,
+    )
+    n_tagged = len(tagged_ids)
 
     score = journal.trustworthiness_score()
     print(f"Filter:                  commit_sha={args.commit_sha!r} reason={args.reason!r}")
@@ -248,54 +172,33 @@ def main() -> int:
         print(f"  trial_ids: {ids_preview}")
     print()
     print(f"Before scrub: trustworthy={n_before_trustworthy}")
-    if append_mode:
-        print(
-            "After  scrub: unchanged (append-event mode does not rewrite trial rows)"
-        )
-    else:
-        print(f"After  scrub: trustworthy={score['trustworthy']}  corrupted={score['corrupted']}  ratio={score['ratio']:.2%}")
+    print("After  scrub: unchanged (append-event mode does not rewrite trial rows)")
     if score["corrupted_by"]:
         print(f"Corrupted-by breakdown: {score['corrupted_by']}")
 
     if args.dry_run:
         print()
-        if append_mode:
-            print("DRY-RUN — no files written. Re-run without --dry-run to append event.")
-        else:
-            print("DRY-RUN — no files written. Re-run without --dry-run to rewrite files.")
+        print("DRY-RUN — no files written. Re-run without --dry-run to append event.")
         return 0
 
     if n_tagged == 0:
         print("Nothing to tag — exiting without writing files.")
         return 0
 
-    if append_mode:
-        event = journal.append_supersession_event(
-            target_trial_ids=tagged_ids,
-            fields=fields,
-            reason=args.reason,
-            policy_version="supersession-v1",
-            actor="scrub_journal.py",
-        )
-        print()
-        print("Appended supersession event:")
-        print(f"  type: {event['type']}")
-        print(f"  target_trial_ids: {len(tagged_ids)}")
-        print(f"  fields: {fields}")
-        print()
-        print("Legacy trial rows were not rewritten.")
-        return 0
-
-    written = _rewrite_all(journal)
+    event = journal.append_supersession_event(
+        target_trial_ids=tagged_ids,
+        fields=fields,
+        reason=args.reason,
+        policy_version="supersession-v1",
+        actor="scrub_journal.py",
+    )
     print()
-    print("Rewrote:")
-    for path, bak in written:
-        if bak:
-            print(f"  {path}  (backed up to {bak.name})")
-        else:
-            print(f"  {path}")
+    print("Appended supersession event:")
+    print(f"  type: {event['type']}")
+    print(f"  target_trial_ids: {len(tagged_ids)}")
+    print(f"  fields: {fields}")
     print()
-    print(f"Done. {n_tagged} entries tagged as bug_corrupted_by={args.commit_sha}.")
+    print("Legacy trial rows were not rewritten.")
     return 0
 
 

@@ -3,12 +3,13 @@ from __future__ import annotations
 import sys
 
 from scripts.autopilot import scrub_journal
+from scripts.autopilot.experiment_journal import JournalEntry
 
 
 def _record_trial(journal_dir, trial_id: int = 1) -> None:
     journal = scrub_journal.ExperimentJournal(journal_dir=journal_dir)
     journal.record(
-        scrub_journal.JournalEntry(
+        JournalEntry(
             trial_id=trial_id,
             timestamp="2026-06-13T00:00:00+00:00",
             species="seeder",
@@ -60,7 +61,7 @@ def test_scrub_defaults_to_append_only_supersession_event(
     }
 
 
-def test_scrub_rewrite_in_place_requires_explicit_flag(tmp_path, monkeypatch) -> None:
+def test_scrub_rejects_retired_rewrite_in_place_flag(tmp_path, monkeypatch) -> None:
     _record_trial(tmp_path)
     monkeypatch.setattr(scrub_journal, "_autopilot_running_pids", lambda: [])
     monkeypatch.setattr(
@@ -82,8 +83,13 @@ def test_scrub_rewrite_in_place_requires_explicit_flag(tmp_path, monkeypatch) ->
         ],
     )
 
-    assert scrub_journal.main() == 0
+    try:
+        scrub_journal.main()
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:  # pragma: no cover - argparse should always reject the retired flag
+        raise AssertionError("--rewrite-in-place was unexpectedly accepted")
 
     reloaded = scrub_journal.ExperimentJournal(journal_dir=tmp_path)
-    assert reloaded.all_entries()[0].bug_corrupted_by == "legacy"
+    assert reloaded.all_entries()[0].bug_corrupted_by == ""
     assert reloaded.supersession_events() == []

@@ -771,40 +771,6 @@ class ExperimentJournal:
         ]
         return with_falsifier[-n:]
 
-    def apply_scrub(
-        self,
-        commit_sha: str,
-        reason: str,
-        trial_id_min: int | None = None,
-        trial_id_max: int | None = None,
-        timestamp_min: str | None = None,
-        timestamp_max: str | None = None,
-    ) -> tuple[int, list[int]]:
-        """Tag in-window entries as bug_corrupted_by=<commit_sha>.
-
-        Filter semantics: an entry is tagged when it falls inside EVERY
-        bound provided (AND, not OR). Bounds that are None match everything.
-
-        Returns (n_tagged, [trial_ids_tagged]). Mutates self._entries in
-        memory. The caller is responsible for re-persisting the JSONL +
-        TSV via the scrub CLI (this method intentionally does not write to
-        disk so the operator can preview the change first).
-        """
-        tagged: list[int] = []
-        for e in self._entries:
-            if trial_id_min is not None and e.trial_id < trial_id_min:
-                continue
-            if trial_id_max is not None and e.trial_id > trial_id_max:
-                continue
-            if timestamp_min is not None and (e.timestamp or "") < timestamp_min:
-                continue
-            if timestamp_max is not None and (e.timestamp or "") > timestamp_max:
-                continue
-            e.bug_corrupted_by = commit_sha
-            e.bug_corrupted_reason = (reason or "")[:200]
-            tagged.append(e.trial_id)
-        return len(tagged), tagged
-
     def matching_trial_ids(
         self,
         *,
