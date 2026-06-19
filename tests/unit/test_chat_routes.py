@@ -781,3 +781,59 @@ class TestEditModeFailClosed:
         detail = str(exc_info.value.detail)
         assert "ORCHESTRATOR_EDIT_TRANSACTION" in detail
         assert "ORCHESTRATOR_EDIT_ROOT" in detail
+
+    @pytest.mark.asyncio
+    async def test_force_mode_edit_applies_transaction_when_flag_and_root_set(
+        self, mock_state, mock_primitives, base_routing, monkeypatch, tmp_path
+    ):
+        from contextlib import nullcontext
+        from unittest.mock import AsyncMock
+
+        from src.api.models import ChatResponse
+
+        edit_root = tmp_path / "task-root"
+        edit_root.mkdir()
+        target_file = edit_root / "calc.py"
+        target_file.write_text("VALUE = 1\n")
+
+        monkeypatch.setenv("ORCHESTRATOR_EDIT_TRANSACTION", "1")
+        monkeypatch.setenv("ORCHESTRATOR_EDIT_ROOT", str(edit_root))
+        mock_primitives.request_context = MagicMock(return_value=nullcontext())
+
+        req = ChatRequest(
+            prompt="update calc.py",
+            mock_mode=False,
+            real_mode=True,
+            force_mode="edit",
+            force_role="coder_escalation",
+        )
+
+        def _fake_execute_direct(request, routing, primitives, state, start_time, initial_role):
+            assert "Current file contents:" in request.prompt
+            return ChatResponse(
+                answer="<<<FILE: calc.py>>>\nVALUE = 2\n<<<END>>>",
+                turns=1,
+                elapsed_seconds=0.01,
+                mock_mode=False,
+                real_mode=True,
+                routed_to=str(initial_role),
+                role_history=[str(initial_role)],
+                routing_strategy=routing.routing_strategy,
+                mode="edit",
+            )
+
+        with patch("src.api.routes.chat._route_request", return_value=base_routing), \
+             patch("src.api.routes.chat._preprocess", return_value=None), \
+             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
+             patch("src.api.routes.chat._plan_review_gate", return_value=None), \
+             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_direct", side_effect=_fake_execute_direct) as mock_execute_direct:
+            result = await _handle_chat(req, mock_state)
+
+        assert mock_execute_direct.call_count == 1
+        assert result.mode == "edit"
+        assert result.answer.startswith("edit transaction applied: 1 write(s), 0 delete(s)")
+        assert target_file.read_text() == "VALUE = 2"
