@@ -728,21 +728,38 @@ def _action_rollback(action: dict[str, Any], ctx: _ActionContext):
 def _action_distill_knowledge(action: dict[str, Any], ctx: _ActionContext):
     # Evolution Manager: knowledge distillation (no eval, no system change)
     last_n = action.get("last_n", 10)
-    if ctx.evo is not None and ctx.strategy_store is not None:
-        journal_entries = (
-            ctx.journal.entries_with_supersessions()
-            if hasattr(ctx.journal, "entries_with_supersessions")
-            else ctx.journal.all_entries()
-        )
-        result = ctx.evo.distill(
-            journal_entries=journal_entries,
-            strategy_store=ctx.strategy_store,
-            last_n=last_n,
-            trial_id=ctx.state.get("trial_counter", 0),
-        )
-        log.info("Knowledge distillation: %s", result)
-    else:
+    if ctx.evo is None or ctx.strategy_store is None:
         log.warning("distill_knowledge requires evo + strategy_store")
+        return (
+            SkipOutcome(
+                "invalid",
+                "distill_knowledge unavailable: missing evo or strategy_store",
+                "distill_knowledge",
+            ),
+            "evolution_manager",
+        )
+    journal_entries = (
+        ctx.journal.entries_with_supersessions()
+        if hasattr(ctx.journal, "entries_with_supersessions")
+        else ctx.journal.all_entries()
+    )
+    result = ctx.evo.distill(
+        journal_entries=journal_entries,
+        strategy_store=ctx.strategy_store,
+        last_n=last_n,
+        trial_id=ctx.state.get("trial_counter", 0),
+    )
+    log.info("Knowledge distillation: %s", result)
+    if isinstance(result, dict) and result.get("status") == "failed":
+        reason = result.get("reason") or "unknown failure"
+        return (
+            SkipOutcome(
+                "invalid",
+                f"distill_knowledge failed: {reason}",
+                "distill_knowledge",
+            ),
+            "evolution_manager",
+        )
     return None, "evolution_manager"
 
 

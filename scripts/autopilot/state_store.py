@@ -305,7 +305,7 @@ def check_blacklist(
     """Check if `action` matches any blacklist pattern; return reason or None."""
     if not isinstance(action, dict):
         return None
-    for entry in blacklist:
+    for entry in reversed(blacklist):
         pattern = entry.get("pattern", {})
         if not isinstance(pattern, dict):
             continue
@@ -357,8 +357,24 @@ def append_blacklist(
             data = yaml.safe_load(blacklist_path.read_text()) or {"blacklist": []}
         except Exception:
             log.debug("Blacklist read failed", exc_info=True)
-    data.setdefault("blacklist", []).append(entry)
+    entries = data.setdefault("blacklist", [])
+    if not isinstance(entries, list):
+        entries = []
+        data["blacklist"] = entries
+
+    matching_indices = [
+        idx for idx, existing in enumerate(entries)
+        if isinstance(existing, dict) and existing.get("pattern") == pattern
+    ]
+    if matching_indices:
+        entries[matching_indices[-1]] = entry
+        for idx in reversed(matching_indices[:-1]):
+            del entries[idx]
+        log.info("Updated blacklisted pattern: %s (reason: %s)", pattern, reason)
+    else:
+        entries.append(entry)
+        log.info("Blacklisted pattern: %s (reason: %s)", pattern, reason)
+
     blacklist_path.write_text(yaml.dump(
         data, default_flow_style=False, sort_keys=False, allow_unicode=True,
     ))
-    log.info("Blacklisted pattern: %s (reason: %s)", pattern, reason)

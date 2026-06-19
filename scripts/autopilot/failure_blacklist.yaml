@@ -20,10 +20,10 @@ blacklist:
     type: structural_experiment
     flags:
       graph_router: true
-  reason: 'Auto-blacklisted: 2× invalid — graph_router feature requires specialist_routing
-    feature'
-  added: '2026-06-04T17:17:42.501586+00:00'
-  source_trial: 518
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft action exactly
+    matches a Blacklisted Configurations entry'
+  added: '2026-06-05T19:16:24.457198+00:00'
+  source_trial: 669
 - pattern:
     type: seed_batch
     n_questions: 3
@@ -34,10 +34,10 @@ blacklist:
 - pattern:
     type: numeric_trial
     surface: monitor
-  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft action is
-    technically allowed, but the rationale relies o'
-  added: '2026-06-05T00:40:04.377779+00:00'
-  source_trial: 570
+  reason: 'Auto-blacklisted: 4× invalid — action blacklisted: Auto-blacklisted: 2×
+    critic-rejected — critic rejected: Draf'
+  added: '2026-06-19T03:01:22.431676+00:00'
+  source_trial: 854
 - pattern:
     type: structural_experiment
     flags:
@@ -119,9 +119,9 @@ blacklist:
 - pattern:
     type: seed_batch
     n_questions: 10
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 662'
-  added: '2026-06-05T16:52:12.039230+00:00'
-  source_trial: 662
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 696'
+  added: '2026-06-06T06:38:54.051485+00:00'
+  source_trial: 696
 - pattern:
     type: deep_eval
     tier: 1
@@ -136,14 +136,6 @@ blacklist:
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 664'
   added: '2026-06-05T17:32:53.917962+00:00'
   source_trial: 664
-- pattern:
-    type: structural_experiment
-    flags:
-      graph_router: true
-  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft action exactly
-    matches a Blacklisted Configurations entry'
-  added: '2026-06-05T19:16:24.457198+00:00'
-  source_trial: 669
 - pattern:
     type: structural_experiment
     flags:
@@ -184,12 +176,6 @@ blacklist:
   added: '2026-06-05T23:08:10.746561+00:00'
   source_trial: 680
 - pattern:
-    type: seed_batch
-    n_questions: 10
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 682'
-  added: '2026-06-05T23:48:53.673573+00:00'
-  source_trial: 682
-- pattern:
     type: structural_experiment
     flags:
       personas: true
@@ -218,12 +204,6 @@ blacklist:
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 693'
   added: '2026-06-06T05:17:42.095992+00:00'
   source_trial: 693
-- pattern:
-    type: seed_batch
-    n_questions: 10
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 696'
-  added: '2026-06-06T06:38:54.051485+00:00'
-  source_trial: 696
 - pattern:
     type: structural_experiment
     flags:
@@ -267,13 +247,6 @@ blacklist:
   added: '2026-06-10T19:55:05.936904+00:00'
   source_trial: 738
 - pattern:
-    type: numeric_trial
-    surface: monitor
-  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Draft exactly matches
-    Blacklisted Configurations {''type'':''numer'
-  added: '2026-06-10T22:52:41.781433+00:00'
-  source_trial: 747
-- pattern:
     type: train_routing_models
   reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft falsely claims
     train_routing_models has not executed; con'
@@ -285,7 +258,41 @@ blacklist:
     suites:
     - coder
     - math
-  reason: 'Auto-blacklisted: 5× invalid — action blacklisted: Auto-blacklisted: 3
+  reason: 'Auto-blacklisted: 8× invalid — action blacklisted: Auto-blacklisted: 3
     consecutive failures ending at trial 662'
-  added: '2026-06-18T13:01:43.572384+00:00'
-  source_trial: 832
+  added: '2026-06-19T00:01:45.436026+00:00'
+  source_trial: 841
+- pattern:
+    type: numeric_trial
+    surface: memrl_retrieval
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 838'
+  added: '2026-06-18T21:53:45.659665+00:00'
+  source_trial: 838
+- pattern:
+    type: seed_batch
+    n_questions: 14
+    suites:
+    - coder
+    - math
+  reason: 'Auto-blacklisted: 5× invalid — action blacklisted: Auto-blacklisted: 3
+    consecutive failures ending at trial 844'
+  added: '2026-06-19T08:39:55.394546+00:00'
+  source_trial: 859
+- pattern:
+    type: deep_eval
+    tier: 2
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 847'
+  added: '2026-06-19T02:05:05.895935+00:00'
+  source_trial: 847
+- pattern:
+    type: seed_batch
+    n_questions: 14
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 855'
+  added: '2026-06-19T03:25:44.146770+00:00'
+  source_trial: 855
+- pattern:
+    type: seed_batch
+    n_questions: 18
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 858'
+  added: '2026-06-19T08:37:05.843976+00:00'
+  source_trial: 858

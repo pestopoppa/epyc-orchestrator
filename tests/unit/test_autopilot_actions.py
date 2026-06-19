@@ -269,6 +269,9 @@ class _FakeJournal:
     def insights_text(self, n):
         return "(no insights yet)"
 
+    def all_entries(self):
+        return []
+
     def recent(self, n):
         return []
 
@@ -491,11 +494,13 @@ def test_code_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None
 
 
 def test_distill_knowledge_returns_evolution_manager_species() -> None:
-    """Without evo/strategy_store, distill_knowledge logs warning and returns None."""
+    """Without evo/strategy_store, distill_knowledge is a journalable invalid outcome."""
     result, species = actions._action_distill_knowledge(
         {"type": "distill_knowledge"}, _ctx(evo=None, strategy_store=None),
     )
-    assert result is None
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert "missing evo or strategy_store" in result.reason
     assert species == "evolution_manager"
 
 
@@ -535,6 +540,27 @@ def test_distill_knowledge_uses_superseded_journal_view() -> None:
     assert species == "evolution_manager"
     assert result is None
     assert evo.journal_entries == ["folded"]
+
+
+def test_distill_knowledge_failed_result_returns_invalid_skip() -> None:
+    class FakeEvolutionManager:
+        def distill(self, *, journal_entries, strategy_store, last_n, trial_id):
+            return {"status": "failed", "reason": "LLM invocation failed"}
+
+    result, species = actions._action_distill_knowledge(
+        {"type": "distill_knowledge", "last_n": 7},
+        _ctx(
+            evo=FakeEvolutionManager(),
+            strategy_store=object(),
+            journal=_FakeJournal(),
+            state={"trial_counter": 42},
+        ),
+    )
+
+    assert species == "evolution_manager"
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "invalid"
+    assert result.reason == "distill_knowledge failed: LLM invocation failed"
 
 
 def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> None:

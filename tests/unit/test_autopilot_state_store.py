@@ -70,6 +70,14 @@ def test_check_blacklist_matches_full_pattern() -> None:
     ) == "no"
 
 
+def test_check_blacklist_prefers_latest_duplicate_pattern() -> None:
+    bl = [
+        {"pattern": {"type": "x"}, "reason": "first"},
+        {"pattern": {"type": "x"}, "reason": "latest"},
+    ]
+    assert state_store.check_blacklist({"type": "x"}, bl) == "latest"
+
+
 def test_check_blacklist_no_match_returns_none() -> None:
     bl = [{"pattern": {"type": "x"}, "reason": "no"}]
     assert state_store.check_blacklist({"type": "y"}, bl) is None
@@ -107,6 +115,26 @@ def test_append_blacklist_appends_to_existing(tmp_path) -> None:
     data = yaml.safe_load(bl_path.read_text())
     assert len(data["blacklist"]) == 2
     assert data["blacklist"][1]["reason"] == "second"
+
+
+def test_append_blacklist_updates_duplicate_pattern(tmp_path) -> None:
+    bl_path = tmp_path / "bl.yaml"
+    bl_path.write_text(yaml.dump({"blacklist": [
+        {"pattern": {"type": "x"}, "reason": "first", "source_trial": 1},
+        {"pattern": {"type": "y"}, "reason": "second", "source_trial": 2},
+        {"pattern": {"type": "x"}, "reason": "older duplicate", "source_trial": 3},
+    ]}))
+    state_store.append_blacklist(
+        {"type": "x"}, trial_id=4, reason="latest", blacklist_path=bl_path,
+    )
+    data = yaml.safe_load(bl_path.read_text())
+    assert len(data["blacklist"]) == 2
+    assert [entry["pattern"] for entry in data["blacklist"]] == [
+        {"type": "y"},
+        {"type": "x"},
+    ]
+    assert data["blacklist"][1]["reason"] == "latest"
+    assert data["blacklist"][1]["source_trial"] == 4
 
 
 def test_append_blacklist_skips_type_only_low_risk_action(tmp_path) -> None:
