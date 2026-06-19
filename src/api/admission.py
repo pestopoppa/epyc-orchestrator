@@ -54,18 +54,6 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
 
-# Degraded fallback only. Normal defaults are generated from stack priors.
-FALLBACK_LIMITS: dict[str, int] = {
-    "http://localhost:8070": 2,
-    "http://localhost:8072": 1,
-    "http://localhost:8080": 2,
-    "http://localhost:8082": 1,
-    "http://localhost:8083": 2,
-    "http://localhost:8085": 1,
-    "http://localhost:8086": 2,
-    "http://localhost:8087": 1,
-}
-
 # Embedding servers (8090-8095) are not gated — they're lightweight.
 
 
@@ -73,16 +61,55 @@ def _limits_from_stack_priors(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
     return live_stack_serving_slot_limits(path)
 
 
+def _manifest_server_slots(server: dict[str, object], serial_roles: set[str]) -> int:
+    roles = server.get("roles")
+    primary_role = roles[0] if isinstance(roles, list) and roles else None
+    if server.get("worker_pool") is True:
+        return 4 if server.get("worker_type") == "fast" else 1
+    if server.get("vision") is True:
+        return 1 if server.get("vision_type") == "escalation" else 2
+    if isinstance(primary_role, str) and primary_role in serial_roles:
+        return 1
+    return 2
+
+
+def _limits_from_stack_manifest() -> dict[str, int]:
+    """Return degraded admission limits from the computed stack manifest."""
+    try:
+        from scripts.server.stack_manifest import HOT_SERVERS, SERIAL_ROLES, WARM_SERVERS
+    except Exception:
+        logger.warning("Stack manifest admission fallback unavailable", exc_info=True)
+        return {}
+
+    limits: dict[str, int] = {}
+    serial_roles = set(SERIAL_ROLES)
+    for server in [*HOT_SERVERS, *WARM_SERVERS]:
+        if not isinstance(server, dict):
+            continue
+        if server.get("embedding") is True:
+            continue
+        port = server.get("port")
+        if not isinstance(port, int):
+            continue
+        limits[f"http://localhost:{port}"] = _manifest_server_slots(server, serial_roles)
+    return limits
+
+
+# Compatibility export for tests and callers that inspect degraded defaults.
+# _load_default_limits() recomputes from the manifest at call time.
+FALLBACK_LIMITS: dict[str, int] = _limits_from_stack_manifest()
+
+
 def _load_default_limits(path: Path = STACK_PRIORS_PATH) -> dict[str, int]:
     try:
         limits = _limits_from_stack_priors(path)
     except (OSError, AttributeError, TypeError):
-        logger.warning("Falling back to static admission limits", exc_info=True)
-        return dict(FALLBACK_LIMITS)
+        logger.warning("Falling back to stack-manifest admission limits", exc_info=True)
+        return _limits_from_stack_manifest()
     if limits:
         return limits
-    logger.warning("Falling back to static admission limits; no stack-prior limits found")
-    return dict(FALLBACK_LIMITS)
+    logger.warning("Falling back to stack-manifest admission limits; no stack-prior limits found")
+    return _limits_from_stack_manifest()
 
 
 DEFAULT_LIMITS: dict[str, int] = _load_default_limits()
@@ -96,7 +123,7 @@ class AdmissionController:
     """
 
     def __init__(self, limits: dict[str, int] | None = None):
-        self._limits = limits or DEFAULT_LIMITS
+        self._limits = dict(limits) if limits is not None else _load_default_limits()
         self._semaphores: dict[str, threading.Semaphore] = {
             url: threading.Semaphore(n) for url, n in self._limits.items()
         }

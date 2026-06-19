@@ -9,6 +9,7 @@ from src.api.admission import (
     AdmissionController,
     FALLBACK_LIMITS,
     _limits_from_stack_priors,
+    _limits_from_stack_manifest,
     _load_default_limits,
 )
 
@@ -74,6 +75,16 @@ class TestAdmissionController:
                 "waiting_background": 0,
             }
         }
+
+    def test_constructor_refreshes_default_limits_when_unspecified(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.api.admission._load_default_limits",
+            lambda path=None: {"http://localhost:9001": 3},
+        )
+
+        ctrl = AdmissionController()
+
+        assert ctrl.get_status()["http://localhost:9001"]["limit"] == 3
 
     def test_limits_from_stack_priors_includes_shared_replica_ports(self, tmp_path: Path):
         priors = tmp_path / "stack_priors.yaml"
@@ -161,6 +172,49 @@ class TestAdmissionController:
         priors.write_text("roles: [not, valid", encoding="utf-8")
 
         assert _load_default_limits(priors) == FALLBACK_LIMITS
+
+    def test_manifest_fallback_derives_limits_and_skips_embedders(self, monkeypatch):
+        from scripts.server import stack_manifest
+
+        monkeypatch.setattr(
+            stack_manifest,
+            "HOT_SERVERS",
+            [
+                {"port": 9100, "roles": ["frontdoor"]},
+                {"port": 9101, "roles": ["worker_fast"], "worker_pool": True, "worker_type": "fast"},
+                {"port": 9102, "roles": ["worker_general"], "worker_pool": True},
+                {"port": 9103, "roles": ["vision_escalation"], "vision": True, "vision_type": "escalation"},
+                {"port": 9190, "roles": ["embedder"], "embedding": True},
+            ],
+        )
+        monkeypatch.setattr(stack_manifest, "WARM_SERVERS", [])
+        monkeypatch.setattr(stack_manifest, "SERIAL_ROLES", {"frontdoor"})
+
+        assert _limits_from_stack_manifest() == {
+            "http://localhost:9100": 1,
+            "http://localhost:9101": 4,
+            "http://localhost:9102": 1,
+            "http://localhost:9103": 1,
+        }
+
+    def test_load_default_limits_recomputes_manifest_fallback(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ):
+        from scripts.server import stack_manifest
+
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(yaml.safe_dump({"roles": {}}), encoding="utf-8")
+        monkeypatch.setattr(
+            stack_manifest,
+            "HOT_SERVERS",
+            [{"port": 9200, "roles": ["new_live_role"]}],
+        )
+        monkeypatch.setattr(stack_manifest, "WARM_SERVERS", [])
+        monkeypatch.setattr(stack_manifest, "SERIAL_ROLES", set())
+
+        assert _load_default_limits(priors) == {"http://localhost:9200": 2}
 
     def test_thread_safety(self):
         """Concurrent acquire/release should not corrupt state."""
