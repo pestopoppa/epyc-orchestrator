@@ -243,17 +243,50 @@ def test_discover_default_roles_fallback_prefers_active_discovery(monkeypatch):
     assert _MOD._discover_default_roles_fallback() == ["worker_general"]
 
 
-def test_discover_default_roles_fallback_uses_legacy_tuple_when_empty(monkeypatch):
+def test_discover_default_roles_fallback_uses_emergency_role_when_empty(monkeypatch):
     monkeypatch.setattr(_MOD, "discover_active_roles", lambda registry_path=None: [])
 
-    assert _MOD._discover_default_roles_fallback() == [
-        "frontdoor",
-        "coder_escalation",
-        "worker_general",
-        "architect_general",
-        "worker_vision",
-        "vision_escalation",
-    ]
+    assert _MOD._discover_default_roles_fallback() == ["frontdoor"]
+
+
+def test_read_registry_topology_derives_degraded_ports_and_heavy_set(tmp_path: Path):
+    registry_path = tmp_path / "model_registry.yaml"
+    registry_path.write_text(
+        """
+server_mode:
+  frontdoor:
+    model: frontdoor.gguf
+    port: 8070
+    memory_gb: 37
+  worker:
+    model: worker.gguf
+    port: 8072
+    memory_gb: 16
+  architect_general:
+    model: architect.gguf
+    port: 8083
+    memory_gb: 69
+  voice_server:
+    model_type: whisper
+    port: 8099
+""",
+        encoding="utf-8",
+    )
+
+    topology = _MOD._read_registry_topology(registry_path)
+
+    assert topology["role_port"] == {
+        "architect_general": 8083,
+        "frontdoor": 8070,
+        "worker_general": 8072,
+    }
+    assert topology["model_ports"] == [8070, 8072, 8083]
+    assert topology["heavy_ports"] == {8070, 8083}
+    assert topology["role_cost_tier"] == {
+        "architect_general": 4,
+        "frontdoor": 2,
+        "worker_general": 1,
+    }
 
 
 def test_discover_active_roles_includes_registry_role_timeouts(tmp_path: Path):

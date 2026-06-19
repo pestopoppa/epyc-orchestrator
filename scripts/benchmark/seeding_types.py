@@ -41,7 +41,14 @@ STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.y
 STACK_PRIOR_SEEDING_EXCLUDED_ROLES = frozenset({
     "toolrunner", "worker_math", "worker_summarize",
 })
+SEEDING_EXCLUDED_ROLES = frozenset({
+    "voice_server", "document_formalizer",
+    "nextplaid_code", "nextplaid_docs",
+    "dev", "reap_25b",
+})
 HEAVY_MODEL_MEM_GB_THRESHOLD = 18.0
+_COST_TIER_1_MAX_MEM_GB = 18.0
+_COST_TIER_2_MAX_MEM_GB = 40.0
 
 EVAL_DIR = RESEARCH_ROOT / "benchmarks" / "results" / "eval"
 SEEN_FILE = EVAL_DIR / "seen_questions.jsonl"
@@ -114,11 +121,25 @@ def _cost_tier_from_stack_priors(role_name: str, record: dict[str, Any]) -> int:
     try:
         cost = float(memory_cost)
     except (TypeError, ValueError):
-        return ROLE_COST_TIER.get(role_name, 3)
+        model = record.get("model")
+        mem_gb = model.get("mem_gb") if isinstance(model, dict) else None
+        return _cost_tier_from_model_mem(mem_gb) or ROLE_COST_TIER.get(role_name, 3)
     if cost <= 1.0:
         return ROLE_COST_TIER.get(role_name, 2)
     if cost <= 2.0:
         return 3
+    return 4
+
+
+def _cost_tier_from_model_mem(mem_gb: Any) -> int | None:
+    try:
+        mem = float(mem_gb)
+    except (TypeError, ValueError):
+        return None
+    if mem <= _COST_TIER_1_MAX_MEM_GB:
+        return 1
+    if mem <= _COST_TIER_2_MAX_MEM_GB:
+        return 2
     return 4
 
 
@@ -190,6 +211,23 @@ def _primary_port_from_serving(serving: dict[str, Any]) -> int | None:
     return None
 
 
+# Map registry keys to the role names the orchestrator accepts for force_role.
+# Most keys match directly; add entries here only for mismatches.
+# When renaming roles, update this mapping.
+_REGISTRY_KEY_TO_ROLE = {
+    "worker": "worker_general",
+}
+
+
+def _canonical_role_name(role_name: str) -> str:
+    try:
+        from src.roles import Role
+    except ImportError:
+        return role_name
+    canonical = Role.from_string(role_name)
+    return canonical.value if canonical is not None else role_name
+
+
 def _read_stack_prior_topology(
     stack_priors_path: Path = STACK_PRIORS_PATH,
 ) -> dict[str, Any]:
@@ -225,6 +263,71 @@ def _read_stack_prior_topology(
     }
 
 
+def _read_registry_topology(
+    registry_path: Path | None = None,
+) -> dict[str, Any]:
+    """Read degraded benchmark topology from the lean model registry.
+
+    Generated stack priors remain primary. This fallback exists for broken or
+    unavailable generated artifacts and avoids preserving a separate role/port
+    table in the benchmark harness.
+    """
+    registry_path = registry_path or PROJECT_ROOT / "orchestration" / "model_registry.yaml"
+    try:
+        with registry_path.open() as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+    roles_section = data.get("server_mode", {})
+    if not isinstance(roles_section, dict):
+        return {}
+
+    role_port: dict[str, int] = {}
+    role_cost_tier: dict[str, int] = {}
+    model_ports: set[int] = set()
+    heavy_ports: set[int] = set()
+
+    for role_key, role_def in roles_section.items():
+        if not isinstance(role_key, str) or not isinstance(role_def, dict):
+            continue
+        if role_key in SEEDING_EXCLUDED_ROLES:
+            continue
+        if "model" not in role_def and "model_type" not in role_def:
+            continue
+        model_type = role_def.get("model_type", "gguf")
+        if model_type not in ("gguf", "gguf_vlm"):
+            continue
+
+        role_name = _canonical_role_name(_REGISTRY_KEY_TO_ROLE.get(role_key, role_key))
+        port = role_def.get("port")
+        if not isinstance(port, int):
+            continue
+
+        role_port[role_name] = port
+        model_ports.add(port)
+
+        mem_gb = role_def.get("memory_gb")
+        try:
+            if float(mem_gb) >= HEAVY_MODEL_MEM_GB_THRESHOLD:
+                heavy_ports.add(port)
+        except (TypeError, ValueError):
+            pass
+
+        tier = _cost_tier_from_model_mem(mem_gb)
+        if tier is not None:
+            role_cost_tier[role_name] = tier
+
+    if not role_port:
+        return {}
+    return {
+        "role_port": role_port,
+        "role_cost_tier": role_cost_tier,
+        "heavy_ports": heavy_ports,
+        "model_ports": sorted(model_ports),
+    }
+
+
 # ── Orchestrator defaults ─────────────────────────────────────────────
 
 DEFAULT_ORCHESTRATOR_URL = "http://localhost:8000"
@@ -240,10 +343,7 @@ DEFAULT_SUITES = [
     "thinking", "general", "instruction_precision",
     "vl", "tool_compliance",
 ]
-_DEFAULT_ROLES_FALLBACK = [
-    "frontdoor", "coder_escalation", "worker_general",
-    "architect_general", "worker_vision", "vision_escalation",
-]
+_EMERGENCY_DEFAULT_ROLES_FALLBACK = ["frontdoor"]
 
 
 def _discover_default_roles_fallback() -> list[str]:
@@ -258,7 +358,7 @@ def _discover_default_roles_fallback() -> list[str]:
             roles.append(name)
         if roles:
             return roles
-    return list(_DEFAULT_ROLES_FALLBACK)
+    return list(_EMERGENCY_DEFAULT_ROLES_FALLBACK)
 
 
 DEFAULT_ROLES = _read_stack_prior_default_roles() or _discover_default_roles_fallback()
@@ -319,30 +419,22 @@ THREE_WAY_COST_TIER: dict[str, int] = {
 
 
 # ── Server topology ──────────────────────────────────────────────────
-# Generated stack priors are preferred. Static values are degraded/offline
-# fallbacks for historical fixtures and broken local checkouts.
-
-_HEAVY_PORTS_FALLBACK = {8070, 8083, 8085, 8087}
-
-_ROLE_PORT_FALLBACK: dict[str, int] = {
-    "frontdoor": 8070,
-    "coder_escalation": 8070,
-    "worker_summarize": 8070,
-    "worker_general": 8072,
-    "worker_vision": 8086,
-    "vision_escalation": 8087,
-    "architect_general": 8083,
-    "ingest_long_context": 8085,
-}
-
-_MODEL_PORTS_FALLBACK = [8070, 8072, 8083, 8085, 8086, 8087]
+# Generated stack priors are preferred. Registry-derived topology is the
+# degraded/offline fallback for historical fixtures and broken generated
+# artifacts; empty sets preserve fail-closed behavior if both sources are gone.
 
 _STACK_PRIOR_TOPOLOGY = _read_stack_prior_topology()
+_REGISTRY_TOPOLOGY = _read_registry_topology()
 ROLE_PORT: dict[str, int] = dict(
-    _STACK_PRIOR_TOPOLOGY.get("role_port") or _ROLE_PORT_FALLBACK
+    _STACK_PRIOR_TOPOLOGY.get("role_port") or _REGISTRY_TOPOLOGY.get("role_port") or {}
 )
-HEAVY_PORTS = set(_STACK_PRIOR_TOPOLOGY.get("heavy_ports") or _HEAVY_PORTS_FALLBACK)
-MODEL_PORTS = list(_STACK_PRIOR_TOPOLOGY.get("model_ports") or _MODEL_PORTS_FALLBACK)
+ROLE_COST_TIER.update(_REGISTRY_TOPOLOGY.get("role_cost_tier") or {})
+HEAVY_PORTS = set(
+    _STACK_PRIOR_TOPOLOGY.get("heavy_ports") or _REGISTRY_TOPOLOGY.get("heavy_ports") or set()
+)
+MODEL_PORTS = list(
+    _STACK_PRIOR_TOPOLOGY.get("model_ports") or _REGISTRY_TOPOLOGY.get("model_ports") or []
+)
 
 STACK_SCRIPT = PROJECT_ROOT / "scripts" / "server" / "orchestrator_stack.py"
 
@@ -351,28 +443,6 @@ STACK_SCRIPT = PROJECT_ROOT / "scripts" / "server" / "orchestrator_stack.py"
 # Roles excluded from seeding evaluation (non-LLM infrastructure).
 # When changing the stack, update this set for new non-LLM services.
 # See adaptation surface docs in wiki/autopilot-seeder-roles.md.
-
-SEEDING_EXCLUDED_ROLES = frozenset({
-    "voice_server", "document_formalizer",
-    "nextplaid_code", "nextplaid_docs",
-    "dev", "reap_25b",
-})
-
-# Map registry keys to the role names the orchestrator accepts for force_role.
-# Most keys match directly; add entries here only for mismatches.
-# When renaming roles, update this mapping.
-_REGISTRY_KEY_TO_ROLE = {
-    "worker": "worker_general",
-}
-
-
-def _canonical_role_name(role_name: str) -> str:
-    try:
-        from src.roles import Role
-    except ImportError:
-        return role_name
-    canonical = Role.from_string(role_name)
-    return canonical.value if canonical is not None else role_name
 
 
 def discover_active_roles(
