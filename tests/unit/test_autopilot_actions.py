@@ -276,6 +276,76 @@ class _FakeJournal:
         return []
 
 
+class _RecordingGate:
+    def __init__(self, *, use_sequential: bool):
+        self.use_sequential = use_sequential
+        self.calls: list[dict] = []
+
+    def check(self, result, **kwargs):
+        self.calls.append({"result": result, "kwargs": kwargs})
+        return SimpleNamespace(seq={"state": "confirmed"} if kwargs else None)
+
+
+def test_action_gate_check_default_off_uses_legacy_call() -> None:
+    gate = _RecordingGate(use_sequential=False)
+    result = _eval_result()
+
+    verdict = actions._action_gate_check(
+        {"type": "prompt_mutation"},
+        _ctx(gate=gate),
+        result,
+    )
+
+    assert verdict.seq is None
+    assert len(gate.calls) == 1
+    assert gate.calls[0]["kwargs"] == {}
+    assert "seq_action_gate_check" not in result.details
+
+
+def test_action_gate_check_threads_seq_inputs(monkeypatch) -> None:
+    gate = _RecordingGate(use_sequential=True)
+    result = _eval_result()
+    result.question_results = [{"qid": 1, "ok": True}]
+
+    monkeypatch.setattr(
+        autopilot,
+        "_seq_inputs_for_trial",
+        lambda **kwargs: {
+            "baseline_profile": {1: True},
+            "baseline_task_rate": 12.5,
+            "prior_quality_obs": [(7, 1.2)],
+            "prior_rate_obs": [(8, 0.3)],
+            "candidate": "candidate-x",
+            "core_id": "core-v",
+        },
+    )
+    monkeypatch.setattr(autopilot, "task_rate_qph_from", lambda _result: 42.0)
+
+    verdict = actions._action_gate_check(
+        {"type": "prompt_mutation"},
+        _ctx(gate=gate, journal=_FakeJournal()),
+        result,
+    )
+
+    assert verdict.seq == {"state": "confirmed"}
+    kwargs = gate.calls[0]["kwargs"]
+    assert kwargs["question_results"] == [{"qid": 1, "ok": True}]
+    assert kwargs["task_rate"] == 42.0
+    assert kwargs["baseline_profile"] == {1: True}
+    assert kwargs["baseline_task_rate"] == 12.5
+    assert kwargs["prior_quality_obs"] == [(7, 1.2)]
+    assert kwargs["prior_rate_obs"] == [(8, 0.3)]
+    assert kwargs["candidate"] == "candidate-x"
+    assert kwargs["core_id"] == "core-v"
+    assert result.details["seq_action_gate_check"] == {
+        "enabled": True,
+        "applied": True,
+        "reason": "",
+        "candidate": "candidate-x",
+        "core_id": "core-v",
+    }
+
+
 class _FakeSwarm:
     def __init__(self):
         self.epochs: list[str] = []

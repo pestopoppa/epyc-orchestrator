@@ -300,6 +300,95 @@ def _build_mutation_context(
     return failure_context, last_per_suite
 
 
+def _autopilot_attr(name: str) -> Any | None:
+    """Resolve helpers from the already-loaded autopilot module without import cycles."""
+    import sys
+
+    for module_name in ("scripts.autopilot.autopilot", "autopilot", "__main__"):
+        mod = sys.modules.get(module_name)
+        if mod is not None and hasattr(mod, name):
+            return getattr(mod, name)
+    return None
+
+
+def _record_seq_action_gate(
+    eval_result: EvalResult,
+    *,
+    applied: bool,
+    reason: str = "",
+    candidate: str = "",
+    core_id: str = "",
+) -> None:
+    details = getattr(eval_result, "details", None)
+    if isinstance(details, dict):
+        details["seq_action_gate_check"] = {
+            "enabled": True,
+            "applied": applied,
+            "reason": reason,
+            "candidate": candidate,
+            "core_id": core_id,
+        }
+
+
+def _action_gate_check(
+    action: dict[str, Any],
+    ctx: _ActionContext,
+    eval_result: EvalResult,
+):
+    """Run the action-local revert gate, threading W4 seq inputs when available."""
+    if not getattr(ctx.gate, "use_sequential", False):
+        return ctx.gate.check(eval_result)
+
+    seq_inputs_for_trial = _autopilot_attr("_seq_inputs_for_trial")
+    task_rate_qph_from = _autopilot_attr("task_rate_qph_from")
+    if seq_inputs_for_trial is None or task_rate_qph_from is None:
+        _record_seq_action_gate(
+            eval_result,
+            applied=False,
+            reason="autopilot_seq_helpers_unavailable",
+        )
+        log.warning("Sequential action gate fell back to legacy check: helpers unavailable")
+        return ctx.gate.check(eval_result)
+    if ctx.journal is None:
+        _record_seq_action_gate(eval_result, applied=False, reason="journal_unavailable")
+        log.warning("Sequential action gate fell back to legacy check: journal unavailable")
+        return ctx.gate.check(eval_result)
+
+    try:
+        seq_inputs = seq_inputs_for_trial(
+            journal=ctx.journal,
+            action=action,
+            tier=eval_result.tier,
+        )
+        verdict = ctx.gate.check(
+            eval_result,
+            question_results=list(getattr(eval_result, "question_results", []) or []),
+            task_rate=task_rate_qph_from(eval_result),
+            baseline_profile=seq_inputs["baseline_profile"],
+            baseline_task_rate=seq_inputs["baseline_task_rate"],
+            prior_quality_obs=seq_inputs["prior_quality_obs"],
+            prior_rate_obs=seq_inputs["prior_rate_obs"],
+            candidate=seq_inputs["candidate"],
+            core_id=seq_inputs["core_id"],
+        )
+        _record_seq_action_gate(
+            eval_result,
+            applied=verdict.seq is not None,
+            reason="" if verdict.seq is not None else "seq_inputs_not_ready",
+            candidate=seq_inputs.get("candidate", ""),
+            core_id=seq_inputs.get("core_id", ""),
+        )
+        return verdict
+    except Exception as exc:  # noqa: BLE001 - action revert gate must remain non-fatal
+        _record_seq_action_gate(
+            eval_result,
+            applied=False,
+            reason=f"seq_action_gate_error:{type(exc).__name__}",
+        )
+        log.warning("Sequential action gate fell back to legacy check: %s", exc)
+        return ctx.gate.check(eval_result)
+
+
 def _simplicity_check(
     mutation, eval_result, ctx: _ActionContext, *, kind: str, log_label: str,
 ) -> tuple[bool, str | None]:
@@ -419,7 +508,7 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     eval_result = ctx.tower.hybrid_eval()
 
     # Revert if quality drops
-    verdict = ctx.gate.check(eval_result)
+    verdict = _action_gate_check(action, ctx, eval_result)
     if not verdict:
         log.warning("Prompt mutation failed safety gate, reverting")
         ctx.forge.revert_mutation(mutation)
@@ -481,7 +570,7 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
     eval_result = ctx.tower.hybrid_eval()
 
     # Safety gate check
-    verdict = ctx.gate.check(eval_result)
+    verdict = _action_gate_check(action, ctx, eval_result)
     if not verdict:
         log.warning("GEPA mutation failed safety gate, reverting")
         ctx.forge.revert_mutation(mutation)
@@ -556,7 +645,7 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
     ctx.forge.apply_code_mutation(mutation)
     eval_result = ctx.tower.hybrid_eval()
 
-    verdict = ctx.gate.check(eval_result)
+    verdict = _action_gate_check(action, ctx, eval_result)
     if not verdict:
         log.warning("Code mutation failed safety gate, reverting")
         ctx.forge.revert_code_mutation(mutation)
@@ -612,7 +701,7 @@ def _action_structural_experiment(action: dict[str, Any], ctx: _ActionContext):
     eval_result.details.setdefault("flag_apply_result", apply_result)
 
     # Revert if quality drops
-    verdict = ctx.gate.check(eval_result)
+    verdict = _action_gate_check(action, ctx, eval_result)
     if not verdict:
         log.warning("Structural experiment failed safety gate, reverting")
         # Revert flags
@@ -662,7 +751,7 @@ def _action_structural_prune(action: dict[str, Any], ctx: _ActionContext):
     eval_result = ctx.tower.hybrid_eval()
 
     # Acceptance: safety gate passes AND instruction_token_ratio decreased
-    verdict_result = ctx.gate.check(eval_result)
+    verdict_result = _action_gate_check(action, ctx, eval_result)
     ratio_decreased = eval_result.instruction_token_ratio < pre_ratio
 
     if not verdict_result or not ratio_decreased:
