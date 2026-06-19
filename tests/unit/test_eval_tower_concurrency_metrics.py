@@ -11,8 +11,63 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 
+import eval_tower  # noqa: E402
 from eval_tower import EvalTower, QuestionResult  # noqa: E402
 from safety_gate import Baseline, SafetyGate  # noqa: E402
+
+
+def test_eval_concurrency_env_override_still_wins(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "5")
+    monkeypatch.setattr(
+        eval_tower,
+        "_same_role_matrix_allows_eval_fanout",
+        lambda _role: False,
+    )
+
+    assert eval_tower._eval_concurrency() == 5
+
+
+def test_eval_concurrency_uses_topology_cap_when_matrix_allows(monkeypatch) -> None:
+    from src.runtime import instance_topology
+
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
+    monkeypatch.setattr(instance_topology, "max_safe_concurrency", lambda role: 3)
+    monkeypatch.setattr(
+        eval_tower,
+        "_same_role_matrix_allows_eval_fanout",
+        lambda role: role == "frontdoor",
+    )
+
+    assert eval_tower._eval_concurrency() == 3
+
+
+def test_eval_concurrency_falls_back_to_serial_when_matrix_blocks(monkeypatch) -> None:
+    from src.runtime import instance_topology
+
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
+    monkeypatch.setattr(instance_topology, "max_safe_concurrency", lambda _role: 3)
+    monkeypatch.setattr(
+        eval_tower,
+        "_same_role_matrix_allows_eval_fanout",
+        lambda _role: False,
+    )
+
+    assert eval_tower._eval_concurrency() == 1
+
+
+def test_eval_concurrency_falls_back_to_serial_when_matrix_stale(monkeypatch) -> None:
+    from src.scheduling import contention
+
+    monkeypatch.setattr(
+        contention,
+        "matrix_status",
+        lambda current_topology_hash: contention.MatrixStatus.STALE,
+    )
+    monkeypatch.setattr(contention, "topology_fingerprint", lambda _config: "hash")
+
+    assert not eval_tower._same_role_matrix_allows_eval_fanout("frontdoor")
 
 
 def test_aggregate_uses_batch_throughput_for_concurrent_objective() -> None:

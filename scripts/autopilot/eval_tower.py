@@ -200,19 +200,43 @@ DEFAULT_TIMEOUT = _default_eval_timeout()
 
 # Concurrent fan-out for sentinel/pool evaluations.
 #
-# Default behavior (WP-1): topology-derived safe-N from the bottleneck role
-# (`AUTOPILOT_EVAL_BOTTLENECK_ROLE`, default "frontdoor"). For the current
-# stack, that's 3 (full + q3 + q2 disjoint) — the largest fan-out that lands
-# every request on a cpuset disjoint from all the others under
-# ConcurrencyAwareBackend's full-first dispatcher. Roles whose full instance
-# covers all 0-95 (worker_general, architect_general) cap the default at 1.
+# Default behavior (J6/WP-7): matrix-aware topology safe-N from the bottleneck
+# role (`AUTOPILOT_EVAL_BOTTLENECK_ROLE`, default "frontdoor"). The topology
+# cap is the physical ceiling, and the same-role contention matrix must be
+# certified fresh + ALLOW for background/eval traffic before the default rises
+# above serial. Missing/stale/invalid matrix evidence fails closed to 1.
 #
 # Operators can still override via `AUTOPILOT_EVAL_CONCURRENCY=N`. The env
-# override always wins, even over the topology cap, because some test/diag
-# paths intentionally exceed it (e.g. WP-3 migration smoke tests).
+# override always wins, even over the topology/matrix cap, because some
+# test/diag paths intentionally exceed it (e.g. WP-3 migration smoke tests).
 #
-# Reference topology safe-N: frontdoor=3, ingest_long_context=3,
+# Reference certified safe-N: frontdoor=3, ingest_long_context=3,
 # vision_escalation=3, worker_general=1, architect_general=1, worker_vision=1.
+def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+        from src.scheduling.contention import (
+            MatrixStatus,
+            PairDecision,
+            TrafficClass,
+            load_contention_matrix,
+            matrix_status,
+            pair_policy,
+            topology_fingerprint,
+        )
+
+        current_hash = topology_fingerprint(NUMA_CONFIG)
+        if matrix_status(current_topology_hash=current_hash) != MatrixStatus.OK:
+            return False
+        matrix = load_contention_matrix()
+        return (
+            pair_policy(role, role, TrafficClass.BACKGROUND, matrix=matrix)
+            == PairDecision.ALLOW
+        )
+    except Exception:
+        return False
+
+
 def _eval_concurrency() -> int:
     raw = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
     if raw is not None:
@@ -223,7 +247,12 @@ def _eval_concurrency() -> int:
     bottleneck = os.environ.get("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
     try:
         from src.runtime.instance_topology import max_safe_concurrency
-        return max(1, max_safe_concurrency(bottleneck))
+        topology_cap = max(1, max_safe_concurrency(bottleneck))
+        if topology_cap <= 1:
+            return 1
+        if not _same_role_matrix_allows_eval_fanout(bottleneck):
+            return 1
+        return topology_cap
     except Exception:
         return 1
 
