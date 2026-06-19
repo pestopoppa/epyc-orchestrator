@@ -104,6 +104,34 @@ class TestStreamPolicy:
             {"architect_general"}
         )
 
+    def test_safe_non_stream_roles_recomputes_env_threshold(self, tmp_path, monkeypatch):
+        import src.runtime.inference_tap as tap
+
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            yaml.safe_dump(
+                {
+                    "roles": {
+                        "architect_general": {
+                            "deployment_status": "live_stack",
+                            "model": {"mem_gb": 69.0},
+                        },
+                        "frontdoor": {
+                            "deployment_status": "live_stack",
+                            "model": {"mem_gb": 37.0},
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("INFERENCE_TAP_SAFE_NON_STREAM_MIN_MEM_GB", "80")
+        assert tap.safe_non_stream_roles(priors) == frozenset()
+
+        monkeypatch.setenv("INFERENCE_TAP_SAFE_NON_STREAM_MIN_MEM_GB", "64")
+        assert tap.safe_non_stream_roles(priors) == frozenset({"architect_general"})
+
     def test_should_stream_role_safe_mode_uses_derived_policy(self, monkeypatch):
         import src.runtime.inference_tap as tap
 

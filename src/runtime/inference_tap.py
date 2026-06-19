@@ -118,13 +118,28 @@ def _degraded_safe_non_stream_roles_from_stack_manifest() -> frozenset[str] | No
     return frozenset(NO_SPEC_DECODE_ROLES)
 
 
-_DERIVED_SAFE_NON_STREAM_ROLES = _safe_non_stream_roles_from_stack_priors()
-if _DERIVED_SAFE_NON_STREAM_ROLES is None:
-    SAFE_NON_STREAM_ROLES = (
-        _degraded_safe_non_stream_roles_from_stack_manifest() or frozenset()
-    )
-else:
-    SAFE_NON_STREAM_ROLES = _DERIVED_SAFE_NON_STREAM_ROLES
+def safe_non_stream_roles(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> frozenset[str]:
+    """Return the current safe-mode non-stream role set.
+
+    Keep this dynamic so stack-prior or threshold changes are not frozen at
+    module import. Tests and legacy callers may monkeypatch
+    ``SAFE_NON_STREAM_ROLES``; honor that explicit override when present.
+    """
+    override = globals().get("SAFE_NON_STREAM_ROLES")
+    if isinstance(override, frozenset):
+        return override
+    derived = _safe_non_stream_roles_from_stack_priors(stack_priors_path)
+    if derived is not None:
+        return derived
+    return _degraded_safe_non_stream_roles_from_stack_manifest() or frozenset()
+
+
+def __getattr__(name: str) -> Any:
+    if name == "SAFE_NON_STREAM_ROLES":
+        return safe_non_stream_roles()
+    raise AttributeError(name)
 
 
 def _read_sentinel() -> str:
@@ -188,7 +203,7 @@ def should_stream_role(role: str) -> bool:
     if mode == "force":
         return True
     normalized = str(Role.from_string(role) or role)
-    return normalized not in SAFE_NON_STREAM_ROLES
+    return normalized not in safe_non_stream_roles()
 
 
 def _topology_hash() -> str:
