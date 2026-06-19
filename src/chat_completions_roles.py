@@ -14,22 +14,19 @@ Read live from ``ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES`` so an A/B can flip it
 from __future__ import annotations
 
 import os
+from typing import Any
 
-from src.roles import Role
 from src.registry.stack_priors import live_stack_role_records
+from src.roles import Role
+
+try:
+    from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
+except Exception:  # pragma: no cover - catastrophic import fallback
+    HOT_SERVERS = ()
+    WARM_SERVERS = ()
+    ROLE_LAUNCH_META = {}
 
 ENV_VAR = "ORCHESTRATOR_USE_CHAT_COMPLETIONS_ROLES"
-
-_DEGRADED_CHAT_COMPLETIONS_ROLES = frozenset(
-    {
-        str(Role.FRONTDOOR),
-        str(Role.CODER_ESCALATION),
-        str(Role.WORKER_GENERAL),
-        str(Role.WORKER_MATH),
-        str(Role.WORKER_SUMMARIZE),
-        str(Role.TOOLRUNNER),
-    }
-)
 
 
 def _live_chat_completions_roles() -> set[str]:
@@ -55,6 +52,53 @@ def _live_chat_completions_roles() -> set[str]:
     return roles
 
 
+def _launch_primary_for_role(role: str) -> tuple[str | None, dict[str, Any]]:
+    """Return the primary launch role and metadata for a raw or canonical role."""
+    canonical = Role.from_string(role)
+    candidates = [role]
+    if canonical is not None and str(canonical) not in candidates:
+        candidates.append(str(canonical))
+
+    for candidate in candidates:
+        meta = ROLE_LAUNCH_META.get(candidate)
+        if isinstance(meta, dict):
+            return candidate, meta
+
+    for primary, meta in ROLE_LAUNCH_META.items():
+        if not isinstance(meta, dict):
+            continue
+        shared = meta.get("shared_with_first_n")
+        if not isinstance(shared, list):
+            continue
+        if any(candidate in shared for candidate in candidates):
+            return str(primary), meta
+
+    return None, {}
+
+
+def _degraded_chat_completions_roles() -> set[str]:
+    """Derive the narrow fallback set from launch-manifest roles and order."""
+    roles: set[str] = set()
+    for server in tuple(HOT_SERVERS) + tuple(WARM_SERVERS):
+        if not isinstance(server, dict):
+            continue
+        for role in server.get("roles") or ():
+            if not isinstance(role, str):
+                continue
+
+            primary, meta = _launch_primary_for_role(role)
+            mode = meta.get("mode")
+            canonical = Role.from_string(role)
+            role_value = str(canonical) if canonical is not None else role
+
+            if mode == "default" and primary == str(Role.FRONTDOOR):
+                roles.add(role_value)
+            elif mode == "worker_pool" and meta.get("worker_type") == "explore":
+                roles.add(role_value)
+
+    return roles
+
+
 def chat_completions_roles() -> set[str]:
     """The set of roles that route through /v1/chat/completions (server-side jinja). Read live."""
     raw = os.environ.get(ENV_VAR)
@@ -62,4 +106,4 @@ def chat_completions_roles() -> set[str]:
         return {r.strip() for r in raw.split(",") if r.strip()}
 
     live_roles = _live_chat_completions_roles()
-    return live_roles or set(_DEGRADED_CHAT_COMPLETIONS_ROLES)
+    return live_roles or _degraded_chat_completions_roles()
