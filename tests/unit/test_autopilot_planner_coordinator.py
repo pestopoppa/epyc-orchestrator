@@ -670,27 +670,71 @@ def test_decision_carries_original_draft_action_after_substitution() -> None:
 
 
 def test_critique_prompt_surfaces_flag_and_feedback_context() -> None:
-    """The critic must SEE the flag schema, current flags, last-invalid action,
-    and blacklist (embedded via the planner prompt) and be told to use them."""
+    """The critic sees the measurement/constraint view, not the full prompt."""
     planner_prompt = (
+        "## Original Planning Instructions\n"
+        "FULL_PLANNER_MARKER_UNIQUE should never reach the critic.\n"
+        "### Evidence Power and Sequential Candidate Status\n"
+        "  - quality MDE: 0.070; seq verdict: accumulating\n"
+        "### System Health\n"
+        "  - nominal; no host contention detected\n"
+        "### Action Availability\n"
+        "  - graph_router unavailable until specialist_routing is OFF\n"
+        "### Blacklisted Configurations\n  some-entry\n"
         "### Feature Flags (live state + dependency rules)\n"
         "  - graph_router (currently OFF) requires [specialist_routing=OFF]\n"
         "### Last Non-Executing Action (validator/dispatch feedback)\n"
         "  reason: graph_router feature requires specialist_routing feature\n"
-        "### Blacklisted Configurations\n  some-entry\n"
+        "### Experiment Journal\n"
+        "  SHOULD_NOT_REACH_CRITIC\n"
     )
     out = planner_coordinator.build_critique_prompt(
         planner_prompt, "draft text",
         {"type": "structural_experiment", "flags": {"graph_router": True}}, {},
     )
-    # Context embedded:
+    # Selected context embedded:
+    assert "Selected Measurement and Constraint Context" in out
+    assert "Evidence Power and Sequential Candidate Status" in out
+    assert "quality MDE: 0.070" in out
+    assert "System Health" in out
+    assert "Action Availability" in out
     assert "Feature Flags" in out
     assert "Last Non-Executing Action" in out
     assert "Blacklisted Configurations" in out
     assert "specialist_routing" in out
+    # Full planner context not embedded:
+    assert "Original Planner Context" not in out
+    assert "FULL_PLANNER_MARKER_UNIQUE" not in out
+    assert "SHOULD_NOT_REACH_CRITIC" not in out
     # Instructions tell the critic to use them + that the verdict is binding:
     assert "BINDING" in out
     assert "dependencies are not all currently ON" in out
+    assert "below-MDE" in out
+
+
+def test_critique_prompt_caps_selected_sections() -> None:
+    long_feature_section = "x" * 2000
+    planner_prompt = (
+        "### Feature Flags\n"
+        f"{long_feature_section}\n"
+        "TAIL_MARKER_AFTER_LIMIT\n"
+    )
+    out = planner_coordinator.build_critique_prompt(
+        planner_prompt, "draft text", {"type": "seed_batch"}, {},
+    )
+    assert "... [truncated for critic context]" in out
+    assert "TAIL_MARKER_AFTER_LIMIT" not in out
+
+
+def test_critique_prompt_uses_safe_fallback_when_selected_sections_absent() -> None:
+    out = planner_coordinator.build_critique_prompt(
+        "## Planner internals\nFULL_PLANNER_MARKER_UNIQUE\n",
+        "draft text",
+        {"type": "seed_batch"},
+        {},
+    )
+    assert "selected planner context unavailable" in out
+    assert "FULL_PLANNER_MARKER_UNIQUE" not in out
 
 
 def test_open_primary_circuit_routes_directly_to_fallback() -> None:

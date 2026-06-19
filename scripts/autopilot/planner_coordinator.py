@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +60,15 @@ SAFE_FALLBACK_SEED_N = 14
 # exact failure the critic exists to catch (critic_reject_loop @708). Extend ONLY
 # with genuinely observational, non-mutating, non-looping action types.
 OBSERVATIONAL_ACTIONS: frozenset[str] = frozenset()
+_CRITIQUE_CONTEXT_HEADINGS = (
+    "### Evidence Power and Sequential Candidate Status",
+    "### System Health",
+    "### Action Availability",
+    "### Blacklisted Configurations",
+    "### Feature Flags",
+    "### Last Non-Executing Action",
+)
+_CRITIQUE_SECTION_CHAR_LIMIT = 1600
 
 # Claude planner drafts run a ~80KB prompt WITH tool access (Read/Grep/Glob) and
 # take 60-228s in practice; the old hard 300s default intermittently KILLED a
@@ -441,6 +451,7 @@ def build_critique_prompt(
     action: dict[str, Any],
     rationale: dict[str, Any],
 ) -> str:
+    selected_context = _selected_critique_context(planner_prompt)
     return f"""\
 You are the secondary AutoPilot planner reviewer.
 
@@ -451,13 +462,15 @@ validation, stale context, or an action that violates the single-variable rule.
 Your verdict is BINDING (draft_critique mode): a `reject` routes the action to a
 safe fallback, and a `revise` with a valid `revised_action` REPLACES the draft.
 Reject or revise (preferring a concrete `revised_action`) if the draft does any
-of the following — the relevant evidence is in the Original Planner Context:
+of the following — the relevant evidence is in the selected context below:
   - re-proposes a feature flag whose dependencies are not all currently ON (see
     the "Feature Flags" section: live state + dependency rules). Prefer a
     `revised_action` that enables the missing dependency first (one flag/trial).
   - repeats the "Last Non-Executing Action" (the validator/dispatch already
     rejected it; re-proposing it burns a trial and will be auto-blacklisted).
   - matches a "Blacklisted Configurations" entry.
+  - cites below-MDE or single-trial evidence as decisive without a reproduction
+    plan; use the "Evidence Power" section to reject unmeasurable proposals.
 Do NOT manufacture host-noise / contention narratives when System Health is
 nominal, and do NOT propose operator-domain actions (widening safety-gate
 thresholds, baseline refresh) — those are outside the autopilot action space.
@@ -476,9 +489,9 @@ Use revise only when you can provide a better single canonical action. Use
 reject only when the draft is unsafe or unsupported and no safe revision is
 available.
 
-## Original Planner Context
+## Selected Measurement and Constraint Context
 
-{planner_prompt}
+{selected_context}
 
 ## Draft Text
 
@@ -492,6 +505,30 @@ available.
 
 {json.dumps(rationale, indent=2, sort_keys=True)}
 """
+
+
+def _selected_critique_context(planner_prompt: str) -> str:
+    sections = [
+        section
+        for heading in _CRITIQUE_CONTEXT_HEADINGS
+        if (section := _extract_markdown_section(planner_prompt, heading))
+    ]
+    if not sections:
+        return "(selected planner context unavailable; critique only the parsed draft and rationale)"
+    return "\n\n".join(sections)
+
+
+def _extract_markdown_section(text: str, heading: str) -> str:
+    start = text.find(heading)
+    if start < 0:
+        return ""
+    tail = text[start:]
+    next_heading = re.search(r"\n#{2,3}\s+", tail[len(heading):])
+    end = len(heading) + next_heading.start() if next_heading else len(tail)
+    section = tail[:end].strip()
+    if len(section) <= _CRITIQUE_SECTION_CHAR_LIMIT:
+        return section
+    return section[:_CRITIQUE_SECTION_CHAR_LIMIT].rstrip() + "\n  ... [truncated for critic context]"
 
 
 def extract_critique(text: str) -> PlannerCritique:
