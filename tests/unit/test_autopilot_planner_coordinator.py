@@ -436,7 +436,7 @@ def test_active_reject_without_revision_uses_safe_seed_batch() -> None:
 
     assert decision.action is not None
     assert decision.action["type"] == "seed_batch"
-    assert decision.action["n_questions"] == 10
+    assert decision.action["n_questions"] == planner_coordinator.SAFE_FALLBACK_SEED_N
 
 
 def test_unparseable_critique_fails_closed_not_open() -> None:
@@ -643,6 +643,7 @@ def test_reconcile_active_reject_without_revision_is_safe_seed_batch() -> None:
     crit = PlannerCritique(decision="reject", issues=["unsupported"])
     out_action, _, _ = _reconcile(action, {}, "draft", crit, active=True)
     assert out_action["type"] == "seed_batch"
+    assert out_action["n_questions"] == planner_coordinator.SAFE_FALLBACK_SEED_N
 
 
 def test_decision_carries_original_draft_action_after_substitution() -> None:

@@ -50,6 +50,7 @@ MEDIUM_RISK_ACTIONS = {
     "distill_skillbank",
 }
 HIGH_RISK_ACTIONS = KNOWN_ACTION_TYPES - LOW_RISK_ACTIONS - MEDIUM_RISK_ACTIONS
+SAFE_FALLBACK_SEED_N = 14
 
 # Actions safe to DISPATCH WITHOUT a critic verdict (degraded/uncritiqued mode).
 # Intentionally EMPTY: when the binding critic is unavailable we PAUSE by default
@@ -595,7 +596,7 @@ def _reconcile(
     if critique.decision == "reject":
         safe_action = {
             "type": "seed_batch",
-            "n_questions": 10,
+            "n_questions": SAFE_FALLBACK_SEED_N,
             "suites": ["coder", "math"],
         }
         safe_rationale = {

@@ -177,6 +177,7 @@ SEQ_PROMOTION_FINAL_CONFIRM_E = float(
 SEQ_PROMOTION_FRESH_EVAL_TIER = int(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_FRESH_EVAL_TIER", "2")
 )
+SAFE_FALLBACK_SEED_N = 14
 
 # 2026-05-23 constrained-creativity planner knobs (gated on stagnation).
 # Lean prompt is the default; the rich rubric+synthesis fragment activates
@@ -1059,7 +1060,7 @@ def _force_metric_action_after_meta(
             int(state.get("consecutive_meta_actions", 0)),
         )
         return (
-            {"type": "seed_batch", "n_questions": 10},
+            {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N},
             {
                 **(rationale or {}),
                 "meta_action_forced_metric_trial": True,
@@ -2784,7 +2785,7 @@ def _run_loop_inner(
 
         if not action:
             log.warning("No action proposed, defaulting to seed_batch")
-            action = {"type": "seed_batch", "n_questions": 10}
+            action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
 
         # Meta actions are allowed as occasional bookkeeping, but a repeated
         # metric-free action means the planner is avoiding the experiment loop.
@@ -3742,7 +3743,7 @@ def _auto_action(
 ) -> dict[str, Any]:
     """Generate an action without LLM controller (autonomous fallback)."""
     if memory_count < 500 or species == "seeder":
-        return {"type": "seed_batch", "n_questions": 10}
+        return {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
     elif species == "numeric_swarm":
         return {"type": "numeric_trial", "surface": "memrl_retrieval"}
     elif species == "prompt_forge":
@@ -3761,7 +3762,7 @@ def _auto_action(
         return {"type": "structural_experiment", "flags": {"think_harder": True}}
     elif species == "evolution_manager":
         return {"type": "distill_knowledge", "last_n": 10}
-    return {"type": "seed_batch", "n_questions": 10}
+    return {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
 
 
 def _git_tag(tag: str, message: str) -> None:
