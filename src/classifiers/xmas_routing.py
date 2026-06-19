@@ -541,6 +541,7 @@ def build_xmas_routing_metadata(
             for key, value in result.matched_terms.items()
         },
         "suggested_role": None,
+        "candidate_metrics": {},
         "winner_table_version": None,
         "winner_table_path": str(cfg.winner_table_path) if cfg.winner_table_path else None,
         "winner_table_status": "not_configured",
@@ -563,6 +564,11 @@ def build_xmas_routing_metadata(
         meta["winner_table_error"] = str(exc)[:200]
     else:
         meta["suggested_role"] = table.winner_for(result.domain, result.function)
+        cell_evidence = table.evidence.get(result.cell) or {}
+        candidates = cell_evidence.get("candidates") or {}
+        meta["candidate_metrics"] = candidates if isinstance(candidates, dict) else {}
+        if cell_evidence:
+            meta["cell_sample_count"] = cell_evidence.get("sample_count")
         meta["winner_table_version"] = table.version
         meta["winner_table_status"] = "loaded"
     return meta

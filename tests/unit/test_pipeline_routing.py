@@ -328,6 +328,10 @@ class TestRouteRequest:
             "is_confident": True,
             "winner_table_status": "loaded",
             "suggested_role": "coder_escalation",
+            "candidate_metrics": {
+                "frontdoor": {"correct": 2, "accuracy": 0.4, "wall_mean_s": 9.0},
+                "coder_escalation": {"correct": 5, "accuracy": 1.0, "wall_mean_s": 8.0},
+            },
             "applied": False,
         }
         with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
@@ -343,8 +347,82 @@ class TestRouteRequest:
         assert result.xmas_meta is xmas_meta
         call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
         assert call_kwargs["routing_meta"]["xmas"]["applied"] is True
-        assert call_kwargs["routing_meta"]["xmas"]["apply_reason"] == "enforced"
+        assert call_kwargs["routing_meta"]["xmas"]["apply_reason"] == "evidence_quality_lift"
         assert call_kwargs["routing_meta"]["xmas"]["previous_role"] == "frontdoor"
+        assert call_kwargs["routing_meta"]["xmas"]["incumbent_role"] == "frontdoor"
+
+    def test_xmas_enforce_keeps_incumbent_when_not_evaluated(self):
+        """X-MAS enforce must not replace an incumbent absent from cell evidence."""
+        request = ChatRequest(prompt="Refactor this Python function.", real_mode=True)
+        state = MagicMock()
+        state.hybrid_router = None
+        state.failure_graph = None
+
+        xmas_meta = {
+            "mode": "enforce",
+            "cell": "code:refine",
+            "is_confident": True,
+            "winner_table_status": "loaded",
+            "suggested_role": "worker_general",
+            "candidate_metrics": {
+                "frontdoor": {"correct": 3, "accuracy": 0.6, "wall_mean_s": 10.0},
+                "worker_general": {"correct": 5, "accuracy": 1.0, "wall_mean_s": 8.0},
+            },
+            "applied": False,
+        }
+        with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
+            mock_classify.return_value = (str(Role.CODER_ESCALATION), "learned")
+            with patch(
+                "src.classifiers.xmas_routing.build_xmas_routing_metadata",
+                return_value=xmas_meta,
+            ):
+                result = _route_request(request, state)
+
+        assert result.routing_decision == [str(Role.CODER_ESCALATION)]
+        assert result.routing_strategy == "learned"
+        call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
+        assert call_kwargs["routing_meta"]["xmas"]["applied"] is False
+        assert (
+            call_kwargs["routing_meta"]["xmas"]["apply_reason"]
+            == "incumbent_role_not_evaluated"
+        )
+        assert call_kwargs["routing_meta"]["xmas"]["incumbent_role"] == "coder_escalation"
+
+    def test_xmas_enforce_keeps_incumbent_without_evidence_lift(self):
+        """Equal-quality table evidence is not enough unless X-MAS is faster."""
+        request = ChatRequest(prompt="Solve this arithmetic problem.", real_mode=True)
+        state = MagicMock()
+        state.hybrid_router = None
+        state.failure_graph = None
+
+        xmas_meta = {
+            "mode": "enforce",
+            "cell": "math:solve",
+            "is_confident": True,
+            "winner_table_status": "loaded",
+            "suggested_role": "worker_general",
+            "candidate_metrics": {
+                "frontdoor": {"correct": 5, "accuracy": 1.0, "wall_mean_s": 5.0},
+                "worker_general": {"correct": 5, "accuracy": 1.0, "wall_mean_s": 5.1},
+            },
+            "applied": False,
+        }
+        with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
+            mock_classify.return_value = (str(Role.FRONTDOOR), "rules")
+            with patch(
+                "src.classifiers.xmas_routing.build_xmas_routing_metadata",
+                return_value=xmas_meta,
+            ):
+                result = _route_request(request, state)
+
+        assert result.routing_decision == [str(Role.FRONTDOOR)]
+        assert result.routing_strategy == "rules"
+        call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
+        assert call_kwargs["routing_meta"]["xmas"]["applied"] is False
+        assert (
+            call_kwargs["routing_meta"]["xmas"]["apply_reason"]
+            == "evidence_no_lift_over_incumbent"
+        )
 
     def test_xmas_enforce_low_confidence_does_not_rewrite(self):
         """X-MAS enforce remains advisory for low-confidence cells."""
@@ -419,6 +497,10 @@ class TestRouteRequest:
             "is_confident": True,
             "winner_table_status": "loaded",
             "suggested_role": "coder_escalation",
+            "candidate_metrics": {
+                "frontdoor": {"correct": 2, "accuracy": 0.4, "wall_mean_s": 9.0},
+                "coder_escalation": {"correct": 5, "accuracy": 1.0, "wall_mean_s": 8.0},
+            },
             "applied": False,
         }
         with patch(
@@ -437,7 +519,7 @@ class TestRouteRequest:
         request = ChatRequest(prompt="Refactor this Python function.", real_mode=True)
         state = MagicMock()
         state.hybrid_router = None
-        state.failure_graph.get_failure_risk.return_value = 0.85
+        state.failure_graph.get_failure_risk.return_value = 0.95
 
         xmas_meta = {
             "mode": "enforce",
@@ -445,6 +527,10 @@ class TestRouteRequest:
             "is_confident": True,
             "winner_table_status": "loaded",
             "suggested_role": "coder_escalation",
+            "candidate_metrics": {
+                "frontdoor": {"correct": 2, "accuracy": 0.4, "wall_mean_s": 9.0},
+                "coder_escalation": {"correct": 5, "accuracy": 1.0, "wall_mean_s": 8.0},
+            },
             "applied": False,
         }
         with patch("src.api.routes.chat_pipeline.routing._classify_and_route") as mock_classify:
@@ -459,7 +545,7 @@ class TestRouteRequest:
         assert result.routing_strategy == "failure_vetoed"
         call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
         assert call_kwargs["routing_meta"]["xmas"]["applied"] is True
-        assert call_kwargs["routing_meta"]["xmas"]["apply_reason"] == "enforced"
+        assert call_kwargs["routing_meta"]["xmas"]["apply_reason"] == "evidence_quality_lift"
 
     def test_task_id_generated(self):
         """Task ID is generated with chat prefix."""

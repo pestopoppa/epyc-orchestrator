@@ -43,6 +43,68 @@ from src.api.structured_logging import task_extra
 
 log = logging.getLogger(__name__)
 
+_XMAS_MAX_EVIDENCE_LATENCY_RATIO = 1.10
+_XMAS_MIN_SPEEDUP_FOR_TIE = 0.95
+
+
+def _numeric_metric(metrics: dict, key: str) -> float | None:
+    value = metrics.get(key)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _xmas_quality(metrics: dict) -> float | None:
+    correct = _numeric_metric(metrics, "correct")
+    if correct is not None:
+        return correct
+    return _numeric_metric(metrics, "accuracy")
+
+
+def _xmas_latency_ratio(suggested: dict, incumbent: dict) -> float | None:
+    suggested_latency = _numeric_metric(suggested, "wall_mean_s")
+    incumbent_latency = _numeric_metric(incumbent, "wall_mean_s")
+    if suggested_latency is None or incumbent_latency is None or incumbent_latency <= 0:
+        return None
+    return suggested_latency / incumbent_latency
+
+
+def _xmas_evidence_allows_incumbent_replacement(
+    xmas_meta: dict,
+    previous_role: str,
+    suggested_role: str,
+) -> tuple[bool, str]:
+    """Return whether cell evidence justifies replacing the incumbent route."""
+    candidate_metrics = xmas_meta.get("candidate_metrics") or {}
+    if not isinstance(candidate_metrics, dict):
+        return False, "missing_candidate_metrics"
+    suggested_metrics = candidate_metrics.get(suggested_role)
+    if not isinstance(suggested_metrics, dict):
+        return False, "suggested_role_not_evaluated"
+    incumbent_metrics = candidate_metrics.get(previous_role)
+    if not isinstance(incumbent_metrics, dict):
+        return False, "incumbent_role_not_evaluated"
+
+    suggested_quality = _xmas_quality(suggested_metrics)
+    incumbent_quality = _xmas_quality(incumbent_metrics)
+    if suggested_quality is None or incumbent_quality is None:
+        return False, "missing_quality_evidence"
+
+    latency_ratio = _xmas_latency_ratio(suggested_metrics, incumbent_metrics)
+    if latency_ratio is not None and latency_ratio > _XMAS_MAX_EVIDENCE_LATENCY_RATIO:
+        return False, "evidence_latency_regression"
+
+    if suggested_quality > incumbent_quality:
+        return True, "evidence_quality_lift"
+    if suggested_quality < incumbent_quality:
+        return False, "evidence_quality_regression"
+    if latency_ratio is not None and latency_ratio < _XMAS_MIN_SPEEDUP_FOR_TIE:
+        return True, "evidence_speed_lift"
+    return False, "evidence_no_lift_over_incumbent"
+
 
 def _apply_xmas_enforce_override(
     request: ChatRequest,
@@ -77,9 +139,21 @@ def _apply_xmas_enforce_override(
         xmas_meta["applied"] = False
         xmas_meta["apply_reason"] = "already_selected"
         return routing_decision, routing_strategy
+    evidence_allows, evidence_reason = _xmas_evidence_allows_incumbent_replacement(
+        xmas_meta,
+        previous_role,
+        str(suggested_role),
+    )
+    xmas_meta["incumbent_role"] = previous_role
+    xmas_meta["incumbent_policy"] = "evidence_lift_or_speedup"
+    xmas_meta["incumbent_reason"] = evidence_reason
+    if not evidence_allows:
+        xmas_meta["applied"] = False
+        xmas_meta["apply_reason"] = evidence_reason
+        return routing_decision, routing_strategy
 
     xmas_meta["applied"] = True
-    xmas_meta["apply_reason"] = "enforced"
+    xmas_meta["apply_reason"] = evidence_reason
     return [str(suggested_role)], f"xmas_enforce:{routing_strategy}"
 
 

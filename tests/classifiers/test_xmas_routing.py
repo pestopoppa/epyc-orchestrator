@@ -372,6 +372,8 @@ def test_enforce_metadata_loads_complete_evidence_backed_table(tmp_path) -> None
     assert meta["mode"] == "enforce"
     assert meta["suggested_role"] == "frontdoor"
     assert meta["winner_table_status"] == "loaded"
+    assert meta["cell_sample_count"] == 3
+    assert meta["candidate_metrics"]["frontdoor"]["correct"] == 3
 
 
 def test_build_xmas_metadata_survives_missing_table(tmp_path) -> None:
