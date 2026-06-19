@@ -222,7 +222,8 @@ def _execute_direct(
 
     elapsed = time.perf_counter() - start_time
     state.increment_request(mock_mode=False, turns=1)
-    success = not answer.startswith("[ERROR")
+    answer_chars = len(answer or "")
+    success = bool((answer or "").strip()) and not answer.startswith("[ERROR")
 
     if state.progress_logger:
         state.progress_logger.log_task_completed(
@@ -233,6 +234,7 @@ def _execute_direct(
                 "producer_role": str(initial_role),
                 "delegation_lineage": [str(initial_role)],
                 "final_answer_role": str(initial_role),
+                "answer_chars": answer_chars,
             },
         )
         score_completed_task(

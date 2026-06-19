@@ -1506,6 +1506,40 @@ class TestExecuteDirect:
         assert result.answer == "Revised answer"
         mock_revise.assert_called_once()
 
+    def test_direct_empty_answer_logs_failed_completion(self, mock_primitives, mock_state):
+        """Empty direct outputs must not be scored as successful completions."""
+        request = ChatRequest(prompt="Empty answer", real_mode=True)
+        routing = RoutingResult(
+            task_id="direct-empty",
+            task_ir={},
+            use_mock=False,
+            routing_decision=["frontdoor"],
+            routing_strategy="deterministic",
+        )
+        start_time = time.perf_counter()
+        mock_primitives.llm_call.return_value = "  \n"
+
+        with patch("src.api.routes.chat_pipeline.direct_stage._should_formalize") as mock_fmt:
+            mock_fmt.return_value = (False, None)
+            with patch("src.api.routes.chat_pipeline.stages.features") as mock_features:
+                mock_features.return_value.generation_monitor = False
+                with patch("src.api.routes.chat_pipeline.direct_stage._should_review") as mock_review:
+                    mock_review.return_value = False
+                    with patch("src.api.routes.chat_pipeline.direct_stage.score_completed_task"):
+                        result = _execute_direct(
+                            request,
+                            routing,
+                            mock_primitives,
+                            mock_state,
+                            start_time,
+                            initial_role="frontdoor",
+                        )
+
+        assert result.answer == ""
+        call = mock_state.progress_logger.log_task_completed.call_args
+        assert call.kwargs["success"] is False
+        assert call.kwargs["completion_meta"]["answer_chars"] == 0
+
     def test_direct_no_progress_logger(self, mock_primitives):
         """Direct call handles missing progress_logger."""
         state = MagicMock()
