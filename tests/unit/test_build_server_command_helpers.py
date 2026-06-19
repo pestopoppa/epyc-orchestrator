@@ -164,7 +164,7 @@ def test_descriptor_active_roles_are_canonical_launch_roles() -> None:
     assert "worker_general" in active_roles
     assert "architect_general" in active_roles
     assert "worker_explore" not in active_roles
-    assert "architect_coding" not in active_roles
+    assert "architect_coding" not in active_roles  # stack-change-guard: allow legacy retired-role coverage
 
 
 # -----------------------------------------------------------------------------
