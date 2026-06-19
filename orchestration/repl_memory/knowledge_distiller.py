@@ -167,6 +167,11 @@ class KnowledgeDistiller:
                 journal=journal,
                 excluded_trial_ids=excluded_trial_ids,
             )
+        if journal is not None or excluded_trial_ids is not None:
+            raise RuntimeError(
+                "journal-aware strategy distillation requires "
+                "StrategyStore.strategy_entries_for_distillation()"
+            )
 
         rows = self.store._conn.execute(
             "SELECT * FROM strategies WHERE entry_type = ?", (entry_type,)

@@ -109,6 +109,21 @@ def test_mdl_compress_skips_folded_journal_excluded_evidence(store, lab):
     assert store.list_conventions() == []
 
 
+def test_mdl_fails_closed_without_journal_aware_store_api(lab):
+    class LegacyStore:
+        _conn = object()
+
+    class FakeJournal:
+        def entries_with_supersessions(self):
+            return []
+
+    with pytest.raises(RuntimeError, match="strategy_rows_for_compression"):
+        lab.mdl_compress_strategies(
+            strategy_store=LegacyStore(),
+            journal=FakeJournal(),
+        )
+
+
 def test_mdl_does_not_compress_below_threshold(store, lab):
     """Dissimilar insights (low Jaccard or high MDL_after) should NOT promote."""
     insights = [

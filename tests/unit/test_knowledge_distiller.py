@@ -143,6 +143,19 @@ class TestKnowledgeDistiller:
         ).fetchone()
         assert row["entry_type"] == "raw"
 
+    def test_distill_fails_closed_without_journal_aware_store_api(self, distiller):
+        class LegacyStore:
+            _conn = object()
+
+        distiller.store = LegacyStore()
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return []
+
+        with pytest.raises(RuntimeError, match="strategy_entries_for_distillation"):
+            distiller._fetch_entries_by_type("raw", journal=FakeJournal())
+
     def test_pattern_skipped_when_not_compressible(self, store, distiller):
         # Cluster has one large seed and two tiny entries; the pattern row
         # would be larger than the cluster total → MDL check skips it.

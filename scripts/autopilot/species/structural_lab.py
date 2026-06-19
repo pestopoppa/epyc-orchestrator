@@ -625,6 +625,11 @@ class StructuralLab:
                     excluded_trial_ids=excluded_trial_ids,
                 )
             else:
+                if journal is not None or excluded_trial_ids is not None:
+                    raise RuntimeError(
+                        "journal-aware strategy compression requires "
+                        "StrategyStore.strategy_rows_for_compression()"
+                    )
                 rows = strategy_store._conn.execute(
                     "SELECT id, insight, source_trial_id, evidence_trial_ids "
                     "FROM strategies ORDER BY source_trial_id DESC"
