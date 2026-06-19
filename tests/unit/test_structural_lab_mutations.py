@@ -12,7 +12,6 @@ import hashlib
 import json
 import sqlite3
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -58,6 +57,7 @@ def test_mdl_compresses_near_duplicate_cluster(store, lab):
             insight=base + f" variant detail {i}",
             source_trial_id=i,
             species="config_tuner",
+            evidence_trial_ids=[10 + i, 20 + i],
         )
 
     result = lab.mdl_compress_strategies(
@@ -74,6 +74,7 @@ def test_mdl_compresses_near_duplicate_cluster(store, lab):
     assert len(conventions) >= 1
     assert len(conventions[0]["member_ids"]) >= 3
     assert conventions[0]["compression_ratio"] >= 0.10
+    assert conventions[0]["evidence_trial_ids"] == [10, 11, 12, 20, 21, 22]
 
 
 def test_mdl_does_not_compress_below_threshold(store, lab):

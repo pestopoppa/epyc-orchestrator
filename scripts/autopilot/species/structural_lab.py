@@ -12,7 +12,6 @@ import sqlite3
 import shutil
 import subprocess
 import sys
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -618,7 +617,8 @@ class StructuralLab:
 
         try:
             rows = strategy_store._conn.execute(
-                "SELECT id, insight, source_trial_id FROM strategies ORDER BY source_trial_id DESC"
+                "SELECT id, insight, source_trial_id, evidence_trial_ids "
+                "FROM strategies ORDER BY source_trial_id DESC"
             ).fetchall()
             if window_trials is not None:
                 rows = rows[:window_trials]
@@ -633,6 +633,7 @@ class StructuralLab:
 
             entries = [
                 {"id": r["id"], "insight": r["insight"], "trial": r["source_trial_id"],
+                 "evidence": strategy_store._evidence_trial_ids_for_row(r),
                  "toks": tokens(r["insight"])}
                 for r in rows
             ]
@@ -665,6 +666,12 @@ class StructuralLab:
                 insights = [entries[idx]["insight"] for idx in cluster]
                 ids = [entries[idx]["id"] for idx in cluster]
                 trials = [entries[idx]["trial"] for idx in cluster]
+                evidence_trial_ids = sorted({
+                    int(trial_id)
+                    for idx in cluster
+                    for trial_id in entries[idx]["evidence"]
+                    if trial_id is not None
+                })
 
                 # Representative = longest insight (most tokens of the shared semantics).
                 rep = max(insights, key=len)
@@ -692,6 +699,7 @@ class StructuralLab:
                         member_ids=ids,
                         compression_ratio=ratio,
                         span_trials=(min(trials), max(trials)),
+                        evidence_trial_ids=evidence_trial_ids,
                     )
                 conventions_promoted += 1
                 bytes_saved += (mdl_before - mdl_after)

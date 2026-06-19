@@ -286,9 +286,16 @@ class StrategyStore:
                 member_ids TEXT NOT NULL,
                 compression_ratio REAL NOT NULL,
                 span_trials TEXT NOT NULL,
+                evidence_trial_ids TEXT DEFAULT '[]',
                 promoted_at TEXT NOT NULL
             )
         """)
+        try:
+            self._conn.execute(
+                "ALTER TABLE strategy_conventions ADD COLUMN evidence_trial_ids TEXT DEFAULT '[]'"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already present
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS strategy_validity (
                 strategy_id TEXT PRIMARY KEY,
@@ -316,19 +323,29 @@ class StrategyStore:
         member_ids: list[str],
         compression_ratio: float,
         span_trials: tuple[int, int],
+        evidence_trial_ids: list[int] | None = None,
     ) -> str:
         """Persist a promoted MDL convention."""
         conv_id = str(uuid.uuid4())
+        evidence_json = json.dumps(
+            sorted({
+                int(tid)
+                for tid in (evidence_trial_ids or [])
+                if tid is not None
+            })
+        )
         self._conn.execute(
             """INSERT INTO strategy_conventions
-               (id, representative, member_ids, compression_ratio, span_trials, promoted_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (id, representative, member_ids, compression_ratio, span_trials,
+                evidence_trial_ids, promoted_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 conv_id,
                 representative,
                 json.dumps(member_ids),
                 float(compression_ratio),
                 json.dumps(list(span_trials)),
+                evidence_json,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -337,7 +354,8 @@ class StrategyStore:
 
     def list_conventions(self) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT id, representative, member_ids, compression_ratio, span_trials, promoted_at "
+            "SELECT id, representative, member_ids, compression_ratio, span_trials, "
+            "evidence_trial_ids, promoted_at "
             "FROM strategy_conventions ORDER BY promoted_at DESC"
         ).fetchall()
         return [
@@ -347,6 +365,7 @@ class StrategyStore:
                 "member_ids": json.loads(r["member_ids"]),
                 "compression_ratio": r["compression_ratio"],
                 "span_trials": json.loads(r["span_trials"]),
+                "evidence_trial_ids": json.loads(r["evidence_trial_ids"] or "[]"),
                 "promoted_at": r["promoted_at"],
             }
             for r in rows

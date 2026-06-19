@@ -105,6 +105,9 @@ class TestKnowledgeDistiller:
             "SELECT * FROM strategies WHERE entry_type = 'pattern'"
         ).fetchone()
         assert store._evidence_trial_ids_for_row(pattern_row) == [100, 101, 102, 103]
+        convention_rows = store.list_conventions()
+        assert len(convention_rows) == 1
+        assert convention_rows[0]["evidence_trial_ids"] == [100, 101, 102, 103]
         assert store.retrieve("alpha", k=10, excluded_trial_ids={102}) == []
 
     def test_pattern_skipped_when_not_compressible(self, store, distiller):

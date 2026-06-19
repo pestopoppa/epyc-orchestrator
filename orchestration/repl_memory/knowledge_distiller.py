@@ -293,6 +293,7 @@ class KnowledgeDistiller:
                     member_ids=source_ids,
                     compression_ratio=seed_len / max(total_len, 1),
                     span_trials=span,
+                    evidence_trial_ids=evidence_trial_ids,
                 )
             except Exception:
                 # add_convention is best-effort — the pattern row is already
