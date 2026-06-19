@@ -62,6 +62,26 @@ def _safe_join(root: Path, rel: str) -> Path | None:
     return p
 
 
+def _explicit_target_paths(root: Path, target_files: list[str]) -> list[tuple[str, Path]]:
+    """Normalize an explicit target-file list into deterministic, safe, root-relative paths."""
+    root = Path(root).resolve()
+    seen: set[str] = set()
+    out: list[tuple[str, Path]] = []
+    for rel in target_files:
+        p = _safe_join(root, rel)
+        if p is None:
+            raise EditScopeError(f"unsafe target file rejected: {rel}")
+        if not p.is_file():
+            continue
+        canon = str(p.relative_to(root))
+        if canon in seen:
+            continue
+        seen.add(canon)
+        out.append((canon, p))
+    out.sort(key=lambda item: item[0])
+    return out
+
+
 def parse_edit_response(text: str | None) -> tuple[dict[str, str], list[str]]:
     """Parse the model's one-shot output into {relpath: full_content} + [deletes]."""
     text = text or ""
@@ -81,15 +101,14 @@ def assemble_context(root: Path | str, target_files: list[str] | None = None, *,
     rewrite surface."""
     root = Path(root)
     if target_files:
-        names = list(target_files)
+        safe = _explicit_target_paths(root, target_files)
     else:
         names = [str(p.relative_to(root)) for p in sorted(root.rglob("*"))
                  if p.is_file() and ".git" not in p.parts]
+        safe = [(rel, p) for rel in names if (p := _safe_join(root, rel)) is not None and p.is_file()]
     # Bound the scope BEFORE reading any content (review #2): resolve + count candidates, then
     # sum stat().st_size, failing closed early so a huge scoped root never loads oversized content
     # into memory. Only after the caps pass do we read file bodies.
-    safe = [(rel, p) for rel in names
-            if (p := _safe_join(root, rel)) is not None and p.is_file()]
     if len(safe) > max_files:
         raise EditScopeError(
             f"edit scope too large: {len(safe)} file(s) exceeds cap ({max_files}) "

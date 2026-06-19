@@ -101,6 +101,24 @@ def test_assemble_and_prompt(tmp_path):
     assert "Add square" in prompt and "calc.py" in prompt and "<<<FILE:" in prompt
 
 
+def test_assemble_explicit_targets_are_deterministic_and_bounded(tmp_path):
+    (tmp_path / "b.py").write_text("B = 2\n")
+    (tmp_path / "a.py").write_text("A = 1\n")
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "c.py").write_text("C = 3\n")
+
+    ctx = assemble_context(tmp_path, ["b.py", "a.py", "b.py", "nested/../nested/c.py"])
+    assert list(ctx) == ["a.py", "b.py", "nested/c.py"]
+    assert ctx["a.py"] == "A = 1\n"
+    assert "C = 3" in ctx["nested/c.py"]
+
+
+def test_assemble_explicit_targets_reject_unsafe_paths(tmp_path):
+    (tmp_path / "ok.py").write_text("OK = 1\n")
+    with pytest.raises(EditScopeError, match="unsafe target file rejected"):
+        assemble_context(tmp_path, ["ok.py", "../escape.py"])
+
+
 def test_run_edit_transaction_with_stub_llm(tmp_path):
     (tmp_path / "calc.py").write_text("def double(x):\n    return x * 2\n")
 
@@ -110,6 +128,30 @@ def test_run_edit_transaction_with_stub_llm(tmp_path):
 
     res, raw = run_edit_transaction(stub, "Add square(x) to calc.py", tmp_path, ["calc.py"])
     assert res.ok and "square" in (tmp_path / "calc.py").read_text()
+
+
+def test_run_edit_transaction_uses_only_explicit_targets(tmp_path):
+    (tmp_path / "a.py").write_text("A = 1\n")
+    (tmp_path / "b.py").write_text("B = 2\n")
+    (tmp_path / "c.py").write_text("C = 3\n")
+
+    seen = {"called": False}
+
+    def stub(prompt):
+        seen["called"] = True
+        assert "--- a.py ---" in prompt
+        assert "--- b.py ---" in prompt
+        assert "--- c.py ---" not in prompt
+        assert prompt.index("--- a.py ---") < prompt.index("--- b.py ---")
+        return "<<<FILE: a.py>>>\nA = 10\n<<<END>>>\n<<<FILE: b.py>>>\nB = 20\n<<<END>>>"
+
+    res, raw = run_edit_transaction(stub, "Edit two files", tmp_path, ["b.py", "a.py", "b.py"])
+    assert seen["called"]
+    assert raw
+    assert res.ok
+    assert (tmp_path / "a.py").read_text() == "A = 10"
+    assert (tmp_path / "b.py").read_text() == "B = 20"
+    assert (tmp_path / "c.py").read_text() == "C = 3\n"
 
 
 def test_flag_default_off(monkeypatch):
