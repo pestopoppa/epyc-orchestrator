@@ -1,0 +1,20 @@
+{
+  "api_url": "http://127.0.0.1:8000",
+  "arm_sequence": [
+    "off",
+    "on"
+  ],
+  "created_at": "2026-06-19T11:31:43+00:00",
+  "host_quiet_confirmed": true,
+  "kind": "dcp-j7-ab-run",
+  "mode": "real",
+  "orch_checkout_unchanged": true,
+  "orch_head_after": "f96a6ab",
+  "orch_head_before": "f96a6ab",
+  "prompts": [
+    "trace_callers",
+    "autopilot_gate_path",
+    "feature_flag_attest"
+  ],
+  "reps": 1
+}

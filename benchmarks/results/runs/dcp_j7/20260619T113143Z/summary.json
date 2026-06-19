@@ -1,0 +1,23 @@
+{
+  "delta": {
+    "avg_delegation_event_tokens_delta": -166.333,
+    "avg_tokens_generated_delta": -104.667,
+    "p50_elapsed_pct": -0.6137
+  },
+  "off": {
+    "avg_delegation_event_tokens": 166.333,
+    "avg_delegation_events": 1.0,
+    "avg_tokens_generated": 352.0,
+    "errors": 0,
+    "n": 3,
+    "p50_elapsed_s": 20.219
+  },
+  "on": {
+    "avg_delegation_event_tokens": 0.0,
+    "avg_delegation_events": 1.0,
+    "avg_tokens_generated": 247.333,
+    "errors": 0,
+    "n": 3,
+    "p50_elapsed_s": 32.628
+  }
+}
