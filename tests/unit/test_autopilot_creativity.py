@@ -313,10 +313,11 @@ def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> 
         known_actions=KNOWN_ACTIONS,
         memory_count=100,
         converged=False,
-        slot_memory_text="  (all slots empty or servers offline)",
+        slot_memory_text="  healthy queried ports with empty KV cache: frontdoor:8070",
         blacklist=[{"pattern": {"type": "distill_skillbank"}, "reason": "blacklisted"}],
     )
     assert "`slot_compact`" in availability
+    assert "not evidence that the eval instrument or host is contaminated" in availability
     assert "`train_routing_models`" in availability
     assert "`reset_memories`" in availability
     assert "`distill_skillbank`" in availability
@@ -338,7 +339,7 @@ def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
         known_actions=KNOWN_ACTIONS,
         memory_count=10_000,
         converged=True,
-        slot_memory_text="  (all slots empty or servers offline)",
+        slot_memory_text="  healthy queried ports with empty KV cache: frontdoor:8070",
         blacklist=[
             {
                 "pattern": {"type": "seed_batch", "n_questions": n_questions},
@@ -410,6 +411,37 @@ def test_slot_query_ports_falls_back_when_stack_priors_unavailable(monkeypatch) 
     monkeypatch.setattr(autopilot, "_slot_query_ports_from_stack_priors", lambda: {})
 
     assert autopilot._slot_query_ports() == autopilot._FALLBACK_SLOT_QUERY_PORTS
+
+
+def test_query_slot_memory_separates_empty_and_unavailable_ports(monkeypatch) -> None:
+    monkeypatch.setattr(
+        autopilot,
+        "_slot_query_ports",
+        lambda: {"frontdoor": [8070], "worker_general": [8072]},
+    )
+
+    class _Response:
+        def __init__(self, status_code: int, payload: list[dict] | None = None) -> None:
+            self.status_code = status_code
+            self._payload = payload or []
+
+        def json(self) -> list[dict]:
+            return self._payload
+
+    def _fake_get(url: str, timeout: float) -> _Response:
+        assert timeout == 3.0
+        if url.endswith(":8070/slots"):
+            return _Response(200, [{"id": 0, "state": "idle", "n_past": 0}])
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("httpx.get", _fake_get)
+
+    text = autopilot._query_slot_memory()
+
+    assert "healthy queried ports with empty KV cache: frontdoor:8070" in text
+    assert "unavailable configured replica ports: worker_general:8072" in text
+    assert "do not infer eval-instrument contamination" in text
+    assert "all slots empty or servers offline" not in text
 
 
 def test_build_exploration_block_resilient_to_archive_errors(tmp_path: Path) -> None:

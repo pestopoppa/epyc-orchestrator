@@ -1553,7 +1553,10 @@ def _build_action_availability(
         )
 
     if not _slot_compaction_viable(slot_memory_text):
-        blocked["slot_compact"] = "all production slots are empty/offline right now"
+        blocked["slot_compact"] = (
+            "no queried slot currently has cached tokens to compact; this is not "
+            "evidence that the eval instrument or host is contaminated"
+        )
 
     seed_exhaustion = _seed_fallback_exhaustion_reason(blacklist)
     if seed_exhaustion:
@@ -2192,7 +2195,9 @@ def _query_slot_memory() -> str:
     """
     import httpx
 
-    lines: list[str] = []
+    cached_lines: list[str] = []
+    empty_ports: list[str] = []
+    unavailable_ports: list[str] = []
     for role, ports in _slot_query_ports().items():
         for port in ports:
             try:
@@ -2200,23 +2205,40 @@ def _query_slot_memory() -> str:
                     f"http://localhost:{port}/slots", timeout=3.0
                 )
                 if resp.status_code != 200:
-                    lines.append(f"  {role}:{port} — unreachable ({resp.status_code})")
+                    unavailable_ports.append(f"{role}:{port} http {resp.status_code}")
                     continue
                 slots = resp.json()
                 if not isinstance(slots, list):
                     continue
+                port_cached = 0
                 for s in slots:
                     sid = s.get("id", "?")
                     state = s.get("state", "?")
                     n_past = s.get("n_past", 0)
                     if n_past > 0:
-                        lines.append(
+                        port_cached += int(n_past)
+                        cached_lines.append(
                             f"  {role}:{port}/slot{sid} — {state}, {n_past} tokens cached"
                         )
+                if port_cached == 0:
+                    empty_ports.append(f"{role}:{port}")
             except Exception:
-                lines.append(f"  {role}:{port} — offline")
+                unavailable_ports.append(f"{role}:{port}")
+    lines = list(cached_lines)
+    if empty_ports:
+        lines.append(
+            "  healthy queried ports with empty KV cache: " + ", ".join(empty_ports)
+        )
+    if unavailable_ports:
+        lines.append(
+            "  unavailable configured replica ports: " + ", ".join(unavailable_ports)
+        )
+        lines.append(
+            "  note: unavailable replicas only affect slot_compact targeting; "
+            "do not infer eval-instrument contamination from this line"
+        )
     if not lines:
-        return "  (all slots empty or servers offline)"
+        return "  (no slot data returned; slot_compact has no target)"
     return "\n".join(lines)
 
 
