@@ -27,6 +27,11 @@ roles:
     deployment_status: live_stack
     serving:
       endpoint: http://localhost:8070
+  ingest_long_context:
+    deployment_status: live_stack
+    serving:
+      endpoint: http://localhost:notaport
+      ports: [8085]
   reap_25b_frontdoor:
     deployment_status: benchmark_or_candidate
     serving:
@@ -40,6 +45,7 @@ roles:
     assert targets == [
         ("coder_escalation/frontdoor", 8070),
         ("architect_general", 8083),
+        ("ingest_long_context", 8085),
     ]
 
 

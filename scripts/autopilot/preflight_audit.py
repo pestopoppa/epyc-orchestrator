@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 from src.registry.stack_priors import (
     live_stack_role_records,
-    stack_prior_endpoint_port,
+    stack_prior_primary_port,
     stack_prior_serving,
 )
 from src.autopilot_core.baseline_ledger import canonical_jsonable
@@ -92,7 +92,7 @@ def _model_server_target_groups(
         endpoint = serving.get("endpoint")
         health_url = _health_url(endpoint) if isinstance(endpoint, str) else None
         if health_url is None:
-            endpoint_port = stack_prior_endpoint_port(serving)
+            endpoint_port = stack_prior_primary_port(serving)
             if endpoint_port is None:
                 continue
             health_url = f"http://localhost:{endpoint_port}/health"

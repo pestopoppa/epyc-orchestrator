@@ -84,11 +84,13 @@ def _write_stack_priors(path: Path, roles: dict[str, dict]) -> Path:
 
 
 def test_load_model_fleet_uses_live_stack_priors_and_skips_candidates(tmp_path: Path) -> None:
+    worker_record = _stack_prior_record("worker_general", port=8072, tps=60.7)
+    worker_record["serving"]["endpoint"] = "http://localhost:notaport"
     priors_path = _write_stack_priors(
         tmp_path / "stack_priors.yaml",
         {
             "frontdoor": _stack_prior_record("frontdoor", port=8070, tps=24.3, mem_gb=37),
-            "worker_general": _stack_prior_record("worker_general", port=8072, tps=60.7),
+            "worker_general": worker_record,
             "candidate": _stack_prior_record(
                 "candidate",
                 deployment_status="benchmark_or_candidate",
@@ -105,6 +107,7 @@ def test_load_model_fleet_uses_live_stack_priors_and_skips_candidates(tmp_path: 
     assert fleet[0]["tps"] == 24.3
     assert fleet[0]["tier"] == "HOT"
     assert fleet[0]["gb"] == 37.0
+    assert fleet[1]["port"] == 8072
     assert "candidate" not in {role["role_id"] for role in fleet}
 
 

@@ -85,9 +85,8 @@ def load_model_fleet(stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH) -> lis
         from src.registry.stack_priors import (
             load_stack_priors_artifact,
             live_stack_role_records,
-            stack_prior_endpoint_port,
+            stack_prior_primary_port,
             stack_prior_serving,
-            stack_prior_serving_ports,
         )
 
         artifact = load_stack_priors_artifact(stack_priors_path)
@@ -121,10 +120,7 @@ def load_model_fleet(stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH) -> lis
         serving = stack_prior_serving(record)
         priors = record.get("priors") if isinstance(record.get("priors"), dict) else {}
         model = record.get("model") if isinstance(record.get("model"), dict) else {}
-        endpoint_port = stack_prior_endpoint_port(serving)
-        if endpoint_port is None:
-            serving_ports = stack_prior_serving_ports(serving)
-            endpoint_port = serving_ports[0] if serving_ports else 0
+        endpoint_port = stack_prior_primary_port(serving) or 0
         fleet.append(
             {
                 "role_id": role,

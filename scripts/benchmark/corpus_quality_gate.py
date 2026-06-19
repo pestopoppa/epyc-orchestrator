@@ -40,9 +40,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 from src.registry.stack_priors import (
     live_stack_role_records,
-    stack_prior_endpoint_port,
+    stack_prior_primary_port,
     stack_prior_serving,
-    stack_prior_serving_ports,
 )
 from scripts.server.stack_manifest import HOT_ROLES, PORT_MAP
 STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
@@ -58,18 +57,6 @@ def _preferred_fallback_model_roles() -> tuple[str, ...]:
     )
 
 
-def _stack_prior_primary_port(serving: dict) -> int | None:
-    try:
-        port = stack_prior_endpoint_port(serving)
-    except ValueError:
-        port = None
-    if port is not None:
-        return port
-    for candidate_port in stack_prior_serving_ports(serving):
-        return candidate_port
-    return None
-
-
 def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
     roles = live_stack_role_records(path)
 
@@ -78,7 +65,7 @@ def _load_live_models(path: Path = STACK_PRIORS_PATH) -> dict[str, dict]:
         if not isinstance(record, dict):
             continue
         serving = stack_prior_serving(record)
-        port = _stack_prior_primary_port(serving)
+        port = stack_prior_primary_port(serving)
         if port is None:
             continue
         models[str(role)] = {

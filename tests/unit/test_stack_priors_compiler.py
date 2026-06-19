@@ -26,6 +26,7 @@ from src.registry.stack_priors import (
     stack_prior_launch_entries,
     stack_prior_launch_modes,
     stack_prior_model_mem_gb,
+    stack_prior_primary_port,
     stack_prior_serving_url_value,
     stack_prior_serving_ports,
     stack_prior_uses_shared_worker_launch,
@@ -107,6 +108,11 @@ def test_runtime_stack_prior_helpers_project_live_roles(tmp_path: Path) -> None:
         priors,
     ) == {"worker_vision": 9101, "vision_escalation": 9107}
     assert stack_prior_endpoint_port({"endpoint": "http://localhost:1234/v1"}) == 1234
+    assert stack_prior_primary_port(
+        {"endpoint": "http://localhost:1234/v1", "ports": [5678]}
+    ) == 1234
+    assert stack_prior_primary_port({"endpoint": "http://localhost:notaport", "ports": [5678]}) == 5678
+    assert stack_prior_primary_port({"endpoint": "http://localhost:notaport"}) is None
     assert stack_prior_serving_ports({"ports": [1, "2", 3, None]}) == [1, 3]
     assert stack_prior_serving_url_value({"ports": [9100, 9200]}) == (
         "full:http://localhost:9100,http://localhost:9200"

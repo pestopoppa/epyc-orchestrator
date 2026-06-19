@@ -409,6 +409,19 @@ def stack_prior_serving_ports(serving: dict[str, Any]) -> list[int]:
     return [port for port in ports if isinstance(port, int)]
 
 
+def stack_prior_primary_port(serving: dict[str, Any]) -> int | None:
+    """Return the endpoint port, falling back to the first declared serving port."""
+    try:
+        endpoint_port = stack_prior_endpoint_port(serving)
+    except ValueError:
+        endpoint_port = None
+    if endpoint_port is not None:
+        return endpoint_port
+    for port in stack_prior_serving_ports(serving):
+        return port
+    return None
+
+
 def stack_prior_serving_url_value(serving: dict[str, Any]) -> str | None:
     """Return the config-compatible URL value for a serving block."""
     ports = stack_prior_serving_ports(serving)
@@ -458,13 +471,9 @@ def live_role_primary_ports(
         if role not in role_names:
             continue
         serving = stack_prior_serving(record)
-        endpoint_port = stack_prior_endpoint_port(serving)
-        if endpoint_port is not None:
-            ports[role] = endpoint_port
-            continue
-        for port in stack_prior_serving_ports(serving):
-            ports[role] = port
-            break
+        primary_port = stack_prior_primary_port(serving)
+        if primary_port is not None:
+            ports[role] = primary_port
     return ports
 
 

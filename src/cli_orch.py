@@ -26,7 +26,7 @@ from pathlib import Path
 from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
 from src.registry.stack_priors import (
     live_stack_role_records,
-    stack_prior_endpoint_port,
+    stack_prior_primary_port,
     stack_prior_serving,
 )
 from src.roles import Role
@@ -82,10 +82,7 @@ def _stack_status_targets(
     names_by_port: dict[int, list[str]] = {}
     for role, record in roles.items():
         serving = stack_prior_serving(record)
-        try:
-            port = stack_prior_endpoint_port(serving)
-        except ValueError:
-            continue
+        port = stack_prior_primary_port(serving)
         if port is None:
             continue
         names_by_port.setdefault(port, []).append(role)
