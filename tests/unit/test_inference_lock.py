@@ -109,6 +109,45 @@ def test_degraded_lock_roles_derive_from_stack_manifest():
     assert "embedder" not in heavy
 
 
+def test_lock_role_sets_recompute_stack_priors_without_import_snapshot(tmp_path):
+    priors = tmp_path / "stack_priors.yaml"
+    _write_stack_priors(
+        priors,
+        {
+            "frontdoor": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": ["default"], "entries": []}},
+            },
+            "worker_general": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": ["worker_pool"], "entries": []}},
+            },
+        },
+    )
+
+    heavy, light = lock_mod.lock_role_sets(priors)
+    assert "frontdoor" in heavy
+    assert "worker_general" in light
+
+    _write_stack_priors(
+        priors,
+        {
+            "frontdoor": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": ["worker_pool"], "entries": []}},
+            },
+            "worker_general": {
+                "deployment_status": "live_stack",
+                "serving": {"launch": {"modes": ["default"], "entries": []}},
+            },
+        },
+    )
+
+    heavy, light = lock_mod.lock_role_sets(priors)
+    assert "worker_general" in heavy
+    assert "frontdoor" in light
+
+
 def test_manifest_shared_lock_roles_derive_from_launch_metadata():
     roles = lock_mod._manifest_shared_lock_roles()
 

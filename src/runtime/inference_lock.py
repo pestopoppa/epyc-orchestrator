@@ -83,16 +83,31 @@ def _degraded_lock_roles_from_stack_manifest() -> tuple[frozenset[str], frozense
     return frozenset(heavy), light_roles
 
 
-_DERIVED_LOCK_ROLES = _lock_roles_from_stack_priors()
-if _DERIVED_LOCK_ROLES is None:
-    _DEGRADED_LOCK_ROLES = _degraded_lock_roles_from_stack_manifest()
-    if _DEGRADED_LOCK_ROLES is None:
-        HEAVY_ROLES = frozenset()
-        LIGHT_ROLES = frozenset()
-    else:
-        HEAVY_ROLES, LIGHT_ROLES = _DEGRADED_LOCK_ROLES
-else:
-    HEAVY_ROLES, LIGHT_ROLES = _DERIVED_LOCK_ROLES
+def lock_role_sets(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Return current exclusive/shared inference-lock role sets."""
+    heavy_override = globals().get("HEAVY_ROLES")
+    light_override = globals().get("LIGHT_ROLES")
+    if isinstance(heavy_override, frozenset) and isinstance(light_override, frozenset):
+        return heavy_override, light_override
+
+    derived = _lock_roles_from_stack_priors(stack_priors_path)
+    if derived is not None:
+        return derived
+
+    degraded = _degraded_lock_roles_from_stack_manifest()
+    if degraded is not None:
+        return degraded
+    return frozenset(), frozenset()
+
+
+def __getattr__(name: str) -> object:
+    if name == "HEAVY_ROLES":
+        return lock_role_sets()[0]
+    if name == "LIGHT_ROLES":
+        return lock_role_sets()[1]
+    raise AttributeError(name)
 
 # Embedders use shared lock; identify by role or context where possible.
 
@@ -381,10 +396,11 @@ def _lock_path(role: str) -> Path:
 
 def _is_heavy_role(role: str) -> bool:
     normalized = str(Role.from_string(role) or role)
-    if normalized in HEAVY_ROLES:
+    heavy_roles, light_roles = lock_role_sets()
+    if normalized in heavy_roles:
         return True
     # Default to heavy for unknown roles (safer for CPU contention)
-    return normalized not in LIGHT_ROLES
+    return normalized not in light_roles
 
 
 @contextmanager
