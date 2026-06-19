@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 from src.retrieval import colbert_encoder, cross_encoder
-from src.retrieval.markdown_chunker import Chunk, chunk_file
+from src.retrieval.markdown_chunker import chunk_file
 
 logger = logging.getLogger(__name__)
 
@@ -427,6 +427,51 @@ def update_files(
     conn.commit()
     conn.close()
     return {"ok": True, "files_processed": len(paths), "chunks_encoded": encoded}
+
+
+def remove_files(
+    paths: list[str],
+    index_dir: Path | str = DEFAULT_INDEX_DIR,
+) -> dict[str, Any]:
+    """Remove catalog rows for files that left the source corpus."""
+    index_dir = Path(index_dir)
+    conn = _ensure_catalog(index_dir)
+    conn.row_factory = sqlite3.Row
+    fts_enabled = _ensure_fts(conn)
+    cur = conn.cursor()
+
+    removed_files = 0
+    removed_chunks = 0
+    removed_embeddings = 0
+    for raw_path in paths:
+        p = Path(raw_path).expanduser().resolve()
+        rows = cur.execute(
+            "SELECT chunk_id, emb_path FROM chunk WHERE file_path = ?",
+            (str(p),),
+        ).fetchall()
+        if not rows:
+            continue
+        removed_files += 1
+        removed_chunks += len(rows)
+        for row in rows:
+            if fts_enabled:
+                cur.execute("DELETE FROM chunk_fts WHERE rowid = ?", (int(row["chunk_id"]),))
+            emb_path = index_dir / str(row["emb_path"])
+            try:
+                emb_path.unlink()
+                removed_embeddings += 1
+            except FileNotFoundError:
+                pass
+        cur.execute("DELETE FROM chunk WHERE file_path = ?", (str(p),))
+
+    conn.commit()
+    conn.close()
+    return {
+        "ok": True,
+        "files_removed": removed_files,
+        "chunks_removed": removed_chunks,
+        "embeddings_removed": removed_embeddings,
+    }
 
 
 def query(

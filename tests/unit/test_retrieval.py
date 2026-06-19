@@ -5,7 +5,6 @@ Encoder is mocked — onnxruntime is not always available in devcontainers.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from textwrap import dedent
 from unittest.mock import patch
@@ -14,7 +13,6 @@ import numpy as np
 import pytest
 
 from src.retrieval.markdown_chunker import (
-    DEFAULT_MAX_CHARS,
     Chunk,
     chunk_file,
     chunk_markdown,
@@ -243,6 +241,34 @@ def test_kb_rag_update_files_replaces_specific_files(tmp_path: Path) -> None:
     assert s["files"] == 1
     # Old chunks for f are gone, replaced.
     assert s["chunks"] >= 1
+
+
+def test_kb_rag_remove_files_prunes_catalog_rows(tmp_path: Path) -> None:
+    from src.retrieval import kb_rag
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    f = corpus_root / "removed.md"
+    f.write_text("# Old\n\nbody\n")
+    cfg = kb_rag.CorpusConfig(roots=[str(corpus_root)], include_globs=["*.md"], exclude_patterns=[])
+    index_dir = tmp_path / "idx"
+
+    def fake_encode(text, max_tokens):
+        return np.eye(3, 4, dtype=np.float32)
+
+    with patch.object(kb_rag.colbert_encoder, "is_available", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "ensure_loaded", return_value=True), \
+         patch.object(kb_rag.colbert_encoder, "encode", side_effect=fake_encode):
+        kb_rag.build_index(cfg, index_dir=index_dir)
+
+    assert kb_rag.stats(index_dir=index_dir)["files"] == 1
+    f.unlink()
+    result = kb_rag.remove_files([str(f)], index_dir=index_dir)
+
+    assert result["ok"] is True
+    assert result["files_removed"] == 1
+    assert result["chunks_removed"] >= 1
+    assert kb_rag.stats(index_dir=index_dir)["files"] == 0
 
 
 def test_kb_rag_query_returns_empty_when_no_index(tmp_path: Path) -> None:

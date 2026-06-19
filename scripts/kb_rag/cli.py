@@ -26,6 +26,7 @@ from src.retrieval.kb_rag import (  # noqa: E402
     CorpusConfig,
     build_index,
     query,
+    remove_files,
     stats,
     update_files,
 )
@@ -35,17 +36,8 @@ DEFAULT_EVAL_CASES = _REPO / "scripts" / "kb_rag" / "k7_seed_cases.json"
 DEFAULT_MANIFEST_ROOT = Path("/workspace")
 
 
-def _paths_from_source_manifest(
-    manifest_path: Path,
-    *,
-    manifest_root: Path = DEFAULT_MANIFEST_ROOT,
-) -> tuple[list[str], list[dict]]:
-    """Extract updateable file paths from a project-wiki source manifest."""
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    sources = manifest.get("sources")
-    if not isinstance(sources, list):
-        raise ValueError(f"manifest sources must be a list: {manifest_path}")
-
+def _resolve_manifest_paths(sources: list, *, manifest_root: Path) -> list[str]:
+    """Resolve manifest source rows to absolute paths."""
     root = manifest_root.expanduser().resolve()
     paths: list[str] = []
     for source in sources:
@@ -58,11 +50,27 @@ def _paths_from_source_manifest(
         if not path.is_absolute():
             path = root / path
         paths.append(str(path.expanduser().resolve()))
+    return paths
+
+
+def _paths_from_source_manifest(
+    manifest_path: Path,
+    *,
+    manifest_root: Path = DEFAULT_MANIFEST_ROOT,
+) -> tuple[list[str], list[str]]:
+    """Extract updateable and removable file paths from a source manifest."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    sources = manifest.get("sources")
+    if not isinstance(sources, list):
+        raise ValueError(f"manifest sources must be a list: {manifest_path}")
 
     removed = manifest.get("removed_sources", [])
     if not isinstance(removed, list):
         removed = []
-    return paths, removed
+    return (
+        _resolve_manifest_paths(sources, manifest_root=manifest_root),
+        _resolve_manifest_paths(removed, manifest_root=manifest_root),
+    )
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
@@ -75,11 +83,11 @@ def _cmd_build(args: argparse.Namespace) -> int:
 def _cmd_update(args: argparse.Namespace) -> int:
     cfg = CorpusConfig.from_yaml(args.config or DEFAULT_CONFIG)
     paths = list(args.files or [])
-    removed_sources: list[dict] = []
+    removed_paths: list[str] = []
     manifest_paths_count = 0
     if args.manifest:
         try:
-            manifest_paths, removed_sources = _paths_from_source_manifest(
+            manifest_paths, removed_paths = _paths_from_source_manifest(
                 Path(args.manifest).expanduser(),
                 manifest_root=Path(args.manifest_root),
             )
@@ -88,17 +96,31 @@ def _cmd_update(args: argparse.Namespace) -> int:
             return 1
         manifest_paths_count = len(manifest_paths)
         paths.extend(manifest_paths)
-    if not paths:
+    if not paths and not removed_paths:
         print(
             "usage: update (--files file1.md [file2.md ...] | --manifest manifest.json)",
             file=sys.stderr,
         )
         return 1
-    result = update_files(paths, cfg, index_dir=args.index_dir or DEFAULT_INDEX_DIR)
+    removed_result = None
+    if removed_paths:
+        removed_result = remove_files(
+            removed_paths,
+            index_dir=args.index_dir or DEFAULT_INDEX_DIR,
+        )
+        if not removed_result.get("ok"):
+            print(json.dumps(removed_result, indent=2))
+            return 1
+    if paths:
+        result = update_files(paths, cfg, index_dir=args.index_dir or DEFAULT_INDEX_DIR)
+    else:
+        result = {"ok": True, "files_processed": 0, "chunks_encoded": 0}
     if args.manifest:
         result["manifest"] = str(Path(args.manifest).expanduser())
         result["manifest_paths"] = manifest_paths_count
-        result["manifest_removed_sources_ignored"] = len(removed_sources)
+        result["manifest_removed_paths"] = len(removed_paths)
+        if removed_result is not None:
+            result["manifest_removed_result"] = removed_result
     print(json.dumps(result, indent=2))
     return 0 if result.get("ok") else 1
 
