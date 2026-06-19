@@ -136,21 +136,27 @@ def build_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     totals["delta_audit_minus_core"] = round(
         totals["audit_quality_0_3"] - totals["core_quality_0_3"], 6
     )
+    gaming_diagnostic = _gaming_diagnostic(trial_summaries)
     return {
         "trial_count": len(trial_rows),
         "audited_trial_count": len(trial_summaries),
         "totals": totals,
         "trials": trial_summaries,
-        "transfer_diagnostic": _transfer_diagnostic(trial_summaries),
+        "gaming_alarm": gaming_diagnostic["gaming_alarm"],
+        "gaming_events": gaming_diagnostic["gaming_events"],
+        "transfer_diagnostic": {
+            "audited_trial_count": len(trial_summaries),
+            "potential_overfit_divergences": len(gaming_diagnostic["gaming_events"]),
+            "events": gaming_diagnostic["gaming_events"],
+        },
     }
 
 
-def _transfer_diagnostic(trials: list[dict[str, Any]]) -> dict[str, Any]:
+def _gaming_diagnostic(trials: list[dict[str, Any]]) -> dict[str, Any]:
     if len(trials) < 3:
         return {
-            "audited_trial_count": len(trials),
-            "potential_overfit_divergences": 0,
-            "events": [],
+            "gaming_alarm": False,
+            "gaming_events": [],
         }
 
     events: list[dict[str, Any]] = []
@@ -170,15 +176,16 @@ def _transfer_diagnostic(trials: list[dict[str, Any]]) -> dict[str, Any]:
         prev = trial
 
     return {
-        "audited_trial_count": len(trials),
-        "potential_overfit_divergences": len(events),
-        "events": events,
+        "gaming_alarm": bool(events),
+        "gaming_events": events,
     }
 
 
 def render_markdown(report: Mapping[str, Any]) -> str:
     totals = report["totals"]
-    diagnostic = report["transfer_diagnostic"]
+    transfer_diagnostic = report["transfer_diagnostic"]
+    gaming_events = report.get("gaming_events") or []
+    gaming_alarm = bool(report.get("gaming_alarm"))
     lines = [
         "# W6 Rotating Audit Block Report",
         "",
@@ -194,7 +201,12 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         ),
         (
             "- Transfer diagnostic: "
-            f"potential overfit divergences={diagnostic['potential_overfit_divergences']}"
+            f"potential overfit divergences={transfer_diagnostic['potential_overfit_divergences']}"
+        ),
+        (
+            "- Gaming alarm: "
+            f"{'triggered' if gaming_alarm else 'clear'} "
+            f"({len(gaming_events)} event{'s' if len(gaming_events) != 1 else ''})"
         ),
         "",
         "| trial_id | core | audit | core_q | audit_q | delta_audit_minus_core |",
@@ -208,14 +220,19 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             )
         )
 
-    events = diagnostic.get("events") or []
-    if events:
-        lines.extend(["", "## Potential Overfit Divergences", ""])
-        for event in events:
+    if gaming_alarm:
+        lines.extend(["", "## Audit Gaming Alarm", ""])
+        for event in gaming_events:
             lines.append(
                 "- trial {trial_id} vs {previous_trial_id}: core_delta={core_delta:+.3f} "
                 "audit_delta={audit_delta:+.3f}".format(**event)
             )
+        lines.append("- Action: review transition(s) for audit overfitting risk.")
+
+    if not gaming_alarm:
+        lines.append("")
+        lines.append("## Audit Gaming Alarm")
+        lines.append("- No suspicious gaming trend detected.")
 
     return "\n".join(lines).rstrip() + "\n"
 

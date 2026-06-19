@@ -141,3 +141,64 @@ def test_transfer_diagnostic_counts_divergences(tmp_path: Path) -> None:
             "audit_delta": 0.0,
         }
     ]
+
+
+def test_no_gaming_alarm_with_insufficient_audited_history(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
+        ],
+    )
+
+    report = audit_block_report.build_report(audit_block_report.load_journal_rows([journal]))
+
+    assert report["gaming_alarm"] is False
+    assert report["gaming_events"] == []
+    assert report["transfer_diagnostic"]["potential_overfit_divergences"] == 0
+
+
+def test_gaming_alarm_detects_core_improving_audit_flat_or_worsening(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
+            _trial(3, core_correct=2, core_total=2, audit_correct=2, audit_total=2),
+        ],
+    )
+
+    report = audit_block_report.build_report(audit_block_report.load_journal_rows([journal]))
+
+    assert report["gaming_alarm"] is True
+    assert report["gaming_events"] == [
+        {
+            "trial_id": 2,
+            "previous_trial_id": 1,
+            "core_delta": 1.5,
+            "audit_delta": 0.0,
+        }
+    ]
+
+
+def test_markdown_includes_gaming_alarm(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
+            _trial(3, core_correct=2, core_total=2, audit_correct=2, audit_total=2),
+        ],
+    )
+
+    markdown = audit_block_report.render_markdown(
+        audit_block_report.build_report(audit_block_report.load_journal_rows([journal]))
+    )
+
+    assert "## Audit Gaming Alarm" in markdown
+    assert "triggered" in markdown
+    assert "trial 2 vs 1" in markdown
