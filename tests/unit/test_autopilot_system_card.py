@@ -40,8 +40,16 @@ server_mode:
     acceleration: {type: speculative_decoding, draft_max: 2, lookup: false}
     throughput: 60.7
     description: Worker alias without a matching roles entry
+  __LEGACY_ARCHITECT_ROLE__:
+    port: 8099
+    model: removed-role.gguf
+    tier: hot
+    throughput: 4.2
+    description: Retired architect role must stay out of live summaries
 roles:
   frontdoor:
+    backend: {type: local}
+  worker_general:
     backend: {type: local}
   __LEGACY_ARCHITECT_ROLE__:  # legacy fixture: stack priors must exclude this from live roles
     backend: {type: local}
@@ -257,6 +265,26 @@ def test_renderer_compiles_fallback_rows_when_stack_priors_missing(tmp_path: Pat
         "worker-compiled.gguf |"
     ) in summary
     assert "worker.gguf" not in summary
+
+
+def test_renderer_degraded_registry_fallback_canonicalizes_live_aliases(
+    tmp_path: Path,
+) -> None:
+    _write_minimal_root(tmp_path)
+    stack_priors_path = tmp_path / "orchestration" / "derived" / "stack_priors.yaml"
+    stack_priors_path.unlink()
+
+    summary = render_stack_summary.render_current_stack_summary(
+        stack_priors_path=stack_priors_path,
+        registry_path=tmp_path / "orchestration" / "model_registry.yaml",
+        descriptor_path=tmp_path / "orchestration" / "missing_model_descriptors.yaml",
+    )
+
+    assert "Source: `orchestration/model_registry.yaml (degraded fallback)`" in summary
+    assert "| frontdoor | 8070 | frontdoor.gguf |" in summary
+    assert "| worker_general | 8072 | worker.gguf |" in summary
+    assert "| worker | 8072 |" not in summary
+    assert f"| {LEGACY_ARCHITECT_ROLE} |" not in summary
 
 
 def test_system_card_prefers_state_baseline_over_yaml(tmp_path: Path) -> None:

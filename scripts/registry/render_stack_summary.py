@@ -189,6 +189,19 @@ def compiled_registry_role_rows(
     return stack_prior_role_rows(compiled)
 
 
+def _canonical_degraded_registry_role(name: str, roles: dict[str, Any]) -> str | None:
+    from src.roles import Role, chain_name_to_role
+
+    direct = Role.from_string(name)
+    if direct is not None and direct.value == name and name in roles:
+        return name
+
+    chain_role = chain_name_to_role(name)
+    if chain_role is not None and chain_role.value in roles:
+        return chain_role.value
+    return None
+
+
 def registry_role_rows(registry: dict[str, Any]) -> list[str]:
     server_mode = registry.get("server_mode") or {}
     roles = registry.get("roles") or {}
@@ -203,11 +216,10 @@ def registry_role_rows(registry: dict[str, Any]) -> list[str]:
         role_cfg = roles.get(name) or {}
         if not isinstance(server_cfg, dict) or not isinstance(role_cfg, dict):
             continue
-        model_type = server_cfg.get("model_type")
-        registry_role = name in roles
-        hot_local_alias = server_cfg.get("tier") == "hot" and model_type is None
-        if not registry_role and not hot_local_alias:
+        canonical_name = _canonical_degraded_registry_role(name, roles)
+        if canonical_name is None:
             continue
+        role_cfg = roles.get(canonical_name) or role_cfg
         backend_type = nested(role_cfg, "backend", "type") or "local"
         if backend_type != "local":
             continue
@@ -233,7 +245,7 @@ def registry_role_rows(registry: dict[str, Any]) -> list[str]:
             "| "
             + " | ".join(
                 [
-                    clean_cell(name, 28),
+                    clean_cell(canonical_name, 28),
                     clean_cell(port, 12),
                     clean_cell(model, 44),
                     clean_cell(tier, 12),
