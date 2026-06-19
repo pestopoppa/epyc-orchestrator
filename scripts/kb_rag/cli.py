@@ -32,6 +32,37 @@ from src.retrieval.kb_rag import (  # noqa: E402
 
 DEFAULT_CONFIG = _REPO / "config" / "kb_rag_config.yaml"
 DEFAULT_EVAL_CASES = _REPO / "scripts" / "kb_rag" / "k7_seed_cases.json"
+DEFAULT_MANIFEST_ROOT = Path("/workspace")
+
+
+def _paths_from_source_manifest(
+    manifest_path: Path,
+    *,
+    manifest_root: Path = DEFAULT_MANIFEST_ROOT,
+) -> tuple[list[str], list[dict]]:
+    """Extract updateable file paths from a project-wiki source manifest."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    sources = manifest.get("sources")
+    if not isinstance(sources, list):
+        raise ValueError(f"manifest sources must be a list: {manifest_path}")
+
+    root = manifest_root.expanduser().resolve()
+    paths: list[str] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        raw_path = source.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = root / path
+        paths.append(str(path.expanduser().resolve()))
+
+    removed = manifest.get("removed_sources", [])
+    if not isinstance(removed, list):
+        removed = []
+    return paths, removed
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
@@ -43,11 +74,31 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
 def _cmd_update(args: argparse.Namespace) -> int:
     cfg = CorpusConfig.from_yaml(args.config or DEFAULT_CONFIG)
-    paths = args.files or []
+    paths = list(args.files or [])
+    removed_sources: list[dict] = []
+    manifest_paths_count = 0
+    if args.manifest:
+        try:
+            manifest_paths, removed_sources = _paths_from_source_manifest(
+                Path(args.manifest).expanduser(),
+                manifest_root=Path(args.manifest_root),
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"manifest update input failed: {exc}", file=sys.stderr)
+            return 1
+        manifest_paths_count = len(manifest_paths)
+        paths.extend(manifest_paths)
     if not paths:
-        print("usage: update --files file1.md [file2.md ...]", file=sys.stderr)
+        print(
+            "usage: update (--files file1.md [file2.md ...] | --manifest manifest.json)",
+            file=sys.stderr,
+        )
         return 1
     result = update_files(paths, cfg, index_dir=args.index_dir or DEFAULT_INDEX_DIR)
+    if args.manifest:
+        result["manifest"] = str(Path(args.manifest).expanduser())
+        result["manifest_paths"] = manifest_paths_count
+        result["manifest_removed_sources_ignored"] = len(removed_sources)
     print(json.dumps(result, indent=2))
     return 0 if result.get("ok") else 1
 
@@ -102,6 +153,21 @@ def main(argv: list[str] | None = None) -> int:
 
     pu = sub.add_parser("update", help="incremental re-encode of changed files")
     pu.add_argument("--files", nargs="+", help="files to refresh")
+    pu.add_argument(
+        "--manifest",
+        help=(
+            "project-wiki source manifest to refresh; use a "
+            "--changed-since-manifest output for incremental updates"
+        ),
+    )
+    pu.add_argument(
+        "--manifest-root",
+        default=str(DEFAULT_MANIFEST_ROOT),
+        help=(
+            "root for manifest-relative paths "
+            f"(default: {DEFAULT_MANIFEST_ROOT})"
+        ),
+    )
     pu.set_defaults(func=_cmd_update)
 
     pq = sub.add_parser("query", help="top-K MaxSim retrieval")
