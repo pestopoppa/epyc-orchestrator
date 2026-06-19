@@ -599,6 +599,39 @@ def _config(tmp_path: Path, *, mode: str, roles: set[str]) -> StackChangePipelin
     )
 
 
+def _assert_text_stack_primary_port_consumers(
+    stack_priors_path: Path,
+    *,
+    expected_roles: set[str],
+    expected_port: int,
+) -> None:
+    from scripts.autopilot.preflight_audit import _model_server_target_groups
+    from scripts.benchmark import corpus_quality_gate
+    from scripts.graph_router.train_graph_router import load_model_fleet
+    from src.cli_orch import _stack_status_targets
+
+    artifact = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8"))
+    records = artifact["roles"]
+    grouped_role_name = "/".join(sorted(expected_roles))
+
+    assert (grouped_role_name, expected_port) in _stack_status_targets(stack_priors_path)
+
+    live_models = corpus_quality_gate._load_live_models(stack_priors_path)
+    assert {role: live_models[role]["port"] for role in expected_roles} == {
+        role: expected_port for role in expected_roles
+    }
+
+    fleet = {record["role_id"]: record for record in load_model_fleet(stack_priors_path)}
+    assert {role: fleet[role]["port"] for role in expected_roles} == {
+        role: expected_port for role in expected_roles
+    }
+
+    _, names_by_health_url = _model_server_target_groups(records, "http://localhost:8000")
+    assert sorted(names_by_health_url[f"http://localhost:{expected_port}/health"]) == sorted(
+        expected_roles
+    )
+
+
 def test_pipeline_report_names_simulated_fixture_target(tmp_path: Path) -> None:
     config = _config(tmp_path, mode="update", roles={"frontdoor", "coder_escalation"})
     _base_frontdoor_registry(config.lean_registry)
@@ -872,6 +905,11 @@ def test_simulated_worker_swap_updates_generated_consumers_with_approval(
     assert q_priors.baseline_tps_source_by_role["worker_general"] == PRIOR_SOURCE_STACK_PRIORS
     assert q_priors.baseline_quality_by_role["worker_general"] == pytest.approx(0.9)
     assert validate_live_q_scorer_prior_sources(config.stack_priors) == []
+    _assert_text_stack_primary_port_consumers(
+        config.stack_priors,
+        expected_roles=roles,
+        expected_port=8072,
+    )
 
     calls: list[dict[str, Any]] = []
     original_run = pipeline.subprocess.run
