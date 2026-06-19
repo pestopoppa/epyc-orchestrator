@@ -825,6 +825,43 @@ class TestExecuteDelegated:
 
         assert result is None
 
+    def test_error_answer_logs_failed_completion(self, mock_primitives, mock_state):
+        """Delegated error answers must not be logged as successful completions."""
+        request = ChatRequest(prompt="Error", real_mode=True)
+        routing = RoutingResult(
+            task_id="deleg-error",
+            task_ir={},
+            use_mock=False,
+            routing_decision=["architect_general"],
+            routing_strategy="deterministic",
+        )
+        start_time = time.perf_counter()
+
+        with patch("src.api.routes.chat_pipeline.delegation_stage.features") as mock_features:
+            mock_features.return_value.architect_delegation = True
+            with patch(
+                "src.api.routes.chat_pipeline.delegation_stage._architect_delegated_answer"
+            ) as mock_deleg:
+                mock_deleg.return_value = (
+                    "[ERROR: Delegation exhausted]",
+                    {"loops": 0, "phases": [], "delegation_events": []},
+                )
+                with patch("src.api.routes.chat_pipeline.delegation_stage.score_completed_task"):
+                    result = _execute_delegated(
+                        request,
+                        routing,
+                        mock_primitives,
+                        mock_state,
+                        start_time,
+                        initial_role="architect_general",
+                        execution_mode="direct",
+                    )
+
+        assert result is not None
+        assert result.answer == "[ERROR: Delegation exhausted]"
+        call = mock_state.progress_logger.log_task_completed.call_args
+        assert call.kwargs["success"] is False
+
     def test_forced_delegated_mode(self, mock_primitives, mock_state):
         """execution_mode='delegated' forces delegation for non-architect."""
         request = ChatRequest(prompt="Force delegated", real_mode=True)

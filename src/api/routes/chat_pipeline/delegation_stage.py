@@ -188,7 +188,8 @@ def _execute_delegated(
     if not answer:
         return None
 
-    if not answer.startswith("[ERROR"):
+    success = not answer.startswith("[ERROR")
+    if success:
         answer = _truncate_looped_answer(answer, request.prompt)
 
     elapsed = time.perf_counter() - start_time
@@ -201,7 +202,7 @@ def _execute_delegated(
         )
         state.progress_logger.log_task_completed(
             task_id=routing.task_id,
-            success=True,
+            success=success,
             details=f"Delegated mode ({initial_role}), {elapsed:.3f}s, {phases_log}",
             completion_meta={
                 "producer_role": str(initial_role),
