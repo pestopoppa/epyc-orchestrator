@@ -1040,19 +1040,50 @@ class ExperimentJournal:
     def species_effectiveness(
         self, window: int | None = None
     ) -> dict[str, dict[str, float]]:
-        """Pareto improvement rate per species.
+        """Effectiveness signals per species.
 
-        Returns {species: {total: N, pareto: M, rate: M/N}} for each species.
+        ``rate`` remains the legacy Pareto-frontier rate for reports.  Budget
+        rebalancing should prefer ``budget_rate``: PEAF surprise-derived
+        realized information gain when present, otherwise the legacy frontier
+        rate.  This lets informative non-frontier trials earn exploration
+        budget without changing old consumers that display Pareto counts.
         """
         entries = self._entries[-window:] if window else self._entries
         stats: dict[str, dict[str, float]] = {}
         for e in entries:
             if e.species not in stats:
-                stats[e.species] = {"total": 0, "pareto": 0, "rate": 0.0}
+                stats[e.species] = {
+                    "total": 0,
+                    "pareto": 0,
+                    "rate": 0.0,
+                    "information_gain": 0.0,
+                    "information_count": 0,
+                    "information_rate": 0.0,
+                    "budget_rate": 0.0,
+                }
             stats[e.species]["total"] += 1
             if e.pareto_status == "frontier":
                 stats[e.species]["pareto"] += 1
+            if (
+                e.surprise_score is not None
+                and not e.bug_corrupted_by
+                and e.outcome_status == "ok"
+            ):
+                # PEAF surprise is already normalized objective-space distance.
+                # Cap per-trial credit so one wild forecast miss cannot dominate
+                # species allocation.
+                info_gain = min(max(float(e.surprise_score), 0.0), 1.0)
+                stats[e.species]["information_gain"] += info_gain
+                stats[e.species]["information_count"] += 1
         for sp in stats:
             total = stats[sp]["total"]
             stats[sp]["rate"] = stats[sp]["pareto"] / total if total > 0 else 0.0
+            info_count = stats[sp]["information_count"]
+            if info_count > 0:
+                stats[sp]["information_rate"] = (
+                    stats[sp]["information_gain"] / info_count
+                )
+                stats[sp]["budget_rate"] = stats[sp]["information_rate"]
+            else:
+                stats[sp]["budget_rate"] = stats[sp]["rate"]
         return stats

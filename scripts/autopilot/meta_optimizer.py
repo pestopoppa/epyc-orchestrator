@@ -6,7 +6,7 @@ Rebalances species budgets, detects stagnation, adjusts search strategy.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger("autopilot.meta")
@@ -75,7 +75,10 @@ class MetaOptimizer:
         """Rebalance species budgets based on effectiveness and state.
 
         Args:
-            species_effectiveness: {species: {total, pareto, rate}}
+            species_effectiveness: {species: {total, pareto, rate, budget_rate}}.
+                ``rate`` is the legacy Pareto-frontier rate; ``budget_rate`` is
+                realized information gain from PEAF surprise when available,
+                falling back to ``rate`` for legacy journals.
             hv_slope: Hypervolume trend slope (stagnation indicator)
             memory_count: Current routing memory count
             is_converged: Whether Q-values have converged
@@ -105,7 +108,7 @@ class MetaOptimizer:
             # Phase: balanced optimization
             # Adjust based on effectiveness
             for species, stats in species_effectiveness.items():
-                rate = stats.get("rate", 0.0)
+                rate = stats.get("budget_rate", stats.get("rate", 0.0))
                 if species == "seeder":
                     self.budget.seeder = max(0.15, 0.30 + rate * 0.2)
                 elif species == "numeric_swarm":
