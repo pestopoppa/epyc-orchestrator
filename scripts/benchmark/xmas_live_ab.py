@@ -223,6 +223,49 @@ def render_report(
         f"- regression domains: {', '.join(regression_domains) if regression_domains else 'none'}"
     )
 
+    diagnostics = summary.get("diagnostics") or {}
+    if diagnostics:
+        score_flips = diagnostics.get("score_flips") or {}
+        lines.extend(["", "## Diagnostics"])
+        lines.append(
+            "- score flips: "
+            + ", ".join(
+                f"{key}={value}"
+                for key, value in sorted(score_flips.items())
+                if value
+            )
+            if any(score_flips.values())
+            else "- score flips: none"
+        )
+        timeout_counts = diagnostics.get("timeout_counts_by_arm") or {}
+        if timeout_counts:
+            lines.append(
+                "- timeouts/errors: "
+                + ", ".join(f"{arm}={count}" for arm, count in sorted(timeout_counts.items()))
+            )
+        route_transitions = diagnostics.get("route_transition_counts") or {}
+        if route_transitions:
+            top_transitions = sorted(
+                route_transitions.items(),
+                key=lambda item: (-int(item[1]), item[0]),
+            )[:5]
+            lines.append(
+                "- top route transitions: "
+                + ", ".join(f"{transition} ({count})" for transition, count in top_transitions)
+            )
+        top_latency = diagnostics.get("top_latency_regressions") or []
+        if top_latency:
+            lines.append("- largest latency regressions:")
+            for item in top_latency[:5]:
+                lines.append(
+                    "  - "
+                    f"{item.get('prompt_id')} {item.get('cell')}: "
+                    f"{item.get('baseline_route')} -> {item.get('xmas_route')}, "
+                    f"{item.get('baseline_latency_s')}s -> {item.get('xmas_latency_s')}s "
+                    f"({item.get('latency_ratio')}x), score "
+                    f"{item.get('baseline_score')} -> {item.get('xmas_score')}"
+                )
+
     lines.extend(
         [
             "",
@@ -384,6 +427,207 @@ def _arm_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _rate(values: list[bool | None]) -> float | None:
+    scored = [value for value in values if value is not None]
+    return (sum(1 for value in scored if value is True) / len(scored)) if scored else None
+
+
+def _mean_numeric(values: list[float | None]) -> float | None:
+    numeric = [float(value) for value in values if value is not None]
+    return (sum(numeric) / len(numeric)) if numeric else None
+
+
+def _prompt_arm_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate one prompt's rows for one arm."""
+    scores = [row.get("score") for row in rows]
+    latencies = [
+        float(row["elapsed_s"])
+        for row in rows
+        if row.get("elapsed_s") is not None
+    ]
+    route_counts = Counter(str(row.get("routed_to") or "") for row in rows)
+    route_counts.pop("", None)
+    error_counts = Counter(
+        str(row.get("error_code") or "")
+        for row in rows
+        if row.get("error_code") or row.get("status") == 0
+    )
+    return {
+        "n": len(rows),
+        "score_rate": _rate(scores),
+        "median_latency_s": median(latencies),
+        "dominant_route": route_counts.most_common(1)[0][0] if route_counts else "",
+        "route_counts": dict(sorted(route_counts.items())),
+        "error_counts": dict(sorted(error_counts.items())),
+        "xmas_applied_n": sum(
+            1
+            for row in rows
+            if str(row.get("routing_strategy", "")).startswith("xmas_enforce:")
+        ),
+    }
+
+
+def _score_flip_bucket(baseline_rate: float | None, xmas_rate: float | None) -> str:
+    if baseline_rate is None or xmas_rate is None:
+        return "unscored"
+    if baseline_rate > xmas_rate:
+        return "baseline_only_better"
+    if xmas_rate > baseline_rate:
+        return "xmas_only_better"
+    if baseline_rate == 1.0 and xmas_rate == 1.0:
+        return "both_correct"
+    if baseline_rate == 0.0 and xmas_rate == 0.0:
+        return "both_incorrect"
+    return "tied_partial"
+
+
+def diagnostics_summary(
+    rows: list[dict[str, Any]],
+    *,
+    latency_regression_ratio: float = 3.0,
+    max_examples: int = 10,
+) -> dict[str, Any]:
+    """Return no-inference diagnostics explaining an X-MAS A/B decision."""
+    rows_by_prompt: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in rows:
+        prompt_id = str(row.get("prompt_id") or "")
+        arm = str(row.get("arm") or "")
+        if not prompt_id or arm not in {"baseline", "xmas"}:
+            continue
+        rows_by_prompt.setdefault(prompt_id, {}).setdefault(arm, []).append(row)
+
+    score_flips: Counter[str] = Counter()
+    route_transitions: Counter[str] = Counter()
+    timeout_counts_by_arm: Counter[str] = Counter()
+    cell_stats: dict[str, dict[str, Any]] = {}
+    latency_regressions: list[dict[str, Any]] = []
+
+    for prompt_id, arms in sorted(rows_by_prompt.items()):
+        baseline_rows = arms.get("baseline", [])
+        xmas_rows = arms.get("xmas", [])
+        if not baseline_rows or not xmas_rows:
+            continue
+        baseline = _prompt_arm_metrics(baseline_rows)
+        xmas = _prompt_arm_metrics(xmas_rows)
+        baseline_route = str(baseline.get("dominant_route") or "")
+        xmas_route = str(xmas.get("dominant_route") or "")
+        route_transitions[f"{baseline_route or '<none>'}->{xmas_route or '<none>'}"] += 1
+        for arm_name, metrics in (("baseline", baseline), ("xmas", xmas)):
+            timeout_counts_by_arm[arm_name] += sum(
+                int(count) for count in (metrics.get("error_counts") or {}).values()
+            )
+
+        bucket = _score_flip_bucket(baseline.get("score_rate"), xmas.get("score_rate"))
+        score_flips[bucket] += 1
+
+        domain = str((xmas_rows[0].get("domain") or baseline_rows[0].get("domain") or ""))
+        function = str(
+            xmas_rows[0].get("function") or baseline_rows[0].get("function") or ""
+        )
+        cell = f"{domain}:{function}" if domain and function else domain or "unknown"
+        stats = cell_stats.setdefault(
+            cell,
+            {
+                "n": 0,
+                "score_flips": Counter(),
+                "baseline_scores": [],
+                "xmas_scores": [],
+                "baseline_latencies": [],
+                "xmas_latencies": [],
+                "baseline_routes": Counter(),
+                "xmas_routes": Counter(),
+            },
+        )
+        stats["n"] += 1
+        stats["score_flips"][bucket] += 1
+        stats["baseline_scores"].append(baseline.get("score_rate"))
+        stats["xmas_scores"].append(xmas.get("score_rate"))
+        if baseline.get("median_latency_s") is not None:
+            stats["baseline_latencies"].append(float(baseline["median_latency_s"]))
+        if xmas.get("median_latency_s") is not None:
+            stats["xmas_latencies"].append(float(xmas["median_latency_s"]))
+        if baseline_route:
+            stats["baseline_routes"][baseline_route] += 1
+        if xmas_route:
+            stats["xmas_routes"][xmas_route] += 1
+
+        baseline_latency = baseline.get("median_latency_s")
+        xmas_latency = xmas.get("median_latency_s")
+        if baseline_latency and xmas_latency:
+            latency_ratio = float(xmas_latency) / float(baseline_latency)
+            if latency_ratio >= latency_regression_ratio:
+                latency_regressions.append(
+                    {
+                        "prompt_id": prompt_id,
+                        "cell": cell,
+                        "baseline_route": baseline_route,
+                        "xmas_route": xmas_route,
+                        "baseline_score": baseline.get("score_rate"),
+                        "xmas_score": xmas.get("score_rate"),
+                        "baseline_latency_s": round(float(baseline_latency), 3),
+                        "xmas_latency_s": round(float(xmas_latency), 3),
+                        "latency_ratio": round(latency_ratio, 3),
+                    }
+                )
+
+    by_cell: dict[str, dict[str, Any]] = {}
+    for cell, stats in sorted(cell_stats.items()):
+        baseline_latency = median(stats["baseline_latencies"])
+        xmas_latency = median(stats["xmas_latencies"])
+        by_cell[cell] = {
+            "n": stats["n"],
+            "baseline_score_rate": _mean_numeric(stats["baseline_scores"]),
+            "xmas_score_rate": _mean_numeric(stats["xmas_scores"]),
+            "baseline_median_latency_s": baseline_latency,
+            "xmas_median_latency_s": xmas_latency,
+            "latency_ratio_xmas_over_baseline": (
+                xmas_latency / baseline_latency
+                if baseline_latency and xmas_latency
+                else None
+            ),
+            "score_flips": dict(sorted(stats["score_flips"].items())),
+            "baseline_routes": dict(sorted(stats["baseline_routes"].items())),
+            "xmas_routes": dict(sorted(stats["xmas_routes"].items())),
+        }
+        if (
+            by_cell[cell]["baseline_score_rate"] is not None
+            and by_cell[cell]["xmas_score_rate"] is not None
+        ):
+            by_cell[cell]["score_delta_xmas_minus_baseline"] = (
+                by_cell[cell]["xmas_score_rate"] - by_cell[cell]["baseline_score_rate"]
+            )
+
+    latency_regressions.sort(
+        key=lambda item: (-float(item["latency_ratio"]), str(item["prompt_id"]))
+    )
+    timeout_counts = {
+        arm: count for arm, count in sorted(timeout_counts_by_arm.items()) if count
+    }
+    return {
+        "prompt_count": len(rows_by_prompt),
+        "paired_prompt_count": sum(
+            1
+            for arms in rows_by_prompt.values()
+            if arms.get("baseline") and arms.get("xmas")
+        ),
+        "score_flips": dict(sorted(score_flips.items())),
+        "route_transition_counts": dict(sorted(route_transitions.items())),
+        "timeout_counts_by_arm": timeout_counts,
+        "xmas_override_prompt_count": sum(
+            1
+            for arms in rows_by_prompt.values()
+            if any(
+                str(row.get("routing_strategy", "")).startswith("xmas_enforce:")
+                for row in arms.get("xmas", [])
+            )
+        ),
+        "latency_regression_ratio": latency_regression_ratio,
+        "latency_regression_prompt_count": len(latency_regressions),
+        "top_latency_regressions": latency_regressions[:max_examples],
+        "by_cell": by_cell,
+    }
+
+
 def acceptance_report(
     summary: dict[str, Any],
     *,
@@ -499,6 +743,7 @@ def summarize(
         if base_rate is not None and xmas_rate is not None:
             domain_summary["score_delta_xmas_minus_baseline"] = xmas_rate - base_rate
         summary["domains"][domain] = domain_summary
+    summary["diagnostics"] = diagnostics_summary(rows)
     summary["decision"] = acceptance_report(
         summary,
         min_prompts_per_arm=min_prompts_per_arm,

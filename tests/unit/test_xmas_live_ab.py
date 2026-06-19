@@ -343,6 +343,7 @@ def test_summarize_reports_routes_scores_and_xmas_apply_count() -> None:
     rows = [
         {
             "arm": "baseline",
+            "prompt_id": "p1",
             "score": True,
             "elapsed_s": 10.0,
             "routing_strategy": "rules",
@@ -350,6 +351,7 @@ def test_summarize_reports_routes_scores_and_xmas_apply_count() -> None:
         },
         {
             "arm": "baseline",
+            "prompt_id": "p2",
             "score": False,
             "elapsed_s": 20.0,
             "routing_strategy": "rules",
@@ -357,6 +359,7 @@ def test_summarize_reports_routes_scores_and_xmas_apply_count() -> None:
         },
         {
             "arm": "xmas",
+            "prompt_id": "p1",
             "score": True,
             "elapsed_s": 7.0,
             "routing_strategy": "xmas_enforce:rules",
@@ -364,6 +367,7 @@ def test_summarize_reports_routes_scores_and_xmas_apply_count() -> None:
         },
         {
             "arm": "xmas",
+            "prompt_id": "p2",
             "score": True,
             "elapsed_s": 9.0,
             "routing_strategy": "rules",
@@ -381,6 +385,115 @@ def test_summarize_reports_routes_scores_and_xmas_apply_count() -> None:
         "worker_general": 1,
     }
     assert summary["score_delta_xmas_minus_baseline"] == 0.5
+    assert summary["diagnostics"]["route_transition_counts"] == {
+        "frontdoor->frontdoor": 1,
+        "frontdoor->worker_general": 1,
+    }
+
+
+def test_diagnostics_summary_explains_prompt_level_regressions() -> None:
+    rows = [
+        {
+            "arm": "baseline",
+            "prompt_id": "math_1",
+            "domain": "math",
+            "function": "solve",
+            "score": True,
+            "elapsed_s": 10.0,
+            "routing_strategy": "learned",
+            "routed_to": "coder_escalation",
+        },
+        {
+            "arm": "xmas",
+            "prompt_id": "math_1",
+            "domain": "math",
+            "function": "solve",
+            "score": False,
+            "elapsed_s": 60.0,
+            "routing_strategy": "xmas_enforce:learned",
+            "routed_to": "worker_general",
+        },
+        {
+            "arm": "baseline",
+            "prompt_id": "code_1",
+            "domain": "code",
+            "function": "solve",
+            "score": True,
+            "elapsed_s": 5.0,
+            "routing_strategy": "learned",
+            "routed_to": "coder_escalation",
+        },
+        {
+            "arm": "xmas",
+            "prompt_id": "code_1",
+            "domain": "code",
+            "function": "solve",
+            "score": False,
+            "elapsed_s": 100.0,
+            "routing_strategy": "",
+            "routed_to": "",
+            "status": 0,
+            "error_code": "ReadTimeout",
+        },
+    ]
+
+    diagnostics = xmas_live_ab.diagnostics_summary(rows)
+
+    assert diagnostics["paired_prompt_count"] == 2
+    assert diagnostics["score_flips"] == {"baseline_only_better": 2}
+    assert diagnostics["route_transition_counts"] == {
+        "coder_escalation-><none>": 1,
+        "coder_escalation->worker_general": 1,
+    }
+    assert diagnostics["timeout_counts_by_arm"] == {"xmas": 1}
+    assert diagnostics["xmas_override_prompt_count"] == 1
+    assert diagnostics["latency_regression_prompt_count"] == 2
+    assert diagnostics["top_latency_regressions"][0]["prompt_id"] == "code_1"
+    assert diagnostics["by_cell"]["math:solve"]["score_delta_xmas_minus_baseline"] == -1.0
+    assert diagnostics["by_cell"]["math:solve"]["latency_ratio_xmas_over_baseline"] == 6.0
+
+
+def test_render_report_includes_diagnostics(tmp_path: Path) -> None:
+    summary = {
+        "mode": "replay",
+        "decision": {
+            "status": "hold",
+            "blockers": ["latency ratio 6.000 > allowed 1.100"],
+            "lift_domains": [],
+            "regression_domains": ["math"],
+        },
+        "score_delta_xmas_minus_baseline": -1.0,
+        "latency_ratio_xmas_over_baseline": 6.0,
+        "diagnostics": {
+            "score_flips": {"baseline_only_better": 1},
+            "timeout_counts_by_arm": {"xmas": 1},
+            "route_transition_counts": {"coder_escalation->worker_general": 1},
+            "top_latency_regressions": [
+                {
+                    "prompt_id": "math_1",
+                    "cell": "math:solve",
+                    "baseline_route": "coder_escalation",
+                    "xmas_route": "worker_general",
+                    "baseline_score": 1.0,
+                    "xmas_score": 0.0,
+                    "baseline_latency_s": 10.0,
+                    "xmas_latency_s": 60.0,
+                    "latency_ratio": 6.0,
+                }
+            ],
+        },
+    }
+
+    report = xmas_live_ab.render_report(
+        summary,
+        source_results=tmp_path / "results.jsonl",
+    )
+
+    assert "## Diagnostics" in report
+    assert "baseline_only_better=1" in report
+    assert "timeouts/errors: xmas=1" in report
+    assert "coder_escalation->worker_general (1)" in report
+    assert "math_1 math:solve" in report
 
 
 def test_summarize_marks_promote_candidate_when_gates_pass() -> None:
