@@ -39,6 +39,27 @@ def _lock_roles_from_stack_priors(
     return live_stack_lock_role_sets(stack_priors_path)
 
 
+def _manifest_shared_lock_roles() -> frozenset[str]:
+    """Derive shared-lock roles from the live stack manifest classification."""
+    try:
+        from scripts.server.stack_manifest import HOT_SERVERS
+    except Exception:
+        return frozenset()
+
+    shared: set[str] = set()
+    for server in HOT_SERVERS:
+        if not isinstance(server, dict):
+            continue
+        if server.get("worker_pool") is True or server.get("vision_type") == "worker":
+            roles = server.get("roles")
+            if not isinstance(roles, list):
+                continue
+            for role in roles:
+                normalized = Role.from_string(role) if isinstance(role, str) else None
+                shared.add((normalized.value if normalized is not None else str(role)))
+    return frozenset(shared)
+
+
 def _degraded_lock_roles_from_stack_manifest() -> tuple[frozenset[str], frozenset[str]] | None:
     """Derive a compatibility lock policy from the live launcher manifest."""
     try:
@@ -46,14 +67,7 @@ def _degraded_lock_roles_from_stack_manifest() -> tuple[frozenset[str], frozense
     except Exception:
         return None
 
-    light_roles = frozenset(
-        {
-            Role.WORKER_GENERAL.value,
-            Role.WORKER_MATH.value,
-            Role.TOOLRUNNER.value,
-            Role.WORKER_VISION.value,
-        }
-    )
+    light_roles = _manifest_shared_lock_roles()
 
     heavy: set[str] = set()
     for role in HOT_ROLES | SERIAL_ROLES:

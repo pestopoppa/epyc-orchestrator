@@ -109,6 +109,13 @@ def test_degraded_lock_roles_derive_from_stack_manifest():
     assert "embedder" not in heavy
 
 
+def test_manifest_shared_lock_roles_derive_from_launch_metadata():
+    roles = lock_mod._manifest_shared_lock_roles()
+
+    assert {"worker_general", "worker_math", "toolrunner", "worker_vision"} <= roles
+    assert "embedder" not in roles
+
+
 def test_is_heavy_role_uses_derived_sets_and_unknowns_fail_closed(monkeypatch):
     monkeypatch.setattr(lock_mod, "HEAVY_ROLES", frozenset({"frontdoor"}))
     monkeypatch.setattr(lock_mod, "LIGHT_ROLES", frozenset({"worker_general"}))
