@@ -72,6 +72,7 @@ class RoleConfig:
     quant: str           # Quantization (e.g. "Q4_K_M", "Q6_K")
     tier: str            # HOT, WARM, COLD
     ram_gb: float        # Estimated RAM per instance (mlock'd)
+    mode: str = "default"  # default, vision, embedding, worker_pool
     alias_to: str = ""    # If set, this role is routed through another role's server
 
     # Instance topology
@@ -173,6 +174,7 @@ def load_template(name: str, templates_dir: Path | None = None) -> StackTemplate
             quant=role_data.get("quant", "Q4_K_M"),
             tier=role_data.get("tier", "HOT"),
             ram_gb=float(role_data.get("ram_gb", 0)),
+            mode=str(role_data.get("mode", "default") or "default"),
             alias_to=str(role_data.get("alias_to", "") or ""),
         )
         # Parse full instance
@@ -310,7 +312,7 @@ def validate_template(
     # 4. Tier consistency
     for role_name, role in template.roles.items():
         if live_roles and role_name not in live_roles and not (
-            role.alias_to or role.tier.upper() == "ALIAS"
+            role.alias_to or role.tier.upper() == "ALIAS" or role.mode == "embedding"
         ):
             errors.append(
                 f"Retired role '{role_name}' must not appear in stack templates; "

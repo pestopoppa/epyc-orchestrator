@@ -283,6 +283,28 @@ class TestStackTemplates:
         assert arch.full.numa == "FULL"
         assert len(arch.replicas) == 0
 
+    def test_embedder_fleet_has_single_embedding_instances(self):
+        from src.config.stack_templates import load_template
+        template = load_template("default")
+        embedder_roles = [
+            "embedder",
+            "embedder_1",
+            "embedder_2",
+            "embedder_3",
+            "embedder_4",
+            "embedder_5",
+        ]
+        assert [template.roles[name].full.port for name in embedder_roles] == [
+            8090,
+            8091,
+            8092,
+            8093,
+            8094,
+            8095,
+        ]
+        assert {template.roles[name].mode for name in embedder_roles} == {"embedding"}
+        assert all(not template.roles[name].quarters for name in embedder_roles)
+
     def test_validate_default_passes(self):
         from src.config.stack_templates import load_template, validate_template
         template = load_template("default")

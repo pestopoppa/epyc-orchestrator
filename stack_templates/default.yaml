@@ -8,9 +8,12 @@
 #   1×96t full-speed instance + 4×48t quarter instances
 #   ConcurrencyAwareBackend routes single→full, concurrent→quarters
 #
+# Embedding roles (embedder, embedder_1..5):
+#   6×BGE single-port embedding servers, no NUMA pinning, optional at launch
+#
 # Aliases are represented with tier=ALIAS + alias_to; they do not launch separate servers.
 # Architect roles: 1×96t full-machine canonical instance
-# Single-instance roles: 1×96t or 1×24t dedicated
+# Single-instance roles: 1×96t, 1×24t, or embedding-mode dedicated
 
 name: default
 description: Production baseline (2026-06-13) — current manifest topology with explicit aliases
@@ -131,3 +134,69 @@ roles:
       - { port: 8287, numa: Q0B, threads: 48 }
       - { port: 8387, numa: Q1A, threads: 48 }
       - { port: 8487, numa: Q1B, threads: 48 }
+
+  embedder:
+    model: bge-large-en-v1.5-f16
+    quant: f16
+    tier: HOT
+    mode: embedding
+    ram_gb: 0.67
+    full:
+      port: 8090
+      numa: NONE
+      threads: 4
+
+  embedder_1:
+    model: bge-large-en-v1.5-f16
+    quant: f16
+    tier: HOT
+    mode: embedding
+    ram_gb: 0.67
+    full:
+      port: 8091
+      numa: NONE
+      threads: 4
+
+  embedder_2:
+    model: bge-large-en-v1.5-f16
+    quant: f16
+    tier: HOT
+    mode: embedding
+    ram_gb: 0.67
+    full:
+      port: 8092
+      numa: NONE
+      threads: 4
+
+  embedder_3:
+    model: bge-large-en-v1.5-f16
+    quant: f16
+    tier: HOT
+    mode: embedding
+    ram_gb: 0.67
+    full:
+      port: 8093
+      numa: NONE
+      threads: 4
+
+  embedder_4:
+    model: bge-large-en-v1.5-f16
+    quant: f16
+    tier: HOT
+    mode: embedding
+    ram_gb: 0.67
+    full:
+      port: 8094
+      numa: NONE
+      threads: 4
+
+  embedder_5:
+    model: bge-large-en-v1.5-f16
+    quant: f16
+    tier: HOT
+    mode: embedding
+    ram_gb: 0.67
+    full:
+      port: 8095
+      numa: NONE
+      threads: 4

@@ -137,6 +137,24 @@ class TestDefaultYamlRoundTrip:
         assert _RETIRED_ARCHITECT_ROLE not in t.roles
         assert t.roles["architect_general"].instance_count == 1
         assert t.roles["ingest_long_context"].instance_count == 5
+        embedder_roles = [
+            "embedder",
+            "embedder_1",
+            "embedder_2",
+            "embedder_3",
+            "embedder_4",
+            "embedder_5",
+        ]
+        assert [t.roles[name].full.port for name in embedder_roles] == [
+            8090,
+            8091,
+            8092,
+            8093,
+            8094,
+            8095,
+        ]
+        assert {t.roles[name].mode for name in embedder_roles} == {"embedding"}
+        assert {t.roles[name].full.threads for name in embedder_roles} == {4}
         result = validate_template(t)
         assert result.valid, f"default template should validate: {result.errors}"
 
