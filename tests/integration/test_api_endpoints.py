@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from src.api import create_app
 from src.api.dependencies import dep_app_state, dep_health_tracker
+from src.api.routes import health as health_route
 from src.api.state import AppState
 
 pytestmark = pytest.mark.integration
@@ -111,6 +112,34 @@ class TestHealthEndpoint:
 
         data = resp.json()
         assert "knowledge_tools" in data
+
+    def test_health_degrades_when_backend_probe_fails(self, client, mock_state, monkeypatch):
+        """Backend liveness probe failures degrade health even with closed circuits."""
+        mock_state.health_tracker.get_status.return_value = {
+            "http://localhost:8070": {"state": "closed"},
+        }
+
+        async def fake_probe_core_backends():
+            return {
+                "frontdoor": {
+                    "ok": False,
+                    "latency_ms": 12.3,
+                    "url": "http://localhost:8070",
+                    "status_code": 503,
+                    "failure_reason": "http_status",
+                    "failure_detail": "status=503",
+                }
+            }
+
+        monkeypatch.setattr(health_route, "_probe_core_backends", fake_probe_core_backends)
+
+        resp = client.get("/health")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "degraded"
+        assert data["backend_probes"]["frontdoor"]["ok"] is False
+        assert data["backend_probes"]["frontdoor"]["failure_reason"] == "http_status"
 
 
 # ── Stats endpoint ────────────────────────────────────────────────────
