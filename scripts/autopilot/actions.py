@@ -539,6 +539,18 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
             getattr(mutation, "safety_reason", "unsafe"),
         )
         return None, "prompt_forge"
+    if getattr(mutation, "mutated_content", None) == getattr(
+        mutation, "original_content", None
+    ):
+        log.warning("Code mutation produced no file changes, skipping eval")
+        return (
+            SkipOutcome(
+                "skipped",
+                "code_mutation produced no file changes",
+                "code_mutation",
+            ),
+            "prompt_forge",
+        )
 
     skill_without = _skill_efficacy_without_result(ctx)
     ctx.forge.apply_code_mutation(mutation)

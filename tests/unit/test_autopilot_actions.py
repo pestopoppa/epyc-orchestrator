@@ -493,6 +493,42 @@ def test_code_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None
     assert swarm.epochs == []
 
 
+def test_code_mutation_noop_skips_eval() -> None:
+    class FakeForge:
+        def __init__(self):
+            self.applied = 0
+
+        def propose_code_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="same",
+                mutated_content="same",
+                syntax_valid=True,
+                safety_valid=True,
+            )
+
+        def apply_code_mutation(self, mutation):
+            self.applied += 1
+
+    tower = _QueuedTower([])
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+    result, species = actions._action_code_mutation(
+        {"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=swarm, journal=_FakeJournal()),
+    )
+
+    assert species == "prompt_forge"
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert result.reason == "code_mutation produced no file changes"
+    assert forge.applied == 0
+    assert tower.calls == 0
+    assert swarm.epochs == []
+
+
 def test_distill_knowledge_returns_evolution_manager_species() -> None:
     """Without evo/strategy_store, distill_knowledge is a journalable invalid outcome."""
     result, species = actions._action_distill_knowledge(
@@ -743,6 +779,24 @@ def test_first_unblacklisted_seed_action_reports_exhaustion() -> None:
 
     assert action is None
     assert reason == f"blocked {autopilot.FALLBACK_SEED_CANDIDATES[-1]}"
+
+
+def test_critic_fallback_seed_skip_when_seed_candidates_exhausted() -> None:
+    skip = autopilot._critic_fallback_seed_skip(
+        {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N},
+        [
+            {
+                "pattern": {"type": "seed_batch", "n_questions": n_questions},
+                "reason": f"blocked {n_questions}",
+            }
+            for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
+        ],
+    )
+
+    assert skip is not None
+    assert skip.status == "skipped"
+    assert skip.action_type == "planner_coordinator"
+    assert "critic fallback seed_batch unavailable" in skip.reason
 
 
 def test_first_meta_action_is_allowed() -> None:

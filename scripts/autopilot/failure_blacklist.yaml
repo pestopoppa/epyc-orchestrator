@@ -274,10 +274,10 @@ blacklist:
     suites:
     - coder
     - math
-  reason: 'Auto-blacklisted: 6× invalid — action blacklisted: Auto-blacklisted: 2×
+  reason: 'Auto-blacklisted: 7× invalid — action blacklisted: Auto-blacklisted: 2×
     invalid — action blacklisted: Auto-blac'
-  added: '2026-06-19T08:54:00.946696+00:00'
-  source_trial: 863
+  added: '2026-06-19T09:09:10.622704+00:00'
+  source_trial: 866
 - pattern:
     type: deep_eval
     tier: 2

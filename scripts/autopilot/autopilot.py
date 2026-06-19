@@ -425,6 +425,23 @@ def _seed_fallback_exhaustion_reason(blacklist: list[dict[str, Any]]) -> str | N
     return reason or "all measured seed fallbacks are blacklisted"
 
 
+def _critic_fallback_seed_skip(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+) -> SkipOutcome | None:
+    """Skip a critic seed fallback when the measured seed ladder is exhausted."""
+    if action.get("type") != "seed_batch":
+        return None
+    reason = _seed_fallback_exhaustion_reason(blacklist)
+    if not reason:
+        return None
+    return SkipOutcome(
+        "skipped",
+        f"critic fallback seed_batch unavailable: {reason}",
+        "planner_coordinator",
+    )
+
+
 def _first_unblacklisted_numeric_trial_action(
     blacklist: list[dict[str, Any]],
     *,
@@ -2524,6 +2541,7 @@ def _run_loop_inner(
         # ── 2. Reason ────────────────────────────────────────────
         if tui is not None:
             tui.set_status("selecting next trial (controller)…")
+        critic_fallback_skip: SkipOutcome | None = None
         if use_controller:
             phase.set(
                 "planner_prompt_build",
@@ -2902,6 +2920,7 @@ def _run_loop_inner(
             ):
                 _record_rejected_draft(state, draft_action, crit, trial_counter)
                 blacklist = load_blacklist()  # may have grown
+                critic_fallback_skip = _critic_fallback_seed_skip(action, blacklist)
                 if (
                     int(state.get("consecutive_rejected_drafts", 0))
                     >= MAX_CONSECUTIVE_REJECTED_DRAFTS
@@ -2975,21 +2994,28 @@ def _run_loop_inner(
             )
 
         # ── 3. Act ───────────────────────────────────────────────
-        # B2: Check failure blacklist before dispatch
-        pre_dispatch_skip: SkipOutcome | None = None
-        action, rationale = _replace_blacklisted_seed_fallback(
-            action,
-            blacklist,
-            rationale,
-            reason_label="pre-dispatch",
-        )
-        blocked_reason = check_blacklist(action, blacklist)
-        if blocked_reason:
-            log.warning(
-                "Trial %d: action blacklisted (%s), recording invalid skip",
-                trial_counter, blocked_reason,
-            )
-            pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
+            # B2: Check failure blacklist before dispatch
+            pre_dispatch_skip: SkipOutcome | None = critic_fallback_skip
+            if pre_dispatch_skip is not None:
+                log.warning(
+                    "Trial %d: %s",
+                    trial_counter,
+                    pre_dispatch_skip.reason,
+                )
+            else:
+                action, rationale = _replace_blacklisted_seed_fallback(
+                    action,
+                    blacklist,
+                    rationale,
+                    reason_label="pre-dispatch",
+                )
+                blocked_reason = check_blacklist(action, blacklist)
+                if blocked_reason:
+                    log.warning(
+                        "Trial %d: action blacklisted (%s), recording invalid skip",
+                        trial_counter, blocked_reason,
+                    )
+                    pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
 
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
         phase.set(
