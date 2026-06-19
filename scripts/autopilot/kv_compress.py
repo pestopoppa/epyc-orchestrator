@@ -437,9 +437,16 @@ def _fallback_production_ports_from_stack_manifest() -> dict[str, int]:
     return dict(sorted(ports.items()))
 
 
-# Backward-compatible fallback for older imports/tests. New code should call
-# production_ports().
-PRODUCTION_PORTS = _fallback_production_ports_from_stack_manifest()
+def degraded_production_ports() -> dict[str, int]:
+    """Return the explicit degraded fallback ports for compatibility paths."""
+    return _fallback_production_ports_from_stack_manifest()
+
+
+def __getattr__(name: str) -> Any:
+    """Preserve legacy ``PRODUCTION_PORTS`` imports without a stale snapshot."""
+    if name == "PRODUCTION_PORTS":
+        return degraded_production_ports()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _is_slot_server(serving: dict[str, Any]) -> bool:
@@ -507,9 +514,9 @@ def production_ports_from_stack_priors(
 
 def production_ports(*, include_aliases: bool = False) -> dict[str, int]:
     """Return live KV-compression ports, falling back only in degraded mode."""
-    return production_ports_from_stack_priors(include_aliases=include_aliases) or dict(
-        PRODUCTION_PORTS
-    )
+    return production_ports_from_stack_priors(
+        include_aliases=include_aliases,
+    ) or degraded_production_ports()
 
 
 def auto_compress_all(
