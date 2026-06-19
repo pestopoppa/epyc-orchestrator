@@ -283,6 +283,14 @@ def _discover_llama_models() -> dict[int, str]:
     return models
 
 
+def _pid_is_running(pid: Any) -> bool:
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return False
+    return pid_int > 0 and Path(f"/proc/{pid_int}").exists()
+
+
 def _load_state_services(state_path: Path) -> list[dict[str, Any]]:
     """Load non-llama auxiliary services from orchestrator_state.json at `state_path`."""
     services: list[dict[str, Any]] = []
@@ -298,11 +306,42 @@ def _load_state_services(state_path: Path) -> list[dict[str, Any]]:
                 "port": info.get("port"),
                 "model": info.get("model_path", ""),
                 "pid": info.get("pid", -1),
+                "running": _pid_is_running(info.get("pid")),
             })
     except FileNotFoundError:
         pass
     except Exception as exc:
         logger.debug("Failed to load orchestrator_state.json: %s", exc)
+    return services
+
+
+def expected_stack_services() -> list[dict[str, Any]]:
+    """Expected stack servers from the launch manifest, including unloaded ports."""
+    try:
+        from scripts.server.stack_manifest import HOT_SERVERS, WARM_SERVERS
+    except Exception as exc:
+        logger.debug("Failed to load stack manifest services: %s", exc)
+        return []
+
+    services: list[dict[str, Any]] = []
+    for server in HOT_SERVERS + WARM_SERVERS:
+        if not isinstance(server, dict):
+            continue
+        port = server.get("port")
+        roles = server.get("roles") or []
+        if not isinstance(port, int) or not isinstance(roles, list) or not roles:
+            continue
+        role = _port_hint(port)
+        services.append({
+            "name": role,
+            "role": role,
+            "port": port,
+            "roles": [str(r) for r in roles],
+            "embedding": bool(server.get("embedding")),
+            "vision": bool(server.get("vision")),
+            "worker_pool": bool(server.get("worker_pool")),
+            "numa_instance": server.get("numa_instance"),
+        })
     return services
 
 

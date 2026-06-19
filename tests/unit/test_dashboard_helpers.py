@@ -49,6 +49,51 @@ def test_port_hints_quarter_ports_generated() -> None:
     assert dashboard_topology._PORT_HINTS[8380] == "frontdoor.q3"
 
 
+def test_expected_stack_services_include_embedder_fleet() -> None:
+    services = dashboard_topology.expected_stack_services()
+    embedders = [s for s in services if s.get("embedding")]
+
+    assert [s["port"] for s in embedders] == [8090, 8091, 8092, 8093, 8094, 8095]
+    assert [s["role"] for s in embedders] == [
+        "embedder",
+        "embedder_1",
+        "embedder_2",
+        "embedder_3",
+        "embedder_4",
+        "embedder_5",
+    ]
+
+
+def test_topology_emits_expected_unloaded_stack_servers(monkeypatch) -> None:
+    monkeypatch.setattr(dashboard, "_discover_llama_ports", lambda: {})
+    monkeypatch.setattr(dashboard, "_discover_llama_models", lambda: {})
+    monkeypatch.setattr(dashboard, "_load_state_services", lambda: [])
+
+    response = asyncio.run(dashboard.topology())
+    data = json.loads(response.body)
+    by_port = {node["port"]: node for node in data["nodes"]}
+
+    embedder = by_port[8090]
+    assert embedder["role"] == "embedder"
+    assert embedder["kind"] == "expected-stack-server"
+    assert embedder["expected"] is True
+    assert embedder["running"] is False
+
+
+def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(dashboard, "_read_tail", lambda *a, **kw: "")
+    monkeypatch.setattr(dashboard, "_parse_inference_sections", lambda *a, **kw: [])
+    monkeypatch.setattr(dashboard, "_todays_progress_log", lambda: tmp_path / "missing.jsonl")
+
+    response = asyncio.run(dashboard.topology_activity())
+    data = json.loads(response.body)
+
+    embedder = data["per_role"]["embedder"]
+    assert embedder["expected"] is True
+    assert embedder["n_recent"] == 0
+    assert embedder["n_completed"] == 0
+
+
 def test_service_port_hints_use_manifest_worker_fast_port(monkeypatch) -> None:
     from scripts.server import stack_manifest
 
@@ -143,7 +188,7 @@ def test_load_state_services_parses_known_fields(tmp_path) -> None:
             "model_path": "api", "log_file": "api.log",
         },
         "embedder": {
-            "role": "embedder", "port": 8090, "pid": 456,
+            "role": "embedder", "port": 8090, "pid": 999999999,
             "model_path": "/m/bge.gguf", "log_file": "emb.log",
         },
         "junk": "not a dict, must be skipped",
@@ -153,6 +198,7 @@ def test_load_state_services_parses_known_fields(tmp_path) -> None:
     embedder = next(s for s in services if s["name"] == "embedder")
     assert embedder["port"] == 8090
     assert embedder["model"] == "/m/bge.gguf"
+    assert embedder["running"] is False
 
 
 def test_discover_llama_ports_parses_ps_output(monkeypatch) -> None:

@@ -66,6 +66,7 @@ from src.api.routes.dashboard_topology import (
     _process_info_by_match,
     _role_color,
     base_role,
+    expected_stack_services,
 )
 from src.api.routes.dashboard_topology import _load_state_services as _load_state_services_impl
 from src.autopilot_core.action_identity import (
@@ -1823,6 +1824,18 @@ async def topology_activity(window_s: float = 600.0) -> JSONResponse:
     # Per-role aggregation from tap sections. timestamp format is
     # "YYYY-MM-DD HH:MM:SS" in local time (writer uses datetime.now()).
     per_role: dict[str, dict[str, Any]] = {}
+    for svc in expected_stack_services():
+        role = base_role(svc.get("role") or "")
+        if not role:
+            continue
+        per_role.setdefault(role, {
+            "n_recent": 0,
+            "n_completed": 0,
+            "last_activity_age_s": None,
+            "_tps_samples": [],
+            "_duration_samples": [],
+            "expected": True,
+        })
     for s in sections:
         role = base_role(s.get("role") or "")
         if not role:
@@ -1896,6 +1909,12 @@ async def topology() -> JSONResponse:
     llama_ports = _discover_llama_ports()
     llama_models = _discover_llama_models()
     services = _load_state_services()
+    expected_services = expected_stack_services()
+    expected_by_port = {
+        svc["port"]: svc
+        for svc in expected_services
+        if isinstance(svc.get("port"), int)
+    }
     seen_ports: set[int] = set()
     nodes: list[dict[str, Any]] = []
 
@@ -1914,6 +1933,7 @@ async def topology() -> JSONResponse:
     for port, role in sorted(llama_ports.items()):
         if port in seen_ports:
             continue
+        expected = expected_by_port.get(port, {})
         seen_ports.add(port)
         nodes.append({
             "id": f"port_{port}",
@@ -1930,6 +1950,9 @@ async def topology() -> JSONResponse:
             # also serves coder_escalation + worker_summarize). Surfaced so the
             # dashboard can render them under the primary role label.
             "aliases": role_aliases(role),
+            "expected": bool(expected),
+            "running": True,
+            "manifest_roles": expected.get("roles", []),
         })
 
     # Auxiliary services not already covered.
@@ -1937,6 +1960,7 @@ async def topology() -> JSONResponse:
         port = svc.get("port")
         if not port or port in seen_ports:
             continue
+        expected = expected_by_port.get(port, {})
         seen_ports.add(port)
         nodes.append({
             "id": svc["name"],
@@ -1946,6 +1970,35 @@ async def topology() -> JSONResponse:
             "color": _role_color(svc["role"]),
             "kind": "service",
             "model": _clean_model_name(svc.get("model", "")),
+            "expected": bool(expected),
+            "running": bool(svc.get("running")),
+            "manifest_roles": expected.get("roles", []),
+        })
+
+    # Expected stack servers that are not currently visible via /proc or the
+    # state file still get topology rows so the activity panel can show them as
+    # expected/down/no recent activity instead of silently omitting them.
+    for svc in expected_services:
+        port = svc.get("port")
+        role = str(svc.get("role") or "")
+        if not port or port in seen_ports or not role:
+            continue
+        seen_ports.add(port)
+        nodes.append({
+            "id": f"expected_{port}",
+            "label": svc.get("name") or role,
+            "role": role,
+            "port": port,
+            "color": _role_color(role),
+            "kind": "expected-stack-server",
+            "model": "",
+            "aliases": [r for r in svc.get("roles", [])[1:] if isinstance(r, str)],
+            "expected": True,
+            "running": False,
+            "manifest_roles": svc.get("roles", []),
+            "embedding": bool(svc.get("embedding")),
+            "vision": bool(svc.get("vision")),
+            "worker_pool": bool(svc.get("worker_pool")),
         })
 
     return JSONResponse({"nodes": nodes, "generated_at": time.time()})
