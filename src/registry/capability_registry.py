@@ -110,13 +110,36 @@ def _validate_entry(entry: Any, idx: int) -> list[str]:
             f"must be one of {sorted(_VALID_RISK)}"
         )
 
+    actionable_by = entry.get("actionable_by")
+    if "actionable_by" in entry:
+        if not isinstance(actionable_by, str):
+            errors.append(f"{label}: actionable_by must be a string")
+        else:
+            if actionable_by in {"operator", "autopilot"}:
+                pass
+            elif actionable_by.startswith("gated:") and actionable_by[6:].strip():
+                pass
+            else:
+                errors.append(
+                    f"{label}: invalid actionable_by {actionable_by!r}; "
+                    "must be 'operator', 'autopilot', or 'gated:<condition>'"
+                )
+
     if "promotion_state" in entry and entry["promotion_state"] not in _VALID_PROMOTION_STATE:
         errors.append(
             f"{label}: invalid promotion_state {entry['promotion_state']!r}; "
             f"must be one of {sorted(_VALID_PROMOTION_STATE)}"
         )
-    elif entry.get("promotion_state") == "promoted" and not entry.get("kill_condition"):
-        errors.append(f"{label}: promoted rows must define a kill_condition")
+    elif entry.get("promotion_state") == "promoted":
+        if actionable_by != "autopilot":
+            errors.append(
+                f"{label}: promoted rows must set actionable_by to 'autopilot'"
+            )
+        kill_condition = entry.get("kill_condition")
+        if not isinstance(kill_condition, str) or not kill_condition.strip():
+            errors.append(
+                f"{label}: promoted rows must define a non-empty string kill_condition"
+            )
 
     # roles must be a non-empty list
     if "roles" in entry:

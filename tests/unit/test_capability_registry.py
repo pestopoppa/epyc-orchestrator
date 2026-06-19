@@ -119,7 +119,8 @@ def test_edit_transaction_auto_routing_is_operator_only_placeholder() -> None:
     assert edit_cap["actionable_by"] == "operator"
     assert edit_cap["promotion_state"] == "placeholder"
     assert edit_cap["risk"] == "high"
-    assert edit_cap["kill_condition"]
+    assert isinstance(edit_cap["kill_condition"], str)
+    assert edit_cap["kill_condition"].strip()
 
 
 def test_load_minimal_valid_registry(tmp_path: Path) -> None:
@@ -262,18 +263,51 @@ def test_invalid_risk_raises(tmp_path: Path) -> None:
         load_capability_registry(path)
 
 
+def test_invalid_actionable_by_raises(tmp_path: Path) -> None:
+    path = _write_registry(
+        tmp_path,
+        [_minimal_entry(actionable_by="gated:   ")],
+    )
+    with pytest.raises(CapabilityRegistryError, match="invalid actionable_by"):
+        load_capability_registry(path)
+
+
 def test_invalid_promotion_state_raises(tmp_path: Path) -> None:
     path = _write_registry(tmp_path, [_minimal_entry(promotion_state="deployed")])
     with pytest.raises(CapabilityRegistryError, match="invalid promotion_state"):
         load_capability_registry(path)
 
 
-def test_promoted_entry_requires_kill_condition(tmp_path: Path) -> None:
+def test_promoted_entry_requires_autopilot_and_kill_condition(tmp_path: Path) -> None:
     path = _write_registry(
         tmp_path,
-        [_minimal_entry(promotion_state="promoted", kill_condition=None)],
+        [
+            _minimal_entry(
+                promotion_state="promoted",
+                actionable_by="operator",
+                kill_condition="rollback on regression",
+            )
+        ],
     )
-    with pytest.raises(CapabilityRegistryError, match="must define a kill_condition"):
+    with pytest.raises(CapabilityRegistryError, match="promoted rows must set actionable_by"):
+        load_capability_registry(path)
+
+
+def test_promoted_entry_requires_text_kill_condition(tmp_path: Path) -> None:
+    path = _write_registry(
+        tmp_path,
+        [
+            _minimal_entry(
+                promotion_state="promoted",
+                actionable_by="autopilot",
+                kill_condition=["rollback on regression"],
+            )
+        ],
+    )
+    with pytest.raises(
+        CapabilityRegistryError,
+        match="promoted rows must define a non-empty string kill_condition",
+    ):
         load_capability_registry(path)
 
 
