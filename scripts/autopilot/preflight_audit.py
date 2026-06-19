@@ -100,31 +100,6 @@ def _model_server_target_groups(
     return api_health, names_by_health_url
 
 
-def _fallback_model_server_records() -> dict[str, dict[str, object]]:
-    records: dict[str, dict[str, object]] = {}
-    for server in HOT_SERVERS + WARM_SERVERS:
-        if not isinstance(server, dict):
-            continue
-        port = server.get("port")
-        roles = server.get("roles")
-        if not isinstance(port, int) or not isinstance(roles, list):
-            continue
-        visible_roles = [
-            str(Role.from_string(role) or role)
-            for role in roles
-            if isinstance(role, str) and _fallback_model_server_includes_role(role)
-        ]
-        if not visible_roles:
-            continue
-        endpoint = f"http://localhost:{port}"
-        for role_name in visible_roles:
-            records[f"{role_name}@{port}"] = {
-                "role": role_name,
-                "serving": {"endpoint": endpoint},
-            }
-    return records
-
-
 def _format_model_server_targets(
     api_health: str,
     names_by_health_url: dict[str, list[str]],
@@ -139,10 +114,24 @@ def _format_model_server_targets(
 
 
 def _fallback_model_server_targets(orchestrator_url: str) -> list[tuple[str, str]]:
-    api_health, names_by_health_url = _model_server_target_groups(
-        _fallback_model_server_records(),
-        orchestrator_url,
-    )
+    api_health = _health_url(orchestrator_url) or "http://localhost:8000/health"
+    names_by_health_url: dict[str, list[str]] = {}
+    for server in HOT_SERVERS + WARM_SERVERS:
+        if not isinstance(server, dict):
+            continue
+        port = server.get("port")
+        roles = server.get("roles")
+        if not isinstance(port, int) or not isinstance(roles, list):
+            continue
+        visible_roles = [
+            str(Role.from_string(role) or role)
+            for role in roles
+            if isinstance(role, str) and _fallback_model_server_includes_role(role)
+        ]
+        if not visible_roles:
+            continue
+        health_url = f"http://localhost:{port}/health"
+        names_by_health_url.setdefault(health_url, []).extend(visible_roles)
     return _format_model_server_targets(api_health, names_by_health_url)
 
 
