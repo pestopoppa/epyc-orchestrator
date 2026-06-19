@@ -140,3 +140,61 @@ def test_report_baseline_promotion_table_tolerates_incomplete_events(tmp_path) -
 
     assert "## Baseline Promotion Evidence" in report
     assert "| 7 | yes | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |" in report
+
+
+def test_report_uses_dynamic_drop_threshold_and_quality_floor(tmp_path) -> None:
+    output = tmp_path / "report.md"
+    rows = [
+        {
+            "trial_id": tid,
+            "quality": quality,
+            "speed": 10.0,
+            "cost": 0.5,
+            "reliability": reliability,
+            "tier": 1,
+            "eval_wall_s": 100.0,
+            "n_questions": 50,
+        }
+        for tid, quality, reliability in [
+            (1, 2.0, 1.0),
+            (2, 1.9, 1.0),
+            (3, 1.8, 1.0),
+            (4, 1.7, 1.0),
+            (5, 1.6, 1.0),
+            (6, 1.5, 1.0),
+            (7, 0.5, 1.0),
+        ]
+    ]
+    legacy = {
+        "frontier": [
+            {"trial_id": tid, "objectives": [2.0, 10.0, -0.5, 1.0]}
+            for tid in range(1, 7)
+        ],
+        "all_entries": [{"trial_id": tid} for tid in range(1, 8)],
+        "hypervolume_history": [[7, 1.0]],
+    }
+    task_rate = {
+        "frontier": [
+            {"trial_id": tid, "objectives": [2.0, 1800.0, 1.0]}
+            for tid in [1, 2, 3, 7]
+        ],
+        "all_entries": [{"trial_id": tid} for tid in range(1, 8)],
+        "hypervolume_history": [[7, 1.0]],
+    }
+
+    replay._write_report(
+        output,
+        journal=tmp_path / "autopilot_journal.jsonl",
+        rows=rows,
+        malformed=0,
+        legacy=legacy,
+        task_rate=task_rate,
+        current_run_only=False,
+    )
+
+    report = output.read_text()
+
+    assert "3 of 6 legacy canonical T1 frontier points fall off" in report
+    assert "Raw Fable drop criterion (`>=3 of 6`) is met" in report
+    assert "Task-rate promotion readiness is not ready" in report
+    assert "1 quality-floor violation(s)" in report

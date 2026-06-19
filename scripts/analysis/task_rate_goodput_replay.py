@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ DEFAULT_JOURNAL = REPO / "orchestration" / "autopilot_journal.jsonl"
 DEFAULT_STATE = REPO / "orchestration" / "autopilot_state.json"
 DEFAULT_REPORT_DIR = REPO / "orchestration" / "reports"
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
+QUALITY_FLOOR = 1.0
 
 
 def _read_jsonl(path: Path) -> tuple[list[dict[str, Any]], int]:
@@ -307,6 +309,16 @@ def _promotion_event_table(
     return lines
 
 
+def _quality_for_entry(
+    entry: dict[str, Any],
+    rows_by_tid: dict[int, dict[str, Any]],
+) -> float | None:
+    tid = _trial_id(entry)
+    if tid is None:
+        return None
+    return _as_float(rows_by_tid.get(tid, {}).get("quality"))
+
+
 def _write_report(
     path: Path,
     *,
@@ -331,7 +343,15 @@ def _write_report(
     dropped = [entry for entry in legacy_frontier if _trial_id(entry) in dropped_ids]
     added = [entry for entry in task_rate_frontier if _trial_id(entry) in added_ids]
 
-    criterion_met = len(dropped_ids) >= 2 and len(legacy_frontier) == 5
+    drop_threshold = max(2, math.ceil(len(legacy_frontier) * 2 / 5))
+    raw_drop_criterion_met = len(dropped_ids) >= drop_threshold
+    low_quality_additions = [
+        entry
+        for entry in added
+        if (quality := _quality_for_entry(entry, rows_by_tid)) is not None
+        and quality < QUALITY_FLOOR
+    ]
+    promotion_ready = raw_drop_criterion_met and not low_quality_additions
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     scope = "latest trial-id reset segment" if current_run_only else "full journal"
     lines = [
@@ -350,8 +370,19 @@ def _write_report(
             f"`{TASK_RATE_OBJECTIVE_POLICY}`."
         ),
         (
-            "Fable criterion (`>=2 of 5`) is "
-            f"{'met' if criterion_met else 'not met'} on this replay."
+            "Raw Fable drop criterion "
+            f"(`>={drop_threshold} of {len(legacy_frontier)}`) is "
+            f"{'met' if raw_drop_criterion_met else 'not met'} on this replay."
+        ),
+        (
+            "Task-rate promotion readiness is "
+            f"{'ready' if promotion_ready else 'not ready'}"
+            + (
+                " because task-rate frontier additions include "
+                f"{len(low_quality_additions)} quality-floor violation(s)."
+                if low_quality_additions
+                else "."
+            )
         ),
         "",
         "## Frontier Summary",
