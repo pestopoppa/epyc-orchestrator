@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -452,3 +453,473 @@ def test_seq_promotion_fresh_eval_blacklist_suppresses_retry() -> None:
     assert second == action
     assert second_context is None
     assert state["seq_pending_promotion_fresh_eval"]["blocked_at_trial"] == 21
+
+
+def _run_loop_inner_seq_harness(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    state: dict[str, Any],
+    verdict_seq: dict[str, Any],
+    force_fresh_eval_context: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[tuple[bool, int]]]:
+    baseline_update_calls: list[tuple[bool, int]] = []
+
+    class FakeJournal:
+        def __init__(self) -> None:
+            self._entries: list[JournalEntry] = []
+            self._promotions: list[dict[str, Any]] = []
+
+        def record(self, entry: JournalEntry) -> None:
+            self._entries.append(entry)
+
+        def all_entries(self) -> list[JournalEntry]:
+            return list(self._entries)
+
+        def entries_with_supersessions(self) -> list[JournalEntry]:
+            return list(self._entries)
+
+        def by_species(self, species: str) -> list[JournalEntry]:
+            return [entry for entry in self._entries if entry.species == species]
+
+        def species_effectiveness(self, window: int = 50) -> dict[str, float]:
+            return {}
+
+        def baseline_promotion_events(self) -> list[dict[str, Any]]:
+            return list(self._promotions)
+
+        def append_baseline_promotion_event(self, **payload: Any) -> dict[str, Any]:
+            self._promotions.append(payload)
+            return payload
+
+        def supersession_events(self) -> list[dict[str, Any]]:
+            return []
+
+    class FakeVerdict:
+        def __init__(self, seq: dict[str, Any]) -> None:
+            self.seq = dict(seq)
+            self.passed = True
+            self.categories: list[str] = []
+            self.violations: list[str] = []
+
+        def __bool__(self) -> bool:
+            return self.passed
+
+    class FakeCriticism:
+        keep_or_revert = "keep"
+
+        def as_text(self) -> str:
+            return "ok"
+
+        def directions_text(self) -> str:
+            return ""
+
+    class FakeSafetyGate:
+        def __init__(
+            self,
+            consecutive_failures: int = 0,
+            quality_history: list[Any] | None = None,
+            quality_history_by_tier: dict[str, Any] | None = None,
+            baseline_state: dict[str, Any] | None = None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> None:
+            self.consecutive_failures = consecutive_failures
+            self.quality_history = quality_history if quality_history is not None else []
+            self.quality_history_by_tier = (
+                quality_history_by_tier if quality_history_by_tier is not None else {}
+            )
+            self.baseline = SimpleNamespace(
+                quality_for_tier=lambda *_args: 0.0,
+                to_state_dict=lambda: baseline_state or {},
+            )
+            self.use_sequential = True
+
+        def check(self, *args: Any, **kwargs: Any) -> FakeVerdict:
+            return FakeVerdict(verdict_seq)
+
+        def analyze_failure(self, *args: Any, **kwargs: Any) -> str:
+            return ""
+
+        def should_rollback(self) -> bool:
+            return False
+
+        def reset_failures(self) -> None:
+            self.consecutive_failures = 0
+
+        def update_baseline(
+            self,
+            *_args: Any,
+            seq_confirmed: bool | None = None,
+            source_trial_id: int | None = None,
+            **kwargs: Any,
+        ) -> Any:
+            baseline_update_calls.append((bool(seq_confirmed), int(source_trial_id or 0)))
+            return SimpleNamespace(
+                updated=True,
+                reason="",
+                tier=2,
+                previous_quality=2.0,
+                new_quality=2.5,
+                proof=None,
+            )
+
+    class FakeMetaOptimizer:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.budget = autopilot.SpeciesBudget()
+
+        def select_species(self) -> str:
+            return "seed_batch"
+
+        def should_rebalance(self, _trial_counter: int) -> bool:
+            return False
+
+        def rebalance(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+    class FakeSeeder:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def get_memory_count(self) -> int:
+            return 0
+
+        def restore_state(self, _state: dict[str, Any]) -> None:
+            return None
+
+        def export_state(self) -> dict[str, Any]:
+            return {"td_errors": []}
+
+        @property
+        def is_converged(self) -> bool:
+            return False
+
+    class FakeEvalTower:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def capture_recent_traces(self, _limit: int = 50) -> str:
+            return ""
+
+    class FakePromptForge:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    class FakeStructuralLab:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def restore_checkpoint(self) -> None:
+            return None
+
+        def checkpoint_state(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+    class FakeEvolutionManager:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+    class FakeParetoArchive:
+        def frontier_size(self, *_args: Any, **_kwargs: Any) -> int:
+            return 1
+
+        def add(self, *args: Any, **kwargs: Any) -> bool:
+            return True
+
+        def update(self, *args: Any, **kwargs: Any) -> str:
+            return "frontier"
+
+        def hypervolume_slope(self, *_args: Any, **_kwargs: Any) -> float:
+            return 0.0
+
+        def hypervolume(self, *_args: Any, **_kwargs: Any) -> float:
+            return 0.0
+
+        def get_frontier(self, *args: Any, **kwargs: Any) -> list[Any]:
+            return []
+
+        def summary(self) -> dict[str, Any]:
+            return {}
+
+    class FakeShortTermMemory:
+        def __init__(self) -> None:
+            pass
+
+        def refresh_from_journal(self, _journal: Any) -> None:
+            return None
+
+    class FakeStrategyStore:
+        def count(self) -> int:
+            return 0
+
+        def store(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    class FakePhaseTracker:
+        def set(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+            return {}
+
+        def clear(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+    class FakeAsyncTaskRunner:
+        def reap(self, *args: Any, **kwargs: Any) -> None:
+            return None
+
+        def submit_subprocess(
+            self,
+            *args: Any,
+            **kwargs: Any,
+        ) -> None:
+            return None
+
+        def submit(self, *args: Any, **kwargs: Any) -> Any:
+            return None
+
+        def shutdown(self) -> None:
+            return None
+
+    fake_journal = FakeJournal()
+
+    def fake_check_blacklist(
+        action: dict[str, Any], _blacklist: list[dict[str, Any]]
+    ) -> None:
+        return None
+
+    def fake_replace_blacklisted_seed_fallback(
+        action: dict[str, Any],
+        blacklist: list[dict[str, Any]],  # noqa: ARG001
+        rationale: dict[str, Any] | None,
+        reason_label: str = "",  # noqa: ARG001
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        return action, rationale
+
+    def fake_replace_blacklisted_autonomous_action(
+        action: dict[str, Any], _blacklist: list[dict[str, Any]], rationale: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        return action, rationale
+
+    def fake_enforce_experiment_quota(
+        action: dict[str, Any],
+        _state: dict[str, Any],
+        _memory_count: int,
+        rationale: dict[str, Any],
+        _trial_counter: int,
+        _blacklist: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        return action, rationale
+
+    def fake_force_metric_action_after_meta(
+        action: dict[str, Any],
+        _state: dict[str, Any],
+        rationale: dict[str, Any],
+        _blacklist: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        return action, rationale
+
+    def fake_maybe_force_seq_promotion_fresh_eval(
+        action: dict[str, Any],
+        state: dict[str, Any],  # noqa: ARG001
+        blacklist: list[dict[str, Any]],  # noqa: ARG001
+        rationale: dict[str, Any] | None,
+        trial_counter: int,  # noqa: ARG001
+        enabled: bool,  # noqa: ARG001
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+        if force_fresh_eval_context is None:
+            return action, rationale, None
+        return (
+            {"type": "deep_eval", "tier": 2},
+            (rationale or {}) | {"seq_promotion_fresh_eval": True},
+            dict(force_fresh_eval_context),
+        )
+
+    def fake_maybe_force_seq_baseline_draw(
+        action: dict[str, Any],
+        state: dict[str, Any],  # noqa: ARG001
+        journal: Any,  # noqa: ARG001
+        tier: int,  # noqa: ARG001
+        blacklist: list[dict[str, Any]],  # noqa: ARG001
+        rationale: dict[str, Any] | None,
+        trial_counter: int,  # noqa: ARG001
+        enabled: bool,  # noqa: ARG001
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+        return action, rationale, None
+
+    def fake_dispatch_action(*args: Any, **kwargs: Any) -> tuple[Any, str]:
+        return (
+            autopilot.EvalResult(
+                tier=2,
+                quality=2.5,
+                speed=10.0,
+                cost=0.1,
+                reliability=1.0,
+            ),
+            "seed_batch",
+        )
+
+    class FakeSelfCriticism:
+        def __call__(self, *args: Any, **kwargs: Any) -> FakeCriticism:
+            return FakeCriticism()
+
+    monkeypatch.setattr(autopilot, "load_state", lambda: state)
+    monkeypatch.setattr(autopilot, "save_state", lambda *args: None)
+    monkeypatch.setattr(autopilot, "ExperimentJournal", lambda: fake_journal)
+    monkeypatch.setattr(autopilot, "ParetoArchive", FakeParetoArchive)
+    monkeypatch.setattr(autopilot, "SafetyGate", FakeSafetyGate)
+    monkeypatch.setattr(autopilot, "MetaOptimizer", FakeMetaOptimizer)
+    monkeypatch.setattr(autopilot, "Seeder", FakeSeeder)
+    monkeypatch.setattr(autopilot, "NumericSwarm", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(autopilot, "PromptForge", FakePromptForge)
+    monkeypatch.setattr(autopilot, "StructuralLab", FakeStructuralLab)
+    monkeypatch.setattr(autopilot, "EvolutionManager", FakeEvolutionManager)
+    monkeypatch.setattr(autopilot, "ShortTermMemory", FakeShortTermMemory)
+    monkeypatch.setattr(autopilot, "StrategyStore", FakeStrategyStore)
+    monkeypatch.setattr(autopilot, "EvalTower", FakeEvalTower)
+    monkeypatch.setattr(autopilot, "AsyncTaskRunner", FakeAsyncTaskRunner)
+    monkeypatch.setattr(autopilot, "PhaseTracker", FakePhaseTracker)
+    monkeypatch.setattr(autopilot, "check_blacklist", fake_check_blacklist)
+    monkeypatch.setattr(
+        autopilot,
+        "_replace_blacklisted_seed_fallback",
+        fake_replace_blacklisted_seed_fallback,
+    )
+    monkeypatch.setattr(
+        autopilot,
+        "_replace_blacklisted_autonomous_action",
+        fake_replace_blacklisted_autonomous_action,
+    )
+    monkeypatch.setattr(
+        autopilot,
+        "_enforce_experiment_quota",
+        fake_enforce_experiment_quota,
+    )
+    monkeypatch.setattr(
+        autopilot,
+        "_force_metric_action_after_meta",
+        fake_force_metric_action_after_meta,
+    )
+    monkeypatch.setattr(autopilot, "_auto_action", lambda *args, **kwargs: {"type": "seed_batch"})
+    monkeypatch.setattr(
+        autopilot,
+        "_maybe_force_seq_promotion_fresh_eval",
+        fake_maybe_force_seq_promotion_fresh_eval,
+    )
+    monkeypatch.setattr(
+        autopilot,
+        "_maybe_force_seq_baseline_draw",
+        fake_maybe_force_seq_baseline_draw,
+    )
+    monkeypatch.setattr(autopilot, "dispatch_action", fake_dispatch_action)
+    monkeypatch.setattr(autopilot, "_journal_archive_payload_for_authority", lambda *args: None)
+    monkeypatch.setattr(autopilot, "_sync_startup_archive_from_journal_authority", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        autopilot,
+        "_recover_from_in_flight_trial",
+        lambda _state, _journal, _archive, trial_counter: trial_counter,
+    )
+    monkeypatch.setattr(autopilot, "_save_state_with_journal_archive_authority", lambda *args, **kwargs: None)
+    monkeypatch.setattr(autopilot, "_append_baseline_promotion_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(autopilot, "health_check", lambda *args, **kwargs: object())
+    monkeypatch.setattr(autopilot, "should_generate_today", lambda _state: False)
+    monkeypatch.setattr(autopilot.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(autopilot, "_git_tag", lambda *args, **kwargs: None)
+    monkeypatch.setattr(autopilot, "generate_self_criticism", FakeSelfCriticism())
+    monkeypatch.setattr(
+        autopilot,
+        "classify_learning_exclusion",
+        lambda *args, **kwargs: (None, "", None),
+    )
+    monkeypatch.setattr(autopilot.peaf, "compute_surprise", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(
+        autopilot.peaf,
+        "actual_objectives_from_eval",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(autopilot, "get_preflight_diagnostics", None)
+
+    autopilot._run_loop_inner(
+        max_trials=1,
+        dry_run=False,
+        use_controller=False,
+        tui=None,
+    )
+
+    return state, baseline_update_calls
+
+
+def test_run_loop_inner_forwards_finalized_seq_to_gate_and_clears_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+    }
+
+    returned_state, baseline_update_calls = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-a",
+            "confirmed": True,
+            "E_quality": 120.0,
+            "E_rate_noninf": 120.0,
+        },
+        force_fresh_eval_context={
+            "candidate": "candidate-a",
+            "source_trial_id": 13,
+        },
+    )
+
+    assert baseline_update_calls == [(True, 0)]
+    assert returned_state["seq_last_promotion_finalized"] == {
+        "trial_id": 0,
+        "candidate": "candidate-a",
+        "combined_E": 120.0,
+        "baseline_update_reason": "",
+    }
+    assert "seq_pending_promotion_fresh_eval" not in returned_state
+
+
+def test_run_loop_inner_nonfinalized_seq_does_not_promote_and_leaves_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state: dict[str, Any] = {
+        "trial_counter": 0,
+        "paused": False,
+        "td_errors": [],
+        "seeder_state": {},
+        "consecutive_failures": 0,
+        "quality_history": [],
+        "quality_history_by_tier": {},
+        "baseline_state": {},
+        "seq_pending_promotion_fresh_eval": {
+            "candidate": "candidate-a",
+            "source_trial_id": 13,
+            "tier": 2,
+            "attempts": 3,
+        },
+    }
+
+    returned_state, baseline_update_calls = _run_loop_inner_seq_harness(
+        monkeypatch,
+        state=state,
+        verdict_seq={
+            "candidate": "candidate-a",
+            "confirmed": True,
+            "E_quality": 90.0,
+            "E_rate_noninf": 90.0,
+        },
+        force_fresh_eval_context=None,
+    )
+
+    assert baseline_update_calls == [(False, 0)]
+    assert "seq_last_promotion_finalized" not in returned_state
+    assert "seq_pending_promotion_fresh_eval" in returned_state

@@ -3027,28 +3027,28 @@ def _run_loop_inner(
             )
 
         # ── 3. Act ───────────────────────────────────────────────
-            # B2: Check failure blacklist before dispatch
-            pre_dispatch_skip: SkipOutcome | None = critic_fallback_skip
-            if pre_dispatch_skip is not None:
+        # B2: Check failure blacklist before dispatch
+        pre_dispatch_skip: SkipOutcome | None = critic_fallback_skip
+        if pre_dispatch_skip is not None:
+            log.warning(
+                "Trial %d: %s",
+                trial_counter,
+                pre_dispatch_skip.reason,
+            )
+        else:
+            action, rationale = _replace_blacklisted_seed_fallback(
+                action,
+                blacklist,
+                rationale,
+                reason_label="pre-dispatch",
+            )
+            blocked_reason = check_blacklist(action, blacklist)
+            if blocked_reason:
                 log.warning(
-                    "Trial %d: %s",
-                    trial_counter,
-                    pre_dispatch_skip.reason,
+                    "Trial %d: action blacklisted (%s), recording invalid skip",
+                    trial_counter, blocked_reason,
                 )
-            else:
-                action, rationale = _replace_blacklisted_seed_fallback(
-                    action,
-                    blacklist,
-                    rationale,
-                    reason_label="pre-dispatch",
-                )
-                blocked_reason = check_blacklist(action, blacklist)
-                if blocked_reason:
-                    log.warning(
-                        "Trial %d: action blacklisted (%s), recording invalid skip",
-                        trial_counter, blocked_reason,
-                    )
-                    pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
+                pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
 
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
         phase.set(
