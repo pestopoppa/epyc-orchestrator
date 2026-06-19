@@ -160,3 +160,9 @@ blacklist:
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 869'
   added: '2026-06-19T09:23:22.399946+00:00'
   source_trial: 869
+- pattern:
+    type: seed_batch
+    n_questions: 14
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 885'
+  added: '2026-06-19T12:19:51.261141+00:00'
+  source_trial: 885
