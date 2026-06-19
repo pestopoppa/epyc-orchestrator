@@ -133,14 +133,17 @@ def test_available_roles_canonicalizes_live_stack_role_ids(monkeypatch):
 
 
 def test_ordered_live_role_ids_uses_stack_prior_topology():
-    def record(*ports: int) -> dict:
-        return {"serving": {"ports": list(ports)}}
+    def record(*ports: int, endpoint: str | None = None) -> dict:
+        serving = {"ports": list(ports)}
+        if endpoint is not None:
+            serving["endpoint"] = endpoint
+        return {"serving": serving}
 
     assert openai_compat._ordered_live_role_ids(
         {
             "toolrunner": record(8072),
             "worker_general": record(8072, 8082),
-            "frontdoor": record(8070, 8080),
+            "frontdoor": record(8080, 8070, endpoint="http://localhost:8070"),
             "vision_escalation": record(8087),
             "worker_summarize": record(8070),
         }

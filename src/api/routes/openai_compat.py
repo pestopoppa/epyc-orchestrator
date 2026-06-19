@@ -32,7 +32,11 @@ from src.prompt_builders import (
     extract_code_from_response,
     auto_wrap_final,
 )
-from src.registry.stack_priors import live_stack_role_records, stack_prior_serving
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_primary_port,
+    stack_prior_serving,
+)
 from scripts.server.stack_manifest import HOT_SERVERS, ROLE_LAUNCH_META, WARM_SERVERS
 from src.repl_environment import REPLEnvironment
 from src.roles import Role
@@ -88,16 +92,6 @@ def _degraded_available_roles() -> list[str]:
     return ordered_roles
 
 
-def _primary_stack_prior_port(record: dict) -> int:
-    serving = stack_prior_serving(record)
-    ports = serving.get("ports")
-    if isinstance(ports, list):
-        numeric_ports = [port for port in ports if isinstance(port, int)]
-        if numeric_ports:
-            return min(numeric_ports)
-    return 1_000_000
-
-
 def _ordered_live_role_ids(records: dict[str, dict]) -> list[str]:
     return [
         role
@@ -105,7 +99,7 @@ def _ordered_live_role_ids(records: dict[str, dict]) -> list[str]:
             records.items(),
             key=lambda item: (
                 0 if item[0] == "frontdoor" else 1,
-                _primary_stack_prior_port(item[1]),
+                stack_prior_primary_port(stack_prior_serving(item[1])) or 1_000_000,
                 item[0],
             ),
         )
