@@ -361,3 +361,19 @@ def test_controller_template_uses_constitution_and_system_card() -> None:
         )
         < autopilot.CONTROLLER_PROMPT_TEMPLATE.index("### Journal Trustworthiness")
     )
+
+
+def test_render_system_card_fails_closed_when_generator_unavailable(monkeypatch) -> None:
+    def _boom(*args, **kwargs):
+        raise RuntimeError("broken stack-prior render")
+
+    monkeypatch.setattr(gen_system_card, "generate_system_card", _boom)
+
+    card = autopilot._render_system_card({})
+
+    assert "SYSTEM CARD GENERATION FAILED" in card
+    assert "broken stack-prior render" in card
+    assert "Live role, port, tier, throughput" in card
+    assert "Do not use checked-in `system_card.md`" in card
+    assert "| Role | Port | Model |" not in card
+    assert "frontdoor-prior.gguf" not in card

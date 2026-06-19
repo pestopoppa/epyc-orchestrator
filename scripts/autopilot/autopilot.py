@@ -1461,16 +1461,24 @@ def _read_guidance_file(path: Path, missing_label: str) -> str:
 
 
 def _render_system_card(state: dict[str, Any] | None = None) -> str:
-    """Render live controller facts, falling back to the checked-in card."""
+    """Render live controller facts, failing closed if generation breaks."""
     try:
         from gen_system_card import generate_system_card
 
         return generate_system_card(ORCH_ROOT, state_override=state)
     except Exception as exc:
-        fallback = _read_guidance_file(SYSTEM_CARD_PATH, "system_card.md")
         return (
-            f"{fallback}\n\n"
-            f"[system-card generator unavailable: {type(exc).__name__}: {exc}]"
+            "# AutoPilot Generated System Card\n\n"
+            "SYSTEM CARD GENERATION FAILED.\n\n"
+            "## Degraded Stack Guidance\n\n"
+            f"- generator_error: {type(exc).__name__}: {exc}\n"
+            "- Live role, port, tier, throughput, baseline, and trust-boundary facts "
+            "are unavailable.\n"
+            "- Do not use checked-in `system_card.md`, historical program text, "
+            "handoffs, memories, or old logs as authoritative stack truth.\n"
+            "- Choose an observational or no-stack-change action, or pause for "
+            "operator repair, until `scripts/autopilot/gen_system_card.py --check` "
+            "passes again.\n"
         )
 
 
