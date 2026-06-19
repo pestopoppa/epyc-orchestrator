@@ -637,8 +637,14 @@ def test_cmd_status_prints_mmproj_attestation_warning(monkeypatch, capsys) -> No
     )
     monkeypatch.setattr(
         stack_commands,
-        "_stack_prior_launch_requirements",
-        lambda: {"worker_vision": {"mmproj_path": "/models/current-mmproj.gguf"}},
+        "_stack_prior_launch_contracts",
+        lambda: {
+            "worker_vision": {
+                "requirements": {"mmproj_path": "/models/current-mmproj.gguf"},
+                "runtime": {},
+                "ports": [8086],
+            }
+        },
     )
 
     rc = stack_commands.cmd_status(Namespace())
@@ -649,3 +655,55 @@ def test_cmd_status_prints_mmproj_attestation_warning(monkeypatch, capsys) -> No
     assert "expected mmproj current-mmproj.gguf" in out
     assert "live cmdline has stale-mmproj.gguf" in out
     assert saved[-1] == {"server_8086": info}
+
+
+def test_cmd_status_prints_runtime_contract_warning(monkeypatch, capsys) -> None:
+    info = stack_commands.ProcessInfo(
+        role="worker_general",
+        pid=123,
+        port=8072,
+        started_at="now",
+        model_path="/models/current.gguf",
+        log_file="worker.log",
+    )
+    saved: list[dict[str, stack_commands.ProcessInfo]] = []
+
+    monkeypatch.setattr(stack_commands, "load_state", lambda: {"worker_general": info})
+    monkeypatch.setattr(stack_commands, "save_state", lambda state: saved.append(dict(state)))
+    monkeypatch.setattr(stack_commands.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(stack_commands, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(
+        stack_commands,
+        "_stack_prior_launch_contracts",
+        lambda: {
+            "worker_general": {
+                "requirements": {"model_path": "/models/current.gguf"},
+                "runtime": {
+                    "cache": {"context_tokens": 16384},
+                    "flags": {"flash_attn": True},
+                },
+                "ports": [8072],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        stack_commands._stack_processes,
+        "process_cmdline",
+        lambda _pid: [
+            "llama-server",
+            "-m",
+            "/models/current.gguf",
+            "-c",
+            "8192",
+            "--flash-attn",
+            "off",
+        ],
+    )
+
+    rc = stack_commands.cmd_status(Namespace())
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "runtime context_tokens expected 16384; live cmdline has 8192" in out
+    assert "runtime flash_attn expected True; live cmdline has False" in out
+    assert saved[-1] == {"worker_general": info}

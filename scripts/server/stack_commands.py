@@ -1487,7 +1487,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     seen_pids = set()
     attestation_warnings: list[str] = []
-    launch_requirements_by_role = _stack_prior_launch_requirements()
+    contracts_by_role = _stack_prior_launch_contracts()
     for name, info in sorted(state.items()):
         if info.pid != -1 and info.pid in seen_pids:
             continue  # Skip duplicates (roles sharing servers)
@@ -1529,15 +1529,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             cmdline = _stack_processes.process_cmdline(info.pid) if alive else []
 
         model = Path(info.model_path).stem if info.model_path != "uvicorn" else "uvicorn"
-        launch_requirements = (
-            launch_requirements_by_role.get(info.role)
-            or launch_requirements_by_role.get(name)
-            or {}
-        )
+        launch_contract = _launch_contract_for_process(name, info, contracts_by_role)
+        launch_requirements = launch_contract.get("requirements")
+        launch_requirements = launch_requirements if isinstance(launch_requirements, dict) else {}
         attestation = _status_attestation(info, alive, cmdline, launch_requirements)
         warning = _attestation_warning(name, info, attestation, cmdline, launch_requirements)
         if warning:
             attestation_warnings.append(warning)
+        attestation_warnings.extend(
+            _runtime_attestation_warnings(name, info, cmdline, launch_contract)
+        )
 
         print(
             f"{name:<25} {info.port:<8} {pid_str:<10} {status:<10} "
