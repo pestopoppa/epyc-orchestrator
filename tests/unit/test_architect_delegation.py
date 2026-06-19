@@ -704,6 +704,48 @@ class RateLimiter:
         assert stats.get("break_reason") == "specialist_report"
         assert primitives.llm_call.call_count == 0
 
+    def test_rescued_long_specialist_report_keeps_full_answer(self):
+        from src.api.routes.chat_delegation import _architect_delegated_answer
+
+        primitives = MagicMock()
+        primitives._backends = {"test": True}
+        primitives.total_tokens_generated = 0
+        primitives.llm_call = MagicMock(return_value="compact summary")
+        state = MagicMock()
+        state.tool_registry = None
+
+        full_report = "FULL SPECIALIST ANSWER\n" + ("detail line\n" * 400)
+        mock_cache = MagicMock()
+        mock_cache.make_key.return_value = "long-rescue-key"
+        mock_cache.get.return_value = None
+
+        with patch(
+            "src.api.routes.chat_delegation._run_architect_decision",
+            return_value=("I|brief:investigate|to:coder_escalation", 1, 0),
+        ), patch(
+            "src.api.routes.chat_delegation._run_specialist_loop",
+            return_value=(full_report, 0, [], [], False, True, {}, []),
+        ), patch(
+            "src.delegation_cache.get_delegation_cache",
+            return_value=mock_cache,
+        ):
+            answer, stats = _architect_delegated_answer(
+                question="q",
+                context="",
+                primitives=primitives,
+                state=state,
+                max_loops=3,
+                force_response_on_cap=True,
+            )
+
+        assert answer == full_report
+        assert stats["specialist_output"] == full_report
+        assert stats["report_handles"]
+        assert stats.get("break_reason") == "specialist_report"
+        cache_args = mock_cache.put.call_args.args
+        assert cache_args[1] == full_report
+        assert "[REPORT_HANDLE id=" not in answer
+
 
 # ── Prompt Builder Tests ─────────────────────────────────────────────────
 

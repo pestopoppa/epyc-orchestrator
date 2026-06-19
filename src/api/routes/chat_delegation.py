@@ -946,6 +946,8 @@ def _architect_delegated_answer_inner(
         _cached = _deleg_cache.get(_cache_key)
         if _cached is not None:
             report = _cached.report
+            report_for_loop = report
+            final_report = report
             report_handle = _cached.report_handle
             specialist_timed_out = False
             report_rescued = False
@@ -984,18 +986,20 @@ def _architect_delegated_answer_inner(
                 )
             total_tools += deleg_tools
             all_tools_called.extend(deleg_tools_called)
-            compressed_report, report_handle = _compress_report_for_loop(
+            full_report = report
+            report_for_loop, report_handle = _compress_report_for_loop(
                 report, question, primitives, delegate_to,
             )
-            report = compressed_report
+            final_report = full_report if report_rescued else report_for_loop
             if report_handle:
                 stats["report_handles"].append(report_handle)
 
             # Store in cache for future reuse (skip failed/error reports)
-            if report and not report.startswith(("[ERROR", "[Delegation failed")):
+            cache_report = final_report
+            if cache_report and not cache_report.startswith(("[ERROR", "[Delegation failed")):
                 delegate_tokens_for_cache = primitives.total_tokens_generated - tokens_before
                 _deleg_cache.put(
-                    _cache_key, report, delegate_to,
+                    _cache_key, cache_report, delegate_to,
                     tokens_used=delegate_tokens_for_cache,
                     report_handle=report_handle,
                 )
@@ -1003,8 +1007,8 @@ def _architect_delegated_answer_inner(
         phase_b_ms = (time.perf_counter() - phase_b_start) * 1000
         delegate_tokens = primitives.total_tokens_generated - tokens_before
         cumulative_delegate_tokens += delegate_tokens
-        reports.append(report)
-        stats["specialist_output"] = report
+        reports.append(report_for_loop)
+        stats["specialist_output"] = final_report
         stats["phases"].append(
             {
                 "loop": loop,
@@ -1016,7 +1020,7 @@ def _architect_delegated_answer_inner(
         )
         stats["tool_timings"].extend(phase_tool_timings)
         # Delegation telemetry
-        report_text = report or ""
+        report_text = final_report or ""
         failed_prefixes = (
             "[ERROR",
             "[Delegation failed",
@@ -1047,7 +1051,7 @@ def _architect_delegated_answer_inner(
             }
         )
 
-        log.info(f"Specialist {delegate_to} done ({phase_b_ms:.0f}ms, {len(report)} chars)")
+        log.info(f"Specialist {delegate_to} done ({phase_b_ms:.0f}ms, {len(final_report)} chars)")
 
         # Specialist timeout is a strong signal of lock pressure or decode stall.
         # Force synthesis immediately instead of re-delegating into another stall.
@@ -1065,7 +1069,7 @@ def _architect_delegated_answer_inner(
                 len(stats.get("tool_timings", [])),
             )
             stats["tools_called"] = all_tools_called
-            return report, stats
+            return final_report, stats
 
     # ── Cap reached ──
     stats["loops"] = max_loops
