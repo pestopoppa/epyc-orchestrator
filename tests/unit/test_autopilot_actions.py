@@ -836,6 +836,78 @@ def test_pre_dispatch_seed_fallback_reselects_blacklisted_action() -> None:
     assert rationale["fallback_seed_reselected_context"] == "test"
 
 
+def test_autonomous_blacklisted_action_reselects_seed_fallback() -> None:
+    action, rationale = autopilot._replace_blacklisted_autonomous_action(
+        {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50},
+        [
+            {
+                "pattern": {"type": "gepa_optimize", "file": "frontdoor.md"},
+                "reason": "manual prompt freeze",
+            }
+        ],
+        {"falsifier": "noop"},
+    )
+
+    assert action == {
+        "type": "seed_batch",
+        "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
+    }
+    assert rationale["autonomous_blacklisted_replaced"] is True
+    assert rationale["autonomous_blacklisted_reason"] == "manual prompt freeze"
+    assert rationale["autonomous_blacklisted_from"] == {
+        "type": "gepa_optimize",
+        "file": "frontdoor.md",
+        "max_evals": 50,
+    }
+
+
+def test_autonomous_meta_action_reselects_seed_fallback() -> None:
+    action, rationale = autopilot._replace_blacklisted_autonomous_action(
+        {"type": "distill_knowledge", "last_n": 10},
+        [],
+        {"falsifier": "noop"},
+    )
+
+    assert action == {
+        "type": "seed_batch",
+        "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
+    }
+    assert rationale["autonomous_blacklisted_replaced"] is True
+    assert rationale["autonomous_blacklisted_reason"] == (
+        "autonomous meta action does not collect metrics"
+    )
+    assert rationale["autonomous_blacklisted_from"] == {
+        "type": "distill_knowledge",
+        "last_n": 10,
+    }
+
+
+def test_autonomous_blacklisted_action_stays_when_seed_fallbacks_exhausted() -> None:
+    requested = {"type": "gepa_optimize", "file": "frontdoor.md", "max_evals": 50}
+    blacklist = [
+        {
+            "pattern": {"type": "gepa_optimize", "file": "frontdoor.md"},
+            "reason": "manual prompt freeze",
+        },
+        *[
+            {
+                "pattern": {"type": "seed_batch", "n_questions": n_questions},
+                "reason": f"blocked {n_questions}",
+            }
+            for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
+        ],
+    ]
+
+    action, rationale = autopilot._replace_blacklisted_autonomous_action(
+        requested,
+        blacklist,
+        {"falsifier": "noop"},
+    )
+
+    assert action == requested
+    assert rationale == {"falsifier": "noop"}
+
+
 def test_first_unblacklisted_seed_action_reports_exhaustion() -> None:
     blacklist = [
         {

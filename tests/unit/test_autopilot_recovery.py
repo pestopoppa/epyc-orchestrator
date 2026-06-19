@@ -26,6 +26,7 @@ verification gate. Covers:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -531,6 +532,35 @@ def test_save_state_preserves_pause_reason_when_paused(
     autopilot.save_state(state)
 
     assert autopilot.load_state()["pause_reason"] == "operator pause"
+
+
+def test_resume_clears_skip_loop_latch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(autopilot, "STATE_PATH", tmp_path / "state.json")
+    autopilot.save_state(
+        {
+            "trial_counter": 882,
+            "paused": True,
+            "_dispatch_deficiency": "skip_action_loop",
+            "consecutive_skip_actions": 4,
+            "last_invalid_action": {"type": "numeric_trial", "surface": "memrl_retrieval"},
+            "last_invalid_reason": "action blacklisted",
+            "last_invalid_status": "invalid",
+            "pause_reason": "operator review",
+        }
+    )
+
+    autopilot.cmd_resume(argparse.Namespace())
+
+    state = autopilot.load_state()
+    assert state["paused"] is False
+    assert state["consecutive_skip_actions"] == 0
+    assert state["last_invalid_action"] is None
+    assert state["last_invalid_reason"] is None
+    assert state["last_invalid_status"] is None
+    assert "_dispatch_deficiency" not in state
+    assert "pause_reason" not in state
 
 
 # ───────── _recover_from_in_flight_trial ──────────

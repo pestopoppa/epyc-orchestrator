@@ -502,6 +502,42 @@ def _replace_blacklisted_seed_fallback(
     return replacement, next_rationale
 
 
+def _replace_blacklisted_autonomous_action(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Keep no-controller mode from burning trials on known-blocked/meta actions."""
+    blocked = check_blacklist(action, blacklist)
+    is_meta_noop = action.get("type") in META_NOOP_ACTIONS
+    if not blocked and not is_meta_noop:
+        return action, rationale
+    reason = blocked or "autonomous meta action does not collect metrics"
+    replacement, fallback_reason = _first_unblacklisted_seed_action(blacklist)
+    if replacement is None:
+        log.warning(
+            "Autonomous action %s is not dispatchable (%s), and no measured seed "
+            "fallback remains unblocked: %s",
+            json.dumps(action, default=str),
+            reason,
+            fallback_reason,
+        )
+        return action, rationale
+    next_rationale = {
+        **(rationale or {}),
+        "autonomous_blacklisted_replaced": True,
+        "autonomous_blacklisted_reason": reason,
+        "autonomous_blacklisted_from": dict(action),
+    }
+    log.warning(
+        "Autonomous action %s is not dispatchable (%s); using measured seed fallback %s.",
+        json.dumps(action, default=str),
+        reason,
+        json.dumps(replacement, default=str),
+    )
+    return replacement, next_rationale
+
+
 def _seq_baseline_reference_block_key(reference: dict[str, Any]) -> str:
     ref_id = reference.get("latest_reference_trial_id")
     ref_token = "none" if ref_id is None else str(ref_id)
@@ -2972,6 +3008,11 @@ def _run_loop_inner(
             rationale = {"falsifier": "", "rubric_scores": {}}  # no controller call
             stagnation_signal = ""  # gate is controller-only; autonomous mode skips it
             state["consecutive_rejected_drafts"] = 0  # no critic in autonomous mode
+            action, rationale = _replace_blacklisted_autonomous_action(
+                action,
+                blacklist,
+                rationale,
+            )
 
         if not action:
             log.warning("No action proposed, defaulting to seed_batch")
@@ -4122,6 +4163,13 @@ def cmd_resume(args: argparse.Namespace) -> None:
     state = load_state()
     state["paused"] = False
     state.pop("pause_reason", None)
+    if state.get("_dispatch_deficiency") == "skip_action_loop":
+        state["consecutive_skip_actions"] = 0
+        state["last_invalid_action"] = None
+        state["last_invalid_reason"] = None
+        state["last_invalid_status"] = None
+    state.pop("_dispatch_deficiency", None)
+    state.pop("_meta_halt_reason", None)
     save_state(state)
     print("AutoPilot resumed")
 
