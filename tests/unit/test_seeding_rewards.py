@@ -55,6 +55,35 @@ def _write_stack_priors(path: Path, throughput: dict[str, float]) -> Path:
     return path
 
 
+def _write_model_descriptors(path: Path) -> Path:
+    path.write_text(
+        """
+models:
+  - model_id: worker
+    role_bindings:
+      roles:
+        - worker_explore
+        - worker_math
+    speed:
+      optimized_tps: 61.5
+      solo_96t_tps: 42.0
+  - model_id: architect
+    role_bindings:
+      roles:
+        - architect_general
+    speed:
+      quarter_48t_tps: 12.25
+  - model_id: no-speed
+    role_bindings:
+      roles:
+        - worker_vision
+    speed: {}
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_stack_prior_throughput_by_role_loads_live_roles_only(tmp_path: Path):
     stack_priors = _write_stack_priors(
         tmp_path / "stack_priors.yaml",
@@ -85,6 +114,22 @@ def test_stack_prior_architect_reward_roles_load_live_architect_like_roles(tmp_p
     assert _RETIRED_ARCHITECT_ROLE not in roles
 
 
+def test_descriptor_throughput_by_role_loads_generated_descriptor_roles(
+    tmp_path: Path,
+):
+    descriptors = _write_model_descriptors(tmp_path / "model_descriptors.yaml")
+
+    throughput = _MOD.descriptor_throughput_by_role(descriptors)
+
+    assert throughput == {
+        "architect_general": 12.25,
+        "worker_general": 61.5,
+        "worker_math": 61.5,
+    }
+    assert "worker_explore" not in throughput
+    assert "worker_vision" not in throughput
+
+
 def test_compute_comparative_rewards_uses_stack_prior_throughput(tmp_path: Path):
     stack_priors = _write_stack_priors(
         tmp_path / "stack_priors.yaml",
@@ -111,6 +156,7 @@ def test_compute_comparative_rewards_uses_stack_prior_throughput(tmp_path: Path)
     assert provenance["roles"] == ["frontdoor", "worker_general"]
     assert provenance["role_count"] == 2
     assert provenance["stack_priors_path"] == str(stack_priors)
+    assert provenance["model_descriptors_path"] is None
     assert provenance["uses_degraded_fallback"] is False
 
 
@@ -136,6 +182,7 @@ def test_compute_comparative_rewards_no_stack_priors_fails_closed(tmp_path: Path
     assert provenance["roles"] == []
     assert provenance["role_count"] == 0
     assert provenance["stack_priors_path"] == str(missing)
+    assert provenance["model_descriptors_path"] is None
     assert provenance["uses_degraded_fallback"] is False
     assert provenance["reason"] == "no_override_and_no_live_stack_priors"
 
@@ -181,14 +228,17 @@ def test_throughput_prior_provenance_prefers_explicit_override(tmp_path: Path):
     assert provenance["roles"] == ["worker_general"]
     assert provenance["role_count"] == 1
     assert provenance["stack_priors_path"] is None
+    assert provenance["model_descriptors_path"] is None
 
 
 def test_throughput_prior_provenance_marks_degraded_fallback(tmp_path: Path):
     missing = tmp_path / "missing.yaml"
+    missing_descriptors = tmp_path / "missing_model_descriptors.yaml"
 
     provenance = _MOD.throughput_prior_provenance(
         {
             "stack_priors_path": missing,
+            "model_descriptors_path": missing_descriptors,
             "allow_degraded_fallback": True,
         },
     )
@@ -197,16 +247,45 @@ def test_throughput_prior_provenance_marks_degraded_fallback(tmp_path: Path):
     assert provenance["role_count"] == len(_MOD.FALLBACK_THROUGHPUT_BY_ROLE)
     assert "frontdoor" in provenance["roles"]
     assert provenance["stack_priors_path"] == str(missing)
+    assert provenance["model_descriptors_path"] is None
     assert provenance["uses_degraded_fallback"] is True
     assert provenance["reason"] == "stack_priors_missing_or_no_live_throughput"
     assert "worker_general" in provenance["roles"]
     assert "worker_explore" not in provenance["roles"]
 
 
-def test_compute_comparative_rewards_canonicalizes_worker_explore_degraded_fallback(
+def test_throughput_prior_provenance_prefers_descriptor_degraded_fallback(
     tmp_path: Path,
 ):
     missing = tmp_path / "missing.yaml"
+    descriptors = _write_model_descriptors(tmp_path / "model_descriptors.yaml")
+
+    provenance = _MOD.throughput_prior_provenance(
+        {
+            "stack_priors_path": missing,
+            "model_descriptors_path": descriptors,
+            "allow_degraded_fallback": True,
+        },
+    )
+
+    assert provenance["source"] == _MOD.PRIOR_SOURCE_MODEL_DESCRIPTORS
+    assert provenance["role_count"] == 3
+    assert provenance["roles"] == [
+        "architect_general",
+        "worker_general",
+        "worker_math",
+    ]
+    assert provenance["stack_priors_path"] == str(missing)
+    assert provenance["model_descriptors_path"] == str(descriptors)
+    assert provenance["uses_degraded_fallback"] is True
+    assert provenance["reason"] == "stack_priors_missing_or_no_live_throughput"
+
+
+def test_compute_comparative_rewards_uses_descriptor_degraded_fallback(
+    tmp_path: Path,
+):
+    missing = tmp_path / "missing.yaml"
+    descriptors = _write_model_descriptors(tmp_path / "model_descriptors.yaml")
 
     rewards = _MOD.compute_comparative_rewards(
         {
@@ -221,6 +300,34 @@ def test_compute_comparative_rewards_canonicalizes_worker_explore_degraded_fallb
         },
         cost_config={
             "stack_priors_path": missing,
+            "model_descriptors_path": descriptors,
+            "allow_degraded_fallback": True,
+        },
+    )
+
+    assert math.isclose(rewards["worker_explore:direct"], 0.4655)
+
+
+def test_compute_comparative_rewards_canonicalizes_worker_explore_degraded_fallback(
+    tmp_path: Path,
+):
+    missing = tmp_path / "missing.yaml"
+    missing_descriptors = tmp_path / "missing_model_descriptors.yaml"
+
+    rewards = _MOD.compute_comparative_rewards(
+        {
+            "frontdoor:direct": _rr(role="frontdoor", passed=True),
+            "worker_explore:direct": _rr(
+                role="worker_explore",
+                passed=True,
+                generation_ms=2000,
+                tokens_generated=100,
+                elapsed_seconds=2.0,
+            ),
+        },
+        cost_config={
+            "stack_priors_path": missing,
+            "model_descriptors_path": missing_descriptors,
             "allow_degraded_fallback": True,
         },
     )

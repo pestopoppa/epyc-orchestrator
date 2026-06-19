@@ -12,6 +12,8 @@ from typing import Any
 
 from urllib.parse import urlparse
 
+import yaml
+
 from src.roles import Role
 
 from seeding_types import (
@@ -25,6 +27,10 @@ from seeding_types import (
     RoleResult,
     STACK_PRIORS_PATH,
     WebResearchTelemetry,
+)
+
+DEFAULT_MODEL_DESCRIPTORS_PATH = (
+    Path(__file__).resolve().parents[2] / "orchestration" / "model_descriptors.yaml"
 )
 
 __all__ = [
@@ -65,10 +71,12 @@ FALLBACK_ARCHITECT_REWARD_ROLES = frozenset({"architect_general", "vision_escala
 THROUGHPUT_CONFIG_KEY = "throughput_by_role"
 LEGACY_THROUGHPUT_CONFIG_KEY = "baseline_" + "tps_by_role"
 STACK_PRIORS_CONFIG_KEY = "stack_priors_path"
+MODEL_DESCRIPTORS_CONFIG_KEY = "model_descriptors_path"
 ALLOW_DEGRADED_CONFIG_KEY = "allow_degraded_fallback"
 PRIOR_SOURCE_CONFIG_OVERRIDE = "config_override"
 PRIOR_SOURCE_LEGACY_CONFIG_OVERRIDE = "legacy_config_override"
 PRIOR_SOURCE_STACK_PRIORS = "stack_priors"
+PRIOR_SOURCE_MODEL_DESCRIPTORS = "model_descriptors"
 PRIOR_SOURCE_DEGRADED_FALLBACK = "degraded_fallback"
 PRIOR_SOURCE_MISSING = "missing"
 
@@ -129,11 +137,60 @@ def stack_prior_architect_reward_roles(path: Path | None = None) -> set[str]:
     return architect_roles
 
 
+def _load_model_descriptors(path: Path = DEFAULT_MODEL_DESCRIPTORS_PATH) -> list[dict[str, Any]]:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return []
+    models = data.get("models")
+    if not isinstance(models, list):
+        return []
+    return [model for model in models if isinstance(model, dict)]
+
+
+def _descriptor_speed_tps(descriptor: dict[str, Any]) -> float | None:
+    speed = descriptor.get("speed")
+    if not isinstance(speed, dict):
+        return None
+    for key in (
+        "optimized_tps",
+        "quarter_48t_tps",
+        "solo_96t_tps",
+        "prefill_tps",
+        "generation_tps_range",
+    ):
+        value = _positive_float(speed.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def descriptor_throughput_by_role(
+    path: Path = DEFAULT_MODEL_DESCRIPTORS_PATH,
+) -> dict[str, float]:
+    """Read degraded per-role throughput from generated model descriptors."""
+    throughput: dict[str, float] = {}
+    for descriptor in _load_model_descriptors(path):
+        tps = _descriptor_speed_tps(descriptor)
+        if tps is None:
+            continue
+        bindings = descriptor.get("role_bindings")
+        roles = bindings.get("roles") if isinstance(bindings, dict) else None
+        if not isinstance(roles, list):
+            continue
+        for role in roles:
+            if not isinstance(role, str):
+                continue
+            throughput[_canonical_role_name(role)] = tps
+    return throughput
+
+
 def _throughput_provenance(
     source: str,
     throughput: dict[str, float],
     *,
     stack_priors_path: Path | None = None,
+    model_descriptors_path: Path | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
     return {
@@ -141,7 +198,13 @@ def _throughput_provenance(
         "roles": sorted(throughput),
         "role_count": len(throughput),
         "stack_priors_path": str(stack_priors_path) if stack_priors_path else None,
-        "uses_degraded_fallback": source == PRIOR_SOURCE_DEGRADED_FALLBACK,
+        "model_descriptors_path": (
+            str(model_descriptors_path) if model_descriptors_path else None
+        ),
+        "uses_degraded_fallback": source in {
+            PRIOR_SOURCE_MODEL_DESCRIPTORS,
+            PRIOR_SOURCE_DEGRADED_FALLBACK,
+        },
         "reason": reason,
     }
 
@@ -168,6 +231,17 @@ def _resolve_throughput_by_role(
             stack_priors_path=stack_priors_path or STACK_PRIORS_PATH,
         )
     if cost_config.get(ALLOW_DEGRADED_CONFIG_KEY):
+        descriptor_value = cost_config.get(MODEL_DESCRIPTORS_CONFIG_KEY)
+        descriptor_path = Path(descriptor_value) if descriptor_value else DEFAULT_MODEL_DESCRIPTORS_PATH
+        descriptor_throughput = descriptor_throughput_by_role(descriptor_path)
+        if descriptor_throughput:
+            return descriptor_throughput, _throughput_provenance(
+                PRIOR_SOURCE_MODEL_DESCRIPTORS,
+                descriptor_throughput,
+                stack_priors_path=stack_priors_path or STACK_PRIORS_PATH,
+                model_descriptors_path=descriptor_path,
+                reason="stack_priors_missing_or_no_live_throughput",
+            )
         fallback = dict(FALLBACK_THROUGHPUT_BY_ROLE)
         return fallback, _throughput_provenance(
             PRIOR_SOURCE_DEGRADED_FALLBACK,
