@@ -95,6 +95,40 @@ roles:
         assert features["worker_general"].is_moe == 1.0
         assert features["worker_general"].quant_bits == 4.0
 
+    def test_extract_model_features_degraded_fallback_uses_registry_descriptors(
+        self,
+        tmp_path: Path,
+    ):
+        registry = tmp_path / "model_registry.yaml"
+        registry.write_text(
+            """
+roles:
+  novel_router:
+    model:
+      name: NovelRouter-42B-MoE-Q5_K_M
+      quant: Q5_K_M
+      size_gb: 42
+      architecture: custom_moe
+server_mode: {}
+""",
+            encoding="utf-8",
+        )
+        cfg = ScoringConfig(
+            baseline_tps_by_role={"novel_router": 12.5},
+            baseline_quality_by_role={"novel_router": 0.81},
+            memory_cost_by_role={"novel_router": 2.0},
+        )
+
+        features = extract_model_features(
+            cfg,
+            stack_priors_path=tmp_path / "missing.yaml",
+            registry_path=registry,
+        )
+
+        assert features["novel_router"].param_count_log == pytest.approx(np.log2(42))
+        assert features["novel_router"].is_moe == 1.0
+        assert features["novel_router"].quant_bits == 5.0
+
 
 class TestPromptFeatures:
     """Test prompt feature extraction."""

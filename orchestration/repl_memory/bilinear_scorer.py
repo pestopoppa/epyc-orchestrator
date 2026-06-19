@@ -29,6 +29,7 @@ import numpy as np
 
 from src.roles import Role
 from src.registry.stack_priors import live_stack_role_records
+from src.registry.model_descriptors import compile_model_descriptors
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +42,9 @@ MODEL_FEATURE_DIM = 6
 PROMPT_FEATURE_DIM = 8
 
 DEFAULT_STACK_PRIORS_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/derived/stack_priors.yaml")
+DEFAULT_REGISTRY_PATH = Path("/mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml")
 
-DEGRADED_STACK_PRIOR_MODEL_FEATURES = {
-    "frontdoor": {"params_b": 35, "is_moe": True, "quant_bits": 8},
-    "coder_escalation": {"params_b": 35, "is_moe": True, "quant_bits": 8},
-    "architect_general": {"params_b": 122, "is_moe": True, "quant_bits": 4},
-    "worker_general": {"params_b": 26, "is_moe": True, "quant_bits": 4},
-    "worker_math": {"params_b": 26, "is_moe": True, "quant_bits": 4},
-    "toolrunner": {"params_b": 26, "is_moe": True, "quant_bits": 4},
-    "ingest_long_context": {"params_b": 80, "is_moe": True, "quant_bits": 4},
-}
+UNKNOWN_MODEL_FEATURES = {"params_b": 30.0, "is_moe": False, "quant_bits": 4.0}
 
 
 @dataclass
@@ -115,6 +109,55 @@ def _stack_prior_model_features(
     return features
 
 
+def _descriptor_model_features(
+    registry_path: Path = DEFAULT_REGISTRY_PATH,
+    *,
+    active_roles: set[str] | None = None,
+) -> dict[str, dict[str, float | bool]]:
+    features: dict[str, dict[str, float | bool]] = {}
+    try:
+        descriptors = compile_model_descriptors(
+            lean_registry_path=registry_path,
+            research_registry_path=None,
+            active_roles=active_roles,
+            allow_incomplete=True,
+        )
+    except Exception as exc:
+        logger.debug("Could not compile degraded bilinear model descriptors: %s", exc)
+        return features
+
+    models = descriptors.get("models")
+    if not isinstance(models, list):
+        return features
+
+    for descriptor in models:
+        if not isinstance(descriptor, dict):
+            continue
+        params_b = descriptor.get("params_b")
+        if not isinstance(params_b, (int, float)) or params_b <= 0:
+            continue
+        arch = str(descriptor.get("arch") or "").lower()
+        active_b = descriptor.get("active_b")
+        specs = {
+            "params_b": float(params_b),
+            "is_moe": bool("moe" in arch or isinstance(active_b, (int, float))),
+            "quant_bits": _quant_bits(descriptor.get("quant")),
+        }
+        bindings = descriptor.get("role_bindings")
+        if not isinstance(bindings, dict):
+            continue
+        for field in ("roles", "server_roles"):
+            values = bindings.get(field)
+            if not isinstance(values, list):
+                continue
+            for role in values:
+                if not isinstance(role, str):
+                    continue
+                canonical = _canonical_role_name(role)
+                features.setdefault(canonical, specs)
+    return features
+
+
 def _canonical_role_name(role: str) -> str:
     canonical = Role.from_string(role)
     return canonical.value if canonical is not None else role
@@ -123,6 +166,7 @@ def _canonical_role_name(role: str) -> str:
 def extract_model_features(
     scoring_config,
     stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+    registry_path: Path = DEFAULT_REGISTRY_PATH,
 ) -> Dict[str, ModelFeatures]:
     """Extract model feature vectors from ScoringConfig baselines.
 
@@ -138,15 +182,18 @@ def extract_model_features(
     memory = scoring_config.memory_cost_by_role
 
     stack_features = _stack_prior_model_features(stack_priors_path)
+    canonical_roles = {_canonical_role_name(role) for role in tps}
+    degraded_features = (
+        {}
+        if stack_features
+        else _descriptor_model_features(registry_path, active_roles=canonical_roles)
+    )
 
     for role in tps:
         canonical_role = _canonical_role_name(role)
         specs = stack_features.get(
             canonical_role,
-            DEGRADED_STACK_PRIOR_MODEL_FEATURES.get(
-                canonical_role,
-                {"params_b": 30.0, "is_moe": False, "quant_bits": 4.0},
-            ),
+            degraded_features.get(canonical_role, UNKNOWN_MODEL_FEATURES),
         )
         features[canonical_role] = ModelFeatures(
             role=canonical_role,
