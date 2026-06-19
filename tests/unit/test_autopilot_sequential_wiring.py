@@ -164,7 +164,9 @@ def test_maybe_force_seq_baseline_draw_marks_rationale_and_state(
     assert state["seq_baseline_draw_forced"]["trial_id"] == 8
 
 
-def test_maybe_force_seq_baseline_draw_respects_blacklist(tmp_path: Path) -> None:
+def test_maybe_force_seq_baseline_draw_uses_alternate_when_default_blacklisted(
+    tmp_path: Path,
+) -> None:
     journal = ExperimentJournal(journal_dir=tmp_path)
     action = {"type": "noop"}
     state: dict = {}
@@ -182,26 +184,41 @@ def test_maybe_force_seq_baseline_draw_respects_blacklist(tmp_path: Path) -> Non
         enabled=True,
     )
 
-    assert forced == action
-    assert rationale is None
-    assert reference is None
-    assert state["seq_baseline_draw_blocked"]["reason"] == "test"
+    assert forced == {"type": "seed_batch", "n_questions": 16}
+    assert rationale == {
+        "seq_baseline_reference_draw": True,
+        "seq_baseline_reference_reason": "no marked seq baseline-reference draw",
+    }
+    assert reference is not None
+    assert state["seq_baseline_draw_forced"]["action"] == forced
 
-    retried, retry_rationale, retry_reference = autopilot._maybe_force_seq_baseline_draw(
+
+def test_maybe_force_seq_baseline_draw_records_block_when_all_fallbacks_blacklisted(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    action = {"type": "noop"}
+    state: dict = {}
+    blacklist = [
+        {"pattern": candidate, "reason": f"blocked-{idx}"}
+        for idx, candidate in enumerate(autopilot._seed_action_candidates())
+    ]
+
+    forced, rationale, reference = autopilot._maybe_force_seq_baseline_draw(
         action,
         state=state,
         journal=journal,
         tier=1,
-        blacklist=[
-            {"pattern": {"type": "seed_batch", "n_questions": 14}, "reason": "test"}
-        ],
+        blacklist=blacklist,
         rationale=None,
-        trial_counter=10,
+        trial_counter=9,
         enabled=True,
     )
-    assert retried == action
-    assert retry_rationale is None
-    assert retry_reference is None
+
+    assert forced == action
+    assert rationale is None
+    assert reference is None
+    assert state["seq_baseline_draw_blocked"]["reason"]
     assert state["seq_baseline_draw_blocked"]["trial_id"] == 9
 
 

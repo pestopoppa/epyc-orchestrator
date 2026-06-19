@@ -609,6 +609,54 @@ def test_repeated_meta_action_forces_metric_seed_batch() -> None:
     }
 
 
+def test_repeated_meta_action_avoids_blacklisted_metric_seed_batch() -> None:
+    action, rationale = autopilot._force_metric_action_after_meta(
+        {"type": "distill_knowledge", "last_n": 10},
+        {"consecutive_meta_actions": 1},
+        {"falsifier": "noop"},
+        [
+            {
+                "pattern": {
+                    "type": "seed_batch",
+                    "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
+                },
+                "reason": "blocked",
+            }
+        ],
+    )
+
+    assert action == {"type": "seed_batch", "n_questions": 16}
+    assert rationale["meta_action_forced_metric_trial"] is True
+    assert rationale["fallback_seed_reselected"] is True
+    assert rationale["fallback_seed_reselected_reason"] == "blocked"
+
+
+def test_pre_dispatch_seed_fallback_reselects_blacklisted_action() -> None:
+    action, rationale = autopilot._replace_blacklisted_seed_fallback(
+        {
+            "type": "seed_batch",
+            "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
+            "suites": ["coder", "math"],
+        },
+        [
+            {
+                "pattern": {
+                    "type": "seed_batch",
+                    "n_questions": autopilot.SAFE_FALLBACK_SEED_N,
+                    "suites": ["coder", "math"],
+                },
+                "reason": "blocked suite draw",
+            }
+        ],
+        {"falsifier": "noop"},
+        reason_label="test",
+    )
+
+    assert action == {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N}
+    assert rationale["fallback_seed_reselected"] is True
+    assert rationale["fallback_seed_reselected_context"] == "test"
+
+
 def test_first_meta_action_is_allowed() -> None:
     action, rationale = autopilot._force_metric_action_after_meta(
         {"type": "distill_knowledge", "last_n": 10},
@@ -645,6 +693,59 @@ def test_quota_forces_experiment_after_consecutive_passive_when_memory_large() -
     assert rationale["experiment_quota_forced"] is True
     # Counter resets after forcing an experiment.
     assert state["consecutive_passive_actions"] == 0
+
+
+def test_quota_skips_blacklisted_numeric_surface() -> None:
+    state = {"consecutive_passive_actions": autopilot.MAX_CONSECUTIVE_PASSIVE}
+    action, rationale = autopilot._enforce_experiment_quota(
+        {"type": "seed_batch", "n_questions": 10},
+        state,
+        memory_count=autopilot.QUOTA_MEMORY_THRESHOLD + 1,
+        rationale={"falsifier": "x"},
+        trial_counter=2,
+        blacklist=[
+            {
+                "pattern": {
+                    "type": "numeric_trial",
+                    "surface": "monitor",
+                    "params": {},
+                },
+                "reason": "blocked monitor",
+            }
+        ],
+    )
+
+    assert action == {"type": "numeric_trial", "surface": "memrl_retrieval", "params": {}}
+    assert rationale["experiment_quota_forced"] is True
+    assert state["consecutive_passive_actions"] == 0
+
+
+def test_quota_records_block_when_all_numeric_surfaces_blacklisted() -> None:
+    state = {"consecutive_passive_actions": autopilot.MAX_CONSECUTIVE_PASSIVE}
+    requested = {"type": "seed_batch", "n_questions": 10}
+    action, rationale = autopilot._enforce_experiment_quota(
+        requested,
+        state,
+        memory_count=autopilot.QUOTA_MEMORY_THRESHOLD + 1,
+        rationale={"falsifier": "x"},
+        trial_counter=2,
+        blacklist=[
+            {
+                "pattern": {
+                    "type": "numeric_trial",
+                    "surface": surface,
+                    "params": {},
+                },
+                "reason": f"blocked {surface}",
+            }
+            for surface in autopilot._QUOTA_NUMERIC_SURFACES
+        ],
+    )
+
+    assert action == requested
+    assert rationale == {"falsifier": "x"}
+    assert state["consecutive_passive_actions"] == autopilot.MAX_CONSECUTIVE_PASSIVE + 1
+    assert state["experiment_quota_blocked"]["trial_id"] == 2
 
 
 def test_quota_resets_counter_on_nonpassive_action() -> None:

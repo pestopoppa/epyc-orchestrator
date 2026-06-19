@@ -178,6 +178,7 @@ SEQ_PROMOTION_FRESH_EVAL_TIER = int(
     os.environ.get("AUTOPILOT_SEQ_PROMOTION_FRESH_EVAL_TIER", "2")
 )
 SAFE_FALLBACK_SEED_N = 14
+FALLBACK_SEED_CANDIDATES = (14, 16, 18, 20, 24, 30)
 
 # 2026-05-23 constrained-creativity planner knobs (gated on stagnation).
 # Lean prompt is the default; the rich rubric+synthesis fragment activates
@@ -374,6 +375,108 @@ def _seq_baseline_draw_action() -> dict[str, Any]:
     return {"type": "seed_batch", "n_questions": 14}
 
 
+def _seed_action_candidates(
+    preferred: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+
+    def add(candidate: dict[str, Any]) -> None:
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    if isinstance(preferred, dict) and preferred.get("type") == "seed_batch":
+        add(dict(preferred))
+        if "suites" in preferred:
+            no_suite = dict(preferred)
+            no_suite.pop("suites", None)
+            add(no_suite)
+
+    for n_questions in FALLBACK_SEED_CANDIDATES:
+        add({"type": "seed_batch", "n_questions": int(n_questions)})
+        add(
+            {
+                "type": "seed_batch",
+                "n_questions": int(n_questions),
+                "suites": ["coder", "math"],
+            }
+        )
+    return candidates
+
+
+def _first_unblacklisted_seed_action(
+    blacklist: list[dict[str, Any]],
+    *,
+    preferred: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    last_blocked = ""
+    for candidate in _seed_action_candidates(preferred):
+        blocked = check_blacklist(candidate, blacklist)
+        if not blocked:
+            return candidate, ""
+        last_blocked = blocked
+    return None, last_blocked or "all measured seed fallbacks are blacklisted"
+
+
+def _first_unblacklisted_numeric_trial_action(
+    blacklist: list[dict[str, Any]],
+    *,
+    trial_counter: int = 0,
+) -> tuple[dict[str, Any] | None, str]:
+    last_blocked = ""
+    for offset in range(len(_QUOTA_NUMERIC_SURFACES)):
+        surface = _QUOTA_NUMERIC_SURFACES[
+            (trial_counter + offset) % len(_QUOTA_NUMERIC_SURFACES)
+        ]
+        candidate = {"type": "numeric_trial", "surface": surface, "params": {}}
+        blocked = check_blacklist(candidate, blacklist)
+        if not blocked:
+            return candidate, ""
+        last_blocked = blocked
+    return None, last_blocked or "all quota numeric_trial surfaces are blacklisted"
+
+
+def _replace_blacklisted_seed_fallback(
+    action: dict[str, Any],
+    blacklist: list[dict[str, Any]],
+    rationale: dict[str, Any] | None = None,
+    *,
+    reason_label: str = "blacklisted fallback",
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if action.get("type") != "seed_batch":
+        return action, rationale
+    blocked = check_blacklist(action, blacklist)
+    if not blocked:
+        return action, rationale
+    replacement, _ = _first_unblacklisted_seed_action(
+        blacklist,
+        preferred=action,
+    )
+    if replacement is None:
+        log.warning(
+            "%s seed action %s is blacklisted (%s), and no measured seed "
+            "fallback remains unblocked.",
+            reason_label,
+            json.dumps(action, default=str),
+            blocked,
+        )
+        return action, rationale
+    next_rationale = {
+        **(rationale or {}),
+        "fallback_seed_reselected": True,
+        "fallback_seed_reselected_reason": blocked,
+        "fallback_seed_reselected_from": dict(action),
+        "fallback_seed_reselected_context": reason_label,
+    }
+    log.warning(
+        "%s seed action %s is blacklisted (%s); using measured fallback %s.",
+        reason_label,
+        json.dumps(action, default=str),
+        blocked,
+        json.dumps(replacement, default=str),
+    )
+    return replacement, next_rationale
+
+
 def _seq_baseline_reference_block_key(reference: dict[str, Any]) -> str:
     ref_id = reference.get("latest_reference_trial_id")
     ref_token = "none" if ref_id is None else str(ref_id)
@@ -409,19 +512,26 @@ def _maybe_force_seq_baseline_draw(
         return action, rationale, None
     blocked_reason = check_blacklist(forced, blacklist)
     if blocked_reason:
-        state["seq_baseline_draw_blocked"] = {
-            "trial_id": trial_counter,
-            "action": forced,
-            "reason": blocked_reason,
-            "reference": reference,
-            "reference_key": reference_key,
-        }
-        log.warning(
-            "Seq baseline-reference draw due but forced action is blacklisted: %s",
-            blocked_reason,
+        fallback, fallback_reason = _first_unblacklisted_seed_action(
+            blacklist,
+            preferred=forced,
         )
-        return action, rationale, None
-
+        if fallback is not None:
+            forced = fallback
+            blocked_reason = ""
+        else:
+            state["seq_baseline_draw_blocked"] = {
+                "trial_id": trial_counter,
+                "action": forced,
+                "reason": fallback_reason or blocked_reason,
+                "reference": reference,
+                "reference_key": reference_key,
+            }
+            log.warning(
+                "Seq baseline-reference draw due but forced action is blacklisted: %s",
+                fallback_reason or blocked_reason,
+            )
+            return action, rationale, None
     next_rationale = dict(rationale or {})
     next_rationale["seq_baseline_reference_draw"] = True
     next_rationale["seq_baseline_reference_reason"] = reference["reason"]
@@ -732,6 +842,7 @@ def _enforce_experiment_quota(
     memory_count: int,
     rationale: dict[str, Any] | None = None,
     trial_counter: int = 0,
+    blacklist: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Cap consecutive passive (seed/distill) actions once memory is large.
 
@@ -748,7 +859,25 @@ def _enforce_experiment_quota(
 
     streak = int(state.get("consecutive_passive_actions", 0))
     if memory_count >= QUOTA_MEMORY_THRESHOLD and streak >= MAX_CONSECUTIVE_PASSIVE:
-        surface = _QUOTA_NUMERIC_SURFACES[trial_counter % len(_QUOTA_NUMERIC_SURFACES)]
+        forced, blocked_reason = _first_unblacklisted_numeric_trial_action(
+            blacklist or [],
+            trial_counter=trial_counter,
+        )
+        if forced is None:
+            log.warning(
+                "Experiment quota due after %d consecutive passive actions, but "
+                "all numeric_trial quota surfaces are blacklisted: %s",
+                streak,
+                blocked_reason,
+            )
+            state["experiment_quota_blocked"] = {
+                "trial_id": trial_counter,
+                "reason": blocked_reason,
+                "action": action,
+            }
+            state["consecutive_passive_actions"] = streak + 1
+            return action, rationale
+        surface = forced["surface"]
         log.warning(
             "Experiment quota: %d consecutive passive actions with memory_count=%d "
             ">= %d threshold; forcing frontier-moving numeric_trial(surface=%s) "
@@ -756,8 +885,9 @@ def _enforce_experiment_quota(
             streak, memory_count, QUOTA_MEMORY_THRESHOLD, surface, atype,
         )
         state["consecutive_passive_actions"] = 0
+        state["experiment_quota_blocked"] = None
         return (
-            {"type": "numeric_trial", "surface": surface, "params": {}},
+            forced,
             {
                 **(rationale or {}),
                 "experiment_quota_forced": True,
@@ -1046,6 +1176,7 @@ def _force_metric_action_after_meta(
     action: dict[str, Any],
     state: dict[str, Any],
     rationale: dict[str, Any] | None = None,
+    blacklist: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Replace repeated meta no-ops with a measured action."""
     if (
@@ -1059,13 +1190,16 @@ def _force_metric_action_after_meta(
             action.get("type"),
             int(state.get("consecutive_meta_actions", 0)),
         )
-        return (
+        forced, forced_rationale = _replace_blacklisted_seed_fallback(
             {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N},
+            blacklist or [],
             {
                 **(rationale or {}),
                 "meta_action_forced_metric_trial": True,
             },
+            reason_label="meta-action replacement",
         )
+        return forced, forced_rationale
     return action, rationale
 
 
@@ -2789,13 +2923,18 @@ def _run_loop_inner(
 
         # Meta actions are allowed as occasional bookkeeping, but a repeated
         # metric-free action means the planner is avoiding the experiment loop.
-        action, rationale = _force_metric_action_after_meta(action, state, rationale)
+        action, rationale = _force_metric_action_after_meta(
+            action,
+            state,
+            rationale,
+            blacklist,
+        )
 
         # Experiment quota: once memory is large, cap consecutive passive
         # (seed/distill) actions so the planner cannot rationalize no-op work
         # forever — force a frontier-moving experiment instead.
         action, rationale = _enforce_experiment_quota(
-            action, state, memory_count, rationale, trial_counter,
+            action, state, memory_count, rationale, trial_counter, blacklist,
         )
 
         seq_fresh_eval_context: dict[str, Any] | None = None
@@ -2823,6 +2962,12 @@ def _run_loop_inner(
         # ── 3. Act ───────────────────────────────────────────────
         # B2: Check failure blacklist before dispatch
         pre_dispatch_skip: SkipOutcome | None = None
+        action, rationale = _replace_blacklisted_seed_fallback(
+            action,
+            blacklist,
+            rationale,
+            reason_label="pre-dispatch",
+        )
         blocked_reason = check_blacklist(action, blacklist)
         if blocked_reason:
             log.warning(
