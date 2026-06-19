@@ -812,6 +812,45 @@ class SafetyGate:
         categories = []  # AP-14: track which checks failed
         seq_block: dict[str, Any] | None = None  # LEDGER-W4 journal block (default-off)
 
+        def record_seq_shadow() -> None:
+            nonlocal seq_block
+            if seq_block is not None or not seq_inputs_ready:
+                return
+            # LEDGER-W4 (01c §3): when the default-off sequential path is active
+            # and the caller threads per-question results, journal the anytime-valid
+            # e-process verdict for every trusted trial, including regressions. The
+            # verdict remains advisory at the safety gate: it never adds a violation,
+            # and baseline promotion is still gated downstream through
+            # update_baseline(seq_confirmed=...).
+            seq_block = self._sequential_verdict(
+                result,
+                question_results=question_results,
+                task_rate=task_rate,
+                baseline_profile=baseline_profile,
+                baseline_task_rate=baseline_task_rate,
+                prior_quality_obs=prior_quality_obs or (),
+                prior_rate_obs=prior_rate_obs or (),
+                candidate=candidate,
+                core_id=core_id,
+            )
+            categories.append("seq_" + seq_block["state"])
+            e_rate = seq_block.get("E_rate_noninf")
+            warnings.append(
+                "Sequential verdict ({state}): E_quality={eq:.3f}, "
+                "E_rate_noninf={er}, k={k} (LEDGER-W4, AUTOPILOT_SEQ_VERDICT); "
+                "baseline promotion {gate}.".format(
+                    state=seq_block["state"],
+                    eq=seq_block.get("E_quality", float("nan")),
+                    er=f"{e_rate:.3f}" if e_rate is not None else "n/a",
+                    k=seq_block.get("k"),
+                    gate=(
+                        "permitted (confirmed)"
+                        if seq_block.get("confirmed")
+                        else "blocked until confirmed"
+                    ),
+                )
+            )
+
         # 1. Quality floor (tier-aware)
         quality_floor = QUALITY_FLOOR_T0 if result.tier == 0 else QUALITY_FLOOR_T1
         if result.quality < quality_floor:
@@ -835,44 +874,10 @@ class SafetyGate:
                     f"Slight quality drop: {result.quality:.3f} vs baseline {baseline_q:.3f} "
                     f"({relative_delta:+.1%})"
                 )
-            elif self.use_sequential and question_results is not None and baseline_profile:
-                # LEDGER-W4 (01c §3): when the default-off sequential path is active
-                # and the caller threads per-question results, the anytime-valid
-                # e-process verdict REPLACES the MAD noise filter as the "is this a
-                # real improvement?" significance test. It appends one of
-                # seq_accumulating / seq_confirmed / seq_refuted (consumed by
-                # classify_learning_exclusion) and records the full E-process journal
-                # block on the verdict. It never adds a violation — promotion is gated
-                # downstream in update_baseline(seq_confirmed=...), so a non-confirmed
-                # candidate is journaled but cannot ratchet the baseline.
-                seq_block = self._sequential_verdict(
-                    result,
-                    question_results=question_results,
-                    task_rate=task_rate,
-                    baseline_profile=baseline_profile,
-                    baseline_task_rate=baseline_task_rate,
-                    prior_quality_obs=prior_quality_obs or (),
-                    prior_rate_obs=prior_rate_obs or (),
-                    candidate=candidate,
-                    core_id=core_id,
-                )
-                categories.append("seq_" + seq_block["state"])
-                e_rate = seq_block.get("E_rate_noninf")
-                warnings.append(
-                    "Sequential verdict ({state}): E_quality={eq:.3f}, "
-                    "E_rate_noninf={er}, k={k} (LEDGER-W4, AUTOPILOT_SEQ_VERDICT); "
-                    "baseline promotion {gate}.".format(
-                        state=seq_block["state"],
-                        eq=seq_block.get("E_quality", float("nan")),
-                        er=f"{e_rate:.3f}" if e_rate is not None else "n/a",
-                        k=seq_block.get("k"),
-                        gate=(
-                            "permitted (confirmed)"
-                            if seq_block.get("confirmed")
-                            else "blocked until confirmed"
-                        ),
-                    )
-                )
+            elif seq_inputs_ready:
+                record_seq_shadow()
+                # Seq evidence is already journaled above and replaces the MAD noise
+                # filter as the "is this a real improvement?" significance test.
             else:
                 # Improvement or no change — apply MAD noise filter (intake-421).
                 # Robust against outliers; only fires once history has MAD_MIN_SAMPLES.
@@ -1032,6 +1037,8 @@ class SafetyGate:
 
         # 6. Proxy-only improvement detection (skeptical re-questioning)
         warnings.extend(self._proxy_check(result))
+
+        record_seq_shadow()
 
         passed = len(violations) == 0
         verdict = SafetyVerdict(

@@ -218,6 +218,28 @@ def test_seq_path_never_adds_a_violation(tmp_path):
     assert verdict.passed is True
 
 
+def test_seq_shadow_journaled_for_failed_regression(tmp_path):
+    """Failed trials still need seq shadow rows for W4 readiness denominators.
+    The seq tag must remain advisory and must not launder the failed verdict."""
+    g = SafetyGate(baseline_path=tmp_path / "absent.yaml", use_sequential=True)
+    verdict = g.check(
+        _improvement_result(quality=0.2),
+        question_results={"q1": False},
+        baseline_profile={"q1": 0.0},
+        prior_quality_obs=[(i, 0.0) for i in range(8)],
+    )
+
+    assert verdict.seq is not None
+    assert verdict.seq["state"] == "refuted"
+    assert "seq_refuted" in verdict.categories
+    assert "quality_floor" in verdict.categories
+    assert "regression" in verdict.categories
+    assert verdict.categories[0] == "quality_floor"
+    assert verdict.passed is False
+    by, _, _ = classify_learning_exclusion(verdict, _Eval())
+    assert by != "seq_refuted"
+
+
 # ---------------------------------------------------------------------------
 # update_baseline confirmed-gate (anti-ratchet)
 # ---------------------------------------------------------------------------
