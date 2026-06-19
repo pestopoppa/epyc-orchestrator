@@ -12,6 +12,7 @@ import hashlib
 import json
 import sqlite3
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -75,6 +76,37 @@ def test_mdl_compresses_near_duplicate_cluster(store, lab):
     assert len(conventions[0]["member_ids"]) >= 3
     assert conventions[0]["compression_ratio"] >= 0.10
     assert conventions[0]["evidence_trial_ids"] == [10, 11, 12, 20, 21, 22]
+
+
+def test_mdl_compress_skips_folded_journal_excluded_evidence(store, lab):
+    """Convention promotion must not aggregate evidence quarantined by journal view."""
+    base = "Disable self-speculation for dense models because HSD overhead dominates on CPU"
+    for i in range(3):
+        store.store(
+            description=f"try-{i}",
+            insight=base + f" variant detail {i}",
+            source_trial_id=i,
+            species="config_tuner",
+            evidence_trial_ids=[10 + i],
+        )
+
+    class FakeJournal:
+        def entries_with_supersessions(self):
+            return [
+                SimpleNamespace(trial_id=11, bug_corrupted_by="superseded"),
+            ]
+
+    result = lab.mdl_compress_strategies(
+        strategy_store=store,
+        journal=FakeJournal(),
+        min_cluster_size=3,
+        jaccard_threshold=0.50,
+        compression_threshold=0.10,
+    )
+
+    assert result["status"] == "ok"
+    assert result["conventions_promoted"] == 0
+    assert store.list_conventions() == []
 
 
 def test_mdl_does_not_compress_below_threshold(store, lab):

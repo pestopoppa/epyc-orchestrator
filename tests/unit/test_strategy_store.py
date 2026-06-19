@@ -135,6 +135,51 @@ class TestStrategyStore:
         assert all(r.id != sid for r in results)
         assert any(r.source_trial_id == 3 for r in results)
 
+    def test_strategy_rows_for_compression_applies_folded_evidence_exclusions(self, store):
+        excluded_id = store.store(
+            "Strategy A",
+            "Insight A",
+            source_trial_id=99,
+            species="alpha",
+            evidence_trial_ids=[1, 2],
+        )
+        kept_id = store.store(
+            "Strategy B",
+            "Insight B",
+            source_trial_id=3,
+            species="alpha",
+            evidence_trial_ids=[3],
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=2, bug_corrupted_by="superseded"),
+                ]
+
+        rows = store.strategy_rows_for_compression(journal=FakeJournal())
+
+        row_ids = {row["id"] for row in rows}
+        assert excluded_id not in row_ids
+        assert kept_id in row_ids
+
+    def test_strategy_rows_for_compression_window_counts_eligible_rows(self, store):
+        for trial_id in range(1, 5):
+            store.store(
+                f"Strategy {trial_id}",
+                f"Insight {trial_id}",
+                source_trial_id=trial_id,
+                species="alpha",
+                evidence_trial_ids=[trial_id],
+            )
+
+        rows = store.strategy_rows_for_compression(
+            window_trials=2,
+            excluded_trial_ids={4},
+        )
+
+        assert [row["source_trial_id"] for row in rows] == [3, 2]
+
     def test_excluded_strategy_evidence_trial_ids_prefers_folded_view(self):
         from orchestration.repl_memory.strategy_store import (
             excluded_strategy_evidence_trial_ids,

@@ -655,6 +655,40 @@ class StrategyStore:
         except (TypeError, ValueError):
             return []
 
+    def strategy_rows_for_compression(
+        self,
+        *,
+        window_trials: int | None = None,
+        journal: Any | None = None,
+        excluded_trial_ids: set[int] | None = None,
+    ) -> list[sqlite3.Row]:
+        """Return strategy rows eligible for convention compression.
+
+        MDL compression reads raw rows rather than using semantic retrieval, but
+        it must honor the same evidence quarantine as planner retrieval when a
+        folded journal view is available.
+        """
+        excluded = set(excluded_trial_ids or set())
+        if journal is not None:
+            excluded.update(excluded_strategy_evidence_trial_ids(journal))
+
+        rows = self._conn.execute(
+            "SELECT id, insight, source_trial_id, evidence_trial_ids "
+            "FROM strategies ORDER BY source_trial_id DESC"
+        ).fetchall()
+        if not excluded:
+            return rows[:window_trials] if window_trials is not None else rows
+
+        eligible: list[sqlite3.Row] = []
+        for row in rows:
+            evidence_trial_ids = self._evidence_trial_ids_for_row(row)
+            if excluded.intersection(evidence_trial_ids):
+                continue
+            eligible.append(row)
+            if window_trials is not None and len(eligible) >= window_trials:
+                break
+        return eligible
+
     def retrieve(
         self,
         query_text: str,

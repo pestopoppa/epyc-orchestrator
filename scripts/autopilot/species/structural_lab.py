@@ -592,6 +592,8 @@ class StructuralLab:
         self,
         *,
         strategy_store: Any = None,
+        journal: Any = None,
+        excluded_trial_ids: set[int] | None = None,
         window_trials: int | None = None,
         min_cluster_size: int = 3,
         jaccard_threshold: float = 0.60,
@@ -616,12 +618,19 @@ class StructuralLab:
             _owns_store = False
 
         try:
-            rows = strategy_store._conn.execute(
-                "SELECT id, insight, source_trial_id, evidence_trial_ids "
-                "FROM strategies ORDER BY source_trial_id DESC"
-            ).fetchall()
-            if window_trials is not None:
-                rows = rows[:window_trials]
+            if hasattr(strategy_store, "strategy_rows_for_compression"):
+                rows = strategy_store.strategy_rows_for_compression(
+                    window_trials=window_trials,
+                    journal=journal,
+                    excluded_trial_ids=excluded_trial_ids,
+                )
+            else:
+                rows = strategy_store._conn.execute(
+                    "SELECT id, insight, source_trial_id, evidence_trial_ids "
+                    "FROM strategies ORDER BY source_trial_id DESC"
+                ).fetchall()
+                if window_trials is not None:
+                    rows = rows[:window_trials]
 
             if not rows:
                 return {"status": "ok", "clusters_examined": 0, "conventions_promoted": 0,
