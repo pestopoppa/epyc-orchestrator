@@ -17,6 +17,7 @@ import statistics
 import subprocess
 import sys
 import time
+from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,145 @@ def load_result_rows(path: Path) -> list[dict[str, Any]]:
         if line.strip():
             rows.append(json.loads(line))
     return rows
+
+
+def load_run_metadata(results_path: Path) -> dict[str, Any] | None:
+    """Load sibling run metadata if it exists."""
+    candidates = []
+    if results_path.is_dir():
+        candidates.append(results_path / "meta.json")
+    else:
+        candidates.append(results_path.with_name("meta.json"))
+        candidates.append(results_path.parent / "meta.json")
+    for candidate in candidates:
+        if candidate.exists():
+            return json.loads(candidate.read_text(encoding="utf-8"))
+    return None
+
+
+def validate_result_bundle(rows: list[dict[str, Any]], meta: dict[str, Any] | None) -> list[str]:
+    """Validate that a replayed result bundle matches its recorded run metadata."""
+    if not meta:
+        return []
+
+    errors: list[str] = []
+    prompt_ids = [str(item) for item in meta.get("prompt_ids") or []]
+    arm_sequence = [str(item) for item in meta.get("arm_sequence") or []]
+    if not prompt_ids:
+        errors.append("meta.json is missing prompt_ids")
+        return errors
+    if not arm_sequence:
+        errors.append("meta.json is missing arm_sequence")
+        return errors
+
+    expected_blocks = len(arm_sequence)
+    expected_rows = len(prompt_ids) * expected_blocks
+    if len(rows) != expected_rows:
+        errors.append(
+            f"row count {len(rows)} does not match prompt_ids({len(prompt_ids)}) * "
+            f"arm_sequence({expected_blocks})"
+        )
+
+    prompt_counter = Counter(str(row.get("prompt_id", "")) for row in rows)
+    for prompt_id in prompt_ids:
+        if prompt_counter.get(prompt_id, 0) != expected_blocks:
+            errors.append(
+                f"prompt_id {prompt_id!r} appears {prompt_counter.get(prompt_id, 0)} times; "
+                f"expected {expected_blocks}"
+            )
+
+    expected_prompt_set = set(prompt_ids)
+    for block_idx, expected_arm in enumerate(arm_sequence):
+        block_rows = [row for row in rows if row.get("block") == block_idx]
+        if len(block_rows) != len(prompt_ids):
+            errors.append(
+                f"block {block_idx} has {len(block_rows)} rows; expected {len(prompt_ids)}"
+            )
+            continue
+        actual_arm = {str(row.get("arm", "")) for row in block_rows}
+        if actual_arm != {expected_arm}:
+            errors.append(
+                f"block {block_idx} arm set {sorted(actual_arm)!r} does not match "
+                f"expected {expected_arm!r}"
+            )
+        block_prompt_ids = {str(row.get("prompt_id", "")) for row in block_rows}
+        if block_prompt_ids != expected_prompt_set:
+            missing = sorted(expected_prompt_set - block_prompt_ids)
+            extra = sorted(block_prompt_ids - expected_prompt_set)
+            detail = []
+            if missing:
+                detail.append(f"missing={missing}")
+            if extra:
+                detail.append(f"extra={extra}")
+            errors.append(f"block {block_idx} prompt ids mismatch ({', '.join(detail)})")
+    return errors
+
+
+def render_report(
+    summary: dict[str, Any],
+    *,
+    source_results: Path,
+    meta: dict[str, Any] | None = None,
+    validation_errors: list[str] | None = None,
+) -> str:
+    """Render a no-inference replay report for the held-out X-MAS run."""
+    decision = summary.get("decision", {})
+    lines: list[str] = [
+        "# X-MAS held-out replay report",
+        "",
+        f"- source results: `{source_results}`",
+        f"- replay mode: `{summary.get('mode', 'unknown')}`",
+        f"- decision: `{decision.get('status', 'unknown')}`",
+    ]
+    if meta:
+        lines.extend(
+            [
+                f"- prompt manifest: `{meta.get('prompt_manifest', 'unknown')}`",
+                f"- arm sequence: `{', '.join(str(item) for item in meta.get('arm_sequence') or [])}`",
+                f"- prompt count: `{len(meta.get('prompt_ids') or [])}`",
+            ]
+        )
+    if summary.get("score_delta_xmas_minus_baseline") is not None:
+        lines.append(
+            f"- score delta (xmas - baseline): `{summary['score_delta_xmas_minus_baseline']:.3f}`"
+        )
+    if summary.get("latency_ratio_xmas_over_baseline") is not None:
+        lines.append(
+            f"- latency ratio (xmas / baseline): `{summary['latency_ratio_xmas_over_baseline']:.3f}`"
+        )
+
+    lines.extend(["", "## Validation"])
+    if validation_errors:
+        lines.append("- status: fail")
+        for error in validation_errors:
+            lines.append(f"- {error}")
+    else:
+        lines.append("- status: pass")
+
+    blockers = decision.get("blockers") or []
+    lines.extend(["", "## Decision"])
+    if blockers:
+        lines.append("- blockers:")
+        lines.extend([f"  - {blocker}" for blocker in blockers])
+    else:
+        lines.append("- blockers: none")
+    lift_domains = decision.get("lift_domains") or []
+    regression_domains = decision.get("regression_domains") or []
+    lines.append(f"- lift domains: {', '.join(lift_domains) if lift_domains else 'none'}")
+    lines.append(
+        f"- regression domains: {', '.join(regression_domains) if regression_domains else 'none'}"
+    )
+
+    lines.extend(
+        [
+            "",
+            "## Next Clean-Window Run",
+            "- keep `xmas_routing.mode` off until this report is green and a new inference window is confirmed quiet",
+            "- reuse the exact held-out prompt manifest recorded above",
+            "- keep baseline restore enabled so the final arm leaves the orchestrator in `mode=off`",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def score_answer(answer: str, spec: dict[str, Any]) -> bool | None:
@@ -381,6 +521,7 @@ def run(args: argparse.Namespace) -> int:
 
     if args.summarize_results:
         rows = load_result_rows(args.summarize_results)
+        meta = load_run_metadata(args.summarize_results)
         summary = summarize(
             rows,
             min_prompts_per_arm=args.min_decision_prompts,
@@ -388,9 +529,24 @@ def run(args: argparse.Namespace) -> int:
             max_domain_regression=args.max_domain_regression,
             max_latency_ratio=args.max_latency_ratio,
         )
+        summary["mode"] = "replay"
         summary["source_results"] = str(args.summarize_results)
+        validation_errors = validate_result_bundle(rows, meta)
+        if validation_errors:
+            raise SystemExit("run bundle validation failed: " + "; ".join(validation_errors))
         write_json(summary_path, summary)
+        report_path = output_dir / "report.md"
+        report_path.write_text(
+            render_report(
+                summary,
+                source_results=args.summarize_results,
+                meta=meta,
+                validation_errors=validation_errors,
+            ),
+            encoding="utf-8",
+        )
         print(f"[xmas_live_ab] summarized {len(rows)} rows -> {summary_path}")
+        print(f"[xmas_live_ab] wrote report -> {report_path}")
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
 

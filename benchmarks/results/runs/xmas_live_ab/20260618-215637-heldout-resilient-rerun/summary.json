@@ -25,6 +25,164 @@
       "xmas_applied_n": 23
     }
   },
+  "decision": {
+    "blockers": [
+      "overall score delta -0.350 < required 0.050",
+      "latency ratio 16.181 > allowed 1.100",
+      "no domain improved by >= 0.050",
+      "domain regressions: code, math, reasoning"
+    ],
+    "lift_domains": [],
+    "regression_domains": [
+      "code",
+      "math",
+      "reasoning"
+    ],
+    "status": "hold",
+    "thresholds": {
+      "max_domain_regression": 0.0,
+      "max_latency_ratio": 1.1,
+      "min_prompts_per_arm": 25,
+      "min_score_delta": 0.05
+    }
+  },
+  "domains": {
+    "code": {
+      "arms": {
+        "baseline": {
+          "median_latency_s": 2.259,
+          "n": 5,
+          "routed_to_counts": {
+            "coder_escalation": 5
+          },
+          "score_rate": 0.75,
+          "scored_n": 4,
+          "xmas_applied_n": 0
+        },
+        "xmas": {
+          "median_latency_s": 108.735,
+          "n": 5,
+          "routed_to_counts": {
+            "architect_general": 1,
+            "ingest_long_context": 1,
+            "worker_general": 2
+          },
+          "score_rate": 0.0,
+          "scored_n": 4,
+          "xmas_applied_n": 4
+        }
+      },
+      "score_delta_xmas_minus_baseline": -0.75
+    },
+    "knowledge": {
+      "arms": {
+        "baseline": {
+          "median_latency_s": 1.445,
+          "n": 5,
+          "routed_to_counts": {
+            "coder_escalation": 5
+          },
+          "score_rate": 0.25,
+          "scored_n": 4,
+          "xmas_applied_n": 0
+        },
+        "xmas": {
+          "median_latency_s": 34.364,
+          "n": 5,
+          "routed_to_counts": {
+            "worker_general": 5
+          },
+          "score_rate": 0.25,
+          "scored_n": 4,
+          "xmas_applied_n": 5
+        }
+      },
+      "score_delta_xmas_minus_baseline": 0.0
+    },
+    "long_context": {
+      "arms": {
+        "baseline": {
+          "median_latency_s": 3.41,
+          "n": 5,
+          "routed_to_counts": {
+            "coder_escalation": 4,
+            "ingest_long_context": 1
+          },
+          "score_rate": 0.75,
+          "scored_n": 4,
+          "xmas_applied_n": 0
+        },
+        "xmas": {
+          "median_latency_s": 22.462,
+          "n": 5,
+          "routed_to_counts": {
+            "ingest_long_context": 1,
+            "worker_general": 4
+          },
+          "score_rate": 0.75,
+          "scored_n": 4,
+          "xmas_applied_n": 5
+        }
+      },
+      "score_delta_xmas_minus_baseline": 0.0
+    },
+    "math": {
+      "arms": {
+        "baseline": {
+          "median_latency_s": 16.962,
+          "n": 5,
+          "routed_to_counts": {
+            "coder_escalation": 5
+          },
+          "score_rate": 1.0,
+          "scored_n": 4,
+          "xmas_applied_n": 0
+        },
+        "xmas": {
+          "median_latency_s": 111.422,
+          "n": 5,
+          "routed_to_counts": {
+            "architect_general": 1,
+            "worker_general": 4
+          },
+          "score_rate": 0.25,
+          "scored_n": 4,
+          "xmas_applied_n": 5
+        }
+      },
+      "score_delta_xmas_minus_baseline": -0.75
+    },
+    "reasoning": {
+      "arms": {
+        "baseline": {
+          "median_latency_s": 11.559,
+          "n": 5,
+          "routed_to_counts": {
+            "coder_escalation": 5
+          },
+          "score_rate": 0.5,
+          "scored_n": 4,
+          "xmas_applied_n": 0
+        },
+        "xmas": {
+          "median_latency_s": 57.789,
+          "n": 5,
+          "routed_to_counts": {
+            "architect_general": 1,
+            "frontdoor": 1,
+            "worker_general": 2
+          },
+          "score_rate": 0.25,
+          "scored_n": 4,
+          "xmas_applied_n": 4
+        }
+      },
+      "score_delta_xmas_minus_baseline": -0.25
+    }
+  },
   "latency_delta_xmas_minus_baseline_s": 34.294,
-  "score_delta_xmas_minus_baseline": -0.35000000000000003
+  "latency_ratio_xmas_over_baseline": 16.181053563523683,
+  "mode": "replay",
+  "score_delta_xmas_minus_baseline": -0.35000000000000003,
+  "source_results": "benchmarks/results/runs/xmas_live_ab/20260618-215637-heldout-resilient-rerun/results.jsonl"
 }

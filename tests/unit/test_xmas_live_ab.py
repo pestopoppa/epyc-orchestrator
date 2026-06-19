@@ -160,7 +160,9 @@ def test_summarize_results_mode_does_not_reload_or_chat(
             [
                 json.dumps(
                     {
+                        "block": 0,
                         "arm": "baseline",
+                        "prompt_id": "math_1",
                         "domain": "math",
                         "score": False,
                         "elapsed_s": 10.0,
@@ -168,16 +170,50 @@ def test_summarize_results_mode_does_not_reload_or_chat(
                 ),
                 json.dumps(
                     {
+                        "block": 0,
+                        "arm": "baseline",
+                        "prompt_id": "code_1",
+                        "domain": "code",
+                        "score": True,
+                        "elapsed_s": 10.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "block": 1,
                         "arm": "xmas",
+                        "prompt_id": "math_1",
                         "domain": "math",
                         "score": True,
                         "elapsed_s": 9.0,
                         "routing_strategy": "xmas_enforce:worker_general",
                     }
                 ),
+                json.dumps(
+                    {
+                        "block": 1,
+                        "arm": "xmas",
+                        "prompt_id": "code_1",
+                        "domain": "code",
+                        "score": True,
+                        "elapsed_s": 9.0,
+                        "routing_strategy": "xmas_enforce:coder_escalation",
+                    }
+                ),
             ]
         )
         + "\n",
+        encoding="utf-8",
+    )
+    rows_path.with_name("meta.json").write_text(
+        json.dumps(
+            {
+                "mode": "real",
+                "prompt_manifest": "/tmp/held-out/prompts.jsonl",
+                "prompt_ids": ["math_1", "code_1"],
+                "arm_sequence": ["baseline", "xmas"],
+            }
+        ),
         encoding="utf-8",
     )
     output = tmp_path / "summary"
@@ -201,7 +237,72 @@ def test_summarize_results_mode_does_not_reload_or_chat(
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
     assert summary["decision"]["status"] == "promote_candidate"
     assert "source_results" in summary
-    assert "summarized 2 rows" in capsys.readouterr().out
+    report = (output / "report.md").read_text(encoding="utf-8")
+    assert "X-MAS held-out replay report" in report
+    assert "prompt manifest: `/tmp/held-out/prompts.jsonl`" in report
+    assert "decision: `promote_candidate`" in report
+    assert "summarized 4 rows" in capsys.readouterr().out
+
+
+def test_summarize_results_rejects_mismatched_run_bundle(tmp_path: Path) -> None:
+    rows_path = tmp_path / "results.jsonl"
+    rows_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "block": 0,
+                        "arm": "baseline",
+                        "prompt_id": "math_1",
+                        "domain": "math",
+                        "score": True,
+                        "elapsed_s": 10.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "block": 0,
+                        "arm": "baseline",
+                        "prompt_id": "code_1",
+                        "domain": "code",
+                        "score": True,
+                        "elapsed_s": 10.0,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rows_path.with_name("meta.json").write_text(
+        json.dumps(
+            {
+                "mode": "real",
+                "prompt_manifest": "/tmp/held-out/prompts.jsonl",
+                "prompt_ids": ["math_1", "code_1"],
+                "arm_sequence": ["baseline", "xmas"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "summary"
+
+    try:
+        xmas_live_ab.run(
+            SimpleNamespace(
+                summarize_results=rows_path,
+                output=output,
+                min_decision_prompts=1,
+                min_score_delta=0.05,
+                max_domain_regression=0.0,
+                max_latency_ratio=1.10,
+            )
+        )
+    except SystemExit as exc:
+        assert "run bundle validation failed" in str(exc)
+        assert "row count 2 does not match prompt_ids(2) * arm_sequence(2)" in str(exc)
+    else:
+        raise AssertionError("mismatched replay bundle must fail validation")
 
 
 def test_score_answer_supports_common_methods() -> None:
