@@ -304,3 +304,10 @@ blacklist:
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 864'
   added: '2026-06-19T09:02:06.404868+00:00'
   source_trial: 864
+- pattern:
+    type: structural_experiment
+    flags:
+      output_formalizer: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 869'
+  added: '2026-06-19T09:23:22.399946+00:00'
+  source_trial: 869

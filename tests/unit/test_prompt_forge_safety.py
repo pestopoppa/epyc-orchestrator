@@ -13,8 +13,12 @@ sys.path.insert(0, str(AUTOPILOT_DIR))
 from species.prompt_forge import PromptForge  # noqa: E402
 
 
-def _forge_with_prompt(tmp_path: Path, content: str = "Base prompt\n") -> PromptForge:
-    (tmp_path / "frontdoor.md").write_text(content)
+def _forge_with_prompt(
+    tmp_path: Path,
+    content: str = "Base prompt\n",
+    filename: str = "frontdoor.md",
+) -> PromptForge:
+    (tmp_path / filename).write_text(content)
     return PromptForge(prompts_dir=tmp_path, auto_commit=False)
 
 
@@ -115,6 +119,76 @@ def test_resolve_prompt_rejects_symlink_escape(tmp_path: Path) -> None:
         raise AssertionError("expected symlink escape to be rejected")
 
 
+def test_frontdoor_prompt_integrity_rejects_agent_commentary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    forge = _forge_with_prompt(
+        tmp_path,
+        "# Front Door Orchestrator\nTaskIR mode\nDirect-answer mode\nAnswer tags (scoped)\n",
+    )
+    monkeypatch.setattr(
+        forge,
+        "_invoke_claude",
+        lambda _prompt: (
+            "```markdown\n"
+            "fenced block from my response and writes it to the target file itself\n"
+            "One note worth flagging: this is agent commentary.\n"
+            "```"
+        ),
+    )
+
+    mutation = forge.propose_mutation(target_file="frontdoor.md")
+
+    assert mutation.safety_valid is False
+    assert "prompt_integrity:frontdoor_corruption_marker" in mutation.safety_reason
+    assert mutation.mutated_content == mutation.original_content
+
+
+def test_frontdoor_prompt_integrity_rejects_missing_router_markers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    forge = _forge_with_prompt(
+        tmp_path,
+        "# Front Door Orchestrator\nTaskIR mode\nDirect-answer mode\nAnswer tags (scoped)\n",
+    )
+    monkeypatch.setattr(
+        forge,
+        "_invoke_claude",
+        lambda _prompt: "```markdown\n# Front Door Orchestrator\nTaskIR mode\n```",
+    )
+
+    mutation = forge.propose_mutation(target_file="frontdoor.md")
+
+    assert mutation.safety_valid is False
+    assert "frontdoor_missing_required_markers" in mutation.safety_reason
+    assert mutation.mutated_content == mutation.original_content
+
+
+def test_frontdoor_prompt_integrity_rejects_bad_apply_and_revert(tmp_path: Path) -> None:
+    forge = _forge_with_prompt(
+        tmp_path,
+        "# Front Door Orchestrator\nTaskIR mode\nDirect-answer mode\nAnswer tags (scoped)\n",
+    )
+    mutation = forge.propose_mutation(target_file="frontdoor.md")
+
+    mutation.mutated_content = "fenced block from my response\n"
+    try:
+        forge.apply_mutation(mutation)
+    except ValueError as exc:
+        assert "prompt integrity rejected mutation" in str(exc)
+    else:
+        raise AssertionError("expected corrupted frontdoor apply to be rejected")
+
+    mutation.mutated_content = mutation.original_content
+    mutation.original_content = "one note worth flagging\n"
+    try:
+        forge.revert_mutation(mutation)
+    except ValueError as exc:
+        assert "prompt integrity rejected revert" in str(exc)
+    else:
+        raise AssertionError("expected corrupted frontdoor revert to be rejected")
+
+
 def test_mutation_prompt_includes_negative_transfer_safety_block(tmp_path: Path) -> None:
     forge = _forge_with_prompt(tmp_path)
 
@@ -135,7 +209,7 @@ def test_mutation_prompt_includes_negative_transfer_safety_block(tmp_path: Path)
 def test_rejects_mismatched_suite_anchor_introduced_by_mutation(
     tmp_path: Path, monkeypatch
 ) -> None:
-    forge = _forge_with_prompt(tmp_path)
+    forge = _forge_with_prompt(tmp_path, filename="worker_general.md")
     monkeypatch.setattr(
         forge,
         "_invoke_claude",
@@ -148,7 +222,7 @@ def test_rejects_mismatched_suite_anchor_introduced_by_mutation(
     )
 
     mutation = forge.propose_mutation(
-        target_file="frontdoor.md",
+        target_file="worker_general.md",
         mutation_type="targeted_fix",
         failure_context="Trial #1: coder failure.",
         per_suite_quality={"coder": 1.0},
@@ -163,7 +237,7 @@ def test_rejects_mismatched_suite_anchor_introduced_by_mutation(
 def test_warns_on_low_evidence_without_rejecting_generic_mutation(
     tmp_path: Path, monkeypatch
 ) -> None:
-    forge = _forge_with_prompt(tmp_path)
+    forge = _forge_with_prompt(tmp_path, filename="worker_general.md")
     monkeypatch.setattr(
         forge,
         "_invoke_claude",
@@ -171,7 +245,7 @@ def test_warns_on_low_evidence_without_rejecting_generic_mutation(
     )
 
     mutation = forge.propose_mutation(
-        target_file="frontdoor.md",
+        target_file="worker_general.md",
         mutation_type="targeted_fix",
         failure_context="Trial #7: answer drifted.",
         per_suite_quality={"coder": 1.0},
@@ -185,7 +259,7 @@ def test_warns_on_low_evidence_without_rejecting_generic_mutation(
 def test_rejects_universal_suite_best_practice_without_source_context(
     tmp_path: Path, monkeypatch
 ) -> None:
-    forge = _forge_with_prompt(tmp_path)
+    forge = _forge_with_prompt(tmp_path, filename="worker_general.md")
     monkeypatch.setattr(
         forge,
         "_invoke_claude",
@@ -198,7 +272,7 @@ def test_rejects_universal_suite_best_practice_without_source_context(
     )
 
     mutation = forge.propose_mutation(
-        target_file="frontdoor.md",
+        target_file="worker_general.md",
         mutation_type="targeted_fix",
     )
 

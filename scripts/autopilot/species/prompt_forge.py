@@ -77,6 +77,17 @@ _UNIVERSAL_TRANSFER_RE = re.compile(
     r"every\s+(?:task|prompt|suite|benchmark))\b",
     re.IGNORECASE,
 )
+_FRONTDOOR_REQUIRED_MARKERS = (
+    "# Front Door Orchestrator",
+    "TaskIR mode",
+    "Direct-answer mode",
+    "Answer tags (scoped)",
+)
+_FRONTDOOR_CORRUPTION_MARKERS = (
+    "fenced block from my response",
+    "i should **not** edit the file directly",
+    "one note worth flagging",
+)
 
 
 @dataclass(frozen=True)
@@ -136,6 +147,20 @@ def _added_text(original: str, mutated: str) -> str:
 
 def _trial_reference_count(text: str) -> int:
     return len({int(match) for match in _TRIAL_REF_RE.findall(text or "")})
+
+
+def _prompt_integrity_reason(filename: str, content: str) -> str | None:
+    """Return a rejection reason for prompt text known to be structurally corrupt."""
+    if filename != "frontdoor.md":
+        return None
+    lowered = content.lower()
+    for marker in _FRONTDOOR_CORRUPTION_MARKERS:
+        if marker in lowered:
+            return f"frontdoor_corruption_marker:{marker}"
+    missing = [marker for marker in _FRONTDOOR_REQUIRED_MARKERS if marker not in content]
+    if missing:
+        return "frontdoor_missing_required_markers:" + ",".join(missing)
+    return None
 
 
 class PromptForge:
@@ -249,6 +274,17 @@ class PromptForge:
             original_content=original,
             mutated_content=mutated_content,
         )
+        integrity_reason = _prompt_integrity_reason(target_file, mutated_content)
+        if integrity_reason:
+            mutation.safety_valid = False
+            mutation.safety_reason = "prompt_integrity:" + integrity_reason
+            mutation.mutated_content = original
+            log.warning(
+                "Prompt mutation rejected by integrity guard (%s): %s",
+                target_file,
+                integrity_reason,
+            )
+            return mutation
         self._attach_transfer_safety(
             mutation,
             original_content=original,
@@ -303,10 +339,25 @@ class PromptForge:
                 mutated_content=original,
             )
 
-        return result.to_prompt_mutation()
+        mutation = result.to_prompt_mutation()
+        integrity_reason = _prompt_integrity_reason(mutation.file, mutation.mutated_content)
+        if integrity_reason:
+            mutation.safety_valid = False
+            mutation.safety_reason = "prompt_integrity:" + integrity_reason
+            mutation.mutated_content = mutation.original_content
+            log.warning(
+                "GEPA prompt mutation rejected by integrity guard (%s): %s",
+                mutation.file,
+                integrity_reason,
+            )
+        return mutation
 
     def apply_mutation(self, mutation: PromptMutation) -> dict[str, Any]:
         """Apply a mutation (write file + optional git commit)."""
+        integrity_reason = _prompt_integrity_reason(mutation.file, mutation.mutated_content)
+        if integrity_reason:
+            raise ValueError(f"prompt integrity rejected mutation: {integrity_reason}")
+
         # Git snapshot before
         git_before = self._capture_git_state()
 
@@ -333,6 +384,10 @@ class PromptForge:
 
     def revert_mutation(self, mutation: PromptMutation) -> None:
         """Revert a mutation to original content and commit the revert."""
+        integrity_reason = _prompt_integrity_reason(mutation.file, mutation.original_content)
+        if integrity_reason:
+            raise ValueError(f"prompt integrity rejected revert: {integrity_reason}")
+
         self.write_prompt(mutation.file, mutation.original_content)
         mutation.accepted = False
         # Commit the revert so corrupted state is never the HEAD
@@ -587,6 +642,10 @@ class PromptForge:
         The context handles file backup, worktree versioning, and
         copying the mutated file to the main repo for live eval.
         """
+        integrity_reason = _prompt_integrity_reason(mutation.file, mutation.mutated_content)
+        if integrity_reason:
+            raise ValueError(f"prompt integrity rejected isolated mutation: {integrity_reason}")
+
         rel_path = f"orchestration/prompts/{mutation.file}"
         ctx.apply_file(rel_path, mutation.mutated_content)
         mutation.accepted = True
