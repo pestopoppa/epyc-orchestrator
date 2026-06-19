@@ -94,12 +94,11 @@ def test_topology_activity_initializes_expected_embedder_bucket(monkeypatch, tmp
     assert embedder["n_completed"] == 0
 
 
-def test_service_port_hints_use_manifest_worker_fast_port(monkeypatch) -> None:
-    from scripts.server import stack_manifest
-
-    monkeypatch.setitem(stack_manifest.PORT_MAP, "worker_fast", 9902)
+def test_service_port_hints_are_auxiliary_only() -> None:
     hints = dashboard_topology._service_port_hints()
-    assert hints[9902] == "worker_fast"
+    assert hints[8000] == "orchestrator"
+    assert hints[8090] == "embedder"
+    assert "worker_fast" not in hints.values()
 
 
 def test_stack_prior_port_hints_skip_alias_records(tmp_path) -> None:

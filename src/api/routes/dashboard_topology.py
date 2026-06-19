@@ -46,15 +46,7 @@ _BASE_SERVICE_PORT_HINTS: dict[int, str] = {
 
 
 def _service_port_hints() -> dict[int, str]:
-    hints = dict(_BASE_SERVICE_PORT_HINTS)
-    try:
-        from scripts.server.stack_manifest import PORT_MAP
-    except Exception:
-        return hints
-    worker_fast_port = PORT_MAP.get("worker_fast")
-    if isinstance(worker_fast_port, int):
-        hints[worker_fast_port] = "worker_fast"
-    return hints
+    return dict(_BASE_SERVICE_PORT_HINTS)
 
 
 def _label_for_stack_prior_entry(role: str, entry: dict[str, Any]) -> tuple[int, str] | None:
