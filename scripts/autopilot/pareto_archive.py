@@ -217,55 +217,6 @@ class ParetoArchive:
         self._require_mutable()
         self._load_archive_payload(archive_data or {})
 
-    def save(self, state: dict[str, Any] | None = None) -> None:
-        """Atomically save archive to state file, merging with existing state.
-
-        2026-05-23 Phase 6a — atomic write via temp + os.replace. The
-        autopilot_state.json holds pareto_archive as a sub-key alongside
-        trial_counter et al.; a partial write would brick startup. Symmetric
-        with state_store.save_state's atomic semantics.
-        """
-        self._require_mutable()
-        if self.state_path.exists():
-            existing = json.loads(self.state_path.read_text())
-        else:
-            existing = {}
-        if state:
-            existing.update(state)
-        canonical_front = self._frontiers.get(DEFAULT_FRONTIER_TIER, [])
-        canonical_hv = self._hv_history_by_tier.get(DEFAULT_FRONTIER_TIER, [])
-        archive_payload = {
-            # New tier-segregated schema (JSON keys are strings; normalized to int on load).
-            "frontiers_by_tier": {
-                str(t): [e.to_dict() for e in front]
-                for t, front in self._frontiers.items()
-            },
-            "hv_history_by_tier": {
-                str(t): list(hist) for t, hist in self._hv_history_by_tier.items()
-            },
-            "all_entries": [e.to_dict() for e in self._all_entries],
-            "repro_clusters": {
-                str(k): [list(obj) for obj in v]
-                for k, v in self._repro_clusters.items()
-            },
-            # Legacy fields = canonical-tier (T1) projection, so direct state-JSON readers
-            # (e.g. the dashboard fallback) keep working.
-            "frontier": [e.to_dict() for e in canonical_front],
-            "hypervolume_history": list(canonical_hv),
-        }
-        existing["pareto_archive"] = archive_payload
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        import os as _os
-        tmp = self.state_path.with_suffix(self.state_path.suffix + f".tmp.{_os.getpid()}")
-        payload = json.dumps(existing, indent=2, default=str)
-        with open(tmp, "w") as fh:
-            fh.write(payload)
-            fh.flush()
-            _os.fsync(fh.fileno())
-        _os.replace(tmp, self.state_path)
-        if state is not None:
-            state["pareto_archive"] = archive_payload
-
     # ── core operations ─────────────────────────────────────────
 
     @staticmethod

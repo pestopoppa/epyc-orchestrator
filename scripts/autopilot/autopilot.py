@@ -1758,9 +1758,9 @@ def _maybe_reimport_pareto_from_journal(
     """Re-add a single journal entry to the Pareto archive if missing.
 
     Per handoffs/active/autopilot-exogenous-restart-resilience.md Section 5.7.
-    Handles the corruption window where the journal advanced (line 837)
-    but archive.save (line 929) was never reached → on restart the journal
-    has the entry but the on-disk Pareto archive doesn't.
+    Handles the historical corruption window where the journal advanced but
+    the derived state-cache archive was not persisted → on restart the journal
+    has the entry but the on-disk Pareto archive does not.
 
     Returns True if the entry was re-imported, False otherwise.
 

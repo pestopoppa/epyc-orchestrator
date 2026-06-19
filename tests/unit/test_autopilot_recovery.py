@@ -400,11 +400,7 @@ def test_save_state_with_journal_archive_authority_removes_state_cache(
     saved: list[dict] = []
 
     monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
-    monkeypatch.setattr(
-        archive,
-        "save",
-        lambda _state: pytest.fail("legacy archive.save should not run"),
-    )
+    assert not hasattr(archive, "save")
 
     used_journal = autopilot._save_state_with_journal_archive_authority(
         state,
@@ -431,11 +427,7 @@ def test_save_state_with_empty_journal_does_not_write_legacy_archive(
     saved: list[dict] = []
 
     monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
-    monkeypatch.setattr(
-        archive,
-        "save",
-        lambda _state: pytest.fail("empty-journal lifecycle saves must not write legacy archive"),
-    )
+    assert not hasattr(archive, "save")
 
     used_journal = autopilot._save_state_with_journal_archive_authority(
         state,
@@ -473,11 +465,7 @@ def test_save_state_with_journal_authority_removes_baseline_cache(
     saved: list[dict] = []
 
     monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
-    monkeypatch.setattr(
-        archive,
-        "save",
-        lambda _state: pytest.fail("legacy archive.save should not run"),
-    )
+    assert not hasattr(archive, "save")
 
     used_journal = autopilot._save_state_with_journal_archive_authority(
         state,
@@ -515,11 +503,7 @@ def test_save_state_with_journal_authority_keeps_drifted_baseline_cache(
     saved: list[dict] = []
 
     monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
-    monkeypatch.setattr(
-        archive,
-        "save",
-        lambda _state: pytest.fail("legacy archive.save should not run"),
-    )
+    assert not hasattr(archive, "save")
 
     used_journal = autopilot._save_state_with_journal_archive_authority(
         state,
@@ -794,14 +778,9 @@ def test_reimport_adds_missing_valid_entry(
 def test_reimport_does_not_persist_archive_before_journal_authority_sync(
     journal: ExperimentJournal,
     archive: ParetoArchive,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     journal.record(_make_entry(trial_id=43))
-    monkeypatch.setattr(
-        archive,
-        "save",
-        lambda _state: pytest.fail("re-import should not write legacy archive snapshot"),
-    )
+    assert not hasattr(archive, "save")
 
     assert autopilot._maybe_reimport_pareto_from_journal(archive, journal, 43) is True
     assert [entry.trial_id for entry in archive._all_entries] == [43]

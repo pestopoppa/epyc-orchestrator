@@ -7,19 +7,16 @@ Covers:
     to concurrent readers)
   - load_state on a corrupt JSON file exits 70 with the exact stderr
     format, leaves the file untouched, does NOT write a fresh state
-  - pareto_archive.save round-trip preserves data
-  - Crash-during-write semantics (monkeypatch os.replace to raise)
+  - ParetoArchive no longer exposes the legacy mutable state-cache save API
+  - save_state crash-during-write semantics (monkeypatch os.replace to raise)
     leaves the original file intact + leaves a forensic .tmp.<pid>
 """
 
 from __future__ import annotations
 
-import io
 import json
-import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -123,60 +120,33 @@ def test_load_state_valid_file_returns_parsed(tmp_path: Path) -> None:
     assert state_store.load_state(p, lambda: {}) == {"trial_counter": 10}
 
 
-# ───────── pareto archive atomic semantics ──────────
+# ───────── Pareto archive state-cache compatibility retirement ──────────
 
 
-def test_pareto_save_atomic_round_trip(tmp_path: Path) -> None:
+def test_pareto_archive_does_not_expose_legacy_state_cache_save(tmp_path: Path) -> None:
+    archive = ParetoArchive(state_path=tmp_path / "state.json")
+    archive.update(
+        ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0), eval_tier=1)
+    )
+
+    assert not hasattr(archive, "save")
+
+
+def test_pareto_archive_loads_explicit_state_payload(tmp_path: Path) -> None:
     state_path = tmp_path / "state.json"
-    archive = ParetoArchive(state_path=state_path)
-    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0), eval_tier=1))
-    archive.update(ParetoEntry(trial_id=2, objectives=(0.5, 80.0, -0.3, 0.9), eval_tier=1))
-    archive.save({"trial_counter": 2})
-    # Re-load from the same path
-    a2 = ParetoArchive(state_path=state_path)
-    assert a2.frontier_size() == 2
-    # And no .tmp file left behind
-    leftover = [x for x in tmp_path.iterdir() if ".tmp." in x.name]
-    assert leftover == []
-
-
-def test_pareto_save_updates_caller_state_for_followup_save(tmp_path: Path) -> None:
-    state_path = tmp_path / "state.json"
-    archive = ParetoArchive(state_path=state_path)
     state = {
         "trial_counter": 1,
         "pareto_archive": {
-            "frontier": [],
-            "all_entries": [],
+            "all_entries": [
+                ParetoEntry(
+                    trial_id=1,
+                    objectives=(1.0, 50.0, -0.5, 1.0),
+                    eval_tier=1,
+                ).to_dict()
+            ],
             "hypervolume_history": [],
         },
     }
-    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0), eval_tier=1))
-
-    archive.save(state)
     state_store.save_state(state_path, state)
 
-    loaded = json.loads(state_path.read_text())
-    assert loaded["pareto_archive"]["all_entries"][0]["trial_id"] == 1
     assert ParetoArchive(state_path=state_path).frontier_size() == 1
-
-
-def test_pareto_save_crash_during_replace_preserves_original(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import pareto_archive as pa_mod
-    state_path = tmp_path / "state.json"
-    archive = ParetoArchive(state_path=state_path)
-    archive.update(ParetoEntry(trial_id=1, objectives=(1.0, 50.0, -0.5, 1.0), eval_tier=1))
-    archive.save({"trial_counter": 1})
-    original = state_path.read_text()
-    # Force os.replace to raise on the next save
-    real_replace = pa_mod.__dict__.get("os") or os  # paranoia
-    def boom(*a, **kw):
-        raise OSError("simulated replace failure")
-    # pareto_archive imports os as _os inside save() — patch the live module
-    monkeypatch.setattr("os.replace", boom)
-    archive.update(ParetoEntry(trial_id=2, objectives=(0.5, 80.0, -0.3, 0.9), eval_tier=1))
-    with pytest.raises(OSError):
-        archive.save({"trial_counter": 2})
-    assert state_path.read_text() == original

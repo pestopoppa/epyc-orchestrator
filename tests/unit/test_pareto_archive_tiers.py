@@ -150,7 +150,6 @@ def test_readonly_archive_refuses_mutation_methods() -> None:
             trial_id=3,
         ),
         lambda: archive.mark_production_best(2),
-        lambda: archive.save({}),
         lambda: archive.load({"pareto_archive": {}}),
     ):
         try:
