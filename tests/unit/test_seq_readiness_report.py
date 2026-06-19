@@ -166,3 +166,27 @@ def test_main_strict_returns_nonzero_when_blocked(tmp_path: Path, capsys) -> Non
 
     assert code == 1
     assert "Status: blocked" in capsys.readouterr().out
+
+
+def test_main_writes_json_and_markdown_outputs(tmp_path: Path, capsys) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    journal.write_text(json.dumps(_row(1, "fp-a", set(range(20)))) + "\n")
+    out_json = tmp_path / "reports" / "seq.json"
+    out_md = tmp_path / "reports" / "seq.md"
+
+    code = seq_readiness_report.main(
+        [
+            "--journal",
+            str(journal),
+            "--out-json",
+            str(out_json),
+            "--out-md",
+            str(out_md),
+        ]
+    )
+
+    assert code == 0
+    stdout = capsys.readouterr().out
+    assert "Status: blocked" in stdout
+    assert json.loads(out_json.read_text())["cutover_ready"] is False
+    assert "Status: blocked" in out_md.read_text()

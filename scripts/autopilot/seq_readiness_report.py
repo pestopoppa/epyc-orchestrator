@@ -470,6 +470,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--journal", type=Path, default=DEFAULT_JOURNAL_DIR)
     parser.add_argument("--json", action="store_true", help="Emit structured JSON.")
     parser.add_argument(
+        "--out-json",
+        type=Path,
+        help="Write the structured report JSON to this path while preserving stdout behavior.",
+    )
+    parser.add_argument(
+        "--out-md",
+        type=Path,
+        help="Write the rendered Markdown report to this path while preserving stdout behavior.",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="Exit nonzero when sequential-verdict cutover is not ready.",
@@ -486,6 +496,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     rows = list(iter_journal_rows(args.journal))
@@ -497,10 +512,16 @@ def main(argv: list[str] | None = None) -> int:
         hold_flip_rate=max(0.0, args.hold_flip_rate),
         min_shared_qids=max(0, args.min_shared_qids),
     )
+    json_text = json.dumps(report, sort_keys=True, default=str)
+    markdown_text = render_markdown(report)
+    if args.out_json:
+        _write_text(args.out_json, json_text + "\n")
+    if args.out_md:
+        _write_text(args.out_md, markdown_text + "\n")
     if args.json:
-        print(json.dumps(report, sort_keys=True, default=str))
+        print(json_text)
     else:
-        print(render_markdown(report))
+        print(markdown_text)
     if args.strict and not report["cutover_ready"]:
         return 1
     return 0
