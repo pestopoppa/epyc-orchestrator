@@ -112,10 +112,10 @@ blacklist:
   source_trial: 659
 - pattern:
     type: rollback
-  reason: 'Auto-blacklisted: 2× critic-rejected — critic rejected: Draft action is
-    recovery-only but rollback already failed at #6'
-  added: '2026-06-05T16:33:14.117892+00:00'
-  source_trial: 662
+  reason: 'Auto-blacklisted: 3× critic-rejected — critic rejected: Parsed action matches
+    blacklisted rollback configuration and Ac'
+  added: '2026-06-19T08:54:00.921791+00:00'
+  source_trial: 863
 - pattern:
     type: seed_batch
     n_questions: 10
@@ -274,10 +274,10 @@ blacklist:
     suites:
     - coder
     - math
-  reason: 'Auto-blacklisted: 5× invalid — action blacklisted: Auto-blacklisted: 3
-    consecutive failures ending at trial 844'
-  added: '2026-06-19T08:39:55.394546+00:00'
-  source_trial: 859
+  reason: 'Auto-blacklisted: 6× invalid — action blacklisted: Auto-blacklisted: 2×
+    invalid — action blacklisted: Auto-blac'
+  added: '2026-06-19T08:54:00.946696+00:00'
+  source_trial: 863
 - pattern:
     type: deep_eval
     tier: 2
@@ -287,12 +287,20 @@ blacklist:
 - pattern:
     type: seed_batch
     n_questions: 14
-  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 855'
-  added: '2026-06-19T03:25:44.146770+00:00'
-  source_trial: 855
+  reason: 'Auto-blacklisted: 2× invalid — action blacklisted: Auto-blacklisted: 3
+    consecutive failures ending at trial 855'
+  added: '2026-06-19T08:48:24.593961+00:00'
+  source_trial: 861
 - pattern:
     type: seed_batch
     n_questions: 18
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 858'
   added: '2026-06-19T08:37:05.843976+00:00'
   source_trial: 858
+- pattern:
+    type: structural_experiment
+    flags:
+      specialist_routing: false
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 864'
+  added: '2026-06-19T09:02:06.404868+00:00'
+  source_trial: 864

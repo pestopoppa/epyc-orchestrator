@@ -329,6 +329,30 @@ def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> 
     assert "distill_skillbank" not in viable
 
 
+def test_action_availability_blocks_seed_batch_when_fallbacks_exhausted(
+    tmp_path: Path,
+) -> None:
+    j = _fresh_journal(tmp_path)
+    availability, viable = autopilot._build_action_availability(
+        journal=j,
+        known_actions=KNOWN_ACTIONS,
+        memory_count=10_000,
+        converged=True,
+        slot_memory_text="  (all slots empty or servers offline)",
+        blacklist=[
+            {
+                "pattern": {"type": "seed_batch", "n_questions": n_questions},
+                "reason": f"blocked {n_questions}",
+            }
+            for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
+        ],
+    )
+
+    assert "`seed_batch`" in availability
+    assert "all configured measured seed fallback candidates are blacklisted" in availability
+    assert "seed_batch" not in viable
+
+
 def test_slot_query_ports_from_stack_priors_uses_live_primary_llama_entries(tmp_path: Path) -> None:
     priors = tmp_path / "stack_priors.yaml"
     priors.write_text(

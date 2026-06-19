@@ -417,6 +417,14 @@ def _first_unblacklisted_seed_action(
     return None, last_blocked or "all measured seed fallbacks are blacklisted"
 
 
+def _seed_fallback_exhaustion_reason(blacklist: list[dict[str, Any]]) -> str | None:
+    """Return a planner-facing reason when every measured seed fallback is blocked."""
+    candidate, reason = _first_unblacklisted_seed_action(blacklist)
+    if candidate is not None:
+        return None
+    return reason or "all measured seed fallbacks are blacklisted"
+
+
 def _first_unblacklisted_numeric_trial_action(
     blacklist: list[dict[str, Any]],
     *,
@@ -1529,6 +1537,13 @@ def _build_action_availability(
 
     if not _slot_compaction_viable(slot_memory_text):
         blocked["slot_compact"] = "all production slots are empty/offline right now"
+
+    seed_exhaustion = _seed_fallback_exhaustion_reason(blacklist)
+    if seed_exhaustion:
+        blocked["seed_batch"] = (
+            "all configured measured seed fallback candidates are blacklisted; "
+            f"last reason: {seed_exhaustion}"
+        )
 
     cautions["reset_memories"] = (
         "destructive recovery action; do not use for ordinary stagnation"

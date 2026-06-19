@@ -563,6 +563,53 @@ def test_distill_knowledge_failed_result_returns_invalid_skip() -> None:
     assert result.reason == "distill_knowledge failed: LLM invocation failed"
 
 
+def test_distill_skillbank_unavailable_skips_eval() -> None:
+    class FakeLab:
+        def __init__(self):
+            self.checkpoints = []
+
+        def checkpoint_state(self, **kwargs):
+            self.checkpoints.append(kwargs)
+
+        def distill_skillbank(self, *, teacher, categories):
+            return {"status": "not_available"}
+
+    class FakeTower:
+        def hybrid_eval(self):
+            raise AssertionError("unavailable distill_skillbank must not run eval")
+
+    result, species = actions._action_distill_skillbank(
+        {"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]},
+        _ctx(lab=FakeLab(), tower=FakeTower(), state={"trial_counter": 42}),
+    )
+
+    assert species == "structural_lab"
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "DistillationPipeline not available" in result.reason
+
+
+def test_distill_skillbank_available_runs_eval() -> None:
+    class FakeLab:
+        def checkpoint_state(self, **kwargs):
+            pass
+
+        def distill_skillbank(self, *, teacher, categories):
+            return {"status": "success"}
+
+    class FakeTower:
+        def hybrid_eval(self):
+            return "EVAL"
+
+    result, species = actions._action_distill_skillbank(
+        {"type": "distill_skillbank", "teacher": "claude", "categories": ["routing"]},
+        _ctx(lab=FakeLab(), tower=FakeTower(), state={"trial_counter": 42}),
+    )
+
+    assert species == "structural_lab"
+    assert result == "EVAL"
+
+
 def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> None:
     class FakeJournal(_FakeJournal):
         def entries_with_supersessions(self):
@@ -681,6 +728,21 @@ def test_pre_dispatch_seed_fallback_reselects_blacklisted_action() -> None:
     assert action == {"type": "seed_batch", "n_questions": autopilot.SAFE_FALLBACK_SEED_N}
     assert rationale["fallback_seed_reselected"] is True
     assert rationale["fallback_seed_reselected_context"] == "test"
+
+
+def test_first_unblacklisted_seed_action_reports_exhaustion() -> None:
+    blacklist = [
+        {
+            "pattern": {"type": "seed_batch", "n_questions": n_questions},
+            "reason": f"blocked {n_questions}",
+        }
+        for n_questions in autopilot.FALLBACK_SEED_CANDIDATES
+    ]
+
+    action, reason = autopilot._first_unblacklisted_seed_action(blacklist)
+
+    assert action is None
+    assert reason == f"blocked {autopilot.FALLBACK_SEED_CANDIDATES[-1]}"
 
 
 def test_first_meta_action_is_allowed() -> None:

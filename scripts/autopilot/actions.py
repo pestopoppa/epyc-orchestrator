@@ -692,6 +692,15 @@ def _action_distill_skillbank(action: dict[str, Any], ctx: _ActionContext):
     )
     result = ctx.lab.distill_skillbank(teacher=teacher, categories=categories)
     log.info("Distillation result: %s", result)
+    if isinstance(result, dict) and result.get("status") == "not_available":
+        return (
+            SkipOutcome(
+                "skipped",
+                "distill_skillbank unavailable: DistillationPipeline not available",
+                "distill_skillbank",
+            ),
+            "structural_lab",
+        )
     eval_result = ctx.tower.hybrid_eval()
     return eval_result, "structural_lab"
 
