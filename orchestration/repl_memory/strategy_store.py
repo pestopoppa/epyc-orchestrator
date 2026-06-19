@@ -762,6 +762,28 @@ class StrategyStore:
 
         return entries
 
+    def retrieve_for_journal(
+        self,
+        query_text: str,
+        *,
+        journal: Any,
+        k: int = 5,
+        species: Optional[str] = None,
+        include_quarantined: bool = False,
+        rrf_k: int = _RRF_K,
+        stale_penalty: float = 0.5,
+    ) -> list[StrategyEntry]:
+        """Retrieve strategies through the folded journal evidence view."""
+        return self.retrieve(
+            query_text,
+            k=k,
+            species=species,
+            include_quarantined=include_quarantined,
+            rrf_k=rrf_k,
+            stale_penalty=stale_penalty,
+            excluded_trial_ids=excluded_strategy_evidence_trial_ids(journal),
+        )
+
     def audit_insight_specificity(self) -> list[dict[str, Any]]:
         """Return stored strategies whose insight text looks task-specific."""
         rows = self._conn.execute(

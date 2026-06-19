@@ -266,12 +266,19 @@ def _build_mutation_context(
     # B1: Strategy store retrieval — add past strategy insights
     if ctx.strategy_store is not None:
         query = f"{target} {mutation_type} {description}"
-        excluded_trial_ids = excluded_strategy_evidence_trial_ids(ctx.journal)
-        strategies = ctx.strategy_store.retrieve(
-            query,
-            k=3,
-            excluded_trial_ids=excluded_trial_ids,
-        )
+        if hasattr(ctx.strategy_store, "retrieve_for_journal"):
+            strategies = ctx.strategy_store.retrieve_for_journal(
+                query,
+                journal=ctx.journal,
+                k=3,
+            )
+        else:
+            excluded_trial_ids = excluded_strategy_evidence_trial_ids(ctx.journal)
+            strategies = ctx.strategy_store.retrieve(
+                query,
+                k=3,
+                excluded_trial_ids=excluded_trial_ids,
+            )
         if strategies:
             strategy_lines = "\n".join(
                 f"- Trial #{s.source_trial_id} ({s.species}): {s.description} → {s.insight}"

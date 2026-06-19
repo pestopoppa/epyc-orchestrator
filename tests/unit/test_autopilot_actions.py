@@ -760,10 +760,14 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
 
     class FakeStrategyStore:
         def __init__(self):
-            self.excluded_trial_ids = None
+            self.journal = None
+            self.query = ""
+            self.k = 0
 
-        def retrieve(self, query, k, excluded_trial_ids=None):
-            self.excluded_trial_ids = excluded_trial_ids
+        def retrieve_for_journal(self, query, *, journal, k):
+            self.query = query
+            self.journal = journal
+            self.k = k
             return []
 
     store = FakeStrategyStore()
@@ -777,7 +781,9 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
         _ctx(journal=FakeJournal(), strategy_store=store, state={}),
     )
 
-    assert store.excluded_trial_ids == {2, 3, 4, 5}
+    assert store.journal is not None
+    assert store.k == 3
+    assert "src/example.py" in store.query
 
 
 def test_reset_memories_returns_none_eval() -> None:

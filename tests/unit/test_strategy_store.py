@@ -113,6 +113,28 @@ class TestStrategyStore:
 
         assert results == []
 
+    def test_retrieve_for_journal_applies_folded_evidence_exclusions(self, store):
+        sid = store.store(
+            "Strategy A",
+            "Insight A",
+            source_trial_id=99,
+            species="alpha",
+            evidence_trial_ids=[1, 2],
+        )
+        store.store("Strategy B", "Insight B", source_trial_id=3, species="alpha")
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=2, bug_corrupted_by="superseded"),
+                ]
+
+        results = store.retrieve_for_journal("Strategy", journal=FakeJournal(), k=10)
+
+        assert results
+        assert all(r.id != sid for r in results)
+        assert any(r.source_trial_id == 3 for r in results)
+
     def test_excluded_strategy_evidence_trial_ids_prefers_folded_view(self):
         from orchestration.repl_memory.strategy_store import (
             excluded_strategy_evidence_trial_ids,
