@@ -30,6 +30,9 @@ SENTINEL_PATH = Path(__file__).resolve().parent / "sentinel_questions.yaml"
 # live trial set is unchanged until a deliberate cutover (see tool_sentinels.yaml).
 TOOL_SENTINEL_PATH = Path(__file__).resolve().parent / "tool_sentinels.yaml"
 ORCHESTRATOR_URL = "http://localhost:8000"
+EVAL_T1_SPEC_N = 100
+EVAL_T2_SPEC_N = 500
+EVAL_SPEC_SEED = 42
 _EXPECTED_FREE_SCORERS = {"programmatic"}
 _CORE_METADATA_KEY = "__core_metadata__"
 
@@ -1314,15 +1317,25 @@ class EvalTower:
         seed: int = 42,
         trial_id: int | None = None,
     ) -> EvalResult:
-        """Run evaluation at specified tier."""
+        """Run the production eval spec for a tier.
+
+        ``n`` and ``seed`` are accepted for backward-compatible callers but are
+        intentionally ignored here: planner-selected deep_eval actions must not
+        choose their own question quantum. Calibration utilities that need an
+        explicit sample size call ``eval_t1``/``eval_t2`` directly.
+        """
         if tier == 0:
             return self.eval_t0()
         elif tier == 1:
             if trial_id is None:
-                return self.eval_t1(n=n or 100, seed=seed)
-            return self.eval_t1(n=n or 100, seed=seed, trial_id=trial_id)
+                return self.eval_t1(n=EVAL_T1_SPEC_N, seed=EVAL_SPEC_SEED)
+            return self.eval_t1(
+                n=EVAL_T1_SPEC_N,
+                seed=EVAL_SPEC_SEED,
+                trial_id=trial_id,
+            )
         elif tier == 2:
-            return self.eval_t2(n=n or 500, seed=seed)
+            return self.eval_t2(n=EVAL_T2_SPEC_N, seed=EVAL_SPEC_SEED)
         else:
             raise ValueError(f"Unknown eval tier: {tier}")
 

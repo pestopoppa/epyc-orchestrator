@@ -4382,7 +4382,14 @@ def calibrate_baseline(
     result: EvalResult | None = None
     if not migrate_only:
         tower = EvalTower(url=ORCHESTRATOR_URL)
-        result = tower.evaluate(tier=tier, n=n, seed=seed)
+        if tier == 0:
+            result = tower.eval_t0()
+        elif tier == 1:
+            result = tower.eval_t1(n=n or 100, seed=seed)
+        elif tier == 2:
+            result = tower.eval_t2(n=n or 500, seed=seed)
+        else:
+            raise ValueError(f"Unknown eval tier: {tier}")
         _apply_calibrated_baseline_result(baseline, result)
 
     state["baseline_state"] = baseline.to_state_dict()

@@ -88,6 +88,18 @@ class _FakeEvalTower:
         self.calls.append((tier, n, seed))
         return _t1_result()
 
+    def eval_t0(self) -> EvalResult:
+        self.calls.append((0, None, 0))
+        return _t1_result()
+
+    def eval_t1(self, *, n: int = 100, seed: int = 42) -> EvalResult:
+        self.calls.append((1, n, seed))
+        return _t1_result()
+
+    def eval_t2(self, *, n: int = 500, seed: int = 42) -> EvalResult:
+        self.calls.append((2, n, seed))
+        return _t1_result()
+
 
 def test_calibrate_baseline_migrates_t2_and_persists_t1(tmp_path, monkeypatch):
     path = tmp_path / "autopilot_baseline.yaml"

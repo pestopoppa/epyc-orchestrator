@@ -47,6 +47,25 @@ def test_dispatcher_rejects_ap9_scope_violation(caplog) -> None:
     assert species == "numeric_trial"
 
 
+def test_dispatcher_rejects_deep_eval_sampling_knobs(monkeypatch) -> None:
+    def fail_handler(action, ctx):  # noqa: ANN001, ARG001
+        raise AssertionError("deep_eval handler should not run for invalid schema")
+
+    monkeypatch.setitem(actions._ACTION_HANDLERS, "deep_eval", fail_handler)
+
+    result, species = actions.dispatch_action(
+        {"type": "deep_eval", "tier": 2, "n_questions": 7, "seed": 999},
+        seeder=None, swarm=None, forge=None, lab=None, tower=None,
+        gate=None, archive=None, journal=None, state={},
+    )
+
+    assert isinstance(result, actions.SkipOutcome)
+    assert result.status == "skipped"
+    assert "AP-9" in result.reason
+    assert "unsupported keys" in result.reason
+    assert species == "deep_eval"
+
+
 def test_dispatcher_unknown_action_type() -> None:
     result, species = actions.dispatch_action(
         {"type": "nonexistent_action"},
@@ -229,17 +248,18 @@ def test_deep_eval_handler_calls_tower_evaluate_with_tier() -> None:
         def __init__(self):
             self.calls = []
 
-        def evaluate(self, *, tier):
-            self.calls.append(tier)
+        def evaluate(self, **kwargs):
+            self.calls.append(kwargs)
             return "DEEP_EVAL"
 
     tower = FakeTower()
     result, species = actions._action_deep_eval(
-        {"type": "deep_eval", "tier": 3}, _ctx(tower=tower),
+        {"type": "deep_eval", "tier": 2, "n": 7, "n_questions": 7, "seed": 999},
+        _ctx(tower=tower),
     )
     assert result == "DEEP_EVAL"
     assert species == "seeder"
-    assert tower.calls == [3]
+    assert tower.calls == [{"tier": 2}]
 
 
 def _eval_result(
