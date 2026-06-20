@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(ORCH_ROOT))
 
 from phase_status import (  # noqa: E402
+    DEFAULT_AUTOPILOT_LOG_PATH,
     DEFAULT_STALE_AFTER_S,
     PHASE_PATH,
     build_phase_health_report,
@@ -37,6 +38,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_STALE_AFTER_S,
         help="Heartbeat age threshold that marks an active phase stale.",
     )
+    parser.add_argument(
+        "--log-path",
+        type=Path,
+        default=None,
+        help=(
+            "AutoPilot log path used to fill missing in-flight eval counters "
+            f"(default for the live phase path: {DEFAULT_AUTOPILOT_LOG_PATH})"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Emit structured JSON.")
     parser.add_argument(
         "--strict",
@@ -49,8 +59,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
+        log_path = args.log_path.expanduser().resolve() if args.log_path else None
         report = build_phase_health_report(
             path=args.phase_path.expanduser().resolve(),
+            log_path=log_path,
             stale_after_s=args.stale_after_s,
         )
     except ValueError as exc:

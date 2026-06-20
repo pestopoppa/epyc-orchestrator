@@ -12,6 +12,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -23,9 +24,12 @@ from typing import Any, Callable, Iterator
 
 log = logging.getLogger("autopilot.phase")
 
+ORCH_ROOT = Path(__file__).resolve().parents[2]
 PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")
 PHASE_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.jsonl")
+DEFAULT_AUTOPILOT_LOG_PATH = ORCH_ROOT / "logs" / "autopilot.log"
 DEFAULT_STALE_AFTER_S = 900.0
+LOG_TAIL_BYTES = 65536
 EVAL_PROGRESS_FIELDS = (
     "eval_label",
     "eval_completed_questions",
@@ -129,6 +133,58 @@ def _read_json_object(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.expanduser().resolve() == right.expanduser().resolve()
+    except OSError:
+        return left == right
+
+
+def _tail_eval_progress(log_path: Path, *, trial_id: Any | None = None) -> dict[str, Any] | None:
+    """Return the latest in-flight eval progress marker from an AutoPilot log tail."""
+    if not log_path.exists():
+        return None
+
+    progress_pat = re.compile(
+        r"T(?P<label>[12]) progress: (?P<completed>\d+)/(?P<total>\d+)"
+        r"(?: \((?P<correct_pct>\d+(?:\.\d+)?)% correct\))?"
+    )
+    trial_pat = re.compile(r"Trial (?P<trial_id>\d+): ")
+    current_trial_id = str(trial_id) if trial_id is not None else None
+    active_trial_id: str | None = None
+    latest: dict[str, Any] | None = None
+    try:
+        with open(log_path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - LOG_TAIL_BYTES))
+            chunk = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+
+    for line in chunk.splitlines():
+        trial_match = trial_pat.search(line)
+        if trial_match:
+            active_trial_id = trial_match.group("trial_id")
+        match = progress_pat.search(line)
+        if not match:
+            continue
+        if current_trial_id is not None and active_trial_id != current_trial_id:
+            continue
+        completed = int(match.group("completed"))
+        total = int(match.group("total"))
+        latest = {
+            "eval_label": f"T{match.group('label')}",
+            "eval_completed_questions": completed,
+            "eval_total_questions": total,
+            "eval_progress_source": "log_tail",
+            "eval_progress_log_path": str(log_path),
+        }
+        if match.group("correct_pct") is not None:
+            latest["eval_correct_pct"] = float(match.group("correct_pct"))
+    return latest
+
+
 def _process_exists(pid: int | None) -> bool | None:
     if pid is None:
         return None
@@ -146,6 +202,7 @@ def _process_exists(pid: int | None) -> bool | None:
 def build_phase_health_report(
     *,
     path: Path = PHASE_PATH,
+    log_path: Path | None = None,
     now: float | None = None,
     stale_after_s: float = DEFAULT_STALE_AFTER_S,
 ) -> dict[str, Any]:
@@ -210,6 +267,21 @@ def build_phase_health_report(
         "heartbeat": payload,
     }
     report.update({field: payload.get(field) for field in EVAL_PROGRESS_FIELDS})
+    action_type = report.get("action_type")
+    should_tail_log = (
+        report.get("eval_total_questions") is None
+        and action_type in {"deep_eval", "structural_experiment"}
+    )
+    if log_path is None and _same_path(path, PHASE_PATH):
+        log_path = DEFAULT_AUTOPILOT_LOG_PATH
+    if should_tail_log and log_path is not None:
+        progress = _tail_eval_progress(log_path, trial_id=report.get("trial_id"))
+        if progress:
+            for field in EVAL_PROGRESS_FIELDS:
+                if report.get(field) is None and field in progress:
+                    report[field] = progress[field]
+            report["eval_progress_source"] = progress.get("eval_progress_source")
+            report["eval_progress_log_path"] = progress.get("eval_progress_log_path")
     return report
 
 

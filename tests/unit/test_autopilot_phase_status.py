@@ -75,6 +75,137 @@ def test_phase_health_report_accepts_fresh_alive_heartbeat(tmp_path, monkeypatch
     assert "Eval progress: 200/500 (72% correct)" in formatted
 
 
+def test_phase_health_report_tails_eval_progress_when_heartbeat_lacks_counters(
+    tmp_path, monkeypatch
+):
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 902,
+                "action_type": "deep_eval",
+                "updated_at": 100.0,
+                "updated_at_iso": "2026-06-20T12:13:13+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "autopilot.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                '2026-06-20 19:14:09 [autopilot] INFO: Trial 902: {"type": "deep_eval"}',
+                "2026-06-20 19:29:11 [autopilot.eval] INFO: T2 progress: 50/500 (78% correct)",
+                "2026-06-20 21:43:41 [autopilot.eval] INFO: T2 progress: 400/500 (70% correct)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        log_path=log_path,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["ok"] is True
+    assert report["eval_label"] == "T2"
+    assert report["eval_completed_questions"] == 400
+    assert report["eval_total_questions"] == 500
+    assert report["eval_correct_pct"] == 70.0
+    assert report["eval_progress_source"] == "log_tail"
+    formatted = "\n".join(format_phase_health_report(report))
+    assert "Eval progress: 400/500 (70% correct)" in formatted
+
+
+def test_phase_health_report_does_not_tail_other_trial_progress(tmp_path, monkeypatch):
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 903,
+                "action_type": "deep_eval",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "autopilot.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                '2026-06-20 19:14:09 [autopilot] INFO: Trial 902: {"type": "deep_eval"}',
+                "2026-06-20 21:43:41 [autopilot.eval] INFO: T2 progress: 400/500 (70% correct)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        log_path=log_path,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["ok"] is True
+    assert report["eval_completed_questions"] is None
+    assert report.get("eval_progress_source") is None
+
+
+def test_phase_health_report_keeps_heartbeat_eval_progress_over_log_tail(
+    tmp_path, monkeypatch
+):
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 902,
+                "action_type": "deep_eval",
+                "eval_label": "T1",
+                "eval_completed_questions": 10,
+                "eval_total_questions": 60,
+                "eval_correct_pct": 100.0,
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "autopilot.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                '2026-06-20 19:14:09 [autopilot] INFO: Trial 902: {"type": "deep_eval"}',
+                "2026-06-20 21:43:41 [autopilot.eval] INFO: T2 progress: 400/500 (70% correct)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+
+    report = build_phase_health_report(
+        path=snapshot,
+        log_path=log_path,
+        now=120.0,
+        stale_after_s=60.0,
+    )
+
+    assert report["eval_label"] == "T1"
+    assert report["eval_completed_questions"] == 10
+    assert report["eval_total_questions"] == 60
+    assert report["eval_correct_pct"] == 100.0
+    assert report.get("eval_progress_source") is None
+
+
 def test_phase_health_report_blocks_stale_heartbeat(tmp_path, monkeypatch):
     snapshot = tmp_path / "phase.json"
     snapshot.write_text(
