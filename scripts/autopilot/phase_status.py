@@ -26,6 +26,14 @@ log = logging.getLogger("autopilot.phase")
 PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")
 PHASE_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.jsonl")
 DEFAULT_STALE_AFTER_S = 900.0
+EVAL_PROGRESS_FIELDS = (
+    "eval_label",
+    "eval_completed_questions",
+    "eval_total_questions",
+    "eval_correct_questions",
+    "eval_correct_pct",
+    "eval_concurrency",
+)
 
 
 def _json_default(value: Any) -> str:
@@ -182,7 +190,7 @@ def build_phase_health_report(
     status = "active"
     if blockers:
         status = "stale" if stale else "pid_dead"
-    return {
+    report = {
         "ok": not blockers,
         "status": status,
         "path": str(path),
@@ -201,9 +209,23 @@ def build_phase_health_report(
         "blockers": blockers,
         "heartbeat": payload,
     }
+    report.update({field: payload.get(field) for field in EVAL_PROGRESS_FIELDS})
+    return report
 
 
 def format_phase_health_report(report: dict[str, Any]) -> list[str]:
+    eval_progress = ""
+    if report.get("eval_total_questions") is not None:
+        eval_progress = (
+            f"{report.get('eval_completed_questions')}/"
+            f"{report.get('eval_total_questions')}"
+        )
+        if report.get("eval_correct_pct") is not None:
+            try:
+                correct_pct = float(report["eval_correct_pct"])
+                eval_progress += f" ({correct_pct:.0f}% correct)"
+            except (TypeError, ValueError):
+                pass
     lines = [
         "# AutoPilot Phase Health",
         "",
@@ -218,6 +240,8 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- Stale threshold: {report.get('stale_after_s')}",
         f"- Updated at: {report.get('updated_at_iso')}",
     ]
+    if eval_progress:
+        lines.append(f"- Eval progress: {eval_progress}")
     if report.get("blockers"):
         lines.extend(["", "## Blockers", ""])
         lines.extend(f"- {blocker}" for blocker in report["blockers"])

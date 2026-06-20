@@ -27,6 +27,47 @@ def test_eval_concurrency_env_override_still_wins(monkeypatch) -> None:
     assert eval_tower._eval_concurrency() == 5
 
 
+def test_eval_batch_progress_callback_reports_logged_milestones(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_CONCURRENCY", "1")
+    tower = EvalTower()
+    events: list[dict] = []
+    tower.on_progress = events.append
+
+    def fake_eval_question(q: dict, client: object) -> QuestionResult:
+        return QuestionResult(
+            question_id=str(q["id"]),
+            suite="unit",
+            prompt=str(q["id"]),
+            expected="ok",
+            correct=bool(q["correct"]),
+        )
+
+    monkeypatch.setattr(tower, "_eval_question", fake_eval_question)
+
+    results = tower._eval_batch(
+        [
+            {"id": "q1", "correct": True},
+            {"id": "q2", "correct": False},
+            {"id": "q3", "correct": True},
+        ],
+        client=object(),  # type: ignore[arg-type]
+        log_every=2,
+        label="T2",
+    )
+
+    assert len(results) == 3
+    assert events == [
+        {
+            "label": "T2",
+            "completed_questions": 2,
+            "total_questions": 3,
+            "correct_questions": 1,
+            "correct_pct": 50.0,
+            "concurrency": 1,
+        }
+    ]
+
+
 def test_eval_concurrency_uses_topology_cap_when_matrix_allows(monkeypatch) -> None:
     from src.runtime import instance_topology
 

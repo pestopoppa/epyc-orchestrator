@@ -481,6 +481,7 @@ class EvalTower:
         timeout: int = DEFAULT_TIMEOUT,
         sentinel_path: Path | None = None,
         on_question: "Callable[[str], None] | None" = None,
+        on_progress: "Callable[[dict[str, Any]], None] | None" = None,
     ):
         self.url = url
         self.timeout = timeout
@@ -490,6 +491,7 @@ class EvalTower:
         self._core_cache: dict[str, tuple[list[dict], dict[str, Any], Path]] = {}
         self._trial_id_context: int | None = None
         self.on_question = on_question
+        self.on_progress = on_progress
 
     def set_trial_context(self, trial_id: int | str | None) -> None:
         """Set the current AutoPilot trial id for deterministic audit sampling."""
@@ -837,6 +839,13 @@ class EvalTower:
                         "%s progress: %d/%d (%.0f%% correct)",
                         label, i + 1, n, 100 * correct_so_far / (i + 1),
                     )
+                    self._emit_progress(
+                        label=label,
+                        completed_questions=i + 1,
+                        total_questions=n,
+                        correct_questions=correct_so_far,
+                        concurrency=workers,
+                    )
             batch_wall_s = time.time() - batch_start
             out = [r for r in results if r is not None]
             for r in out:
@@ -860,12 +869,44 @@ class EvalTower:
                         "%s progress: %d/%d (%.0f%% correct, concurrency=%d)",
                         label, done, n, 100 * correct_so_far / done, workers,
                     )
+                    self._emit_progress(
+                        label=label,
+                        completed_questions=done,
+                        total_questions=n,
+                        correct_questions=correct_so_far,
+                        concurrency=workers,
+                    )
         batch_wall_s = time.time() - batch_start
         out = [r for r in results if r is not None]
         for r in out:
             r.eval_concurrency = workers
             r.eval_wall_s = batch_wall_s
         return out
+
+    def _emit_progress(
+        self,
+        *,
+        label: str,
+        completed_questions: int,
+        total_questions: int,
+        correct_questions: int,
+        concurrency: int,
+    ) -> None:
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress(
+                {
+                    "label": label,
+                    "completed_questions": completed_questions,
+                    "total_questions": total_questions,
+                    "correct_questions": correct_questions,
+                    "correct_pct": 100 * correct_questions / max(1, completed_questions),
+                    "concurrency": concurrency,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("eval progress callback failed: %s", exc)
 
     # ── aggregate results ────────────────────────────────────────
 

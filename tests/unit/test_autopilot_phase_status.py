@@ -47,6 +47,12 @@ def test_phase_health_report_accepts_fresh_alive_heartbeat(tmp_path, monkeypatch
                 "pid": 123,
                 "trial_id": 894,
                 "action_type": "deep_eval",
+                "eval_label": "T2",
+                "eval_completed_questions": 200,
+                "eval_total_questions": 500,
+                "eval_correct_questions": 144,
+                "eval_correct_pct": 72.0,
+                "eval_concurrency": 1,
                 "updated_at": 100.0,
                 "updated_at_iso": "2026-06-20T12:13:13+00:00",
             }
@@ -62,7 +68,11 @@ def test_phase_health_report_accepts_fresh_alive_heartbeat(tmp_path, monkeypatch
     assert report["heartbeat_age_s"] == 20.0
     assert report["pid_alive"] is True
     assert report["trial_id"] == 894
-    assert "Status: active" in "\n".join(format_phase_health_report(report))
+    assert report["eval_completed_questions"] == 200
+    assert report["eval_total_questions"] == 500
+    formatted = "\n".join(format_phase_health_report(report))
+    assert "Status: active" in formatted
+    assert "Eval progress: 200/500 (72% correct)" in formatted
 
 
 def test_phase_health_report_blocks_stale_heartbeat(tmp_path, monkeypatch):

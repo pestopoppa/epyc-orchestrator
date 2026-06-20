@@ -163,6 +163,32 @@ xmas_routing:
     assert "$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy" in xmas_action["command"]
 
 
+def test_phase_section_surfaces_eval_progress() -> None:
+    section = report_mod.phase_section(
+        {
+            "ok": True,
+            "status": "active",
+            "trial_id": 902,
+            "phase": "dispatch_action",
+            "action_type": "deep_eval",
+            "heartbeat_age_s": 4.0,
+            "pid": 123,
+            "pid_alive": True,
+            "eval_label": "T2",
+            "eval_completed_questions": 200,
+            "eval_total_questions": 500,
+            "eval_correct_questions": 144,
+            "eval_correct_pct": 72.0,
+            "eval_concurrency": 1,
+        }
+    )
+
+    assert section.status == "ready"
+    assert "T2 200/500" in section.summary
+    assert section.details["eval_completed_questions"] == 200
+    assert section.details["eval_correct_pct"] == 72.0
+
+
 def test_ds_e1_section_surfaces_clean_window_blockers() -> None:
     section = report_mod.ds_e1_section(
         {

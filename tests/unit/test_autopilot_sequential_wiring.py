@@ -53,6 +53,50 @@ def test_eval_progress_callback_refreshes_dispatch_heartbeat() -> None:
     ]
 
 
+def test_eval_batch_progress_callback_refreshes_dispatch_heartbeat() -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class FakePhase:
+        def set(self, phase: str, **fields: Any) -> dict[str, Any]:
+            calls.append((phase, fields))
+            return {}
+
+    action = {"type": "deep_eval"}
+    callback = autopilot._make_eval_batch_progress_callback(
+        phase=FakePhase(),  # type: ignore[arg-type]
+        trial_id=lambda: 902,
+        action=lambda: action,
+    )
+
+    callback(
+        {
+            "label": "T2",
+            "completed_questions": 200,
+            "total_questions": 500,
+            "correct_questions": 144,
+            "correct_pct": 72.0,
+            "concurrency": 1,
+        }
+    )
+
+    assert calls == [
+        (
+            "dispatch_action",
+            {
+                "trial_id": 902,
+                "action_type": "deep_eval",
+                "idle_reason": "evaluating question",
+                "eval_label": "T2",
+                "eval_completed_questions": 200,
+                "eval_total_questions": 500,
+                "eval_correct_questions": 144,
+                "eval_correct_pct": 72.0,
+                "eval_concurrency": 1,
+            },
+        )
+    ]
+
+
 def _entry(
     trial_id: int,
     action: dict,

@@ -99,12 +99,20 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
 
 def phase_section(phase_report: dict[str, Any]) -> GateSection:
     blockers = list(phase_report.get("blockers") or [])
+    eval_progress = ""
+    if phase_report.get("eval_total_questions") is not None:
+        eval_progress = (
+            f" ({phase_report.get('eval_label') or 'eval'} "
+            f"{phase_report.get('eval_completed_questions')}/"
+            f"{phase_report.get('eval_total_questions')})"
+        )
     return GateSection(
         key="phase_health",
         status="ready" if phase_report.get("ok") else "blocked",
         summary=(
             f"AutoPilot phase heartbeat is {phase_report.get('status')} "
-            f"at trial {phase_report.get('trial_id')} / {phase_report.get('phase')}."
+            f"at trial {phase_report.get('trial_id')} / {phase_report.get('phase')}"
+            f"{eval_progress}."
         ),
         blockers=blockers,
         details={
@@ -116,6 +124,12 @@ def phase_section(phase_report: dict[str, Any]) -> GateSection:
             "heartbeat_age_s": phase_report.get("heartbeat_age_s"),
             "pid": phase_report.get("pid"),
             "pid_alive": phase_report.get("pid_alive"),
+            "eval_label": phase_report.get("eval_label"),
+            "eval_completed_questions": phase_report.get("eval_completed_questions"),
+            "eval_total_questions": phase_report.get("eval_total_questions"),
+            "eval_correct_questions": phase_report.get("eval_correct_questions"),
+            "eval_correct_pct": phase_report.get("eval_correct_pct"),
+            "eval_concurrency": phase_report.get("eval_concurrency"),
         },
     )
 

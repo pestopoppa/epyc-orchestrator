@@ -2359,6 +2359,30 @@ def _make_eval_progress_callback(
     return _callback
 
 
+def _make_eval_batch_progress_callback(
+    *,
+    phase: PhaseTracker,
+    trial_id: Callable[[], int],
+    action: Callable[[], dict[str, Any] | None],
+) -> Callable[[dict[str, Any]], None]:
+    def _callback(progress: dict[str, Any]) -> None:
+        current_action = action() or {}
+        phase.set(
+            "dispatch_action",
+            trial_id=trial_id(),
+            action_type=current_action.get("type", ""),
+            idle_reason="evaluating question",
+            eval_label=progress.get("label"),
+            eval_completed_questions=progress.get("completed_questions"),
+            eval_total_questions=progress.get("total_questions"),
+            eval_correct_questions=progress.get("correct_questions"),
+            eval_correct_pct=progress.get("correct_pct"),
+            eval_concurrency=progress.get("concurrency"),
+        )
+
+    return _callback
+
+
 def _run_loop_inner(
     max_trials: int | None,
     dry_run: bool,
@@ -2495,7 +2519,13 @@ def _run_loop_inner(
         trial_id=lambda: trial_counter,
         action=lambda: current_action,
     )
+    eval_batch_progress_callback = _make_eval_batch_progress_callback(
+        phase=phase,
+        trial_id=lambda: trial_counter,
+        action=lambda: current_action,
+    )
     tower.on_question = eval_progress_callback
+    tower.on_progress = eval_batch_progress_callback
     seeder.on_question = eval_progress_callback
 
     # ── Plot freshness, decoupled from the trial loop ──────────────────────
