@@ -4172,9 +4172,9 @@ def cmd_report(args: argparse.Namespace) -> None:
 def cmd_plot(args: argparse.Namespace) -> None:
     """Generate plots."""
     journal = ExperimentJournal()
-    archive, _archive_source = _archive_for_read_command(
+    archive, archive_source = _archive_for_read_command(
         journal,
-        source=ARCHIVE_SOURCE_JOURNAL_ALL,
+        source=getattr(args, "archive_source", ARCHIVE_SOURCE_JOURNAL_ALL),
     )
     state = load_state()
     td_errors = [(i, e) for i, e in enumerate(state.get("td_errors", []))]
@@ -4187,6 +4187,8 @@ def cmd_plot(args: argparse.Namespace) -> None:
         # dashboard panels for days; never let that happen quietly again.
         log.error("Plot generation failed: %s", e)
         sys.exit(1)
+    if archive_source != ARCHIVE_SOURCE_STATE:
+        print(f"Archive source: {archive_source}")
     for p in paths:
         print(f"  {p}")
 
@@ -4493,6 +4495,15 @@ def main() -> None:
 
     # plot
     p_plot = subparsers.add_parser("plot")
+    p_plot.add_argument(
+        "--archive-source",
+        choices=ARCHIVE_SOURCE_CHOICES,
+        default=ARCHIVE_SOURCE_JOURNAL_ALL,
+        help=(
+            "Archive read source for this operator command only. "
+            "Defaults to journal-all; state is a legacy fallback."
+        ),
+    )
     p_plot.set_defaults(func=cmd_plot)
 
     # checkpoint

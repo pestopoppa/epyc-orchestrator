@@ -178,13 +178,51 @@ def test_cmd_plot_uses_journal_archive_snapshot(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(autopilot, "load_state", lambda: {"td_errors": [0.25]})
     monkeypatch.setattr(autopilot, "generate_all_plots", _generate_all_plots)
 
-    autopilot.cmd_plot(SimpleNamespace())
+    autopilot.cmd_plot(SimpleNamespace(archive_source=autopilot.ARCHIVE_SOURCE_JOURNAL_ALL))
 
     archive = captured["archive"]
     assert archive.read_only is True
     assert [entry.trial_id for entry in archive.frontier(tier=2)] == [1]
     assert isinstance(captured["journal"], FakeJournal)
     assert captured["td_errors"] == [(0, 0.25)]
+    assert captured["raise_on_error"] is True
+
+
+def test_cmd_plot_accepts_explicit_archive_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_archive = object()
+    captured: dict[str, object] = {}
+
+    class FakeJournal:
+        pass
+
+    def _archive_for_read_command(journal, *, source):
+        captured["journal_arg"] = journal
+        captured["source_arg"] = source
+        return sentinel_archive, source
+
+    def _generate_all_plots(archive, journal, td_errors, *, raise_on_error):
+        captured["archive"] = archive
+        captured["journal"] = journal
+        captured["td_errors"] = td_errors
+        captured["raise_on_error"] = raise_on_error
+        return []
+
+    monkeypatch.setattr(autopilot, "ExperimentJournal", FakeJournal)
+    monkeypatch.setattr(autopilot, "_archive_for_read_command", _archive_for_read_command)
+    monkeypatch.setattr(autopilot, "load_state", lambda: {"td_errors": []})
+    monkeypatch.setattr(autopilot, "generate_all_plots", _generate_all_plots)
+
+    autopilot.cmd_plot(
+        SimpleNamespace(archive_source=autopilot.ARCHIVE_SOURCE_JOURNAL_CURRENT_RUN)
+    )
+
+    assert isinstance(captured["journal_arg"], FakeJournal)
+    assert captured["source_arg"] == autopilot.ARCHIVE_SOURCE_JOURNAL_CURRENT_RUN
+    assert captured["archive"] is sentinel_archive
+    assert isinstance(captured["journal"], FakeJournal)
+    assert captured["td_errors"] == []
     assert captured["raise_on_error"] is True
 
 
