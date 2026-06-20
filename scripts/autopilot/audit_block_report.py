@@ -169,6 +169,9 @@ def build_report(
         "gaming_alarm_window_trial_count": gaming_diagnostic[
             "gaming_alarm_window_trial_count"
         ],
+        "gaming_alarm_clearance_clean_trials_required": gaming_diagnostic[
+            "gaming_alarm_clearance_clean_trials_required"
+        ],
         "cumulative_gaming_alarm": gaming_diagnostic["cumulative_gaming_alarm"],
         "cumulative_gaming_events": gaming_diagnostic["cumulative_gaming_events"],
         "transfer_diagnostic": {
@@ -182,6 +185,9 @@ def build_report(
             "alarm_window": gaming_diagnostic["gaming_alarm_window"],
             "alarm_window_trial_count": gaming_diagnostic[
                 "gaming_alarm_window_trial_count"
+            ],
+            "clearance_clean_trials_required": gaming_diagnostic[
+                "gaming_alarm_clearance_clean_trials_required"
             ],
         },
     }
@@ -222,6 +228,7 @@ def _gaming_diagnostic(
             "gaming_events": [],
             "gaming_alarm_window": alarm_window,
             "gaming_alarm_window_trial_count": len(trials),
+            "gaming_alarm_clearance_clean_trials_required": 0,
             "cumulative_gaming_alarm": False,
             "cumulative_gaming_events": [],
         }
@@ -234,6 +241,13 @@ def _gaming_diagnostic(
         "gaming_events": active_events,
         "gaming_alarm_window": alarm_window,
         "gaming_alarm_window_trial_count": len(window_trials),
+        "gaming_alarm_clearance_clean_trials_required": (
+            _gaming_alarm_clearance_clean_trials_required(
+                trials,
+                active_events,
+                alarm_window=alarm_window,
+            )
+        ),
         "cumulative_gaming_alarm": bool(cumulative_events),
         "cumulative_gaming_events": cumulative_events,
     }
@@ -269,6 +283,33 @@ def _gaming_events(trials: list[dict[str, Any]]) -> list[dict[str, Any]]:
         prev = trial
 
     return events
+
+
+def _gaming_alarm_clearance_clean_trials_required(
+    trials: list[dict[str, Any]],
+    active_events: list[dict[str, Any]],
+    *,
+    alarm_window: int | None,
+) -> int | None:
+    """Rows needed to age out active events, assuming no new gaming events occur."""
+    if not active_events:
+        return 0
+    if alarm_window is None or alarm_window <= 0 or alarm_window >= len(trials):
+        return None
+
+    index_by_trial_id = {
+        trial["trial_id"]: index
+        for index, trial in enumerate(trials)
+        if "trial_id" in trial
+    }
+    remaining = 0
+    trial_count = len(trials)
+    for event in active_events:
+        event_index = index_by_trial_id.get(event.get("trial_id"))
+        if event_index is None:
+            return None
+        remaining = max(remaining, event_index + alarm_window - trial_count)
+    return max(0, remaining)
 
 
 def render_markdown(report: Mapping[str, Any]) -> str:
@@ -311,6 +352,14 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"last {alarm_window} audited trial"
             f"{'s' if alarm_window != 1 else ''} "
             f"(available={report.get('gaming_alarm_window_trial_count')})"
+        )
+    clearance_trials = report.get("gaming_alarm_clearance_clean_trials_required")
+    if gaming_alarm and clearance_trials is not None:
+        lines.append(
+            "- Gaming alarm clearance: "
+            f"{clearance_trials} future clean audited trial"
+            f"{'s' if clearance_trials != 1 else ''} required "
+            "to age active events out of the window"
         )
     lines.extend(
         [

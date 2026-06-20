@@ -249,6 +249,8 @@ def test_gaming_alarm_detects_core_improving_audit_flat_or_worsening(tmp_path: P
     ]
     assert report["cumulative_gaming_alarm"] is True
     assert report["cumulative_gaming_events"] == report["gaming_events"]
+    assert report["gaming_alarm_clearance_clean_trials_required"] is None
+    assert report["transfer_diagnostic"]["clearance_clean_trials_required"] is None
 
 
 def test_alarm_window_can_clear_after_historical_divergence(tmp_path: Path) -> None:
@@ -271,11 +273,45 @@ def test_alarm_window_can_clear_after_historical_divergence(tmp_path: Path) -> N
 
     assert report["gaming_alarm"] is False
     assert report["gaming_events"] == []
+    assert report["gaming_alarm_clearance_clean_trials_required"] == 0
     assert report["gaming_alarm_window"] == 3
     assert report["gaming_alarm_window_trial_count"] == 3
     assert report["transfer_diagnostic"]["potential_overfit_divergences"] == 0
     assert report["cumulative_gaming_alarm"] is True
     assert report["transfer_diagnostic"]["cumulative_potential_overfit_divergences"] == 1
+
+
+def test_alarm_window_reports_clean_rows_needed_to_clear_active_event(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(2, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(3, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(4, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
+            _trial(5, core_correct=2, core_total=2, audit_correct=2, audit_total=2),
+        ],
+    )
+
+    report = audit_block_report.build_report(
+        audit_block_report.load_journal_rows([journal]),
+        alarm_window=3,
+    )
+
+    assert report["gaming_alarm"] is True
+    assert report["gaming_events"] == [
+        {
+            "trial_id": 4,
+            "previous_trial_id": 3,
+            "core_delta": 1.5,
+            "audit_delta": 0.0,
+        }
+    ]
+    assert report["gaming_alarm_clearance_clean_trials_required"] == 1
+    assert report["transfer_diagnostic"]["clearance_clean_trials_required"] == 1
 
 
 def test_markdown_distinguishes_current_window_from_cumulative_history(tmp_path: Path) -> None:

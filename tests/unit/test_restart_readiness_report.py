@@ -58,12 +58,14 @@ def _audit_report(
         "gaming_events": [{"trial_id": 2}] if gaming_alarm else [],
         "gaming_alarm_window": 30,
         "gaming_alarm_window_trial_count": min(audited_trial_count, 30),
+        "gaming_alarm_clearance_clean_trials_required": 4 if gaming_alarm else 0,
         "cumulative_gaming_alarm": gaming_alarm,
         "cumulative_gaming_events": [{"trial_id": 2}] if gaming_alarm else [],
         "transfer_diagnostic": {
             "audited_trial_count": audited_trial_count,
             "potential_overfit_divergences": divergences,
             "events": [{"trial_id": 2}] if divergences else [],
+            "clearance_clean_trials_required": 4 if gaming_alarm else 0,
             "cumulative_potential_overfit_divergences": divergences,
             "cumulative_events": [{"trial_id": 2}] if divergences else [],
             "alarm_window": 30,
@@ -284,6 +286,7 @@ def test_w6_audit_summary_is_visible_without_blocking_restart(monkeypatch) -> No
     assert report["summary"]["w6_min_audited_trials"] == 30
     assert report["summary"]["w6_alarm_window"] == 30
     assert report["summary"]["w6_alarm_window_trial_count"] == 29
+    assert report["summary"]["w6_alarm_clearance_clean_trials_required"] == 4
     assert report["summary"]["w6_gaming_alarm"] is True
     assert report["summary"]["w6_potential_overfit_divergences"] == 5
     assert report["summary"]["w6_cumulative_potential_overfit_divergences"] == 5

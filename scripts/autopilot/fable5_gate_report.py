@@ -166,6 +166,9 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "w6_audited_trial_count_remaining": summary.get(
                 "w6_audited_trial_count_remaining"
             ),
+            "w6_alarm_clearance_clean_trials_required": summary.get(
+                "w6_alarm_clearance_clean_trials_required"
+            ),
             "w6_raw_audited_trial_count": summary.get("w6_raw_audited_trial_count"),
             "w6_trusted_audited_trial_count": summary.get(
                 "w6_trusted_audited_trial_count"
@@ -531,6 +534,9 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                         "w6_audited_trial_count_remaining"
                     ),
                     "w6_gaming_alarm": details.get("w6_gaming_alarm"),
+                    "w6_alarm_clearance_clean_trials_required": details.get(
+                        "w6_alarm_clearance_clean_trials_required"
+                    ),
                 },
                 "command": STRICT_RESTART_READINESS_COMMAND,
                 "follow_up": STRICT_FABLE5_GATE_COMMAND,

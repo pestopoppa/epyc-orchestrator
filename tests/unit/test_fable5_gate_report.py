@@ -73,6 +73,7 @@ xmas_routing:
                 "w6_audited_trial_count": 34,
                 "w6_min_audited_trials": 30,
                 "w6_audited_trial_count_remaining": 0,
+                "w6_alarm_clearance_clean_trials_required": 4,
                 "w6_raw_audited_trial_count": 40,
                 "w6_trusted_audited_trial_count": 39,
                 "w6_untrusted_audited_trial_count": 1,
@@ -144,6 +145,7 @@ xmas_routing:
     assert restart["details"]["seq_trusted_vector_trials_remaining"] == 58
     assert restart["details"]["seq_shadow_rows_remaining"] == 20
     assert restart["details"]["w6_audited_trial_count_remaining"] == 0
+    assert restart["details"]["w6_alarm_clearance_clean_trials_required"] == 4
     assert restart["details"]["snapshot_restart_readiness"] == "tail_fold_ready"
     assert restart["details"]["snapshot_payload_journal_max_trial_id"] == 895
     assert restart["details"]["baseline_seed_append_expect_trial_counter"] == 896
@@ -163,6 +165,12 @@ xmas_routing:
     assert report["next_actions"][0]["evidence"]["seq_shadow_rows_remaining"] == 20
     assert report["next_actions"][0]["evidence"]["w6_audited_rows_required"] == 30
     assert report["next_actions"][0]["evidence"]["w6_audited_rows_remaining"] == 0
+    assert (
+        report["next_actions"][0]["evidence"][
+            "w6_alarm_clearance_clean_trials_required"
+        ]
+        == 4
+    )
     assert "restart_readiness_report.py" in report["next_actions"][0]["command"]
     assert "--require-seq-cutover --require-w6-audit" in report["next_actions"][0]["command"]
     assert report["next_actions"][0]["follow_up"] == (

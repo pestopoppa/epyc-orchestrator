@@ -148,6 +148,9 @@ def _w6_audit_restart_report(
         "untrusted_audited_trial_ids": report.get("untrusted_audited_trial_ids"),
         "alarm_window": report.get("gaming_alarm_window"),
         "alarm_window_trial_count": report.get("gaming_alarm_window_trial_count"),
+        "alarm_clearance_clean_trials_required": report.get(
+            "gaming_alarm_clearance_clean_trials_required"
+        ),
         "gaming_alarm": gaming_alarm,
         "potential_overfit_divergences": (
             report.get("transfer_diagnostic") or {}
@@ -215,6 +218,9 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "w6_alarm_window": w6.get("alarm_window"),
         "w6_alarm_window_trial_count": w6.get("alarm_window_trial_count"),
+        "w6_alarm_clearance_clean_trials_required": w6.get(
+            "alarm_clearance_clean_trials_required"
+        ),
         "w6_gaming_alarm": w6.get("gaming_alarm"),
         "w6_potential_overfit_divergences": w6.get("potential_overfit_divergences"),
         "w6_cumulative_gaming_alarm": w6.get("cumulative_gaming_alarm"),
