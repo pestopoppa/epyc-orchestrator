@@ -170,17 +170,17 @@ class TestRoleAdjustment:
     """Per-role capability factors."""
 
     def test_architect_is_tier_1(self):
-        assert _role_adjustment("architect_general") == 0.6
+        assert _role_adjustment("architect_general") == pytest.approx(0.727978)
 
     def test_coder_is_tier_2(self):
-        assert _role_adjustment("coder_escalation") == 0.8
+        assert _role_adjustment("coder_escalation") == pytest.approx(0.824178)
 
     def test_worker_is_tier_3(self):
         assert _role_adjustment("worker_general") == 1.0
 
     def test_frontdoor_uses_live_stack_prior_model_tier(self):
         assert _role_tier_for_role("frontdoor") == "tier_2"
-        assert _role_adjustment("frontdoor") == 0.8
+        assert _role_adjustment("frontdoor") == pytest.approx(0.824178)
 
     def test_role_tier_ignores_candidate_stack_prior_records(self, tmp_path):
         priors = tmp_path / "stack_priors.yaml"

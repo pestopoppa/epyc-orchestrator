@@ -238,8 +238,8 @@ def _get_default_config() -> dict[str, Any]:
             "force_review_high": True,
             "early_escalation_high": False,
             "role_adjustments": {
-                "tier_1": 0.6,
-                "tier_2": 0.8,
+                "tier_1": 0.727978,
+                "tier_2": 0.824178,
                 "tier_3": 1.0,
             },
             "feature_weights": {

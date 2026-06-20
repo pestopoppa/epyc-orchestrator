@@ -245,11 +245,13 @@ factual_risk:
   threshold_high: 0.7  # above = "high" risk band
   force_review_high: true       # force plan review for high-risk prompts (Phase 4)
   early_escalation_high: false  # trigger earlier escalation for high-risk (Phase 4)
-  # Per-role capability adjustment — stronger models reduce effective risk
+  # Per-role capability adjustment — measured G12 AA-Omniscience deterministic
+  # 4-class calibration accepted 2026-06-20. Values are hallucination-rate
+  # multipliers versus the worst observed tier.
   role_adjustments:
-    tier_1: 0.6   # 235B+ (architect_general, thinking_*)
-    tier_2: 0.8   # 32B-70B (coder_escalation)
-    tier_3: 1.0   # 7B-14B (worker_*, frontdoor, explore)
+    tier_1: 0.727978  # architect_general: 0.497121 / 0.682879
+    tier_2: 0.824178  # frontdoor: 0.562814 / 0.682879
+    tier_3: 1.0       # worker_general: worst observed tier baseline
   # Feature weights for score computation (must sum to 1.0)
   feature_weights:
     has_date_question: 0.15

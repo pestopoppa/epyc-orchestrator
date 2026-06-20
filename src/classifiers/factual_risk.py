@@ -35,7 +35,7 @@ class FactualRiskResult:
         adjusted_risk_score: Risk adjusted for assigned role capability.
         risk_band: Discretized band — "low", "medium", or "high".
         risk_features: Individual feature values for telemetry/debugging.
-        role_adjustment: Multiplier applied for the role (e.g. 0.6 for 235B).
+        role_adjustment: Multiplier applied for the role.
     """
 
     risk_score: float = 0.0
@@ -163,10 +163,12 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
 }
 
 # Default role adjustment tiers. Role -> tier selection is derived from generated
-# stack priors when available; these values remain the tier multipliers.
+# stack priors when available; these values remain the tier multipliers. G12
+# AA-Omniscience calibration accepted deterministic 4-class scoring for this
+# role-tier update on 2026-06-20.
 _DEFAULT_ROLE_TIERS: dict[str, float] = {
-    "tier_1": 0.6,
-    "tier_2": 0.8,
+    "tier_1": 0.727978,
+    "tier_2": 0.824178,
     "tier_3": 1.0,
 }
 

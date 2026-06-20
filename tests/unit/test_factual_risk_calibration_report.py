@@ -163,6 +163,12 @@ def test_tier_calibration_readiness_blocks_until_expected_roles_present(tmp_path
     assert readiness["complete"] is False
     assert readiness["status"] == "blocked_missing_roles"
     assert readiness["missing_roles"] == ["architect_general"]
+    assert readiness["scoring_policy"] == {
+        "basis": "deterministic_aa_omniscience_4class",
+        "decided_at": "2026-06-20",
+        "decision": "accepted_for_role_tier_recalibration",
+        "scope": "factual_risk_role_adjustments_only",
+    }
     assert readiness["role_metrics"]["frontdoor"]["accuracy"] == 0.5
     assert readiness["role_metrics"]["worker_general"]["hallucination_rate"] == 0.333333
     assert readiness["role_multiplier_preview_vs_worst"]["worker_general"] == 1.0
@@ -195,6 +201,7 @@ def test_tier_calibration_readiness_reports_complete_preview(tmp_path: Path) -> 
     readiness = summary["tier_calibration_readiness"]
     assert readiness["complete"] is True
     assert readiness["status"] == "ready_for_tier_update"
+    assert readiness["scoring_policy"]["decision"] == "accepted_for_role_tier_recalibration"
     assert readiness["missing_roles"] == []
     assert readiness["tier_multiplier_preview_vs_worst"] == {
         "tier_1": 0.0,

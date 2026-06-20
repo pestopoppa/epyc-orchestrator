@@ -34,6 +34,12 @@ DEFAULT_ROLE_TO_TIER = {
     "frontdoor": "tier_2",
     "worker_general": "tier_3",
 }
+DEFAULT_SCORING_POLICY = {
+    "decision": "accepted_for_role_tier_recalibration",
+    "basis": "deterministic_aa_omniscience_4class",
+    "decided_at": "2026-06-20",
+    "scope": "factual_risk_role_adjustments_only",
+}
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -291,6 +297,7 @@ def _build_tier_calibration_readiness(
     return {
         "complete": complete,
         "status": "ready_for_tier_update" if complete else "blocked_missing_roles",
+        "scoring_policy": dict(DEFAULT_SCORING_POLICY),
         "expected_roles": list(expected_roles),
         "observed_roles": list(observed_roles),
         "missing_roles": list(missing_roles),
@@ -299,8 +306,9 @@ def _build_tier_calibration_readiness(
         "role_multiplier_preview_vs_worst": role_multiplier_preview,
         "tier_multiplier_preview_vs_worst": tier_multiplier_preview if complete else {},
         "note": (
-            "Preview only: do not update factual-risk role tiers until all expected roles "
-            "are present and the deterministic-vs-LLM-judge scoring decision is resolved."
+            "Deterministic AA-Omniscience 4-class scoring is accepted for this "
+            "role-tier recalibration only; keep factual-risk mode/canary/enforce "
+            "decisions on their separate telemetry gates."
         ),
     }
 
