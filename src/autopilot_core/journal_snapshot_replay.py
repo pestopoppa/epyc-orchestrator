@@ -8,16 +8,19 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from src.autopilot_core.action_identity import config_fingerprint_from_row
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
+    fold_supersession_events,
     objectives_from_journal_row,
     reconstruct_archive_from_journal_rows,
 )
 from src.autopilot_core.learning_exclusions import WITHIN_NOISE_EXCLUSIONS
-from src.autopilot_core.pareto_math import dominates, hypervolume
+from src.autopilot_core.pareto_math import dominates, hypervolume, median_objectives
 from src.autopilot_core.tier_specs import (
     DEFAULT_FRONTIER_TIER,
     LEGACY_OBJECTIVE_POLICY,
+    MIN_FRONTIER_EVAL_TIER,
     TASK_RATE_OBJECTIVE_POLICY,
     TASK_RATE_REFERENCE_POINT,
     spec_for,
@@ -25,6 +28,7 @@ from src.autopilot_core.tier_specs import (
 
 
 JOURNAL_SNAPSHOT_EVENT_TYPE = "journal_snapshot"
+REPRESENTATIVE_REPLAY_STATE_VERSION = "representative-replay-state-v1"
 
 
 @dataclass(frozen=True)
@@ -110,6 +114,62 @@ def _snapshot_archive_payload(snapshot: dict[str, Any]) -> dict[str, Any] | None
     return None
 
 
+def representative_replay_state_from_rows(
+    rows: Iterable[dict[str, Any]],
+    *,
+    objective_policy: str = LEGACY_OBJECTIVE_POLICY,
+) -> dict[str, Any]:
+    """Build compact raw state needed to extend representative clusters.
+
+    Archive snapshots store median representative entries, but a later
+    within-noise tail needs the raw objective samples behind each representative
+    cluster. This payload is optional and snapshot-scoped; normal archive replay
+    remains unchanged.
+    """
+    folded_rows, _meta = fold_supersession_events(rows)
+    clusters: dict[tuple[int, str], dict[str, Any]] = {}
+    for row in folded_rows:
+        if _trial_id_from_row(row) is None:
+            continue
+        shaped = _shaped_row_for_archive(row, objective_policy=objective_policy)
+        if shaped is None:
+            continue
+        if int(shaped["eval_tier"]) < MIN_FRONTIER_EVAL_TIER:
+            continue
+        if not _row_requires_prefix_raw_samples(row):
+            continue
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        key = (int(shaped["eval_tier"]), config_fingerprint_from_row(row))
+        cluster = clusters.setdefault(
+            key,
+            {
+                "tier": int(shaped["eval_tier"]),
+                "fingerprint": key[1],
+                "objs": [],
+                "last_tid": -1,
+                "shaped": shaped,
+            },
+        )
+        cluster["objs"].append(list(shaped["objectives"]))
+        if trial_id >= int(cluster["last_tid"]):
+            cluster["last_tid"] = trial_id
+            cluster["shaped"] = shaped
+    return {
+        "version": REPRESENTATIVE_REPLAY_STATE_VERSION,
+        "objective_policy": objective_policy,
+        "clusters": [
+            copy.deepcopy(cluster)
+            for _key, cluster in sorted(
+                clusters.items(),
+                key=lambda item: (item[0][0], item[0][1]),
+            )
+        ],
+    }
+
+
 def archive_payload_from_current_snapshot(
     rows: Iterable[dict[str, Any]],
     ledger_events: Iterable[dict[str, Any]],
@@ -190,9 +250,6 @@ def archive_payload_from_verified_snapshot(
     ]
     if not tail_rows:
         return None
-    if any(_row_requires_prefix_raw_samples(row) for row in tail_rows):
-        return None
-
     policy = str(
         snapshot_archive.get("objective_policy") or LEGACY_OBJECTIVE_POLICY
     )
@@ -201,6 +258,15 @@ def archive_payload_from_verified_snapshot(
     for row in tail_rows:
         if objectives_from_journal_row(row, objective_policy=policy) is None:
             return None
+
+    if any(_row_requires_prefix_raw_samples(row) for row in tail_rows):
+        return _fold_representative_tail_into_snapshot(
+            snapshot_archive,
+            snapshot.get("replay_state"),
+            tail_rows,
+            tail_events,
+            policy,
+        )
 
     tail_archive = reconstruct_archive_from_journal_rows(
         tail_rows + tail_events,
@@ -213,6 +279,35 @@ def archive_payload_from_verified_snapshot(
     return _fold_tail_archive_into_snapshot(snapshot_archive, tail_archive)
 
 
+def _shaped_row_for_archive(
+    row: dict[str, Any],
+    *,
+    objective_policy: str,
+) -> dict[str, Any] | None:
+    bug = row.get("bug_corrupted_by") or ""
+    if bug and bug != "mad_noise":
+        return None
+    try:
+        tier = int(row.get("tier", DEFAULT_FRONTIER_TIER))
+        trial_id = int(row.get("trial_id"))
+    except (TypeError, ValueError):
+        return None
+    objectives = objectives_from_journal_row(row, objective_policy=objective_policy)
+    if objectives is None:
+        return None
+    return {
+        "trial_id": trial_id,
+        "objectives": list(objectives),
+        "git_tag": row.get("git_tag", ""),
+        "species": row.get("species", ""),
+        "is_production_best": False,
+        "timestamp": row.get("timestamp", ""),
+        "reasoning": row.get("reasoning", ""),
+        "eval_tier": tier,
+        "speed_deinflated": False,
+    }
+
+
 def _row_requires_prefix_raw_samples(row: dict[str, Any]) -> bool:
     bug = row.get("bug_corrupted_by") or ""
     eval_details = row.get("eval_details") or {}
@@ -223,6 +318,180 @@ def _row_requires_prefix_raw_samples(row: dict[str, Any]) -> bool:
     if isinstance(learning_exclusion, dict):
         excluded_by = str(learning_exclusion.get("by") or "")
     return bug == "mad_noise" or excluded_by in WITHIN_NOISE_EXCLUSIONS
+
+
+def _load_representative_replay_clusters(
+    replay_state: object,
+    *,
+    objective_policy: str,
+) -> dict[tuple[int, str], dict[str, Any]] | None:
+    if not isinstance(replay_state, dict):
+        return None
+    if replay_state.get("version") != REPRESENTATIVE_REPLAY_STATE_VERSION:
+        return None
+    replay_policy = str(
+        replay_state.get("objective_policy") or LEGACY_OBJECTIVE_POLICY
+    )
+    if replay_policy != objective_policy:
+        return None
+    clusters: dict[tuple[int, str], dict[str, Any]] = {}
+    raw_clusters = replay_state.get("clusters")
+    if not isinstance(raw_clusters, list):
+        return None
+    for raw in raw_clusters:
+        if not isinstance(raw, dict):
+            return None
+        try:
+            tier = int(raw["tier"])
+            fingerprint = str(raw["fingerprint"])
+            last_tid = int(raw["last_tid"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        objs = raw.get("objs")
+        shaped = raw.get("shaped")
+        if not isinstance(objs, list) or not isinstance(shaped, dict):
+            return None
+        clusters[(tier, fingerprint)] = {
+            "tier": tier,
+            "fingerprint": fingerprint,
+            "objs": copy.deepcopy(objs),
+            "last_tid": last_tid,
+            "shaped": copy.deepcopy(shaped),
+        }
+    return clusters
+
+
+def _fold_representative_tail_into_snapshot(
+    snapshot_archive: dict[str, Any],
+    replay_state: object,
+    tail_rows: list[dict[str, Any]],
+    tail_events: list[dict[str, Any]],
+    objective_policy: str,
+) -> dict[str, Any] | None:
+    clusters = _load_representative_replay_clusters(
+        replay_state,
+        objective_policy=objective_policy,
+    )
+    if clusters is None:
+        return None
+
+    folded_tail_rows, tail_supersessions = fold_supersession_events(
+        tail_rows + tail_events
+    )
+    normal_tail_entries: list[dict[str, Any]] = []
+    tail_t0_audit: list[dict[str, Any]] = []
+    changed_clusters: set[tuple[int, str]] = set()
+    excluded_bug = {"count": 0, "max_trial_id": None}
+
+    for row in folded_tail_rows:
+        if _trial_id_from_row(row) is None:
+            continue
+        bug = row.get("bug_corrupted_by") or ""
+        if bug and bug != "mad_noise":
+            trial_id = _trial_id_from_row(row)
+            if trial_id is not None:
+                _bump_exclusion(excluded_bug, trial_id)
+            continue
+        shaped = _shaped_row_for_archive(row, objective_policy=objective_policy)
+        if shaped is None:
+            continue
+        tier = int(shaped["eval_tier"])
+        if tier < MIN_FRONTIER_EVAL_TIER:
+            tail_t0_audit.append(shaped)
+            continue
+        try:
+            trial_id = int(row.get("trial_id"))
+        except (TypeError, ValueError):
+            continue
+        if _row_requires_prefix_raw_samples(row):
+            key = (tier, config_fingerprint_from_row(row))
+            cluster = clusters.setdefault(
+                key,
+                {
+                    "tier": tier,
+                    "fingerprint": key[1],
+                    "objs": [],
+                    "last_tid": -1,
+                    "shaped": shaped,
+                },
+            )
+            cluster["objs"].append(list(shaped["objectives"]))
+            if trial_id >= int(cluster["last_tid"]):
+                cluster["last_tid"] = trial_id
+                cluster["shaped"] = shaped
+            changed_clusters.add(key)
+            continue
+        normal_tail_entries.append(shaped)
+
+    if not changed_clusters:
+        return None
+
+    prefix_entries = [
+        copy.deepcopy(entry)
+        for entry in snapshot_archive.get("all_entries") or []
+        if not _entry_matches_representative_cluster(entry, changed_clusters)
+    ]
+    representative_entries = [
+        _representative_entry_from_cluster(clusters[key])
+        for key in sorted(changed_clusters)
+    ]
+    merged_entries = prefix_entries + normal_tail_entries + representative_entries
+    merged = _rebuild_archive_from_entries(
+        snapshot_archive,
+        merged_entries,
+        (snapshot_archive.get("t0_audit") or []) + tail_t0_audit,
+    )
+    merged["journal_max_trial_id"] = _max_trial_id(
+        snapshot_archive.get("journal_max_trial_id"),
+        *(row.get("trial_id") for row in folded_tail_rows if isinstance(row, dict)),
+    )
+    prefix_exclusions = snapshot_archive.get("exclusions") or {}
+    merged["exclusions"] = {
+        "bug_corrupted": _merge_exclusion_slot(
+            prefix_exclusions.get("bug_corrupted") or {},
+            excluded_bug,
+        ),
+        "truncated_above_cap": copy.deepcopy(
+            prefix_exclusions.get("truncated_above_cap") or {
+                "count": 0,
+                "max_trial_id": None,
+            }
+        ),
+        "max_trial_id_cap": prefix_exclusions.get("max_trial_id_cap"),
+    }
+    merged["supersessions"] = _merge_supersession_meta(
+        snapshot_archive.get("supersessions") or {},
+        tail_supersessions,
+    )
+    return merged
+
+
+def _entry_matches_representative_cluster(
+    entry: object,
+    keys: set[tuple[int, str]],
+) -> bool:
+    if not isinstance(entry, dict) or not entry.get("is_representative"):
+        return False
+    try:
+        tier = int(entry.get("eval_tier", DEFAULT_FRONTIER_TIER))
+    except (TypeError, ValueError):
+        return False
+    return (tier, str(entry.get("config_fingerprint") or "")) in keys
+
+
+def _representative_entry_from_cluster(cluster: dict[str, Any]) -> dict[str, Any]:
+    representative = copy.deepcopy(cluster["shaped"])
+    representative["objectives"] = list(median_objectives(cluster["objs"]))
+    representative["config_fingerprint"] = str(cluster["fingerprint"])
+    representative["n_reproductions"] = len(cluster["objs"])
+    representative["is_representative"] = True
+    return representative
+
+
+def _bump_exclusion(slot: dict[str, Any], trial_id: int) -> None:
+    slot["count"] = int(slot.get("count") or 0) + 1
+    max_trial_id = _max_trial_id(slot.get("max_trial_id"), trial_id)
+    slot["max_trial_id"] = max_trial_id
 
 
 def _reference_point_for_archive_policy(policy: str) -> tuple[float, ...]:
@@ -274,6 +543,60 @@ def _merge_supersession_meta(
             + (tail.get("field_names") or [])
         }),
     }
+
+
+def _rebuild_archive_from_entries(
+    snapshot_archive: dict[str, Any],
+    entries: list[dict[str, Any]],
+    t0_audit: list[dict[str, Any]],
+) -> dict[str, Any]:
+    policy = str(snapshot_archive.get("objective_policy") or LEGACY_OBJECTIVE_POLICY)
+    ref = _reference_point_for_archive_policy(policy)
+    sorted_entries = sorted(
+        (copy.deepcopy(entry) for entry in entries),
+        key=lambda entry: int(entry.get("trial_id") or 0),
+    )
+    frontiers_by_tier: dict[int, list[dict[str, Any]]] = {}
+    hv_history_by_tier: dict[int, list[list[float]]] = {}
+    for entry in sorted_entries:
+        tier = int(entry.get("eval_tier", DEFAULT_FRONTIER_TIER))
+        trial_id = int(entry.get("trial_id"))
+        objectives = entry["objectives"]
+        frontier = frontiers_by_tier.setdefault(tier, [])
+        if not any(dominates(front["objectives"], objectives) for front in frontier):
+            frontiers_by_tier[tier] = [
+                front
+                for front in frontier
+                if not dominates(objectives, front["objectives"])
+            ]
+            frontiers_by_tier[tier].append(entry)
+        history = hv_history_by_tier.setdefault(tier, [])
+        hv = round(
+            hypervolume(
+                [front["objectives"] for front in frontiers_by_tier[tier]],
+                ref=ref,
+            ),
+            4,
+        )
+        if history:
+            hv = max(history[-1][1], hv)
+        history.append([trial_id, hv])
+
+    canonical_tier = int(snapshot_archive.get("canonical_tier") or DEFAULT_FRONTIER_TIER)
+    rebuilt = copy.deepcopy(snapshot_archive)
+    rebuilt["all_entries"] = sorted_entries
+    rebuilt["t0_audit"] = copy.deepcopy(t0_audit)
+    rebuilt["frontiers_by_tier"] = {
+        str(tier): frontier for tier, frontier in sorted(frontiers_by_tier.items())
+    }
+    rebuilt["hv_history_by_tier"] = {
+        str(tier): history for tier, history in sorted(hv_history_by_tier.items())
+    }
+    rebuilt["frontier"] = copy.deepcopy(frontiers_by_tier.get(canonical_tier, []))
+    rebuilt["hypervolume_history"] = copy.deepcopy(
+        hv_history_by_tier.get(canonical_tier, [])
+    )
+    return rebuilt
 
 
 def _fold_tail_archive_into_snapshot(

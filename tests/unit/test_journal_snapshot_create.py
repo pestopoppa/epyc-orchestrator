@@ -55,6 +55,7 @@ def test_build_archive_snapshot_dry_run_does_not_write(tmp_path: Path) -> None:
     assert result.ledger_event_count == 0
     assert result.snapshot is not None
     assert "archive" in result.snapshot
+    assert result.snapshot["replay_state"]["version"] == "representative-replay-state-v1"
     assert journal.journal_snapshot_events() == []
 
 

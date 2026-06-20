@@ -19,6 +19,10 @@ from experiment_journal import DEFAULT_JOURNAL_DIR, ExperimentJournal  # noqa: E
 from src.autopilot_core.journal_reconstruction import (  # noqa: E402
     reconstruct_archive_from_journal_rows,
 )
+from src.autopilot_core.journal_snapshot_replay import (  # noqa: E402
+    representative_replay_state_from_rows,
+)
+from src.autopilot_core.tier_specs import LEGACY_OBJECTIVE_POLICY  # noqa: E402
 
 
 DEFAULT_POLICY_VERSION = "journal-archive-snapshot-v1"
@@ -122,6 +126,12 @@ def build_archive_snapshot(
     latest_event = journal.latest_journal_snapshot_event() or {}
     snapshot = {
         "archive": archive,
+        "replay_state": representative_replay_state_from_rows(
+            rows,
+            objective_policy=str(
+                archive.get("objective_policy") or LEGACY_OBJECTIVE_POLICY
+            ),
+        ),
         "source": {
             "kind": "full_journal_replay",
             "trial_count": len(trial_rows),

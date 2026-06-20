@@ -13,6 +13,7 @@ from src.autopilot_core.journal_snapshot_replay import (
     archive_payload_from_verified_snapshot,
     build_snapshot_replay_diagnostic,
     format_snapshot_replay_summary,
+    representative_replay_state_from_rows,
 )
 
 
@@ -177,6 +178,34 @@ def test_verified_snapshot_payload_rejects_within_noise_tail() -> None:
     payload = archive_payload_from_verified_snapshot(rows + [event], [event])
 
     assert payload is None
+
+
+def test_verified_snapshot_payload_folds_within_noise_tail_with_replay_state() -> None:
+    rows = [_row(1, quality=1.2), _row(2, quality=1.4, speed=45.0)]
+    rows[0]["eval_details"] = {
+        "learning_exclusion": {
+            "by": "seq_accumulating",
+            "reason": "unit-test sequential accumulation",
+        }
+    }
+    rows[1]["eval_details"] = {
+        "learning_exclusion": {
+            "by": "seq_accumulating",
+            "reason": "unit-test sequential accumulation",
+        }
+    }
+    prefix_rows = [rows[0]]
+    event = _snapshot_event(
+        through_trial_id=1,
+        snapshot={
+            "archive": _archive(prefix_rows),
+            "replay_state": representative_replay_state_from_rows(prefix_rows),
+        },
+    )
+
+    payload = archive_payload_from_verified_snapshot(rows + [event], [event])
+
+    assert payload == _archive(rows)
 
 
 def test_snapshot_replay_requires_matching_hash_for_ready_status() -> None:
