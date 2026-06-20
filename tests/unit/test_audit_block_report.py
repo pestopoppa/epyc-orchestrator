@@ -14,6 +14,9 @@ def _trial(
     audit_total: int,
     *,
     missing_partition_core: int = 0,
+    corrupt: str = "",
+    outcome_status: str = "ok",
+    tier: int = 1,
 ) -> dict:
     question_results = []
     for idx in range(core_total):
@@ -32,10 +35,15 @@ def _trial(
                 "partition": "audit",
             }
         )
-    return {
+    row = {
         "trial_id": trial_id,
+        "tier": tier,
+        "outcome_status": outcome_status,
         "eval_details": {"question_results": question_results},
     }
+    if corrupt:
+        row["bug_corrupted_by"] = corrupt
+    return row
 
 
 def _write_journal(path: Path, rows: list[dict]) -> None:
@@ -141,6 +149,63 @@ def test_transfer_diagnostic_counts_divergences(tmp_path: Path) -> None:
             "audit_delta": 0.0,
         }
     ]
+
+
+def test_report_excludes_untrusted_rows_from_w6_audit_counts_and_alarm(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
+            _trial(
+                3,
+                core_correct=2,
+                core_total=2,
+                audit_correct=0,
+                audit_total=2,
+                corrupt="resource_contention",
+            ),
+            _trial(
+                4,
+                core_correct=2,
+                core_total=2,
+                audit_correct=0,
+                audit_total=2,
+                outcome_status="skipped",
+            ),
+            _trial(
+                5,
+                core_correct=2,
+                core_total=2,
+                audit_correct=0,
+                audit_total=2,
+                outcome_status="invalid",
+            ),
+            _trial(
+                6,
+                core_correct=2,
+                core_total=2,
+                audit_correct=0,
+                audit_total=2,
+                tier=0,
+            ),
+        ],
+    )
+
+    report = audit_block_report.build_report(audit_block_report.load_journal_rows([journal]))
+
+    assert report["trial_count"] == 6
+    assert report["raw_audited_trial_count"] == 6
+    assert report["trusted_audited_trial_count"] == 2
+    assert report["untrusted_audited_trial_count"] == 4
+    assert report["untrusted_audited_trial_ids"] == [3, 4, 5, 6]
+    assert report["audited_trial_count"] == 2
+    assert [trial["trial_id"] for trial in report["trials"]] == [1, 2]
+    assert report["gaming_alarm"] is False
+    assert report["transfer_diagnostic"]["potential_overfit_divergences"] == 0
 
 
 def test_no_gaming_alarm_with_insufficient_audited_history(tmp_path: Path) -> None:

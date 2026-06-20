@@ -67,6 +67,10 @@ xmas_routing:
                 "snapshot_restart_readiness": "tail_fold_ready",
                 "w6_audit_cutover_ready": False,
                 "w6_audited_trial_count": 34,
+                "w6_raw_audited_trial_count": 40,
+                "w6_trusted_audited_trial_count": 39,
+                "w6_untrusted_audited_trial_count": 1,
+                "w6_untrusted_audited_trial_ids": [889],
                 "w6_min_audited_trials": 30,
                 "w6_gaming_alarm": True,
                 "w6_potential_overfit_divergences": 4,
@@ -132,6 +136,8 @@ xmas_routing:
     assert restart["details"]["state_trial_counter"] == 896
     assert restart["details"]["snapshot_restart_readiness"] == "tail_fold_ready"
     assert restart["details"]["snapshot_payload_journal_max_trial_id"] == 895
+    assert restart["details"]["w6_untrusted_audited_trial_count"] == 1
+    assert restart["details"]["w6_untrusted_audited_trial_ids"] == [889]
     assert [action["key"] for action in report["next_actions"]] == [
         "continue_w4_w6_accrual",
         "run_ds_e1_kv_measurements",

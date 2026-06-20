@@ -154,6 +154,16 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "seq_shadow_rows": summary.get("seq_shadow_rows"),
             "w6_audit_cutover_ready": summary.get("w6_audit_cutover_ready"),
             "w6_audited_trial_count": summary.get("w6_audited_trial_count"),
+            "w6_raw_audited_trial_count": summary.get("w6_raw_audited_trial_count"),
+            "w6_trusted_audited_trial_count": summary.get(
+                "w6_trusted_audited_trial_count"
+            ),
+            "w6_untrusted_audited_trial_count": summary.get(
+                "w6_untrusted_audited_trial_count"
+            ),
+            "w6_untrusted_audited_trial_ids": summary.get(
+                "w6_untrusted_audited_trial_ids"
+            ),
             "w6_min_audited_trials": summary.get("w6_min_audited_trials"),
             "w6_gaming_alarm": summary.get("w6_gaming_alarm"),
             "w6_potential_overfit_divergences": summary.get(

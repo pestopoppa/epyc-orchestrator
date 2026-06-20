@@ -9,6 +9,8 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+UNTRUSTED_OUTCOME_STATUSES = frozenset({"invalid", "skipped"})
+
 
 def _expand_journal_paths(raw_paths: Iterable[Path]) -> list[Path]:
     paths: list[Path] = []
@@ -128,7 +130,18 @@ def build_report(
     alarm_window: int | None = None,
 ) -> dict[str, Any]:
     trial_rows = [row for row in rows if _is_trial_row(row)]
-    trial_summaries = [summary for row in trial_rows if (summary := _trial_summary(row))]
+    audit_rows = [
+        (row, summary)
+        for row in trial_rows
+        if (summary := _trial_summary(row)) is not None
+    ]
+    trusted_audit_rows = [
+        (row, summary) for row, summary in audit_rows if _is_trusted_trial_row(row)
+    ]
+    untrusted_audit_rows = [
+        (row, summary) for row, summary in audit_rows if not _is_trusted_trial_row(row)
+    ]
+    trial_summaries = [summary for _row, summary in trusted_audit_rows]
     totals = {
         "core_correct": sum(summary["core_correct"] for summary in trial_summaries),
         "core_total": sum(summary["core_total"] for summary in trial_summaries),
@@ -143,6 +156,10 @@ def build_report(
     gaming_diagnostic = _gaming_diagnostic(trial_summaries, alarm_window=alarm_window)
     return {
         "trial_count": len(trial_rows),
+        "raw_audited_trial_count": len(audit_rows),
+        "trusted_audited_trial_count": len(trusted_audit_rows),
+        "untrusted_audited_trial_count": len(untrusted_audit_rows),
+        "untrusted_audited_trial_ids": _trial_ids(row for row, _summary in untrusted_audit_rows),
         "audited_trial_count": len(trial_summaries),
         "totals": totals,
         "trials": trial_summaries,
@@ -168,6 +185,30 @@ def build_report(
             ],
         },
     }
+
+
+def _is_trusted_trial_row(row: Mapping[str, Any]) -> bool:
+    if row.get("bug_corrupted_by"):
+        return False
+    try:
+        if int(row.get("tier", 1)) < 1:
+            return False
+    except (TypeError, ValueError):
+        return False
+    status = str(row.get("outcome_status") or "ok")
+    if status in UNTRUSTED_OUTCOME_STATUSES:
+        return False
+    return True
+
+
+def _trial_ids(rows: Iterable[Mapping[str, Any]]) -> list[int]:
+    trial_ids: list[int] = []
+    for row in rows:
+        try:
+            trial_ids.append(int(row["trial_id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return sorted(trial_ids)
 
 
 def _gaming_diagnostic(

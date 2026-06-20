@@ -39,6 +39,10 @@ def _audit_report(
 ) -> dict[str, Any]:
     return {
         "trial_count": audited_trial_count,
+        "raw_audited_trial_count": audited_trial_count,
+        "trusted_audited_trial_count": audited_trial_count,
+        "untrusted_audited_trial_count": 0,
+        "untrusted_audited_trial_ids": [],
         "audited_trial_count": audited_trial_count,
         "totals": {
             "core_correct": 0,
@@ -261,6 +265,8 @@ def test_w6_audit_summary_is_visible_without_blocking_restart(monkeypatch) -> No
     assert report["blockers"] == []
     assert report["summary"]["w6_audit_cutover_ready"] is False
     assert report["summary"]["w6_audited_trial_count"] == 29
+    assert report["summary"]["w6_untrusted_audited_trial_count"] == 0
+    assert report["summary"]["w6_untrusted_audited_trial_ids"] == []
     assert report["summary"]["w6_min_audited_trials"] == 30
     assert report["summary"]["w6_alarm_window"] == 30
     assert report["summary"]["w6_alarm_window_trial_count"] == 29

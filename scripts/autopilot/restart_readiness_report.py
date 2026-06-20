@@ -139,6 +139,10 @@ def _w6_audit_restart_report(
         "cutover_ready": not blockers,
         "min_audited_trials": min_audited_trials,
         "audited_trial_count": audited_trial_count,
+        "raw_audited_trial_count": report.get("raw_audited_trial_count"),
+        "trusted_audited_trial_count": report.get("trusted_audited_trial_count"),
+        "untrusted_audited_trial_count": report.get("untrusted_audited_trial_count"),
+        "untrusted_audited_trial_ids": report.get("untrusted_audited_trial_ids"),
         "alarm_window": report.get("gaming_alarm_window"),
         "alarm_window_trial_count": report.get("gaming_alarm_window_trial_count"),
         "gaming_alarm": gaming_alarm,
@@ -177,6 +181,10 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "seq_shadow_rows": (seq.get("seq_shadow") or {}).get("seq_shadow_rows"),
         "w6_audit_cutover_ready": w6.get("cutover_ready"),
         "w6_audited_trial_count": w6.get("audited_trial_count"),
+        "w6_raw_audited_trial_count": w6.get("raw_audited_trial_count"),
+        "w6_trusted_audited_trial_count": w6.get("trusted_audited_trial_count"),
+        "w6_untrusted_audited_trial_count": w6.get("untrusted_audited_trial_count"),
+        "w6_untrusted_audited_trial_ids": w6.get("untrusted_audited_trial_ids"),
         "w6_min_audited_trials": w6.get("min_audited_trials"),
         "w6_alarm_window": w6.get("alarm_window"),
         "w6_alarm_window_trial_count": w6.get("alarm_window_trial_count"),
@@ -276,6 +284,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"ready={summary['w6_audit_cutover_ready']}, "
             f"audited_trials={summary['w6_audited_trial_count']}/"
             f"{summary['w6_min_audited_trials']}, "
+            f"untrusted_audited_trials={summary['w6_untrusted_audited_trial_count']}, "
             f"alarm_window={summary['w6_alarm_window_trial_count']}/"
             f"{summary['w6_alarm_window']}, "
             f"gaming_alarm={summary['w6_gaming_alarm']}, "
