@@ -10,6 +10,7 @@ from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_j
 from src.autopilot_core.journal_snapshot_replay import (
     JOURNAL_SNAPSHOT_EVENT_TYPE,
     archive_payload_from_current_snapshot,
+    archive_payload_from_verified_snapshot,
     build_snapshot_replay_diagnostic,
     format_snapshot_replay_summary,
 )
@@ -146,6 +147,36 @@ def test_snapshot_replay_flags_unverified_tail_after_matching_prefix() -> None:
     assert diagnostic.tail_trial_count == 1
     assert any("post-snapshot trials" in item for item in diagnostic.warnings)
     assert archive_payload_from_current_snapshot(rows + [event], [event]) is None
+
+
+def test_verified_snapshot_payload_folds_safe_tail() -> None:
+    rows = [_row(1, quality=1.2), _row(2, quality=1.4, speed=45.0)]
+    event = _snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": _archive([rows[0]])},
+    )
+
+    payload = archive_payload_from_verified_snapshot(rows + [event], [event])
+
+    assert payload == _archive(rows)
+
+
+def test_verified_snapshot_payload_rejects_within_noise_tail() -> None:
+    rows = [_row(1, quality=1.2), _row(2, quality=1.4, speed=45.0)]
+    rows[1]["eval_details"] = {
+        "learning_exclusion": {
+            "by": "seq_accumulating",
+            "reason": "unit-test sequential accumulation",
+        }
+    }
+    event = _snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": _archive([rows[0]])},
+    )
+
+    payload = archive_payload_from_verified_snapshot(rows + [event], [event])
+
+    assert payload is None
 
 
 def test_snapshot_replay_requires_matching_hash_for_ready_status() -> None:

@@ -10,7 +10,17 @@ from typing import Any, Iterable
 
 from src.autopilot_core.baseline_ledger import canonical_jsonable
 from src.autopilot_core.journal_reconstruction import (
+    objectives_from_journal_row,
     reconstruct_archive_from_journal_rows,
+)
+from src.autopilot_core.learning_exclusions import WITHIN_NOISE_EXCLUSIONS
+from src.autopilot_core.pareto_math import dominates, hypervolume
+from src.autopilot_core.tier_specs import (
+    DEFAULT_FRONTIER_TIER,
+    LEGACY_OBJECTIVE_POLICY,
+    TASK_RATE_OBJECTIVE_POLICY,
+    TASK_RATE_REFERENCE_POINT,
+    spec_for,
 )
 
 
@@ -121,6 +131,245 @@ def archive_payload_from_current_snapshot(
         return None
     archive = _snapshot_archive_payload(snapshot)
     return copy.deepcopy(archive) if isinstance(archive, dict) else None
+
+
+def archive_payload_from_verified_snapshot(
+    rows: Iterable[dict[str, Any]],
+    ledger_events: Iterable[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return a verified snapshot archive, folding a safe post-snapshot tail.
+
+    The tail path is deliberately conservative. It only folds ordinary trial
+    rows whose objective contribution is self-contained. Rows that participate
+    in within-noise representative clustering (for example ``seq_accumulating``)
+    need raw prefix samples that a compact snapshot does not retain, so this
+    helper returns ``None`` and leaves callers on full replay for those tails.
+    """
+    rows_list = list(rows)
+    ledger_events_list = [
+        event
+        for event in ledger_events
+        if event.get("type") and "trial_id" not in event
+    ]
+    current_payload = archive_payload_from_current_snapshot(
+        rows_list,
+        ledger_events_list,
+    )
+    if current_payload is not None:
+        return current_payload
+
+    diagnostic = build_snapshot_replay_diagnostic(rows_list, ledger_events_list)
+    if diagnostic.bounded_replay_readiness != "tail_unverified":
+        return None
+    event = diagnostic.latest_event or {}
+    snapshot = event.get("snapshot")
+    if not isinstance(snapshot, dict) or diagnostic.through_trial_id is None:
+        return None
+    snapshot_archive = _snapshot_archive_payload(snapshot)
+    if not isinstance(snapshot_archive, dict):
+        return None
+
+    snapshot_indices = _snapshot_event_indices(ledger_events_list)
+    if not snapshot_indices:
+        return None
+    latest_snapshot_index, _latest_event = snapshot_indices[-1]
+    post_snapshot_events = ledger_events_list[latest_snapshot_index + 1:]
+    tail_events = [
+        event
+        for event in post_snapshot_events
+        if event.get("type") == "supersession"
+        and not _event_targets_prefix(event, diagnostic.through_trial_id)
+    ]
+    tail_rows = [
+        row
+        for row in rows_list
+        if (
+            (trial_id := _trial_id_from_row(row)) is not None
+            and trial_id > diagnostic.through_trial_id
+        )
+    ]
+    if not tail_rows:
+        return None
+    if any(_row_requires_prefix_raw_samples(row) for row in tail_rows):
+        return None
+
+    policy = str(
+        snapshot_archive.get("objective_policy") or LEGACY_OBJECTIVE_POLICY
+    )
+    if policy not in {LEGACY_OBJECTIVE_POLICY, TASK_RATE_OBJECTIVE_POLICY}:
+        return None
+    for row in tail_rows:
+        if objectives_from_journal_row(row, objective_policy=policy) is None:
+            return None
+
+    tail_archive = reconstruct_archive_from_journal_rows(
+        tail_rows + tail_events,
+        None,
+        current_run_only=False,
+        objective_policy=policy,
+    )
+    if tail_archive is None:
+        return None
+    return _fold_tail_archive_into_snapshot(snapshot_archive, tail_archive)
+
+
+def _row_requires_prefix_raw_samples(row: dict[str, Any]) -> bool:
+    bug = row.get("bug_corrupted_by") or ""
+    eval_details = row.get("eval_details") or {}
+    learning_exclusion = {}
+    if isinstance(eval_details, dict):
+        learning_exclusion = eval_details.get("learning_exclusion") or {}
+    excluded_by = ""
+    if isinstance(learning_exclusion, dict):
+        excluded_by = str(learning_exclusion.get("by") or "")
+    return bug == "mad_noise" or excluded_by in WITHIN_NOISE_EXCLUSIONS
+
+
+def _reference_point_for_archive_policy(policy: str) -> tuple[float, ...]:
+    if policy == TASK_RATE_OBJECTIVE_POLICY:
+        return TASK_RATE_REFERENCE_POINT
+    return spec_for(DEFAULT_FRONTIER_TIER).reference_point
+
+
+def _max_trial_id(*values: Any) -> int | None:
+    found: list[int] = []
+    for value in values:
+        try:
+            found.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return max(found) if found else None
+
+
+def _merge_exclusion_slot(
+    prefix: dict[str, Any],
+    tail: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "count": int(prefix.get("count") or 0) + int(tail.get("count") or 0),
+        "max_trial_id": _max_trial_id(
+            prefix.get("max_trial_id"),
+            tail.get("max_trial_id"),
+        ),
+    }
+
+
+def _merge_supersession_meta(
+    prefix: dict[str, Any],
+    tail: dict[str, Any],
+) -> dict[str, Any]:
+    target_ids = {
+        int(value)
+        for value in (prefix.get("target_trial_ids") or [])
+        + (tail.get("target_trial_ids") or [])
+        if isinstance(value, int) or str(value).isdigit()
+    }
+    return {
+        "events_applied": int(prefix.get("events_applied") or 0)
+        + int(tail.get("events_applied") or 0),
+        "target_trial_ids": sorted(target_ids),
+        "field_names": sorted({
+            str(value)
+            for value in (prefix.get("field_names") or [])
+            + (tail.get("field_names") or [])
+        }),
+    }
+
+
+def _fold_tail_archive_into_snapshot(
+    snapshot_archive: dict[str, Any],
+    tail_archive: dict[str, Any],
+) -> dict[str, Any] | None:
+    policy = str(snapshot_archive.get("objective_policy") or LEGACY_OBJECTIVE_POLICY)
+    ref = _reference_point_for_archive_policy(policy)
+    merged = copy.deepcopy(snapshot_archive)
+    tail_entries = copy.deepcopy(tail_archive.get("all_entries") or [])
+    if not all(isinstance(entry, dict) for entry in tail_entries):
+        return None
+
+    frontiers_by_tier = {
+        str(tier): copy.deepcopy(frontier)
+        for tier, frontier in (merged.get("frontiers_by_tier") or {}).items()
+        if isinstance(frontier, list)
+    }
+    hv_history_by_tier = {
+        str(tier): copy.deepcopy(history)
+        for tier, history in (merged.get("hv_history_by_tier") or {}).items()
+        if isinstance(history, list)
+    }
+
+    all_entries = copy.deepcopy(merged.get("all_entries") or [])
+    all_entries.extend(tail_entries)
+    for entry in tail_entries:
+        try:
+            tier = int(entry.get("eval_tier", DEFAULT_FRONTIER_TIER))
+            trial_id = int(entry.get("trial_id"))
+        except (TypeError, ValueError):
+            return None
+        objectives = entry.get("objectives")
+        if not isinstance(objectives, list):
+            return None
+        key = str(tier)
+        frontier = frontiers_by_tier.setdefault(key, [])
+        if not any(dominates(front["objectives"], objectives) for front in frontier):
+            frontiers_by_tier[key] = [
+                front
+                for front in frontier
+                if not dominates(objectives, front["objectives"])
+            ]
+            frontiers_by_tier[key].append(entry)
+        history = hv_history_by_tier.setdefault(key, [])
+        hv = round(
+            hypervolume(
+                [front["objectives"] for front in frontiers_by_tier[key]],
+                ref=ref,
+            ),
+            4,
+        )
+        if history:
+            hv = max(history[-1][1], hv)
+        history.append([trial_id, hv])
+
+    canonical_key = str(merged.get("canonical_tier") or DEFAULT_FRONTIER_TIER)
+    merged["frontiers_by_tier"] = {
+        key: frontiers_by_tier[key] for key in sorted(frontiers_by_tier, key=int)
+    }
+    merged["hv_history_by_tier"] = {
+        key: hv_history_by_tier[key] for key in sorted(hv_history_by_tier, key=int)
+    }
+    merged["frontier"] = copy.deepcopy(frontiers_by_tier.get(canonical_key, []))
+    merged["hypervolume_history"] = copy.deepcopy(
+        hv_history_by_tier.get(canonical_key, [])
+    )
+    merged["all_entries"] = all_entries
+    merged["t0_audit"] = copy.deepcopy(merged.get("t0_audit") or [])
+    merged["t0_audit"].extend(copy.deepcopy(tail_archive.get("t0_audit") or []))
+    merged["journal_max_trial_id"] = _max_trial_id(
+        merged.get("journal_max_trial_id"),
+        tail_archive.get("journal_max_trial_id"),
+    )
+
+    prefix_exclusions = merged.get("exclusions") or {}
+    tail_exclusions = tail_archive.get("exclusions") or {}
+    merged["exclusions"] = {
+        "bug_corrupted": _merge_exclusion_slot(
+            prefix_exclusions.get("bug_corrupted") or {},
+            tail_exclusions.get("bug_corrupted") or {},
+        ),
+        "truncated_above_cap": _merge_exclusion_slot(
+            prefix_exclusions.get("truncated_above_cap") or {},
+            tail_exclusions.get("truncated_above_cap") or {},
+        ),
+        "max_trial_id_cap": tail_exclusions.get(
+            "max_trial_id_cap",
+            prefix_exclusions.get("max_trial_id_cap"),
+        ),
+    }
+    merged["supersessions"] = _merge_supersession_meta(
+        merged.get("supersessions") or {},
+        tail_archive.get("supersessions") or {},
+    )
+    return merged
 
 
 def _journal_trial_stats(

@@ -30,6 +30,7 @@ import argparse
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -67,6 +68,7 @@ def _make_entry(
     reliability: float = 0.9,
     bug_corrupted_by: str = "",
     species: str = "test_species",
+    eval_details: dict[str, Any] | None = None,
 ) -> JournalEntry:
     return JournalEntry(
         trial_id=trial_id,
@@ -79,6 +81,7 @@ def _make_entry(
         cost=cost,
         reliability=reliability,
         pareto_status="frontier",
+        eval_details=eval_details or {},
         bug_corrupted_by=bug_corrupted_by,
     )
 
@@ -163,7 +166,7 @@ def test_journal_archive_authority_uses_current_snapshot(
     assert called_full_replay is False
 
 
-def test_journal_archive_authority_replays_full_journal_when_snapshot_has_tail(
+def test_journal_archive_authority_folds_safe_snapshot_tail(
     journal: ExperimentJournal,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -178,6 +181,47 @@ def test_journal_archive_authority_replays_full_journal_when_snapshot_has_tail(
         actor="unit-test",
     )
     journal.record(_make_entry(2, quality=1.5, speed=45.0))
+    called_full_replay = False
+
+    def _fail_full_replay(*args, **kwargs):
+        nonlocal called_full_replay
+        called_full_replay = True
+        raise AssertionError("safe tail should fold without full replay fallback")
+
+    monkeypatch.setattr(autopilot, "reconstruct_archive_from_journal_rows", _fail_full_replay)
+
+    payload = autopilot._journal_archive_payload_for_authority(journal)
+
+    assert called_full_replay is False
+    assert payload is not None
+    assert payload["journal_max_trial_id"] == 2
+
+
+def test_journal_archive_authority_replays_full_journal_when_tail_needs_prefix(
+    journal: ExperimentJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(1, quality=1.4, speed=40.0))
+    rows = autopilot._journal_rows_for_archive(journal)
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    journal.append_journal_snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": archive},
+        policy_version="unit-policy-v1",
+        actor="unit-test",
+    )
+    journal.record(_make_entry(
+        2,
+        quality=1.5,
+        speed=45.0,
+        eval_details={
+            "learning_exclusion": {
+                "by": "seq_accumulating",
+                "reason": "unit-test sequential accumulation",
+            }
+        },
+    ))
     calls: list[int] = []
 
     def _full_replay(rows_arg, *args, **kwargs):
