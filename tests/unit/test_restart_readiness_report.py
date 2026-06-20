@@ -31,6 +31,84 @@ def _seq_ready(*, ready: bool = False) -> dict[str, Any]:
     }
 
 
+def _audit_report(
+    *,
+    audited_trial_count: int = 0,
+    gaming_alarm: bool = False,
+    divergences: int = 0,
+) -> dict[str, Any]:
+    return {
+        "trial_count": audited_trial_count,
+        "audited_trial_count": audited_trial_count,
+        "totals": {
+            "core_correct": 0,
+            "core_total": 0,
+            "audit_correct": 0,
+            "audit_total": 0,
+            "core_quality_0_3": 0.0,
+            "audit_quality_0_3": 0.0,
+            "delta_audit_minus_core": 0.0,
+        },
+        "trials": [],
+        "gaming_alarm": gaming_alarm,
+        "gaming_events": [{"trial_id": 2}] if gaming_alarm else [],
+        "transfer_diagnostic": {
+            "audited_trial_count": audited_trial_count,
+            "potential_overfit_divergences": divergences,
+            "events": [{"trial_id": 2}] if divergences else [],
+        },
+    }
+
+
+def _patch_ready_dependencies(monkeypatch, *, audit_report: dict[str, Any] | None = None) -> None:
+    monkeypatch.setattr(
+        report_mod,
+        "build_archive_authority_report",
+        lambda state, rows: {"ok": True, "diagnostic": {"status": "match"}},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_baseline_authority_report",
+        lambda state, rows: {"ok": False, "status": "no_events"},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_seq_readiness_report",
+        lambda rows: _seq_ready(ready=True),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_snapshot_replay_diagnostic",
+        lambda rows, events: SimpleNamespace(
+            bounded_replay_readiness="current",
+            event_count=1,
+            status="archive_prefix_match",
+            hash_status="match",
+            latest_event=None,
+            through_trial_id=10,
+            policy_version="journal-archive-snapshot-v1",
+            snapshot_hash="abc",
+            parent_snapshot_hash="",
+            tail_trial_count=0,
+            tail_max_trial_id=None,
+            journal_max_trial_id=10,
+            post_snapshot_prefix_event_count=0,
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "archive_payload_from_verified_snapshot",
+        lambda rows, events: {"journal_max_trial_id": 10},
+    )
+    if audit_report is not None:
+        monkeypatch.setattr(
+            report_mod,
+            "build_audit_block_report",
+            lambda rows: audit_report,
+        )
+
+
 def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch) -> None:
     monkeypatch.setattr(
         report_mod,
@@ -80,6 +158,7 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
     assert report["summary"]["snapshot_restart_readiness"] == "tail_fold_ready"
     assert report["summary"]["baseline_authority_source"] == "state_baseline"
     assert report["summary"]["seq_cutover_ready"] is False
+    assert report["summary"]["w6_audited_trial_count"] == 0
 
 
 def test_require_seq_cutover_blocks_when_seq_report_not_ready(monkeypatch) -> None:
@@ -130,6 +209,72 @@ def test_require_seq_cutover_blocks_when_seq_report_not_ready(monkeypatch) -> No
     assert report["blockers"] == [
         "sequential verdict cutover readiness is blocked"
     ]
+
+
+def test_w6_audit_summary_is_visible_without_blocking_restart(monkeypatch) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(
+            audited_trial_count=29,
+            gaming_alarm=True,
+            divergences=5,
+        ),
+    )
+
+    report = report_mod.build_restart_readiness_report(_state(), [])
+
+    assert report["restart_ready"] is True
+    assert report["blockers"] == []
+    assert report["summary"]["w6_audit_cutover_ready"] is False
+    assert report["summary"]["w6_audited_trial_count"] == 29
+    assert report["summary"]["w6_min_audited_trials"] == 30
+    assert report["summary"]["w6_gaming_alarm"] is True
+    assert report["summary"]["w6_potential_overfit_divergences"] == 5
+    assert report["w6_audit_cutover"]["blockers"] == [
+        "audited trial history too small: 29 < 30",
+        "W6 audit gaming alarm is triggered",
+    ]
+
+
+def test_require_w6_audit_blocks_on_sample_size_and_alarm(monkeypatch) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(
+            audited_trial_count=29,
+            gaming_alarm=True,
+            divergences=5,
+        ),
+    )
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        [],
+        require_w6_audit=True,
+    )
+
+    assert report["restart_ready"] is False
+    assert report["blockers"] == [
+        "W6 audit cutover readiness is blocked: "
+        "audited trial history too small: 29 < 30; "
+        "W6 audit gaming alarm is triggered"
+    ]
+
+
+def test_require_w6_audit_accepts_clean_minimum(monkeypatch) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(audited_trial_count=30),
+    )
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        [],
+        require_w6_audit=True,
+    )
+
+    assert report["restart_ready"] is True
+    assert report["blockers"] == []
+    assert report["summary"]["w6_audit_cutover_ready"] is True
 
 
 def test_restart_report_blocks_without_baseline_source(monkeypatch) -> None:
@@ -190,7 +335,7 @@ def test_cli_json_strict_returns_one_on_restart_blocker(tmp_path: Path, capsys, 
     monkeypatch.setattr(
         report_mod,
         "build_restart_readiness_report",
-        lambda state, rows, require_seq_cutover=False: {
+        lambda state, rows, **kwargs: {
             "restart_ready": False,
             "blockers": ["blocked"],
         },
