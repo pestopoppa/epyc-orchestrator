@@ -157,8 +157,34 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
     assert report["blockers"] == []
     assert report["summary"]["snapshot_restart_readiness"] == "tail_fold_ready"
     assert report["summary"]["baseline_authority_source"] == "state_baseline"
+    assert report["summary"]["baseline_seed_status"] == "ready"
+    assert report["summary"]["baseline_seed_append_ready"] is True
+    assert report["summary"]["baseline_seed_append_required"] is True
+    assert report["baseline_authority"]["seed_preflight"]["event_tier"] == 1
     assert report["summary"]["seq_cutover_ready"] is False
     assert report["summary"]["w6_audited_trial_count"] == 0
+
+
+def test_baseline_seed_preflight_skips_when_ledger_fold_ready(monkeypatch) -> None:
+    _patch_ready_dependencies(monkeypatch)
+    monkeypatch.setattr(
+        report_mod,
+        "build_baseline_authority_report",
+        lambda state, rows: {"ok": True, "status": "match"},
+    )
+
+    report = report_mod.build_restart_readiness_report(_state(), [])
+
+    assert report["summary"]["baseline_authority_source"] == "ledger_fold"
+    assert report["summary"]["baseline_seed_status"] == "ledger_fold_ready"
+    assert report["summary"]["baseline_seed_append_ready"] is False
+    assert report["summary"]["baseline_seed_append_required"] is False
+    assert report["baseline_authority"]["seed_preflight"] == {
+        "status": "ledger_fold_ready",
+        "append_required": False,
+        "append_ready": False,
+        "warning": "",
+    }
 
 
 def test_require_seq_cutover_blocks_when_seq_report_not_ready(monkeypatch) -> None:

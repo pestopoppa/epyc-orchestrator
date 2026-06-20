@@ -18,6 +18,7 @@ sys.path.insert(0, str(ORCH_ROOT))
 from archive_authority_report import build_archive_authority_report  # noqa: E402
 from audit_block_report import build_report as build_audit_block_report  # noqa: E402
 from baseline_authority_report import build_baseline_authority_report  # noqa: E402
+from baseline_authority_seed import build_baseline_seed_event  # noqa: E402
 from preflight_audit import JOURNAL_PATH, STATE_PATH, _load_jsonl  # noqa: E402
 from seq_readiness_report import build_seq_readiness_report  # noqa: E402
 from src.autopilot_core.journal_snapshot_replay import (  # noqa: E402
@@ -75,11 +76,47 @@ def _baseline_restart_report(
         if state_cache_present
         else "missing"
     )
+    seed_preflight = _baseline_seed_preflight(
+        state,
+        journal_rows,
+        ledger_fold_ready=bool(report.get("ok")),
+    )
     return {
         **report,
         "startup_safe": startup_safe,
         "authority_source": authority_source,
         "state_baseline_present": state_cache_present,
+        "seed_preflight": seed_preflight,
+    }
+
+
+def _baseline_seed_preflight(
+    state: dict[str, Any],
+    journal_rows: list[dict[str, Any]],
+    *,
+    ledger_fold_ready: bool,
+) -> dict[str, Any]:
+    if ledger_fold_ready:
+        return {
+            "status": "ledger_fold_ready",
+            "append_required": False,
+            "append_ready": False,
+            "warning": "",
+        }
+    result = build_baseline_seed_event(state, journal_rows)
+    event = result.event or {}
+    after = result.after or {}
+    return {
+        "status": result.status,
+        "append_required": result.status == "ready",
+        "append_ready": result.status == "ready",
+        "warning": result.warning,
+        "before": result.before,
+        "after": result.after,
+        "post_append_cutover_ready": after.get("cutover_ready"),
+        "event_source_trial_id": event.get("source_trial_id"),
+        "event_tier": event.get("tier"),
+        "event_new_quality": event.get("new_quality"),
     }
 
 
@@ -117,6 +154,7 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
     snapshot = report["snapshot_replay"]
     archive = report["archive_authority"]
     baseline = report["baseline_authority"]
+    baseline_seed = baseline.get("seed_preflight") or {}
     return {
         "restart_ready": report["restart_ready"],
         "blockers": report["blockers"],
@@ -125,6 +163,9 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "snapshot_payload_available": snapshot.get("payload_available"),
         "baseline_authority_source": baseline.get("authority_source"),
         "baseline_startup_safe": baseline.get("startup_safe"),
+        "baseline_seed_status": baseline_seed.get("status"),
+        "baseline_seed_append_ready": baseline_seed.get("append_ready"),
+        "baseline_seed_append_required": baseline_seed.get("append_required"),
         "seq_cutover_ready": seq.get("cutover_ready"),
         "seq_trusted_vector_trials": seq.get("trusted_vector_trials"),
         "seq_shadow_rows": (seq.get("seq_shadow") or {}).get("seq_shadow_rows"),
@@ -205,6 +246,12 @@ def render_markdown(report: dict[str, Any]) -> str:
             "- Baseline startup source: "
             f"{summary['baseline_authority_source']} "
             f"(startup_safe={summary['baseline_startup_safe']})"
+        ),
+        (
+            "- Baseline seed preflight: "
+            f"{summary['baseline_seed_status']} "
+            f"(append_ready={summary['baseline_seed_append_ready']}, "
+            f"append_required={summary['baseline_seed_append_required']})"
         ),
         (
             "- Sequential cutover: "
