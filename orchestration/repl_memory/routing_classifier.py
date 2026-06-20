@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from src.roles import Role
+from scripts.graph_router.action_space import normalize_action
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,7 @@ DEFAULT_WEIGHTS_PATH = Path(
 
 def _canonicalize_action_label(label: str) -> str:
     """Return the canonical live role for a loaded action label when known."""
-    role = Role.from_string(label)
-    return str(role) if role is not None else label
+    return normalize_action(label, include_seeded_frontdoor=True) or label
 
 
 def _relu(x: np.ndarray) -> np.ndarray:

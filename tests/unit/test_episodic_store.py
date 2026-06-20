@@ -233,8 +233,8 @@ class TestRoutingClassifier:
 
         clf = RoutingClassifier(
             input_dim=1031,
-            n_actions=2,
-            label_map={0: "worker_explore", 1: "coder"},
+            n_actions=3,
+            label_map={0: "worker_explore", 1: "coder", 2: "frontdoor:direct"},
         )
         path = tmp_path / "legacy_labels.npz"
         clf.save(path)
@@ -243,6 +243,7 @@ class TestRoutingClassifier:
         assert loaded is not None
         assert loaded.label_map[0] == "worker_general"
         assert loaded.label_map[1] == "coder_escalation"
+        assert loaded.label_map[2] == "frontdoor"
 
     def test_load_missing_returns_none(self):
         from orchestration.repl_memory.routing_classifier import RoutingClassifier
@@ -316,11 +317,15 @@ class TestRoutingClassifier:
 
         clf = RoutingClassifier(
             input_dim=1031,
-            n_actions=2,
-            label_map={0: "worker_explore", 1: "coder"},
+            n_actions=3,
+            label_map={0: "worker_explore", 1: "coder", 2: "frontdoor:direct"},
         )
         path = tmp_path / "saved_legacy_labels.npz"
         clf.save(path)
 
         data = np.load(path, allow_pickle=True)
-        assert list(data["_label_map_vals"]) == ["worker_general", "coder_escalation"]
+        assert list(data["_label_map_vals"]) == [
+            "worker_general",
+            "coder_escalation",
+            "frontdoor",
+        ]
