@@ -330,6 +330,24 @@ def _descriptor_removal_errors(path: Path, generated: dict[str, Any]) -> list[st
     ]
 
 
+def _descriptor_operator_decision_details(
+    *, removal_blocked: bool, policy_blocked: bool
+) -> list[str]:
+    if removal_blocked:
+        return [
+            "operator decision required: descriptor generation removes model_id(s); "
+            "approve coverage/removal before rerunning with --allow-descriptor-model-removal"
+        ]
+    if policy_blocked:
+        return [
+            "operator decision required: fix descriptor compiler/source registry before updating"
+        ]
+    return [
+        "operator decision required: review descriptor drift details, then run "
+        "uv run python scripts/registry/stack_change_pipeline.py update"
+    ]
+
+
 def _descriptor_policy_errors(generated: dict[str, Any]) -> list[str]:
     models = generated.get("models")
     if not isinstance(models, list):
@@ -417,6 +435,12 @@ def _check_descriptors(config: StackChangePipelineConfig) -> PipelineStep:
     removal_errors = _descriptor_removal_errors(config.descriptors, expected)
     policy_errors = _descriptor_policy_errors(expected)
     drift_details = _descriptor_drift_details(config.descriptors, expected)
+    drift_details.extend(
+        _descriptor_operator_decision_details(
+            removal_blocked=bool(removal_errors),
+            policy_blocked=bool(policy_errors),
+        )
+    )
     if removal_errors or policy_errors:
         errors = [
             f"descriptor artifact is stale: {config.descriptors}",

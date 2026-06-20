@@ -635,6 +635,10 @@ def test_check_reports_stale_generated_artifact_without_writing(tmp_path: Path) 
     descriptor_step = next(step for step in report.steps if step.name == "descriptors")
     assert any("artifact is stale" in error for error in report.errors)
     assert any("descriptor changed qwen3.6-35b-a3b-q8_0" in detail for detail in descriptor_step.details)
+    assert any(
+        "operator decision required: review descriptor drift details" in detail
+        for detail in descriptor_step.details
+    )
     assert config.stack_priors.read_text(encoding="utf-8") == priors_before
 
 
@@ -706,6 +710,10 @@ def test_check_reports_descriptor_model_removal_blocker(tmp_path: Path) -> None:
         for detail in descriptor_step.details
     )
     assert any("benchmark-only-reap" in error for error in descriptor_step.errors)
+    assert any(
+        "operator decision required: descriptor generation removes model_id(s)" in detail
+        for detail in descriptor_step.details
+    )
     assert not any(
         error.endswith("stack_change_pipeline.py update") for error in descriptor_step.errors
     )
