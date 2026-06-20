@@ -115,6 +115,11 @@ xmas_routing:
         "run_xmas_constrained_policy_ab",
     ]
     assert report["next_actions"][0]["status"] == "active"
+    assert "restart_readiness_report.py" in report["next_actions"][0]["command"]
+    assert "--require-seq-cutover --require-w6-audit" in report["next_actions"][0]["command"]
+    assert report["next_actions"][0]["follow_up"] == (
+        "python3 scripts/autopilot/fable5_gate_report.py --json --strict"
+    )
     assert "ds_e1_kv_measurements.sh --execute" in report["next_actions"][1]["command"]
     assert report["next_actions"][1]["status"] == "blocked"
     assert report["next_actions"][2]["command"] == (

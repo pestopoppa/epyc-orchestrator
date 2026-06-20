@@ -47,6 +47,12 @@ DEFAULT_XMAS_CONSTRAINED_OUTPUT_ARG = (
     "benchmarks/results/runs/xmas_live_ab/"
     "$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy"
 )
+STRICT_RESTART_READINESS_COMMAND = (
+    "cd /mnt/raid0/llm/epyc-orchestrator && "
+    "python3 scripts/autopilot/restart_readiness_report.py "
+    "--json --strict --require-seq-cutover --require-w6-audit"
+)
+STRICT_FABLE5_GATE_COMMAND = "python3 scripts/autopilot/fable5_gate_report.py --json --strict"
 REQUIRED_XMAS_AB_POLICY = "incumbent_constrained_v1"
 
 
@@ -405,7 +411,8 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "w6_audited_rows": details.get("w6_audited_trial_count"),
                     "w6_gaming_alarm": details.get("w6_gaming_alarm"),
                 },
-                "command": "python3 scripts/autopilot/fable5_gate_report.py --json --strict",
+                "command": STRICT_RESTART_READINESS_COMMAND,
+                "follow_up": STRICT_FABLE5_GATE_COMMAND,
             }
         )
 
