@@ -1,11 +1,10 @@
 # Dynamic Stack DS-E1 Evidence Packet
 
-Generated: 2026-06-20T14:47:00Z
+Generated: 2026-06-20T14:55:56Z
 Ready for DS-7/DS-6 profile decision: false
 
 ## Blockers
 
-- ds5_roster_manifest: Research model manifest exists but references an older stack-prior compile.
 - ri10_canary: RI-10 config is present, but this packet has no current canary sample-count artifact to prove decision readiness.
 - kv_size_measurements: No direct DS-E1 production KV-size measurement series was found.
 
@@ -23,11 +22,11 @@ Ready for DS-7/DS-6 profile decision: false
 
 ### ds5_roster_manifest
 
-- Status: `stale`
-- Summary: Research model manifest exists but references an older stack-prior compile.
+- Status: `ready`
+- Summary: Research model manifest exists for DS-5 roster context.
 - Details:
   - `path`: "/mnt/raid0/llm/epyc-inference-research/docs/MODEL_MANIFEST.md"
-  - `manifest_compiled_at`: "2026-06-14T14:15:21Z"
+  - `manifest_compiled_at`: "2026-06-20T07:13:46Z"
   - `stack_priors_compiled_at`: "2026-06-20T07:13:46Z"
 
 ### contention_matrix
