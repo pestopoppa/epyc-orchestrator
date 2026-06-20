@@ -22,6 +22,7 @@ from collections import Counter
 from datetime import datetime, timezone
 
 from src.api.models import ChatRequest, ChatResponse
+from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
 from src.api.services.memrl import score_completed_task
 from src.graph import run_task, GraphConfig, TaskDeps, TaskState
 from src.llm_primitives import LLMPrimitives
@@ -437,6 +438,7 @@ async def _execute_repl(
                         "producer_role": producer_role,
                         "delegation_lineage": reported_role_history,
                         "final_answer_role": producer_role,
+                        **llm_completion_meta(primitives),
                     },
                 )
                 score_completed_task(
@@ -660,6 +662,7 @@ async def _execute_repl(
                 "final_answer_role": current_role,
                 "workspace_version": (task_state.workspace_state or {}).get("version", 0),
                 "workspace_decisions": len((task_state.workspace_state or {}).get("decisions", [])),
+                **llm_completion_meta(primitives),
             },
         )
         score_completed_task(

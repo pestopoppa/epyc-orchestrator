@@ -1306,6 +1306,11 @@ class TestExecuteDirect:
         assert result is not None
         assert result.answer == "Direct answer"
         assert result.mode == "direct"
+        call = mock_state.progress_logger.log_task_completed.call_args
+        assert call.kwargs["completion_meta"]["tokens_generated"] == 100
+        assert call.kwargs["completion_meta"]["prompt_eval_ms"] == 50.0
+        assert call.kwargs["completion_meta"]["generation_ms"] == 200.0
+        assert call.kwargs["completion_meta"]["http_overhead_ms"] == 10.0
 
     def test_direct_with_context(self, mock_primitives, mock_state):
         """Direct call prepends context to prompt."""

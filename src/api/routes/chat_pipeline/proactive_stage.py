@@ -14,6 +14,7 @@ import re as _re
 import time
 
 from src.api.models import ChatRequest, ChatResponse
+from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
 from src.constants import TASK_IR_OBJECTIVE_LEN
 from src.api.routes.chat_utils import RoutingResult
 from src.api.services.memrl import score_completed_task
@@ -207,6 +208,7 @@ async def _execute_proactive(
                 "producer_role": "proactive_delegation",
                 "delegation_lineage": result.roles_used or ["architect_general"],
                 "final_answer_role": (result.roles_used or ["architect_general"])[-1],
+                **llm_completion_meta(primitives),
             },
         )
         score_completed_task(

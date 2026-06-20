@@ -251,15 +251,45 @@ def synthetic_like(text: str) -> bool:
     return any(pattern.search(text) for pattern in SYNTHETIC_MARKERS)
 
 
+def _token_payload(data: dict[str, Any]) -> dict[str, Any] | None:
+    prompt_tokens = data.get("prompt_tokens")
+    completion_tokens = data.get("completion_tokens")
+    if isinstance(prompt_tokens, int | float) and isinstance(completion_tokens, int | float):
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total": prompt_tokens + completion_tokens,
+        }
+    for key in (
+        "tokens",
+        "token_usage",
+        "usage",
+        "tokens_generated",
+        "total_tokens",
+        "output_tokens",
+        "completion_tokens",
+    ):
+        value = data.get(key)
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, int | float):
+            return {"total": value}
+    chat_meta = data.get("chat_meta")
+    if isinstance(chat_meta, dict):
+        usage = chat_meta.get("usage")
+        if isinstance(usage, dict):
+            return usage
+        if isinstance(usage, int | float):
+            return {"total": usage}
+    return None
+
+
 def _extract_tokens(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     for row in reversed(rows):
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
-        for key in ("tokens", "token_usage", "usage"):
-            value = data.get(key)
-            if isinstance(value, dict):
-                return value
-            if isinstance(value, int | float):
-                return {"total": value}
+        payload = _token_payload(data)
+        if payload:
+            return payload
     return None
 
 

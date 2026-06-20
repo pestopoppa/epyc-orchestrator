@@ -33,6 +33,7 @@ from src.api.routes.chat_utils import (
     RoutingResult,
     _truncate_looped_answer,
 )
+from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
 from src.api.structured_logging import task_extra
 
 log = logging.getLogger(__name__)
@@ -279,6 +280,7 @@ def _execute_react(
                 "producer_role": str(initial_role),
                 "delegation_lineage": [str(initial_role)],
                 "final_answer_role": str(initial_role),
+                **llm_completion_meta(primitives),
             },
         )
         score_completed_task(

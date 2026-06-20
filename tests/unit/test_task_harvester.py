@@ -297,6 +297,34 @@ def test_dedupe_prompt_collapses_forced_multi_role_attempts(tmp_path: Path) -> N
     assert manifest["counts"]["duplicates_collapsed"] == 1
 
 
+def test_extract_tokens_accepts_runtime_token_fields() -> None:
+    assert harvest_tasks._extract_tokens(
+        [
+            _row("task_completed", "a", "2026-06-12T00:00:00+00:00", {"tokens_generated": 42})
+        ]
+    ) == {"total": 42}
+    assert harvest_tasks._extract_tokens(
+        [
+            _row(
+                "task_completed",
+                "b",
+                "2026-06-12T00:00:00+00:00",
+                {"prompt_tokens": 10, "completion_tokens": 5},
+            )
+        ]
+    ) == {"prompt_tokens": 10, "completion_tokens": 5, "total": 15}
+    assert harvest_tasks._extract_tokens(
+        [
+            _row(
+                "task_completed",
+                "c",
+                "2026-06-12T00:00:00+00:00",
+                {"chat_meta": {"usage": {"total_tokens": 9}}},
+            )
+        ]
+    ) == {"total_tokens": 9}
+
+
 def test_compact_evidence_keeps_gate_fields_without_bulk_attempts() -> None:
     row = {
         "schema_version": "real_task_record.v1",
@@ -332,6 +360,7 @@ def test_compact_evidence_keeps_gate_fields_without_bulk_attempts() -> None:
     assert compact["route_attempt_count"] == 2
     assert compact["route_attempt_roles"] == ["frontdoor", "worker_general"]
     assert "prompt" not in compact
+    assert "prompt_ref" not in compact
     assert "source_refs" not in compact
     assert "route_attempts" not in compact
     assert "duplicate_task_ids" not in compact

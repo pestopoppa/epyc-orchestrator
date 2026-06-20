@@ -23,6 +23,7 @@ from src.api.routes.chat_utils import (
     _should_formalize,
     _truncate_looped_answer,
 )
+from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
 from src.api.services.memrl import score_completed_task
 from src.api.structured_logging import task_extra
 from src.llm_primitives import LLMPrimitives
@@ -235,6 +236,7 @@ def _execute_direct(
                 "delegation_lineage": [str(initial_role)],
                 "final_answer_role": str(initial_role),
                 "answer_chars": answer_chars,
+                **llm_completion_meta(primitives),
             },
         )
         score_completed_task(

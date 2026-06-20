@@ -12,6 +12,7 @@ from collections import Counter
 
 from src.api.models import ChatRequest, ChatResponse
 from src.api.routes.chat_delegation import _architect_delegated_answer
+from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
 from src.api.routes.chat_utils import RoutingResult, _truncate_looped_answer
 from src.api.services.memrl import score_completed_task
 from src.api.structured_logging import task_extra
@@ -213,6 +214,7 @@ def _execute_delegated(
                     if p.get("phase") == "B"
                 ],
                 "final_answer_role": str(initial_role),
+                **llm_completion_meta(primitives),
             },
         )
         score_completed_task(

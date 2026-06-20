@@ -50,6 +50,7 @@ from src.api.routes.chat_pipeline.routing import (
     _preprocess,
     _route_request,
 )
+from src.api.routes.chat_pipeline.telemetry import llm_completion_meta
 from src.api.routes.chat_review import (
     _architect_verdict,
     _fast_revise,
@@ -221,6 +222,7 @@ async def _stream_repl(
                         "producer_role": str(current_role),
                         "delegation_lineage": [str(r) for r in role_history],
                         "final_answer_role": str(current_role),
+                        **llm_completion_meta(primitives),
                     },
                 )
                 score_completed_task(
@@ -410,6 +412,7 @@ async def _stream_repl(
                 "producer_role": str(current_role),
                 "delegation_lineage": [str(r) for r in role_history],
                 "final_answer_role": str(current_role),
+                **llm_completion_meta(primitives),
             },
         )
         score_completed_task(
