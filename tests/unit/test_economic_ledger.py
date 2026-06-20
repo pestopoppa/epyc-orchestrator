@@ -139,7 +139,11 @@ def test_digest_economics_section_is_best_effort(tmp_path: Path) -> None:
     section = digest._economics_section(now, repo_root=tmp_path)
     assert section[0] == "### Economics (last 7 days)"
     assert any("planner cloud spend" in line for line in section)
+    assert any("total cloud spend" in line for line in section)
     assert any("local eval wall time" in line for line in section)
+    assert any("planner monthly projection" in line and "(hold)" in line for line in section)
+    assert any("operator gate-latency rule: not evaluated" in line for line in section)
+    assert any("economic rules source: built-in defaults" in line for line in section)
 
 
 def test_planner_spend_rule_triggers_with_low_threshold(tmp_path: Path) -> None:
@@ -155,7 +159,8 @@ def test_planner_spend_rule_triggers_with_low_threshold(tmp_path: Path) -> None:
             },
         ],
     )
-    rules = tmp_path / "economic_rules.yaml"
+    rules = tmp_path / "orchestration" / "economic_rules.yaml"
+    rules.parent.mkdir(parents=True, exist_ok=True)
     rules.write_text(
         "planner_monthly_spend_threshold_usd: 1.0\n"
         "operator_gate_latency_threshold_days: 3.0\n"
@@ -175,3 +180,7 @@ def test_planner_spend_rule_triggers_with_low_threshold(tmp_path: Path) -> None:
     assert summary.review.planner_spend_triggered is True
     report = ledger_mod.render_report(summary)
     assert "TRIGGER: raise F3-W3a planner-distill priority" in report
+
+    section = digest._economics_section(datetime(2026, 6, 12, 12, tzinfo=timezone.utc), repo_root=tmp_path)
+    assert any("planner monthly projection" in line and "(triggered)" in line for line in section)
+    assert any("economic rules source: configured" in line for line in section)

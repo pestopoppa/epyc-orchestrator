@@ -178,6 +178,7 @@ def _economics_section(now: datetime, repo_root: Path | None = None) -> list[str
             planner_archive=root / "logs" / "planner_archive.jsonl",
             journal_dir=root / "orchestration",
             cloud_costs=root / "orchestration" / "cloud_costs.yaml",
+            rules_path=root / "orchestration" / "economic_rules.yaml",
             progress_root=Path("/mnt/raid0/llm/epyc-root/progress"),
             orch_progress_dir=root / "logs" / "progress",
             now=now,
@@ -187,13 +188,28 @@ def _economics_section(now: datetime, repo_root: Path | None = None) -> list[str
             "### Economics (last 7 days)",
             f"- unavailable: {e}",
         ]
+    rules_source = "configured" if ledger.rules.source_exists else "built-in defaults"
+    planner_status = "triggered" if ledger.review.planner_spend_triggered else "hold"
+    gate_latency = ledger.review.operator_gate_latency_triggered
+    if gate_latency is None:
+        gate_latency_status = "not evaluated"
+    else:
+        gate_latency_status = "triggered" if gate_latency else "hold"
     return [
         "### Economics (last 7 days)",
         f"- planner cloud spend: ${ledger.planner.total_usd:.4f}",
         f"- manual cloud spend: ${ledger.manual.total_usd:.4f}",
+        f"- total cloud spend: ${ledger.total_cloud_usd:.4f}",
         f"- local eval wall time: {ledger.local.eval_hours:.2f}h",
         f"- autopilot eval trials: {ledger.local.trials}",
         f"- decision markers: {ledger.throughput.progress_decision_markers}",
+        (
+            "- planner monthly projection: "
+            f"${ledger.review.projected_monthly_planner_spend_usd:.2f} / "
+            f"${ledger.rules.planner_monthly_spend_threshold_usd:.2f} ({planner_status})"
+        ),
+        f"- operator gate-latency rule: {gate_latency_status}",
+        f"- economic rules source: {rules_source}",
     ]
 
 
