@@ -601,6 +601,34 @@ class TestAP32InsightFormat:
             "trial_reference",
         ]
 
+    def test_audit_insight_specificity_skips_folded_journal_excluded_evidence(self, store):
+        excluded_id = store.store(
+            "scripts/autopilot/foo.py improved trial #123",
+            "Keep commit abc1234 behavior from /mnt/raid0/llm/example/path.",
+            source_trial_id=123,
+            species="structural_lab",
+            evidence_trial_ids=[123],
+        )
+        kept_id = store.store(
+            "scripts/autopilot/bar.py improved trial #124",
+            "Keep commit def5678 behavior from /mnt/raid0/llm/other/path.",
+            source_trial_id=124,
+            species="prompt_forge",
+            evidence_trial_ids=[124],
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=123, bug_corrupted_by="superseded"),
+                ]
+
+        findings = store.audit_insight_specificity(journal=FakeJournal())
+
+        finding_ids = {item["id"] for item in findings}
+        assert excluded_id not in finding_ids
+        assert kept_id in finding_ids
+
 
 class TestAP28HybridRetrieval:
     """AP-28: FTS5 + RRF fusion, content-hash staleness, validity weighting."""

@@ -1147,14 +1147,26 @@ class StrategyStore:
             excluded_trial_ids=excluded_strategy_evidence_trial_ids(journal),
         )
 
-    def audit_insight_specificity(self) -> list[dict[str, Any]]:
+    def audit_insight_specificity(
+        self,
+        *,
+        journal: Any | None = None,
+        excluded_trial_ids: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
         """Return stored strategies whose insight text looks task-specific."""
+        excluded = set(excluded_trial_ids or set())
+        if journal is not None:
+            excluded.update(excluded_strategy_evidence_trial_ids(journal))
+
         rows = self._conn.execute(
-            "SELECT id, description, insight, source_trial_id, species, metadata_json "
+            "SELECT id, description, insight, source_trial_id, species, metadata_json, "
+            "evidence_trial_ids "
             "FROM strategies ORDER BY created_at ASC"
         ).fetchall()
         findings: list[dict[str, Any]] = []
         for row in rows:
+            if excluded.intersection(self._evidence_trial_ids_for_row(row)):
+                continue
             meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
             format_meta = meta.get("insight_format") if isinstance(meta, dict) else {}
             if not isinstance(format_meta, dict):
