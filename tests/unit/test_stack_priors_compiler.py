@@ -431,6 +431,58 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     assert worker["priors"]["memory_cost"] == 1.0
 
 
+def test_compile_prefers_server_mode_launch_requirement_paths(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "registry.yaml",
+        {
+            "server_mode": {
+                "worker": {
+                    "url": "http://localhost:8072",
+                    "port": 8072,
+                    "tier": "hot",
+                    "model_role": "worker_general",
+                    "model_path": "/models/gemma-4-26B-A4B-it-Q8_0.gguf",
+                    "draft_model_path": "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf",
+                }
+            },
+            "roles": {"worker_general": {"memory": {"residency": "warm"}}},
+        },
+    )
+    descriptor_path = _write_yaml(
+        tmp_path / "descriptors.yaml",
+        {
+            "models": [
+                {
+                    "model_id": "gemma4-26b-a4b-q8",
+                    "role_bindings": {"roles": ["worker_general"], "server_roles": ["worker"]},
+                    "quality": {"suite_vector": {"overall": 0.9}, "measured": []},
+                    "speed": {"quarter_48t_tps": 60.7, "measured": []},
+                    "acceleration": {"spec_type": "mtp"},
+                    "serving": {"ports": [8072], "binary": "ik-pr1744"},
+                    "known_gaps": [],
+                }
+            ]
+        },
+    )
+
+    priors = compile_stack_priors(
+        registry_path=registry_path,
+        descriptor_path=descriptor_path,
+        active_roles={"worker_general"},
+    )
+
+    launch = priors["roles"]["worker_general"]["serving"]["launch"]
+    assert launch["requirements"]["model_path"] == "/models/gemma-4-26B-A4B-it-Q8_0.gguf"
+    assert (
+        launch["requirements"]["draft_model_path"]
+        == "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf"
+    )
+    assert (
+        launch["runtime"]["flags"]["spec"]["draft_model_path"]
+        == "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf"
+    )
+
+
 def test_compile_shared_aliases_use_runtime_descriptor(tmp_path: Path) -> None:
     registry_path = _write_yaml(
         tmp_path / "registry.yaml",

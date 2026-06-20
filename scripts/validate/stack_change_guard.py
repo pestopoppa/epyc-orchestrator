@@ -20,7 +20,11 @@ import yaml
 REPO_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.registry.stack_priors import _launch_runtime_record, validate_stack_priors_contract  # noqa: E402
+from src.registry.stack_priors import (  # noqa: E402
+    _launch_runtime_record,
+    _server_mode_launch_requirement_overrides,
+    validate_stack_priors_contract,
+)
 
 DEFAULT_REGISTRY = REPO_ROOT / "orchestration" / "model_registry.yaml"
 DEFAULT_DESCRIPTORS = REPO_ROOT / "orchestration" / "model_descriptors.yaml"
@@ -851,6 +855,9 @@ def _launch_manifest_targets(
         descriptor = descriptor_roles.get(role) or {}
         role_cfg = registry_roles.get(role) if isinstance(registry_roles.get(role), dict) else None
         server_cfg = _server_cfg_for_role(role, server_mode)
+        target["launch_requirements"].update(
+            _server_mode_launch_requirement_overrides(server_cfg)
+        )
         target["launch_runtime"] = _launch_runtime_record(
             role,
             descriptor,

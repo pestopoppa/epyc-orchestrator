@@ -48,7 +48,7 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-20T19:44:46Z'
+compiled_at: '2026-06-20T20:07:22Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
@@ -56,31 +56,31 @@ source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
     sha256: 99368745def2306ba47381ed63807e5bc10065d06e803d5d25f754f110d4a14f
-    repo_commit: 401e33ff
+    repo_commit: 1a8cb729
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: cfc87794a05a5744a7405ebfce23772ca8f557732ddf2d967a5c66476cf3e3d0
-    repo_commit: 401e33ff
+    sha256: ee408d8999958146cf49d76b2cb6498102269c7f84352a473aaf590d3099e058
+    repo_commit: 1a8cb729
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 00c70c304463a1dfd59ea0a4568391de5a0aa1d904af809a8eba511e6d7e1bc9
-    repo_commit: 401e33ff
+    repo_commit: 1a8cb729
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: 401e33ff
+    repo_commit: 1a8cb729
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: 3384fe5e66bd5e289c62fee40bdfa665d3a0adc04559c9a67c067928b3768801
-    repo_commit: 401e33ff
+    repo_commit: 1a8cb729
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: a13a6f5b6cf6ec4f37be1a42083128f38cfba023dbfc45508149572741325648
-    repo_commit: 401e33ff
+    repo_commit: 1a8cb729
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 401e33ff
+    repo_commit: 1a8cb729
 roles:
   architect_general:
     role: architect_general
@@ -235,7 +235,8 @@ roles:
         - frontdoor
         modes:
         - default
-        requirements: {}
+        requirements:
+          model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -379,7 +380,8 @@ roles:
         - frontdoor
         modes:
         - default
-        requirements: {}
+        requirements:
+          model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -1401,7 +1403,8 @@ roles:
         - frontdoor
         modes:
         - default
-        requirements: {}
+        requirements:
+          model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server

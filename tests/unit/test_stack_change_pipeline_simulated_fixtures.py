@@ -658,6 +658,27 @@ def _assert_text_stack_primary_port_consumers(
     )
 
 
+def _assert_worker_pool_stack_prior_consumer(
+    records: dict[str, dict[str, Any]],
+    *,
+    expected_port: int,
+    expected_model_path_fragment: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.registry import stack_priors
+    from src.services.worker_pool import WorkerPoolManager, WorkerTier
+
+    monkeypatch.setattr(stack_priors, "live_stack_role_records", lambda: records)
+    config = WorkerPoolManager().config
+
+    assert list(config.workers) == ["worker_general"]
+    worker = config.workers["worker_general"]
+    assert worker.port == expected_port
+    assert expected_model_path_fragment in worker.model_path
+    assert worker.tier is WorkerTier.HOT
+    assert worker.managed_process is False
+
+
 def _assert_seeding_descriptor_fallback_consumer(
     descriptors_path: Path,
     *,
@@ -988,6 +1009,12 @@ def test_simulated_worker_swap_updates_generated_consumers_with_approval(
         config.stack_priors,
         expected_roles=roles,
         expected_port=8072,
+    )
+    _assert_worker_pool_stack_prior_consumer(
+        priors["roles"],
+        expected_port=8072,
+        expected_model_path_fragment="gemma-4-26B-A4B-it-Q8_0.gguf",
+        monkeypatch=monkeypatch,
     )
 
     calls: list[dict[str, Any]] = []

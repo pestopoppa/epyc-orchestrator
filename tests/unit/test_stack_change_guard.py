@@ -383,6 +383,38 @@ def test_validate_stack_priors_rejects_launch_manifest_requirement_drift(
     assert any("mmproj_path" in error for error in result.errors)
 
 
+def test_launch_manifest_targets_prefer_server_mode_launch_requirement_paths(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(
+        tmp_path / "registry.yaml",
+        {
+            "server_mode": {
+                "worker": {
+                    "model_role": "worker_general",
+                    "model_path": "/models/gemma-4-26B-A4B-it-Q8_0.gguf",
+                    "draft_model_path": "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf",
+                }
+            },
+            "roles": {},
+        },
+    )
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+
+    targets = stack_change_guard._launch_manifest_targets(
+        registry_path=registry,
+        descriptor_path=descriptors,
+    )
+
+    requirements = targets["worker_general"]["launch_requirements"]
+    assert requirements["model_path"] == "/models/gemma-4-26B-A4B-it-Q8_0.gguf"
+    assert requirements["draft_model_path"] == "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf"
+    assert (
+        targets["worker_general"]["launch_runtime"]["flags"]["spec"]["draft_model_path"]
+        == "/models/gemma-4-26B-A4B-it-draft-Q8_0.gguf"
+    )
+
+
 def test_validate_stack_priors_rejects_launch_manifest_runtime_drift(
     tmp_path: Path,
 ) -> None:

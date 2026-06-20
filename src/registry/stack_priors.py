@@ -1037,6 +1037,18 @@ def _launch_runtime_record(
     }
 
 
+def _server_mode_launch_requirement_overrides(server_cfg: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(server_cfg, dict):
+        return {}
+
+    overrides: dict[str, str] = {}
+    for key in ("model_path", "draft_model_path", "mmproj_path"):
+        value = server_cfg.get(key)
+        if isinstance(value, str) and value:
+            overrides[key] = value
+    return overrides
+
+
 def _role_memory_cost(
     role: str,
     role_cfg: dict[str, Any] | None,
@@ -1099,12 +1111,25 @@ def _serving_record(
         if isinstance(launch_cfg, dict)
         else _launch_record([])
     )
+    requirement_overrides = (
+        _server_mode_launch_requirement_overrides(server_cfg)
+        if isinstance(launch_cfg, dict)
+        else {}
+    )
+    if requirement_overrides:
+        requirements = launch_record.get("requirements")
+        if not isinstance(requirements, dict):
+            requirements = {}
+        launch_record["requirements"] = {**requirements, **requirement_overrides}
+    runtime_launch_cfg = copy.deepcopy(launch_cfg) if isinstance(launch_cfg, dict) else None
+    if isinstance(runtime_launch_cfg, dict):
+        runtime_launch_cfg["launch"] = launch_record
     runtime_record = _launch_runtime_record(
         role,
         descriptor,
         server_cfg,
         role_cfg,
-        launch_cfg,
+        runtime_launch_cfg,
     )
     launch_record["runtime"] = runtime_record
 
