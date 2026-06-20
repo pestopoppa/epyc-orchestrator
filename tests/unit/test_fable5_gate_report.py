@@ -44,6 +44,11 @@ xmas_routing:
     monkeypatch.setattr(report_mod, "validate_xmas_table", lambda path, **kwargs: [])
     monkeypatch.setattr(
         report_mod,
+        "xmas_quiet_window_report",
+        lambda: {"ready": False, "blockers": ["active AutoPilot process(es): 123"]},
+    )
+    monkeypatch.setattr(
+        report_mod,
         "build_restart_readiness_report",
         lambda state, rows, **kwargs: {
             "restart_ready": False,
@@ -106,6 +111,10 @@ xmas_routing:
     assert xmas["details"]["latest_ab_policy"] == "unknown_legacy"
     assert xmas["details"]["required_ab_policy"] == "incumbent_constrained_v1"
     assert xmas["details"]["latest_ab_latency_ratio"] == 16.18
+    assert xmas["details"]["quiet_window_ready"] is False
+    assert xmas["details"]["quiet_window_blockers"] == [
+        "active AutoPilot process(es): 123"
+    ]
     assert report["sections"][0]["key"] == "phase_health"
     assert report["sections"][0]["status"] == "ready"
     assert [action["key"] for action in report["next_actions"]] == [
@@ -126,6 +135,9 @@ xmas_routing:
         "python3 scripts/analysis/ri10_canary_sample_report.py"
     )
     xmas_action = report["next_actions"][3]
+    assert xmas_action["status"] == "blocked"
+    assert xmas_action["blocked_by"] == ["active AutoPilot process(es): 123"]
+    assert "latest X-MAS held-out A/B decision is hold" in xmas_action["evidence_blockers"]
     assert "xmas_live_ab.py" in xmas_action["command"]
     assert "<heldout_prompts.jsonl>" not in xmas_action["command"]
     assert xmas_action["prompt_manifest"] == (
@@ -186,6 +198,7 @@ xmas_routing:
         config_path=config,
         candidate_table_path=table,
         ab_root=ab_root,
+        quiet_window={"ready": True, "blockers": []},
     )
 
     assert section.status == "ready"
@@ -225,12 +238,57 @@ xmas_routing:
         config_path=config,
         candidate_table_path=table,
         ab_root=ab_root,
+        quiet_window={"ready": True, "blockers": []},
     )
 
     assert section.status == "blocked"
     assert section.blockers == [
         "latest X-MAS held-out A/B policy is "
         "unknown_legacy; required incumbent_constrained_v1"
+    ]
+
+
+def test_xmas_next_action_ready_when_only_evidence_is_missing() -> None:
+    section = report_mod.GateSection(
+        key="xmas_production_path",
+        status="blocked",
+        summary="blocked",
+        blockers=["latest X-MAS held-out A/B decision is hold"],
+        details={"quiet_window_ready": True, "quiet_window_blockers": []},
+    )
+
+    actions = report_mod.build_next_actions([section])
+
+    assert actions == [
+        {
+            "key": "run_xmas_constrained_policy_ab",
+            "priority": "P0",
+            "status": "ready",
+            "reason": (
+                "X-MAS enforce needs a fresh held-out A/B carrying "
+                "incumbent_constrained_v1 and a promote_candidate verdict."
+            ),
+            "requires": (
+                "attested quiet window; runner preflight refuses AutoPilot "
+                "and competing benchmark coordinators"
+            ),
+            "blocked_by": [],
+            "evidence_blockers": ["latest X-MAS held-out A/B decision is hold"],
+            "prompt_manifest": (
+                "benchmarks/results/runs/xmas_live_ab/"
+                "20260618-heldout-resilient/prompts.jsonl"
+            ),
+            "required_policy": "incumbent_constrained_v1",
+            "command": (
+                "cd /mnt/raid0/llm/epyc-orchestrator && "
+                "uv run python scripts/benchmark/xmas_live_ab.py "
+                "--prompts benchmarks/results/runs/xmas_live_ab/"
+                "20260618-heldout-resilient/prompts.jsonl "
+                "--reps 2 --host-quiet-confirmed "
+                "--output benchmarks/results/runs/xmas_live_ab/"
+                "$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy"
+            ),
+        }
     ]
 
 

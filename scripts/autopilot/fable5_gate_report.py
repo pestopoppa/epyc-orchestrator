@@ -47,6 +47,20 @@ DEFAULT_XMAS_CONSTRAINED_OUTPUT_ARG = (
     "benchmarks/results/runs/xmas_live_ab/"
     "$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy"
 )
+XMAS_QUIET_WINDOW_PROCESS_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("AutoPilot", "scripts/autopilot/autopilot.py start"),
+    ("AutoPilot", "autopilot.py start"),
+    ("X-MAS cheap-kill", "xmas_cheap_kill.py"),
+    ("X-MAS function-axis sweep", "xmas_function_axis_sweep.py"),
+    ("BEP A/B", "bep_ab.py"),
+    ("DCP J7 A/B", "dcp_j7_ab.py"),
+    ("DS-E1 KV measurement", "ds_e1_kv_measurements.sh"),
+    ("benchmark runner", "run_benchmark.py"),
+    ("seeding runner", "seed_specialist_routing.py"),
+    ("seeding runner v2", "seed_specialist_routing_v2.py"),
+    ("migration probe", "migration_probe.py"),
+    ("placement fanout probe", "placement_fanout_probe.py"),
+)
 STRICT_RESTART_READINESS_COMMAND = (
     "cd /mnt/raid0/llm/epyc-orchestrator && "
     "python3 scripts/autopilot/restart_readiness_report.py "
@@ -215,11 +229,15 @@ def xmas_section(
     config_path: Path = DEFAULT_CLASSIFIER_CONFIG,
     candidate_table_path: Path = DEFAULT_XMAS_TABLE,
     ab_root: Path = DEFAULT_XMAS_AB_ROOT,
+    quiet_window: dict[str, Any] | None = None,
 ) -> GateSection:
     blockers: list[str] = []
+    quiet_window_report = quiet_window or xmas_quiet_window_report()
     details: dict[str, Any] = {
         "config_path": str(config_path),
         "candidate_table_path": str(candidate_table_path),
+        "quiet_window_ready": quiet_window_report.get("ready"),
+        "quiet_window_blockers": list(quiet_window_report.get("blockers") or []),
     }
     try:
         config = _load_yaml_mapping(config_path)
@@ -306,6 +324,29 @@ def xmas_section(
         blockers=blockers,
         details=details,
     )
+
+
+def xmas_quiet_window_report() -> dict[str, Any]:
+    """Report whether the X-MAS held-out A/B runner preflight can pass."""
+    blockers: list[str] = []
+    matches_by_label: dict[str, list[str]] = {}
+    for label, pattern in XMAS_QUIET_WINDOW_PROCESS_PATTERNS:
+        matches = _pgrep(pattern)
+        if not matches:
+            continue
+        labeled_matches = matches_by_label.setdefault(label, [])
+        for match in matches:
+            if match not in labeled_matches:
+                labeled_matches.append(match)
+
+    for label, matches in matches_by_label.items():
+        blockers.append(f"active {label} process(es): {_compact_processes(matches)}")
+
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "active_processes": matches_by_label,
+    }
 
 
 def _latest_xmas_ab_summary(root: Path) -> dict[str, Any] | None:
@@ -453,14 +494,16 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
 
     xmas = by_key.get("xmas_production_path")
     if xmas and xmas.status != "ready":
+        quiet_window_blockers = list(xmas.details.get("quiet_window_blockers") or [])
         actions.append(
             {
                 "key": "run_xmas_constrained_policy_ab",
                 "priority": "P0",
-                "status": "blocked",
+                "status": "ready" if xmas.details.get("quiet_window_ready") else "blocked",
                 "reason": "X-MAS enforce needs a fresh held-out A/B carrying incumbent_constrained_v1 and a promote_candidate verdict.",
                 "requires": "attested quiet window; runner preflight refuses AutoPilot and competing benchmark coordinators",
-                "blocked_by": xmas.blockers,
+                "blocked_by": quiet_window_blockers,
+                "evidence_blockers": xmas.blockers,
                 "prompt_manifest": DEFAULT_XMAS_HELDOUT_PROMPTS_ARG,
                 "required_policy": REQUIRED_XMAS_AB_POLICY,
                 "command": (
