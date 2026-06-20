@@ -28,6 +28,7 @@ DEFAULT_STACK_PRIORS = ORCH_ROOT / "orchestration" / "derived" / "stack_priors.y
 DEFAULT_CLASSIFIER_CONFIG = ORCH_ROOT / "orchestration" / "classifier_config.yaml"
 DEFAULT_CONTENTION_MATRIX = ORCH_ROOT / "orchestration" / "contention_matrix.yaml"
 DEFAULT_RESEARCH_MANIFEST = RESEARCH_ROOT / "docs" / "MODEL_MANIFEST.md"
+DEFAULT_RI10_REPORT_GLOB = "orchestration/reports/ri10_canary_sample_report*.json"
 DEFAULT_KV_GLOBS = (
     "orchestration/reports/ds_e1*kv*",
     "orchestration/reports/dynamic_stack*kv*",
@@ -223,11 +224,48 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
     mode = factual.get("mode")
     canary_ratio = factual.get("canary_ratio")
     canary_roles = factual.get("canary_roles") or []
+    report_paths = _resolve_glob(ORCH_ROOT, DEFAULT_RI10_REPORT_GLOB)
+    latest_report: dict[str, Any] = {}
+    latest_report_path: Path | None = report_paths[-1] if report_paths else None
+    if latest_report_path:
+        try:
+            loaded = json.loads(latest_report_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                latest_report = loaded
+        except Exception as exc:
+            latest_report = {"error": str(exc)}
+
     status = "missing_data"
-    summary = (
-        "RI-10 config is present, but this packet has no current canary sample-count "
-        "artifact to prove decision readiness."
-    )
+    summary = "RI-10 config is present, but no current canary sample-count artifact was found."
+    if latest_report:
+        if latest_report.get("canary_decision_ready") is True:
+            status = "ready"
+            summary = "RI-10 canary sample-count and enforce/shadow arm telemetry are present."
+        elif latest_report.get("sample_count_ready") is True:
+            status = "insufficient_data"
+            summary = (
+                "RI-10 high-risk sample-count coverage exists, but enforce/shadow canary "
+                "decision telemetry is not sufficient."
+            )
+        else:
+            status = "insufficient_data"
+            summary = "RI-10 canary sample-count artifact exists but is below the high-risk sample gate."
+    report_summary = {
+        key: latest_report.get(key)
+        for key in (
+            "generated_at",
+            "canary_start",
+            "decision_gate_high_risk_samples",
+            "high_risk_rows_since_canary_start",
+            "frontdoor_high_risk_rows_since_canary_start",
+            "sample_count_ready",
+            "canary_decision_ready",
+            "decision_reason",
+            "canary_arm_counts_since_canary_start",
+            "high_risk_gate_actions_since_canary_start",
+        )
+        if key in latest_report
+    }
     return EvidenceSection(
         "ri10_canary",
         status,
@@ -238,6 +276,8 @@ def ri10_canary_section(config_path: Path = DEFAULT_CLASSIFIER_CONFIG) -> Eviden
             "canary_ratio": canary_ratio,
             "canary_roles": canary_roles,
             "decision_gate": ">=50 high-risk samples",
+            "report_path": str(latest_report_path) if latest_report_path else None,
+            "report_summary": report_summary,
         },
     )
 
@@ -287,7 +327,14 @@ def build_packet() -> dict[str, Any]:
         ri10_canary_section(),
         kv_measurement_section(),
     ]
-    blocking_statuses = {"missing", "missing_data", "stale", "invalid", "incomplete"}
+    blocking_statuses = {
+        "missing",
+        "missing_data",
+        "insufficient_data",
+        "stale",
+        "invalid",
+        "incomplete",
+    }
     blockers = [
         f"{section.key}: {section.summary}"
         for section in sections

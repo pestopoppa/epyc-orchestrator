@@ -61,7 +61,7 @@ def test_ds5_manifest_section_flags_stale_compile(tmp_path: Path) -> None:
     assert section.details["stack_priors_compiled_at"] == "2026-06-20T00:00:00Z"
 
 
-def test_ri10_section_reports_config_but_missing_decision_data(tmp_path: Path) -> None:
+def test_ri10_section_reports_config_but_missing_decision_data(tmp_path: Path, monkeypatch) -> None:
     config = tmp_path / "classifier_config.yaml"
     config.write_text(
         """
@@ -72,6 +72,7 @@ factual_risk:
 """,
         encoding="utf-8",
     )
+    monkeypatch.setattr(packet_mod, "ORCH_ROOT", tmp_path)
 
     section = packet_mod.ri10_canary_section(config)
 
@@ -79,6 +80,40 @@ factual_risk:
     assert section.details["mode"] == "canary"
     assert section.details["canary_ratio"] == 0.25
     assert section.details["canary_roles"] == ["frontdoor"]
+
+
+def test_ri10_section_flags_report_with_insufficient_arm_data(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+factual_risk:
+  mode: canary
+  canary_ratio: 0.25
+  canary_roles: [frontdoor]
+""",
+        encoding="utf-8",
+    )
+    report_dir = tmp_path / "orchestration" / "reports"
+    report_dir.mkdir(parents=True)
+    report_path = report_dir / "ri10_canary_sample_report_20260620.json"
+    report_path.write_text(
+        """
+{
+  "sample_count_ready": true,
+  "canary_decision_ready": false,
+  "high_risk_rows_since_canary_start": 490,
+  "decision_reason": "high-risk samples exist, but enforce/shadow canary arm telemetry is not observable"
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(packet_mod, "ORCH_ROOT", tmp_path)
+
+    section = packet_mod.ri10_canary_section(config)
+
+    assert section.status == "insufficient_data"
+    assert section.details["report_path"] == str(report_path)
+    assert section.details["report_summary"]["high_risk_rows_since_canary_start"] == 490
 
 
 def test_kv_measurement_section_flags_missing_series(tmp_path: Path) -> None:

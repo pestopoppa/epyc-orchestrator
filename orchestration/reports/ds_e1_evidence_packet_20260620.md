@@ -1,11 +1,11 @@
 # Dynamic Stack DS-E1 Evidence Packet
 
-Generated: 2026-06-20T14:55:56Z
+Generated: 2026-06-20T15:06:12Z
 Ready for DS-7/DS-6 profile decision: false
 
 ## Blockers
 
-- ri10_canary: RI-10 config is present, but this packet has no current canary sample-count artifact to prove decision readiness.
+- ri10_canary: RI-10 high-risk sample-count coverage exists, but enforce/shadow canary decision telemetry is not sufficient.
 - kv_size_measurements: No direct DS-E1 production KV-size measurement series was found.
 
 ## Evidence Sections
@@ -40,14 +40,16 @@ Ready for DS-7/DS-6 profile decision: false
 
 ### ri10_canary
 
-- Status: `missing_data`
-- Summary: RI-10 config is present, but this packet has no current canary sample-count artifact to prove decision readiness.
+- Status: `insufficient_data`
+- Summary: RI-10 high-risk sample-count coverage exists, but enforce/shadow canary decision telemetry is not sufficient.
 - Details:
   - `path`: "/mnt/raid0/llm/epyc-orchestrator/orchestration/classifier_config.yaml"
   - `mode`: "canary"
   - `canary_ratio`: 0.25
   - `canary_roles`: ["frontdoor"]
   - `decision_gate`: ">=50 high-risk samples"
+  - `report_path`: "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/ri10_canary_sample_report_20260620.json"
+  - `report_summary`: {"canary_arm_counts_since_canary_start": {"enforce_high_risk": 0, "shadow_high_risk": 0}, "canary_decision_ready": false, "canary_start": "2026-04-06", "decision_gate_high_risk_samples": 50, "decision_reason": "high-risk samples exist, but enforce/shadow canary arm telemetry is not observable", "frontdoor_high_risk_rows_since_canary_start": 283, "generated_at": "2026-06-20T15:03:49Z", "high_risk_gate_actions_since_canary_start": {"<missing>": 54, "not_enforced:risk_control_disabled": 390}, "high_risk_rows_since_canary_start": 444, "sample_count_ready": true}
 
 ### kv_size_measurements
 
