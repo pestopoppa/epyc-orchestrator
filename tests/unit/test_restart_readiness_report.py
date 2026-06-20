@@ -172,7 +172,15 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
     assert report["summary"]["baseline_seed_status"] == "ready"
     assert report["summary"]["baseline_seed_append_ready"] is True
     assert report["summary"]["baseline_seed_append_required"] is True
+    assert report["summary"]["baseline_seed_append_expect_trial_counter"] == 2
+    assert report["summary"]["baseline_seed_append_expect_journal_max_trial_id"] is None
     assert report["baseline_authority"]["seed_preflight"]["event_tier"] == 1
+    assert (
+        report["baseline_authority"]["seed_preflight"][
+            "append_expect_trial_counter"
+        ]
+        == 2
+    )
     assert report["summary"]["seq_cutover_ready"] is False
     assert report["summary"]["w6_audited_trial_count"] == 0
 

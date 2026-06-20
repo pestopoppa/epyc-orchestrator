@@ -75,6 +75,8 @@ xmas_routing:
                 "w6_gaming_alarm": True,
                 "w6_potential_overfit_divergences": 4,
                 "baseline_seed_append_ready": True,
+                "baseline_seed_append_expect_trial_counter": 896,
+                "baseline_seed_append_expect_journal_max_trial_id": 895,
             },
         },
     )
@@ -136,6 +138,8 @@ xmas_routing:
     assert restart["details"]["state_trial_counter"] == 896
     assert restart["details"]["snapshot_restart_readiness"] == "tail_fold_ready"
     assert restart["details"]["snapshot_payload_journal_max_trial_id"] == 895
+    assert restart["details"]["baseline_seed_append_expect_trial_counter"] == 896
+    assert restart["details"]["baseline_seed_append_expect_journal_max_trial_id"] == 895
     assert restart["details"]["w6_untrusted_audited_trial_count"] == 1
     assert restart["details"]["w6_untrusted_audited_trial_ids"] == [889]
     assert [action["key"] for action in report["next_actions"]] == [

@@ -105,6 +105,7 @@ def _baseline_seed_preflight(
         }
     result = build_baseline_seed_event(state, journal_rows)
     event = result.event or {}
+    proof = event.get("proof") if isinstance(event.get("proof"), dict) else {}
     after = result.after or {}
     return {
         "status": result.status,
@@ -117,6 +118,8 @@ def _baseline_seed_preflight(
         "event_source_trial_id": event.get("source_trial_id"),
         "event_tier": event.get("tier"),
         "event_new_quality": event.get("new_quality"),
+        "append_expect_trial_counter": proof.get("state_trial_counter"),
+        "append_expect_journal_max_trial_id": proof.get("journal_max_trial_id"),
     }
 
 
@@ -176,6 +179,12 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "baseline_seed_status": baseline_seed.get("status"),
         "baseline_seed_append_ready": baseline_seed.get("append_ready"),
         "baseline_seed_append_required": baseline_seed.get("append_required"),
+        "baseline_seed_append_expect_trial_counter": baseline_seed.get(
+            "append_expect_trial_counter"
+        ),
+        "baseline_seed_append_expect_journal_max_trial_id": baseline_seed.get(
+            "append_expect_journal_max_trial_id"
+        ),
         "seq_cutover_ready": seq.get("cutover_ready"),
         "seq_trusted_vector_trials": seq.get("trusted_vector_trials"),
         "seq_shadow_rows": (seq.get("seq_shadow") or {}).get("seq_shadow_rows"),

@@ -170,6 +170,12 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
                 "w6_potential_overfit_divergences"
             ),
             "baseline_seed_append_ready": summary.get("baseline_seed_append_ready"),
+            "baseline_seed_append_expect_trial_counter": summary.get(
+                "baseline_seed_append_expect_trial_counter"
+            ),
+            "baseline_seed_append_expect_journal_max_trial_id": summary.get(
+                "baseline_seed_append_expect_journal_max_trial_id"
+            ),
             "durable_journal_max_trial_id": archive_authority.get(
                 "journal_max_trial_id"
             ),
