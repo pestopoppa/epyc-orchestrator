@@ -1,6 +1,6 @@
 # Dynamic Stack DS-E1 Evidence Packet
 
-Generated: 2026-06-20T17:46:52Z
+Generated: 2026-06-20T19:48:41Z
 Ready for DS-7/DS-6 profile decision: false
 
 ## Blockers
@@ -15,8 +15,8 @@ Ready for DS-7/DS-6 profile decision: false
 - Summary: 10 live stack-prior roles packaged from generated truth.
 - Details:
   - `path`: "/mnt/raid0/llm/epyc-orchestrator/orchestration/derived/stack_priors.yaml"
-  - `compiled_at`: "2026-06-20T07:13:46Z"
-  - `source_commit`: "61e670d"
+  - `compiled_at`: "2026-06-20T19:44:46Z"
+  - `source_commit`: "401e33ff"
   - `roles`: [{"effective_context_tokens": 16384, "endpoint": "http://localhost:8083", "model_id": "qwen3.5-122b-a10b-q4_k_m", "model_mem_gb": 69.0, "ports": [8083], "role": "architect_general", "throughput_tps": 12.19, "tier": "hot"}, {"effective_context_tokens": 32768, "endpoint": "http://localhost:8070", "model_id": "qwen3.6-35b-a3b-q8_0", "model_mem_gb": 37.0, "ports": [8070], "role": "coder_escalation", "throughput_tps": 24.3, "tier": "hot"}, {"effective_context_tokens": 32768, "endpoint": "http://localhost:8070", "model_id": "qwen3.6-35b-a3b-q8_0", "model_mem_gb": 37.0, "ports": [8070, 8080, 8180, 8280, 8380], "role": "frontdoor", "throughput_tps": 24.3, "tier": "hot"}, {"effective_context_tokens": 32768, "endpoint": "http://localhost:8085", "model_id": "qwen3-next-80b-a3b-q4_k_m", "model_mem_gb": 45.0, "ports": [8085, 8185, 8285, 8385, 8485], "role": "ingest_long_context", "throughput_tps": 20.8, "tier": "hot"}, {"effective_context_tokens": 16384, "endpoint": "http://localhost:8072", "model_id": "gemma4-26b-a4b-q4_k_m", "model_mem_gb": 16.0, "ports": [8072, 8082], "role": "toolrunner", "throughput_tps": 60.7, "tier": "hot"}, {"effective_context_tokens": 16384, "endpoint": "http://localhost:8087", "model_id": "qwen3-vl-30b-a3b-q4_k_m", "model_mem_gb": 18.0, "ports": [8087, 8187, 8287, 8387, 8487], "role": "vision_escalation", "throughput_tps": 27.6, "tier": "hot"}, {"effective_context_tokens": 16384, "endpoint": "http://localhost:8072", "model_id": "gemma4-26b-a4b-q4_k_m", "model_mem_gb": 16.0, "ports": [8072, 8082, 8182, 8282, 8382], "role": "worker_general", "throughput_tps": 60.7, "tier": "hot"}, {"effective_context_tokens": 16384, "endpoint": "http://localhost:8072", "model_id": "gemma4-26b-a4b-q4_k_m", "model_mem_gb": 16.0, "ports": [8072, 8082], "role": "worker_math", "throughput_tps": 60.7, "tier": "hot"}, {"effective_context_tokens": 32768, "endpoint": "http://localhost:8070", "model_id": "qwen3.6-35b-a3b-q8_0", "model_mem_gb": 37.0, "ports": [8070], "role": "worker_summarize", "throughput_tps": 24.3, "tier": "hot"}, {"effective_context_tokens": 8192, "endpoint": "http://localhost:8086", "model_id": "qwen2.5-vl-7b-q4_k_m", "model_mem_gb": 4.4, "ports": [8086], "role": "worker_vision", "throughput_tps": 20.0, "tier": "hot"}]
 
 ### ds5_roster_manifest
@@ -25,8 +25,8 @@ Ready for DS-7/DS-6 profile decision: false
 - Summary: Research model manifest exists for DS-5 roster context.
 - Details:
   - `path`: "/mnt/raid0/llm/epyc-inference-research/docs/MODEL_MANIFEST.md"
-  - `manifest_compiled_at`: "2026-06-20T07:13:46Z"
-  - `stack_priors_compiled_at`: "2026-06-20T07:13:46Z"
+  - `manifest_compiled_at`: "2026-06-20T19:44:46Z"
+  - `stack_priors_compiled_at`: "2026-06-20T19:44:46Z"
 
 ### contention_matrix
 
