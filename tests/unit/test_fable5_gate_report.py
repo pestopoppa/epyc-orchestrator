@@ -108,6 +108,17 @@ xmas_routing:
     assert xmas["details"]["latest_ab_latency_ratio"] == 16.18
     assert report["sections"][0]["key"] == "phase_health"
     assert report["sections"][0]["status"] == "ready"
+    assert [action["key"] for action in report["next_actions"]] == [
+        "continue_w4_w6_accrual",
+        "run_ds_e1_kv_measurements",
+        "collect_ri10_canary_arm_telemetry",
+        "run_xmas_constrained_policy_ab",
+    ]
+    assert report["next_actions"][0]["status"] == "active"
+    assert "ds_e1_kv_measurements.sh --execute" in report["next_actions"][1]["command"]
+    assert report["next_actions"][1]["status"] == "blocked"
+    assert "ri10_canary_sample_report.py" in report["next_actions"][2]["command"]
+    assert "xmas_live_ab.py" in report["next_actions"][3]["command"]
 
 
 def test_ds_e1_section_surfaces_clean_window_blockers() -> None:
@@ -213,6 +224,16 @@ def test_render_markdown_surfaces_section_details() -> None:
         {
             "ready": False,
             "blockers": ["gate: blocked"],
+            "next_actions": [
+                {
+                    "key": "run_gate",
+                    "priority": "P0",
+                    "status": "blocked",
+                    "reason": "needs evidence",
+                    "blocked_by": ["window busy"],
+                    "command": "python3 gate.py --strict",
+                }
+            ],
             "sections": [
                 {
                     "key": "gate",
@@ -228,6 +249,9 @@ def test_render_markdown_surfaces_section_details() -> None:
     assert "# Fable5 Gate Report" in rendered
     assert "Ready: false" in rendered
     assert "- gate: blocked" in rendered
+    assert "## Next Actions" in rendered
+    assert "### run_gate" in rendered
+    assert "- Command: `python3 gate.py --strict`" in rendered
     assert "### gate" in rendered
     assert '`count`: 1' in rendered
 

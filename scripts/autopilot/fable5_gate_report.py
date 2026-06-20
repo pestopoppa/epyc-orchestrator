@@ -360,7 +360,102 @@ def build_fable5_gate_report(
         "ready": not blockers,
         "blockers": blockers,
         "sections": [asdict(section) for section in sections],
+        "next_actions": build_next_actions(sections),
     }
+
+
+def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
+    """Return deterministic operator next steps without changing gate semantics."""
+    by_key = {section.key: section for section in sections}
+    actions: list[dict[str, Any]] = []
+
+    phase = by_key.get("phase_health")
+    if phase and phase.status != "ready":
+        actions.append(
+            {
+                "key": "recover_autopilot_phase",
+                "priority": "P0",
+                "status": "blocked",
+                "reason": "AutoPilot phase health is not ready; do not trust evidence accrual until recovered.",
+                "blocked_by": phase.blockers,
+                "command": "python3 scripts/autopilot/phase_health_report.py --json",
+            }
+        )
+        return actions
+
+    restart = by_key.get("w4_w6_restart_cutover")
+    if restart and restart.status != "ready":
+        details = restart.details
+        actions.append(
+            {
+                "key": "continue_w4_w6_accrual",
+                "priority": "P0",
+                "status": "active" if phase and phase.details.get("status") == "active" else "blocked",
+                "reason": "Sequential authority and W6 audit cutover need more trusted rows before any flip.",
+                "evidence": {
+                    "trusted_vectors": details.get("seq_trusted_vector_trials"),
+                    "seq_shadow_rows": details.get("seq_shadow_rows"),
+                    "w6_audited_rows": details.get("w6_audited_trial_count"),
+                    "w6_gaming_alarm": details.get("w6_gaming_alarm"),
+                },
+                "command": "python3 scripts/autopilot/fable5_gate_report.py --json --strict",
+            }
+        )
+
+    ds_e1 = by_key.get("ds_e1_dynamic_stack")
+    if ds_e1 and ds_e1.status != "ready":
+        details = ds_e1.details
+        section_statuses = details.get("section_statuses") or {}
+        if section_statuses.get("kv_size_measurements") != "ready":
+            actions.append(
+                {
+                    "key": "run_ds_e1_kv_measurements",
+                    "priority": "P0",
+                    "status": "ready" if details.get("clean_window_ready") else "blocked",
+                    "reason": "DS-E1 cannot decide DS-7/DS-6 profiles until direct production KV-size rows exist.",
+                    "requires": "attested clean window with AutoPilot and live llama-server processes stopped/coordinated",
+                    "blocked_by": details.get("clean_window_blockers") or [],
+                    "command": (
+                        "cd /mnt/raid0/llm/epyc-inference-research && "
+                        "scripts/benchmark/ds_e1_kv_measurements.sh --execute"
+                    ),
+                    "follow_up": (
+                        "cd /mnt/raid0/llm/epyc-orchestrator && "
+                        "python3 scripts/server/dynamic_stack_evidence_packet.py "
+                        "--output orchestration/reports/ds_e1_evidence_packet_20260620.md --strict"
+                    ),
+                }
+            )
+        if section_statuses.get("ri10_canary") != "ready":
+            actions.append(
+                {
+                    "key": "collect_ri10_canary_arm_telemetry",
+                    "priority": "P0",
+                    "status": "active",
+                    "reason": "RI-10 has enough high-risk samples, but fresh enforce/shadow canary-arm telemetry is still missing.",
+                    "command": "python3 scripts/analysis/ri10_canary_sample_report.py --json",
+                }
+            )
+
+    xmas = by_key.get("xmas_production_path")
+    if xmas and xmas.status != "ready":
+        actions.append(
+            {
+                "key": "run_xmas_constrained_policy_ab",
+                "priority": "P0",
+                "status": "blocked",
+                "reason": "X-MAS enforce needs a fresh held-out A/B carrying incumbent_constrained_v1 and a promote_candidate verdict.",
+                "requires": "attested quiet window; runner preflight refuses AutoPilot and competing benchmark coordinators",
+                "blocked_by": xmas.blockers,
+                "command": (
+                    "uv run python scripts/benchmark/xmas_live_ab.py "
+                    "--prompts <heldout_prompts.jsonl> --reps 2 --host-quiet-confirmed "
+                    "--output benchmarks/results/runs/xmas_live_ab/<timestamp>-constrained-policy"
+                ),
+            }
+        )
+
+    return actions
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -375,6 +470,33 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.extend(["## Blockers", ""])
         lines.extend(f"- {blocker}" for blocker in blockers)
         lines.append("")
+    next_actions = list(report.get("next_actions") or [])
+    if next_actions:
+        lines.extend(["## Next Actions", ""])
+        for action in next_actions:
+            lines.extend(
+                [
+                    f"### {action.get('key')}",
+                    "",
+                    f"- Priority: `{action.get('priority')}`",
+                    f"- Status: `{action.get('status')}`",
+                    f"- Reason: {action.get('reason')}",
+                ]
+            )
+            if action.get("requires"):
+                lines.append(f"- Requires: {action['requires']}")
+            if action.get("blocked_by"):
+                lines.append("- Blocked by:")
+                lines.extend(f"  - {blocker}" for blocker in action["blocked_by"])
+            if action.get("evidence"):
+                lines.append("- Evidence:")
+                for key, value in action["evidence"].items():
+                    lines.append(f"  - `{key}`: {json.dumps(value, sort_keys=True, default=str)}")
+            if action.get("command"):
+                lines.append(f"- Command: `{action['command']}`")
+            if action.get("follow_up"):
+                lines.append(f"- Follow-up: `{action['follow_up']}`")
+            lines.append("")
     lines.extend(["## Sections", ""])
     for section in report.get("sections") or []:
         lines.extend(
