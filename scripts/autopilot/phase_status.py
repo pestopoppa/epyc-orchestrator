@@ -25,6 +25,7 @@ log = logging.getLogger("autopilot.phase")
 
 PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")
 PHASE_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.jsonl")
+DEFAULT_STALE_AFTER_S = 900.0
 
 
 def _json_default(value: Any) -> str:
@@ -110,6 +111,117 @@ class PhaseTracker:
 
     def clear(self, reason: str = "") -> None:
         self.set("stopped", reason=reason)
+
+
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _process_exists(pid: int | None) -> bool | None:
+    if pid is None:
+        return None
+    if pid < 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def build_phase_health_report(
+    *,
+    path: Path = PHASE_PATH,
+    now: float | None = None,
+    stale_after_s: float = DEFAULT_STALE_AFTER_S,
+) -> dict[str, Any]:
+    """Build a read-only liveness report from the AutoPilot phase heartbeat."""
+    if now is None:
+        now = time.time()
+    if stale_after_s < 0:
+        raise ValueError("stale_after_s must be non-negative")
+
+    payload = _read_json_object(path)
+    if payload is None:
+        return {
+            "ok": False,
+            "status": "missing",
+            "path": str(path),
+            "stale_after_s": stale_after_s,
+            "blockers": [f"phase heartbeat missing or unreadable: {path}"],
+        }
+
+    updated_at = payload.get("updated_at")
+    try:
+        heartbeat_age_s = max(0.0, now - float(updated_at))
+    except (TypeError, ValueError):
+        heartbeat_age_s = None
+
+    pid: int | None
+    try:
+        pid = int(payload["pid"])
+    except (KeyError, TypeError, ValueError):
+        pid = None
+    pid_alive = _process_exists(pid)
+    stale = heartbeat_age_s is None or heartbeat_age_s > stale_after_s
+    blockers: list[str] = []
+    if pid_alive is False:
+        blockers.append(f"phase heartbeat pid is not alive: {pid}")
+    if heartbeat_age_s is None:
+        blockers.append("phase heartbeat has no numeric updated_at")
+    elif stale:
+        blockers.append(
+            f"phase heartbeat is stale: {heartbeat_age_s:.1f}s > {stale_after_s:.1f}s"
+        )
+    status = "active"
+    if blockers:
+        status = "stale" if stale else "pid_dead"
+    return {
+        "ok": not blockers,
+        "status": status,
+        "path": str(path),
+        "stale_after_s": stale_after_s,
+        "heartbeat_age_s": heartbeat_age_s,
+        "pid": pid,
+        "pid_alive": pid_alive,
+        "phase": payload.get("phase"),
+        "phase_started_at": payload.get("phase_started_at"),
+        "phase_age_s_recorded": payload.get("phase_age_s"),
+        "trial_id": payload.get("trial_id"),
+        "action_type": payload.get("action_type"),
+        "idle_reason": payload.get("idle_reason"),
+        "updated_at": payload.get("updated_at"),
+        "updated_at_iso": payload.get("updated_at_iso"),
+        "blockers": blockers,
+        "heartbeat": payload,
+    }
+
+
+def format_phase_health_report(report: dict[str, Any]) -> list[str]:
+    lines = [
+        "# AutoPilot Phase Health",
+        "",
+        f"- Status: {report.get('status')}",
+        f"- OK: {str(report.get('ok')).lower()}",
+        f"- Phase: {report.get('phase')}",
+        f"- Trial: {report.get('trial_id')}",
+        f"- Action: {report.get('action_type')}",
+        f"- Idle reason: {report.get('idle_reason')}",
+        f"- PID: {report.get('pid')} (alive={report.get('pid_alive')})",
+        f"- Heartbeat age: {report.get('heartbeat_age_s')}",
+        f"- Stale threshold: {report.get('stale_after_s')}",
+        f"- Updated at: {report.get('updated_at_iso')}",
+    ]
+    if report.get("blockers"):
+        lines.extend(["", "## Blockers", ""])
+        lines.extend(f"- {blocker}" for blocker in report["blockers"])
+    return lines
 
 
 class AsyncTaskRunner:
