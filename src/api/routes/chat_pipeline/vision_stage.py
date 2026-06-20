@@ -20,9 +20,10 @@ from src.api.models import ChatRequest, ChatResponse
 from src.api.routes.chat_utils import RoutingResult
 from src.api.services.memrl import score_completed_task
 from src.api.routes.vision_serving import (
-    VISION_ROLES as _VISION_ROLES,
+    VISION_ROLES as _LEGACY_VISION_ROLES,
     fallback_vl_port_for_role as _fallback_vl_port_for_role,
     stack_prior_vl_ports as _shared_stack_prior_vl_ports,
+    vision_roles as _shared_vision_roles,
 )
 from src.api.structured_logging import task_extra
 from src.llm_primitives import LLMPrimitives
@@ -32,6 +33,7 @@ _DEFAULT_STACK_PRIORS_PATH = (
 )
 
 log = logging.getLogger(__name__)
+_VISION_ROLES = _LEGACY_VISION_ROLES
 
 
 def _stack_prior_vl_ports(stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH) -> dict[str, int]:
@@ -39,6 +41,10 @@ def _stack_prior_vl_ports(stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH) 
     if not ports:
         log.warning("Using fallback VL ports; no live stack-prior VL ports found")
     return ports
+
+
+def _vision_roles(stack_priors_path: Path = _DEFAULT_STACK_PRIORS_PATH) -> frozenset[str]:
+    return _shared_vision_roles(stack_priors_path)
 
 
 def _vl_port_for_role(
@@ -178,7 +184,7 @@ async def _execute_vision_multimodal(
     Returns None if not a vision request or if the handler fails
     (caller falls through to text-only mode as last resort).
     """
-    if str(initial_role) not in _VISION_ROLES:
+    if str(initial_role) not in _vision_roles():
         return None
     if not (request.image_path or request.image_base64):
         return None

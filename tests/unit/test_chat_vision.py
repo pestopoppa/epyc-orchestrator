@@ -22,6 +22,7 @@ from src.api.routes.chat_vision import (
     _vl_url_for_role,
     _vision_react_mode_answer,
 )
+from src.api.routes.vision_serving import stack_prior_vision_roles, vision_roles
 
 
 class TestStructuredAnalysisDetection:
@@ -61,14 +62,23 @@ roles:
     serving:
       endpoint: http://localhost:9101
       ports: [9101]
+      launch:
+        modes: [vision]
+        entries:
+          - mode: vision
   vision_escalation:
     deployment_status: live_stack
     serving:
       ports: [9107]
+      launch:
+        entries:
+          - vision_type: escalation
   stale_vision:
     deployment_status: benchmark_or_candidate
     serving:
       endpoint: http://localhost:9999
+      launch:
+        modes: [vision]
 """,
             encoding="utf-8",
         )
@@ -77,6 +87,62 @@ roles:
             "worker_vision": "http://localhost:9101",
             "vision_escalation": "http://localhost:9107",
         }
+
+    def test_stack_prior_vision_roles_uses_generated_launch_metadata(self, tmp_path: Path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  worker_vision:
+    deployment_status: live_stack
+    serving:
+      launch:
+        modes: [vision]
+        entries: []
+  document_vision:
+    deployment_status: live_stack
+    serving:
+      launch:
+        modes: [auxiliary]
+        entries:
+          - vision_type: document
+  stale_vision:
+    deployment_status: benchmark_or_candidate
+    serving:
+      launch:
+        modes: [vision]
+        entries: []
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      launch:
+        modes: [worker_pool]
+        entries: []
+""",
+            encoding="utf-8",
+        )
+
+        assert stack_prior_vision_roles(priors) == {"worker_vision", "document_vision"}
+        assert vision_roles(priors) == {"worker_vision", "document_vision"}
+
+    def test_vision_roles_do_not_legacy_fallback_when_artifact_has_no_vision_roles(
+        self, tmp_path: Path
+    ):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  worker_general:
+    deployment_status: live_stack
+    serving:
+      launch:
+        modes: [worker_pool]
+        entries: []
+""",
+            encoding="utf-8",
+        )
+
+        assert vision_roles(priors) == frozenset()
 
     def test_vl_url_for_role_falls_back_to_config_url(self, tmp_path: Path):
         assert _vl_url_for_role("vision_escalation", tmp_path / "missing.yaml") == (
@@ -96,6 +162,10 @@ roles:
         assert _fallback_vl_port_for_role("worker_vision") == 8086
         assert _fallback_vl_port_for_role("vision_escalation") == 8087
 
+    def test_fallback_vl_port_rejects_unknown_degraded_role(self):
+        with pytest.raises(ValueError, match="No degraded VL port fallback"):
+            _fallback_vl_port_for_role("document_vision")
+
     def test_vl_url_for_port_resolves_generated_endpoint(self, tmp_path: Path):
         priors = tmp_path / "stack_priors.yaml"
         priors.write_text(
@@ -105,6 +175,10 @@ roles:
     deployment_status: live_stack
     serving:
       endpoint: http://127.0.0.1:9101
+      launch:
+        modes: [vision]
+        entries:
+          - mode: vision
 """,
             encoding="utf-8",
         )

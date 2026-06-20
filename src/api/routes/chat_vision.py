@@ -22,8 +22,8 @@ from src.prompt_builders import (
 )
 from src.api.routes.chat_utils import QWEN_STOP
 from src.api.routes.vision_serving import (
-    VISION_ROLES as _VISION_ROLES,
     fallback_vl_port_for_role as _fallback_vl_port_for_role,
+    vision_roles as _vision_roles,
 )
 from src.registry.stack_priors import (
     live_stack_role_records,
@@ -77,7 +77,7 @@ def _stack_prior_vl_urls(
         return {}
 
     urls: dict[str, str] = {}
-    for role in _VISION_ROLES:
+    for role in _vision_roles(stack_priors_path):
         record = roles.get(role)
         if record is None:
             continue
@@ -116,7 +116,7 @@ def _vl_url_for_port(
     for url in _stack_prior_vl_urls(stack_priors_path).values():
         if urlparse(url).port == vl_port:
             return url
-    for role in _VISION_ROLES:
+    for role in _vision_roles(stack_priors_path):
         if _fallback_vl_port_for_role(role) == vl_port:
             return _fallback_vl_url_for_role(role)
     return f"http://localhost:{vl_port}"
