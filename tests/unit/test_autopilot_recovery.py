@@ -40,6 +40,9 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
 import autopilot  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
 from pareto_archive import ParetoArchive, ParetoEntry  # noqa: E402
+from src.autopilot_core.journal_reconstruction import (  # noqa: E402
+    reconstruct_archive_from_journal_rows,
+)
 
 
 # ───────── fixtures ──────────
@@ -129,6 +132,66 @@ def test_archive_for_read_command_can_use_journal_snapshot() -> None:
     assert source == autopilot.ARCHIVE_SOURCE_JOURNAL_ALL
     assert archive.read_only is True
     assert [entry.trial_id for entry in archive.frontier(tier=2)] == [2]
+
+
+def test_journal_archive_authority_uses_current_snapshot(
+    journal: ExperimentJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(1, quality=1.4, speed=40.0))
+    rows = autopilot._journal_rows_for_archive(journal)
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    journal.append_journal_snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": archive},
+        policy_version="unit-policy-v1",
+        actor="unit-test",
+    )
+    called_full_replay = False
+
+    def _fail_full_replay(*args, **kwargs):
+        nonlocal called_full_replay
+        called_full_replay = True
+        raise AssertionError("current verified snapshot should satisfy authority")
+
+    monkeypatch.setattr(autopilot, "reconstruct_archive_from_journal_rows", _fail_full_replay)
+
+    payload = autopilot._journal_archive_payload_for_authority(journal)
+
+    assert payload == archive
+    assert called_full_replay is False
+
+
+def test_journal_archive_authority_replays_full_journal_when_snapshot_has_tail(
+    journal: ExperimentJournal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(1, quality=1.4, speed=40.0))
+    rows = autopilot._journal_rows_for_archive(journal)
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+    assert archive is not None
+    journal.append_journal_snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": archive},
+        policy_version="unit-policy-v1",
+        actor="unit-test",
+    )
+    journal.record(_make_entry(2, quality=1.5, speed=45.0))
+    calls: list[int] = []
+
+    def _full_replay(rows_arg, *args, **kwargs):
+        rows_list = list(rows_arg)
+        calls.append(len(rows_list))
+        return reconstruct_archive_from_journal_rows(rows_list, *args, **kwargs)
+
+    monkeypatch.setattr(autopilot, "reconstruct_archive_from_journal_rows", _full_replay)
+
+    payload = autopilot._journal_archive_payload_for_authority(journal)
+
+    assert calls
+    assert payload is not None
+    assert payload["journal_max_trial_id"] == 2
 
 
 def test_archive_for_read_command_falls_back_when_journal_empty(

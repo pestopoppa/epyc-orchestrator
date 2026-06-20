@@ -9,6 +9,7 @@ from typing import Any
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 from src.autopilot_core.journal_snapshot_replay import (
     JOURNAL_SNAPSHOT_EVENT_TYPE,
+    archive_payload_from_current_snapshot,
     build_snapshot_replay_diagnostic,
     format_snapshot_replay_summary,
 )
@@ -115,6 +116,20 @@ def test_snapshot_replay_reports_current_archive_prefix() -> None:
     )
 
 
+def test_current_snapshot_payload_helper_returns_verified_archive() -> None:
+    rows = [_row(1, quality=1.2)]
+    archive = _archive(rows)
+    event = _snapshot_event(
+        through_trial_id=1,
+        snapshot={"archive": archive},
+    )
+
+    payload = archive_payload_from_current_snapshot(rows + [event], [event])
+
+    assert payload == archive
+    assert payload is not archive
+
+
 def test_snapshot_replay_flags_unverified_tail_after_matching_prefix() -> None:
     rows = [_row(1, quality=1.2), _row(2, quality=1.1)]
     event = _snapshot_event(
@@ -130,6 +145,7 @@ def test_snapshot_replay_flags_unverified_tail_after_matching_prefix() -> None:
     assert diagnostic.event_count == 1
     assert diagnostic.tail_trial_count == 1
     assert any("post-snapshot trials" in item for item in diagnostic.warnings)
+    assert archive_payload_from_current_snapshot(rows + [event], [event]) is None
 
 
 def test_snapshot_replay_requires_matching_hash_for_ready_status() -> None:

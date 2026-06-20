@@ -51,6 +51,7 @@ import yaml
 
 from src.registry.stack_priors import live_stack_slot_query_ports
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
+from src.autopilot_core.journal_snapshot_replay import archive_payload_from_current_snapshot
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
 from pareto_archive import ParetoArchive, ParetoEntry, pareto_archive_from_journal_rows
 from safety_gate import Baseline, DEFAULT_BASELINE_PATH, EvalResult, SafetyGate
@@ -2007,8 +2008,16 @@ def _archive_entry_count(payload: object) -> int:
 def _journal_archive_payload_for_authority(
     journal: ExperimentJournal,
 ) -> dict[str, Any] | None:
+    rows = _journal_rows_for_archive(journal)
+    if hasattr(journal, "ledger_events"):
+        snapshot_payload = archive_payload_from_current_snapshot(
+            rows,
+            journal.ledger_events(),
+        )
+        if snapshot_payload is not None:
+            return snapshot_payload
     return reconstruct_archive_from_journal_rows(
-        _journal_rows_for_archive(journal),
+        rows,
         None,
         current_run_only=False,
     )

@@ -100,6 +100,29 @@ def _snapshot_archive_payload(snapshot: dict[str, Any]) -> dict[str, Any] | None
     return None
 
 
+def archive_payload_from_current_snapshot(
+    rows: Iterable[dict[str, Any]],
+    ledger_events: Iterable[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return the latest snapshot archive only when it is current and verified.
+
+    This is the first bounded-replay consumption path: it avoids full journal
+    replay only when there is no tail to fold and the existing diagnostic proves
+    the snapshot archive matches current-policy prefix replay. Tailed snapshots
+    still return ``None`` so callers keep using full replay until a tail-fold
+    consumer exists.
+    """
+    diagnostic = build_snapshot_replay_diagnostic(rows, ledger_events)
+    if diagnostic.bounded_replay_readiness != "current":
+        return None
+    event = diagnostic.latest_event or {}
+    snapshot = event.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return None
+    archive = _snapshot_archive_payload(snapshot)
+    return copy.deepcopy(archive) if isinstance(archive, dict) else None
+
+
 def _journal_trial_stats(
     rows: list[dict[str, Any]], through_trial_id: int,
 ) -> tuple[int, int | None, int | None]:
