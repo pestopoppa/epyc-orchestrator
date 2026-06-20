@@ -1,24 +1,24 @@
 {
   "band_counts": {
     "<missing>": 4828,
-    "high": 490,
-    "low": 70918,
-    "medium": 17760
+    "high": 492,
+    "low": 71229,
+    "medium": 17811
   },
   "band_counts_since_canary_start": {
     "<missing>": 114,
-    "high": 444,
-    "low": 63485,
-    "medium": 15767
+    "high": 446,
+    "low": 63796,
+    "medium": 15818
   },
   "canary_arm_counts_since_canary_start": {
-    "enforce_high_risk": 0,
-    "shadow_high_risk": 0
+    "enforce_high_risk": 1,
+    "shadow_high_risk": 1
   },
-  "canary_decision_ready": false,
+  "canary_decision_ready": true,
   "canary_start": "2026-04-06",
   "decision_gate_high_risk_samples": 50,
-  "decision_reason": "high-risk samples exist, but enforce/shadow canary arm telemetry is not observable",
+  "decision_reason": "high-risk sample count and enforce/shadow arm telemetry are present",
   "example_high_risk_rows": [
     {
       "decision_source": "learned",
@@ -165,8 +165,8 @@
       "timestamp": "2026-04-07T09:14:26.213483+00:00"
     }
   ],
-  "frontdoor_high_risk_rows_since_canary_start": 283,
-  "generated_at": "2026-06-20T15:03:49Z",
+  "frontdoor_high_risk_rows_since_canary_start": 285,
+  "generated_at": "2026-06-20T17:46:52Z",
   "high_risk_by_date_since_canary_start": {
     "2026-04-07": 16,
     "2026-04-09": 12,
@@ -194,22 +194,23 @@
     "2026-06-14": 1,
     "2026-06-15": 5,
     "2026-06-18": 1,
-    "2026-06-19": 2
+    "2026-06-19": 2,
+    "2026-06-20": 2
   },
   "high_risk_decision_sources_since_canary_start": {
     "classifier": 46,
-    "forced": 8,
+    "forced": 10,
     "learned": 241,
     "rules": 149
   },
   "high_risk_gate_actions_since_canary_start": {
-    "<missing>": 54,
+    "<missing>": 56,
     "not_enforced:risk_control_disabled": 390
   },
-  "high_risk_rows_since_canary_start": 444,
-  "high_risk_rows_total": 490,
-  "routing_decision_rows": 93996,
-  "routing_decision_rows_since_canary_start": 79810,
+  "high_risk_rows_since_canary_start": 446,
+  "high_risk_rows_total": 492,
+  "routing_decision_rows": 94360,
+  "routing_decision_rows_since_canary_start": 80174,
   "sample_count_ready": true,
   "source_glob": "/mnt/raid0/llm/epyc-orchestrator/logs/progress/*.jsonl"
 }
