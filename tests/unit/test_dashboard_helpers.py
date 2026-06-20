@@ -440,6 +440,81 @@ def test_process_status_includes_autopilot_phase_health(tmp_path, monkeypatch) -
     assert payload["autopilot_phase_age_s"] == payload["autopilot_phase_health"]["heartbeat_age_s"]
 
 
+def test_repo_readiness_summary_loads_latest_advisory_queue(tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    progress_dir = tmp_path / "progress"
+    data_dir.mkdir()
+    progress_dir.mkdir()
+    (data_dir / "repo_readiness_2026-06-19.json").write_text(
+        json.dumps({"generated_at": "old", "repos": {}}),
+        encoding="utf-8",
+    )
+    report = data_dir / "repo_readiness_2026-06-20.json"
+    report.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-06-20T00:00:00Z",
+                "portfolio": {"maturity": {"achieved_level": 2}},
+                "repos": {
+                    "epyc-root": {"maturity": {"achieved_level": 4}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    queue = data_dir / "repo_readiness_remediation_queue_2026-06-20.json"
+    queue.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-06-20T00:00:01Z",
+                "version": 1,
+                "item_count": 2,
+                "items": [
+                    {"priority": "P1", "repo": "epyc-root", "criterion_id": "L5.auto_eval"},
+                    {"priority": "P0", "repo": "epyc-orchestrator", "criterion_id": "L3.security"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    markdown = progress_dir / "repo-readiness-remediation-2026-06-20.md"
+    markdown.write_text("# queue\n", encoding="utf-8")
+
+    summary = dashboard._repo_readiness_summary(
+        data_dir=data_dir,
+        progress_dir=progress_dir,
+        top_n=1,
+    )
+
+    assert summary["available"] is True
+    assert summary["authority"] == "advisory"
+    assert summary["autopilot_gate"] is False
+    assert summary["report_path"] == str(report)
+    assert summary["queue_path"] == str(queue)
+    assert summary["markdown_path"] == str(markdown)
+    assert summary["generated_at"] == "2026-06-20T00:00:01Z"
+    assert summary["portfolio_level"] == {"achieved_level": 2}
+    assert summary["repo_levels"]["epyc-root"] == {"achieved_level": 4}
+    assert summary["priority_counts"] == {"P1": 1, "P0": 1}
+    assert summary["top_items"] == [
+        {"priority": "P0", "repo": "epyc-orchestrator", "criterion_id": "L3.security"}
+    ]
+
+
+def test_repo_readiness_route_is_advisory_when_missing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(dashboard, "REPO_READINESS_DIR", tmp_path / "missing-data")
+    monkeypatch.setattr(dashboard, "REPO_READINESS_PROGRESS_DIR", tmp_path / "missing-progress")
+
+    response = asyncio.run(dashboard.repo_readiness())
+    payload = json.loads(response.body)
+
+    assert payload["available"] is False
+    assert payload["authority"] == "advisory"
+    assert payload["autopilot_gate"] is False
+    assert payload["item_count"] == 0
+    assert payload["top_items"] == []
+
+
 # ----- dashboard_tasks -----
 
 

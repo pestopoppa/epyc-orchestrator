@@ -100,6 +100,8 @@ PROGRESS_LOG_DIR = ORCHESTRATOR_LOG_DIR / "progress"
 AUTOPILOT_LOG = ORCHESTRATOR_LOG_DIR / "autopilot.log"
 AUTOPILOT_PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")
 ORCHESTRATOR_STATE_PATH = ORCHESTRATOR_LOG_DIR / "orchestrator_state.json"
+REPO_READINESS_DIR = Path("/mnt/raid0/llm/epyc-root/data/repo_readiness")
+REPO_READINESS_PROGRESS_DIR = Path("/mnt/raid0/llm/epyc-root/progress/2026-06")
 
 
 def _load_state_services() -> list[dict[str, Any]]:
@@ -130,6 +132,79 @@ def _autopilot_phase_health() -> dict[str, Any]:
             "path": str(AUTOPILOT_PHASE_PATH),
             "blockers": [f"phase health unavailable: {exc}"],
         }
+
+
+def _latest_matching_file(root: Path, pattern: str) -> Path | None:
+    try:
+        candidates = [path for path in root.glob(pattern) if path.is_file()]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _load_json_file(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _repo_readiness_summary(
+    *,
+    data_dir: Path | None = None,
+    progress_dir: Path | None = None,
+    top_n: int = 12,
+) -> dict[str, Any]:
+    data_dir = data_dir or REPO_READINESS_DIR
+    progress_dir = progress_dir or REPO_READINESS_PROGRESS_DIR
+    report_path = _latest_matching_file(data_dir, "repo_readiness_[0-9]*.json")
+    queue_path = _latest_matching_file(data_dir, "repo_readiness_remediation_queue_*.json")
+    report = _load_json_file(report_path)
+    queue = _load_json_file(queue_path)
+    queue_items = [item for item in queue.get("items", []) if isinstance(item, dict)]
+    priority_counts: dict[str, int] = {}
+    for item in queue_items:
+        priority = str(item.get("priority") or "unknown")
+        priority_counts[priority] = priority_counts.get(priority, 0) + 1
+    top_items = sorted(
+        queue_items,
+        key=lambda item: (
+            str(item.get("priority") or "P9"),
+            str(item.get("repo") or ""),
+            str(item.get("criterion_id") or ""),
+        ),
+    )[:top_n]
+    markdown_path = _latest_matching_file(
+        progress_dir,
+        "repo-readiness-remediation-*.md",
+    )
+    repos = report.get("repos") if isinstance(report.get("repos"), dict) else {}
+    return {
+        "available": bool(report or queue),
+        "authority": "advisory",
+        "autopilot_gate": False,
+        "report_path": str(report_path) if report_path else None,
+        "queue_path": str(queue_path) if queue_path else None,
+        "markdown_path": str(markdown_path) if markdown_path else None,
+        "generated_at": queue.get("generated_at") or report.get("generated_at"),
+        "portfolio_level": (report.get("portfolio") or {}).get("maturity")
+        if isinstance(report.get("portfolio"), dict)
+        else None,
+        "repo_levels": {
+            repo: data.get("maturity")
+            for repo, data in sorted(repos.items())
+            if isinstance(data, dict)
+        },
+        "queue_version": queue.get("version"),
+        "item_count": queue.get("item_count", len(queue_items) if queue_items else 0),
+        "priority_counts": priority_counts,
+        "top_items": top_items,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -955,6 +1030,17 @@ async def process_status() -> JSONResponse:
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
         "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
     }, headers=_NO_STORE_HEADERS)
+
+
+@router.get("/dashboard/api/repo_readiness")
+async def repo_readiness() -> JSONResponse:
+    """Passive repo-readiness queue summary for dashboard pickup.
+
+    This intentionally exposes the root scorer's latest report as advisory
+    planning input only. It is not an AutoPilot authority gate and does not
+    mutate queue state.
+    """
+    return JSONResponse(_repo_readiness_summary(), headers=_NO_STORE_HEADERS)
 
 
 # ---------------------------------------------------------------------------
