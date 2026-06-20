@@ -53,10 +53,18 @@ xmas_routing:
         lambda state, rows, **kwargs: {
             "restart_ready": False,
             "blockers": ["sequential verdict cutover readiness is blocked"],
+            "archive_authority": {
+                "journal_max_trial_id": 895,
+                "state_trial_counter": 896,
+            },
+            "snapshot_replay": {
+                "payload_journal_max_trial_id": 895,
+            },
             "summary": {
                 "seq_cutover_ready": False,
                 "seq_trusted_vector_trials": 62,
                 "seq_shadow_rows": 10,
+                "snapshot_restart_readiness": "tail_fold_ready",
                 "w6_audit_cutover_ready": False,
                 "w6_audited_trial_count": 34,
                 "w6_min_audited_trials": 30,
@@ -117,6 +125,13 @@ xmas_routing:
     ]
     assert report["sections"][0]["key"] == "phase_health"
     assert report["sections"][0]["status"] == "ready"
+    restart = [
+        section for section in report["sections"] if section["key"] == "w4_w6_restart_cutover"
+    ][0]
+    assert restart["details"]["durable_journal_max_trial_id"] == 895
+    assert restart["details"]["state_trial_counter"] == 896
+    assert restart["details"]["snapshot_restart_readiness"] == "tail_fold_ready"
+    assert restart["details"]["snapshot_payload_journal_max_trial_id"] == 895
     assert [action["key"] for action in report["next_actions"]] == [
         "continue_w4_w6_accrual",
         "run_ds_e1_kv_measurements",

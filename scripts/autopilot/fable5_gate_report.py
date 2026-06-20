@@ -123,6 +123,8 @@ def phase_section(phase_report: dict[str, Any]) -> GateSection:
 def restart_section(restart_report: dict[str, Any]) -> GateSection:
     summary = restart_report.get("summary") or {}
     blockers = list(restart_report.get("blockers") or [])
+    archive_authority = restart_report.get("archive_authority") or {}
+    snapshot_replay = restart_report.get("snapshot_replay") or {}
     return GateSection(
         key="w4_w6_restart_cutover",
         status="ready" if restart_report.get("restart_ready") else "blocked",
@@ -144,6 +146,14 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
                 "w6_potential_overfit_divergences"
             ),
             "baseline_seed_append_ready": summary.get("baseline_seed_append_ready"),
+            "durable_journal_max_trial_id": archive_authority.get(
+                "journal_max_trial_id"
+            ),
+            "state_trial_counter": archive_authority.get("state_trial_counter"),
+            "snapshot_restart_readiness": summary.get("snapshot_restart_readiness"),
+            "snapshot_payload_journal_max_trial_id": snapshot_replay.get(
+                "payload_journal_max_trial_id"
+            ),
         },
     )
 
