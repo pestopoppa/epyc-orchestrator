@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 from typing import Any
 
@@ -116,8 +118,14 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
     )
 
 
-def ds_e1_section(packet: dict[str, Any]) -> GateSection:
+def ds_e1_section(
+    packet: dict[str, Any],
+    *,
+    clean_window: dict[str, Any] | None = None,
+) -> GateSection:
     blockers = list(packet.get("blockers") or [])
+    clean_window_report = clean_window or ds_e1_clean_window_report()
+    clean_window_blockers = list(clean_window_report.get("blockers") or [])
     return GateSection(
         key="ds_e1_dynamic_stack",
         status="ready" if packet.get("ready_for_profile_decision") else "blocked",
@@ -134,8 +142,58 @@ def ds_e1_section(packet: dict[str, Any]) -> GateSection:
                 for section in packet.get("sections") or []
                 if isinstance(section, dict)
             },
+            "clean_window_ready": clean_window_report.get("ready"),
+            "clean_window_blockers": clean_window_blockers,
         },
     )
+
+
+def ds_e1_clean_window_report() -> dict[str, Any]:
+    """Report whether the DS-E1 KV harness can run without contaminating evidence."""
+    blockers: list[str] = []
+    autopilot = _pgrep("scripts/autopilot/autopilot.py start")
+    llama = _pgrep_exact("llama-server")
+    if autopilot:
+        blockers.append(f"active AutoPilot process(es): {_compact_processes(autopilot)}")
+    if llama:
+        blockers.append(f"live llama-server process(es): {_compact_processes(llama)}")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "active_autopilot": autopilot,
+        "live_llama_server": llama,
+    }
+
+
+def _pgrep(pattern: str) -> list[str]:
+    result = subprocess.run(
+        ["pgrep", "-af", pattern],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    current_pid = str(os.getpid())
+    return [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip() and not line.startswith(f"{current_pid} ")
+    ]
+
+
+def _pgrep_exact(name: str) -> list[str]:
+    result = subprocess.run(
+        ["pgrep", "-a", "-x", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _compact_processes(lines: list[str], *, limit: int = 4) -> str:
+    if len(lines) <= limit:
+        return "; ".join(lines)
+    return "; ".join(lines[:limit]) + f"; ... +{len(lines) - limit} more"
 
 
 def xmas_section(

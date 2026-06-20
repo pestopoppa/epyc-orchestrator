@@ -103,6 +103,28 @@ xmas_routing:
     assert report["sections"][0]["status"] == "ready"
 
 
+def test_ds_e1_section_surfaces_clean_window_blockers() -> None:
+    section = report_mod.ds_e1_section(
+        {
+            "ready_for_profile_decision": False,
+            "generated_at": "2026-06-20T00:00:00Z",
+            "blockers": ["kv_size_measurements: missing"],
+            "sections": [{"key": "kv_size_measurements", "status": "missing"}],
+        },
+        clean_window={
+            "ready": False,
+            "blockers": ["active AutoPilot process(es): 123 autopilot"],
+        },
+    )
+
+    assert section.status == "blocked"
+    assert section.blockers == ["kv_size_measurements: missing"]
+    assert section.details["clean_window_ready"] is False
+    assert section.details["clean_window_blockers"] == [
+        "active AutoPilot process(es): 123 autopilot"
+    ]
+
+
 def test_xmas_section_accepts_promote_candidate_ab(monkeypatch, tmp_path: Path) -> None:
     config = tmp_path / "classifier_config.yaml"
     config.write_text(
