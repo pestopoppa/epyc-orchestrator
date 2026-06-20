@@ -151,9 +151,21 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "restart_ready": restart_report.get("restart_ready"),
             "seq_cutover_ready": summary.get("seq_cutover_ready"),
             "seq_trusted_vector_trials": summary.get("seq_trusted_vector_trials"),
+            "seq_min_trusted_vector_trials": summary.get(
+                "seq_min_trusted_vector_trials"
+            ),
+            "seq_trusted_vector_trials_remaining": summary.get(
+                "seq_trusted_vector_trials_remaining"
+            ),
             "seq_shadow_rows": summary.get("seq_shadow_rows"),
+            "seq_min_shadow_rows": summary.get("seq_min_shadow_rows"),
+            "seq_shadow_rows_remaining": summary.get("seq_shadow_rows_remaining"),
             "w6_audit_cutover_ready": summary.get("w6_audit_cutover_ready"),
             "w6_audited_trial_count": summary.get("w6_audited_trial_count"),
+            "w6_min_audited_trials": summary.get("w6_min_audited_trials"),
+            "w6_audited_trial_count_remaining": summary.get(
+                "w6_audited_trial_count_remaining"
+            ),
             "w6_raw_audited_trial_count": summary.get("w6_raw_audited_trial_count"),
             "w6_trusted_audited_trial_count": summary.get(
                 "w6_trusted_audited_trial_count"
@@ -164,7 +176,6 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "w6_untrusted_audited_trial_ids": summary.get(
                 "w6_untrusted_audited_trial_ids"
             ),
-            "w6_min_audited_trials": summary.get("w6_min_audited_trials"),
             "w6_gaming_alarm": summary.get("w6_gaming_alarm"),
             "w6_potential_overfit_divergences": summary.get(
                 "w6_potential_overfit_divergences"
@@ -503,8 +514,22 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 "reason": "Sequential authority and W6 audit cutover need more trusted rows before any flip.",
                 "evidence": {
                     "trusted_vectors": details.get("seq_trusted_vector_trials"),
+                    "trusted_vectors_required": details.get(
+                        "seq_min_trusted_vector_trials"
+                    ),
+                    "trusted_vectors_remaining": details.get(
+                        "seq_trusted_vector_trials_remaining"
+                    ),
                     "seq_shadow_rows": details.get("seq_shadow_rows"),
+                    "seq_shadow_rows_required": details.get("seq_min_shadow_rows"),
+                    "seq_shadow_rows_remaining": details.get(
+                        "seq_shadow_rows_remaining"
+                    ),
                     "w6_audited_rows": details.get("w6_audited_trial_count"),
+                    "w6_audited_rows_required": details.get("w6_min_audited_trials"),
+                    "w6_audited_rows_remaining": details.get(
+                        "w6_audited_trial_count_remaining"
+                    ),
                     "w6_gaming_alarm": details.get("w6_gaming_alarm"),
                 },
                 "command": STRICT_RESTART_READINESS_COMMAND,

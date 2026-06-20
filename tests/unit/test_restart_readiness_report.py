@@ -182,7 +182,12 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
         == 2
     )
     assert report["summary"]["seq_cutover_ready"] is False
+    assert report["summary"]["seq_min_trusted_vector_trials"] is None
+    assert report["summary"]["seq_trusted_vector_trials_remaining"] is None
+    assert report["summary"]["seq_min_shadow_rows"] is None
+    assert report["summary"]["seq_shadow_rows_remaining"] is None
     assert report["summary"]["w6_audited_trial_count"] == 0
+    assert report["summary"]["w6_audited_trial_count_remaining"] == 30
 
 
 def test_baseline_seed_preflight_skips_when_ledger_fold_ready(monkeypatch) -> None:
@@ -273,6 +278,7 @@ def test_w6_audit_summary_is_visible_without_blocking_restart(monkeypatch) -> No
     assert report["blockers"] == []
     assert report["summary"]["w6_audit_cutover_ready"] is False
     assert report["summary"]["w6_audited_trial_count"] == 29
+    assert report["summary"]["w6_audited_trial_count_remaining"] == 1
     assert report["summary"]["w6_untrusted_audited_trial_count"] == 0
     assert report["summary"]["w6_untrusted_audited_trial_ids"] == []
     assert report["summary"]["w6_min_audited_trials"] == 30
@@ -326,6 +332,7 @@ def test_require_w6_audit_accepts_clean_minimum(monkeypatch) -> None:
     assert report["restart_ready"] is True
     assert report["blockers"] == []
     assert report["summary"]["w6_audit_cutover_ready"] is True
+    assert report["summary"]["w6_audited_trial_count_remaining"] == 0
 
 
 def test_require_w6_audit_uses_trailing_alarm_window(monkeypatch) -> None:

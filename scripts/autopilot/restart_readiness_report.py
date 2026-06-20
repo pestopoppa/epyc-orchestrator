@@ -168,6 +168,13 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
     archive = report["archive_authority"]
     baseline = report["baseline_authority"]
     baseline_seed = baseline.get("seed_preflight") or {}
+    seq_thresholds = seq.get("thresholds") or {}
+    seq_trusted_count = seq.get("trusted_vector_trials")
+    seq_min_trusted = seq_thresholds.get("min_trusted_vector_trials")
+    seq_shadow_rows = (seq.get("seq_shadow") or {}).get("seq_shadow_rows")
+    seq_min_shadow = seq_thresholds.get("min_seq_shadow_rows")
+    w6_audited_count = w6.get("audited_trial_count")
+    w6_min_audited = w6.get("min_audited_trials")
     return {
         "restart_ready": report["restart_ready"],
         "blockers": report["blockers"],
@@ -186,15 +193,26 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
             "append_expect_journal_max_trial_id"
         ),
         "seq_cutover_ready": seq.get("cutover_ready"),
-        "seq_trusted_vector_trials": seq.get("trusted_vector_trials"),
-        "seq_shadow_rows": (seq.get("seq_shadow") or {}).get("seq_shadow_rows"),
+        "seq_trusted_vector_trials": seq_trusted_count,
+        "seq_min_trusted_vector_trials": seq_min_trusted,
+        "seq_trusted_vector_trials_remaining": _remaining_count(
+            seq_trusted_count,
+            seq_min_trusted,
+        ),
+        "seq_shadow_rows": seq_shadow_rows,
+        "seq_min_shadow_rows": seq_min_shadow,
+        "seq_shadow_rows_remaining": _remaining_count(seq_shadow_rows, seq_min_shadow),
         "w6_audit_cutover_ready": w6.get("cutover_ready"),
-        "w6_audited_trial_count": w6.get("audited_trial_count"),
+        "w6_audited_trial_count": w6_audited_count,
         "w6_raw_audited_trial_count": w6.get("raw_audited_trial_count"),
         "w6_trusted_audited_trial_count": w6.get("trusted_audited_trial_count"),
         "w6_untrusted_audited_trial_count": w6.get("untrusted_audited_trial_count"),
         "w6_untrusted_audited_trial_ids": w6.get("untrusted_audited_trial_ids"),
-        "w6_min_audited_trials": w6.get("min_audited_trials"),
+        "w6_min_audited_trials": w6_min_audited,
+        "w6_audited_trial_count_remaining": _remaining_count(
+            w6_audited_count,
+            w6_min_audited,
+        ),
         "w6_alarm_window": w6.get("alarm_window"),
         "w6_alarm_window_trial_count": w6.get("alarm_window_trial_count"),
         "w6_gaming_alarm": w6.get("gaming_alarm"),
@@ -204,6 +222,13 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
             "cumulative_potential_overfit_divergences"
         ),
     }
+
+
+def _remaining_count(current: Any, minimum: Any) -> int | None:
+    try:
+        return max(0, int(minimum) - int(current))
+    except (TypeError, ValueError):
+        return None
 
 
 def build_restart_readiness_report(
