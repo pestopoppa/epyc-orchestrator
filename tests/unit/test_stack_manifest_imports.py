@@ -175,6 +175,31 @@ def test_port_map_aliases_match_computed_launch_servers() -> None:
         assert PORT_MAP[role] == computed_role_ports[role]
 
 
+def test_dense_retriever_candidates_are_warm_embedding_roles() -> None:
+    from scripts.server.stack_manifest import (
+        EMBEDDING_SERVER_RECIPES,
+        HOT_SERVERS,
+        ROLE_LAUNCH_META,
+        WARM_SERVERS,
+    )
+
+    candidate_ports = {
+        "embedder_granite_97m_r2": 8096,
+        "embedder_multilingual_e5_base": 8097,
+        "embedder_bge_m3": 8098,
+    }
+    hot_roles = {role for server in HOT_SERVERS for role in server.get("roles", [])}
+    warm_role_ports = {
+        role: server["port"] for server in WARM_SERVERS for role in server.get("roles", [])
+    }
+
+    for role, port in candidate_ports.items():
+        assert role not in hot_roles
+        assert warm_role_ports[role] == port
+        assert ROLE_LAUNCH_META[role]["mode"] == "embedding"
+        assert EMBEDDING_SERVER_RECIPES[port]["model_path"].endswith(".gguf")
+
+
 def test_launch_kv_quant_configs_keep_canonical_worker_roles_only() -> None:
     from scripts.server.stack_manifest import LAUNCH_KV_QUANT_CONFIGS
 

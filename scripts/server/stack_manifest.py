@@ -47,6 +47,9 @@ PORT_MAP = {
     "embedder_3": 8093,
     "embedder_4": 8094,
     "embedder_5": 8095,
+    "embedder_granite_97m_r2": 8096,
+    "embedder_multilingual_e5_base": 8097,
+    "embedder_bge_m3": 8098,
     "orchestrator": 8000,
     "document_formalizer": 9001,
     "sd_server": 8190,  # ERNIE-Image-Turbo via stable-diffusion.cpp native (replaced ComfyUI 2026-05-07; ~1.7-3.4× CPU speedup)
@@ -165,6 +168,26 @@ ROLE_LAUNCH_META: dict[str, dict] = {
     "embedder_3": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8093},
     "embedder_4": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8094},
     "embedder_5": {"tier": "hot", "mode": "embedding", "no_numa": True, "port": 8095},
+    # Dense-retriever Phase B candidates. Warm/default-off so production
+    # BGE-large episodic memory behavior stays unchanged until explicitly launched.
+    "embedder_granite_97m_r2": {
+        "tier": "warm",
+        "mode": "embedding",
+        "no_numa": True,
+        "port": 8096,
+    },
+    "embedder_multilingual_e5_base": {
+        "tier": "warm",
+        "mode": "embedding",
+        "no_numa": True,
+        "port": 8097,
+    },
+    "embedder_bge_m3": {
+        "tier": "warm",
+        "mode": "embedding",
+        "no_numa": True,
+        "port": 8098,
+    },
     # ---- WARM tier (optional, --include-warm) ----
     # 2026-05-06: worker_pool deprecated in registry; warm 1.5B worker retained as inert.
     "worker_fast": {
@@ -188,6 +211,49 @@ ROLE_LAUNCH_META: dict[str, dict] = {
 # 6 parallel instances provide redundancy and reduce latency via fan-out
 EMBEDDING_MODEL_PATH = str(_PATHS["models_dir"] / "bge-large-en-v1.5-f16.gguf")
 EMBEDDER_PORTS = [8090, 8091, 8092, 8093, 8094, 8095]
+EMBEDDING_SERVER_RECIPES: dict[int, dict[str, str | int | bool]] = {
+    port: {
+        "model_path": EMBEDDING_MODEL_PATH,
+        "model_name": "BGE-large-en-v1.5 (embeddings)",
+        "context_tokens": 512,
+        "threads": 4,
+        "slots": 4,
+        "pooling": "cls",
+        "flash_attn": True,
+    }
+    for port in EMBEDDER_PORTS
+}
+EMBEDDING_SERVER_RECIPES.update(
+    {
+        8096: {
+            "model_path": "/mnt/raid0/llm/models/granite-embedding-97m-multilingual-r2-Q8_0.gguf",
+            "model_name": "granite-embedding-97m-multilingual-r2 Q8_0",
+            "context_tokens": 32768,
+            "threads": 16,
+            "slots": 4,
+            "pooling": "cls",
+            "flash_attn": True,
+        },
+        8097: {
+            "model_path": "/mnt/raid0/llm/models/multilingual-e5-base-Q8_0.gguf",
+            "model_name": "multilingual-e5-base Q8_0",
+            "context_tokens": 512,
+            "threads": 16,
+            "slots": 4,
+            "pooling": "mean",
+            "flash_attn": True,
+        },
+        8098: {
+            "model_path": "/mnt/raid0/llm/models/bge-m3-Q8_0.gguf",
+            "model_name": "BGE-M3 Q8_0 dense-only",
+            "context_tokens": 8192,
+            "threads": 16,
+            "slots": 4,
+            "pooling": "cls",
+            "flash_attn": True,
+        },
+    }
+)
 
 # Worker pool models (FIXED paths to existing files)
 # NOTE: worker_coder uses the fast 1.5B worker backend on port 8102.

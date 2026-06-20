@@ -258,6 +258,26 @@ def test_build_embedding_command_enables_embeddings_and_cls_pool() -> None:
     assert cmd[cmd.index("-t") + 1] == "4"
 
 
+def test_build_embedding_command_uses_warm_candidate_recipes() -> None:
+    granite = oss._build_embedding_command(port=8096)
+    assert granite[granite.index("-m") + 1].endswith(
+        "granite-embedding-97m-multilingual-r2-Q8_0.gguf"
+    )
+    assert granite[granite.index("-c") + 1] == "32768"
+    assert granite[granite.index("-t") + 1] == "16"
+    assert granite[granite.index("--pooling") + 1] == "cls"
+
+    e5 = oss._build_embedding_command(port=8097)
+    assert e5[e5.index("-m") + 1].endswith("multilingual-e5-base-Q8_0.gguf")
+    assert e5[e5.index("-c") + 1] == "512"
+    assert e5[e5.index("--pooling") + 1] == "mean"
+
+    bge_m3 = oss._build_embedding_command(port=8098)
+    assert bge_m3[bge_m3.index("-m") + 1].endswith("bge-m3-Q8_0.gguf")
+    assert bge_m3[bge_m3.index("-c") + 1] == "8192"
+    assert bge_m3[bge_m3.index("--pooling") + 1] == "cls"
+
+
 def test_build_dev_command_short_context_small_threads() -> None:
     cmd = oss._build_dev_command(port=9999)
     assert cmd[cmd.index("-c") + 1] == "4096"
@@ -783,6 +803,31 @@ def test_start_server_worker_pool_forwards_numa_instance_to_prefix(tmp_path, mon
     assert info is not None
     assert calls == [("worker_general", 3)]
     assert popen.call_args.args[0][:3] == ["taskset", "-c", "worker_general:3"]
+    _assert_detached_popen(popen)
+
+
+def test_start_server_embedding_candidate_reports_recipe_model_path(
+    tmp_path, monkeypatch
+) -> None:
+    fake_proc = SimpleNamespace(pid=4344)
+    monkeypatch.setattr(oss, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(oss, "_write_llama_marker", lambda *a, **kw: None)
+    monkeypatch.setattr(oss, "wait_for_health", lambda *a, **kw: True)
+    monkeypatch.setattr(oss, "build_launch_env", lambda *a, **kw: {})
+    with (
+        patch.object(oss, "_numa_prefix", return_value=[]),
+        patch.object(oss.subprocess, "Popen", return_value=fake_proc) as popen,
+    ):
+        info = oss.start_server(
+            port=8096,
+            roles=["embedder_granite_97m_r2"],
+            registry=SimpleNamespace(),
+            embedding_mode=True,
+        )
+
+    assert info is not None
+    assert info.model_path.endswith("granite-embedding-97m-multilingual-r2-Q8_0.gguf")
+    assert popen.call_args.args[0][0].endswith("llama-server")
     _assert_detached_popen(popen)
 
 

@@ -101,6 +101,7 @@ from scripts.server.stack_manifest import (
     DOCKER_SERVICES,
     EMBEDDER_PORTS,
     EMBEDDING_MODEL_PATH,
+    EMBEDDING_SERVER_RECIPES,
     EXPLORE_DRAFT_MODEL,
     HOT_ROLES,
     HOT_SERVERS,
@@ -497,27 +498,39 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
 
 
 def _build_embedding_command(port: int) -> list[str]:
-    """BGE-large embedding server with CLS pooling (6 parallel instances in prod)."""
-    return [
+    """Embedding server command for production BGE ports or warm eval candidates."""
+    recipe = EMBEDDING_SERVER_RECIPES.get(port)
+    if recipe is None:
+        recipe = {
+            "model_path": EMBEDDING_MODEL_PATH,
+            "context_tokens": 512,
+            "threads": 4,
+            "slots": 4,
+            "pooling": "cls",
+            "flash_attn": True,
+        }
+
+    cmd = [
         str(LLAMA_SERVER),
         "-m",
-        EMBEDDING_MODEL_PATH,
+        str(recipe["model_path"]),
         "--host",
         "127.0.0.1",
         "--port",
         str(port),
         "-np",
-        "4",  # 4 parallel slots for embedding requests
+        str(recipe["slots"]),
         "-c",
-        "512",  # BGE works with short contexts
+        str(recipe["context_tokens"]),
         "-t",
-        "4",  # 4 threads per instance (6 instances = 24 threads total)
-        "--embeddings",  # Enable embedding endpoint
+        str(recipe["threads"]),
+        "--embeddings",
         "--pooling",
-        "cls",  # BGE uses CLS token pooling (standard BERT)
-        "--flash-attn",
-        "on",
+        str(recipe["pooling"]),
     ]
+    if recipe.get("flash_attn"):
+        cmd.extend(["--flash-attn", "on"])
+    return cmd
 
 
 def _build_worker_fast_command(port: int, model_path: str) -> list[str]:
@@ -1025,8 +1038,9 @@ def start_server(
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
         cmd = build_server_command(None, port, dev_mode=False, embedding_mode=True)
-        model_name = "BGE-large-en-v1.5 (embeddings)"
-        instance_idx = port - 8090  # 0-5 for ports 8090-8095
+        recipe = EMBEDDING_SERVER_RECIPES.get(port, {})
+        model_name = str(recipe.get("model_name", "embedding model"))
+        instance_idx = port - 8090 if port in EMBEDDER_PORTS else port
 
         print(f"  Starting embedder #{instance_idx} on port {port}: {model_name}")
         print(f"    Roles: {', '.join(roles)}")
@@ -1060,7 +1074,7 @@ def start_server(
                 pid=proc.pid,
                 port=port,
                 started_at=datetime.now().isoformat(),
-                model_path=EMBEDDING_MODEL_PATH,
+                model_path=str(recipe.get("model_path", EMBEDDING_MODEL_PATH)),
                 log_file=str(log_file),
             )
         else:
