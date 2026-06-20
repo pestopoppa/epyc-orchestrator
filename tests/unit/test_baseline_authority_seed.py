@@ -156,3 +156,28 @@ def test_cli_trial_counter_mismatch_returns_two(tmp_path: Path, capsys) -> None:
 
     assert rc == 2
     assert out["status"] == "trial_counter_mismatch"
+
+
+def test_cli_journal_max_trial_mismatch_returns_two(tmp_path: Path, capsys) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    state_path.write_text(json.dumps(_state()), encoding="utf-8")
+    journal_path.write_text(json.dumps(_trial(11)) + "\n", encoding="utf-8")
+
+    rc = seed_mod.main(
+        [
+            "--state",
+            str(state_path),
+            "--journal",
+            str(journal_path),
+            "--append",
+            "--expect-journal-max-trial-id",
+            "10",
+            "--json",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+
+    assert rc == 2
+    assert out["status"] == "journal_max_trial_id_mismatch"
+    assert "expected journal max trial_id 10" in out["warning"]

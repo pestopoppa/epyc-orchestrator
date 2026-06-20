@@ -281,6 +281,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         help="Refuse to append if state trial_counter differs from this value.",
     )
+    parser.add_argument(
+        "--expect-journal-max-trial-id",
+        type=int,
+        help="Refuse to append if the journal max trial_id differs from this value.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit structured JSON.")
     return parser.parse_args(argv)
 
@@ -301,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     actual_counter = state.get("trial_counter")
+    journal_rows = _load_jsonl(journal_path)
+    actual_journal_max_trial_id = _max_trial_id(journal_rows)
     if (
         args.append
         and args.expect_trial_counter is not None
@@ -313,10 +320,22 @@ def main(argv: list[str] | None = None) -> int:
                 f"found {actual_counter}"
             ),
         )
+    elif (
+        args.append
+        and args.expect_journal_max_trial_id is not None
+        and actual_journal_max_trial_id != args.expect_journal_max_trial_id
+    ):
+        result = BaselineSeedResult(
+            status="journal_max_trial_id_mismatch",
+            warning=(
+                f"expected journal max trial_id {args.expect_journal_max_trial_id}, "
+                f"found {actual_journal_max_trial_id}"
+            ),
+        )
     else:
         result = build_baseline_seed_event(
             state,
-            _load_jsonl(journal_path),
+            journal_rows,
             tier=args.tier,
         )
         if args.append:
@@ -328,7 +347,11 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(_summary_lines(result)))
     if result.status in {"ready", "already_aligned", "written"}:
         return 0
-    if result.status in {"trial_counter_mismatch", "live_autopilot_running"}:
+    if result.status in {
+        "journal_max_trial_id_mismatch",
+        "trial_counter_mismatch",
+        "live_autopilot_running",
+    }:
         return 2
     return 1
 
