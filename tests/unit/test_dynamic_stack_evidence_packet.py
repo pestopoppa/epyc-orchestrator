@@ -134,8 +134,69 @@ def test_kv_measurement_section_finds_recursive_relative_candidates(tmp_path: Pa
         patterns=("../epyc-inference-research/data/dynamic_stack/**/kv*",),
     )
 
-    assert section.status == "candidate"
+    assert section.status == "incomplete"
     assert section.details["paths"] == [str(artifact.resolve())]
+    assert section.details["missing_measurements"]["frontdoor"] == [2048, 8192, 32768]
+
+
+def test_kv_measurement_section_rejects_partial_csv(tmp_path: Path) -> None:
+    artifact = tmp_path / "kv_measurements.csv"
+    artifact.write_text(
+        "\n".join(
+            [
+                "role,model_id,model_path,context_length,max_context,ctk,ctv,hadamard,status,rss_load_mb,rss_after_prefill_mb,server_kv_size_mb,prompt_tokens,prompt_tps,log_file,notes",
+                "frontdoor,qwen-frontdoor,/models/frontdoor.gguf,2048,32768,q4_0,f16,yes,ok,100,120,512,1500,20,frontdoor.log,",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    section = packet_mod.kv_measurement_section(root=tmp_path, patterns=("kv*.csv",))
+
+    assert section.status == "incomplete"
+    assert section.details["observed_measurements"] == {"frontdoor": [2048]}
+    assert section.details["missing_measurements"]["frontdoor"] == [8192, 32768]
+    assert section.details["missing_measurements"]["architect_general"] == [2048, 8192]
+
+
+def test_kv_measurement_section_accepts_complete_successful_csv(tmp_path: Path) -> None:
+    artifact = tmp_path / "kv_measurements.csv"
+    rows = [
+        "role,model_id,model_path,context_length,max_context,ctk,ctv,hadamard,status,rss_load_mb,rss_after_prefill_mb,server_kv_size_mb,prompt_tokens,prompt_tps,log_file,notes"
+    ]
+    for role, contexts in packet_mod.REQUIRED_KV_MEASUREMENTS.items():
+        for context in sorted(contexts):
+            rows.append(
+                f"{role},model,/models/{role}.gguf,{context},32768,q4_0,f16,yes,ok,100,120,512,1500,20,{role}.log,"
+            )
+    artifact.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    section = packet_mod.kv_measurement_section(root=tmp_path, patterns=("kv*.csv",))
+
+    assert section.status == "ready"
+    assert "missing_measurements" not in section.details
+    assert section.details["observed_measurements"]["frontdoor"] == [2048, 8192, 32768]
+
+
+def test_kv_measurement_section_rejects_zero_kv_size(tmp_path: Path) -> None:
+    artifact = tmp_path / "kv_measurements.csv"
+    rows = [
+        "role,model_id,model_path,context_length,max_context,ctk,ctv,hadamard,status,rss_load_mb,rss_after_prefill_mb,server_kv_size_mb,prompt_tokens,prompt_tps,log_file,notes"
+    ]
+    for role, contexts in packet_mod.REQUIRED_KV_MEASUREMENTS.items():
+        for context in sorted(contexts):
+            kv_size = "0" if role == "frontdoor" and context == 2048 else "512"
+            rows.append(
+                f"{role},model,/models/{role}.gguf,{context},32768,q4_0,f16,yes,ok,100,120,{kv_size},1500,20,{role}.log,"
+            )
+    artifact.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    section = packet_mod.kv_measurement_section(root=tmp_path, patterns=("kv*.csv",))
+
+    assert section.status == "incomplete"
+    assert section.details["missing_measurements"]["frontdoor"] == [2048]
+    assert section.details["failed_rows"][0]["reason"] == "measurement_not_successful"
 
 
 def test_render_markdown_surfaces_blockers() -> None:

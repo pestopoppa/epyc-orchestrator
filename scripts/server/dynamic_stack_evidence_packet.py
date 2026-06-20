@@ -9,6 +9,7 @@ explicit so DS-7/DS-6 work does not start from stale assumptions.
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from glob import glob
@@ -35,6 +36,12 @@ DEFAULT_KV_GLOBS = (
     "../epyc-inference-research/data/dynamic_stack/**/kv*",
     "../epyc-inference-research/data/kv_measurements/**",
 )
+REQUIRED_KV_MEASUREMENTS = {
+    "frontdoor": {2048, 8192, 32768},
+    "ingest_long_context": {2048, 8192, 32768},
+    "worker_general": {2048, 8192},
+    "architect_general": {2048, 8192},
+}
 
 sys.path.insert(0, str(ORCH_ROOT))
 sys.path.insert(0, str(ORCH_ROOT / "scripts" / "server"))
@@ -308,15 +315,114 @@ def kv_measurement_section(
                 "required_contexts": ["2K", "8K", "32K"],
             },
         )
+    return _assess_kv_measurement_artifacts(unique, patterns)
+
+
+def _assess_kv_measurement_artifacts(
+    paths: list[Path],
+    patterns: tuple[str, ...],
+) -> EvidenceSection:
+    observed: dict[str, set[int]] = {
+        role: set() for role in REQUIRED_KV_MEASUREMENTS
+    }
+    row_count = 0
+    parse_errors: list[str] = []
+    failed_rows: list[dict[str, Any]] = []
+    candidate_paths = [str(path) for path in paths]
+
+    for path in paths:
+        if path.suffix.lower() != ".csv":
+            continue
+        try:
+            with path.open("r", encoding="utf-8", newline="") as handle:
+                rows = csv.DictReader(handle)
+                for row in rows:
+                    row_count += 1
+                    role = str(row.get("role") or "").strip()
+                    if role not in REQUIRED_KV_MEASUREMENTS:
+                        continue
+                    try:
+                        context = int(str(row.get("context_length") or "0"))
+                    except ValueError:
+                        failed_rows.append(
+                            {
+                                "path": str(path),
+                                "role": role,
+                                "context_length": row.get("context_length"),
+                                "reason": "invalid_context_length",
+                            }
+                        )
+                        continue
+                    if context not in REQUIRED_KV_MEASUREMENTS[role]:
+                        continue
+                    if _kv_row_is_successful(row):
+                        observed[role].add(context)
+                    else:
+                        failed_rows.append(
+                            {
+                                "path": str(path),
+                                "role": role,
+                                "context_length": context,
+                                "status": row.get("status"),
+                                "server_kv_size_mb": row.get("server_kv_size_mb"),
+                                "reason": "measurement_not_successful",
+                            }
+                        )
+        except Exception as exc:
+            parse_errors.append(f"{path}: {exc}")
+
+    missing = {
+        role: sorted(required - observed.get(role, set()))
+        for role, required in REQUIRED_KV_MEASUREMENTS.items()
+        if required - observed.get(role, set())
+    }
+    details = {
+        "paths": candidate_paths,
+        "searched_globs": list(patterns),
+        "required_contexts": ["2K", "8K", "32K"],
+        "required_measurements": {
+            role: sorted(contexts)
+            for role, contexts in sorted(REQUIRED_KV_MEASUREMENTS.items())
+        },
+        "observed_measurements": {
+            role: sorted(contexts)
+            for role, contexts in sorted(observed.items())
+            if contexts
+        },
+        "parsed_csv_rows": row_count,
+        "parse_errors": parse_errors,
+        "failed_rows": failed_rows[:20],
+    }
+    if parse_errors:
+        return EvidenceSection(
+            "kv_size_measurements",
+            "invalid",
+            "Candidate DS-E1 KV measurement artifact(s) could not be parsed.",
+            details,
+        )
+    if missing:
+        details["missing_measurements"] = missing
+        return EvidenceSection(
+            "kv_size_measurements",
+            "incomplete",
+            "Candidate DS-E1 KV measurement artifact(s) are missing required production role/context rows.",
+            details,
+        )
     return EvidenceSection(
         "kv_size_measurements",
-        "candidate",
-        f"Found {len(unique)} candidate KV measurement artifact(s); operator review required.",
-        {
-            "paths": [str(path) for path in unique],
-            "required_contexts": ["2K", "8K", "32K"],
-        },
+        "ready",
+        "Direct DS-E1 production KV-size measurements cover all required role/context rows.",
+        details,
     )
+
+
+def _kv_row_is_successful(row: dict[str, str | None]) -> bool:
+    if str(row.get("status") or "").strip().lower() != "ok":
+        return False
+    try:
+        return float(str(row.get("server_kv_size_mb") or "0")) > 0
+    except ValueError:
+        return False
 
 
 def build_packet() -> dict[str, Any]:
