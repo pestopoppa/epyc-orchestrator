@@ -419,6 +419,188 @@ def test_validate_stack_priors_rejects_launch_manifest_runtime_drift(
     assert any("/current/llama-server" in error for error in result.errors)
 
 
+def test_validate_stack_priors_rejects_unclassified_launch_target(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {"port": 8070, "tier": "hot"},
+            "new_live_role": {
+                "port": 9000,
+                "ports": [9000],
+                "tier": "hot",
+                "launch_entries": [
+                    {
+                        "port": 9000,
+                        "primary_role": "new_live_role",
+                        "mode": "default",
+                        "alias": False,
+                    }
+                ],
+            },
+        },
+    )
+
+    assert not result.ok
+    assert (
+        "launch manifest target 'new_live_role' has no generated stack-prior role record"
+        in result.errors
+    )
+
+
+def test_validate_stack_priors_allows_partial_explicit_role_coverage(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    payload = _priors(registry, descriptors)
+    payload["coverage_scope"] = "explicit_active_roles"
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", payload)
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {"port": 8070, "tier": "hot"},
+            "worker_general": {
+                "port": 8072,
+                "ports": [8072],
+                "tier": "hot",
+                "launch_entries": [
+                    {
+                        "port": 8072,
+                        "primary_role": "worker_general",
+                        "mode": "worker_pool",
+                        "alias": False,
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result.ok
+
+
+def test_validate_stack_priors_allows_manifest_owned_embedding_targets(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {"port": 8070, "tier": "hot"},
+            "embedder_granite_97m_r2": {
+                "port": 8096,
+                "ports": [8096],
+                "tier": "warm",
+                "launch_entries": [
+                    {
+                        "port": 8096,
+                        "primary_role": "embedder_granite_97m_r2",
+                        "mode": "embedding",
+                        "alias": False,
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result.ok
+
+
+def test_validate_stack_priors_allows_alias_targets_covered_by_live_primary(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+
+    result = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {"port": 8070, "tier": "hot"},
+            "frontdoor_legacy_alias": {
+                "port": 8070,
+                "ports": [8070],
+                "tier": "hot",
+                "launch_entries": [
+                    {
+                        "port": 8070,
+                        "primary_role": "frontdoor",
+                        "mode": "default",
+                        "alias": True,
+                    }
+                ],
+            },
+        },
+    )
+
+    assert result.ok
+
+
+def test_validate_stack_priors_allows_only_explicit_worker_fast_auxiliary(
+    tmp_path: Path,
+) -> None:
+    registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
+    descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})
+    priors = _write_yaml(tmp_path / "stack_priors.yaml", _priors(registry, descriptors))
+
+    allowed = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {"port": 8070, "tier": "hot"},
+            "worker_fast": {
+                "port": 8102,
+                "ports": [8102],
+                "tier": "warm",
+                "launch_entries": [
+                    {
+                        "port": 8102,
+                        "primary_role": "worker_fast",
+                        "mode": "worker_pool",
+                        "alias": False,
+                        "worker_type": "fast",
+                    }
+                ],
+            },
+        },
+    )
+    rejected = validate_stack_priors(
+        priors,
+        launch_manifest_targets={
+            "frontdoor": {"port": 8070, "tier": "hot"},
+            "worker_shadow": {
+                "port": 8103,
+                "ports": [8103],
+                "tier": "warm",
+                "launch_entries": [
+                    {
+                        "port": 8103,
+                        "primary_role": "worker_shadow",
+                        "mode": "worker_pool",
+                        "alias": False,
+                        "worker_type": "shadow",
+                    }
+                ],
+            },
+        },
+    )
+
+    assert allowed.ok
+    assert not rejected.ok
+    assert (
+        "launch manifest target 'worker_shadow' has no generated stack-prior role record"
+        in rejected.errors
+    )
+
+
 def test_validate_stack_priors_strict_fails_on_known_gaps(tmp_path: Path) -> None:
     registry = _write_yaml(tmp_path / "registry.yaml", {"roles": {}})
     descriptors = _write_yaml(tmp_path / "descriptors.yaml", {"models": []})

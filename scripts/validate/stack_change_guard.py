@@ -30,6 +30,8 @@ DEFAULT_SURFACE_MANIFEST = REPO_ROOT / "orchestration" / "stack_change_surface_m
 DEFAULT_ADD_MODEL_PROCEDURE = REPO_ROOT / "orchestration" / "procedures" / "add_model_to_registry.yaml"
 DEFAULT_PROCEDURE_SCHEMA = REPO_ROOT / "orchestration" / "procedure.schema.json"
 RETIRED_LIVE_ROLES = {"architect_coding"}
+MANIFEST_OWNED_AUXILIARY_LAUNCH_ROLES = frozenset({"worker_fast"})
+MANIFEST_OWNED_AUXILIARY_LAUNCH_MODES = frozenset({"embedding"})
 REQUIRED_SOURCE_ARTIFACTS = (
     "registry",
     "descriptors",
@@ -1005,6 +1007,55 @@ def _normalized_launch_runtime(raw_runtime: Any) -> dict[str, Any]:
     return normalized if isinstance(normalized, dict) else {}
 
 
+def _launch_target_modes(target: dict[str, Any]) -> set[str]:
+    entries = target.get("launch_entries")
+    if not isinstance(entries, list):
+        return set()
+    return {
+        str(entry["mode"])
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("mode"), str)
+    }
+
+
+def _live_prior_roles(roles: dict[str, Any]) -> set[str]:
+    return {
+        role
+        for role, record in roles.items()
+        if isinstance(role, str)
+        and isinstance(record, dict)
+        and record.get("deployment_status") == "live_stack"
+    }
+
+
+def _launch_target_is_covered_alias(
+    role: str,
+    target: dict[str, Any],
+    live_roles: set[str],
+) -> bool:
+    entries = target.get("launch_entries")
+    if not isinstance(entries, list) or not entries:
+        return False
+    primary_roles: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("alias") is not True:
+            return False
+        primary_role = entry.get("primary_role")
+        if not isinstance(primary_role, str):
+            return False
+        primary_roles.add(primary_role)
+    return bool(primary_roles) and role not in live_roles and primary_roles <= live_roles
+
+
+def _launch_target_is_manifest_owned_auxiliary(role: str, target: dict[str, Any]) -> bool:
+    modes = _launch_target_modes(target)
+    if modes and modes <= MANIFEST_OWNED_AUXILIARY_LAUNCH_MODES:
+        return True
+    if role in MANIFEST_OWNED_AUXILIARY_LAUNCH_ROLES:
+        return bool(modes) and target.get("tier") == "warm" and modes <= {"worker_pool"}
+    return False
+
+
 def validate_launch_manifest_serving_alignment(
     priors: dict[str, Any],
     *,
@@ -1026,6 +1077,34 @@ def validate_launch_manifest_serving_alignment(
         return []
 
     errors: list[str] = []
+    live_roles = _live_prior_roles(roles)
+    full_launch_coverage_required = priors.get("coverage_scope") != "explicit_active_roles"
+    for role, target in sorted(targets.items()):
+        if not isinstance(role, str) or not isinstance(target, dict):
+            continue
+        record = roles.get(role)
+        if record is None and not full_launch_coverage_required:
+            continue
+        if isinstance(record, dict) and record.get("deployment_status") == "live_stack":
+            continue
+        if _launch_target_is_covered_alias(role, target, live_roles):
+            continue
+        if _launch_target_is_manifest_owned_auxiliary(role, target):
+            continue
+        if record is None:
+            errors.append(
+                f"launch manifest target {role!r} has no generated stack-prior role record"
+            )
+        elif isinstance(record, dict):
+            errors.append(
+                f"launch manifest target {role!r} has deployment_status "
+                f"{record.get('deployment_status')!r}, expected 'live_stack'"
+            )
+        else:
+            errors.append(
+                f"launch manifest target {role!r} has non-mapping generated stack-prior role record"
+            )
+
     for role, record in sorted(roles.items()):
         if not isinstance(role, str) or not isinstance(record, dict):
             continue
