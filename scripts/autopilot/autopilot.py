@@ -2029,7 +2029,7 @@ def _apply_journal_archive_authority(
         return None
     changed = "pareto_archive" in state
     state.pop("pareto_archive", None)
-    archive.load_archive_payload(archive_payload)
+    archive._replace_from_archive_payload(archive_payload)
     return changed
 
 

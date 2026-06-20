@@ -158,3 +158,7 @@ def test_readonly_archive_refuses_mutation_methods() -> None:
             assert "read-only" in str(exc)
         else:
             raise AssertionError("read-only archive mutation unexpectedly succeeded")
+
+
+def test_generic_raw_payload_loader_is_not_public_api() -> None:
+    assert not hasattr(ParetoArchive, "load_archive_payload")

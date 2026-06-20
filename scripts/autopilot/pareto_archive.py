@@ -212,8 +212,8 @@ class ParetoArchive:
         self._require_mutable()
         self._load_archive_payload((state or {}).get("pareto_archive", {}) or {})
 
-    def load_archive_payload(self, archive_data: dict[str, Any]) -> None:
-        """Load a raw archive payload without requiring a state wrapper."""
+    def _replace_from_archive_payload(self, archive_data: dict[str, Any]) -> None:
+        """Replace mutable runtime view from a journal-authoritative fold."""
         self._require_mutable()
         self._load_archive_payload(archive_data or {})
 
