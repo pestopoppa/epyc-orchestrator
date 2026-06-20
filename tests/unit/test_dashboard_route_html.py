@@ -121,6 +121,21 @@ def test_dashboard_pareto_plot_uses_journal_sources_and_nonnegative_axes() -> No
     assert "tiers ${tierKeys.map" in body
 
 
+def test_dashboard_repo_readiness_panel_is_advisory_only() -> None:
+    """Repo-readiness queue can render in the dashboard without becoming a gate."""
+    html_path = Path(__file__).resolve().parents[1].parent / "src" / "api" / "routes" / "dashboard.html"
+    body = html_path.read_text()
+
+    assert 'id="repo-readiness-panel"' in body
+    assert 'id="repo-readiness-open"' in body
+    assert 'id="repo-readiness-list"' in body
+    assert "/dashboard/api/repo_readiness" in body
+    assert "function renderRepoReadiness(data)" in body
+    assert "setInterval(updateRepoReadiness, 60000)" in body
+    assert "data.authority || 'advisory'" in body
+    assert "data.autopilot_gate ? 'true' : 'false'" in body
+
+
 # ----- dashboard_tasks: timezone-aware UTC (Tranche-8 polish) -----
 
 

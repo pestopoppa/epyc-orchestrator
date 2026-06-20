@@ -168,6 +168,84 @@ h2 .live-dot.down    { background: var(--bad);  box-shadow: 0 0 4px rgba(248, 11
 .counter .value.bad { color: var(--bad); }
 .counter .value.muted { color: var(--muted); }
 
+.readiness-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.readiness-metric {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 7px 8px;
+    min-width: 0;
+    background: rgba(0,0,0,0.16);
+}
+.readiness-metric .label {
+    color: var(--dim);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.readiness-metric .value {
+    margin-top: 2px;
+    font-family: var(--font-mono);
+    font-size: 15px;
+    color: var(--text-strong);
+    font-variant-numeric: tabular-nums;
+}
+.readiness-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.readiness-row {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+    padding: 7px 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.025);
+}
+.readiness-row .repo {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.readiness-row .criterion {
+    color: var(--text);
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+.readiness-priority {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    padding: 2px 4px;
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    border: 1px solid var(--border);
+}
+.readiness-priority.p0 { color: var(--bad); border-color: rgba(248,113,113,.45); background: rgba(248,113,113,.12); }
+.readiness-priority.p1 { color: var(--warn); border-color: rgba(251,191,36,.45); background: rgba(251,191,36,.12); }
+.readiness-priority.p2 { color: var(--accent); border-color: rgba(96,165,250,.45); background: rgba(96,165,250,.10); }
+.readiness-meta {
+    color: var(--dim);
+    font-size: 10px;
+    line-height: 1.45;
+    margin-top: 9px;
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+}
+
 /* Compact topology strip — each role on its own row.
    Grid: role-name | port | activity-stats | slot-dots
    Activity-stats column shows recent req count + t/s + last-active age
@@ -747,6 +825,18 @@ details.section-accordion > *:not(summary) { margin-top: 14px; }
           <li>Tap-only fallback (events without <code>instance_idx</code> binding) → <span class="tag" style="background:rgba(168,85,247,0.15);color:#c084fc;border:1px solid rgba(168,85,247,0.3)">N tap</span>. Click-through opens the captured prompt+response from <code>inference_tap.log</code>.</li>
         </ol>
       </div>
+    </div>
+
+    <div class="panel" id="repo-readiness-panel">
+      <h2>repo readiness <span class="count-suffix" id="repo-readiness-status">loading</span></h2>
+      <div class="readiness-metrics">
+        <div class="readiness-metric"><div class="label">open</div><div class="value" id="repo-readiness-open">-</div></div>
+        <div class="readiness-metric"><div class="label">P0</div><div class="value" id="repo-readiness-p0">-</div></div>
+        <div class="readiness-metric"><div class="label">P1</div><div class="value" id="repo-readiness-p1">-</div></div>
+        <div class="readiness-metric"><div class="label">P2</div><div class="value" id="repo-readiness-p2">-</div></div>
+      </div>
+      <div id="repo-readiness-list" class="readiness-list"></div>
+      <div id="repo-readiness-meta" class="readiness-meta"></div>
     </div>
 
     <div class="panel">
@@ -4129,6 +4219,73 @@ async function updateBuildRev() {
     } catch (e) {}
 }
 
+function renderRepoReadiness(data) {
+    const status = document.getElementById('repo-readiness-status');
+    const openEl = document.getElementById('repo-readiness-open');
+    const p0El = document.getElementById('repo-readiness-p0');
+    const p1El = document.getElementById('repo-readiness-p1');
+    const p2El = document.getElementById('repo-readiness-p2');
+    const list = document.getElementById('repo-readiness-list');
+    const meta = document.getElementById('repo-readiness-meta');
+    if (!status || !openEl || !p0El || !p1El || !p2El || !list || !meta) return;
+
+    if (!data || !data.available) {
+        status.textContent = 'unavailable';
+        openEl.textContent = '-';
+        p0El.textContent = '-';
+        p1El.textContent = '-';
+        p2El.textContent = '-';
+        list.innerHTML = '<div style="color:var(--muted);font-size:11px">no readiness artifacts found</div>';
+        meta.textContent = '';
+        return;
+    }
+
+    const counts = data.priority_counts || {};
+    openEl.textContent = data.item_count == null ? '-' : String(data.item_count);
+    p0El.textContent = String(counts.P0 || 0);
+    p1El.textContent = String(counts.P1 || 0);
+    p2El.textContent = String(counts.P2 || 0);
+    status.textContent = `${data.authority || 'advisory'} gate=${data.autopilot_gate ? 'true' : 'false'}`;
+
+    const items = Array.isArray(data.top_items) ? data.top_items.slice(0, 6) : [];
+    if (!items.length) {
+        list.innerHTML = '<div style="color:var(--muted);font-size:11px">queue empty</div>';
+    } else {
+        list.innerHTML = items.map((item) => {
+            const priority = String(item.priority || 'P?');
+            const cls = priority.toLowerCase();
+            const repo = item.repo || item.repository || 'unknown';
+            const criterion = item.criterion_id || item.criterion || item.title || item.summary || 'unlabeled item';
+            return `<div class="readiness-row">`
+                + `<span class="readiness-priority ${escapeHTML(cls)}">${escapeHTML(priority)}</span>`
+                + `<div><div class="repo">${escapeHTML(repo)}</div>`
+                + `<div class="criterion">${escapeHTML(criterion)}</div></div>`
+                + `</div>`;
+        }).join('');
+    }
+
+    const generated = data.generated_at ? `generated ${data.generated_at}` : 'generated unknown';
+    const portfolio = data.portfolio_level ? `portfolio ${data.portfolio_level}` : 'portfolio unknown';
+    const queue = data.queue_version ? `queue ${data.queue_version}` : 'queue unknown';
+    meta.textContent = `${portfolio} | ${queue} | ${generated}`;
+}
+
+async function updateRepoReadiness() {
+    try {
+        const r = await fetch(`/dashboard/api/repo_readiness?t=${Date.now()}`, { cache: 'no-store' });
+        const data = await r.json();
+        renderRepoReadiness(data);
+    } catch (err) {
+        const status = document.getElementById('repo-readiness-status');
+        const list = document.getElementById('repo-readiness-list');
+        if (status) status.textContent = 'error';
+        if (list) {
+            const msg = err && err.message ? err.message : String(err);
+            list.innerHTML = `<div style="color:var(--bad);font-size:11px">readiness fetch failed: ${escapeHTML(msg)}</div>`;
+        }
+    }
+}
+
 function checkRenderLibs() {
     // After defers run, surface a visible warning if any lib failed to load.
     // Without this, CDN/network failures cause silent degradation (no LaTeX,
@@ -4604,6 +4761,7 @@ function startDashboard() {
         updateRegionLocks();
         updateContentionGate();
         updateAutopilotProgress();
+        updateRepoReadiness();
         updatePareto();  // initial paint of Pareto plots even when accordion closed (so summary text is fresh)
         setInterval(updateGepa, 5000);
         setInterval(updateProcessStatus, 3000);
@@ -4611,6 +4769,7 @@ function startDashboard() {
         setInterval(updateRegionLocks, 1500);  // 1.5s poll — fast enough to catch transient locks during inference
         setInterval(updateContentionGate, 2000);  // 2s poll — gate metrics are cumulative counters; cheap
         setInterval(updateAutopilotProgress, 3000);  // 3s poll — trial progress bar (state.json mtime polling)
+        setInterval(updateRepoReadiness, 60000);  // advisory artifacts change only on scorer/checkpoint runs
         updateTopologyActivity();
         setInterval(updateTopologyActivity, TOPOLOGY_ACTIVITY_POLL_MS);  // topology row activity stats
         setInterval(renderTopologyActivity, TOPOLOGY_ACTIVITY_AGE_TICK_MS);  // local "Ns ago" tick between polls
