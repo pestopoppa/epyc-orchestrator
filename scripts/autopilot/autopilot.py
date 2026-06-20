@@ -39,7 +39,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 # Setup paths
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -2337,6 +2337,28 @@ def run_loop(
             tui.__exit__(None, None, None)
 
 
+def _make_eval_progress_callback(
+    *,
+    phase: PhaseTracker,
+    tui: "AutoPilotTUI | None",
+    trial_id: Callable[[], int],
+    action: Callable[[], dict[str, Any] | None],
+) -> Callable[[str], None]:
+    def _callback(prompt: str) -> None:
+        if tui is not None:
+            tui.set_prompt(prompt)
+        current_action = action() or {}
+        phase.set(
+            "dispatch_action",
+            trial_id=trial_id(),
+            action_type=current_action.get("type", ""),
+            idle_reason="evaluating question",
+            prompt_preview=str(prompt)[:240],
+        )
+
+    return _callback
+
+
 def _run_loop_inner(
     max_trials: int | None,
     dry_run: bool,
@@ -2368,7 +2390,6 @@ def _run_loop_inner(
     )
     tower = EvalTower(
         url=ORCHESTRATOR_URL,
-        on_question=tui.set_prompt if tui is not None else None,
     )
     meta = MetaOptimizer()
 
@@ -2394,7 +2415,6 @@ def _run_loop_inner(
     seeder = Seeder(
         url=ORCHESTRATOR_URL,
         dry_run=dry_run,
-        on_question=tui.set_prompt if tui is not None else None,
     )
     swarm = NumericSwarm()
     forge = PromptForge(auto_commit=not dry_run)
@@ -2468,6 +2488,15 @@ def _run_loop_inner(
     phase = PhaseTracker()
     async_tasks = AsyncTaskRunner()
     phase.set("starting", trial_id=trial_counter, dry_run=dry_run)
+    current_action: dict[str, Any] | None = None
+    eval_progress_callback = _make_eval_progress_callback(
+        phase=phase,
+        tui=tui,
+        trial_id=lambda: trial_counter,
+        action=lambda: current_action,
+    )
+    tower.on_question = eval_progress_callback
+    seeder.on_question = eval_progress_callback
 
     # ── Plot freshness, decoupled from the trial loop ──────────────────────
     # Pre-2026-06-07, plots regenerated ONLY at `trial_counter % PLOT_INTERVAL
@@ -3091,6 +3120,7 @@ def _run_loop_inner(
                 pre_dispatch_skip = _blacklisted_action_skip(action, blocked_reason)
 
         log.info("Trial %d: %s", trial_counter, json.dumps(action))
+        current_action = action
         phase.set(
             "action_selected",
             trial_id=trial_counter,

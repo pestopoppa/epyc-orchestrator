@@ -16,6 +16,43 @@ import autopilot  # type: ignore[import-not-found]  # noqa: E402
 from experiment_journal import ExperimentJournal, JournalEntry  # noqa: E402
 
 
+def test_eval_progress_callback_refreshes_dispatch_heartbeat() -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+    prompts: list[str] = []
+
+    class FakePhase:
+        def set(self, phase: str, **fields: Any) -> dict[str, Any]:
+            calls.append((phase, fields))
+            return {}
+
+    class FakeTui:
+        def set_prompt(self, prompt: str) -> None:
+            prompts.append(prompt)
+
+    action = {"type": "numeric_trial"}
+    callback = autopilot._make_eval_progress_callback(
+        phase=FakePhase(),  # type: ignore[arg-type]
+        tui=FakeTui(),  # type: ignore[arg-type]
+        trial_id=lambda: 895,
+        action=lambda: action,
+    )
+
+    callback("question prompt")
+
+    assert prompts == ["question prompt"]
+    assert calls == [
+        (
+            "dispatch_action",
+            {
+                "trial_id": 895,
+                "action_type": "numeric_trial",
+                "idle_reason": "evaluating question",
+                "prompt_preview": "question prompt",
+            },
+        )
+    ]
+
+
 def _entry(
     trial_id: int,
     action: dict,
