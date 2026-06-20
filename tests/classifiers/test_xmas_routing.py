@@ -260,6 +260,31 @@ def test_xmas_config_env_override(monkeypatch, tmp_path) -> None:
     assert cfg.winner_table_path == table_path
 
 
+def test_xmas_config_resolves_relative_table_path_from_config_root(monkeypatch, tmp_path) -> None:
+    cfg_path = tmp_path / "orchestration" / "classifier_config.yaml"
+    cfg_path.parent.mkdir()
+    cfg_path.write_text(
+        "xmas_routing:\n"
+        "  mode: off\n"
+        "  winner_table_path: orchestration/xmas.yaml\n"
+        "  require_complete_table: true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ORCHESTRATOR_CLASSIFIER_CONFIG", str(cfg_path))
+    monkeypatch.delenv("ORCHESTRATOR_XMAS_ROUTING_MODE", raising=False)
+    monkeypatch.delenv("ORCHESTRATOR_XMAS_WINNER_TABLE_PATH", raising=False)
+    reset_classifier_config()
+
+    try:
+        cfg = get_xmas_routing_config()
+    finally:
+        reset_classifier_config()
+
+    assert cfg.mode == "off"
+    assert cfg.winner_table_path == (tmp_path / "orchestration" / "xmas.yaml").resolve()
+    assert cfg.require_complete_table is True
+
+
 def test_build_xmas_metadata_with_winner_table(tmp_path) -> None:
     table_path = tmp_path / "xmas.yaml"
     table_path.write_text(

@@ -496,10 +496,14 @@ def get_xmas_routing_config() -> XmasRoutingConfig:
         DEFAULT_CONFIDENCE_THRESHOLD,
     )
 
-    raw_path = os.environ.get("ORCHESTRATOR_XMAS_WINNER_TABLE_PATH")
-    if raw_path is None:
+    env_table_path = os.environ.get("ORCHESTRATOR_XMAS_WINNER_TABLE_PATH")
+    if env_table_path is not None:
+        winner_table_path = (
+            Path(env_table_path).expanduser() if env_table_path else None
+        )
+    else:
         raw_path = raw.get("winner_table_path")
-    winner_table_path = Path(raw_path).expanduser() if isinstance(raw_path, str) and raw_path else None
+        winner_table_path = _resolve_configured_table_path(raw_path)
 
     return XmasRoutingConfig(
         mode=mode,
@@ -507,6 +511,22 @@ def get_xmas_routing_config() -> XmasRoutingConfig:
         winner_table_path=winner_table_path,
         require_complete_table=bool(raw.get("require_complete_table", False)),
     )
+
+
+def _resolve_configured_table_path(raw_path: object) -> Path | None:
+    """Resolve config-file table paths relative to the classifier config root."""
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return path
+    try:
+        from src.classifiers.config_loader import _get_config_path
+
+        config_root = _get_config_path().expanduser().resolve().parent.parent
+    except Exception:
+        config_root = Path.cwd()
+    return (config_root / path).resolve()
 
 
 def build_xmas_routing_metadata(

@@ -289,5 +289,5 @@ difficulty_signal:
 xmas_routing:
   mode: "off"              # off|shadow|enforce
   confidence_threshold: 0.55
-  winner_table_path: ""    # populate with a per-stack table path after eval sweep
-  require_complete_table: false
+  winner_table_path: "orchestration/xmas_winner_table.yaml"  # validated function-axis table; mode remains default-off
+  require_complete_table: true
