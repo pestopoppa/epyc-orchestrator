@@ -166,3 +166,9 @@ blacklist:
   reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 885'
   added: '2026-06-19T12:19:51.261141+00:00'
   source_trial: 885
+- pattern:
+    type: deep_eval
+    tier: 1
+  reason: 'Auto-blacklisted: 3 consecutive failures ending at trial 889'
+  added: '2026-06-20T10:51:17.866830+00:00'
+  source_trial: 889
