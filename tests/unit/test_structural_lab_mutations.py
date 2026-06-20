@@ -189,6 +189,68 @@ def test_staleness_increments_validity_failure_on_hash_change(store, lab, tmp_pa
     assert row["beta_fail"] == 1
 
 
+def test_staleness_skips_folded_journal_excluded_evidence(store, lab, tmp_path):
+    """Refuted strategy evidence must not drive staleness side effects."""
+    prompt = tmp_path / "my_prompt.md"
+    prompt.write_text("# Original content\nfoo bar")
+    sid = store.store(
+        description="references my_prompt",
+        insight="uses my_prompt for routing",
+        source_trial_id=1,
+        species="config_tuner",
+        metadata={"refs": [str(prompt)]},
+        evidence_trial_ids=[11],
+    )
+
+    class FakeJournal:
+        def entries_with_supersessions(self):
+            return [
+                SimpleNamespace(
+                    trial_id=11,
+                    eval_details={"learning_exclusion": {"by": "seq_accumulating"}},
+                ),
+            ]
+
+    # First scan records baseline hash. The exclusion affects strategy rows, not
+    # target hash tracking.
+    lab.staleness_invalidate_strategies(
+        strategy_store=store,
+        journal=FakeJournal(),
+        scan_targets=[str(prompt)],
+    )
+
+    prompt.write_text("# Modified content\nfoo baz\nextra line")
+    result = lab.staleness_invalidate_strategies(
+        strategy_store=store,
+        journal=FakeJournal(),
+        scan_targets=[str(prompt)],
+    )
+
+    assert result["hashes_changed"] == 1
+    assert result["strategies_checked"] == 0
+    assert result["strategies_touched"] == 0
+    row = store._conn.execute(
+        "SELECT beta_fail FROM strategy_validity WHERE strategy_id = ?", (sid,),
+    ).fetchone()
+    assert row is None or row["beta_fail"] == 0
+
+
+def test_staleness_fails_closed_without_journal_aware_store_api(lab):
+    class LegacyStore:
+        _conn = object()
+
+    class FakeJournal:
+        def entries_with_supersessions(self):
+            return []
+
+    with pytest.raises(RuntimeError, match="strategy_rows_for_staleness_scan"):
+        lab.staleness_invalidate_strategies(
+            strategy_store=LegacyStore(),
+            journal=FakeJournal(),
+            scan_targets=[],
+        )
+
+
 def test_staleness_quarantines_below_threshold(store, lab, tmp_path):
     """Enough failures push validity < 0.40 and flip the quarantine flag."""
     prompt = tmp_path / "my_prompt.md"

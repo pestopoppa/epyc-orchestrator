@@ -733,6 +733,8 @@ class StructuralLab:
         self,
         *,
         strategy_store: Any = None,
+        journal: Any = None,
+        excluded_trial_ids: set[int] | None = None,
         scan_targets: list[str] | None = None,
         quarantine_threshold: float = 0.40,
         dry_run: bool = False,
@@ -788,9 +790,20 @@ class StructuralLab:
 
             # For each strategy referencing a changed path, bump validity failure.
             import json as _json
-            rows = strategy_store._conn.execute(
-                "SELECT id, metadata_json FROM strategies"
-            ).fetchall()
+            if hasattr(strategy_store, "strategy_rows_for_staleness_scan"):
+                rows = strategy_store.strategy_rows_for_staleness_scan(
+                    journal=journal,
+                    excluded_trial_ids=excluded_trial_ids,
+                )
+            else:
+                if journal is not None or excluded_trial_ids is not None:
+                    raise RuntimeError(
+                        "journal-aware strategy staleness invalidation requires "
+                        "StrategyStore.strategy_rows_for_staleness_scan()"
+                    )
+                rows = strategy_store._conn.execute(
+                    "SELECT id, metadata_json FROM strategies"
+                ).fetchall()
 
             strategies_checked = len(rows)
             quarantined_count = 0

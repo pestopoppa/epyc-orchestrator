@@ -375,6 +375,39 @@ class TestStrategyStore:
 
         assert [row["source_trial_id"] for row in rows] == [3, 2]
 
+    def test_strategy_rows_for_staleness_scan_applies_folded_evidence_exclusions(self, store):
+        excluded_id = store.store(
+            "Strategy A",
+            "Insight A",
+            source_trial_id=99,
+            species="alpha",
+            evidence_trial_ids=[1, 2],
+            metadata={"refs": ["prompt.md"]},
+        )
+        kept_id = store.store(
+            "Strategy B",
+            "Insight B",
+            source_trial_id=3,
+            species="alpha",
+            evidence_trial_ids=[3],
+            metadata={"refs": ["prompt.md"]},
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(
+                        trial_id=2,
+                        eval_details={"learning_exclusion": {"by": "seq_accumulating"}},
+                    ),
+                ]
+
+        rows = store.strategy_rows_for_staleness_scan(journal=FakeJournal())
+
+        row_ids = {row["id"] for row in rows}
+        assert excluded_id not in row_ids
+        assert kept_id in row_ids
+
     def test_strategy_entries_for_distillation_applies_folded_evidence_exclusions(self, store):
         excluded_id = store.store(
             "Strategy A",

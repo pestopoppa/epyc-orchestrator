@@ -924,6 +924,33 @@ class StrategyStore:
                 break
         return eligible
 
+    def strategy_rows_for_staleness_scan(
+        self,
+        *,
+        journal: Any | None = None,
+        excluded_trial_ids: set[int] | None = None,
+    ) -> list[sqlite3.Row]:
+        """Return strategy rows eligible for content-staleness invalidation.
+
+        Staleness scans may cascade into routing-checkpoint invalidation, so they
+        must not let evidence already excluded by the folded journal drive new
+        StrategyStore side effects.
+        """
+        excluded = set(excluded_trial_ids or set())
+        if journal is not None:
+            excluded.update(excluded_strategy_evidence_trial_ids(journal))
+
+        rows = self._conn.execute(
+            "SELECT id, metadata_json, source_trial_id, evidence_trial_ids FROM strategies"
+        ).fetchall()
+        if not excluded:
+            return rows
+        return [
+            row
+            for row in rows
+            if not excluded.intersection(self._evidence_trial_ids_for_row(row))
+        ]
+
     def strategy_entries_for_distillation(
         self,
         entry_type: str,
