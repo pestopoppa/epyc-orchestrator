@@ -30,6 +30,54 @@ Use this runbook whenever model, role, serving-topology, or stack-prior truth ch
 
 The production start path runs the same canonical gate before launch. If descriptors, derived priors, procedure role enums, scanner ownership, launch-command parity witnesses, or simulated model-swap fixtures are stale, the stack start refuses to proceed.
 
+## Queue-2 Clean-Window Attestation
+
+Before running the consolidated Queue-2 E2/E1 clean-window measurements, reload
+the API from the stack launcher so process-env launch intent is uniform across
+workers:
+
+```bash
+uv run python scripts/server/orchestrator_stack.py reload orchestrator
+```
+
+Then prove both feature flags and non-Features process env. The first command
+checks worker-local `Features`; the second checks the selected `/proc/<pid>/environ`
+keys for every API worker discovered through `/config/attest` without dumping
+the full process environment:
+
+```bash
+uv run python scripts/validate/attest_flags.py \
+  --min-workers 6 \
+  --expect specialist_routing=true \
+  --expect model_fallback=true \
+  --expect plan_review=false \
+  --expect architect_delegation=false \
+  --expect parallel_execution=false \
+  --expect unified_streaming=false \
+  --expect routing_classifier=false
+
+uv run python scripts/validate/attest_orchestrator_workers.py \
+  --min-workers 6 \
+  --expect-feature specialist_routing=true \
+  --expect-feature model_fallback=true \
+  --expect-feature plan_review=false \
+  --expect-feature architect_delegation=false \
+  --expect-feature parallel_execution=false \
+  --expect-feature unified_streaming=false \
+  --expect-feature routing_classifier=false \
+  --expect-env ORCHESTRATOR_CROSS_ROLE_DISJOINT_PLACEMENT=1 \
+  --expect-env ORCHESTRATOR_PLACEMENT_STATE_MACHINE=1 \
+  --expect-env ORCHESTRATOR_REVERSE_MIGRATION=1 \
+  --expect-env ORCHESTRATOR_URE_UNCERTAINTY_SHADOW_LOG=1 \
+  --expect-env ORCHESTRATOR_STRUCTURED_TOOL_OUTPUT=1 \
+  --expect-env ORCHESTRATOR_MOCK_MODE=0
+```
+
+Do not bin E2/E1 results as decision-grade if either attester reports fewer
+than six workers, heterogeneous feature state, a missing process env key, or an
+unexpected value. A live API restart triggered outside the launcher must rerun
+this attestation before measurements resume.
+
 ## Diagnostic Paths
 
 Use dry-run and validate-only modes to inspect changes without starting servers:
