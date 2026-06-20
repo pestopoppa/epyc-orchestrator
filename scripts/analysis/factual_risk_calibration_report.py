@@ -28,6 +28,12 @@ ORCH_ROOT = Path("/mnt/raid0/llm/epyc-orchestrator")
 DEFAULT_INPUT = ORCH_ROOT / "orchestration" / "factual_risk_calibration_v2.jsonl"
 DEFAULT_SPLITS = ("train", "val", "test")
 RESULT_NAME_HINTS = ("g10", "g11")
+DEFAULT_EXPECTED_ROLES = ("architect_general", "frontdoor", "worker_general")
+DEFAULT_ROLE_TO_TIER = {
+    "architect_general": "tier_1",
+    "frontdoor": "tier_2",
+    "worker_general": "tier_3",
+}
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -75,6 +81,34 @@ def _normalize_tier(record: dict[str, Any]) -> str | None:
     if tier is None:
         return None
     return str(tier)
+
+
+def _rate(numerator: int | float, denominator: int | float) -> float | None:
+    if denominator <= 0:
+        return None
+    return float(numerator) / float(denominator)
+
+
+def _round_or_none(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value, 6)
+
+
+def _outcome_metrics(counts: Counter[str]) -> dict[str, Any]:
+    total = sum(counts.values())
+    correct = counts.get("CORRECT", 0)
+    incorrect = counts.get("INCORRECT", 0)
+    partial = counts.get("PARTIAL_ANSWER", 0) + counts.get("PARTIAL", 0)
+    not_attempted = counts.get("NOT_ATTEMPTED", 0)
+    answered_denominator = incorrect + partial + not_attempted
+    return {
+        "accuracy": _round_or_none(_rate(correct, total)),
+        "hallucination_rate": _round_or_none(_rate(incorrect, answered_denominator)),
+        "not_attempted_rate": _round_or_none(_rate(not_attempted, total)),
+        "partial_rate": _round_or_none(_rate(partial, total)),
+        "total": total,
+    }
 
 
 def _load_dataset(path: Path) -> dict[str, Any]:
@@ -180,15 +214,6 @@ def _aggregate_results(paths: list[Path]) -> dict[str, Any]:
                 role_sources[role][source] += 1
                 model_sources[model][source] += 1
 
-    def _shape(counter_map: dict[str, Counter[str]]) -> dict[str, Any]:
-        return {
-            key: {
-                "total": sum(counts.values()),
-                "outcomes": _sorted_dict(counts),
-            }
-            for key, counts in sorted(counter_map.items(), key=lambda item: item[0])
-        }
-
     return {
         "enabled": bool(files),
         "files": files,
@@ -196,6 +221,7 @@ def _aggregate_results(paths: list[Path]) -> dict[str, Any]:
             key: {
                 "total": sum(counts.values()),
                 "outcomes": _sorted_dict(counts),
+                "metrics": _outcome_metrics(counts),
                 "source_counts": _sorted_dict(role_sources[key]),
             }
             for key, counts in sorted(by_role.items(), key=lambda item: item[0])
@@ -204,11 +230,78 @@ def _aggregate_results(paths: list[Path]) -> dict[str, Any]:
             key: {
                 "total": sum(counts.values()),
                 "outcomes": _sorted_dict(counts),
+                "metrics": _outcome_metrics(counts),
                 "source_counts": _sorted_dict(model_sources[key]),
             }
             for key, counts in sorted(by_model.items(), key=lambda item: item[0])
         },
-        "by_role_model": _shape(by_role_model),
+        "by_role_model": {
+            key: {
+                "total": sum(counts.values()),
+                "outcomes": _sorted_dict(counts),
+                "metrics": _outcome_metrics(counts),
+            }
+            for key, counts in sorted(by_role_model.items(), key=lambda item: item[0])
+        },
+    }
+
+
+def _build_tier_calibration_readiness(
+    results: dict[str, Any],
+    expected_roles: tuple[str, ...],
+    role_to_tier: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    role_to_tier = role_to_tier or DEFAULT_ROLE_TO_TIER
+    by_role = results.get("by_role", {})
+    observed_roles = tuple(sorted(role for role in by_role if role in expected_roles))
+    missing_roles = tuple(role for role in expected_roles if role not in by_role)
+
+    role_metrics: dict[str, Any] = {}
+    hallucination_rates: dict[str, float] = {}
+    for role in observed_roles:
+        metrics = dict(by_role[role].get("metrics", {}))
+        metrics["tier"] = role_to_tier.get(role)
+        role_metrics[role] = metrics
+        rate = metrics.get("hallucination_rate")
+        if isinstance(rate, (float, int)):
+            hallucination_rates[role] = float(rate)
+
+    worst_hallucination_rate = max(hallucination_rates.values()) if hallucination_rates else None
+    role_multiplier_preview: dict[str, float | None] = {}
+    if worst_hallucination_rate and worst_hallucination_rate > 0:
+        for role, rate in sorted(hallucination_rates.items()):
+            role_multiplier_preview[role] = round(rate / worst_hallucination_rate, 6)
+    else:
+        for role in observed_roles:
+            role_multiplier_preview[role] = None
+
+    tier_values: dict[str, list[float]] = defaultdict(list)
+    for role, multiplier in role_multiplier_preview.items():
+        tier = role_to_tier.get(role)
+        if tier and multiplier is not None:
+            tier_values[tier].append(multiplier)
+
+    tier_multiplier_preview = {
+        tier: round(sum(values) / len(values), 6)
+        for tier, values in sorted(tier_values.items())
+        if values
+    }
+
+    complete = not missing_roles and set(expected_roles).issubset(set(role_metrics))
+    return {
+        "complete": complete,
+        "status": "ready_for_tier_update" if complete else "blocked_missing_roles",
+        "expected_roles": list(expected_roles),
+        "observed_roles": list(observed_roles),
+        "missing_roles": list(missing_roles),
+        "role_metrics": role_metrics,
+        "worst_observed_hallucination_rate": _round_or_none(worst_hallucination_rate),
+        "role_multiplier_preview_vs_worst": role_multiplier_preview,
+        "tier_multiplier_preview_vs_worst": tier_multiplier_preview if complete else {},
+        "note": (
+            "Preview only: do not update factual-risk role tiers until all expected roles "
+            "are present and the deterministic-vs-LLM-judge scoring decision is resolved."
+        ),
     }
 
 
@@ -216,6 +309,7 @@ def build_report(
     dataset_path: Path = DEFAULT_INPUT,
     result_paths: list[Path] | None = None,
     auto_discover_results: bool = True,
+    expected_roles: tuple[str, ...] = DEFAULT_EXPECTED_ROLES,
 ) -> dict[str, Any]:
     dataset = _load_dataset(dataset_path)
     splits = _load_split_counts(dataset_path)
@@ -237,6 +331,7 @@ def build_report(
         "dataset": dataset,
         "splits": splits,
         "results": results,
+        "tier_calibration_readiness": _build_tier_calibration_readiness(results, expected_roles),
     }
 
 
@@ -262,13 +357,22 @@ def main() -> int:
         help="Disable g10/g11 result path discovery under orchestration/.",
     )
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--expected-role",
+        dest="expected_roles",
+        action="append",
+        default=[],
+        help="Role required before tier calibration can be marked complete. May be repeated.",
+    )
     args = parser.parse_args()
 
     result_paths = _parse_paths(args.result_paths)
+    expected_roles = tuple(args.expected_roles) if args.expected_roles else DEFAULT_EXPECTED_ROLES
     report = build_report(
         args.input,
         result_paths,
         auto_discover_results=not args.no_auto_discover_results,
+        expected_roles=expected_roles,
     )
 
     text = json.dumps(report, indent=2, sort_keys=True)

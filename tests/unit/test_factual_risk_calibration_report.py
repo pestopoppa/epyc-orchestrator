@@ -135,3 +135,69 @@ def test_build_report_ignores_missing_result_paths(tmp_path: Path, monkeypatch) 
 
     assert summary["results"]["enabled"] is False
     assert summary["results"]["files"] == []
+
+
+def test_tier_calibration_readiness_blocks_until_expected_roles_present(tmp_path: Path) -> None:
+    dataset = tmp_path / "factual_risk_calibration_v2.jsonl"
+    _write_jsonl(dataset, [{"label_4class": "CORRECT", "label_source": "v1_regex", "risk_band_v1": "low"}])
+    results = tmp_path / "aa_results.jsonl"
+    _write_jsonl(
+        results,
+        [
+            {"role": "frontdoor", "outcome": "CORRECT", "source": "aa_omniscience"},
+            {"role": "frontdoor", "outcome": "PARTIAL_ANSWER", "source": "aa_omniscience"},
+            {"role": "worker_general", "outcome": "INCORRECT", "source": "aa_omniscience"},
+            {"role": "worker_general", "outcome": "PARTIAL_ANSWER", "source": "aa_omniscience"},
+            {"role": "worker_general", "outcome": "NOT_ATTEMPTED", "source": "aa_omniscience"},
+        ],
+    )
+
+    summary = report.build_report(
+        dataset,
+        result_paths=[results],
+        auto_discover_results=False,
+        expected_roles=("architect_general", "frontdoor", "worker_general"),
+    )
+
+    readiness = summary["tier_calibration_readiness"]
+    assert readiness["complete"] is False
+    assert readiness["status"] == "blocked_missing_roles"
+    assert readiness["missing_roles"] == ["architect_general"]
+    assert readiness["role_metrics"]["frontdoor"]["accuracy"] == 0.5
+    assert readiness["role_metrics"]["worker_general"]["hallucination_rate"] == 0.333333
+    assert readiness["role_multiplier_preview_vs_worst"]["worker_general"] == 1.0
+    assert readiness["tier_multiplier_preview_vs_worst"] == {}
+
+
+def test_tier_calibration_readiness_reports_complete_preview(tmp_path: Path) -> None:
+    dataset = tmp_path / "factual_risk_calibration_v2.jsonl"
+    _write_jsonl(dataset, [{"label_4class": "CORRECT", "label_source": "v1_regex", "risk_band_v1": "low"}])
+    results = tmp_path / "aa_results.jsonl"
+    _write_jsonl(
+        results,
+        [
+            {"role": "architect_general", "outcome": "PARTIAL_ANSWER", "source": "aa_omniscience"},
+            {"role": "architect_general", "outcome": "CORRECT", "source": "aa_omniscience"},
+            {"role": "frontdoor", "outcome": "CORRECT", "source": "aa_omniscience"},
+            {"role": "frontdoor", "outcome": "INCORRECT", "source": "aa_omniscience"},
+            {"role": "worker_general", "outcome": "INCORRECT", "source": "aa_omniscience"},
+            {"role": "worker_general", "outcome": "INCORRECT", "source": "aa_omniscience"},
+        ],
+    )
+
+    summary = report.build_report(
+        dataset,
+        result_paths=[results],
+        auto_discover_results=False,
+        expected_roles=("architect_general", "frontdoor", "worker_general"),
+    )
+
+    readiness = summary["tier_calibration_readiness"]
+    assert readiness["complete"] is True
+    assert readiness["status"] == "ready_for_tier_update"
+    assert readiness["missing_roles"] == []
+    assert readiness["tier_multiplier_preview_vs_worst"] == {
+        "tier_1": 0.0,
+        "tier_2": 1.0,
+        "tier_3": 1.0,
+    }
