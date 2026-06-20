@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 from typing import Any
@@ -40,6 +41,7 @@ from validate_xmas_winner_table import (  # noqa: E402
 
 DEFAULT_XMAS_TABLE = ORCH_ROOT / "orchestration" / "xmas_winner_table.yaml"
 DEFAULT_XMAS_AB_ROOT = ORCH_ROOT / "benchmarks" / "results" / "runs" / "xmas_live_ab"
+DEFAULT_DS_E1_KV_PORT = 8194
 DEFAULT_XMAS_HELDOUT_PROMPTS_ARG = (
     "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
 )
@@ -181,15 +183,22 @@ def ds_e1_clean_window_report() -> dict[str, Any]:
     blockers: list[str] = []
     autopilot = _pgrep("scripts/autopilot/autopilot.py start")
     llama = _pgrep_exact("llama-server")
+    measurement_port_in_use = _tcp_port_accepting(DEFAULT_DS_E1_KV_PORT)
     if autopilot:
         blockers.append(f"active AutoPilot process(es): {_compact_processes(autopilot)}")
     if llama:
         blockers.append(f"live llama-server process(es): {_compact_processes(llama)}")
+    if measurement_port_in_use:
+        blockers.append(
+            f"measurement port {DEFAULT_DS_E1_KV_PORT} is already accepting connections"
+        )
     return {
         "ready": not blockers,
         "blockers": blockers,
         "active_autopilot": autopilot,
         "live_llama_server": llama,
+        "measurement_port": DEFAULT_DS_E1_KV_PORT,
+        "measurement_port_in_use": measurement_port_in_use,
     }
 
 
@@ -216,6 +225,12 @@ def _pgrep_exact(name: str) -> list[str]:
         check=False,
     )
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _tcp_port_accepting(port: int, *, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        return sock.connect_ex((host, port)) == 0
 
 
 def _compact_processes(lines: list[str], *, limit: int = 4) -> str:

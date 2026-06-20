@@ -170,6 +170,23 @@ def test_ds_e1_section_surfaces_clean_window_blockers() -> None:
     ]
 
 
+def test_ds_e1_clean_window_report_surfaces_measurement_port(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(report_mod, "_pgrep", lambda pattern: [])
+    monkeypatch.setattr(report_mod, "_pgrep_exact", lambda name: [])
+    monkeypatch.setattr(report_mod, "_tcp_port_accepting", lambda port: True)
+
+    report = report_mod.ds_e1_clean_window_report()
+
+    assert report["ready"] is False
+    assert report["measurement_port"] == 8194
+    assert report["measurement_port_in_use"] is True
+    assert report["blockers"] == [
+        "measurement port 8194 is already accepting connections"
+    ]
+
+
 def test_xmas_section_accepts_promote_candidate_ab(monkeypatch, tmp_path: Path) -> None:
     config = tmp_path / "classifier_config.yaml"
     config.write_text(
