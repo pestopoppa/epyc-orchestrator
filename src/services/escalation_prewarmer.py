@@ -16,21 +16,29 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 from typing import Any
+
+from src.registry.stack_priors import (
+    live_stack_role_records,
+    stack_prior_endpoint_port,
+    stack_prior_serving,
+)
 
 logger = logging.getLogger(__name__)
 
-# Architect server ports (from model routing strategy).
-# architect_coding REMOVED 2026-05-06 (REAP-246B eliminated, 139 GB freed).
-ARCHITECT_PORTS = {
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+
+# Explicit degraded fallbacks. Normal operation derives architect endpoint and
+# model hint from generated stack priors so model/port swaps update prewarming
+# without touching this module.
+_DEGRADED_ARCHITECT_PORTS = {
     "architect_general": 8083,
 }
 
-# Per-port model hints — used to pick the correct chat template when
-# pre-warming. Update this whenever an architect port is repointed to a
-# different model family. Keep in sync with the active stack's registry.
-ARCHITECT_PORT_MODEL_HINT = {
-    8083: "Qwen3.5-122B-A10B",  # architect_general
+_DEGRADED_ARCHITECT_PORT_MODEL_HINT = {
+    8083: "Qwen3.5-122B-A10B",
 }
 
 # System prompt prefix used across architect roles (warm this into KV cache)
@@ -39,6 +47,76 @@ ARCHITECT_SYSTEM_PREFIX = (
     "assess complexity, and provide a structured response. Your role is to reason "
     "about architecture, design patterns, and system-level concerns.\n\n"
 )
+
+
+def architect_ports_from_stack_priors(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> dict[str, int]:
+    """Return live architect role -> endpoint port from generated stack priors."""
+    ports: dict[str, int] = {}
+    for role, record in live_stack_role_records(stack_priors_path).items():
+        if not role.startswith("architect_"):
+            continue
+        try:
+            port = stack_prior_endpoint_port(stack_prior_serving(record))
+        except ValueError:
+            logger.debug("Skipping malformed architect endpoint in stack priors for %s", role)
+            port = None
+        if port is not None:
+            ports[role] = port
+    return dict(sorted(ports.items()))
+
+
+def architect_port_for_role(
+    role: str = "architect_general",
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> int:
+    """Return the architect prewarm port, falling back only in degraded mode."""
+    ports = architect_ports_from_stack_priors(stack_priors_path)
+    return ports.get(role) or _DEGRADED_ARCHITECT_PORTS.get(role, 8083)
+
+
+def architect_port_model_hints_from_stack_priors(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> dict[int, str]:
+    """Return live architect endpoint port -> display/model hint from stack priors."""
+    hints: dict[int, str] = {}
+    for role, record in live_stack_role_records(stack_priors_path).items():
+        if not role.startswith("architect_"):
+            continue
+        try:
+            port = stack_prior_endpoint_port(stack_prior_serving(record))
+        except ValueError:
+            logger.debug("Skipping malformed architect endpoint in stack priors for %s", role)
+            continue
+        if port is None:
+            continue
+        display_name = record.get("display_name")
+        model_id = record.get("model_id")
+        hint = display_name if isinstance(display_name, str) and display_name else model_id
+        if isinstance(hint, str) and hint:
+            hints[port] = hint
+    return dict(sorted(hints.items()))
+
+
+def architect_model_hint_for_port(
+    port: int,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> str:
+    """Return model hint for an architect port, falling back only in degraded mode."""
+    return (
+        architect_port_model_hints_from_stack_priors(stack_priors_path).get(port)
+        or _DEGRADED_ARCHITECT_PORT_MODEL_HINT.get(port, "")
+    )
+
+
+def __getattr__(name: str) -> Any:
+    """Preserve legacy architect prewarm constants without stale snapshots."""
+    if name == "ARCHITECT_PORTS":
+        return dict(_DEGRADED_ARCHITECT_PORTS)
+    if name == "ARCHITECT_PORT_MODEL_HINT":
+        return dict(_DEGRADED_ARCHITECT_PORT_MODEL_HINT)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class EscalationPrewarmer:
@@ -50,8 +128,13 @@ class EscalationPrewarmer:
         asyncio.create_task(prewarmer.prewarm_if_complex(objective, complexity))
     """
 
-    def __init__(self, timeout: float = 10.0):
+    def __init__(
+        self,
+        timeout: float = 10.0,
+        stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+    ):
         self._timeout = timeout
+        self._stack_priors_path = stack_priors_path
         self._prewarm_count = 0
         self._prewarm_hits = 0  # Incremented externally when prewarm slot is used
         self._prewarm_by_port: dict[int, int] = {}
@@ -77,7 +160,10 @@ class EscalationPrewarmer:
         if complexity_level not in ("COMPLEX",):
             return False
 
-        port = target_port or ARCHITECT_PORTS.get("architect_general", 8083)
+        port = target_port or architect_port_for_role(
+            "architect_general",
+            self._stack_priors_path,
+        )
 
         # Check if slot is available before pre-warming
         slot_available = await self._check_slot_available(port)
@@ -121,7 +207,7 @@ class EscalationPrewarmer:
         # unknown ports (defensive — same shape as the prior behavior).
         from src.api.routes.chat_utils import apply_chat_template_for_model
         body = ARCHITECT_SYSTEM_PREFIX + objective[:2000]
-        model_hint = ARCHITECT_PORT_MODEL_HINT.get(port, "")
+        model_hint = architect_model_hint_for_port(port, self._stack_priors_path)
         prewarm_prompt = apply_chat_template_for_model(model_hint, body) if model_hint else body
 
         payload = {
