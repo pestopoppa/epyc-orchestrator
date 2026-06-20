@@ -381,3 +381,68 @@ def test_cli_strict_returns_one_when_gate_blocks(tmp_path: Path, monkeypatch, ca
 
     assert rc == 1
     assert "phase_health: stale" in capsys.readouterr().out
+
+
+def test_cli_writes_json_and_markdown_outputs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    state = tmp_path / "state.json"
+    journal = tmp_path / "journal.jsonl"
+    phase = tmp_path / "phase.json"
+    out_json = tmp_path / "reports" / "fable5_gate.json"
+    out_md = tmp_path / "reports" / "fable5_gate.md"
+    state.write_text('{"trial_counter": 1}\n', encoding="utf-8")
+    journal.write_text("", encoding="utf-8")
+    phase.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(report_mod, "_load_jsonl", lambda path: [])
+    monkeypatch.setattr(
+        report_mod,
+        "build_phase_health_report",
+        lambda path: {"ok": False, "blockers": ["stale"]},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_ds_e1_packet",
+        lambda: {"ready_for_profile_decision": True, "blockers": [], "sections": []},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_fable5_gate_report",
+        lambda **kwargs: {
+            "ready": False,
+            "blockers": ["phase_health: stale"],
+            "next_actions": [],
+            "sections": [
+                {
+                    "key": "phase_health",
+                    "status": "blocked",
+                    "summary": "stale",
+                    "blockers": ["stale"],
+                    "details": {},
+                }
+            ],
+        },
+    )
+
+    rc = report_mod.main(
+        [
+            "--state",
+            str(state),
+            "--journal",
+            str(journal),
+            "--phase",
+            str(phase),
+            "--out-json",
+            str(out_json),
+            "--out-md",
+            str(out_md),
+            "--strict",
+        ]
+    )
+
+    assert rc == 1
+    assert "# Fable5 Gate Report" in capsys.readouterr().out
+    assert '"ready": false' in out_json.read_text(encoding="utf-8")
+    assert "- phase_health: stale" in out_md.read_text(encoding="utf-8")

@@ -604,8 +604,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--xmas-table", type=Path, default=DEFAULT_XMAS_TABLE)
     parser.add_argument("--xmas-ab-root", type=Path, default=DEFAULT_XMAS_AB_ROOT)
     parser.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    parser.add_argument("--out-json", type=Path, help="Write structured JSON to this path.")
+    parser.add_argument("--out-md", type=Path, help="Write Markdown report to this path.")
     parser.add_argument("--strict", action="store_true", help="Exit nonzero when any gate blocks.")
     return parser.parse_args(argv)
+
+
+def _write_text(path: Path, text: str) -> None:
+    resolved = path.expanduser().resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(text, encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -627,6 +635,13 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"failed to build Fable5 gate report: {exc}", file=sys.stderr)
         return 2
+    if args.out_json:
+        _write_text(
+            args.out_json,
+            json.dumps(report, indent=2, sort_keys=True, default=str) + "\n",
+        )
+    if args.out_md:
+        _write_text(args.out_md, render_markdown(report))
     if args.json:
         print(json.dumps(report, sort_keys=True, default=str))
     else:
