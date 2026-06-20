@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""Read-only AutoPilot restart readiness report."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict, is_dataclass
+import json
+from pathlib import Path
+import sys
+from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+ORCH_ROOT = SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(ORCH_ROOT))
+
+from archive_authority_report import build_archive_authority_report  # noqa: E402
+from baseline_authority_report import build_baseline_authority_report  # noqa: E402
+from preflight_audit import JOURNAL_PATH, STATE_PATH, _load_jsonl  # noqa: E402
+from seq_readiness_report import build_seq_readiness_report  # noqa: E402
+from src.autopilot_core.journal_snapshot_replay import (  # noqa: E402
+    archive_payload_from_verified_snapshot,
+    build_snapshot_replay_diagnostic,
+)
+
+
+def _ledger_events(journal_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in journal_rows
+        if isinstance(row, dict) and row.get("type") and "trial_id" not in row
+    ]
+
+
+def _diagnostic_dict(diagnostic: Any) -> dict[str, Any]:
+    if is_dataclass(diagnostic):
+        return asdict(diagnostic)
+    return dict(vars(diagnostic))
+
+
+def _snapshot_restart_report(journal_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    ledger_events = _ledger_events(journal_rows)
+    diagnostic = build_snapshot_replay_diagnostic(journal_rows, ledger_events)
+    payload = archive_payload_from_verified_snapshot(journal_rows, ledger_events)
+    if diagnostic.bounded_replay_readiness == "current":
+        readiness = "current"
+    elif payload is not None:
+        readiness = "tail_fold_ready"
+    else:
+        readiness = diagnostic.bounded_replay_readiness
+    return {
+        "ok": payload is not None,
+        "restart_readiness": readiness,
+        "payload_available": payload is not None,
+        "payload_journal_max_trial_id": (
+            payload.get("journal_max_trial_id") if isinstance(payload, dict) else None
+        ),
+        "diagnostic": _diagnostic_dict(diagnostic),
+    }
+
+
+def _baseline_restart_report(
+    state: dict[str, Any],
+    journal_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    report = build_baseline_authority_report(state, journal_rows)
+    state_cache_present = isinstance(state.get("baseline_state"), dict)
+    startup_safe = bool(report.get("ok")) or state_cache_present
+    authority_source = (
+        "ledger_fold"
+        if report.get("ok")
+        else "state_baseline"
+        if state_cache_present
+        else "missing"
+    )
+    return {
+        **report,
+        "startup_safe": startup_safe,
+        "authority_source": authority_source,
+        "state_baseline_present": state_cache_present,
+    }
+
+
+def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
+    seq = report["sequential_cutover"]
+    snapshot = report["snapshot_replay"]
+    archive = report["archive_authority"]
+    baseline = report["baseline_authority"]
+    return {
+        "restart_ready": report["restart_ready"],
+        "blockers": report["blockers"],
+        "archive_status": archive["diagnostic"].get("status"),
+        "snapshot_restart_readiness": snapshot.get("restart_readiness"),
+        "snapshot_payload_available": snapshot.get("payload_available"),
+        "baseline_authority_source": baseline.get("authority_source"),
+        "baseline_startup_safe": baseline.get("startup_safe"),
+        "seq_cutover_ready": seq.get("cutover_ready"),
+        "seq_trusted_vector_trials": seq.get("trusted_vector_trials"),
+        "seq_shadow_rows": (seq.get("seq_shadow") or {}).get("seq_shadow_rows"),
+    }
+
+
+def build_restart_readiness_report(
+    state: dict[str, Any],
+    journal_rows: list[dict[str, Any]],
+    *,
+    require_seq_cutover: bool = False,
+) -> dict[str, Any]:
+    """Build a no-write report for safe AutoPilot restart/cutover decisions."""
+    archive_report = build_archive_authority_report(state, journal_rows)
+    snapshot_report = _snapshot_restart_report(journal_rows)
+    baseline_report = _baseline_restart_report(state, journal_rows)
+    seq_report = build_seq_readiness_report(journal_rows)
+
+    blockers: list[str] = []
+    if not archive_report.get("ok"):
+        status = (archive_report.get("diagnostic") or {}).get("status", "unknown")
+        blockers.append(f"archive authority is not aligned: {status}")
+    if not snapshot_report.get("ok"):
+        readiness = snapshot_report.get("restart_readiness", "unknown")
+        blockers.append(f"journal snapshot is not current or foldable: {readiness}")
+    if not baseline_report.get("startup_safe"):
+        blockers.append("no safe baseline startup source")
+    if require_seq_cutover and not seq_report.get("cutover_ready"):
+        blockers.append("sequential verdict cutover readiness is blocked")
+
+    report = {
+        "ok": not blockers,
+        "restart_ready": not blockers,
+        "require_seq_cutover": require_seq_cutover,
+        "blockers": blockers,
+        "archive_authority": archive_report,
+        "snapshot_replay": snapshot_report,
+        "baseline_authority": baseline_report,
+        "sequential_cutover": seq_report,
+    }
+    report["summary"] = _summary_report(report)
+    return report
+
+
+def render_markdown(report: dict[str, Any]) -> str:
+    summary = report["summary"]
+    lines = [
+        "# AutoPilot Restart Readiness Report",
+        "",
+        f"- Restart ready: {str(report['restart_ready']).lower()}",
+        f"- Sequential cutover required: {str(report['require_seq_cutover']).lower()}",
+        f"- Archive authority: {summary['archive_status']}",
+        (
+            "- Snapshot replay: "
+            f"{summary['snapshot_restart_readiness']} "
+            f"(payload_available={summary['snapshot_payload_available']})"
+        ),
+        (
+            "- Baseline startup source: "
+            f"{summary['baseline_authority_source']} "
+            f"(startup_safe={summary['baseline_startup_safe']})"
+        ),
+        (
+            "- Sequential cutover: "
+            f"ready={summary['seq_cutover_ready']}, "
+            f"trusted_vectors={summary['seq_trusted_vector_trials']}, "
+            f"seq_shadow_rows={summary['seq_shadow_rows']}"
+        ),
+    ]
+    if report["blockers"]:
+        lines.extend(["", "## Blockers", ""])
+        lines.extend(f"- {blocker}" for blocker in report["blockers"])
+    return "\n".join(lines)
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Report no-inference AutoPilot restart readiness across archive, "
+            "snapshot, baseline, and sequential-verdict gates."
+        )
+    )
+    parser.add_argument("--state", type=Path, default=STATE_PATH)
+    parser.add_argument("--journal", type=Path, default=JOURNAL_PATH)
+    parser.add_argument("--json", action="store_true", help="Emit structured JSON.")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit nonzero when restart readiness blockers exist.",
+    )
+    parser.add_argument(
+        "--require-seq-cutover",
+        action="store_true",
+        help="Treat blocked sequential-verdict cutover readiness as a restart blocker.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    state_path = args.state.expanduser().resolve()
+    journal_path = args.journal.expanduser().resolve()
+    if not state_path.exists():
+        print(f"state file does not exist: {state_path}", file=sys.stderr)
+        return 2
+    if not journal_path.exists():
+        print(f"journal file does not exist: {journal_path}", file=sys.stderr)
+        return 2
+
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"state file is not valid JSON: {state_path}: {exc}", file=sys.stderr)
+        return 2
+    if not isinstance(state, dict):
+        print(f"state file is not a JSON object: {state_path}", file=sys.stderr)
+        return 2
+
+    journal_rows = _load_jsonl(journal_path)
+    report = build_restart_readiness_report(
+        state,
+        journal_rows,
+        require_seq_cutover=args.require_seq_cutover,
+    )
+    if args.json:
+        print(json.dumps(report, sort_keys=True, default=str))
+    else:
+        print(render_markdown(report))
+    if args.strict and not report["restart_ready"]:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

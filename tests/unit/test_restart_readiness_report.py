@@ -1,0 +1,212 @@
+"""Tests for the read-only AutoPilot restart readiness report."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "autopilot"))
+
+import restart_readiness_report as report_mod  # noqa: E402
+
+
+def _state() -> dict[str, Any]:
+    return {
+        "trial_counter": 2,
+        "baseline_state": {"baselines_by_tier": {"1": 1.8}},
+    }
+
+
+def _seq_ready(*, ready: bool = False) -> dict[str, Any]:
+    return {
+        "cutover_ready": ready,
+        "trusted_vector_trials": 61,
+        "seq_shadow": {"seq_shadow_rows": 9},
+        "cutover_blockers": [] if ready else ["trusted vector history too small"],
+    }
+
+
+def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch) -> None:
+    monkeypatch.setattr(
+        report_mod,
+        "build_archive_authority_report",
+        lambda state, rows: {"ok": True, "diagnostic": {"status": "match"}},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_baseline_authority_report",
+        lambda state, rows: {"ok": False, "status": "no_events"},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_seq_readiness_report",
+        lambda rows: _seq_ready(ready=False),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_snapshot_replay_diagnostic",
+        lambda rows, events: SimpleNamespace(
+            bounded_replay_readiness="tail_unverified",
+            event_count=1,
+            status="archive_prefix_match",
+            hash_status="match",
+            latest_event=None,
+            through_trial_id=10,
+            policy_version="journal-archive-snapshot-v1",
+            snapshot_hash="abc",
+            parent_snapshot_hash="",
+            tail_trial_count=1,
+            tail_max_trial_id=11,
+            journal_max_trial_id=11,
+            post_snapshot_prefix_event_count=0,
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "archive_payload_from_verified_snapshot",
+        lambda rows, events: {"journal_max_trial_id": 11},
+    )
+
+    report = report_mod.build_restart_readiness_report(_state(), [])
+
+    assert report["restart_ready"] is True
+    assert report["blockers"] == []
+    assert report["summary"]["snapshot_restart_readiness"] == "tail_fold_ready"
+    assert report["summary"]["baseline_authority_source"] == "state_baseline"
+    assert report["summary"]["seq_cutover_ready"] is False
+
+
+def test_require_seq_cutover_blocks_when_seq_report_not_ready(monkeypatch) -> None:
+    monkeypatch.setattr(
+        report_mod,
+        "build_archive_authority_report",
+        lambda state, rows: {"ok": True, "diagnostic": {"status": "match"}},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_baseline_authority_report",
+        lambda state, rows: {"ok": False, "status": "no_events"},
+    )
+    monkeypatch.setattr(report_mod, "build_seq_readiness_report", lambda rows: _seq_ready())
+    monkeypatch.setattr(
+        report_mod,
+        "build_snapshot_replay_diagnostic",
+        lambda rows, events: SimpleNamespace(
+            bounded_replay_readiness="current",
+            event_count=1,
+            status="archive_prefix_match",
+            hash_status="match",
+            latest_event=None,
+            through_trial_id=10,
+            policy_version="journal-archive-snapshot-v1",
+            snapshot_hash="abc",
+            parent_snapshot_hash="",
+            tail_trial_count=0,
+            tail_max_trial_id=None,
+            journal_max_trial_id=10,
+            post_snapshot_prefix_event_count=0,
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "archive_payload_from_verified_snapshot",
+        lambda rows, events: {"journal_max_trial_id": 10},
+    )
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        [],
+        require_seq_cutover=True,
+    )
+
+    assert report["restart_ready"] is False
+    assert report["blockers"] == [
+        "sequential verdict cutover readiness is blocked"
+    ]
+
+
+def test_restart_report_blocks_without_baseline_source(monkeypatch) -> None:
+    monkeypatch.setattr(
+        report_mod,
+        "build_archive_authority_report",
+        lambda state, rows: {"ok": True, "diagnostic": {"status": "match"}},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_baseline_authority_report",
+        lambda state, rows: {"ok": False, "status": "no_events"},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_seq_readiness_report",
+        lambda rows: _seq_ready(ready=True),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_snapshot_replay_diagnostic",
+        lambda rows, events: SimpleNamespace(
+            bounded_replay_readiness="current",
+            event_count=1,
+            status="archive_prefix_match",
+            hash_status="match",
+            latest_event=None,
+            through_trial_id=10,
+            policy_version="journal-archive-snapshot-v1",
+            snapshot_hash="abc",
+            parent_snapshot_hash="",
+            tail_trial_count=0,
+            tail_max_trial_id=None,
+            journal_max_trial_id=10,
+            post_snapshot_prefix_event_count=0,
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "archive_payload_from_verified_snapshot",
+        lambda rows, events: {"journal_max_trial_id": 10},
+    )
+
+    report = report_mod.build_restart_readiness_report({"trial_counter": 2}, [])
+
+    assert report["restart_ready"] is False
+    assert "no safe baseline startup source" in report["blockers"]
+    assert report["summary"]["baseline_authority_source"] == "missing"
+
+
+def test_cli_json_strict_returns_one_on_restart_blocker(tmp_path: Path, capsys, monkeypatch) -> None:
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    state_path.write_text("{}", encoding="utf-8")
+    journal_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        report_mod,
+        "build_restart_readiness_report",
+        lambda state, rows, require_seq_cutover=False: {
+            "restart_ready": False,
+            "blockers": ["blocked"],
+        },
+    )
+
+    rc = report_mod.main(
+        [
+            "--state",
+            str(state_path),
+            "--journal",
+            str(journal_path),
+            "--json",
+            "--strict",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    assert out["blockers"] == ["blocked"]
