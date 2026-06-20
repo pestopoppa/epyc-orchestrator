@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+from pathlib import Path
 from typing import Any
 
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
@@ -70,6 +72,16 @@ def _archive(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return archive
 
 
+def _load_snapshot_replay_cli():
+    path = Path(__file__).resolve().parents[2] / "scripts/autopilot/journal_snapshot_replay.py"
+    spec = importlib.util.spec_from_file_location("journal_snapshot_replay_cli", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_snapshot_replay_reports_no_events() -> None:
     diagnostic = build_snapshot_replay_diagnostic([_row(1)], [])
 
@@ -79,6 +91,35 @@ def test_snapshot_replay_reports_no_events() -> None:
         "Journal snapshot events: 0",
         "Journal snapshot replay: no snapshot events",
     ]
+
+
+def test_snapshot_replay_cli_strict_readiness_allows_opt_in_tail_fold() -> None:
+    cli = _load_snapshot_replay_cli()
+
+    assert (
+        cli._strict_readiness(
+            diagnostic_readiness="current",
+            tail_fold_payload=None,
+            allow_tail_fold=False,
+        )
+        == "current"
+    )
+    assert (
+        cli._strict_readiness(
+            diagnostic_readiness="tail_unverified",
+            tail_fold_payload={"journal_max_trial_id": 2},
+            allow_tail_fold=True,
+        )
+        == "tail_fold_ready"
+    )
+    assert (
+        cli._strict_readiness(
+            diagnostic_readiness="tail_unverified",
+            tail_fold_payload={"journal_max_trial_id": 2},
+            allow_tail_fold=False,
+        )
+        == "tail_unverified"
+    )
 
 
 def test_snapshot_replay_verifies_hash_without_archive_payload() -> None:
