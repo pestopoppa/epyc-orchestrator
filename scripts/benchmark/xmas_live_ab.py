@@ -33,6 +33,20 @@ DEFAULT_MAX_DOMAIN_REGRESSION = 0.0
 DEFAULT_MAX_LATENCY_RATIO = 1.10
 XMAS_EVIDENCE_POLICY_ID = "incumbent_constrained_v1"
 XMAS_EVIDENCE_POLICY_MIN_COMMIT = "24baac44"
+QUIET_WINDOW_PROCESS_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("AutoPilot", "scripts/autopilot/autopilot.py start"),
+    ("AutoPilot", "autopilot.py start"),
+    ("X-MAS cheap-kill", "xmas_cheap_kill.py"),
+    ("X-MAS function-axis sweep", "xmas_function_axis_sweep.py"),
+    ("BEP A/B", "bep_ab.py"),
+    ("DCP J7 A/B", "dcp_j7_ab.py"),
+    ("DS-E1 KV measurement", "ds_e1_kv_measurements.sh"),
+    ("benchmark runner", "run_benchmark.py"),
+    ("seeding runner", "seed_specialist_routing.py"),
+    ("seeding runner v2", "seed_specialist_routing_v2.py"),
+    ("migration probe", "migration_probe.py"),
+    ("placement fanout probe", "placement_fanout_probe.py"),
+)
 
 DEFAULT_PROMPTS: list[dict[str, Any]] = [
     {
@@ -345,21 +359,31 @@ def validate_table(table_path: Path) -> None:
 
 def ensure_host_quiet() -> None:
     """Refuse real runs when known long-running inference coordinators are active."""
-    checks = [
-        ("autopilot.py", ["pgrep", "-f", "autopilot.py"]),
-        ("xmas_cheap_kill.py", ["pgrep", "-f", "xmas_cheap_kill.py"]),
-        ("xmas_function_axis_sweep.py", ["pgrep", "-f", "xmas_function_axis_sweep.py"]),
-        ("bep_ab.py", ["pgrep", "-f", "bep_ab.py"]),
-    ]
     busy: list[str] = []
-    current_pid = str(os.getpid())
-    for label, cmd in checks:
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        pids = [pid for pid in result.stdout.split() if pid != current_pid]
+    seen_pids: set[str] = set()
+    for label, pattern in QUIET_WINDOW_PROCESS_PATTERNS:
+        matches = _pgrep_lines(pattern)
+        pids = []
+        for line in matches:
+            pid = line.split(maxsplit=1)[0]
+            if pid in seen_pids:
+                continue
+            seen_pids.add(pid)
+            pids.append(pid)
         if pids:
             busy.append(f"{label}: {','.join(pids)}")
     if busy:
         raise RuntimeError("host is not inference-quiet: " + "; ".join(busy))
+
+
+def _pgrep_lines(pattern: str) -> list[str]:
+    result = subprocess.run(["pgrep", "-af", pattern], capture_output=True, text=True)
+    current_pid = str(os.getpid())
+    return [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip() and line.split(maxsplit=1)[0] != current_pid
+    ]
 
 
 def restart_orchestrator(env: dict[str, str]) -> str:
@@ -854,7 +878,10 @@ def run(args: argparse.Namespace) -> int:
 
     if not args.host_quiet_confirmed:
         raise SystemExit("REFUSING real run: pass --host-quiet-confirmed after confirming the host is inference-quiet")
-    ensure_host_quiet()
+    try:
+        ensure_host_quiet()
+    except RuntimeError as exc:
+        raise SystemExit(f"REFUSING real run: {exc}") from exc
 
     rows: list[dict[str, Any]] = []
     try:

@@ -91,6 +91,92 @@ def test_real_run_requires_explicit_prompt_manifest(tmp_path: Path) -> None:
         raise AssertionError("real X-MAS A/B must reject built-in smoke prompts")
 
 
+def test_ensure_host_quiet_blocks_known_competing_runners(monkeypatch) -> None:
+    def fake_run(cmd, *, capture_output, text):
+        assert cmd[:2] == ["pgrep", "-af"]
+        pattern = cmd[2]
+        stdout = ""
+        if pattern == "scripts/autopilot/autopilot.py start":
+            stdout = "123 uv run python scripts/autopilot/autopilot.py start --max-trials 930\n"
+        elif pattern == "dcp_j7_ab.py":
+            stdout = "456 python scripts/benchmark/dcp_j7_ab.py --host-quiet-confirmed\n"
+        return SimpleNamespace(stdout=stdout)
+
+    monkeypatch.setattr(xmas_live_ab.subprocess, "run", fake_run)
+
+    try:
+        xmas_live_ab.ensure_host_quiet()
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "host is not inference-quiet" in message
+        assert "AutoPilot: 123" in message
+        assert "DCP J7 A/B: 456" in message
+    else:
+        raise AssertionError("competing runners must block X-MAS real runs")
+
+
+def test_ensure_host_quiet_filters_current_process(monkeypatch) -> None:
+    current_pid = xmas_live_ab.os.getpid()
+
+    def fake_run(cmd, *, capture_output, text):
+        return SimpleNamespace(
+            stdout=f"{current_pid} python scripts/benchmark/xmas_live_ab.py\n"
+        )
+
+    monkeypatch.setattr(xmas_live_ab.subprocess, "run", fake_run)
+
+    xmas_live_ab.ensure_host_quiet()
+
+
+def test_real_run_reports_clean_host_quiet_refusal(monkeypatch, tmp_path: Path) -> None:
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(
+        '{"id": "a", "domain": "math", "function": "solve", "prompt": "2+2", "expected": "4"}\n',
+        encoding="utf-8",
+    )
+    called = {"restart": False}
+
+    def fail_restart(*args, **kwargs):
+        called["restart"] = True
+        raise AssertionError("busy host must fail before orchestrator reload")
+
+    monkeypatch.setattr(xmas_live_ab, "validate_table", lambda _table: None)
+    monkeypatch.setattr(
+        xmas_live_ab,
+        "ensure_host_quiet",
+        lambda: (_ for _ in ()).throw(RuntimeError("host is not inference-quiet: AutoPilot: 123")),
+    )
+    monkeypatch.setattr(xmas_live_ab, "restart_orchestrator", fail_restart)
+
+    try:
+        xmas_live_ab.run(
+            SimpleNamespace(
+                table=tmp_path / "xmas_winner_table.yaml",
+                prompts=prompts,
+                summarize_results=None,
+                sample_size=None,
+                reps=1,
+                output=tmp_path / "out",
+                max_turns=1,
+                dry_run=False,
+                host_quiet_confirmed=True,
+                timeout_s=1.0,
+                min_decision_prompts=1,
+                min_score_delta=0.05,
+                max_domain_regression=0.0,
+                max_latency_ratio=1.10,
+                restore_baseline=True,
+            )
+        )
+    except SystemExit as exc:
+        assert str(exc) == (
+            "REFUSING real run: host is not inference-quiet: AutoPilot: 123"
+        )
+    else:
+        raise AssertionError("busy host must refuse real X-MAS A/B")
+    assert called == {"restart": False}
+
+
 def test_dry_run_can_use_builtin_smoke_set_without_inference(
     monkeypatch,
     tmp_path: Path,
