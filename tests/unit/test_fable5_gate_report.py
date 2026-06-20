@@ -120,7 +120,15 @@ xmas_routing:
     assert report["next_actions"][2]["command"] == (
         "python3 scripts/analysis/ri10_canary_sample_report.py"
     )
-    assert "xmas_live_ab.py" in report["next_actions"][3]["command"]
+    xmas_action = report["next_actions"][3]
+    assert "xmas_live_ab.py" in xmas_action["command"]
+    assert "<heldout_prompts.jsonl>" not in xmas_action["command"]
+    assert xmas_action["prompt_manifest"] == (
+        "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
+    )
+    assert xmas_action["required_policy"] == "incumbent_constrained_v1"
+    assert f"--prompts {xmas_action['prompt_manifest']}" in xmas_action["command"]
+    assert "$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy" in xmas_action["command"]
 
 
 def test_ds_e1_section_surfaces_clean_window_blockers() -> None:

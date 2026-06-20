@@ -40,6 +40,13 @@ from validate_xmas_winner_table import (  # noqa: E402
 
 DEFAULT_XMAS_TABLE = ORCH_ROOT / "orchestration" / "xmas_winner_table.yaml"
 DEFAULT_XMAS_AB_ROOT = ORCH_ROOT / "benchmarks" / "results" / "runs" / "xmas_live_ab"
+DEFAULT_XMAS_HELDOUT_PROMPTS_ARG = (
+    "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
+)
+DEFAULT_XMAS_CONSTRAINED_OUTPUT_ARG = (
+    "benchmarks/results/runs/xmas_live_ab/"
+    "$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy"
+)
 REQUIRED_XMAS_AB_POLICY = "incumbent_constrained_v1"
 
 
@@ -447,10 +454,14 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 "reason": "X-MAS enforce needs a fresh held-out A/B carrying incumbent_constrained_v1 and a promote_candidate verdict.",
                 "requires": "attested quiet window; runner preflight refuses AutoPilot and competing benchmark coordinators",
                 "blocked_by": xmas.blockers,
+                "prompt_manifest": DEFAULT_XMAS_HELDOUT_PROMPTS_ARG,
+                "required_policy": REQUIRED_XMAS_AB_POLICY,
                 "command": (
+                    "cd /mnt/raid0/llm/epyc-orchestrator && "
                     "uv run python scripts/benchmark/xmas_live_ab.py "
-                    "--prompts <heldout_prompts.jsonl> --reps 2 --host-quiet-confirmed "
-                    "--output benchmarks/results/runs/xmas_live_ab/<timestamp>-constrained-policy"
+                    f"--prompts {DEFAULT_XMAS_HELDOUT_PROMPTS_ARG} "
+                    "--reps 2 --host-quiet-confirmed "
+                    f"--output {DEFAULT_XMAS_CONSTRAINED_OUTPUT_ARG}"
                 ),
             }
         )
