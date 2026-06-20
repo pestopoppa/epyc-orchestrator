@@ -2061,6 +2061,29 @@ def _sync_startup_archive_from_journal_authority(
     return True
 
 
+def _baseline_state_for_startup_gate(
+    state: dict[str, Any],
+    journal: ExperimentJournal,
+) -> dict[str, Any]:
+    """Return the startup baseline authority payload for SafetyGate.
+
+    ``baseline_state`` stays authoritative while present. After W4 cutover
+    removes that cache, the append-only promotion ledger is allowed to seed the
+    gate only when the same reconciliation rules say the fold is cutover-ready.
+    """
+    state_baseline = state.get("baseline_state")
+    if isinstance(state_baseline, dict) and state_baseline:
+        return state_baseline
+    reconciliation = reconcile_baseline_ledger(
+        journal.baseline_promotion_events(),
+        None,
+    )
+    if reconciliation.cutover_ready and isinstance(reconciliation.folded_state, dict):
+        log.info("Using baseline promotion ledger fold for SafetyGate startup baseline")
+        return reconciliation.folded_state
+    return {}
+
+
 def _save_state_with_journal_archive_authority(
     state: dict[str, Any],
     journal: ExperimentJournal,
@@ -2332,7 +2355,7 @@ def _run_loop_inner(
         consecutive_failures=state.get("consecutive_failures", 0),
         quality_history=state.get("quality_history", []),
         quality_history_by_tier=state.get("quality_history_by_tier", {}),
-        baseline_state=state.get("baseline_state", {}),
+        baseline_state=_baseline_state_for_startup_gate(state, journal),
     )
     tower = EvalTower(
         url=ORCHESTRATOR_URL,

@@ -604,6 +604,69 @@ def test_save_state_with_journal_authority_keeps_drifted_baseline_cache(
     assert saved[-1]["baseline_state"] == {"baselines_by_tier": {"1": 1.7}}
 
 
+def test_startup_baseline_prefers_state_cache_when_present(
+    journal: ExperimentJournal,
+) -> None:
+    journal.append_baseline_promotion_event(
+        source_trial_id=8,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8},
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+        actor="unit-test",
+    )
+
+    baseline_state = autopilot._baseline_state_for_startup_gate(
+        {"baseline_state": {"baselines_by_tier": {"1": 1.7}}},
+        journal,
+    )
+
+    assert baseline_state == {"baselines_by_tier": {"1": 1.7}}
+
+
+def test_startup_baseline_uses_cutover_ready_ledger_when_cache_absent(
+    journal: ExperimentJournal,
+) -> None:
+    journal.append_baseline_promotion_event(
+        source_trial_id=8,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8},
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+        actor="unit-test",
+    )
+
+    baseline_state = autopilot._baseline_state_for_startup_gate({}, journal)
+
+    assert baseline_state == {"baselines_by_tier": {"1": 1.8}}
+
+
+def test_startup_baseline_falls_back_when_ledger_not_ready(
+    journal: ExperimentJournal,
+) -> None:
+    journal.append_baseline_promotion_event(
+        source_trial_id=8,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8},
+        baseline_state=None,  # type: ignore[arg-type]
+        actor="unit-test",
+    )
+
+    baseline_state = autopilot._baseline_state_for_startup_gate({}, journal)
+
+    assert baseline_state == {}
+
+
 def test_save_state_drops_pause_reason_when_unpaused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
