@@ -61,6 +61,8 @@ def _args(tmp_path: Path, **overrides) -> Namespace:
         "exclude_synthetic_like": False,
         "dedupe_prompt": False,
         "omit_prompt_text": False,
+        "compact_evidence": False,
+        "training_eligible_only": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -293,3 +295,86 @@ def test_dedupe_prompt_collapses_forced_multi_role_attempts(tmp_path: Path) -> N
         ["worker_general"],
     ]
     assert manifest["counts"]["duplicates_collapsed"] == 1
+
+
+def test_compact_evidence_keeps_gate_fields_without_bulk_attempts() -> None:
+    row = {
+        "schema_version": "real_task_record.v1",
+        "record_type": "task_record",
+        "task_id": "chat-a",
+        "source": "orchestrator_progress_jsonl",
+        "source_refs": [{"path": "p", "line": 1}],
+        "class": "code_change_implementation",
+        "class_is_taxonomy": True,
+        "prompt": "raw private prompt",
+        "prompt_ref": {"kind": "progress_objective_sha256", "sha256": "abc"},
+        "route_taken": ["frontdoor"],
+        "wall_s": 1.0,
+        "outcome": "success",
+        "privacy_class": "local_private",
+        "synthetic_like": False,
+        "training_eligible": True,
+        "eligibility_reasons": [],
+        "duplicate_count": 2,
+        "duplicate_task_ids": ["chat-a", "chat-b"],
+        "duplicate_outcomes": {"success": 2},
+        "route_attempts": [
+            {"task_id": "chat-a", "route_taken": ["frontdoor"], "outcome": "success"},
+            {"task_id": "chat-b", "route_taken": ["worker_general"], "outcome": "success"},
+        ],
+    }
+
+    compact = harvest_tasks.compact_evidence_rows([row])[0]
+
+    assert compact["training_eligible"] is True
+    assert compact["duplicate_count"] == 2
+    assert compact["duplicate_outcomes"] == {"success": 2}
+    assert compact["route_attempt_count"] == 2
+    assert compact["route_attempt_roles"] == ["frontdoor", "worker_general"]
+    assert "prompt" not in compact
+    assert "source_refs" not in compact
+    assert "route_attempts" not in compact
+    assert "duplicate_task_ids" not in compact
+
+
+def test_training_eligible_only_filters_output_and_manifest(tmp_path: Path) -> None:
+    _workload_model(tmp_path / "workload_model.yaml")
+    _write_jsonl(
+        tmp_path / "progress" / "2026-06-12.jsonl",
+        [
+            _row(
+                "task_started",
+                "eligible",
+                "2026-06-12T00:00:00+00:00",
+                {
+                    "task_type": "chat",
+                    "objective": "Implement a code patch and update tests",
+                },
+            ),
+            _row("task_completed", "eligible", "2026-06-12T00:00:02+00:00", outcome="success"),
+            _row(
+                "task_started",
+                "ineligible",
+                "2026-06-12T00:00:03+00:00",
+                {
+                    "task_type": "chat",
+                    "objective": "Say hello exactly 3 times.",
+                },
+            ),
+            _row("task_completed", "ineligible", "2026-06-12T00:00:04+00:00", outcome="success"),
+        ],
+    )
+
+    result = harvest_tasks.run(
+        _args(tmp_path, compact_evidence=True, omit_prompt_text=True, training_eligible_only=True)
+    )
+
+    rows = _read_jsonl(Path(result["output"]))
+    manifest = json.loads(Path(result["manifest"]).read_text())
+    assert len(rows) == 1
+    assert rows[0]["task_id"] == "eligible"
+    assert rows[0]["training_eligible"] is True
+    assert "prompt" not in rows[0]
+    assert manifest["counts"]["written"] == 1
+    assert manifest["counts"]["training_eligible"] == 1
+    assert manifest["options"]["training_eligible_only"] is True

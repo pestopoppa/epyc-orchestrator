@@ -627,6 +627,64 @@ def collapse_duplicate_prompts(rows: list[dict[str, Any]]) -> list[dict[str, Any
     return list(grouped.values())
 
 
+COMPACT_EVIDENCE_FIELDS = [
+    "schema_version",
+    "record_type",
+    "task_id",
+    "source",
+    "started_ref",
+    "terminal_ref",
+    "task_type",
+    "priority",
+    "class",
+    "class_source",
+    "class_confidence",
+    "class_matches",
+    "class_is_taxonomy",
+    "route_taken",
+    "route_strategy",
+    "final_answer_role",
+    "producer_role",
+    "wall_s",
+    "tokens",
+    "outcome",
+    "outcome_source",
+    "task_record_ref",
+    "task_record_schema_version",
+    "operator_verdict",
+    "operator_verdict_details_ref",
+    "timestamps",
+    "privacy_class",
+    "synthetic_like",
+    "training_eligible",
+    "eligibility_reasons",
+]
+
+
+def compact_evidence_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop prompt text and large duplicate evidence while preserving gate fields."""
+    compacted: list[dict[str, Any]] = []
+    for row in rows:
+        compact = {field: row.get(field) for field in COMPACT_EVIDENCE_FIELDS if field in row}
+        duplicate_count = int(row.get("duplicate_count") or 1)
+        if duplicate_count > 1:
+            compact["duplicate_count"] = duplicate_count
+            compact["duplicate_outcomes"] = row.get("duplicate_outcomes", {})
+            route_attempts = row.get("route_attempts")
+            if isinstance(route_attempts, list):
+                compact["route_attempt_count"] = len(route_attempts)
+                compact["route_attempt_roles"] = sorted(
+                    {
+                        str(role)
+                        for attempt in route_attempts
+                        if isinstance(attempt, dict)
+                        for role in attempt.get("route_taken", [])
+                    }
+                )
+        compacted.append(compact)
+    return compacted
+
+
 def write_manifest(
     path: Path,
     *,
@@ -687,9 +745,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         rows = [row for row in rows if not row.get("synthetic_like")]
     if args.dedupe_prompt:
         rows = collapse_duplicate_prompts(rows)
+    if args.training_eligible_only:
+        rows = [row for row in rows if row.get("training_eligible")]
     if args.limit and args.limit > 0:
         rows = rows[: args.limit]
-    written = write_jsonl(output, rows)
     options = {
         "progress_log_dir": str(progress_log_dir),
         "workload_model": str(workload_model),
@@ -701,7 +760,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "omit_prompt_text": args.omit_prompt_text,
         "limit": args.limit,
         "lab_task_records": args.lab_task_records,
+        "compact_evidence": args.compact_evidence,
+        "training_eligible_only": args.training_eligible_only,
     }
+    if args.compact_evidence:
+        rows = compact_evidence_rows(rows)
+    written = write_jsonl(output, rows)
     write_manifest(
         manifest,
         output_path=output,
@@ -728,6 +792,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--exclude-synthetic-like", action="store_true")
     parser.add_argument("--dedupe-prompt", action="store_true")
     parser.add_argument("--omit-prompt-text", action="store_true")
+    parser.add_argument(
+        "--compact-evidence",
+        action="store_true",
+        help="Write a compact local-private JSONL suitable for committing gate evidence.",
+    )
+    parser.add_argument(
+        "--training-eligible-only",
+        action="store_true",
+        help="Write only records that are taxonomy-classed, non-synthetic, and have outcomes.",
+    )
     return parser
 
 
