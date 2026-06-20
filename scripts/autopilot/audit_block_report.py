@@ -122,7 +122,11 @@ def _trial_summary(row: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def build_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def build_report(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    alarm_window: int | None = None,
+) -> dict[str, Any]:
     trial_rows = [row for row in rows if _is_trial_row(row)]
     trial_summaries = [summary for row in trial_rows if (summary := _trial_summary(row))]
     totals = {
@@ -136,7 +140,7 @@ def build_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     totals["delta_audit_minus_core"] = round(
         totals["audit_quality_0_3"] - totals["core_quality_0_3"], 6
     )
-    gaming_diagnostic = _gaming_diagnostic(trial_summaries)
+    gaming_diagnostic = _gaming_diagnostic(trial_summaries, alarm_window=alarm_window)
     return {
         "trial_count": len(trial_rows),
         "audited_trial_count": len(trial_summaries),
@@ -144,20 +148,68 @@ def build_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "trials": trial_summaries,
         "gaming_alarm": gaming_diagnostic["gaming_alarm"],
         "gaming_events": gaming_diagnostic["gaming_events"],
+        "gaming_alarm_window": gaming_diagnostic["gaming_alarm_window"],
+        "gaming_alarm_window_trial_count": gaming_diagnostic[
+            "gaming_alarm_window_trial_count"
+        ],
+        "cumulative_gaming_alarm": gaming_diagnostic["cumulative_gaming_alarm"],
+        "cumulative_gaming_events": gaming_diagnostic["cumulative_gaming_events"],
         "transfer_diagnostic": {
             "audited_trial_count": len(trial_summaries),
             "potential_overfit_divergences": len(gaming_diagnostic["gaming_events"]),
             "events": gaming_diagnostic["gaming_events"],
+            "cumulative_potential_overfit_divergences": len(
+                gaming_diagnostic["cumulative_gaming_events"]
+            ),
+            "cumulative_events": gaming_diagnostic["cumulative_gaming_events"],
+            "alarm_window": gaming_diagnostic["gaming_alarm_window"],
+            "alarm_window_trial_count": gaming_diagnostic[
+                "gaming_alarm_window_trial_count"
+            ],
         },
     }
 
 
-def _gaming_diagnostic(trials: list[dict[str, Any]]) -> dict[str, Any]:
+def _gaming_diagnostic(
+    trials: list[dict[str, Any]],
+    *,
+    alarm_window: int | None = None,
+) -> dict[str, Any]:
     if len(trials) < 3:
         return {
             "gaming_alarm": False,
             "gaming_events": [],
+            "gaming_alarm_window": alarm_window,
+            "gaming_alarm_window_trial_count": len(trials),
+            "cumulative_gaming_alarm": False,
+            "cumulative_gaming_events": [],
         }
+
+    cumulative_events = _gaming_events(trials)
+    window_trials = _alarm_window_trials(trials, alarm_window)
+    active_events = _gaming_events(window_trials)
+    return {
+        "gaming_alarm": bool(active_events),
+        "gaming_events": active_events,
+        "gaming_alarm_window": alarm_window,
+        "gaming_alarm_window_trial_count": len(window_trials),
+        "cumulative_gaming_alarm": bool(cumulative_events),
+        "cumulative_gaming_events": cumulative_events,
+    }
+
+
+def _alarm_window_trials(
+    trials: list[dict[str, Any]],
+    alarm_window: int | None,
+) -> list[dict[str, Any]]:
+    if alarm_window is None or alarm_window <= 0 or alarm_window >= len(trials):
+        return trials
+    return trials[-alarm_window:]
+
+
+def _gaming_events(trials: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if len(trials) < 3:
+        return []
 
     events: list[dict[str, Any]] = []
     prev = trials[0]
@@ -175,10 +227,7 @@ def _gaming_diagnostic(trials: list[dict[str, Any]]) -> dict[str, Any]:
             )
         prev = trial
 
-    return {
-        "gaming_alarm": bool(events),
-        "gaming_events": events,
-    }
+    return events
 
 
 def render_markdown(report: Mapping[str, Any]) -> str:
@@ -186,6 +235,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     transfer_diagnostic = report["transfer_diagnostic"]
     gaming_events = report.get("gaming_events") or []
     gaming_alarm = bool(report.get("gaming_alarm"))
+    alarm_window = report.get("gaming_alarm_window")
+    cumulative_events = report.get("cumulative_gaming_events") or gaming_events
     lines = [
         "# W6 Rotating Audit Block Report",
         "",
@@ -204,14 +255,29 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"potential overfit divergences={transfer_diagnostic['potential_overfit_divergences']}"
         ),
         (
+            "- Cumulative transfer diagnostic: "
+            f"potential overfit divergences={len(cumulative_events)}"
+        ),
+        (
             "- Gaming alarm: "
             f"{'triggered' if gaming_alarm else 'clear'} "
             f"({len(gaming_events)} event{'s' if len(gaming_events) != 1 else ''})"
         ),
-        "",
-        "| trial_id | core | audit | core_q | audit_q | delta_audit_minus_core |",
-        "|---:|---:|---:|---:|---:|---:|",
     ]
+    if alarm_window is not None:
+        lines.append(
+            "- Gaming alarm window: "
+            f"last {alarm_window} audited trial"
+            f"{'s' if alarm_window != 1 else ''} "
+            f"(available={report.get('gaming_alarm_window_trial_count')})"
+        )
+    lines.extend(
+        [
+            "",
+            "| trial_id | core | audit | core_q | audit_q | delta_audit_minus_core |",
+            "|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
     for trial in report["trials"]:
         lines.append(
             "| {trial_id} | {core_correct}/{core_total} | {audit_correct}/{audit_total} | "
@@ -228,11 +294,18 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 "audit_delta={audit_delta:+.3f}".format(**event)
             )
         lines.append("- Action: review transition(s) for audit overfitting risk.")
-
-    if not gaming_alarm:
+    else:
         lines.append("")
         lines.append("## Audit Gaming Alarm")
-        lines.append("- No suspicious gaming trend detected.")
+        if cumulative_events:
+            lines.append("- No suspicious gaming trend detected in the current window.")
+            lines.append(
+                "- Historical divergences remain in cumulative evidence: "
+                f"{len(cumulative_events)} event"
+                f"{'s' if len(cumulative_events) != 1 else ''}."
+            )
+        else:
+            lines.append("- No suspicious gaming trend detected.")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -263,6 +336,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--out-json", type=Path, help="Write JSON summary to this path.")
     parser.add_argument("--out-md", type=Path, help="Write Markdown summary to this path.")
+    parser.add_argument(
+        "--alarm-window",
+        type=int,
+        help=(
+            "Evaluate the active gaming alarm over the last N audited trials while "
+            "preserving cumulative divergence evidence in the report."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -270,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     journal_paths = [path for group in args.journal for path in group]
     rows = load_journal_rows(journal_paths)
-    report = build_report(rows)
+    report = build_report(rows, alarm_window=args.alarm_window)
     if args.out_json is None and args.out_md is None:
         print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     else:

@@ -125,7 +125,7 @@ def _w6_audit_restart_report(
     *,
     min_audited_trials: int,
 ) -> dict[str, Any]:
-    report = build_audit_block_report(journal_rows)
+    report = build_audit_block_report(journal_rows, alarm_window=min_audited_trials)
     audited_trial_count = int(report.get("audited_trial_count") or 0)
     gaming_alarm = bool(report.get("gaming_alarm"))
     blockers: list[str] = []
@@ -139,10 +139,16 @@ def _w6_audit_restart_report(
         "cutover_ready": not blockers,
         "min_audited_trials": min_audited_trials,
         "audited_trial_count": audited_trial_count,
+        "alarm_window": report.get("gaming_alarm_window"),
+        "alarm_window_trial_count": report.get("gaming_alarm_window_trial_count"),
         "gaming_alarm": gaming_alarm,
         "potential_overfit_divergences": (
             report.get("transfer_diagnostic") or {}
         ).get("potential_overfit_divergences"),
+        "cumulative_gaming_alarm": report.get("cumulative_gaming_alarm"),
+        "cumulative_potential_overfit_divergences": (
+            report.get("transfer_diagnostic") or {}
+        ).get("cumulative_potential_overfit_divergences"),
         "blockers": blockers,
         "report": report,
     }
@@ -172,8 +178,14 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "w6_audit_cutover_ready": w6.get("cutover_ready"),
         "w6_audited_trial_count": w6.get("audited_trial_count"),
         "w6_min_audited_trials": w6.get("min_audited_trials"),
+        "w6_alarm_window": w6.get("alarm_window"),
+        "w6_alarm_window_trial_count": w6.get("alarm_window_trial_count"),
         "w6_gaming_alarm": w6.get("gaming_alarm"),
         "w6_potential_overfit_divergences": w6.get("potential_overfit_divergences"),
+        "w6_cumulative_gaming_alarm": w6.get("cumulative_gaming_alarm"),
+        "w6_cumulative_potential_overfit_divergences": w6.get(
+            "cumulative_potential_overfit_divergences"
+        ),
     }
 
 
@@ -264,9 +276,13 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"ready={summary['w6_audit_cutover_ready']}, "
             f"audited_trials={summary['w6_audited_trial_count']}/"
             f"{summary['w6_min_audited_trials']}, "
+            f"alarm_window={summary['w6_alarm_window_trial_count']}/"
+            f"{summary['w6_alarm_window']}, "
             f"gaming_alarm={summary['w6_gaming_alarm']}, "
             "potential_overfit_divergences="
-            f"{summary['w6_potential_overfit_divergences']}"
+            f"{summary['w6_potential_overfit_divergences']}, "
+            "cumulative_divergences="
+            f"{summary['w6_cumulative_potential_overfit_divergences']}"
         ),
     ]
     if report["blockers"]:

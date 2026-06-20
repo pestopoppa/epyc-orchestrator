@@ -182,6 +182,60 @@ def test_gaming_alarm_detects_core_improving_audit_flat_or_worsening(tmp_path: P
             "audit_delta": 0.0,
         }
     ]
+    assert report["cumulative_gaming_alarm"] is True
+    assert report["cumulative_gaming_events"] == report["gaming_events"]
+
+
+def test_alarm_window_can_clear_after_historical_divergence(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
+            _trial(3, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(4, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(5, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+        ],
+    )
+
+    report = audit_block_report.build_report(
+        audit_block_report.load_journal_rows([journal]),
+        alarm_window=3,
+    )
+
+    assert report["gaming_alarm"] is False
+    assert report["gaming_events"] == []
+    assert report["gaming_alarm_window"] == 3
+    assert report["gaming_alarm_window_trial_count"] == 3
+    assert report["transfer_diagnostic"]["potential_overfit_divergences"] == 0
+    assert report["cumulative_gaming_alarm"] is True
+    assert report["transfer_diagnostic"]["cumulative_potential_overfit_divergences"] == 1
+
+
+def test_markdown_distinguishes_current_window_from_cumulative_history(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(2, core_correct=2, core_total=2, audit_correct=1, audit_total=2),
+            _trial(3, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(4, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+            _trial(5, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+        ],
+    )
+
+    markdown = audit_block_report.render_markdown(
+        audit_block_report.build_report(
+            audit_block_report.load_journal_rows([journal]),
+            alarm_window=3,
+        )
+    )
+
+    assert "Gaming alarm window: last 3 audited trials" in markdown
+    assert "No suspicious gaming trend detected in the current window." in markdown
+    assert "Historical divergences remain in cumulative evidence: 1 event." in markdown
 
 
 def test_markdown_includes_gaming_alarm(tmp_path: Path) -> None:

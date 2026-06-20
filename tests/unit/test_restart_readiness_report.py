@@ -52,10 +52,18 @@ def _audit_report(
         "trials": [],
         "gaming_alarm": gaming_alarm,
         "gaming_events": [{"trial_id": 2}] if gaming_alarm else [],
+        "gaming_alarm_window": 30,
+        "gaming_alarm_window_trial_count": min(audited_trial_count, 30),
+        "cumulative_gaming_alarm": gaming_alarm,
+        "cumulative_gaming_events": [{"trial_id": 2}] if gaming_alarm else [],
         "transfer_diagnostic": {
             "audited_trial_count": audited_trial_count,
             "potential_overfit_divergences": divergences,
             "events": [{"trial_id": 2}] if divergences else [],
+            "cumulative_potential_overfit_divergences": divergences,
+            "cumulative_events": [{"trial_id": 2}] if divergences else [],
+            "alarm_window": 30,
+            "alarm_window_trial_count": min(audited_trial_count, 30),
         },
     }
 
@@ -105,7 +113,7 @@ def _patch_ready_dependencies(monkeypatch, *, audit_report: dict[str, Any] | Non
         monkeypatch.setattr(
             report_mod,
             "build_audit_block_report",
-            lambda rows: audit_report,
+            lambda rows, **kwargs: audit_report,
         )
 
 
@@ -254,8 +262,11 @@ def test_w6_audit_summary_is_visible_without_blocking_restart(monkeypatch) -> No
     assert report["summary"]["w6_audit_cutover_ready"] is False
     assert report["summary"]["w6_audited_trial_count"] == 29
     assert report["summary"]["w6_min_audited_trials"] == 30
+    assert report["summary"]["w6_alarm_window"] == 30
+    assert report["summary"]["w6_alarm_window_trial_count"] == 29
     assert report["summary"]["w6_gaming_alarm"] is True
     assert report["summary"]["w6_potential_overfit_divergences"] == 5
+    assert report["summary"]["w6_cumulative_potential_overfit_divergences"] == 5
     assert report["w6_audit_cutover"]["blockers"] == [
         "audited trial history too small: 29 < 30",
         "W6 audit gaming alarm is triggered",
@@ -301,6 +312,48 @@ def test_require_w6_audit_accepts_clean_minimum(monkeypatch) -> None:
     assert report["restart_ready"] is True
     assert report["blockers"] == []
     assert report["summary"]["w6_audit_cutover_ready"] is True
+
+
+def test_require_w6_audit_uses_trailing_alarm_window(monkeypatch) -> None:
+    _patch_ready_dependencies(monkeypatch)
+
+    rows = []
+    for trial_id, core_correct, audit_correct in [
+        (1, 1, 1),
+        (2, 2, 1),
+        (3, 1, 1),
+        (4, 1, 1),
+        (5, 1, 1),
+    ]:
+        question_results = [
+            {"qid": f"core-{trial_id}-{idx}", "partition": "core", "correct": idx < core_correct}
+            for idx in range(2)
+        ]
+        question_results.extend(
+            {
+                "qid": f"audit-{trial_id}-{idx}",
+                "partition": "audit",
+                "correct": idx < audit_correct,
+            }
+            for idx in range(2)
+        )
+        rows.append({"trial_id": trial_id, "eval_details": {"question_results": question_results}})
+
+    report = report_mod.build_restart_readiness_report(
+        _state(),
+        rows,
+        require_w6_audit=True,
+        min_w6_audited_trials=3,
+    )
+
+    assert report["restart_ready"] is True
+    assert report["summary"]["w6_audit_cutover_ready"] is True
+    assert report["summary"]["w6_alarm_window"] == 3
+    assert report["summary"]["w6_alarm_window_trial_count"] == 3
+    assert report["summary"]["w6_gaming_alarm"] is False
+    assert report["summary"]["w6_potential_overfit_divergences"] == 0
+    assert report["summary"]["w6_cumulative_gaming_alarm"] is True
+    assert report["summary"]["w6_cumulative_potential_overfit_divergences"] == 1
 
 
 def test_restart_report_blocks_without_baseline_source(monkeypatch) -> None:
