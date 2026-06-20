@@ -14,8 +14,14 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import sys
 from statistics import median
 from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+ORCH_ROOT = SCRIPT_DIR.parents[1]
+sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(ORCH_ROOT))
 
 try:
     from scripts.autopilot.paired_stats import (

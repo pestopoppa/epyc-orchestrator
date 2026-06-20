@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 from scripts.autopilot import seq_readiness_report
 
@@ -190,3 +192,27 @@ def test_main_writes_json_and_markdown_outputs(tmp_path: Path, capsys) -> None:
     assert "Status: blocked" in stdout
     assert json.loads(out_json.read_text())["cutover_ready"] is False
     assert "Status: blocked" in out_md.read_text()
+
+
+def test_direct_cli_execution_from_repo_root(tmp_path: Path) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    journal.write_text(json.dumps(_row(1, "fp-a", set(range(20)))) + "\n")
+    repo_root = Path(__file__).resolve().parents[2]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/autopilot/seq_readiness_report.py",
+            "--journal",
+            str(journal),
+            "--json",
+        ],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    report = json.loads(result.stdout)
+    assert report["cutover_ready"] is False
+    assert report["trusted_vector_trials"] == 1
