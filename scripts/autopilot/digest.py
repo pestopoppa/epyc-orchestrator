@@ -204,6 +204,7 @@ def render_digest(
     archive: Any,
     state: dict[str, Any],
     journal: Any = None,
+    archive_source: str | None = None,
     now: datetime | None = None,
 ) -> str:
     """Build the markdown digest body for the current snapshot."""
@@ -214,6 +215,8 @@ def render_digest(
     body.extend(_state_section(state))
     body.append("")
     body.extend(_archive_section(archive))
+    if archive_source:
+        body.append(f"- archive source: `{archive_source}`")
     body.append("")
     body.extend(_structural_lab_section(lab))
     body.append("")
@@ -241,6 +244,7 @@ def generate_digest(
     archive: Any,
     state: dict[str, Any],
     journal: Any = None,
+    archive_source: str | None = None,
     output_root: Path | None = None,
     now: datetime | None = None,
 ) -> Path:
@@ -256,7 +260,13 @@ def generate_digest(
     path = _digest_path_for(now, output_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     body = render_digest(
-        swarm=swarm, lab=lab, archive=archive, state=state, journal=journal, now=now,
+        swarm=swarm,
+        lab=lab,
+        archive=archive,
+        state=state,
+        journal=journal,
+        archive_source=archive_source,
+        now=now,
     )
     if not path.exists():
         header = (

@@ -188,6 +188,55 @@ def test_cmd_plot_uses_journal_archive_snapshot(monkeypatch: pytest.MonkeyPatch)
     assert captured["raise_on_error"] is True
 
 
+def test_cmd_digest_accepts_explicit_archive_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel_archive = object()
+    captured: dict[str, object] = {}
+    saved_states: list[dict[str, object]] = []
+
+    class FakeJournal:
+        pass
+
+    class FakeSwarm:
+        pass
+
+    class FakeLab:
+        pass
+
+    def _archive_for_read_command(journal, *, source):
+        captured["journal_arg"] = journal
+        captured["source_arg"] = source
+        return sentinel_archive, source
+
+    def _generate_digest(**kwargs):
+        captured.update(kwargs)
+        return Path("/tmp/autopilot-digest.md")
+
+    monkeypatch.setattr(autopilot, "ExperimentJournal", FakeJournal)
+    monkeypatch.setattr(autopilot, "_archive_for_read_command", _archive_for_read_command)
+    monkeypatch.setattr(autopilot, "NumericSwarm", FakeSwarm)
+    monkeypatch.setattr(autopilot, "StructuralLab", FakeLab)
+    monkeypatch.setattr(autopilot, "generate_digest", _generate_digest)
+    monkeypatch.setattr(autopilot, "load_state", lambda: {"trial_counter": 12})
+    monkeypatch.setattr(autopilot, "save_state", lambda state: saved_states.append(dict(state)))
+
+    autopilot.cmd_digest(
+        SimpleNamespace(
+            no_state_update=True,
+            archive_source=autopilot.ARCHIVE_SOURCE_STATE,
+        )
+    )
+
+    assert isinstance(captured["journal_arg"], FakeJournal)
+    assert captured["source_arg"] == autopilot.ARCHIVE_SOURCE_STATE
+    assert captured["archive"] is sentinel_archive
+    assert captured["archive_source"] == autopilot.ARCHIVE_SOURCE_STATE
+    assert isinstance(captured["swarm"], FakeSwarm)
+    assert isinstance(captured["lab"], FakeLab)
+    assert saved_states == []
+
+
 def test_append_baseline_promotion_event_only_for_updated_baseline(
     tmp_path: Path,
 ) -> None:

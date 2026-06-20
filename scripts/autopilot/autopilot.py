@@ -4217,11 +4217,19 @@ def cmd_digest(args: argparse.Namespace) -> None:
     """
     state = load_state()
     journal = ExperimentJournal()
-    archive, _archive_source = _archive_for_read_command(journal)
+    archive, archive_source = _archive_for_read_command(
+        journal,
+        source=getattr(args, "archive_source", ARCHIVE_SOURCE_JOURNAL_ALL),
+    )
     swarm = NumericSwarm()
     lab = StructuralLab()
     path = generate_digest(
-        swarm=swarm, lab=lab, archive=archive, state=state, journal=journal,
+        swarm=swarm,
+        lab=lab,
+        archive=archive,
+        state=state,
+        journal=journal,
+        archive_source=archive_source,
     )
     if not args.no_state_update:
         state["last_digest_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -4520,6 +4528,15 @@ def main() -> None:
         "--no-state-update",
         action="store_true",
         help="Do NOT update state['last_digest_date'] — useful for ad-hoc snapshots that should not delay the next automatic generation.",
+    )
+    p_digest.add_argument(
+        "--archive-source",
+        choices=ARCHIVE_SOURCE_CHOICES,
+        default=ARCHIVE_SOURCE_JOURNAL_ALL,
+        help=(
+            "Archive read source for this operator command only. "
+            "Defaults to journal-all; state is a legacy fallback."
+        ),
     )
     p_digest.set_defaults(func=cmd_digest)
 
