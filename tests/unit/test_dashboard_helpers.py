@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -374,6 +376,68 @@ def test_read_autopilot_phase_invalid_returns_empty(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(dashboard, "AUTOPILOT_PHASE_PATH", phase_path)
 
     assert dashboard._read_autopilot_phase() == {}
+
+
+def test_autopilot_phase_health_reports_active(tmp_path, monkeypatch) -> None:
+    phase_path = tmp_path / "phase.json"
+    phase_path.write_text(json.dumps({
+        "phase": "dispatch_action",
+        "trial_id": 12,
+        "action_type": "numeric_trial",
+        "pid": os.getpid(),
+        "updated_at": time.time(),
+    }))
+    monkeypatch.setattr(dashboard, "AUTOPILOT_PHASE_PATH", phase_path)
+
+    health = dashboard._autopilot_phase_health()
+
+    assert health["ok"] is True
+    assert health["status"] == "active"
+    assert health["trial_id"] == 12
+    assert health["pid_alive"] is True
+
+
+def test_autopilot_phase_health_reports_stale(tmp_path, monkeypatch) -> None:
+    phase_path = tmp_path / "phase.json"
+    phase_path.write_text(json.dumps({
+        "phase": "dispatch_action",
+        "trial_id": 12,
+        "action_type": "deep_eval",
+        "pid": os.getpid(),
+        "updated_at": time.time() - 3600,
+    }))
+    monkeypatch.setattr(dashboard, "AUTOPILOT_PHASE_PATH", phase_path)
+
+    health = dashboard._autopilot_phase_health()
+
+    assert health["ok"] is False
+    assert health["status"] == "stale"
+    assert health["blockers"]
+
+
+def test_process_status_includes_autopilot_phase_health(tmp_path, monkeypatch) -> None:
+    phase_path = tmp_path / "phase.json"
+    phase_path.write_text(json.dumps({
+        "phase": "dispatch_action",
+        "trial_id": 12,
+        "action_type": "numeric_trial",
+        "pid": os.getpid(),
+        "updated_at": time.time(),
+    }))
+    monkeypatch.setattr(dashboard, "AUTOPILOT_PHASE_PATH", phase_path)
+    monkeypatch.setattr(dashboard, "AUTOPILOT_LOG", tmp_path / "missing.log")
+    monkeypatch.setattr(
+        dashboard,
+        "_process_info_by_match",
+        lambda _match: {"running": True, "pid": os.getpid()},
+    )
+
+    response = asyncio.run(dashboard.process_status())
+    payload = json.loads(response.body)
+
+    assert payload["autopilot_phase"]["trial_id"] == 12
+    assert payload["autopilot_phase_health"]["status"] == "active"
+    assert payload["autopilot_phase_age_s"] == payload["autopilot_phase_health"]["heartbeat_age_s"]
 
 
 # ----- dashboard_tasks -----

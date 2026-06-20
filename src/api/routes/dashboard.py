@@ -88,6 +88,9 @@ from src.autopilot_core.pareto_math import (
     hypervolume as _pareto_hypervolume_impl,
 )
 from src.autopilot_core.tier_specs import DEFAULT_FRONTIER_TIER
+from scripts.autopilot.phase_status import (
+    build_phase_health_report,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -115,6 +118,18 @@ def _read_autopilot_phase() -> dict[str, Any]:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _autopilot_phase_health() -> dict[str, Any]:
+    try:
+        return build_phase_health_report(path=AUTOPILOT_PHASE_PATH)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "status": "unavailable",
+            "path": str(AUTOPILOT_PHASE_PATH),
+            "blockers": [f"phase health unavailable: {exc}"],
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -921,7 +936,10 @@ async def process_status() -> JSONResponse:
         except Exception:
             return None
     phase = _read_autopilot_phase()
-    phase_age_s = _age_s(AUTOPILOT_PHASE_PATH)
+    phase_health = _autopilot_phase_health()
+    phase_age_s = phase_health.get("heartbeat_age_s")
+    if phase_age_s is None:
+        phase_age_s = _age_s(AUTOPILOT_PHASE_PATH)
     if phase and not (autopilot or {}).get("running"):
         phase = dict(phase)
         phase.setdefault("idle_reason", "autopilot process not running")
@@ -932,6 +950,7 @@ async def process_status() -> JSONResponse:
         "last_autopilot_log_age_s": last_log_age_s,
         "autopilot_recent_lines": recent_lines,
         "autopilot_phase": phase,
+        "autopilot_phase_health": phase_health,
         "autopilot_phase_age_s": phase_age_s,
         "inference_tap_age_s": _age_s(_INFERENCE_TAP_PATH),
         "planner_tap_age_s": _age_s(Path("/mnt/raid0/llm/tmp/planner_tap.log")),
