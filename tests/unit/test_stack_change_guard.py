@@ -936,6 +936,7 @@ def test_stack_change_guard_can_print_surface_rule_inventory_json(capsys) -> Non
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["rule_count"] == len(HARDCODED_SURFACE_RULES)
+    assert payload["consumer_surface_count"] == len(REQUIRED_CONSUMER_SURFACE_IDS)
     assert set(surface["surface_id"] for surface in payload["consumer_surfaces"]) == set(
         REQUIRED_CONSUMER_SURFACE_IDS
     )

@@ -1,0 +1,157 @@
+{
+  "blockers": [
+    "w4_w6_restart_cutover: sequential verdict cutover readiness is blocked",
+    "w4_w6_restart_cutover: W6 audit cutover readiness is blocked: W6 audit gaming alarm is triggered",
+    "ds_e1_dynamic_stack: kv_size_measurements: No direct DS-E1 production KV-size measurement series was found.",
+    "xmas_production_path: xmas_routing.mode is off; enforce remains default-off",
+    "xmas_production_path: latest X-MAS held-out A/B policy is unknown_legacy; required incumbent_constrained_v1",
+    "xmas_production_path: latest X-MAS held-out A/B decision is hold"
+  ],
+  "next_actions": [
+    {
+      "command": "cd /mnt/raid0/llm/epyc-orchestrator && python3 scripts/autopilot/restart_readiness_report.py --json --strict --require-seq-cutover --require-w6-audit",
+      "evidence": {
+        "seq_shadow_rows": 15,
+        "trusted_vectors": 67,
+        "w6_audited_rows": 38,
+        "w6_gaming_alarm": true
+      },
+      "follow_up": "python3 scripts/autopilot/fable5_gate_report.py --json --strict",
+      "key": "continue_w4_w6_accrual",
+      "priority": "P0",
+      "reason": "Sequential authority and W6 audit cutover need more trusted rows before any flip.",
+      "status": "active"
+    },
+    {
+      "blocked_by": [
+        "active AutoPilot process(es): 1091014 uv run python scripts/autopilot/autopilot.py start --max-trials 930; 1091018 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 930",
+        "live llama-server process(es): 2681646 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf --host 127.0.0.1 --port 8070 -np 1 -c 32768 -t 96 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2684681 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/lmstudio/models/unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf --host 127.0.0.1 --port 8083 -np 2 -c 16384 -t 96 -ub 8192 --flash-attn on -ctk q4_0 -ctv f16 --mlock --override-kv qwen35moe.expert_used_count=int:8 --slot-save-path /mnt/raid0/llm/cache/kv_slots/architect_general; 2685060 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf --host 127.0.0.1 --port 8085 -np 1 -c 32768 -t 96 -ub 8192 --flash-attn on --jinja -ctk q4_0 -ctv q4_0 --mlock --override-kv qwen3next.expert_used_count=int:4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/ingest_long_context; 2691469 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf --mmproj /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf --host 127.0.0.1 --port 8086 -np 2 -c 8192 -t 24 --flash-attn on; ... +6 more"
+      ],
+      "command": "cd /mnt/raid0/llm/epyc-inference-research && scripts/benchmark/ds_e1_kv_measurements.sh --execute",
+      "follow_up": "cd /mnt/raid0/llm/epyc-orchestrator && python3 scripts/server/dynamic_stack_evidence_packet.py --output orchestration/reports/ds_e1_evidence_packet_20260620.md --strict",
+      "key": "run_ds_e1_kv_measurements",
+      "priority": "P0",
+      "reason": "DS-E1 cannot decide DS-7/DS-6 profiles until direct production KV-size rows exist.",
+      "requires": "attested clean window with AutoPilot and live llama-server processes stopped/coordinated",
+      "status": "blocked"
+    },
+    {
+      "blocked_by": [
+        "active AutoPilot process(es): 1091014 uv run python scripts/autopilot/autopilot.py start --max-trials 930; 1091018 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 930"
+      ],
+      "command": "cd /mnt/raid0/llm/epyc-orchestrator && uv run python scripts/benchmark/xmas_live_ab.py --prompts benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl --reps 2 --host-quiet-confirmed --output benchmarks/results/runs/xmas_live_ab/$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy",
+      "evidence_blockers": [
+        "xmas_routing.mode is off; enforce remains default-off",
+        "latest X-MAS held-out A/B policy is unknown_legacy; required incumbent_constrained_v1",
+        "latest X-MAS held-out A/B decision is hold"
+      ],
+      "key": "run_xmas_constrained_policy_ab",
+      "priority": "P0",
+      "prompt_manifest": "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl",
+      "reason": "X-MAS enforce needs a fresh held-out A/B carrying incumbent_constrained_v1 and a promote_candidate verdict.",
+      "required_policy": "incumbent_constrained_v1",
+      "requires": "attested quiet window; runner preflight refuses AutoPilot and competing benchmark coordinators",
+      "status": "blocked"
+    }
+  ],
+  "ready": false,
+  "sections": [
+    {
+      "blockers": [],
+      "details": {
+        "action_type": "deep_eval",
+        "heartbeat_age_s": 111.27417302131653,
+        "ok": true,
+        "phase": "dispatch_action",
+        "pid": 1091018,
+        "pid_alive": true,
+        "status": "active",
+        "trial_id": 902
+      },
+      "key": "phase_health",
+      "status": "ready",
+      "summary": "AutoPilot phase heartbeat is active at trial 902 / dispatch_action."
+    },
+    {
+      "blockers": [
+        "sequential verdict cutover readiness is blocked",
+        "W6 audit cutover readiness is blocked: W6 audit gaming alarm is triggered"
+      ],
+      "details": {
+        "baseline_seed_append_ready": true,
+        "restart_ready": false,
+        "seq_cutover_ready": false,
+        "seq_shadow_rows": 15,
+        "seq_trusted_vector_trials": 67,
+        "w6_audit_cutover_ready": false,
+        "w6_audited_trial_count": 38,
+        "w6_gaming_alarm": true,
+        "w6_min_audited_trials": 30,
+        "w6_potential_overfit_divergences": 6
+      },
+      "key": "w4_w6_restart_cutover",
+      "status": "blocked",
+      "summary": "W4/W6 strict restart cutover remains blocked."
+    },
+    {
+      "blockers": [
+        "kv_size_measurements: No direct DS-E1 production KV-size measurement series was found."
+      ],
+      "details": {
+        "clean_window_blockers": [
+          "active AutoPilot process(es): 1091014 uv run python scripts/autopilot/autopilot.py start --max-trials 930; 1091018 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 930",
+          "live llama-server process(es): 2681646 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf --host 127.0.0.1 --port 8070 -np 1 -c 32768 -t 96 -ub 8192 --flash-attn on --jinja -ctk q8_0 -ctv q8_0 --mlock --slot-save-path /mnt/raid0/llm/cache/kv_slots/frontdoor; 2684681 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/lmstudio/models/unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf --host 127.0.0.1 --port 8083 -np 2 -c 16384 -t 96 -ub 8192 --flash-attn on -ctk q4_0 -ctv f16 --mlock --override-kv qwen35moe.expert_used_count=int:8 --slot-save-path /mnt/raid0/llm/cache/kv_slots/architect_general; 2685060 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen3-Next-80B-A3B-Instruct-GGUF/Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf --host 127.0.0.1 --port 8085 -np 1 -c 32768 -t 96 -ub 8192 --flash-attn on --jinja -ctk q4_0 -ctv q4_0 --mlock --override-kv qwen3next.expert_used_count=int:4 --slot-save-path /mnt/raid0/llm/cache/kv_slots/ingest_long_context; 2691469 /mnt/raid0/llm/llama.cpp/build/bin/llama-server -m /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q4_K_M.gguf --mmproj /mnt/raid0/llm/lmstudio/models/lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF/mmproj-model-f16.gguf --host 127.0.0.1 --port 8086 -np 2 -c 8192 -t 24 --flash-attn on; ... +6 more"
+        ],
+        "clean_window_ready": false,
+        "generated_at": "2026-06-20T19:16:38Z",
+        "ready_for_profile_decision": false,
+        "section_statuses": {
+          "contention_matrix": "ready",
+          "ds5_roster_manifest": "ready",
+          "kv_size_measurements": "missing",
+          "ri10_canary": "ready",
+          "stack_roster": "ready"
+        }
+      },
+      "key": "ds_e1_dynamic_stack",
+      "status": "blocked",
+      "summary": "DS-E1 dynamic-stack packet is not decision-ready."
+    },
+    {
+      "blockers": [
+        "xmas_routing.mode is off; enforce remains default-off",
+        "latest X-MAS held-out A/B policy is unknown_legacy; required incumbent_constrained_v1",
+        "latest X-MAS held-out A/B decision is hold"
+      ],
+      "details": {
+        "candidate_table_errors": [],
+        "candidate_table_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/xmas_winner_table.yaml",
+        "candidate_table_ready": true,
+        "config_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/classifier_config.yaml",
+        "config_validation_errors": [],
+        "latest_ab_blockers": [
+          "overall score delta -0.350 < required 0.050",
+          "latency ratio 16.181 > allowed 1.100",
+          "no domain improved by >= 0.050",
+          "domain regressions: code, math, reasoning"
+        ],
+        "latest_ab_decision_status": "hold",
+        "latest_ab_latency_ratio": 16.181053563523683,
+        "latest_ab_policy": "unknown_legacy",
+        "latest_ab_score_delta": -0.35000000000000003,
+        "latest_ab_summary_path": "/mnt/raid0/llm/epyc-orchestrator/benchmarks/results/runs/xmas_live_ab/20260618-215637-heldout-resilient-rerun/summary.json",
+        "mode": "off",
+        "quiet_window_blockers": [
+          "active AutoPilot process(es): 1091014 uv run python scripts/autopilot/autopilot.py start --max-trials 930; 1091018 /mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 930"
+        ],
+        "quiet_window_ready": false,
+        "require_complete_table": true,
+        "required_ab_policy": "incumbent_constrained_v1",
+        "winner_table_path": "orchestration/xmas_winner_table.yaml"
+      },
+      "key": "xmas_production_path",
+      "status": "blocked",
+      "summary": "X-MAS production routing remains gated."
+    }
+  ]
+}
