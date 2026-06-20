@@ -1,0 +1,64 @@
+{
+  "schema_version": "live_token_probe_summary.v1",
+  "generated_at": "2026-06-20T23:50:00+00:00",
+  "builder": "scripts/tasks/harvest_tasks.py",
+  "probe_window": {
+    "start_date": "2026-06-20",
+    "end_date": "2026-06-20"
+  },
+  "output_path": "/mnt/raid0/llm/tmp/f1-live-token-probe-20260620/real_tasks.jsonl",
+  "manifest_path": "/mnt/raid0/llm/tmp/f1-live-token-probe-20260620/manifest.json",
+  "counts": {
+    "written": 174,
+    "training_eligible": 174,
+    "taxonomy_class": 174,
+    "duplicates_collapsed": 328,
+    "synthetic_like": 0,
+    "by_source": {
+      "orchestrator_progress_jsonl": 174
+    },
+    "by_source_family": {
+      "orchestrator_progress_jsonl": 174
+    },
+    "by_outcome": {
+      "failure": 27,
+      "success": 147
+    },
+    "by_class": {
+      "benchmark_eval_measurement": 20,
+      "code_change_implementation": 84,
+      "debug_root_cause": 9,
+      "governance_docs_handoff": 8,
+      "ops_deploy_process": 18,
+      "planning_architecture_review": 13,
+      "research_intake_deep_dive": 22
+    },
+    "wall_time_rows": 174,
+    "token_payload_rows": 0
+  },
+  "source_scan": {
+    "progress_records": 1713,
+    "skipped": {
+      "open_task": 450
+    }
+  },
+  "deployment_check": {
+    "active_autopilot_pid": 1091018,
+    "active_autopilot_started_at": "2026-06-20T17:29:27+00:00",
+    "telemetry_file_mtime": "2026-06-20T23:02:05+00:00",
+    "direct_stage_file_mtime": "2026-06-20T23:02:35+00:00",
+    "progress_logger_file_mtime": "2026-06-19T01:58:47+00:00",
+    "stale_process_for_token_telemetry": true
+  },
+  "gate_readout": {
+    "class_outcome_count_gate": true,
+    "wall_time_coverage": true,
+    "token_payload_coverage": false,
+    "status": "blocked_on_controlled_restart_or_new_post_restart_traffic"
+  },
+  "notes": [
+    "The code-level token telemetry fix exists in commit b8c8ac52 and later heads.",
+    "The active AutoPilot process predates the telemetry patch files, so its real-mode completions still emit task_record_v1.tokens=null.",
+    "Do not restart the active W4/W6 accrual process just for this probe; refresh F1 W2 token coverage after a controlled restart or naturally new post-restart traffic."
+  ]
+}
