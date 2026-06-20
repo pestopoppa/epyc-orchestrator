@@ -937,6 +937,14 @@ def test_dashboard_module_html_loads_from_file() -> None:
     assert "</body></html>" in dashboard._DASHBOARD_HTML
 
 
+def test_dashboard_html_surfaces_autopilot_phase_health() -> None:
+    from src.api.routes import dashboard
+
+    html = dashboard._DASHBOARD_HTML
+    assert "autopilot_phase_health" in html
+    assert "phase health" in html
+
+
 def test_dashboard_effective_journal_rows_fold_supersession_events() -> None:
     rows = [
         {

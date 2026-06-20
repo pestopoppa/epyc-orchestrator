@@ -1360,6 +1360,8 @@ function renderAutopilotRunStrip() {
     const logCounts = snap.log_counts || {};
     const verdicts = rolling._verifier_verdicts || {};
     const completed = snap.recent_completed_tasks || [];
+    const phaseHealth = proc.autopilot_phase_health || {};
+    const phaseHealthClass = _autopilotPhaseHealthClass(phaseHealth.status);
 
     const openReqs = typeof openStructuredTapRequests === 'function' ? openStructuredTapRequests() : [];
     const activeReqs = typeof liveStructuredTapRequests === 'function' ? liveStructuredTapRequests() : [];
@@ -1388,6 +1390,9 @@ function renderAutopilotRunStrip() {
     } else if (hasActiveInference) {
         runState = 'inference active';
         runClass = 'good';
+    } else if (phaseHealth.status && phaseHealth.status !== 'active') {
+        runState = `phase ${phaseHealth.status}`;
+        runClass = phaseHealthClass;
     } else if (lastLogAge != null && lastLogAge >= _AUTOPILOT_IDLE_S) {
         runState = 'quiet';
         runClass = 'warn';
@@ -1397,8 +1402,11 @@ function renderAutopilotRunStrip() {
     }
     const workers = proc.gepa_worker_count || 0;
     const phaseName = phase.phase || progressPhaseName(prog, ap.running);
+    const phaseHealthLine = phaseHealth.status
+        ? `<br><strong style="color:${_autopilotPhaseHealthColor(phaseHealth.status)}">${escapeHTML(_autopilotPhaseHealthLabel(phaseHealth))}</strong>`
+        : '';
     const runSub = ap.running
-        ? `${rawAp.running ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))}` : 'autopilot_progress confirms live trial'} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type || prog.action_type ? ` · ${escapeHTML(String(phase.action_type || prog.action_type))}` : ''}`
+        ? `${rawAp.running ? `pid ${escapeHTML(String(ap.pid || '?'))} · ${escapeHTML(String(ap.etime || '?'))}` : 'autopilot_progress confirms live trial'} · last log ${formatShortDuration(lastLogAge)} · ${workers} workers<br><strong>${escapeHTML(String(phaseName))}</strong>${phase.action_type || prog.action_type ? ` · ${escapeHTML(String(phase.action_type || prog.action_type))}` : ''}${phaseHealthLine}`
         : `no process matching autopilot.py start`;
 
     let trialValue = 'no trial';
@@ -3797,6 +3805,33 @@ function _autopilotPhaseAgeS(phase) {
     return null;
 }
 
+function _autopilotPhaseHealthClass(status) {
+    if (status === 'active') return 'good';
+    if (status === 'missing' || status === 'process_down') return 'muted';
+    if (status === 'stale') return 'warn';
+    if (status) return 'bad';
+    return 'muted';
+}
+
+function _autopilotPhaseHealthLabel(health) {
+    if (!health || !health.status) return 'phase health unknown';
+    const bits = [`phase health ${health.status}`];
+    if (health.heartbeat_age_s != null) bits.push(`heartbeat ${formatShortDuration(health.heartbeat_age_s)} ago`);
+    if (health.pid_alive === false) bits.push('pid not alive');
+    if (Array.isArray(health.blockers) && health.blockers.length) {
+        bits.push(`blockers ${health.blockers.length}`);
+    }
+    return bits.join(' · ');
+}
+
+function _autopilotPhaseHealthColor(status) {
+    const cls = _autopilotPhaseHealthClass(status);
+    if (cls === 'good') return 'var(--good)';
+    if (cls === 'warn') return 'var(--warn)';
+    if (cls === 'bad') return 'var(--bad)';
+    return 'var(--muted)';
+}
+
 function _phaseFocus(d, ap) {
     if (!ap || !ap.running) return 'none';
     const phase = d.autopilot_phase || {};
@@ -3814,6 +3849,7 @@ function _renderAutopilotPhase(d, ap) {
     if (!el) return;
     const progress = _latestAutopilotProgress || {};
     const phase = d.autopilot_phase || {};
+    const health = d.autopilot_phase_health || {};
     const fallbackPhase = progress.in_flight ? {
         phase: progress.phase || 'trial in flight',
         trial_id: progress.trial_id,
@@ -3831,6 +3867,9 @@ function _renderAutopilotPhase(d, ap) {
     const age = d.autopilot_phase_age_s != null ? `${Math.round(d.autopilot_phase_age_s)}s ago` : 'mtime unknown';
     const phaseAgeS = _autopilotPhaseAgeS(viewPhase);
     const phaseAge = phaseAgeS != null ? `${Math.round(phaseAgeS)}s in phase` : '';
+    const healthColor = _autopilotPhaseHealthColor(health.status);
+    const healthText = health.status ? _autopilotPhaseHealthLabel(health) : '';
+    const blockers = Array.isArray(health.blockers) ? health.blockers : [];
     const bits = [];
     if (viewPhase.trial_id != null) bits.push(`trial ${escapeHTML(String(viewPhase.trial_id))}`);
     if (viewPhase.action_type) bits.push(escapeHTML(String(viewPhase.action_type)));
@@ -3842,7 +3881,9 @@ function _renderAutopilotPhase(d, ap) {
     el.innerHTML = `
         <span style="color:${ap.running ? 'var(--fg)' : 'var(--bad)'}">phase: ${escapeHTML(String(viewPhase.phase))}</span>
         <span style="color:var(--dim)"> · ${escapeHTML(age)}${phaseAge ? ` · ${escapeHTML(phaseAge)}` : ''}</span>
+        ${healthText ? `<div style="margin-top:3px;color:${healthColor}">${escapeHTML(healthText)}</div>` : ''}
         ${bits.length ? `<div style="margin-top:3px;color:var(--muted)">${bits.join(' · ')}</div>` : ''}
+        ${blockers.length ? `<div style="margin-top:3px;color:var(--bad)">${blockers.slice(0, 3).map(b => escapeHTML(String(b))).join(' · ')}</div>` : ''}
     `;
 }
 
