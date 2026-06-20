@@ -23,6 +23,22 @@ xmas_routing:
     )
     table = tmp_path / "xmas_winner_table.yaml"
     table.write_text("placeholder: true\n", encoding="utf-8")
+    ab_root = tmp_path / "xmas_live_ab"
+    run = ab_root / "run1"
+    run.mkdir(parents=True)
+    (run / "summary.json").write_text(
+        """
+{
+  "decision": {
+    "status": "hold",
+    "blockers": ["latency regression"]
+  },
+  "score_delta_xmas_minus_baseline": -0.35,
+  "latency_ratio_xmas_over_baseline": 16.18
+}
+""",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
     monkeypatch.setattr(report_mod, "validate_xmas_table", lambda path, **kwargs: [])
     monkeypatch.setattr(
@@ -66,6 +82,7 @@ xmas_routing:
         },
         config_path=config,
         xmas_table_path=table,
+        xmas_ab_root=ab_root,
     )
 
     assert report["ready"] is False
@@ -76,8 +93,48 @@ xmas_routing:
     assert "xmas_production_path: xmas_routing.mode is off; enforce remains default-off" in report[
         "blockers"
     ]
+    assert "xmas_production_path: latest X-MAS held-out A/B decision is hold" in report[
+        "blockers"
+    ]
+    xmas = [section for section in report["sections"] if section["key"] == "xmas_production_path"][0]
+    assert xmas["details"]["latest_ab_decision_status"] == "hold"
+    assert xmas["details"]["latest_ab_latency_ratio"] == 16.18
     assert report["sections"][0]["key"] == "phase_health"
     assert report["sections"][0]["status"] == "ready"
+
+
+def test_xmas_section_accepts_promote_candidate_ab(monkeypatch, tmp_path: Path) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+xmas_routing:
+  mode: "enforce"
+  winner_table_path: "xmas_winner_table.yaml"
+  require_complete_table: true
+""",
+        encoding="utf-8",
+    )
+    table = tmp_path / "xmas_winner_table.yaml"
+    table.write_text("placeholder: true\n", encoding="utf-8")
+    ab_root = tmp_path / "ab"
+    run = ab_root / "run"
+    run.mkdir(parents=True)
+    (run / "summary.json").write_text(
+        '{"decision": {"status": "promote_candidate", "blockers": []}}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
+    monkeypatch.setattr(report_mod, "validate_xmas_table", lambda path, **kwargs: [])
+
+    section = report_mod.xmas_section(
+        config_path=config,
+        candidate_table_path=table,
+        ab_root=ab_root,
+    )
+
+    assert section.status == "ready"
+    assert section.blockers == []
+    assert section.details["latest_ab_decision_status"] == "promote_candidate"
 
 
 def test_render_markdown_surfaces_section_details() -> None:

@@ -37,6 +37,7 @@ from validate_xmas_winner_table import (  # noqa: E402
 )
 
 DEFAULT_XMAS_TABLE = ORCH_ROOT / "orchestration" / "xmas_winner_table.yaml"
+DEFAULT_XMAS_AB_ROOT = ORCH_ROOT / "benchmarks" / "results" / "runs" / "xmas_live_ab"
 
 
 @dataclass(frozen=True)
@@ -141,6 +142,7 @@ def xmas_section(
     *,
     config_path: Path = DEFAULT_CLASSIFIER_CONFIG,
     candidate_table_path: Path = DEFAULT_XMAS_TABLE,
+    ab_root: Path = DEFAULT_XMAS_AB_ROOT,
 ) -> GateSection:
     blockers: list[str] = []
     details: dict[str, Any] = {
@@ -189,6 +191,30 @@ def xmas_section(
         details["candidate_table_ready"] = False
         blockers.append(f"candidate X-MAS winner table is missing: {candidate_table_path}")
 
+    ab_summary = _latest_xmas_ab_summary(ab_root)
+    details["latest_ab_summary_path"] = (
+        str(ab_summary["path"]) if ab_summary else None
+    )
+    details["latest_ab_decision_status"] = (
+        ab_summary.get("decision_status") if ab_summary else None
+    )
+    details["latest_ab_score_delta"] = (
+        ab_summary.get("score_delta_xmas_minus_baseline") if ab_summary else None
+    )
+    details["latest_ab_latency_ratio"] = (
+        ab_summary.get("latency_ratio_xmas_over_baseline") if ab_summary else None
+    )
+    details["latest_ab_blockers"] = (
+        ab_summary.get("decision_blockers") if ab_summary else []
+    )
+    if not ab_summary:
+        blockers.append("no X-MAS held-out A/B summary artifact was found")
+    elif ab_summary.get("decision_status") != "promote_candidate":
+        blockers.append(
+            "latest X-MAS held-out A/B decision is "
+            f"{ab_summary.get('decision_status') or '<missing>'}"
+        )
+
     return GateSection(
         key="xmas_production_path",
         status="ready" if not blockers else "blocked",
@@ -201,6 +227,31 @@ def xmas_section(
     )
 
 
+def _latest_xmas_ab_summary(root: Path) -> dict[str, Any] | None:
+    """Return the newest parseable X-MAS live A/B summary."""
+    candidates = sorted(root.glob("*/summary.json"), key=lambda path: path.stat().st_mtime)
+    for path in reversed(candidates):
+        try:
+            loaded = _load_json_object(path)
+        except Exception:
+            continue
+        decision = loaded.get("decision") or {}
+        if not isinstance(decision, dict):
+            decision = {}
+        return {
+            "path": path,
+            "decision_status": decision.get("status"),
+            "decision_blockers": list(decision.get("blockers") or []),
+            "score_delta_xmas_minus_baseline": loaded.get(
+                "score_delta_xmas_minus_baseline"
+            ),
+            "latency_ratio_xmas_over_baseline": loaded.get(
+                "latency_ratio_xmas_over_baseline"
+            ),
+        }
+    return None
+
+
 def build_fable5_gate_report(
     *,
     state: dict[str, Any],
@@ -209,6 +260,7 @@ def build_fable5_gate_report(
     ds_e1_packet: dict[str, Any],
     config_path: Path = DEFAULT_CLASSIFIER_CONFIG,
     xmas_table_path: Path = DEFAULT_XMAS_TABLE,
+    xmas_ab_root: Path = DEFAULT_XMAS_AB_ROOT,
 ) -> dict[str, Any]:
     sections = [
         phase_section(phase_report),
@@ -221,7 +273,11 @@ def build_fable5_gate_report(
             )
         ),
         ds_e1_section(ds_e1_packet),
-        xmas_section(config_path=config_path, candidate_table_path=xmas_table_path),
+        xmas_section(
+            config_path=config_path,
+            candidate_table_path=xmas_table_path,
+            ab_root=xmas_ab_root,
+        ),
     ]
     blockers = [
         f"{section.key}: {blocker}"
@@ -276,6 +332,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--phase", type=Path, default=PHASE_PATH)
     parser.add_argument("--classifier-config", type=Path, default=DEFAULT_CLASSIFIER_CONFIG)
     parser.add_argument("--xmas-table", type=Path, default=DEFAULT_XMAS_TABLE)
+    parser.add_argument("--xmas-ab-root", type=Path, default=DEFAULT_XMAS_AB_ROOT)
     parser.add_argument("--json", action="store_true", help="Emit structured JSON.")
     parser.add_argument("--strict", action="store_true", help="Exit nonzero when any gate blocks.")
     return parser.parse_args(argv)
@@ -295,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
             ds_e1_packet=ds_e1_packet,
             config_path=args.classifier_config.expanduser().resolve(),
             xmas_table_path=args.xmas_table.expanduser().resolve(),
+            xmas_ab_root=args.xmas_ab_root.expanduser().resolve(),
         )
     except Exception as exc:
         print(f"failed to build Fable5 gate report: {exc}", file=sys.stderr)
