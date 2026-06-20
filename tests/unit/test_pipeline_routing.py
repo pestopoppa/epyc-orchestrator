@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -15,8 +16,13 @@ from src.api.routes.chat_pipeline.routing import (
     _preprocess,
     _route_request,
 )
-from src.api.routes.chat_pipeline.routing_decision import normalize_ingress_role, routing_meta
+from src.api.routes.chat_pipeline.routing_decision import (
+    normalize_ingress_role,
+    resolve_timeout,
+    routing_meta,
+)
 from src.api.routes.chat_utils import RoutingResult
+from src.config import reset_config
 from src.roles import Role
 
 _RETIRED_ARCHITECT_ROLE = "architect_" "coding"
@@ -571,6 +577,16 @@ class TestRouteRequest:
 
         # architect_general has longer timeout (300s in ROLE_TIMEOUTS)
         assert result.timeout_s >= 120  # At least default
+
+    def test_resolve_timeout_uses_current_config_after_reset(self):
+        """Live routing timeout lookup must not freeze an import-time dict."""
+        request = ChatRequest(prompt="test")
+        with patch.dict(os.environ, {"ORCHESTRATOR_TIMEOUTS_FRONTDOOR": "77"}):
+            reset_config()
+            try:
+                assert resolve_timeout(request, [str(Role.FRONTDOOR)]) == 77
+            finally:
+                reset_config()
 
     def test_image_path_bypasses_learned_text_routing(self):
         """Unforced image requests route to vision before the learned router."""

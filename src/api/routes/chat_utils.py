@@ -36,6 +36,16 @@ ROLE_TIMEOUTS: dict[str, int] = _timeouts.role_timeouts_dict()
 DEFAULT_TIMEOUT_S: int = _timeouts.default_request
 
 
+def role_timeout_for(role: str) -> int:
+    """Return the current configured timeout for a role.
+
+    ``ROLE_TIMEOUTS`` is retained for compatibility with older importers, but
+    live request routing should read through ``get_config()`` so reset/reload
+    paths see registry/env updates instead of an import-time snapshot.
+    """
+    return _get_config().timeouts.for_role(role)
+
+
 @dataclass
 class RoutingResult:
     """Encapsulates all routing decisions made before execution.
@@ -84,11 +94,7 @@ class RoutingResult:
 
     def timeout_for_role(self, role: str) -> int:
         """Get timeout for a specific role (used during escalation)."""
-        if role == "worker_fast":
-            normalized = "worker_fast"
-        else:
-            normalized = str(Role.from_string(role) or role)
-        return ROLE_TIMEOUTS.get(normalized, DEFAULT_TIMEOUT_S)
+        return role_timeout_for(role)
 
 
 # Three-stage summarization configuration — values sourced from centralized config

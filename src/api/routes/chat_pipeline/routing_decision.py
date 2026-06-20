@@ -6,7 +6,7 @@ import logging
 
 from src.api.models import ChatRequest
 from src.api.routes.chat_routing import _classify_and_route
-from src.api.routes.chat_utils import DEFAULT_TIMEOUT_S, ROLE_TIMEOUTS
+from src.api.routes.chat_utils import role_timeout_for
 from src.api.structured_logging import task_extra
 from src.features import features
 from src.roles import Role
@@ -382,7 +382,7 @@ def log_routing_start(
 def resolve_timeout(request: ChatRequest, routing_decision: list) -> int:
     """Compute role-specific timeout with request-level clamp."""
     role_str = str(routing_decision[0]) if routing_decision else str(Role.FRONTDOOR)
-    timeout_s = ROLE_TIMEOUTS.get(role_str, DEFAULT_TIMEOUT_S)
+    timeout_s = role_timeout_for(role_str)
     if request.timeout_s is not None:
         timeout_s = max(1, min(timeout_s, int(request.timeout_s)))
     return timeout_s
