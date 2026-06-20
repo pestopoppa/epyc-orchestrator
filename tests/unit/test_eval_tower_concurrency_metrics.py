@@ -38,8 +38,39 @@ def test_eval_concurrency_uses_topology_cap_when_matrix_allows(monkeypatch) -> N
         "_same_role_matrix_allows_eval_fanout",
         lambda role: role == "frontdoor",
     )
+    monkeypatch.setattr(
+        eval_tower,
+        "_live_safe_concurrency",
+        lambda role, cap: cap if role == "frontdoor" else 1,
+    )
 
     assert eval_tower._eval_concurrency() == 3
+
+
+def test_eval_concurrency_caps_to_live_fleet_when_static_topology_allows(monkeypatch) -> None:
+    from src.runtime import instance_topology
+
+    monkeypatch.delenv("AUTOPILOT_EVAL_CONCURRENCY", raising=False)
+    monkeypatch.setenv("AUTOPILOT_EVAL_BOTTLENECK_ROLE", "frontdoor")
+    monkeypatch.setattr(instance_topology, "max_safe_concurrency", lambda _role: 3)
+    monkeypatch.setattr(
+        eval_tower,
+        "_same_role_matrix_allows_eval_fanout",
+        lambda _role: True,
+    )
+    monkeypatch.setattr(
+        eval_tower,
+        "_live_safe_concurrency",
+        lambda _role, _cap: 1,
+    )
+
+    assert eval_tower._eval_concurrency() == 1
+
+
+def test_live_safe_concurrency_can_be_disabled_for_diagnostics(monkeypatch) -> None:
+    monkeypatch.setenv("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "0")
+
+    assert eval_tower._live_safe_concurrency("frontdoor", 3) == 3
 
 
 def test_eval_concurrency_falls_back_to_serial_when_matrix_blocks(monkeypatch) -> None:
@@ -204,6 +235,7 @@ def test_aggregate_emits_truthy_question_provenance_flags() -> None:
             "route": "frontdoor->worker_general",
             "tools_called": ["read_file"],
             "error": True,
+            "error_detail": "read_timeout",
             "partial": True,
             "degraded": True,
             "exogenous_recovered": True,

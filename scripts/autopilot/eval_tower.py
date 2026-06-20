@@ -183,6 +183,7 @@ def _compact_question_result(r: "QuestionResult") -> dict[str, Any]:
         item["tools_called"] = list(r.tools_called[:5])
     if r.error:
         item["error"] = True
+        item["error_detail"] = str(r.error).replace("\n", " ")[:200]
     if r.partial:
         item["partial"] = True
     if r.degraded:
@@ -272,6 +273,61 @@ def _same_role_matrix_allows_eval_fanout(role: str) -> bool:
         return False
 
 
+def _live_safe_concurrency(role: str, topology_cap: int) -> int:
+    """Bound eval fan-out by the currently reachable role instances.
+
+    Static topology can say a role is safe at N>1 while the live stack is
+    intentionally launched in full-only mode. In that case, concurrent evals
+    pile onto one llama-server and can corrupt evidence with 5xx/timeouts.
+    """
+    if topology_cap <= 1:
+        return 1
+    if os.environ.get("AUTOPILOT_EVAL_REQUIRE_LIVE_FLEET", "1") == "0":
+        return topology_cap
+    try:
+        from scripts.server.stack_numa import NUMA_CONFIG  # type: ignore[import-not-found]
+        from src.runtime.instance_topology import cpu_list_to_regions
+    except Exception:
+        return 1
+
+    instances = ((NUMA_CONFIG or {}).get(role) or {}).get("instances") or []
+    if not instances:
+        return 1
+
+    live_regions: list[frozenset[str]] = []
+    for entry in instances:
+        if not entry or len(entry) < 2:
+            continue
+        try:
+            port = int(entry[1])
+        except (TypeError, ValueError):
+            continue
+        try:
+            resp = httpx.get(f"http://localhost:{port}/health", timeout=0.5)
+            if resp.status_code != 200:
+                continue
+        except Exception:
+            continue
+        live_regions.append(cpu_list_to_regions(str(entry[0])))
+
+    if not live_regions:
+        return 1
+
+    accepted_union: set[str] = set(live_regions[0])
+    live_cap = 1
+    for regions in sorted(
+        live_regions[1:],
+        key=lambda r: (bool(accepted_union & r), sorted(r)),
+    ):
+        if not regions or accepted_union & regions:
+            continue
+        accepted_union |= regions
+        live_cap += 1
+        if live_cap >= topology_cap:
+            break
+    return max(1, min(topology_cap, live_cap))
+
+
 def _eval_concurrency() -> int:
     raw = os.environ.get("AUTOPILOT_EVAL_CONCURRENCY")
     if raw is not None:
@@ -287,7 +343,7 @@ def _eval_concurrency() -> int:
             return 1
         if not _same_role_matrix_allows_eval_fanout(bottleneck):
             return 1
-        return topology_cap
+        return _live_safe_concurrency(bottleneck, topology_cap)
     except Exception:
         return 1
 
