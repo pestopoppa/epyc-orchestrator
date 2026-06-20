@@ -370,6 +370,7 @@ def test_cmd_digest_accepts_explicit_archive_source(
         SimpleNamespace(
             no_state_update=True,
             archive_source=autopilot.ARCHIVE_SOURCE_STATE,
+            output_root="/tmp/autopilot-digest-smoke",
         )
     )
 
@@ -377,6 +378,7 @@ def test_cmd_digest_accepts_explicit_archive_source(
     assert captured["source_arg"] == autopilot.ARCHIVE_SOURCE_STATE
     assert captured["archive"] is sentinel_archive
     assert captured["archive_source"] == autopilot.ARCHIVE_SOURCE_STATE
+    assert captured["output_root"] == Path("/tmp/autopilot-digest-smoke")
     assert isinstance(captured["swarm"], FakeSwarm)
     assert isinstance(captured["lab"], FakeLab)
     assert saved_states == []

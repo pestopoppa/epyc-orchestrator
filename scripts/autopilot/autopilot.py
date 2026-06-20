@@ -4324,6 +4324,7 @@ def cmd_digest(args: argparse.Namespace) -> None:
         state=state,
         journal=journal,
         archive_source=archive_source,
+        output_root=Path(args.output_root) if getattr(args, "output_root", None) else None,
     )
     if not args.no_state_update:
         state["last_digest_date"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -4639,6 +4640,15 @@ def main() -> None:
         help=(
             "Archive read source for this operator command only. "
             "Defaults to journal-all; state is a legacy fallback."
+        ),
+    )
+    p_digest.add_argument(
+        "--output-root",
+        type=str,
+        default=None,
+        help=(
+            "Optional progress root override for this digest write. "
+            "Useful for ad-hoc smoke snapshots outside the root progress tree."
         ),
     )
     p_digest.set_defaults(func=cmd_digest)
