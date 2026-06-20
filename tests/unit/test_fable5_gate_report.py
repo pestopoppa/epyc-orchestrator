@@ -33,6 +33,7 @@ xmas_routing:
     "status": "hold",
     "blockers": ["latency regression"]
   },
+  "xmas_policy": "unknown_legacy",
   "score_delta_xmas_minus_baseline": -0.35,
   "latency_ratio_xmas_over_baseline": 16.18
 }
@@ -93,11 +94,17 @@ xmas_routing:
     assert "xmas_production_path: xmas_routing.mode is off; enforce remains default-off" in report[
         "blockers"
     ]
+    assert (
+        "xmas_production_path: latest X-MAS held-out A/B policy is "
+        "unknown_legacy; required incumbent_constrained_v1"
+    ) in report["blockers"]
     assert "xmas_production_path: latest X-MAS held-out A/B decision is hold" in report[
         "blockers"
     ]
     xmas = [section for section in report["sections"] if section["key"] == "xmas_production_path"][0]
     assert xmas["details"]["latest_ab_decision_status"] == "hold"
+    assert xmas["details"]["latest_ab_policy"] == "unknown_legacy"
+    assert xmas["details"]["required_ab_policy"] == "incumbent_constrained_v1"
     assert xmas["details"]["latest_ab_latency_ratio"] == 16.18
     assert report["sections"][0]["key"] == "phase_health"
     assert report["sections"][0]["status"] == "ready"
@@ -142,7 +149,8 @@ xmas_routing:
     run = ab_root / "run"
     run.mkdir(parents=True)
     (run / "summary.json").write_text(
-        '{"decision": {"status": "promote_candidate", "blockers": []}}\n',
+        '{"decision": {"status": "promote_candidate", "blockers": []}, '
+        '"xmas_policy": "incumbent_constrained_v1"}\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
@@ -157,6 +165,47 @@ xmas_routing:
     assert section.status == "ready"
     assert section.blockers == []
     assert section.details["latest_ab_decision_status"] == "promote_candidate"
+    assert section.details["latest_ab_policy"] == "incumbent_constrained_v1"
+
+
+def test_xmas_section_blocks_promote_candidate_from_legacy_policy(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+xmas_routing:
+  mode: "enforce"
+  winner_table_path: "xmas_winner_table.yaml"
+  require_complete_table: true
+""",
+        encoding="utf-8",
+    )
+    table = tmp_path / "xmas_winner_table.yaml"
+    table.write_text("placeholder: true\n", encoding="utf-8")
+    ab_root = tmp_path / "ab"
+    run = ab_root / "run"
+    run.mkdir(parents=True)
+    (run / "summary.json").write_text(
+        '{"decision": {"status": "promote_candidate", "blockers": []}, '
+        '"xmas_policy": "unknown_legacy"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
+    monkeypatch.setattr(report_mod, "validate_xmas_table", lambda path, **kwargs: [])
+
+    section = report_mod.xmas_section(
+        config_path=config,
+        candidate_table_path=table,
+        ab_root=ab_root,
+    )
+
+    assert section.status == "blocked"
+    assert section.blockers == [
+        "latest X-MAS held-out A/B policy is "
+        "unknown_legacy; required incumbent_constrained_v1"
+    ]
 
 
 def test_render_markdown_surfaces_section_details() -> None:

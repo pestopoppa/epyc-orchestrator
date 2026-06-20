@@ -129,10 +129,12 @@ def test_dry_run_can_use_builtin_smoke_set_without_inference(
 
     assert xmas_live_ab.run(args) == 0
     assert called == {"chat": False, "restart": False}
-    assert json.loads((output / "meta.json").read_text())["prompt_manifest"] == (
-        "builtin_smoke"
-    )
-    assert json.loads((output / "summary.json").read_text())["dry_run"] is True
+    meta = json.loads((output / "meta.json").read_text())
+    assert meta["prompt_manifest"] == "builtin_smoke"
+    assert meta["xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
+    summary = json.loads((output / "summary.json").read_text())
+    assert summary["dry_run"] is True
+    assert summary["xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
 
 
 def test_summarize_results_mode_does_not_reload_or_chat(
@@ -212,6 +214,7 @@ def test_summarize_results_mode_does_not_reload_or_chat(
                 "prompt_manifest": "/tmp/held-out/prompts.jsonl",
                 "prompt_ids": ["math_1", "code_1"],
                 "arm_sequence": ["baseline", "xmas"],
+                "xmas_policy": xmas_live_ab.XMAS_EVIDENCE_POLICY_ID,
             }
         ),
         encoding="utf-8",
@@ -237,11 +240,77 @@ def test_summarize_results_mode_does_not_reload_or_chat(
     summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
     assert summary["decision"]["status"] == "promote_candidate"
     assert "source_results" in summary
+    assert summary["xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
+    assert summary["required_xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
     report = (output / "report.md").read_text(encoding="utf-8")
     assert "X-MAS held-out replay report" in report
     assert "prompt manifest: `/tmp/held-out/prompts.jsonl`" in report
     assert "decision: `promote_candidate`" in report
     assert "summarized 4 rows" in capsys.readouterr().out
+
+
+def test_summarize_results_marks_unversioned_replay_as_legacy(tmp_path: Path) -> None:
+    rows_path = tmp_path / "results.jsonl"
+    rows_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "block": 0,
+                        "arm": "baseline",
+                        "prompt_id": "math_1",
+                        "domain": "math",
+                        "score": False,
+                        "elapsed_s": 10.0,
+                    }
+                ),
+                json.dumps(
+                    {
+                        "block": 1,
+                        "arm": "xmas",
+                        "prompt_id": "math_1",
+                        "domain": "math",
+                        "score": True,
+                        "elapsed_s": 9.0,
+                        "routing_strategy": "xmas_enforce:worker_general",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    rows_path.with_name("meta.json").write_text(
+        json.dumps(
+            {
+                "mode": "real",
+                "prompt_manifest": "/tmp/held-out/prompts.jsonl",
+                "prompt_ids": ["math_1"],
+                "arm_sequence": ["baseline", "xmas"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "summary"
+
+    assert (
+        xmas_live_ab.run(
+            SimpleNamespace(
+                summarize_results=rows_path,
+                output=output,
+                min_decision_prompts=1,
+                min_score_delta=0.05,
+                max_domain_regression=0.0,
+                max_latency_ratio=1.10,
+            )
+        )
+        == 0
+    )
+
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    assert summary["decision"]["status"] == "promote_candidate"
+    assert summary["xmas_policy"] == "unknown_legacy"
+    assert summary["required_xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
 
 
 def test_summarize_results_rejects_mismatched_run_bundle(tmp_path: Path) -> None:

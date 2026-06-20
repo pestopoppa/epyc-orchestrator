@@ -40,6 +40,7 @@ from validate_xmas_winner_table import (  # noqa: E402
 
 DEFAULT_XMAS_TABLE = ORCH_ROOT / "orchestration" / "xmas_winner_table.yaml"
 DEFAULT_XMAS_AB_ROOT = ORCH_ROOT / "benchmarks" / "results" / "runs" / "xmas_live_ab"
+REQUIRED_XMAS_AB_POLICY = "incumbent_constrained_v1"
 
 
 @dataclass(frozen=True)
@@ -265,13 +266,22 @@ def xmas_section(
     details["latest_ab_blockers"] = (
         ab_summary.get("decision_blockers") if ab_summary else []
     )
+    details["latest_ab_policy"] = ab_summary.get("xmas_policy") if ab_summary else None
+    details["required_ab_policy"] = REQUIRED_XMAS_AB_POLICY
     if not ab_summary:
         blockers.append("no X-MAS held-out A/B summary artifact was found")
-    elif ab_summary.get("decision_status") != "promote_candidate":
-        blockers.append(
-            "latest X-MAS held-out A/B decision is "
-            f"{ab_summary.get('decision_status') or '<missing>'}"
-        )
+    else:
+        if ab_summary.get("xmas_policy") != REQUIRED_XMAS_AB_POLICY:
+            blockers.append(
+                "latest X-MAS held-out A/B policy is "
+                f"{ab_summary.get('xmas_policy') or '<missing>'}; "
+                f"required {REQUIRED_XMAS_AB_POLICY}"
+            )
+        if ab_summary.get("decision_status") != "promote_candidate":
+            blockers.append(
+                "latest X-MAS held-out A/B decision is "
+                f"{ab_summary.get('decision_status') or '<missing>'}"
+            )
 
     return GateSection(
         key="xmas_production_path",
@@ -296,10 +306,14 @@ def _latest_xmas_ab_summary(root: Path) -> dict[str, Any] | None:
         decision = loaded.get("decision") or {}
         if not isinstance(decision, dict):
             decision = {}
+        xmas_policy = loaded.get("xmas_policy")
+        if not isinstance(xmas_policy, str) or not xmas_policy.strip():
+            xmas_policy = "unknown_legacy"
         return {
             "path": path,
             "decision_status": decision.get("status"),
             "decision_blockers": list(decision.get("blockers") or []),
+            "xmas_policy": xmas_policy.strip(),
             "score_delta_xmas_minus_baseline": loaded.get(
                 "score_delta_xmas_minus_baseline"
             ),

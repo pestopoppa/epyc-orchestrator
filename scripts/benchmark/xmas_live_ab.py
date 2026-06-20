@@ -31,6 +31,8 @@ DEFAULT_MIN_DECISION_PROMPTS = 25
 DEFAULT_MIN_SCORE_DELTA = 0.05
 DEFAULT_MAX_DOMAIN_REGRESSION = 0.0
 DEFAULT_MAX_LATENCY_RATIO = 1.10
+XMAS_EVIDENCE_POLICY_ID = "incumbent_constrained_v1"
+XMAS_EVIDENCE_POLICY_MIN_COMMIT = "24baac44"
 
 DEFAULT_PROMPTS: list[dict[str, Any]] = [
     {
@@ -166,6 +168,16 @@ def validate_result_bundle(rows: list[dict[str, Any]], meta: dict[str, Any] | No
                 detail.append(f"extra={extra}")
             errors.append(f"block {block_idx} prompt ids mismatch ({', '.join(detail)})")
     return errors
+
+
+def xmas_policy_from_metadata(meta: dict[str, Any] | None) -> str:
+    """Return the policy id proven by a result bundle's run metadata."""
+    if not meta:
+        return "unknown_legacy"
+    policy = meta.get("xmas_policy")
+    if isinstance(policy, str) and policy.strip():
+        return policy.strip()
+    return "unknown_legacy"
 
 
 def render_report(
@@ -776,6 +788,9 @@ def run(args: argparse.Namespace) -> int:
         )
         summary["mode"] = "replay"
         summary["source_results"] = str(args.summarize_results)
+        summary["xmas_policy"] = xmas_policy_from_metadata(meta)
+        summary["required_xmas_policy"] = XMAS_EVIDENCE_POLICY_ID
+        summary["required_xmas_policy_min_commit"] = XMAS_EVIDENCE_POLICY_MIN_COMMIT
         validation_errors = validate_result_bundle(rows, meta)
         if validation_errors:
             raise SystemExit("run bundle validation failed: " + "; ".join(validation_errors))
@@ -816,6 +831,8 @@ def run(args: argparse.Namespace) -> int:
         "mode": "dry_run" if args.dry_run else "real",
         "api_url": API_URL,
         "table": str(table_path),
+        "xmas_policy": XMAS_EVIDENCE_POLICY_ID,
+        "xmas_policy_min_commit": XMAS_EVIDENCE_POLICY_MIN_COMMIT,
         "prompt_manifest": str(args.prompts) if args.prompts else "builtin_smoke",
         "prompt_ids": [item.get("id", "") for item in prompts],
         "arm_sequence": sequence,
@@ -895,6 +912,9 @@ def run(args: argparse.Namespace) -> int:
         max_domain_regression=args.max_domain_regression,
         max_latency_ratio=args.max_latency_ratio,
     )
+    summary["xmas_policy"] = XMAS_EVIDENCE_POLICY_ID
+    summary["required_xmas_policy"] = XMAS_EVIDENCE_POLICY_ID
+    summary["required_xmas_policy_min_commit"] = XMAS_EVIDENCE_POLICY_MIN_COMMIT
     write_json(summary_path, summary)
     print(f"[xmas_live_ab] wrote {len(rows)} rows -> {rows_path}")
     print(json.dumps(summary, indent=2, sort_keys=True))
