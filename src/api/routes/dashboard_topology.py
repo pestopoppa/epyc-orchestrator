@@ -324,6 +324,8 @@ def expected_stack_services() -> list[dict[str, Any]]:
         if not isinstance(port, int) or not isinstance(roles, list) or not roles:
             continue
         role = _port_hint(port)
+        if role == f"port_{port}":
+            role = str(roles[0])
         services.append({
             "name": role,
             "role": role,

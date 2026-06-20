@@ -53,7 +53,9 @@ def test_expected_stack_services_include_embedder_fleet() -> None:
     services = dashboard_topology.expected_stack_services()
     embedders = [s for s in services if s.get("embedding")]
 
-    assert [s["port"] for s in embedders] == [8090, 8091, 8092, 8093, 8094, 8095]
+    assert [s["port"] for s in embedders] == [
+        8090, 8091, 8092, 8093, 8094, 8095, 8096, 8097, 8098,
+    ]
     assert [s["role"] for s in embedders] == [
         "embedder",
         "embedder_1",
@@ -61,6 +63,9 @@ def test_expected_stack_services_include_embedder_fleet() -> None:
         "embedder_3",
         "embedder_4",
         "embedder_5",
+        "embedder_granite_97m_r2",
+        "embedder_multilingual_e5_base",
+        "embedder_bge_m3",
     ]
 
 
@@ -1142,6 +1147,14 @@ def test_pareto_endpoint_prefers_current_journal_run_over_old_rows_and_state(
     payload = json.loads(response.body)
 
     assert payload["source"] == "journal_current_run"
+    assert payload["legacy_state_archive_warning"] is None
+    assert payload["archive_authority"] == {
+        "source": "journal_current_run",
+        "journal_rows_available": 7,
+        "state_archive_present": True,
+        "state_error": None,
+        "using_legacy_state_archive": False,
+    }
     assert payload["totals"] == {
         "frontier_size": 2,
         "all_entries": 4,
@@ -1207,3 +1220,43 @@ def test_pareto_endpoint_uses_current_run_when_restart_marker_is_newer(
     }
     assert payload["frontier"][0]["trial_id"] == 72
     assert payload["hypervolume_history"][-1][0] == 72
+
+
+def test_pareto_endpoint_marks_legacy_state_archive_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """State-cache fallback should be visible enough to block decision use."""
+    state_path = tmp_path / "autopilot_state.json"
+    journal_path = tmp_path / "autopilot_journal.jsonl"
+    state_path.write_text(json.dumps({
+        "trial_counter": 5,
+        "pareto_archive": {
+            "frontier": [{"trial_id": 5, "objectives": [1.0, 2.0, -0.1, 0.9]}],
+            "all_entries": [{"trial_id": 5, "objectives": [1.0, 2.0, -0.1, 0.9]}],
+            "hypervolume_history": [[5, 2.0]],
+        },
+    }))
+    journal_path.write_text("")
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_STATE_PATH", state_path)
+    monkeypatch.setattr(dashboard, "_AUTOPILOT_JOURNAL_PATH", journal_path)
+
+    response = asyncio.run(dashboard.pareto())
+    payload = json.loads(response.body)
+
+    assert payload["source"] == "state_archive"
+    assert payload["legacy_state_archive_warning"] == {
+        "state_archive_present": True,
+        "journal_rows_available": 0,
+        "detail": (
+            "dashboard fell back to autopilot_state.json:pareto_archive; "
+            "treat this as a legacy state-cache view and run strict archive "
+            "authority validation before using it for decisions"
+        ),
+    }
+    assert payload["archive_authority"] == {
+        "source": "state_archive",
+        "journal_rows_available": 0,
+        "state_archive_present": True,
+        "state_error": None,
+        "using_legacy_state_archive": True,
+    }

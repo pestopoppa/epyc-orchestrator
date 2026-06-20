@@ -1604,6 +1604,9 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
     # `pareto_epoch_ts` already scope to the live run, so the cap only ever
     # truncated real data. We now surface the divergence as a warning instead.
     journal_rows = _read_autopilot_journal_rows()
+    state_archive_present = isinstance(data.get("pareto_archive"), dict) and bool(
+        data.get("pareto_archive")
+    )
     baseline_promotions = _baseline_promotion_summary(
         journal_rows,
         current_run_only=True,
@@ -1653,6 +1656,18 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
             "hypervolume_history": [],
         })
 
+    legacy_state_archive_warning = None
+    if source == "state_archive":
+        legacy_state_archive_warning = {
+            "state_archive_present": state_archive_present,
+            "journal_rows_available": len(journal_rows),
+            "detail": (
+                "dashboard fell back to autopilot_state.json:pareto_archive; "
+                "treat this as a legacy state-cache view and run strict archive "
+                "authority validation before using it for decisions"
+            ),
+        }
+
     canonical_tier = int(archive.get("canonical_tier", DEFAULT_FRONTIER_TIER))
     frontiers_by_tier_raw = archive.get("frontiers_by_tier", {}) or {}
     hv_history_by_tier_raw = archive.get("hv_history_by_tier", {}) or {}
@@ -1698,6 +1713,14 @@ async def pareto(max_dominated: int = 600) -> JSONResponse:
         # Visibility into why trials may be missing from the frontier, so the
         # operator never has to guess whether the plot is stale or the data is.
         "stale_state_warning": stale_state_warning,
+        "legacy_state_archive_warning": legacy_state_archive_warning,
+        "archive_authority": {
+            "source": source,
+            "journal_rows_available": len(journal_rows),
+            "state_archive_present": state_archive_present,
+            "state_error": state_error,
+            "using_legacy_state_archive": source == "state_archive",
+        },
         "state_trial_counter": state_trial_counter,
         "journal_max_trial_id": archive.get("journal_max_trial_id") if isinstance(archive, dict) else None,
         "exclusions": archive.get("exclusions") if isinstance(archive, dict) else None,
