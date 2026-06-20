@@ -232,9 +232,8 @@ class WorkerPoolManager:
         try:
             from src.registry.stack_priors import (
                 live_stack_role_records,
-                stack_prior_endpoint_port,
                 stack_prior_launch,
-                stack_prior_serving_ports,
+                stack_prior_primary_port,
             )
         except Exception:
             return None
@@ -247,8 +246,7 @@ class WorkerPoolManager:
         serving = worker.get("serving")
         if not isinstance(serving, dict):
             return None
-        ports = stack_prior_serving_ports(serving)
-        port = ports[0] if ports else stack_prior_endpoint_port(serving)
+        port = stack_prior_primary_port(serving)
         if not isinstance(port, int):
             return None
 

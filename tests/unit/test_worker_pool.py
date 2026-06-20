@@ -215,7 +215,7 @@ class TestWorkerPoolManager:
                 "worker_general": {
                     "deployment_status": "live_stack",
                     "serving": {
-                        "endpoint": "http://localhost:8072",
+                        "endpoint": "http://localhost:8073",
                         "ports": [8072, 8082],
                         "slots": 1,
                         "launch": {
@@ -232,7 +232,7 @@ class TestWorkerPoolManager:
 
         assert list(config.workers) == ["worker_general"]
         worker = config.workers["worker_general"]
-        assert worker.port == 8072
+        assert worker.port == 8073
         assert worker.model_path == "/models/gemma-4-26B-A4B-it-Q4_K_M.gguf"
         assert worker.slots == 1
         assert worker.tier is WorkerTier.HOT
