@@ -117,7 +117,9 @@ xmas_routing:
     assert report["next_actions"][0]["status"] == "active"
     assert "ds_e1_kv_measurements.sh --execute" in report["next_actions"][1]["command"]
     assert report["next_actions"][1]["status"] == "blocked"
-    assert "ri10_canary_sample_report.py" in report["next_actions"][2]["command"]
+    assert report["next_actions"][2]["command"] == (
+        "python3 scripts/analysis/ri10_canary_sample_report.py"
+    )
     assert "xmas_live_ab.py" in report["next_actions"][3]["command"]
 
 
