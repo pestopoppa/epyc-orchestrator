@@ -360,6 +360,205 @@ def _source_ref(path: Path, line: int) -> dict[str, Any]:
     return {"path": str(path), "line": line}
 
 
+def _message_text(row: dict[str, Any]) -> str:
+    message = row.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(parts)
+    return ""
+
+
+def _assistant_usage(row: dict[str, Any]) -> dict[str, Any] | None:
+    message = row.get("message")
+    if not isinstance(message, dict):
+        return None
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = usage.get("input_tokens")
+    completion_tokens = usage.get("output_tokens")
+    total = 0
+    payload: dict[str, Any] = {}
+    if isinstance(prompt_tokens, int | float):
+        payload["prompt_tokens"] = prompt_tokens
+        total += prompt_tokens
+    if isinstance(completion_tokens, int | float):
+        payload["completion_tokens"] = completion_tokens
+        total += completion_tokens
+    cache_creation = usage.get("cache_creation_input_tokens")
+    cache_read = usage.get("cache_read_input_tokens")
+    if isinstance(cache_creation, int | float):
+        payload["cache_creation_input_tokens"] = cache_creation
+        total += cache_creation
+    if isinstance(cache_read, int | float):
+        payload["cache_read_input_tokens"] = cache_read
+        total += cache_read
+    if payload:
+        payload["total"] = total
+        return payload
+    return None
+
+
+def _is_historical_user_task(row: dict[str, Any], text: str) -> bool:
+    if row.get("type") != "user":
+        return False
+    if row.get("isMeta") is True:
+        return False
+    message = row.get("message")
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("<local-command-caveat>"):
+        return False
+    if stripped.startswith("<command-name>"):
+        return False
+    if "tool_use_id" in stripped[:300] or "<local-command-" in stripped[:300]:
+        return False
+    return True
+
+
+def _source_family_for_path(path: Path) -> str:
+    parts = path.parts
+    if "cloud-llm-vault" in parts:
+        return "historical_operator_conversation"
+    return "historical_conversation"
+
+
+def iter_historical_conversation_paths(paths: list[Path]) -> list[Path]:
+    found: list[Path] = []
+    for path in paths:
+        if path.is_dir():
+            found.extend(sorted(path.rglob("*.jsonl")))
+        elif path.is_file() and path.suffix == ".jsonl":
+            found.append(path)
+    return found
+
+
+def harvest_historical_conversations(
+    *,
+    conversation_paths: list[Path],
+    valid_classes: set[str],
+    start_date: str | None,
+    end_date: str | None,
+    omit_prompt_text: bool,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    skipped = Counter()
+    paths = iter_historical_conversation_paths(conversation_paths)
+
+    for path in paths:
+        rows = list(load_jsonl(path))
+        for index, (lineno, row) in enumerate(rows):
+            text = _message_text(row)
+            if not _is_historical_user_task(row, text):
+                skipped["not_user_task"] += 1
+                continue
+            timestamp = parse_ts(row.get("timestamp"))
+            date_str = timestamp.date().isoformat() if timestamp else None
+            if not _date_in_range(date_str, start_date, end_date):
+                skipped["outside_date_range"] += 1
+                continue
+            class_info = classify_task(text, valid_classes)
+            synthetic = synthetic_like(text)
+            assistant_row = None
+            assistant_ref = None
+            for next_lineno, next_row in rows[index + 1 :]:
+                if next_row.get("type") == "assistant":
+                    assistant_row = next_row
+                    assistant_ref = _source_ref(path, next_lineno)
+                    break
+                if next_row.get("type") == "user" and _is_historical_user_task(next_row, _message_text(next_row)):
+                    break
+            end_ts = parse_ts(assistant_row.get("timestamp")) if assistant_row else None
+            outcome = "success" if assistant_row else "unknown"
+            eligibility_reasons = []
+            if not class_info["class_is_taxonomy"]:
+                eligibility_reasons.append("not_taxonomy_class")
+            if outcome == "unknown":
+                eligibility_reasons.append("missing_outcome")
+            if synthetic:
+                eligibility_reasons.append("synthetic_like_prompt")
+            source_ref = _source_ref(path, lineno)
+            session_id = str(row.get("sessionId") or path.stem)
+            uuid = str(row.get("uuid") or f"line-{lineno}")
+            records.append(
+                {
+                    "schema_version": "real_task_record.v1",
+                    "record_type": "task_record",
+                    "task_id": f"hist-{sha256_text(f'{path}:{uuid}', n=16)}",
+                    "source": "historical_conversation_jsonl",
+                    "source_family": _source_family_for_path(path),
+                    "source_refs": [source_ref],
+                    "started_ref": source_ref,
+                    "terminal_ref": assistant_ref,
+                    "task_type": "chat",
+                    "priority": "historical",
+                    "class": class_info["class"],
+                    "class_source": class_info["class_source"],
+                    "class_confidence": class_info["class_confidence"],
+                    "class_matches": class_info["class_matches"],
+                    "class_is_taxonomy": class_info["class_is_taxonomy"],
+                    "prompt_ref": {
+                        "kind": "historical_conversation_prompt_sha256",
+                        "sha256": sha256_text(text),
+                        "source_ref": source_ref,
+                    },
+                    "prompt": "" if omit_prompt_text else text,
+                    "route_taken": [],
+                    "route_strategy": "historical_conversation",
+                    "final_answer_role": (assistant_row.get("message") or {}).get("model")
+                    if isinstance(assistant_row, dict) and isinstance(assistant_row.get("message"), dict)
+                    else None,
+                    "producer_role": "historical_assistant" if assistant_row else None,
+                    "wall_s": _wall_seconds(timestamp, end_ts, None),
+                    "tokens": _assistant_usage(assistant_row) if assistant_row else None,
+                    "outcome": outcome,
+                    "outcome_source": "assistant_response_observed" if assistant_row else "missing_assistant",
+                    "task_record_ref": None,
+                    "task_record_schema_version": None,
+                    "operator_verdict": None,
+                    "operator_verdict_details_ref": None,
+                    "timestamps": {
+                        "started_at": timestamp.isoformat() if timestamp else None,
+                        "ended_at": end_ts.isoformat() if end_ts else None,
+                    },
+                    "privacy_class": "local_private",
+                    "synthetic_like": synthetic,
+                    "training_eligible": not eligibility_reasons,
+                    "eligibility_reasons": eligibility_reasons,
+                    "historical": {
+                        "session_id": session_id,
+                        "uuid": uuid,
+                        "cwd": row.get("cwd"),
+                        "git_branch": row.get("gitBranch"),
+                        "entrypoint": row.get("entrypoint"),
+                        "version": row.get("version"),
+                    },
+                }
+            )
+
+    meta = {
+        "source": "historical_conversation_jsonl",
+        "source_paths": [str(path) for path in paths],
+        "records": len(records),
+        "skipped": dict(skipped),
+    }
+    return records, meta
+
+
 def harvest_progress_records(
     *,
     progress_log_dir: Path,
@@ -662,6 +861,7 @@ COMPACT_EVIDENCE_FIELDS = [
     "record_type",
     "task_id",
     "source",
+    "source_family",
     "started_ref",
     "terminal_ref",
     "task_type",
@@ -722,6 +922,7 @@ def write_manifest(
     generated_at: str,
     progress_meta: dict[str, Any],
     lab_meta: dict[str, Any],
+    historical_meta: dict[str, Any],
     rows: list[dict[str, Any]],
     options: dict[str, Any],
 ) -> None:
@@ -734,6 +935,7 @@ def write_manifest(
         "counts": {
             "written": len(rows),
             "by_source": dict(Counter(str(row["source"]) for row in rows)),
+            "by_source_family": dict(Counter(str(row.get("source_family") or row["source"]) for row in rows)),
             "by_class": dict(Counter(str(row["class"]) for row in rows)),
             "by_outcome": dict(Counter(str(row["outcome"]) for row in rows)),
             "training_eligible": sum(1 for row in rows if row.get("training_eligible")),
@@ -741,7 +943,7 @@ def write_manifest(
             "taxonomy_class": sum(1 for row in rows if row.get("class_is_taxonomy")),
             "duplicates_collapsed": sum(int(row.get("duplicate_count") or 1) - 1 for row in rows),
         },
-        "sources": {"progress": progress_meta, "lab": lab_meta},
+        "sources": {"progress": progress_meta, "lab": lab_meta, "historical": historical_meta},
         "options": options,
         "privacy_note": "Records are local-private; do not publish prompt text under F6.",
     }
@@ -769,7 +971,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         valid_classes=valid_classes,
         omit_prompt_text=args.omit_prompt_text,
     )
-    rows = progress_records + lab_records
+    historical_records, historical_meta = harvest_historical_conversations(
+        conversation_paths=[Path(p).expanduser() for p in args.historical_conversation_paths],
+        valid_classes=valid_classes,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        omit_prompt_text=args.omit_prompt_text,
+    )
+    rows = progress_records + lab_records + historical_records
     rows.sort(key=lambda row: ((row.get("timestamps") or {}).get("started_at") or "", row.get("task_id") or ""))
     if args.exclude_synthetic_like:
         rows = [row for row in rows if not row.get("synthetic_like")]
@@ -790,6 +999,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "omit_prompt_text": args.omit_prompt_text,
         "limit": args.limit,
         "lab_task_records": args.lab_task_records,
+        "historical_conversation_paths": args.historical_conversation_paths,
         "compact_evidence": args.compact_evidence,
         "training_eligible_only": args.training_eligible_only,
     }
@@ -802,6 +1012,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         generated_at=generated_at,
         progress_meta=progress_meta,
         lab_meta=lab_meta,
+        historical_meta=historical_meta,
         rows=rows,
         options=options,
     )
@@ -817,6 +1028,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date", default=None, help="Inclusive YYYY-MM-DD lower bound")
     parser.add_argument("--end-date", default=None, help="Inclusive YYYY-MM-DD upper bound")
     parser.add_argument("--lab-task-records", action="append", default=[])
+    parser.add_argument(
+        "--historical-conversation-paths",
+        action="append",
+        default=[],
+        help="Claude/Codex session JSONL file or directory to harvest as historical operator workflow.",
+    )
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--include-open", action="store_true")
     parser.add_argument("--exclude-synthetic-like", action="store_true")

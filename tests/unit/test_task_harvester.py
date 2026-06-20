@@ -56,6 +56,7 @@ def _args(tmp_path: Path, **overrides) -> Namespace:
         "start_date": None,
         "end_date": None,
         "lab_task_records": [],
+        "historical_conversation_paths": [],
         "limit": 0,
         "include_open": False,
         "exclude_synthetic_like": False,
@@ -252,6 +253,100 @@ def test_harvest_lab_task_records_normalizes_shadow_record(tmp_path: Path) -> No
     assert rows[0]["outcome"] == "success"
     assert rows[0]["training_eligible"] is False
     assert rows[0]["eligibility_reasons"] == ["dry_run"]
+
+
+def test_harvest_historical_conversations_filters_noise_and_preserves_private_evidence(tmp_path: Path) -> None:
+    _workload_model(tmp_path / "workload_model.yaml")
+    archive_dir = tmp_path / "cloud-llm-vault" / "claude" / "-workspace"
+    session_path = archive_dir / "session-1.jsonl"
+    _write_jsonl(
+        session_path,
+        [
+            {"type": "user", "isMeta": True, "message": {"role": "user", "content": "<command-name>/clear"}},
+            {
+                "type": "user",
+                "timestamp": "2026-06-12T00:00:00Z",
+                "sessionId": "session-1",
+                "uuid": "user-1",
+                "cwd": "/workspace",
+                "gitBranch": "main",
+                "entrypoint": "cli",
+                "version": "1.0",
+                "message": {"role": "user", "content": "Implement a code patch and update tests"},
+            },
+            {
+                "type": "user",
+                "timestamp": "2026-06-12T00:00:01Z",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "tool-1", "content": "private output"}],
+                },
+            },
+            {
+                "type": "assistant",
+                "timestamp": "2026-06-12T00:00:05Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-sonnet-test",
+                    "content": [{"type": "text", "text": "Done."}],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "cache_creation_input_tokens": 2,
+                        "cache_read_input_tokens": 3,
+                    },
+                },
+            },
+        ],
+    )
+
+    result = harvest_tasks.run(
+        _args(
+            tmp_path,
+            progress_log_dir=str(tmp_path / "missing-progress"),
+            historical_conversation_paths=[str(archive_dir)],
+            omit_prompt_text=True,
+            training_eligible_only=True,
+        )
+    )
+
+    rows = _read_jsonl(Path(result["output"]))
+    manifest = json.loads(Path(result["manifest"]).read_text())
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source"] == "historical_conversation_jsonl"
+    assert row["source_family"] == "historical_operator_conversation"
+    assert row["class"] == "code_change_implementation"
+    assert row["prompt"] == ""
+    assert row["prompt_ref"]["kind"] == "historical_conversation_prompt_sha256"
+    assert row["route_taken"] == []
+    assert row["route_strategy"] == "historical_conversation"
+    assert row["producer_role"] == "historical_assistant"
+    assert row["final_answer_role"] == "claude-sonnet-test"
+    assert row["wall_s"] == 5.0
+    assert row["tokens"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "cache_creation_input_tokens": 2,
+        "cache_read_input_tokens": 3,
+        "total": 20,
+    }
+    assert row["outcome"] == "success"
+    assert row["outcome_source"] == "assistant_response_observed"
+    assert row["privacy_class"] == "local_private"
+    assert row["training_eligible"] is True
+    assert row["historical"] == {
+        "session_id": "session-1",
+        "uuid": "user-1",
+        "cwd": "/workspace",
+        "git_branch": "main",
+        "entrypoint": "cli",
+        "version": "1.0",
+    }
+    assert manifest["counts"]["by_source"] == {"historical_conversation_jsonl": 1}
+    assert manifest["counts"]["by_source_family"] == {"historical_operator_conversation": 1}
+    assert manifest["sources"]["historical"]["records"] == 1
+    assert manifest["sources"]["historical"]["skipped"]["not_user_task"] == 3
 
 
 def test_dedupe_prompt_collapses_forced_multi_role_attempts(tmp_path: Path) -> None:
