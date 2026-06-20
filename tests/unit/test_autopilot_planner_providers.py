@@ -188,3 +188,52 @@ def test_codex_provider_uses_configured_default_model_when_unspecified(
     ]
     assert captured["input"] == "prompt"
     assert captured["timeout"] == 7
+
+
+def test_codex_critic_alias_uses_codex_with_distinct_provider_name(
+    monkeypatch, tmp_path
+) -> None:
+    captured = {}
+
+    class FakeProcess:
+        returncode = 0
+
+        def communicate(self, input, timeout):
+            captured["input"] = input
+            captured["timeout"] = timeout
+            return (
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": "ok"},
+                    }
+                ),
+                "",
+            )
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.delenv("AUTOPILOT_CODEX_MODEL", raising=False)
+    monkeypatch.setattr(planner_providers, "_open_planner_tap", lambda: None)
+    monkeypatch.setattr(planner_providers, "_archive_codex_call", lambda *a, **k: None)
+    monkeypatch.setattr(planner_providers.subprocess, "Popen", fake_popen)
+
+    provider = planner_providers.get_planner_provider("codex_critic")
+    result = provider.invoke("prompt", role="critique", timeout=7, cwd=tmp_path)
+
+    assert provider.name == "codex_critic"
+    assert result.provider == "codex_critic"
+    assert result.ok
+    assert captured["cmd"] == [
+        "codex",
+        "exec",
+        "--json",
+        "-s",
+        "read-only",
+        "-",
+    ]
+    assert captured["input"] == "prompt"
+    assert captured["timeout"] == 7

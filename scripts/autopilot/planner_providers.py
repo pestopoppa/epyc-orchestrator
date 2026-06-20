@@ -124,9 +124,11 @@ class CodexPlannerProvider:
         self,
         binary_path: str | None = None,
         model: str | None = None,
+        name: str | None = None,
     ) -> None:
         self._binary = binary_path or os.environ.get("AUTOPILOT_CODEX_BINARY", "codex")
         self._model = model or os.environ.get("AUTOPILOT_CODEX_MODEL")
+        self.name = name or self.name
 
     def invoke(
         self,
@@ -298,6 +300,8 @@ def get_planner_provider(name: str) -> PlannerProvider:
         return ClaudePlannerProvider()
     if normalized == "codex":
         return CodexPlannerProvider()
+    if normalized in {"codex_critic", "codex-critic", "codex_reviewer", "codex-reviewer"}:
+        return CodexPlannerProvider(name="codex_critic")
     raise ValueError(f"Unknown planner provider: {name}")
 
 

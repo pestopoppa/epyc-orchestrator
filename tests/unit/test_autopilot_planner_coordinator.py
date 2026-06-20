@@ -124,6 +124,63 @@ def test_primary_failure_falls_back_to_secondary() -> None:
     assert len(codex.calls) == 1
 
 
+def test_codex_primary_can_use_distinct_codex_critic_alias() -> None:
+    codex = FakeProvider(
+        "codex",
+        [
+            PlannerProviderResult(
+                provider="codex",
+                role="draft",
+                ok=True,
+                text=_action_text(
+                    {
+                        "type": "structural_prune",
+                        "file": "frontdoor.md",
+                        "block": "## Examples",
+                    }
+                ),
+            )
+        ],
+    )
+    codex_critic = FakeProvider(
+        "codex_critic",
+        [
+            PlannerProviderResult(
+                provider="codex_critic",
+                role="critique",
+                ok=True,
+                text=_critique_text(
+                    {
+                        "decision": "approve",
+                        "confidence": 0.8,
+                        "issues": [],
+                    }
+                ),
+            )
+        ],
+    )
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt",
+        session_id=None,
+        planner_state={},
+        settings=PlannerSettings(
+            primary="codex",
+            critic="codex_critic",
+            mode="draft_critique",
+            critique_policy="always",
+        ),
+        provider_factory=_factory({"codex": codex, "codex_critic": codex_critic}),
+    )
+
+    assert decision.draft_provider == "codex"
+    assert decision.critic_provider == "codex_critic"
+    assert decision.degraded is False
+    assert decision.critique is not None
+    assert decision.critique.decision == "approve"
+    assert planner_coordinator.uncritiqued_dispatch_block_reason(decision) == ""
+
+
 def test_fallback_draft_gets_independent_primary_critique() -> None:
     claude = FakeProvider(
         "claude",
