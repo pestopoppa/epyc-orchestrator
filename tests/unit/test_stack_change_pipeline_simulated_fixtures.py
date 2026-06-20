@@ -620,6 +620,7 @@ def _assert_text_stack_primary_port_consumers(
     from scripts.autopilot.preflight_audit import _model_server_target_groups
     from scripts.benchmark import corpus_quality_gate
     from scripts.graph_router.train_graph_router import load_model_fleet
+    from src.api.routes.openai_compat import _ordered_live_role_ids
     from src.cli_orch import _stack_status_targets
 
     artifact = yaml.safe_load(stack_priors_path.read_text(encoding="utf-8"))
@@ -641,6 +642,19 @@ def _assert_text_stack_primary_port_consumers(
     _, names_by_health_url = _model_server_target_groups(records, "http://localhost:8000")
     assert sorted(names_by_health_url[f"http://localhost:{expected_port}/health"]) == sorted(
         expected_roles
+    )
+
+    sentinel_records = {
+        **records,
+        "_sentinel_before": {"serving": {"ports": [expected_port - 1]}},
+        "_sentinel_after": {"serving": {"ports": [expected_port + 1]}},
+    }
+    ordered_roles = _ordered_live_role_ids(sentinel_records)
+    assert ordered_roles.index("_sentinel_before") < min(
+        ordered_roles.index(role) for role in expected_roles
+    )
+    assert max(ordered_roles.index(role) for role in expected_roles) < ordered_roles.index(
+        "_sentinel_after"
     )
 
 
