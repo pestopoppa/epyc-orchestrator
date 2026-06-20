@@ -11,7 +11,7 @@
     "status": "summary_checkpoint_not_final_w2",
     "token_payload_coverage": true
   },
-  "generated_at": "2026-06-20T23:30:00+00:00",
+  "generated_at": "2026-06-20T23:45:00+00:00",
   "schema_version": "mixed_real_task_corpus_summary.v1",
   "sources": [
     {
@@ -67,99 +67,99 @@
     },
     {
       "by_class": {
-        "benchmark_eval_measurement": 10,
-        "code_change_implementation": 58,
-        "debug_root_cause": 3,
-        "governance_docs_handoff": 16,
-        "ops_deploy_process": 17,
-        "planning_architecture_review": 3,
-        "research_intake_deep_dive": 93
+        "benchmark_eval_measurement": 50,
+        "code_change_implementation": 422,
+        "debug_root_cause": 15,
+        "governance_docs_handoff": 101,
+        "ops_deploy_process": 94,
+        "planning_architecture_review": 12,
+        "research_intake_deep_dive": 180
       },
       "by_outcome": {
-        "success": 200
+        "success": 874
       },
       "evidence_role": "operator_demand_backfill",
-      "label": "historical_workspace_smoke",
+      "label": "historical_full_direct",
       "manifest_counts": {
         "by_class": {
-          "benchmark_eval_measurement": 10,
-          "code_change_implementation": 58,
-          "debug_root_cause": 3,
-          "governance_docs_handoff": 16,
-          "ops_deploy_process": 17,
-          "planning_architecture_review": 3,
-          "research_intake_deep_dive": 93
+          "benchmark_eval_measurement": 50,
+          "code_change_implementation": 422,
+          "debug_root_cause": 15,
+          "governance_docs_handoff": 101,
+          "ops_deploy_process": 94,
+          "planning_architecture_review": 12,
+          "research_intake_deep_dive": 180
         },
         "by_outcome": {
-          "success": 200
+          "success": 874
         },
         "by_source": {
-          "historical_conversation_jsonl": 200
+          "historical_conversation_jsonl": 874
         },
         "by_source_family": {
-          "historical_operator_conversation": 200
+          "historical_operator_conversation": 874
         },
         "duplicates_collapsed": 0,
         "synthetic_like": 0,
-        "taxonomy_class": 200,
-        "training_eligible": 200,
-        "written": 200
+        "taxonomy_class": 874,
+        "training_eligible": 874,
+        "written": 874
       },
-      "manifest_path": "/mnt/raid0/llm/tmp/f1-historical-smoke-20260620/manifest.json",
+      "manifest_path": "/mnt/raid0/llm/tmp/f1-historical-full-direct-20260620/manifest.json",
       "prompt_ref_rows": 0,
       "prompt_text_rows": 0,
-      "rows_inspected": 200,
-      "rows_path": "/mnt/raid0/llm/tmp/f1-historical-smoke-20260620/real_tasks.jsonl",
+      "rows_inspected": 874,
+      "rows_path": "/mnt/raid0/llm/tmp/f1-historical-full-direct-20260620/real_tasks.jsonl",
       "source_family": "historical_operator_conversation",
-      "token_payloads": 200,
-      "wall_time_rows": 200,
+      "token_payloads": 874,
+      "wall_time_rows": 874,
       "weight": 1.0,
-      "weighted_records": 200.0,
-      "written": 200
+      "weighted_records": 874.0,
+      "written": 874
     }
   ],
   "totals": {
     "by_class_raw": {
-      "benchmark_eval_measurement": 43,
-      "code_change_implementation": 251,
-      "debug_root_cause": 20,
-      "governance_docs_handoff": 37,
-      "ops_deploy_process": 51,
-      "planning_architecture_review": 32,
-      "research_intake_deep_dive": 138
+      "benchmark_eval_measurement": 83,
+      "code_change_implementation": 615,
+      "debug_root_cause": 32,
+      "governance_docs_handoff": 122,
+      "ops_deploy_process": 128,
+      "planning_architecture_review": 41,
+      "research_intake_deep_dive": 225
     },
     "by_class_weighted": {
-      "benchmark_eval_measurement": 43.0,
-      "code_change_implementation": 251.0,
-      "debug_root_cause": 20.0,
-      "governance_docs_handoff": 37.0,
-      "ops_deploy_process": 51.0,
-      "planning_architecture_review": 32.0,
-      "research_intake_deep_dive": 138.0
+      "benchmark_eval_measurement": 83.0,
+      "code_change_implementation": 615.0,
+      "debug_root_cause": 32.0,
+      "governance_docs_handoff": 122.0,
+      "ops_deploy_process": 128.0,
+      "planning_architecture_review": 41.0,
+      "research_intake_deep_dive": 225.0
     },
     "by_evidence_role_raw": {
-      "operator_demand_backfill": 200,
+      "operator_demand_backfill": 874,
       "operator_progress": 372
     },
     "by_outcome_raw": {
       "failure": 79,
-      "success": 493
+      "success": 1167
     },
     "by_source_family_raw": {
-      "historical_operator_conversation": 200,
+      "historical_operator_conversation": 874,
       "live_progress": 372
     },
     "by_source_family_weighted": {
-      "historical_operator_conversation": 200.0,
+      "historical_operator_conversation": 874.0,
       "live_progress": 372.0
     },
     "prompt_ref_rows": 0,
     "prompt_text_rows": 0,
-    "raw_records": 572,
-    "rows_inspected": 572,
+    "raw_records": 1246,
+    "rows_inspected": 1246,
     "source_family_count": 2,
-    "token_payloads": 200,
-    "wall_time_rows": 572,
-    "weighted_records": 572.0
+    "token_payloads": 874,
+    "wall_time_rows": 1246,
+    "weighted_records": 1246.0
   }
 }

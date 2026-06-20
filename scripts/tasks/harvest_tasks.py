@@ -430,6 +430,14 @@ def _is_historical_user_task(row: dict[str, Any], text: str) -> bool:
     return True
 
 
+def _is_historical_sidechain(path: Path, row: dict[str, Any]) -> bool:
+    if "subagents" in path.parts:
+        return True
+    if row.get("isSidechain") is True:
+        return True
+    return any(key in row for key in ("agentId", "slug", "parentToolUseID"))
+
+
 def _source_family_for_path(path: Path) -> str:
     parts = path.parts
     if "cloud-llm-vault" in parts:
@@ -454,14 +462,21 @@ def harvest_historical_conversations(
     start_date: str | None,
     end_date: str | None,
     omit_prompt_text: bool,
+    include_sidechains: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     records: list[dict[str, Any]] = []
     skipped = Counter()
     paths = iter_historical_conversation_paths(conversation_paths)
 
     for path in paths:
+        if not include_sidechains and "subagents" in path.parts:
+            skipped["sidechain_file"] += 1
+            continue
         rows = list(load_jsonl(path))
         for index, (lineno, row) in enumerate(rows):
+            if not include_sidechains and _is_historical_sidechain(path, row):
+                skipped["sidechain_row"] += 1
+                continue
             text = _message_text(row)
             if not _is_historical_user_task(row, text):
                 skipped["not_user_task"] += 1
@@ -479,6 +494,8 @@ def harvest_historical_conversations(
                 if next_row.get("type") == "assistant":
                     assistant_row = next_row
                     assistant_ref = _source_ref(path, next_lineno)
+                    break
+                if not include_sidechains and _is_historical_sidechain(path, next_row):
                     break
                 if next_row.get("type") == "user" and _is_historical_user_task(next_row, _message_text(next_row)):
                     break
@@ -977,6 +994,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         start_date=args.start_date,
         end_date=args.end_date,
         omit_prompt_text=args.omit_prompt_text,
+        include_sidechains=args.include_historical_sidechains,
     )
     rows = progress_records + lab_records + historical_records
     rows.sort(key=lambda row: ((row.get("timestamps") or {}).get("started_at") or "", row.get("task_id") or ""))
@@ -1000,6 +1018,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "limit": args.limit,
         "lab_task_records": args.lab_task_records,
         "historical_conversation_paths": args.historical_conversation_paths,
+        "include_historical_sidechains": args.include_historical_sidechains,
         "compact_evidence": args.compact_evidence,
         "training_eligible_only": args.training_eligible_only,
     }
@@ -1033,6 +1052,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Claude/Codex session JSONL file or directory to harvest as historical operator workflow.",
+    )
+    parser.add_argument(
+        "--include-historical-sidechains",
+        action="store_true",
+        help="Include archived sidechain/subagent transcripts instead of treating them as delegated-agent evidence.",
     )
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--include-open", action="store_true")

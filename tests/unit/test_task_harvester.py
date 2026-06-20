@@ -57,6 +57,7 @@ def _args(tmp_path: Path, **overrides) -> Namespace:
         "end_date": None,
         "lab_task_records": [],
         "historical_conversation_paths": [],
+        "include_historical_sidechains": False,
         "limit": 0,
         "include_open": False,
         "exclude_synthetic_like": False,
@@ -347,6 +348,77 @@ def test_harvest_historical_conversations_filters_noise_and_preserves_private_ev
     assert manifest["counts"]["by_source_family"] == {"historical_operator_conversation": 1}
     assert manifest["sources"]["historical"]["records"] == 1
     assert manifest["sources"]["historical"]["skipped"]["not_user_task"] == 3
+
+
+def test_harvest_historical_conversations_excludes_sidechains_by_default(tmp_path: Path) -> None:
+    _workload_model(tmp_path / "workload_model.yaml")
+    archive_dir = tmp_path / "cloud-llm-vault" / "claude" / "-workspace"
+    direct_path = archive_dir / "session-1.jsonl"
+    subagent_path = archive_dir / "subagents" / "agent-a.jsonl"
+    direct_rows = [
+        {
+            "type": "user",
+            "timestamp": "2026-06-12T00:00:00Z",
+            "sessionId": "session-1",
+            "uuid": "direct-1",
+            "message": {"role": "user", "content": "Implement a code patch and update tests"},
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-06-12T00:00:03Z",
+            "message": {"role": "assistant", "model": "direct-model", "usage": {"input_tokens": 1}},
+        },
+    ]
+    sidechain_rows = [
+        {
+            "type": "user",
+            "timestamp": "2026-06-12T00:01:00Z",
+            "sessionId": "session-1",
+            "uuid": "side-1",
+            "isSidechain": True,
+            "agentId": "agent-a",
+            "message": {"role": "user", "content": "Implement a delegated code patch and update tests"},
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-06-12T00:01:03Z",
+            "message": {"role": "assistant", "model": "side-model", "usage": {"input_tokens": 1}},
+        },
+    ]
+    _write_jsonl(direct_path, direct_rows)
+    _write_jsonl(subagent_path, sidechain_rows)
+
+    result = harvest_tasks.run(
+        _args(
+            tmp_path,
+            progress_log_dir=str(tmp_path / "missing-progress"),
+            historical_conversation_paths=[str(archive_dir)],
+            omit_prompt_text=True,
+            training_eligible_only=True,
+        )
+    )
+
+    rows = _read_jsonl(Path(result["output"]))
+    manifest = json.loads(Path(result["manifest"]).read_text())
+    assert [row["historical"]["uuid"] for row in rows] == ["direct-1"]
+    assert rows[0]["final_answer_role"] == "direct-model"
+    assert manifest["sources"]["historical"]["skipped"]["sidechain_file"] == 1
+    assert manifest["options"]["include_historical_sidechains"] is False
+
+    included = harvest_tasks.run(
+        _args(
+            tmp_path,
+            progress_log_dir=str(tmp_path / "missing-progress"),
+            historical_conversation_paths=[str(archive_dir)],
+            omit_prompt_text=True,
+            training_eligible_only=True,
+            include_historical_sidechains=True,
+            output=str(tmp_path / "with_sidechains.jsonl"),
+            manifest=str(tmp_path / "with_sidechains.manifest.json"),
+        )
+    )
+    included_rows = _read_jsonl(Path(included["output"]))
+    assert [row["historical"]["uuid"] for row in included_rows] == ["direct-1", "side-1"]
 
 
 def test_dedupe_prompt_collapses_forced_multi_role_attempts(tmp_path: Path) -> None:
