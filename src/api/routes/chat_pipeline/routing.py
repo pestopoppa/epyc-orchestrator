@@ -256,6 +256,13 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
     # Estimated cost (tier weight × prompt tokens / 1M — relative units for Pareto)
     _estimated_cost = estimate_routing_cost(request, state, routing_decision)
 
+    try:
+        from src.classifiers.factual_risk import get_mode as _fr_get_mode
+
+        _factual_risk_mode = _fr_get_mode(role=role_for_signals)
+    except Exception:
+        _factual_risk_mode = ""
+
     # Log task start (MemRL integration). This must happen after all shadow
     # signals are computed so TR-3.3/W7 telemetry is durable in progress JSONL.
     log_routing_start(
@@ -268,6 +275,7 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         heuristic_priors,
         _factual_risk_score,
         _factual_risk_band,
+        _factual_risk_mode,
         _difficulty_score,
         _difficulty_band,
         _estimated_cost,
@@ -304,6 +312,7 @@ def _route_request(request: ChatRequest, state) -> RoutingResult:
         skill_ids=skill_ids,
         factual_risk_score=_factual_risk_score,
         factual_risk_band=_factual_risk_band,
+        factual_risk_mode=_factual_risk_mode,
         difficulty_score=_difficulty_score,
         difficulty_band=_difficulty_band,
         estimated_cost=_estimated_cost,
@@ -414,9 +423,13 @@ def _plan_review_gate(
     plan_review_result = None
     # RI-3: Force plan review when factual risk is high, regardless of complexity heuristics.
     # High-risk prompts need architect oversight to catch factual errors.
-    from src.classifiers.factual_risk import get_mode as _fr_get_mode
     _current_role = routing.routing_decision[0] if routing.routing_decision else ""
-    risk_forced = routing.factual_risk_band == "high" and _fr_get_mode(role=_current_role) == "enforce"
+    factual_risk_mode = str(getattr(routing, "factual_risk_mode", "") or "")
+    if not factual_risk_mode:
+        from src.classifiers.factual_risk import get_mode as _fr_get_mode
+
+        factual_risk_mode = _fr_get_mode(role=_current_role)
+    risk_forced = routing.factual_risk_band == "high" and factual_risk_mode == "enforce"
     needs_review = _needs_plan_review(routing.task_ir, routing.routing_decision, state)
     if (
         request.real_mode

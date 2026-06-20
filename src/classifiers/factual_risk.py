@@ -376,6 +376,18 @@ def assess_risk(
     )
 
 
+def get_configured_mode(config: dict[str, Any] | None = None) -> str:
+    """Return configured factual-risk mode without sampling the canary arm."""
+    import os
+
+    env_mode = os.environ.get("ORCHESTRATOR_FACTUAL_RISK_MODE")
+    if env_mode and env_mode in ("off", "shadow", "enforce"):
+        return env_mode
+    if config is None:
+        config = _get_config()
+    return str(config.get("mode", "off"))
+
+
 def get_mode(config: dict[str, Any] | None = None, role: str = "") -> str:
     """Get the current factual-risk mode.
 
@@ -392,16 +404,12 @@ def get_mode(config: dict[str, Any] | None = None, role: str = "") -> str:
     Returns:
         "off", "shadow", or "enforce".
     """
-    import os
     import random
 
-    env_mode = os.environ.get("ORCHESTRATOR_FACTUAL_RISK_MODE")
-    if env_mode and env_mode in ("off", "shadow", "enforce"):
-        return env_mode
     if config is None:
         config = _get_config()
 
-    mode = str(config.get("mode", "off"))
+    mode = get_configured_mode(config)
 
     if mode == "canary":
         # RI-10: Probabilistic canary — enforce for a fraction of requests

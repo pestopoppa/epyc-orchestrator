@@ -38,9 +38,9 @@ def normalize_ingress_role(role: object) -> object:
 def assess_factual_risk(prompt: str, role: str, task_id: str) -> tuple[float, str]:
     """Return factual-risk score and band, falling back to no-risk on failure."""
     try:
-        from src.classifiers.factual_risk import assess_risk, get_mode as _fr_mode
+        from src.classifiers.factual_risk import assess_risk, get_configured_mode
 
-        if _fr_mode() == "off":
+        if get_configured_mode() == "off":
             return 0.0, ""
         result = assess_risk(prompt, role=role)
         log.info(
@@ -256,6 +256,7 @@ def routing_meta(
     heuristic_priors: dict[str, float],
     factual_risk_score: float,
     factual_risk_band: str,
+    factual_risk_mode: str,
     difficulty_score: float,
     difficulty_band: str,
     estimated_cost: float,
@@ -272,6 +273,7 @@ def routing_meta(
         },
         "factual_risk_score": round(factual_risk_score, 4),
         "factual_risk_band": factual_risk_band,
+        "factual_risk_mode": factual_risk_mode,
         "difficulty_score": round(difficulty_score, 4),
         "difficulty_band": difficulty_band,
         "assigned_role": assigned_role,
@@ -349,6 +351,7 @@ def log_routing_start(
     heuristic_priors: dict[str, float],
     factual_risk_score: float,
     factual_risk_band: str,
+    factual_risk_mode: str,
     difficulty_score: float,
     difficulty_band: str,
     estimated_cost: float,
@@ -370,6 +373,7 @@ def log_routing_start(
             heuristic_priors,
             factual_risk_score,
             factual_risk_band,
+            factual_risk_mode,
             difficulty_score,
             difficulty_band,
             estimated_cost,

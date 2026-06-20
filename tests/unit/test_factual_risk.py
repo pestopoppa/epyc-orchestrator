@@ -12,6 +12,7 @@ from src.classifiers.factual_risk import (
     _role_adjustment,
     _band,
     assess_risk,
+    get_configured_mode,
     get_mode,
 )
 
@@ -307,6 +308,9 @@ class TestGetMode:
 
     def test_default_off(self):
         assert get_mode({}) == "off"
+
+    def test_configured_canary_does_not_sample_arm(self):
+        assert get_configured_mode({"mode": "canary", "canary_enforce_pct": 1.0}) == "canary"
 
     def test_explicit_shadow(self):
         assert get_mode({"mode": "shadow"}) == "shadow"

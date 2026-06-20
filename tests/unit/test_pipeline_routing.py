@@ -917,6 +917,39 @@ class TestPlanReviewGate:
 
         assert result is None
 
+    def test_plan_review_uses_persisted_factual_risk_mode_without_resampling(self):
+        request = ChatRequest(prompt="Verify this claim.", real_mode=True)
+        routing = RoutingResult(
+            task_id="test-123",
+            task_ir={"task_type": "qa"},
+            use_mock=False,
+            routing_decision=["worker_general"],
+            factual_risk_band="high",
+            factual_risk_mode="enforce",
+        )
+        primitives = MagicMock()
+        state = MagicMock()
+        mock_review_result = MagicMock()
+        mock_review_result.decision = "ok"
+
+        with patch("src.api.routes.chat_pipeline.routing.features") as mock_features:
+            mock_features.return_value.plan_review = True
+            with patch("src.api.routes.chat_pipeline.routing._needs_plan_review") as mock_needs:
+                mock_needs.return_value = False
+                with patch(
+                    "src.api.routes.chat_pipeline.routing._architect_plan_review"
+                ) as mock_review:
+                    mock_review.return_value = mock_review_result
+                    with patch(
+                        "src.api.routes.chat_pipeline.routing._store_plan_review_episode"
+                    ):
+                        with patch("src.classifiers.factual_risk.get_mode") as mock_get_mode:
+                            result = _plan_review_gate(request, routing, primitives, state)
+
+        assert result is mock_review_result
+        mock_review.assert_called_once()
+        mock_get_mode.assert_not_called()
+
     def test_plan_review_runs_when_needed(self):
         """Plan review runs when all conditions met."""
         request = ChatRequest(prompt="test", real_mode=True)
@@ -1117,6 +1150,22 @@ class TestTrinityRoleShadow:
         assert result.assigned_role == "thinker"
         assert call_kwargs["routing_meta"]["assigned_role"] == "thinker"
 
+    def test_factual_risk_mode_persisted_in_progress_metadata(self):
+        request = ChatRequest(
+            prompt="Verify this deployment claim.",
+            mock_mode=True,
+            real_mode=False,
+        )
+        state = self._state()
+        state.progress_logger = MagicMock()
+
+        with patch("src.classifiers.factual_risk.get_mode", return_value="enforce"):
+            result = _route_request(request, state)
+
+        call_kwargs = state.progress_logger.log_task_started.call_args.kwargs
+        assert result.factual_risk_mode == "enforce"
+        assert call_kwargs["routing_meta"]["factual_risk_mode"] == "enforce"
+
 
 def test_routing_meta_persists_ure_uncertainty_when_shadow_enabled(monkeypatch):
     request = ChatRequest(prompt="Which backend should handle this?")
@@ -1149,6 +1198,7 @@ def test_routing_meta_persists_ure_uncertainty_when_shadow_enabled(monkeypatch):
         heuristic_priors={},
         factual_risk_score=0.1,
         factual_risk_band="low",
+        factual_risk_mode="shadow",
         difficulty_score=0.2,
         difficulty_band="easy",
         estimated_cost=0.001,
@@ -1156,6 +1206,7 @@ def test_routing_meta_persists_ure_uncertainty_when_shadow_enabled(monkeypatch):
     )
 
     assert meta["assigned_role"] == "worker"
+    assert meta["factual_risk_mode"] == "shadow"
     assert 0.0 <= meta["uncertainty_score"] <= 1.0
     assert meta["uncertainty_components"]
     assert meta["uncertainty_n_alternatives"] == 2
@@ -1181,6 +1232,7 @@ def test_routing_meta_embeds_xmas_when_supplied(monkeypatch):
         heuristic_priors={},
         factual_risk_score=0.0,
         factual_risk_band="",
+        factual_risk_mode="",
         difficulty_score=0.0,
         difficulty_band="",
         estimated_cost=0.0,

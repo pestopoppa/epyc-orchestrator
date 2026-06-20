@@ -69,6 +69,7 @@ class RoutingResult:
     # Factual-risk scoring (populated in shadow/enforce mode, empty when off)
     factual_risk_score: float = 0.0
     factual_risk_band: str = ""
+    factual_risk_mode: str = ""
     # Difficulty-adaptive signal (populated in shadow/enforce mode, empty when off)
     difficulty_score: float = 0.0
     difficulty_band: str = ""
