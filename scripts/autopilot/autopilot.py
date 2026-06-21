@@ -3650,13 +3650,28 @@ def _run_loop_inner(
                     eval_result,
                     species_name=species_name,
                     trial_id=trial_counter,
+                    archive_member_id=f"trial:{trial_counter}",
                     incumbent_signature=state.get("bsv_incumbent_signature"),
+                    incumbent_archive_member_id=state.get("bsv_incumbent_archive_member_id"),
                 )
                 # Incumbent = last frontier entry that ALSO PASSED the SafetyGate (verdict truthy =
                 # SafetyVerdict.passed). archive.update runs even on gate-FAILED trials, so frontier
                 # alone could promote a failed trial's signature as the incumbent (finding #1).
                 if pareto_status == "frontier" and verdict:
-                    state["bsv_incumbent_signature"] = bsv_payload.get("signature")
+                    archive_member_id = bsv_payload.get("archive_member_id")
+                    signature = bsv_payload.get("signature")
+                    state["bsv_incumbent_signature"] = signature
+                    state["bsv_incumbent_archive_member_id"] = archive_member_id
+                    if archive_member_id and signature:
+                        archive_signatures = state.setdefault("bsv_archive_signatures", {})
+                        archive_signatures[archive_member_id] = {
+                            "trial_id": trial_counter,
+                            "signature_hash": bsv_payload.get("signature_hash"),
+                            "signature_confidence": bsv_payload.get("signature_confidence"),
+                            "severity_vs_previous_incumbent": bsv_payload.get("severity"),
+                            "reasons": list(bsv_payload.get("reasons") or [])[:8],
+                            "signature": signature,
+                        }
             except Exception as _bsv_err:  # observe-only must never disrupt the trial loop
                 log.debug("BSV observe skipped (trial %s): %s", trial_counter, _bsv_err)
 

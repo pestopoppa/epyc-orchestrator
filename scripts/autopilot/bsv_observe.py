@@ -64,6 +64,8 @@ def compute_bsv_observe_payload(
     species_name: str,
     trial_id: int,
     incumbent_signature: dict | None,
+    archive_member_id: str | None = None,
+    incumbent_archive_member_id: str | None = None,
 ) -> dict[str, Any]:
     """Build this trial's coarse behavior signature and, if an incumbent exists, its diff severity.
 
@@ -82,7 +84,7 @@ def compute_bsv_observe_payload(
     avg_tokens = float(getattr(eval_result, "avg_prompt_tokens", 0.0) or 0.0)
 
     sig = compute_behavior_signature(
-        archive_member_id=str(species_name or "?"),
+        archive_member_id=str(archive_member_id or species_name or "?"),
         trial_id=trial_id,
         sentinel_outcomes=_suite_outcomes(per_suite),
         route_path=_route_path(routing),
@@ -95,6 +97,9 @@ def compute_bsv_observe_payload(
 
     payload: dict[str, Any] = {
         "bsv_metric_version": BSV_METRIC_VERSION,
+        "archive_member_id": sig.archive_member_id,
+        "incumbent_archive_member_id": incumbent_archive_member_id,
+        "signature_hash": sig.signature_hash,
         "signature": sig_dict,
         "signature_confidence": "partial",
         "severity": None,

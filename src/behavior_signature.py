@@ -127,12 +127,16 @@ class DiffSeverity:
 def _as_dict(sig) -> dict:
     if isinstance(sig, BehaviorSignature):
         return {
+            "archive_member_id": sig.archive_member_id,
+            "trial_id": sig.trial_id,
             "sentinel_outcomes": sig.sentinel_outcomes or {},
+            "answer_hash": sig.answer_hash,
             "route_path_hash": sig.route_path_hash,
             "tool_sequence_hash": sig.tool_sequence_hash,
             "escalation_path_hash": sig.escalation_path_hash,
             "latency_bucket": sig.latency_bucket,
             "token_bucket": sig.token_bucket,
+            "signature_hash": sig.signature_hash,
             "signature_confidence": sig.signature_confidence,
         }
     d = dict(sig)

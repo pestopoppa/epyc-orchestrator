@@ -37,6 +37,24 @@ def test_no_incumbent_has_no_severity():
     assert p["compared_to_incumbent"] is False
     assert p["signature_confidence"] == "partial"
     assert "route_path_hash" in p["signature"]
+    assert p["archive_member_id"] == "seeder"
+    assert p["signature_hash"] == p["signature"]["signature_hash"]
+
+
+def test_archive_member_identity_overrides_species_name():
+    p = compute_bsv_observe_payload(
+        _er(routing_distribution={"frontdoor": 1.0}),
+        species_name="seeder",
+        trial_id=7,
+        archive_member_id="trial:7",
+        incumbent_archive_member_id="trial:3",
+        incumbent_signature=None,
+    )
+    assert p["archive_member_id"] == "trial:7"
+    assert p["signature"]["archive_member_id"] == "trial:7"
+    assert p["signature"]["trial_id"] == 7
+    assert p["incumbent_archive_member_id"] == "trial:3"
+    assert p["signature_hash"]
 
 
 def test_identical_partial_signature_is_watch_not_benign():
