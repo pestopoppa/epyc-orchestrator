@@ -69,7 +69,7 @@ STRICT_RESTART_READINESS_COMMAND = (
     "--json --strict --require-seq-cutover --require-w6-audit"
 )
 STRICT_FABLE5_GATE_COMMAND = "python3 scripts/autopilot/fable5_gate_report.py --json --strict"
-REQUIRED_XMAS_AB_POLICY = "incumbent_constrained_v1"
+REQUIRED_XMAS_AB_POLICY = "incumbent_constrained_cheapfirst_v2"
 
 
 @dataclass(frozen=True)
@@ -643,7 +643,10 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                 "key": "run_xmas_constrained_policy_ab",
                 "priority": "P0",
                 "status": "ready" if xmas.details.get("quiet_window_ready") else "blocked",
-                "reason": "X-MAS enforce needs a fresh held-out A/B carrying incumbent_constrained_v1 and a promote_candidate verdict.",
+                "reason": (
+                    "X-MAS enforce needs a fresh held-out A/B carrying "
+                    f"{REQUIRED_XMAS_AB_POLICY} and a promote_candidate verdict."
+                ),
                 "requires": "attested quiet window; runner preflight refuses AutoPilot and competing benchmark coordinators",
                 "blocked_by": quiet_window_blockers,
                 "evidence_blockers": xmas.blockers,

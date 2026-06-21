@@ -129,7 +129,7 @@ xmas_routing:
     ]
     assert (
         "xmas_production_path: latest X-MAS held-out A/B policy is "
-        "unknown_legacy; required incumbent_constrained_v1"
+        "unknown_legacy; required incumbent_constrained_cheapfirst_v2"
     ) in report["blockers"]
     assert "xmas_production_path: latest X-MAS held-out A/B decision is hold" in report[
         "blockers"
@@ -137,7 +137,9 @@ xmas_routing:
     xmas = [section for section in report["sections"] if section["key"] == "xmas_production_path"][0]
     assert xmas["details"]["latest_ab_decision_status"] == "hold"
     assert xmas["details"]["latest_ab_policy"] == "unknown_legacy"
-    assert xmas["details"]["required_ab_policy"] == "incumbent_constrained_v1"
+    assert xmas["details"]["required_ab_policy"] == (
+        "incumbent_constrained_cheapfirst_v2"
+    )
     assert xmas["details"]["latest_ab_latency_ratio"] == 16.18
     assert xmas["details"]["quiet_window_ready"] is False
     assert xmas["details"]["quiet_window_blockers"] == [
@@ -216,7 +218,7 @@ xmas_routing:
     assert xmas_action["prompt_manifest"] == (
         "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl"
     )
-    assert xmas_action["required_policy"] == "incumbent_constrained_v1"
+    assert xmas_action["required_policy"] == "incumbent_constrained_cheapfirst_v2"
     assert f"--prompts {xmas_action['prompt_manifest']}" in xmas_action["command"]
     assert "$(date -u +%Y%m%dT%H%M%SZ)-constrained-policy" in xmas_action["command"]
 
@@ -273,7 +275,7 @@ xmas_routing:
     "status": "hold",
     "blockers": ["overall score delta -0.250 < required 0.050"]
   },
-  "xmas_policy": "incumbent_constrained_v1",
+  "xmas_policy": "incumbent_constrained_cheapfirst_v2",
   "score_delta_xmas_minus_baseline": -0.25,
   "latency_ratio_xmas_over_baseline": 0.714
 }
@@ -365,7 +367,7 @@ xmas_routing:
     run.mkdir(parents=True)
     (run / "summary.json").write_text(
         '{"decision": {"status": "promote_candidate", "blockers": []}, '
-        '"xmas_policy": "incumbent_constrained_v1"}\n',
+        '"xmas_policy": "incumbent_constrained_cheapfirst_v2"}\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
@@ -381,7 +383,9 @@ xmas_routing:
     assert section.status == "ready"
     assert section.blockers == []
     assert section.details["latest_ab_decision_status"] == "promote_candidate"
-    assert section.details["latest_ab_policy"] == "incumbent_constrained_v1"
+    assert section.details["latest_ab_policy"] == (
+        "incumbent_constrained_cheapfirst_v2"
+    )
 
 
 def test_xmas_section_blocks_promote_candidate_from_legacy_policy(
@@ -421,7 +425,7 @@ xmas_routing:
     assert section.status == "blocked"
     assert section.blockers == [
         "latest X-MAS held-out A/B policy is "
-        "unknown_legacy; required incumbent_constrained_v1"
+        "unknown_legacy; required incumbent_constrained_cheapfirst_v2"
     ]
 
 
@@ -443,7 +447,7 @@ def test_xmas_next_action_ready_when_only_evidence_is_missing() -> None:
             "status": "ready",
             "reason": (
                 "X-MAS enforce needs a fresh held-out A/B carrying "
-                "incumbent_constrained_v1 and a promote_candidate verdict."
+                "incumbent_constrained_cheapfirst_v2 and a promote_candidate verdict."
             ),
             "requires": (
                 "attested quiet window; runner preflight refuses AutoPilot "
@@ -455,7 +459,7 @@ def test_xmas_next_action_ready_when_only_evidence_is_missing() -> None:
                 "benchmarks/results/runs/xmas_live_ab/"
                 "20260618-heldout-resilient/prompts.jsonl"
             ),
-            "required_policy": "incumbent_constrained_v1",
+            "required_policy": "incumbent_constrained_cheapfirst_v2",
             "command": (
                 "cd /mnt/raid0/llm/epyc-orchestrator && "
                 "uv run python scripts/benchmark/xmas_live_ab.py "
