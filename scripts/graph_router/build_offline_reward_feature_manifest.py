@@ -30,6 +30,7 @@ FEATURE_ROW_SCHEMA_VERSION = "offline_reward_feature_input.v1"
 SUMMARY_SCHEMA_VERSION = "offline_reward_feature_manifest_summary.v1"
 PRIVATE_FIELDS = {"answer", "expected", "prompt", "reference", "response"}
 TASK_TYPES = ["code", "chat", "architecture", "ingest", "general"]
+SOURCE_FAMILIES = ["orchestrator_live_seed", "seeding_eval", "three_way_eval", "other"]
 
 
 class FeatureManifestError(ValueError):
@@ -77,18 +78,37 @@ def _task_type_onehot(task_type: str) -> tuple[str, list[float]]:
     return "general", vec
 
 
-def _context_features(record: dict[str, Any]) -> dict[str, Any]:
+def _source_family_onehot(source_path: Path) -> tuple[str, list[float]]:
+    stem = source_path.stem.lower()
+    parts = {part.lower() for part in source_path.parts}
+    if "orchestrator" in parts and stem.startswith("seeding_live"):
+        family = "orchestrator_live_seed"
+    elif stem.startswith("seeding_"):
+        family = "seeding_eval"
+    elif stem.startswith("3way_"):
+        family = "three_way_eval"
+    else:
+        family = "other"
+    vec = [0.0] * len(SOURCE_FAMILIES)
+    vec[SOURCE_FAMILIES.index(family)] = 1.0
+    return family, vec
+
+
+def _context_features(record: dict[str, Any], source_path: Path) -> dict[str, Any]:
     prompt = str(record.get("prompt") or "")
     suite = str(record.get("suite") or "general")
     task_type, task_vec = _task_type_onehot(suite)
+    source_family, source_family_vec = _source_family_onehot(source_path)
     has_images = bool(record.get("images") or record.get("image") or record.get("has_images"))
     context_length = len(prompt)
     return {
         "task_type": task_type,
         "task_type_onehot": task_vec,
+        "source_family": source_family,
+        "source_family_onehot": source_family_vec,
         "context_length_chars": context_length,
         "has_images": has_images,
-        "expected_classifier_feature_dim_without_embedding": 7,
+        "expected_classifier_feature_dim_without_embedding": 11,
     }
 
 
@@ -191,7 +211,7 @@ def build_feature_manifest(
                 f"{labels_path}:{row_number}: question_id mismatch "
                 f"{label_question_id!r} != {source_question_id!r}"
             )
-        feature_context = _context_features(record)
+        feature_context = _context_features(record, source_path)
         manifest_row = {
             "schema_version": FEATURE_ROW_SCHEMA_VERSION,
             "item_id": label.get("item_id"),
@@ -244,9 +264,10 @@ def build_feature_manifest(
         "suites": dict(sorted(by_suite.items())),
         "feature_contract": {
             "embedding_dim_required": 1024,
-            "engineered_feature_dim": 7,
+            "engineered_feature_dim": 11,
             "engineered_features": [
                 "task_type_onehot[5]",
+                "source_family_onehot[4]",
                 "log1p(context_length)/12.0",
                 "has_images",
             ],

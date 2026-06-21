@@ -4,6 +4,6 @@
 - Rows: `524`
 - Unique source records: `193`
 - Embedding dimension required: `1024`
-- Engineered feature dimension: `7`
+- Engineered feature dimension: `11`
 
 The manifest is prompt-free: text is represented only by SHA-256 hashes and lengths.

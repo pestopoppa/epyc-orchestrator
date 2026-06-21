@@ -74,9 +74,11 @@ def _manifest_row(
         "feature_context": {
             "task_type": "general",
             "task_type_onehot": [0.0, 0.0, 0.0, 0.0, 1.0],
+            "source_family": "other",
+            "source_family_onehot": [0.0, 0.0, 0.0, 1.0],
             "context_length_chars": len("What is 2+2?"),
             "has_images": False,
-            "expected_classifier_feature_dim_without_embedding": 7,
+            "expected_classifier_feature_dim_without_embedding": 11,
         },
         "oracle_binary_label": label,
         "oracle_score": score,
@@ -268,6 +270,65 @@ def test_build_verifier_npz_response_telemetry_contract_adds_prompt_free_feature
     diagnostics = summary["model_input_group_diagnostics"]
     assert diagnostics["duplicate_model_input_groups"] == 0
     assert diagnostics["conflicting_model_input_groups"] == 0
+
+
+def test_build_verifier_npz_source_family_response_telemetry_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mod,
+        "load_live_canonical_actions",
+        lambda: ["frontdoor", "architect_general", "coder_escalation"],
+    )
+    source_path = _source(tmp_path / "source.json")
+    manifest_path = _write_jsonl(
+        tmp_path / "manifest.jsonl",
+        [
+            {
+                **_manifest_row(source_path, role_key="frontdoor", label=1, score=1.0),
+                "feature_context": {
+                    **_manifest_row(
+                        source_path,
+                        role_key="frontdoor",
+                        label=1,
+                        score=1.0,
+                    )["feature_context"],
+                    "source_family": "seeding_eval",
+                    "source_family_onehot": [0.0, 1.0, 0.0, 0.0],
+                },
+            },
+            {
+                **_manifest_row(source_path, role_key="coder_primary", label=0, score=0.0),
+                "feature_context": {
+                    **_manifest_row(
+                        source_path,
+                        role_key="coder_primary",
+                        label=0,
+                        score=0.0,
+                    )["feature_context"],
+                    "source_family": "three_way_eval",
+                    "source_family_onehot": [0.0, 0.0, 1.0, 0.0],
+                },
+            },
+        ],
+    )
+    out_npz = tmp_path / "verifier.npz"
+
+    summary = mod.build_verifier_npz(
+        manifest_path,
+        out_npz,
+        embed_fn=lambda _text: np.ones(1024, dtype=np.float32),
+        feature_contract="source_family_response_telemetry",
+    )
+    data = np.load(out_npz, allow_pickle=True)
+
+    assert summary["feature_contract"]["name"] == "source_family_response_telemetry"
+    assert summary["feature_contract"]["engineered_feature_dim"] == 15
+    assert "source_family_onehot[4]" in summary["feature_contract"]["engineered_features"]
+    assert int(data["feature_dim"]) == 1039
+    assert int(data["classifier_feature_dim"]) == 1031
+    assert data["Z"].shape == (2, 1039 + 3)
 
 
 def test_build_verifier_npz_rejects_unmapped_actions(

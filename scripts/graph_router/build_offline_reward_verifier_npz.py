@@ -34,6 +34,7 @@ from scripts.graph_router.action_space import (
 )
 from scripts.graph_router.build_offline_reward_feature_manifest import (
     FEATURE_ROW_SCHEMA_VERSION,
+    SOURCE_FAMILIES,
     _read_source_records,
 )
 
@@ -48,6 +49,7 @@ ROLE_ALIASES = {
 ROLE_SUFFIXES = (":delegated", ":direct", ":repl", ":react")
 PRIVATE_FIELDS = {"answer", "expected", "prompt", "reference", "response"}
 CONFLICT_POLICIES = ("keep", "drop_conflicting_model_inputs")
+FEATURE_CONTRACTS = ("prompt_only", "response_telemetry", "source_family_response_telemetry")
 
 
 class OfflineRewardVerifierNpzError(ValueError):
@@ -98,7 +100,9 @@ def _engineered_feature_names(feature_contract: str) -> list[str]:
         "log1p(context_length)/12.0",
         "has_images",
     ]
-    if feature_contract == "response_telemetry":
+    if feature_contract == "source_family_response_telemetry":
+        names.insert(1, f"source_family_onehot[{len(SOURCE_FAMILIES)}]")
+    if feature_contract in {"response_telemetry", "source_family_response_telemetry"}:
         names.extend(
             [
                 "log1p(answer_chars)/12.0",
@@ -130,7 +134,18 @@ def _engineered_features(row: dict[str, Any], *, feature_contract: str) -> np.nd
         float(np.log1p(context_length) / 12.0),
         1.0 if has_images else 0.0,
     ]
-    if feature_contract == "response_telemetry":
+    if feature_contract == "source_family_response_telemetry":
+        source_family_vec = context.get("source_family_onehot")
+        if (
+            not isinstance(source_family_vec, list)
+            or len(source_family_vec) != len(SOURCE_FAMILIES)
+        ):
+            raise OfflineRewardVerifierNpzError(
+                f"{row.get('item_id')}: source_family_onehot must have length "
+                f"{len(SOURCE_FAMILIES)}"
+            )
+        features[5:5] = map(float, source_family_vec)
+    if feature_contract in {"response_telemetry", "source_family_response_telemetry"}:
         features.extend(
             [
                 _safe_log_feature(row.get("answer_chars"), 12.0),
@@ -583,7 +598,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--drop-unmapped-actions", action="store_true")
     parser.add_argument(
         "--feature-contract",
-        choices=("prompt_only", "response_telemetry"),
+        choices=FEATURE_CONTRACTS,
         default="prompt_only",
     )
     parser.add_argument(

@@ -91,6 +91,8 @@ def test_build_feature_manifest_validates_join_and_strips_text(tmp_path: Path) -
     assert rows[0]["source_record_offset"] == 0
     assert rows[0]["source_record_index_base"] == "zero_based"
     assert rows[0]["feature_context"]["task_type"] == "general"
+    assert rows[0]["feature_context"]["source_family"] == "other"
+    assert rows[0]["feature_context"]["source_family_onehot"] == [0.0, 0.0, 0.0, 1.0]
     assert rows[0]["prompt_chars"] == len("What is 2+2?")
     assert "prompt" not in rows[0]
     assert "answer" not in rows[0]
@@ -147,6 +149,8 @@ def test_build_feature_manifest_resolves_one_based_source_indices(tmp_path: Path
     rows, summary = build_feature_manifest(labels_path)
 
     assert summary["unique_source_records"] == 1
+    assert summary["feature_contract"]["engineered_feature_dim"] == 11
+    assert "source_family_onehot[4]" in summary["feature_contract"]["engineered_features"]
     assert rows[0]["source_record_index"] == 1
     assert rows[0]["source_record_offset"] == 0
     assert rows[0]["source_record_index_base"] == "one_based"
