@@ -278,6 +278,7 @@ def aggregate_runs(
         by_family_method.setdefault((run["family"], run["method"]), []).append(run)
 
     families: dict[str, Any] = {}
+    source_family_summary: dict[str, Any] = {}
     blockers: list[str] = []
     for (family, method), group in sorted(by_family_method.items()):
         fam = families.setdefault(family, {"methods": {}})
@@ -298,9 +299,34 @@ def aggregate_runs(
         }
         if pass_rate < min_calibrated_pass_rate:
             blockers.append(f"{family}_{method}_pass_rate_below_threshold")
+        for source_family in SOURCE_FAMILIES:
+            stratum_metrics = [
+                run["source_family_metrics"][source_family]["metrics"]
+                for run in group
+                if source_family in run.get("source_family_metrics", {})
+                and run["source_family_metrics"][source_family]["metrics"] is not None
+            ]
+            stratum_rows = [
+                run["source_family_metrics"][source_family]["rows"]
+                for run in group
+                if source_family in run.get("source_family_metrics", {})
+            ]
+            if not stratum_rows:
+                continue
+            entry = source_family_summary.setdefault(source_family, {"methods": {}})
+            entry["methods"][f"{family}:{method}"] = {
+                "runs": len(group),
+                "metric_runs": len(stratum_metrics),
+                "rows": _metric_stats([float(value) for value in stratum_rows]),
+                "brier": _metric_stats([metrics["brier"] for metrics in stratum_metrics]),
+                "auc": _metric_stats([metrics["auc"] for metrics in stratum_metrics]),
+                "ece": _metric_stats([metrics["ece"] for metrics in stratum_metrics]),
+                "acc": _metric_stats([metrics["acc"] for metrics in stratum_metrics]),
+            }
 
     return {
         "families": families,
+        "source_families": source_family_summary,
         "criteria": {"min_calibrated_pass_rate": min_calibrated_pass_rate},
         "decision": {
             "status": "promotion_grade" if not blockers else "not_promotion_grade",
@@ -463,6 +489,34 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
                     f"delta-Brier mean `{stats['brier_delta_vs_best_softmax_baseline']['mean']:.4f}`",
                 ]
             )
+        lines.append("")
+    lines.extend(["## Source-Family Summary", ""])
+    for source_family, source_summary in summary["aggregate"]["source_families"].items():
+        methods = source_summary["methods"]
+        ranked = sorted(
+            (
+                (name, stats)
+                for name, stats in methods.items()
+                if stats["metric_runs"] > 0
+            ),
+            key=lambda item: item[1]["ece"]["mean"],
+        )
+        best = ranked[0] if ranked else None
+        lines.extend(
+            [
+                f"### `{source_family}`",
+                "",
+                f"- Method rows observed: `{len(methods)}`",
+            ]
+        )
+        if best is not None:
+            name, stats = best
+            lines.append(
+                f"- Best mean ECE: `{name}` -> `{stats['ece']['mean']:.4f}` "
+                f"over `{stats['metric_runs']}` metric run(s)"
+            )
+        else:
+            lines.append("- Best mean ECE: unavailable; stratum lacks two-class metric coverage")
         lines.append("")
     lines.extend(
         [

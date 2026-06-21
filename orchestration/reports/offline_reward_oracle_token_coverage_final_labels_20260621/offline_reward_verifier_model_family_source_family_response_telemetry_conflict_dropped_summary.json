@@ -665,6 +665,1760 @@
           }
         }
       }
+    },
+    "source_families": {
+      "orchestrator_live_seed": {
+        "methods": {
+          "hist_gradient_boosting:ece_temperature_bias": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.925178128060526,
+              "min": 0.7916666666666666
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9468589743589744,
+              "min": 0.7051282051282052
+            },
+            "brier": {
+              "max": 0.12231490761041641,
+              "mean": 0.05843532923609018,
+              "min": 0.015907494351267815
+            },
+            "ece": {
+              "max": 0.17226029608560645,
+              "mean": 0.11834972936832011,
+              "min": 0.06527194831716386
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:isotonic": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9362662533527186,
+              "min": 0.8333333333333334
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9180106837606837,
+              "min": 0.717948717948718
+            },
+            "brier": {
+              "max": 0.09809413552284241,
+              "mean": 0.055948136188089845,
+              "min": 0.019424548372626305
+            },
+            "ece": {
+              "max": 0.1578703731453667,
+              "mean": 0.10215665900843536,
+              "min": 0.054252203914426984
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:quantile_histogram": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9204668143625363,
+              "min": 0.75
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9280747863247863,
+              "min": 0.7466666666666667
+            },
+            "brier": {
+              "max": 0.1389300376176834,
+              "mean": 0.06182161513715982,
+              "min": 0.02046133764088154
+            },
+            "ece": {
+              "max": 0.2287037136654059,
+              "mean": 0.11699042176935825,
+              "min": 0.06023391767552024
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:raw": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9403263434265272,
+              "min": 0.8695652173913043
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9468589743589744,
+              "min": 0.7051282051282052
+            },
+            "brier": {
+              "max": 0.10772030800580978,
+              "mean": 0.0490275999502046,
+              "min": 7.179725798778236e-05
+            },
+            "ece": {
+              "max": 0.10378150257372086,
+              "mean": 0.05745738386490923,
+              "min": 0.005804910169293483
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:temperature_bias": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9437746192885962,
+              "min": 0.8695652173913043
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9468589743589744,
+              "min": 0.7051282051282052
+            },
+            "brier": {
+              "max": 0.10763096809387207,
+              "mean": 0.05684528304263949,
+              "min": 0.015185133554041386
+            },
+            "ece": {
+              "max": 0.22534702842434248,
+              "mean": 0.12912917505695767,
+              "min": 0.08898674491150625
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:ece_temperature_bias": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.945121299321014,
+              "min": 0.8064516129032258
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9418803418803419,
+              "min": 0.7692307692307693
+            },
+            "brier": {
+              "max": 0.1272425353527069,
+              "mean": 0.06250045923516154,
+              "min": 0.013588874600827694
+            },
+            "ece": {
+              "max": 0.24086789041757584,
+              "mean": 0.1472490249530464,
+              "min": 0.07978193387389183
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:isotonic": {
+            "acc": {
+              "max": 0.967741935483871,
+              "mean": 0.9007806260475257,
+              "min": 0.75
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9417649572649572,
+              "min": 0.7564102564102564
+            },
+            "brier": {
+              "max": 0.10397038608789444,
+              "mean": 0.05912329666316509,
+              "min": 0.03209324926137924
+            },
+            "ece": {
+              "max": 0.2093254004915555,
+              "mean": 0.11747241388196354,
+              "min": 0.02329748484396165
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:quantile_histogram": {
+            "acc": {
+              "max": 0.967741935483871,
+              "mean": 0.8899811870573434,
+              "min": 0.75
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9456176927647516,
+              "min": 0.875
+            },
+            "brier": {
+              "max": 0.1253446489572525,
+              "mean": 0.0713417787104845,
+              "min": 0.03247736394405365
+            },
+            "ece": {
+              "max": 0.19212963183720905,
+              "mean": 0.13272806593390216,
+              "min": 0.05161291072445531
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:raw": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9262206689910177,
+              "min": 0.7586206896551724
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9418803418803419,
+              "min": 0.7692307692307693
+            },
+            "brier": {
+              "max": 0.19791670143604279,
+              "mean": 0.05900590140372515,
+              "min": 0.0016461508348584175
+            },
+            "ece": {
+              "max": 0.2118376681003077,
+              "mean": 0.08034399410955151,
+              "min": 0.017400887018690508
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:temperature_bias": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9387184780043996,
+              "min": 0.8064516129032258
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9418803418803419,
+              "min": 0.7692307692307693
+            },
+            "brier": {
+              "max": 0.11297159641981125,
+              "mean": 0.06280521880835295,
+              "min": 0.02013552188873291
+            },
+            "ece": {
+              "max": 0.25983466332157457,
+              "mean": 0.15449173036051636,
+              "min": 0.10465919847289722
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:ece_temperature_bias": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9217568181876032,
+              "min": 0.8181818181818182
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.8998525641025641,
+              "min": 0.45
+            },
+            "brier": {
+              "max": 0.1744808703660965,
+              "mean": 0.10325875263661147,
+              "min": 0.02354082278907299
+            },
+            "ece": {
+              "max": 0.4161497900883357,
+              "mean": 0.20457610668586085,
+              "min": 0.1238216280937195
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:isotonic": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9046600439940549,
+              "min": 0.75
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.856087732528909,
+              "min": 0.5
+            },
+            "brier": {
+              "max": 0.1390843540430069,
+              "mean": 0.08727069236338139,
+              "min": 0.018540430814027786
+            },
+            "ece": {
+              "max": 0.26803958664337796,
+              "mean": 0.1417738940387393,
+              "min": 0.06636905632913112
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:quantile_histogram": {
+            "acc": {
+              "max": 0.967741935483871,
+              "mean": 0.8931761744918558,
+              "min": 0.8260869565217391
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.8371924333836098,
+              "min": 0.5166666666666667
+            },
+            "brier": {
+              "max": 0.13810700178146362,
+              "mean": 0.09437981955707073,
+              "min": 0.03252675011754036
+            },
+            "ece": {
+              "max": 0.2953703741853436,
+              "mean": 0.16165178213931383,
+              "min": 0.10727969325821976
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:raw": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.8730817541915876,
+              "min": 0.7586206896551724
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.8998525641025641,
+              "min": 0.45
+            },
+            "brier": {
+              "max": 0.1532084047794342,
+              "mean": 0.10658780559897423,
+              "min": 0.04738789051771164
+            },
+            "ece": {
+              "max": 0.3056736012038431,
+              "mean": 0.22806674643560013,
+              "min": 0.1376590842138166
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:temperature_bias": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9152390543422532,
+              "min": 0.8333333333333334
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.8998525641025641,
+              "min": 0.45
+            },
+            "brier": {
+              "max": 0.1481553316116333,
+              "mean": 0.0808061609044671,
+              "min": 0.025452757254242897
+            },
+            "ece": {
+              "max": 0.24186504445970058,
+              "mean": 0.1768597787961716,
+              "min": 0.12826529294252395
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "random_forest:ece_temperature_bias": {
+            "acc": {
+              "max": 0.9666666666666667,
+              "mean": 0.8785161804419599,
+              "min": 0.8064516129032258
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9471111111111111,
+              "min": 0.8076923076923077
+            },
+            "brier": {
+              "max": 0.17664016783237457,
+              "mean": 0.1447169877588749,
+              "min": 0.11006505787372589
+            },
+            "ece": {
+              "max": 0.37656233956416446,
+              "mean": 0.22756998923920374,
+              "min": 0.12494472678630583
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "random_forest:isotonic": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9105506750406245,
+              "min": 0.8387096774193549
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9334658119658119,
+              "min": 0.74
+            },
+            "brier": {
+              "max": 0.11859799921512604,
+              "mean": 0.06102202869951725,
+              "min": 0.02150474488735199
+            },
+            "ece": {
+              "max": 0.1520039097916695,
+              "mean": 0.09960908364145052,
+              "min": 0.027972031384706497
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "random_forest:quantile_histogram": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9085133235975005,
+              "min": 0.8421052631578947
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9358632478632478,
+              "min": 0.7466666666666667
+            },
+            "brier": {
+              "max": 0.10523297637701035,
+              "mean": 0.0658566489815712,
+              "min": 0.030597295612096786
+            },
+            "ece": {
+              "max": 0.18279569115369548,
+              "mean": 0.11755009913124967,
+              "min": 0.055050505494529556
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "random_forest:raw": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9415396393869742,
+              "min": 0.875
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9471111111111111,
+              "min": 0.8076923076923077
+            },
+            "brier": {
+              "max": 0.1204509437084198,
+              "mean": 0.08740263245999813,
+              "min": 0.04981820657849312
+            },
+            "ece": {
+              "max": 0.2877230410990507,
+              "mean": 0.22769609256170928,
+              "min": 0.16236828515926996
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          },
+          "random_forest:temperature_bias": {
+            "acc": {
+              "max": 1.0,
+              "mean": 0.9291471662686946,
+              "min": 0.8333333333333334
+            },
+            "auc": {
+              "max": 1.0,
+              "mean": 0.9471111111111111,
+              "min": 0.8076923076923077
+            },
+            "brier": {
+              "max": 0.09456790238618851,
+              "mean": 0.05740103889256716,
+              "min": 0.02871452458202839
+            },
+            "ece": {
+              "max": 0.21602693070536075,
+              "mean": 0.1396345210427201,
+              "min": 0.09794680587947367
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 31.0,
+              "mean": 25.3,
+              "min": 19.0
+            },
+            "runs": 10
+          }
+        }
+      },
+      "seeding_eval": {
+        "methods": {
+          "hist_gradient_boosting:ece_temperature_bias": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:isotonic": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:quantile_histogram": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:raw": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:temperature_bias": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:ece_temperature_bias": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:isotonic": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:quantile_histogram": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:raw": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:temperature_bias": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:ece_temperature_bias": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:isotonic": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:quantile_histogram": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:raw": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:temperature_bias": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "random_forest:ece_temperature_bias": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "random_forest:isotonic": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "random_forest:quantile_histogram": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "random_forest:raw": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          },
+          "random_forest:temperature_bias": {
+            "acc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "auc": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "brier": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "ece": {
+              "max": NaN,
+              "mean": NaN,
+              "min": NaN
+            },
+            "metric_runs": 0,
+            "rows": {
+              "max": 4.0,
+              "mean": 2.5,
+              "min": 1.0
+            },
+            "runs": 10
+          }
+        }
+      },
+      "three_way_eval": {
+        "methods": {
+          "hist_gradient_boosting:ece_temperature_bias": {
+            "acc": {
+              "max": 0.8571428571428571,
+              "mean": 0.7333125073105424,
+              "min": 0.5952380952380952
+            },
+            "auc": {
+              "max": 0.9081632653061225,
+              "mean": 0.8391197446317824,
+              "min": 0.7690217391304348
+            },
+            "brier": {
+              "max": 0.2699037194252014,
+              "mean": 0.19242002218961715,
+              "min": 0.1310403048992157
+            },
+            "ece": {
+              "max": 0.29159252154521453,
+              "mean": 0.20179539883514253,
+              "min": 0.14213679028408868
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:isotonic": {
+            "acc": {
+              "max": 0.8285714285714286,
+              "mean": 0.7468085836944611,
+              "min": 0.6153846153846154
+            },
+            "auc": {
+              "max": 0.8809523809523809,
+              "mean": 0.8289163088784505,
+              "min": 0.7255434782608695
+            },
+            "brier": {
+              "max": 0.26570191979408264,
+              "mean": 0.17700906097888947,
+              "min": 0.10414201021194458
+            },
+            "ece": {
+              "max": 0.2633902996014326,
+              "mean": 0.14029693601392915,
+              "min": 0.06153846212795803
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:quantile_histogram": {
+            "acc": {
+              "max": 0.8571428571428571,
+              "mean": 0.7432218874320116,
+              "min": 0.6410256410256411
+            },
+            "auc": {
+              "max": 0.8707482993197279,
+              "mean": 0.7932900606674956,
+              "min": 0.6521739130434783
+            },
+            "brier": {
+              "max": 0.26163342595100403,
+              "mean": 0.18652537018060683,
+              "min": 0.1290687769651413
+            },
+            "ece": {
+              "max": 0.23247859206719274,
+              "mean": 0.14005658745509697,
+              "min": 0.04444447521652494
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:raw": {
+            "acc": {
+              "max": 0.7714285714285715,
+              "mean": 0.7343972800257499,
+              "min": 0.6666666666666666
+            },
+            "auc": {
+              "max": 0.9081632653061225,
+              "mean": 0.8391197446317824,
+              "min": 0.7690217391304348
+            },
+            "brier": {
+              "max": 0.23443342745304108,
+              "mean": 0.1984711304306984,
+              "min": 0.16444823145866394
+            },
+            "ece": {
+              "max": 0.2504116247097651,
+              "mean": 0.2045282837392342,
+              "min": 0.16196018539187385
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "hist_gradient_boosting:temperature_bias": {
+            "acc": {
+              "max": 0.8571428571428571,
+              "mean": 0.7336548420113076,
+              "min": 0.6190476190476191
+            },
+            "auc": {
+              "max": 0.9081632653061225,
+              "mean": 0.8391197446317824,
+              "min": 0.7690217391304348
+            },
+            "brier": {
+              "max": 0.21460841596126556,
+              "mean": 0.17416208684444429,
+              "min": 0.12687250971794128
+            },
+            "ece": {
+              "max": 0.20550077452379115,
+              "mean": 0.16287327923714248,
+              "min": 0.11897828531536188
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:ece_temperature_bias": {
+            "acc": {
+              "max": 0.9142857142857143,
+              "mean": 0.749558254317159,
+              "min": 0.6904761904761905
+            },
+            "auc": {
+              "max": 0.8944099378881988,
+              "mean": 0.8271223844228767,
+              "min": 0.717391304347826
+            },
+            "brier": {
+              "max": 0.23598510026931763,
+              "mean": 0.18681368827819825,
+              "min": 0.12249469757080078
+            },
+            "ece": {
+              "max": 0.2426598909146645,
+              "mean": 0.17774279478798197,
+              "min": 0.10178235386099134
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:isotonic": {
+            "acc": {
+              "max": 0.8857142857142857,
+              "mean": 0.7696223092608222,
+              "min": 0.6410256410256411
+            },
+            "auc": {
+              "max": 0.8840579710144928,
+              "mean": 0.79853190652171,
+              "min": 0.6141304347826086
+            },
+            "brier": {
+              "max": 0.283730149269104,
+              "mean": 0.18507587984204293,
+              "min": 0.10427861660718918
+            },
+            "ece": {
+              "max": 0.27380951600415365,
+              "mean": 0.14387540965246953,
+              "min": 0.07239112428256445
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:quantile_histogram": {
+            "acc": {
+              "max": 0.8636363636363636,
+              "mean": 0.7637434965383939,
+              "min": 0.6410256410256411
+            },
+            "auc": {
+              "max": 0.927536231884058,
+              "mean": 0.7967845100386732,
+              "min": 0.6086956521739131
+            },
+            "brier": {
+              "max": 0.28033509850502014,
+              "mean": 0.18545189499855042,
+              "min": 0.11534392833709717
+            },
+            "ece": {
+              "max": 0.2317460314148948,
+              "mean": 0.13402863363185666,
+              "min": 0.06612465894076883
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:raw": {
+            "acc": {
+              "max": 0.8571428571428571,
+              "mean": 0.7754983724611322,
+              "min": 0.6904761904761905
+            },
+            "auc": {
+              "max": 0.8944099378881988,
+              "mean": 0.8271223844228767,
+              "min": 0.717391304347826
+            },
+            "brier": {
+              "max": 0.28170934319496155,
+              "mean": 0.2078528329730034,
+              "min": 0.1351243108510971
+            },
+            "ece": {
+              "max": 0.2812685782001132,
+              "mean": 0.22449195612330222,
+              "min": 0.1356122945036207
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "logistic_l2:temperature_bias": {
+            "acc": {
+              "max": 0.9142857142857143,
+              "mean": 0.7524778347367393,
+              "min": 0.6818181818181818
+            },
+            "auc": {
+              "max": 0.8944099378881988,
+              "mean": 0.8271223844228767,
+              "min": 0.717391304347826
+            },
+            "brier": {
+              "max": 0.24633285403251648,
+              "mean": 0.1813167154788971,
+              "min": 0.12043462693691254
+            },
+            "ece": {
+              "max": 0.29158552532846277,
+              "mean": 0.18756580820378427,
+              "min": 0.0893102637359074
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:ece_temperature_bias": {
+            "acc": {
+              "max": 0.8571428571428571,
+              "mean": 0.6580493026854763,
+              "min": 0.4523809523809524
+            },
+            "auc": {
+              "max": 0.8771929824561403,
+              "mean": 0.7663303206658157,
+              "min": 0.5766590389016019
+            },
+            "brier": {
+              "max": 0.28538867831230164,
+              "mean": 0.21884891390800476,
+              "min": 0.12745127081871033
+            },
+            "ece": {
+              "max": 0.24990146437829192,
+              "mean": 0.1709094772826583,
+              "min": 0.07396974393299648
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:isotonic": {
+            "acc": {
+              "max": 0.8285714285714286,
+              "mean": 0.7116525234307968,
+              "min": 0.5714285714285714
+            },
+            "auc": {
+              "max": 0.8840579710144928,
+              "mean": 0.75708686147644,
+              "min": 0.551487414187643
+            },
+            "brier": {
+              "max": 0.34636062383651733,
+              "mean": 0.21041021049022673,
+              "min": 0.13110388815402985
+            },
+            "ece": {
+              "max": 0.2875521935167767,
+              "mean": 0.15118297664056563,
+              "min": 0.040259733689682824
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:quantile_histogram": {
+            "acc": {
+              "max": 0.8285714285714286,
+              "mean": 0.6874732744954503,
+              "min": 0.5238095238095238
+            },
+            "auc": {
+              "max": 0.8778467908902692,
+              "mean": 0.7531281147782599,
+              "min": 0.5354691075514875
+            },
+            "brier": {
+              "max": 0.36934152245521545,
+              "mean": 0.21526295840740203,
+              "min": 0.14530158042907715
+            },
+            "ece": {
+              "max": 0.3402116263196582,
+              "mean": 0.15106288291416398,
+              "min": 0.07333332938807352
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:raw": {
+            "acc": {
+              "max": 0.8181818181818182,
+              "mean": 0.7192836765948237,
+              "min": 0.5476190476190477
+            },
+            "auc": {
+              "max": 0.8771929824561403,
+              "mean": 0.7663303206658157,
+              "min": 0.5766590389016019
+            },
+            "brier": {
+              "max": 0.27468958497047424,
+              "mean": 0.19447045028209686,
+              "min": 0.14085012674331665
+            },
+            "ece": {
+              "max": 0.2529342262408672,
+              "mean": 0.17559279341192113,
+              "min": 0.11467361216034208
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "mlp_sklearn:temperature_bias": {
+            "acc": {
+              "max": 0.8571428571428571,
+              "mean": 0.7200915857200556,
+              "min": 0.5952380952380952
+            },
+            "auc": {
+              "max": 0.8771929824561403,
+              "mean": 0.7663303206658157,
+              "min": 0.5766590389016019
+            },
+            "brier": {
+              "max": 0.3150106966495514,
+              "mean": 0.20543182045221328,
+              "min": 0.12474711239337921
+            },
+            "ece": {
+              "max": 0.2480983861855098,
+              "mean": 0.1699633156627263,
+              "min": 0.07663809114268848
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "random_forest:ece_temperature_bias": {
+            "acc": {
+              "max": 0.6923076923076923,
+              "mean": 0.538112964513844,
+              "min": 0.4411764705882353
+            },
+            "auc": {
+              "max": 0.8979591836734694,
+              "mean": 0.8371666193001019,
+              "min": 0.7620137299771167
+            },
+            "brier": {
+              "max": 0.2782804071903229,
+              "mean": 0.25095482766628263,
+              "min": 0.21091562509536743
+            },
+            "ece": {
+              "max": 0.24581112230525298,
+              "mean": 0.14183084737885757,
+              "min": 0.02117324982370649
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "random_forest:isotonic": {
+            "acc": {
+              "max": 0.8780487804878049,
+              "mean": 0.7427861833305973,
+              "min": 0.6111111111111112
+            },
+            "auc": {
+              "max": 0.9047619047619048,
+              "mean": 0.8174709974482824,
+              "min": 0.7027863777089783
+            },
+            "brier": {
+              "max": 0.26032203435897827,
+              "mean": 0.18550042062997818,
+              "min": 0.13632898032665253
+            },
+            "ece": {
+              "max": 0.23634081387094089,
+              "mean": 0.15065134383050274,
+              "min": 0.012280387537819997
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "random_forest:quantile_histogram": {
+            "acc": {
+              "max": 0.8571428571428571,
+              "mean": 0.7638231025761435,
+              "min": 0.6190476190476191
+            },
+            "auc": {
+              "max": 0.8774509803921569,
+              "mean": 0.7935996640178851,
+              "min": 0.6613272311212814
+            },
+            "brier": {
+              "max": 0.24718107283115387,
+              "mean": 0.17923937737941742,
+              "min": 0.14845503866672516
+            },
+            "ece": {
+              "max": 0.17839507800009516,
+              "mean": 0.1411074855015906,
+              "min": 0.041904758129801066
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "random_forest:raw": {
+            "acc": {
+              "max": 0.8285714285714286,
+              "mean": 0.7330074782992567,
+              "min": 0.5952380952380952
+            },
+            "auc": {
+              "max": 0.8979591836734694,
+              "mean": 0.8371666193001019,
+              "min": 0.7620137299771167
+            },
+            "brier": {
+              "max": 0.21195997297763824,
+              "mean": 0.17819045186042787,
+              "min": 0.15319190919399261
+            },
+            "ece": {
+              "max": 0.22610251009464266,
+              "mean": 0.1721707487294641,
+              "min": 0.12459499178788601
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          },
+          "random_forest:temperature_bias": {
+            "acc": {
+              "max": 0.8285714285714286,
+              "mean": 0.7340932121129863,
+              "min": 0.6428571428571429
+            },
+            "auc": {
+              "max": 0.8979591836734694,
+              "mean": 0.8371666193001019,
+              "min": 0.7620137299771167
+            },
+            "brier": {
+              "max": 0.24605664610862732,
+              "mean": 0.18076339066028596,
+              "min": 0.12931151688098907
+            },
+            "ece": {
+              "max": 0.26100078579925357,
+              "mean": 0.17678220453586446,
+              "min": 0.11632137256009238
+            },
+            "metric_runs": 10,
+            "rows": {
+              "max": 46.0,
+              "mean": 39.2,
+              "min": 34.0
+            },
+            "runs": 10
+          }
+        }
+      }
     }
   },
   "classifier_weights_path": "orchestration/repl_memory/routing_classifier_weights.npz",

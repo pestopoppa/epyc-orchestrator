@@ -43,5 +43,22 @@
 - `raw`: pass `0/10`, Brier mean `0.1429`, AUC mean `0.8951`, ECE mean `0.1721`, delta-Brier mean `0.1827`
 - `temperature_bias`: pass `0/10`, Brier mean `0.1331`, AUC mean `0.8951`, ECE mean `0.1357`, delta-Brier mean `0.1925`
 
+## Source-Family Summary
+
+### `orchestrator_live_seed`
+
+- Method rows observed: `20`
+- Best mean ECE: `hist_gradient_boosting:raw` -> `0.0575` over `10` metric run(s)
+
+### `seeding_eval`
+
+- Method rows observed: `20`
+- Best mean ECE: unavailable; stratum lacks two-class metric coverage
+
+### `three_way_eval`
+
+- Method rows observed: `20`
+- Best mean ECE: `logistic_l2:quantile_histogram` -> `0.1340` over `10` metric run(s)
+
 This is an offline diagnostic artifact. It does not adopt live
 verifier weights or enable a runtime verifier gate.

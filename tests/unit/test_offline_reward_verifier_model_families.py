@@ -14,6 +14,20 @@ def _run(family: str, method: str, passed: bool, ece: float = 0.04) -> dict:
         "metrics": {"brier": 0.18, "auc": 0.82, "ece": ece, "acc": 0.72},
         "brier_delta_vs_best_softmax_baseline": 0.08,
         "gates": {"pass": passed},
+        "source_family_metrics": {
+            "orchestrator_live_seed": {
+                "rows": 12,
+                "positive_rows": 4,
+                "negative_rows": 8,
+                "metrics": {"brier": 0.11, "auc": 0.9, "ece": 0.07, "acc": 0.83},
+            },
+            "seeding_eval": {
+                "rows": 3,
+                "positive_rows": 0,
+                "negative_rows": 3,
+                "metrics": None,
+            },
+        },
     }
 
 
@@ -70,6 +84,12 @@ def test_aggregate_runs_flags_non_promotion_methods() -> None:
     assert "random_forest_isotonic_pass_rate_below_threshold" in summary["decision"]["blockers"]
     assert summary["families"]["logistic_l2"]["methods"]["raw"]["pass_count"] == 1
     assert summary["families"]["logistic_l2"]["methods"]["raw"]["pass_rate"] == 0.5
+    source_summary = summary["source_families"]["orchestrator_live_seed"]["methods"]
+    assert source_summary["logistic_l2:raw"]["metric_runs"] == 2
+    assert source_summary["logistic_l2:raw"]["ece"]["mean"] == pytest.approx(0.07)
+    sparse_summary = summary["source_families"]["seeding_eval"]["methods"]
+    assert sparse_summary["logistic_l2:raw"]["metric_runs"] == 0
+    assert sparse_summary["logistic_l2:raw"]["rows"]["mean"] == pytest.approx(3.0)
 
 
 def test_parse_rejects_unknown_family() -> None:
