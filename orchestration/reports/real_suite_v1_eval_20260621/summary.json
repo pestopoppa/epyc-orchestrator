@@ -1,0 +1,50 @@
+{
+  "builder": "scripts/tasks/package_real_suite_eval.py",
+  "by_suite": {
+    "real_suite_v1": {
+      "accuracy": 0.22,
+      "correct": 11,
+      "count": 50
+    }
+  },
+  "caveat": "Run is isolated from AutoPilot journal/state, but was collected while the W4/W6 AutoPilot accrual process was live; treat timing as a concurrent-window observation, not a promotion-grade throughput claim.",
+  "error_breakdown": {
+    "Server error '500 Internal Server Error' for url 'http://localhost:8000/chat' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500": 1,
+    "Server error '503 Service Unavailable' for url 'http://localhost:8000/chat' For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/503": 3,
+    "[Errno 104] Connection reset by peer": 1,
+    "[Errno 111] Connection refused": 29
+  },
+  "generated_at": "2026-06-21T01:50:52+00:00",
+  "metrics": {
+    "accuracy": 0.22,
+    "aggregate_speed": 24.539958674148544,
+    "correct": 11,
+    "errors": 34,
+    "eval_concurrency": 1,
+    "eval_wall_s": 423.5540955066681,
+    "incorrect": 5,
+    "median_request_speed": 24.409994542858854,
+    "n_questions": 50,
+    "quality_0_3": 0.66,
+    "reliability": 0.32,
+    "speed_metric_mode": "median_request_tps"
+  },
+  "privacy": {
+    "committed_question_results": "compact prompt-free EvalTower result rows",
+    "private_key_matches": []
+  },
+  "run": {
+    "calibration_id": "real_suite_v1_eval_20260621T0141Z",
+    "core_id": "real_suite_v1",
+    "event_type": "core_v2_calibration",
+    "finished_at": "2026-06-21T01:49:56Z",
+    "requested_n": 50,
+    "seed": 4242,
+    "started_at": "2026-06-21T01:42:52Z",
+    "tier": 1,
+    "trial_id": 910000
+  },
+  "schema_version": "real_suite_v1_eval_report.v1",
+  "source_jsonl": "/mnt/raid0/llm/tmp/real_suite_v1_eval_20260621T0141Z.jsonl",
+  "status": "eval_tower_real_suite_v1_run_packaged"
+}
