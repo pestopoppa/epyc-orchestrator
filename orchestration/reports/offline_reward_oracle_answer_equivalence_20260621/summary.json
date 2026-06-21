@@ -1,0 +1,51 @@
+{
+  "by_role": {
+    "architect_general": 10,
+    "coder_escalation": 39,
+    "coder_primary": 40,
+    "frontdoor": 40,
+    "frontdoor:direct": 49
+  },
+  "by_suite": {
+    "agentic": 2,
+    "debugbench": 25,
+    "general": 31,
+    "instruction_precision": 30,
+    "livecodebench": 24,
+    "math": 31,
+    "thinking": 35
+  },
+  "counts": {
+    "agreement": 130,
+    "compared_rows": 178,
+    "disagreement": 48,
+    "missing_reference_or_response": 0,
+    "missing_target": 0,
+    "proxy_negative": 168,
+    "proxy_positive": 10,
+    "rows": 178
+  },
+  "disagreements": {
+    "by_suite": {
+      "debugbench": 19,
+      "general": 3,
+      "instruction_precision": 2,
+      "livecodebench": 24
+    },
+    "by_type": {
+      "current_negative_deterministically_equivalent": 5,
+      "current_positive_not_deterministically_reconstructable": 43
+    }
+  },
+  "f1_threshold": 0.8,
+  "input_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-Sh6cVX/rows.jsonl",
+  "interpretation": "Deterministic answer-equivalence proxies are an audit target, not a semantic-judge replacement. Disagreement rows are the review set for the next A9 label-construction pass.",
+  "rates": {
+    "agreement": 0.7303370786516854,
+    "disagreement": 0.2696629213483146,
+    "proxy_positive": 0.056179775280898875
+  },
+  "schema_version": "answer_equivalence_target_audit.v1",
+  "status": "observation_not_decision",
+  "target_threshold": 0.5
+}
