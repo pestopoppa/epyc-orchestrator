@@ -146,6 +146,17 @@ Committed artifacts:
   `offline_reward_pairwise_ranker_score_ordered_holdout_expanded_summary.json`
   rebuild the score-ordered pairwise contract and independent holdout eval
   after the livecodebench expansion. Runtime gate changes remain disallowed.
+- `offline_reward_pairwise_thinking_expansion_candidates.jsonl`,
+  `offline_reward_pairwise_thinking_expansion_labels.jsonl`, and
+  `offline_reward_feature_manifest_pairwise_thinking_expansion.jsonl` are the
+  analogous prompt-free repair attempt for `suite:thinking`.
+- `offline_reward_pairwise_preference_contract_score_ordered_hard_holdouts_expanded.jsonl`
+  and
+  `offline_reward_pairwise_ranker_score_ordered_hard_holdouts_expanded_summary.json`
+  rebuild the pairwise contract/eval after both livecodebench and thinking
+  expansions. This is a negative diagnostic: random split signal remains
+  strong, but independent holdout worsens to `5/9` passing, so this artifact is
+  not a downstream routing candidate.
 
 Private row data is not committed. The scored row file is:
 

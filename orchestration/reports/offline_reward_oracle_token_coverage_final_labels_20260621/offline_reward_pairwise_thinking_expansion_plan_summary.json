@@ -1,0 +1,1792 @@
+{
+  "candidate_action_counts": {
+    "architect_general": 685,
+    "frontdoor": 674
+  },
+  "candidate_group_source_family_counts": {
+    "three_way_eval": 363
+  },
+  "candidate_group_suite_counts": {
+    "thinking": 363
+  },
+  "candidate_groups": 363,
+  "candidate_rows": 1359,
+  "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
+  "candidate_source_family_counts": {
+    "three_way_eval": 1359
+  },
+  "candidate_suite_counts": {
+    "thinking": 1359
+  },
+  "decision": {
+    "recommended_next": "score_selected_candidates_and_rebuild_pairwise_contract",
+    "runtime_gate_change_allowed": false,
+    "status": "expansion_plan_ready"
+  },
+  "existing_manifest": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_holdout_expansion.jsonl",
+  "existing_manifest_source_family_counts": {
+    "orchestrator_live_seed": 141,
+    "seeding_eval": 297,
+    "three_way_eval": 1060
+  },
+  "existing_manifest_suite_counts": {
+    "agentic": 15,
+    "coder": 22,
+    "debugbench": 162,
+    "general": 54,
+    "gpqa": 38,
+    "hotpotqa": 27,
+    "instruction_precision": 42,
+    "livecodebench": 922,
+    "long_context": 14,
+    "math": 59,
+    "mode_advantage": 3,
+    "mode_advantage_hard": 18,
+    "simpleqa": 64,
+    "thinking": 58
+  },
+  "existing_pairwise_group_count": 301,
+  "existing_pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_holdout_expanded.jsonl",
+  "inputs": [
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results"
+  ],
+  "min_cross_action_candidate_groups": 20,
+  "privacy": {
+    "commits_prompt_reference_response_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "schema_version": "offline_reward_pairwise_holdout_expansion_plan.v1",
+  "selected_groups": [
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|103|hellaswag_11181|beb953de36627add6ed01f5f53c876d0ddb4f0ab181aed8612d595c2bbc0bd99|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 103,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|12|hellaswag_39747|6ef095525354334a3bb189fc3e13789d7c1b9ee9d1d4dbf3dae6774bd8744c05|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 12,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|19|hellaswag_15065|36b536cea11998650b6269eb1359bba09268f851b585d3b34bff73194f302f50|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 19,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|26|hellaswag_46221|c8552da10f14c8d728ef8537bc51fd7fb8a886f6193988c3eaf5ee9bd3961876|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 26,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|40|hellaswag_41981|a2b3a1bfd55bf90a8120d62f7ede423590ba626e3c975328d7ad1427ed4b2aaa|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 40,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|47|arc_Mercury_411071|0eae51662589a5f721042cda667439913a58907647c24319d602f1241613554f|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 47,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|54|hellaswag_29593|7f31cfb446b4aab237082a305bfc8d946c8c08ee37718ece3ab3b3b72483e96b|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 54,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|5|hellaswag_20600|2b94ecf55cfe60b03007aac36740bf2892c2b3679362ae566aef40cf0581c80a|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 5,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|61|hellaswag_29459|42f3aec9902580460b940432a44d6d5e1de26d27dd3e54b31f88dafb9ef5cd54|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 61,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|68|hellaswag_18769|bb882e7dccfe634368dc0f2320b30cc74374092883c98aceda63c76894215fb0|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 68,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|75|hellaswag_10136|e84cbd825c2418adbf127ed1949519d7b98e741ce8f4e4c4669b21163e59c669|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 75,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|82|hellaswag_11650|20bba76ea5149ed3080cb37341ca8487b32dd723d1e001af6b61ae9f2cb98b6a|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 82,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|89|hellaswag_18269|f159356ef28d2c62b5d96e1d2fae8d065f1dafd53f5dc7e29dce8669c38c1b77|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 89,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|96|hellaswag_10450|e3fa42578a1051b881fe3a39e96fc8fc29a37713387d728b42deb0a599b72245|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl",
+      "source_record_offset": 96,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|12|hellaswag_43165|9c612db00052423f3cf955ee348730795e64d7b1aef2e414077920f5f8f81e3f|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 12,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|19|hellaswag_10733|fbe886b45e75017b97258cb29da90c7676d3ac8f47a01ee6dcc5230022916a26|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 19,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|26|hellaswag_08367|486512091d5249d29841fd7e315320c98cdd1b49cd117bd540f7cc3d3364395b|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 26,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|33|hellaswag_07786|c5b2da190a522c0f0221c8cf702e0de1fff898b36cbe9e7082cc297c78323cdf|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 33,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|40|hellaswag_36029|33e8d65b85bbfa6cd9f13c8f4c1637594a67ac867708baa0da570f5b4104e04a|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 40,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|47|hellaswag_10274|92f20afff7a41ceb0470cf8a2743ce4bba391a15810bc63e3a307c1eb3bb8f95|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 47,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|54|hellaswag_44945|32c08814978d889615fbbaff986c2d126142645cb1442878a92b461bae6f2f74|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 54,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|5|arc_Mercury_412774|7036580ba9ea13dc75aba9c398bdcc4bc8796628ab33748fe9a26f9e7f0f82d6|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 5,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|61|hellaswag_24282|33a3af25470d3f533e2d7be0dad4e90ccbef85f9f9e216eb3727ace9b8b29666|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 61,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl|68|hellaswag_08906|a3b2aef237990d6e1ac855119f82014ab4c0b7c932903cedc61b0169b7e215a2|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260330_031353.jsonl",
+      "source_record_offset": 68,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|12|hellaswag_46262|98602bf784e29f968ee913686d2156abbaedeaa568ca181220e7afc6c1f960c4|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 12,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|19|hellaswag_10483|d4ddec1bcbddb6c00f3774c5e4481408a4e204d60d2e1c92381a2f40f846fff3|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 19,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|26|arc_MCAS_2005_8_6|be7729a848f975e0136609a9890eb2b2f313956621b4a0299159cc76238eb288|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 26,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|33|hellaswag_12994|ab41378fc8971775af9b8b9ed4b4c7c081c73503e4481fe79126902eed1a5bcd|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 33,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|40|hellaswag_11492|0069440ea68b2b75cb489b8787574fcf0a9b0c68678c22b868163cf6978b2465|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 40,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|47|hellaswag_05790|813c22def40892e965ed6051d1acd0f25c10c609e64c21543580060773696dda|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 47,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|54|arc_Mercury_7218505|f98030e88d179a9a6655ce1ebcbdeefd0ada02894507cc438924e2a05c8f8ea2|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 54,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|5|hellaswag_44101|b0d9db1e2928cf59b60ddb3aad6de3e3cff46c0c452ece6f1063466c12ac2f58|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 5,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|61|arc_Mercury_SC_402638|ebdf1d6c5a769ce2a1e7634c271e9bae81c2284bb0185b5996d086e530096174|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 61,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl|68|hellaswag_04091|fc72852cbbc834d3279557fadbee196e17705a78fb7ce71ae3f48f3fa2aca366|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260331_030747.jsonl",
+      "source_record_offset": 68,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_113330.jsonl|15|arc_Mercury_400887|73dcfcd2e69158b527eccb014312c7f489103d9dedb63c666351686854ba28a8|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_113330.jsonl",
+      "source_record_offset": 15,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_113330.jsonl|5|hellaswag_14902|ed1aa04d4fe4cb8b12ab76da89a0db140e3ffec1cc8be488b6a318c86f6efbb5|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_113330.jsonl",
+      "source_record_offset": 5,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|105|hellaswag_36789|9ed7bdc30521d00470c1b046fd9e21db4c941c9ec41b00e2bc719ac71cf3c1a4|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 105,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|15|hellaswag_27352|865e16391c9c4a36155c6a5cb8ed2cdebe24686bf5cf74af90361e66a238d598|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 15,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|25|hellaswag_45662|1a4bc879a44359d2f1e142bc36711e40248e117e39e6eacbfe8ffdbb5716cdc4|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 25,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|35|hellaswag_16637|7e047f8d6ae79346ff3d98aa782be0ec2ebb6074d0396d4d61dd21f29a56db5e|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 35,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|45|hellaswag_01443|ae80f6c09f856ca8b6d3004226848bb4dbc54eff35ad6081c1b68ae74b38c16b|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 45,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|55|hellaswag_11312|0ca48b025e3498f6726358138c88122d35dd80c672abe8eed09303c253e0b430|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 55,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|5|hellaswag_01055|2672467f94ab1ac2133ab9d78db8d34566af5819d1e489efcf31c638be8d1d5d|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 5,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|65|hellaswag_38736|50347229ab7ae82c4d738fcf1caccd5c10a62221b708b395fa2563d388b1598c|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 65,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|75|hellaswag_11933|8d0a100d7cae80781de1a6b8e0b0b36c2c5bbca1661eedc0c186594b8537dcfc|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 75,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|85|hellaswag_08781|f5f24476abc851fee3ae9553408ff44cfaa1a2f41b1ca878af9cca55db28772d|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 85,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl|95|hellaswag_14848|af35e1d8a25a729d999f763f38273594df36c70fd28d9e894557a6182b261c6a|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260405_142710.jsonl",
+      "source_record_offset": 95,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl|15|hellaswag_01122|71650482961fbe7b8e685d664f1712f0ca7ae2d374283d3c7b84a687f4b2963c|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl",
+      "source_record_offset": 15,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl|25|hellaswag_28415|c7ba3df059d46808517df010dc486a4b7b920474a8f35487270ec4b192d8a565|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl",
+      "source_record_offset": 25,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl|35|hellaswag_05484|f0b3f53fd70178014ae271e8d2b8af090cb769ba88d0de35671c4b3042c7cbe7|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl",
+      "source_record_offset": 35,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl|45|hellaswag_10489|bcc8d045165444a841ec6b236e6cf35ac4aa8bf8c49a30cc2cf360de96e12ebe|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl",
+      "source_record_offset": 45,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl|5|hellaswag_01146|64d039fce6a892855d37b392d52b854a13104d55fa6bdeac6b17ed6e99186645|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_093702.jsonl",
+      "source_record_offset": 5,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|105|arc_Mercury_191625|286ec9aff386ff0a14cf419fe68f3b0a4c53fa0400ddab4f4e294eba581b36af|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 105,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|115|hellaswag_01685|5230d7ffa7ee9b7502494aefd91ffd601283c86ac0bba445735f119d129518d8|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 115,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|125|hellaswag_11346|ef53f4fc12014cd3be166de5999a10209b21b59ff79676343a4967efb5b7a483|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 125,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|135|hellaswag_46887|6d91ffc517f47e5179c30be32d82629002d7a391d1f3c1fe7d7150afceaa44fc|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 135,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|145|hellaswag_17732|2b28bc578cf4dcb8c9387569159ef914209ebacb8ab4454689cc7193867d0ff4|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 145,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|155|hellaswag_25105|4be1d3a88abbc061f91462d891dfd7b100d2c709b5631ed0726269436ef32748|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 155,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|15|hellaswag_13348|3002600c7f1bca17163782bbefab6fa18e9b0fc152177bc9c4bc90c4929e8a28|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 15,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|165|hellaswag_49284|23f2bb7dda78529dd173c7a9ef627e614bea8c93595b55580e3b18b9287e67a8|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 165,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|175|hellaswag_18173|190fc0c3b49ea334a55a5445c878581efa82233193c604f531c63a7c2b1f481f|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 175,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|185|hellaswag_48102|51df3f1b8cb6d792ade6511e5ec6be2ca7df99d36411ef733a2bd70bc42f42fa|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 185,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|195|hellaswag_34922|e5907309d198b4429b5b030117419c2fc2815a8190f66a9f76380ba8f07b1c86|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 195,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|205|hellaswag_15508|cbd90022b43a96f1be5bb103710e3d68338251f7296cbcec37968204a2a334fe|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 205,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|215|hellaswag_45203|9f24c8879f22d553c5287911c36c5251a53af9a04bdffd2a598c790e38752958|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 215,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|225|arc_Mercury_7004953|aaa715278edb789ac7538c47a3e86ba098dd2e9572b6b77ed0bd14f5b392c59a|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 225,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|234|hellaswag_46135|fb6aa0abe63c6cd9a6a654ccd81072f0b79dd3393233bf67daa8c66edd08de30|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 234,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|243|hellaswag_13455|01b5ee7894eb682fc94be61f91514fb8a6cdce2d6f089b52092ff5ef8e369f6a|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 243,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|252|hellaswag_33914|92e1b53e81eadaf35780bf8676d832ad61b8b36a37dcd89945133c636f1bfdcb|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 252,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|25|hellaswag_09255|5b845f58598f5c1984c3763e58f6c316abdebb4ddef139b2f4cbfd546615c464|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 25,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|261|arc_NYSEDREGENTS_2013_8_10|24d468476f5099fa1fece7b14d617ba9cb2a5e3dc80722b40ead5298029cfd0a|d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 261,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|270|hellaswag_08523|5c2809805fbd02dc48ec5f25441a95981ebb8ac3b7506f40ec95e4c5b28c9d07|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 270,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|279|hellaswag_39356|070bea3113d328f1f789a5baa24b945cf98116bb1c543875b36c8ce5b3e98741|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 279,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|288|hellaswag_15226|7495ca28100152ee04967651fc8be9659b9dfa97c2993680a70c6f38792ce3c4|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 288,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|297|hellaswag_28038|2a3673181de1b2e045777570777b1f95fb9a031efbda0bd4c8bf60bd94fd042a|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 297,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|306|hellaswag_16527|0b7b3c05707257bd3fe217a9944f270f0f298ba79fb799557312942f9bd6e916|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 306,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|315|arc_MCAS_1999_4_26|f30e10e0a9fa2ab0b165c706258d62e2088babff3442cad8a70c9f150fd01205|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 315,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|324|hellaswag_34066|58206b20fe5f9d7b9ccc01e43ec7742233c30d9f41f7d5d67df941f395ede0be|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 324,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|333|hellaswag_06542|40ad71572b279a9c6ea94a4c1bbab0714bd0145ffc284b4df41a7d99e80a528d|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 333,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|342|hellaswag_19320|6a6d89d886fd1e01361915da8f54df3943d01f4f1d51d168fc51daea27d5c6fc|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 342,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|351|hellaswag_20201|5a6103dbb99f67e0cac4abff44692204dab62eafca6a37ec68c4d6865091ca4a|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 351,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|35|hellaswag_28168|24d761181b1edcf335bbd4f32547353b78b527e0183a0af4b26b2050d4340451|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 35,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|360|hellaswag_45677|4bebdabd1f26c21f25fe25c1a9f25059942998be39285e18f3a650bdb0e87aeb|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 360,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|369|hellaswag_18895|2c544222c1221ecdb49a952f19d82573df74cb874d0138a9994bd3a00d7675ff|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 369,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|377|hellaswag_27671|b53c9e12a22f15609cef0addc5f72318e90237e1304575912273661f4fcfb610|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 377,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|385|hellaswag_43938|222edc36f3379c3f1f81973271bb8410bfa0aa1472c47c27e14532292c3651da|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 385,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|393|hellaswag_29963|ed6f663a461c4654a14536af8f29b62d138454cd308311fa372473407166c4ab|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 393,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|401|hellaswag_26136|072fdda7496c6571974a84a9370f76db00079ed465d9283b89f8c336210c2a9c|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 401,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|409|hellaswag_21618|f60640c6970ae026254a6063cfac4001d6cd34a02727c6ee7e6df8b4fcc26153|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 409,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|417|hellaswag_25180|91f8c2c5e2e5590cbac54814dc72eb774c8149c4dc279397abff05319b0383c8|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 417,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|425|hellaswag_28370|1cd6abe073b22fc5e69109150e2f5c88df114823e4501e9aca506cb26421fd9f|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 425,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|433|hellaswag_50329|6bcad0bf0cbce5cd28c61932f8358ce369bef598f16e97f8b9fdd0d03c3f2668|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 433,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|441|arc_Mercury_SC_401278|614e08872a208c33f684b08f980b2f6c1d941f9b91af80c4789466b59b977ea3|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 441,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|449|hellaswag_11889|fe5a1cdd8f3a0f6a504409d53736b8b7afa7adc9afd6ca2a9afa3c849e92513e|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 449,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|457|hellaswag_21040|c6e4201b597e398977741ae068cca6bfed73bb443de29e8dc7cc8461f6dcded8|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 457,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|45|hellaswag_05311|4152a12f1432bf4c2c1b4a8f1ab4067aeaaf6efca6e420b32bb0ed463ffcef1a|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 45,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|55|hellaswag_23296|f0136e28e81af500fd38b2ea067ca47cfd60ce6506133c2dc25da1812699aa10|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 55,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|5|hellaswag_46425|3ed7790c89d912bb17c36b84c2decaace7cd9e65c43bd35a3397ce21fc3658c5|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 5,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|65|hellaswag_24010|672f69e2bb9e6f0ee909563b2f2de096141c20318d4cc0bbd74c223c480722f7|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 65,
+      "suite": "thinking"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl|75|hellaswag_02668|ed6c96f80e90a83dfe26a7fa159da67c0ba2c387206d9ea9f5cc65878df919e3|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260406_154147.jsonl",
+      "source_record_offset": 75,
+      "suite": "thinking"
+    }
+  ],
+  "skipped_no_cross_action_groups": 2,
+  "skipped_pairwise_overlap_groups": 1,
+  "stats": {
+    "candidate_rows": 1363,
+    "files_scanned": 2555,
+    "skipped_existing_row": 58,
+    "skipped_missing_prompt": 424,
+    "skipped_missing_response": 111,
+    "skipped_non_target_suite_record": 38835
+  },
+  "target_actions": [
+    "architect_general",
+    "coder_escalation",
+    "frontdoor"
+  ],
+  "target_match_mode": "any",
+  "target_source_families": [],
+  "target_suites": [
+    "thinking"
+  ]
+}
