@@ -126,6 +126,36 @@ def test_pairwise_contract_skips_groups_without_label_contrast() -> None:
     assert summary["coverage"]["skipped_no_contrast_groups"] == 1
 
 
+def test_pairwise_contract_score_ordered_expands_beyond_binary_contrast() -> None:
+    rows = [
+        _manifest_row(item_id="pos-a", role_key="frontdoor", label=1, score=0.95),
+        _manifest_row(item_id="pos-b", role_key="architect_general", label=1, score=0.90),
+        _manifest_row(item_id="neg-a", role_key="coder_escalation", label=0, score=0.20),
+    ]
+
+    binary_pairs, binary_summary = mod.build_pairwise_contract(
+        rows,
+        min_pairs=1,
+        min_cross_action_pairs=1,
+        pairing_mode="binary_label",
+    )
+    score_pairs, score_summary = mod.build_pairwise_contract(
+        rows,
+        min_pairs=1,
+        min_cross_action_pairs=1,
+        pairing_mode="score_ordered",
+        min_score_delta=0.01,
+    )
+
+    assert len(binary_pairs) == 2
+    assert len(score_pairs) == 3
+    assert score_summary["contract"]["pairing_mode"] == "score_ordered"
+    assert score_summary["contract"]["learning_target"] == "within_source_record_score_ordered_preference"
+    assert score_summary["coverage"]["cross_action_pair_rows"] == 3
+    assert score_pairs[0]["pairing_mode"] == "score_ordered"
+    assert all(pair["preferred_oracle_score"] > pair["rejected_oracle_score"] for pair in score_pairs)
+
+
 def test_pairwise_contract_rejects_private_text_fields() -> None:
     rows = [
         {

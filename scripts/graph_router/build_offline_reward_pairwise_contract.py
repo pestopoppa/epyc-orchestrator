@@ -16,7 +16,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 import json
-from math import log1p
+from math import isfinite, log1p
 from pathlib import Path
 import sys
 from typing import Any, Iterable
@@ -37,6 +37,7 @@ from scripts.graph_router.build_offline_reward_verifier_npz import (  # noqa: E4
 PAIRWISE_ROW_SCHEMA_VERSION = "offline_reward_pairwise_preference.v1"
 SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_contract_summary.v1"
 CONTRACT_NAME = "within_task_pairwise_preference_v1"
+PAIRING_MODES = ("binary_label", "score_ordered")
 
 
 class PairwiseContractError(ValueError):
@@ -73,6 +74,7 @@ class PairwiseRow:
     elapsed_log_delta: float
     preferred_error_present: bool
     rejected_error_present: bool
+    pairing_mode: str
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -177,7 +179,13 @@ def _elapsed_log(row: dict[str, Any]) -> float:
     return log1p(max(_float_value(row.get("source_elapsed_seconds")), 0.0))
 
 
-def _build_pair(group_key: str, positive: dict[str, Any], negative: dict[str, Any]) -> PairwiseRow:
+def _build_pair(
+    group_key: str,
+    positive: dict[str, Any],
+    negative: dict[str, Any],
+    *,
+    pairing_mode: str,
+) -> PairwiseRow:
     preferred_score = _float_value(positive.get("oracle_score"))
     rejected_score = _float_value(negative.get("oracle_score"))
     preferred_item_id = str(positive.get("item_id") or "")
@@ -215,7 +223,50 @@ def _build_pair(group_key: str, positive: dict[str, Any], negative: dict[str, An
         elapsed_log_delta=_elapsed_log(positive) - _elapsed_log(negative),
         preferred_error_present=bool(positive.get("source_error_present")),
         rejected_error_present=bool(negative.get("source_error_present")),
+        pairing_mode=pairing_mode,
     )
+
+
+def _candidate_pairs(
+    rows: list[dict[str, Any]],
+    *,
+    pairing_mode: str,
+    min_score_delta: float,
+) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], dict[str, int]]:
+    positives = [row for row in rows if row["_oracle_binary_label"] == 1]
+    negatives = [row for row in rows if row["_oracle_binary_label"] == 0]
+    if pairing_mode == "binary_label":
+        pairs = [
+            (positive, negative)
+            for positive in sorted(positives, key=lambda row: str(row.get("item_id") or ""))
+            for negative in sorted(negatives, key=lambda row: str(row.get("item_id") or ""))
+        ]
+    elif pairing_mode == "score_ordered":
+        scored_rows = [
+            row
+            for row in rows
+            if row.get("oracle_score") is not None
+            and isfinite(_float_value(row.get("oracle_score")))
+        ]
+        ordered_rows = sorted(scored_rows, key=lambda row: str(row.get("item_id") or ""))
+        pairs = []
+        for left_index, left in enumerate(ordered_rows):
+            for right in ordered_rows[left_index + 1 :]:
+                left_score = _float_value(left.get("oracle_score"))
+                right_score = _float_value(right.get("oracle_score"))
+                delta = left_score - right_score
+                if abs(delta) < min_score_delta:
+                    continue
+                if delta > 0:
+                    pairs.append((left, right))
+                else:
+                    pairs.append((right, left))
+    else:
+        raise PairwiseContractError(f"unsupported pairing_mode={pairing_mode!r}")
+    return pairs, {
+        "positive_rows": len(positives),
+        "negative_rows": len(negatives),
+    }
 
 
 def build_pairwise_contract(
@@ -224,8 +275,14 @@ def build_pairwise_contract(
     max_pairs_per_group: int | None = None,
     min_pairs: int = 100,
     min_cross_action_pairs: int = 50,
+    pairing_mode: str = "binary_label",
+    min_score_delta: float = 0.0,
     generated_at: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if pairing_mode not in PAIRING_MODES:
+        raise PairwiseContractError(f"unsupported pairing_mode={pairing_mode!r}")
+    if min_score_delta < 0.0:
+        raise PairwiseContractError("min_score_delta must be non-negative")
     generated = generated_at or datetime.now(UTC).isoformat()
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     skipped_unmapped = 0
@@ -243,31 +300,31 @@ def build_pairwise_contract(
     suites: Counter[str] = Counter()
     skipped_no_contrast = 0
     for group_key, rows in sorted(grouped.items()):
-        positives = [row for row in rows if row["_oracle_binary_label"] == 1]
-        negatives = [row for row in rows if row["_oracle_binary_label"] == 0]
-        if not positives or not negatives:
+        candidates, candidate_stats = _candidate_pairs(
+            rows,
+            pairing_mode=pairing_mode,
+            min_score_delta=min_score_delta,
+        )
+        if not candidates:
             skipped_no_contrast += 1
             continue
         emitted = 0
-        for positive in sorted(positives, key=lambda row: str(row.get("item_id") or "")):
-            for negative in sorted(negatives, key=lambda row: str(row.get("item_id") or "")):
-                pair = _build_pair(group_key, positive, negative)
-                payload = asdict(pair)
-                pair_rows.append(payload)
-                action_pairs[f"{pair.preferred_canonical_action}>{pair.rejected_canonical_action}"] += 1
-                source_families[pair.source_family] += 1
-                suites[pair.suite] += 1
-                emitted += 1
-                if max_pairs_per_group is not None and emitted >= max_pairs_per_group:
-                    break
+        for positive, negative in candidates:
+            pair = _build_pair(group_key, positive, negative, pairing_mode=pairing_mode)
+            payload = asdict(pair)
+            pair_rows.append(payload)
+            action_pairs[f"{pair.preferred_canonical_action}>{pair.rejected_canonical_action}"] += 1
+            source_families[pair.source_family] += 1
+            suites[pair.suite] += 1
+            emitted += 1
             if max_pairs_per_group is not None and emitted >= max_pairs_per_group:
                 break
         group_diagnostics.append(
             {
                 "group_key": group_key,
                 "rows": len(rows),
-                "positive_rows": len(positives),
-                "negative_rows": len(negatives),
+                "positive_rows": candidate_stats["positive_rows"],
+                "negative_rows": candidate_stats["negative_rows"],
                 "pairs": emitted,
             }
         )
@@ -295,11 +352,18 @@ def build_pairwise_contract(
         "contract": {
             "name": CONTRACT_NAME,
             "row_schema_version": PAIRWISE_ROW_SCHEMA_VERSION,
-            "learning_target": "within_source_record_positive_over_negative_preference",
+            "pairing_mode": pairing_mode,
+            "min_score_delta": min_score_delta,
+            "learning_target": (
+                "within_source_record_positive_over_negative_preference"
+                if pairing_mode == "binary_label"
+                else "within_source_record_score_ordered_preference"
+            ),
             "material_difference_from_stopped_family": [
                 "uses pairwise preference labels instead of absolute binary labels",
                 "controls prompt and expected answer by pairing only within the same source task",
                 "keeps conflicting absolute model-input groups as contrastive evidence instead of dropping all conflicting rows",
+                "can expand beyond binary labels by ordering rows with distinct offline oracle scores",
                 "does not train a classifier or authorize a runtime gate",
             ],
         },
@@ -328,7 +392,11 @@ def build_pairwise_contract(
             "recommended_next": (
                 "train_pairwise_reward_ranker_offline"
                 if status == "contract_ready"
-                else "collect_more_within_task_positive_negative_contrasts"
+                else (
+                    "collect_more_within_task_positive_negative_contrasts"
+                    if pairing_mode == "binary_label"
+                    else "collect_more_within_task_score_contrasts"
+                )
             ),
         },
         "privacy": {
@@ -370,6 +438,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         f"- Generated at: `{summary['generated_at']}`",
         f"- Contract: `{summary['contract']['name']}`",
+        f"- Pairing mode: `{summary['contract']['pairing_mode']}`",
+        f"- Minimum score delta: `{summary['contract']['min_score_delta']}`",
         f"- Decision: `{decision['status']}`",
         f"- Runtime gate change allowed: `{decision['runtime_gate_change_allowed']}`",
         f"- Pair rows: `{coverage['pair_rows']}`",
@@ -413,6 +483,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-pairs-per-group", type=int)
     parser.add_argument("--min-pairs", type=int, default=100)
     parser.add_argument("--min-cross-action-pairs", type=int, default=50)
+    parser.add_argument("--pairing-mode", choices=PAIRING_MODES, default="binary_label")
+    parser.add_argument("--min-score-delta", type=float, default=0.0)
     parser.add_argument("--generated-at")
     return parser
 
@@ -424,6 +496,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         max_pairs_per_group=args.max_pairs_per_group,
         min_pairs=max(0, int(args.min_pairs)),
         min_cross_action_pairs=max(0, int(args.min_cross_action_pairs)),
+        pairing_mode=args.pairing_mode,
+        min_score_delta=max(0.0, float(args.min_score_delta)),
         generated_at=args.generated_at,
     )
     summary["inputs"]["manifest_jsonl"] = str(args.manifest_jsonl)

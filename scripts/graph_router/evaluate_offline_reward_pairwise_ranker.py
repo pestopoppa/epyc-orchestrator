@@ -428,6 +428,7 @@ def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
             )
     source_family_counts = Counter(str(row.get("source_family") or "unknown") for row in rows)
     suite_counts = Counter(str(row.get("suite") or "unknown") for row in rows)
+    pairing_mode_counts = Counter(str(row.get("pairing_mode") or "unknown") for row in rows)
     action_pair_counts = Counter(
         f"{row['preferred_canonical_action']}>{row['rejected_canonical_action']}"
         for row in rows
@@ -451,6 +452,7 @@ def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
             "group_count": len({str(row["group_key"]) for row in rows}),
             "source_family_pair_counts": dict(sorted(source_family_counts.items())),
             "suite_pair_counts": dict(sorted(suite_counts.items())),
+            "pairing_mode_counts": dict(sorted(pairing_mode_counts.items())),
             "action_pair_counts": dict(sorted(action_pair_counts.items())),
         },
         "split": {
@@ -480,6 +482,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- Cross-action pair rows: `{summary['input']['cross_action_pair_rows']}`",
         f"- Same-action pair rows: `{summary['input']['same_action_pair_rows']}`",
         f"- Group count: `{summary['input']['group_count']}`",
+        f"- Pairing mode counts: `{summary['input']['pairing_mode_counts']}`",
         f"- Families: `{summary['families_requested']}`",
         f"- Seeds: `{summary['seeds']}`",
         f"- Decision: `{decision['status']}`",

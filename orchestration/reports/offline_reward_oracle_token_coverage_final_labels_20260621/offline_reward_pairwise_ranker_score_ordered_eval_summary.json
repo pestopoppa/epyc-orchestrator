@@ -1,0 +1,2433 @@
+{
+  "aggregate": {
+    "criteria": {
+      "min_mean_accuracy": 0.6,
+      "min_mean_auc": 0.6
+    },
+    "decision": {
+      "best_family": "random_forest",
+      "blockers": [],
+      "recommended_next": "cross_validate_pairwise_ranker_on_expanded_contract",
+      "runtime_gate_change_allowed": false,
+      "status": "pairwise_ranker_signal"
+    },
+    "families": {
+      "hist_gradient_boosting": {
+        "acc_delta_vs_random": {
+          "max": 0.1964285714285714,
+          "mean": 0.13912743821143467,
+          "min": 0.08602150537634412
+        },
+        "accuracy": {
+          "max": 0.6964285714285714,
+          "mean": 0.6391274382114347,
+          "min": 0.5860215053763441
+        },
+        "auc": {
+          "max": 0.8093820861678005,
+          "mean": 0.7239110562091774,
+          "min": 0.6430801248699272
+        },
+        "brier": {
+          "max": 0.2545330822467804,
+          "mean": 0.2082516610622406,
+          "min": 0.17016083002090454
+        },
+        "ece": {
+          "max": 0.1215916064477736,
+          "mean": 0.07112552199333723,
+          "min": 0.045131080170593606
+        },
+        "meets_signal_gate": true,
+        "runs": 5
+      },
+      "logistic_l2": {
+        "acc_delta_vs_random": {
+          "max": 0.17261904761904767,
+          "mean": 0.1356475422856425,
+          "min": 0.07526881720430112
+        },
+        "accuracy": {
+          "max": 0.6726190476190477,
+          "mean": 0.6356475422856425,
+          "min": 0.5752688172043011
+        },
+        "auc": {
+          "max": 0.7827380952380952,
+          "mean": 0.7199236558927204,
+          "min": 0.6282807260955023
+        },
+        "brier": {
+          "max": 0.25065040588378906,
+          "mean": 0.20773339569568633,
+          "min": 0.1824166476726532
+        },
+        "ece": {
+          "max": 0.0884991369901165,
+          "mean": 0.05195285979815341,
+          "min": 0.03569029653217735
+        },
+        "meets_signal_gate": true,
+        "runs": 5
+      },
+      "random_forest": {
+        "acc_delta_vs_random": {
+          "max": 0.2012195121951219,
+          "mean": 0.1552481355118569,
+          "min": 0.09139784946236562
+        },
+        "accuracy": {
+          "max": 0.7012195121951219,
+          "mean": 0.6552481355118569,
+          "min": 0.5913978494623656
+        },
+        "auc": {
+          "max": 0.803837001784652,
+          "mean": 0.7475376042814541,
+          "min": 0.6466643542606082
+        },
+        "brier": {
+          "max": 0.23064447939395905,
+          "mean": 0.20371104180812835,
+          "min": 0.18215200304985046
+        },
+        "ece": {
+          "max": 0.11157364343724599,
+          "mean": 0.08343532233965482,
+          "min": 0.06530638963361331
+        },
+        "meets_signal_gate": true,
+        "runs": 5
+      }
+    }
+  },
+  "families_requested": [
+    "logistic_l2",
+    "hist_gradient_boosting",
+    "random_forest"
+  ],
+  "feature_contract": {
+    "feature_dim": 25,
+    "feature_names": [
+      "action_delta[architect_general]",
+      "action_delta[coder_escalation]",
+      "action_delta[frontdoor]",
+      "cross_action",
+      "same_action",
+      "source_family[orchestrator_live_seed]",
+      "source_family[seeding_eval]",
+      "source_family[three_way_eval]",
+      "suite[agentic]",
+      "suite[coder]",
+      "suite[debugbench]",
+      "suite[general]",
+      "suite[gpqa]",
+      "suite[hotpotqa]",
+      "suite[instruction_precision]",
+      "suite[livecodebench]",
+      "suite[long_context]",
+      "suite[math]",
+      "suite[mode_advantage]",
+      "suite[mode_advantage_hard]",
+      "suite[simpleqa]",
+      "suite[thinking]",
+      "answer_chars_log_delta",
+      "elapsed_log_delta",
+      "error_present_delta"
+    ],
+    "name": "pairwise_action_response_delta_v1",
+    "symmetric_augmentation": true
+  },
+  "input": {
+    "action_pair_counts": {
+      "architect_general>architect_general": 24,
+      "architect_general>coder_escalation": 12,
+      "architect_general>frontdoor": 57,
+      "coder_escalation>architect_general": 3,
+      "coder_escalation>coder_escalation": 35,
+      "coder_escalation>frontdoor": 25,
+      "frontdoor>architect_general": 27,
+      "frontdoor>coder_escalation": 19,
+      "frontdoor>frontdoor": 163
+    },
+    "cross_action_pair_rows": 143,
+    "group_count": 133,
+    "pair_rows": 365,
+    "pairing_mode_counts": {
+      "score_ordered": 365
+    },
+    "same_action_pair_rows": 222,
+    "source_family_pair_counts": {
+      "orchestrator_live_seed": 101,
+      "seeding_eval": 156,
+      "three_way_eval": 108
+    },
+    "suite_pair_counts": {
+      "agentic": 10,
+      "coder": 9,
+      "debugbench": 82,
+      "general": 23,
+      "gpqa": 11,
+      "hotpotqa": 13,
+      "instruction_precision": 50,
+      "livecodebench": 92,
+      "long_context": 4,
+      "math": 23,
+      "mode_advantage": 2,
+      "mode_advantage_hard": 8,
+      "simpleqa": 10,
+      "thinking": 28
+    }
+  },
+  "leakage_policy": {
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "runtime_gate_change_allowed": false,
+    "target_fields_excluded_from_features": [
+      "oracle_score_delta",
+      "preferred_oracle_score",
+      "rejected_oracle_score"
+    ],
+    "uses_prompt_answer_expected_text": false
+  },
+  "pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered.jsonl",
+  "runs": [
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.6576576576576577,
+        "auc": 0.7470984498011525,
+        "brier": 0.20292340219020844,
+        "ece": 0.04462622159773165
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 42,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.6428571428571429,
+            "auc": 0.7313619325281133,
+            "brier": 0.2136048525571823,
+            "ece": 0.06672745350064063
+          },
+          "negative_rows": 49,
+          "positive_rows": 49,
+          "rows": 98
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5285714285714286,
+            "auc": 0.5461224489795918,
+            "brier": 0.23588916659355164,
+            "ece": 0.0031560351806027547
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.8518518518518519,
+            "auc": 0.8545953360768176,
+            "brier": 0.14080512523651123,
+            "ece": 0.09842232725134602
+          },
+          "negative_rows": 27,
+          "positive_rows": 27,
+          "rows": 54
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": {
+            "acc": 0.5714285714285714,
+            "auc": 0.5873015873015873,
+            "brier": 0.21470040082931519,
+            "ece": 0.0076699938092912945
+          },
+          "negative_rows": 21,
+          "positive_rows": 21,
+          "rows": 42
+        },
+        "general": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.5625,
+            "brier": 0.26160162687301636,
+            "ece": 0.2722229789942503
+          },
+          "negative_rows": 8,
+          "positive_rows": 8,
+          "rows": 16
+        },
+        "gpqa": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.52,
+            "brier": 0.36148181557655334,
+            "ece": 0.5009040653705598
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.6142857142857143,
+            "auc": 0.68,
+            "brier": 0.21293053030967712,
+            "ece": 0.059370963275432585
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.625,
+            "auc": 0.68,
+            "brier": 0.20279565453529358,
+            "ece": 0.0513891575857997
+          },
+          "negative_rows": 20,
+          "positive_rows": 20,
+          "rows": 40
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.8888888888888888,
+            "auc": 0.8888888888888888,
+            "brier": 0.12901051342487335,
+            "ece": 0.18236549902293417
+          },
+          "negative_rows": 9,
+          "positive_rows": 9,
+          "rows": 18
+        },
+        "mode_advantage": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 0.8333333333333334,
+            "auc": 0.9722222222222222,
+            "brier": 0.21084028482437134,
+            "ece": 0.28254077335198724
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "test_examples": 222,
+      "test_groups": 33,
+      "test_pair_rows": 111,
+      "train_examples": 508,
+      "train_groups": 100,
+      "train_pair_rows": 254
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.6531531531531531,
+        "auc": 0.7251034818602387,
+        "brier": 0.21736863255500793,
+        "ece": 0.08867737087043556
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 42,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.6632653061224489,
+            "auc": 0.7109537692628072,
+            "brier": 0.23033910989761353,
+            "ece": 0.13894164550821395
+          },
+          "negative_rows": 49,
+          "positive_rows": 49,
+          "rows": 98
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5285714285714286,
+            "auc": 0.5510204081632653,
+            "brier": 0.23571518063545227,
+            "ece": 0.0007039072391177927
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.7962962962962963,
+            "auc": 0.8367626886145405,
+            "brier": 0.17004702985286713,
+            "ece": 0.1777487581388818
+          },
+          "negative_rows": 27,
+          "positive_rows": 27,
+          "rows": 54
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": {
+            "acc": 0.5714285714285714,
+            "auc": 0.5873015873015873,
+            "brier": 0.21431425213813782,
+            "ece": 0.0024291729288441794
+          },
+          "negative_rows": 21,
+          "positive_rows": 21,
+          "rows": 42
+        },
+        "general": {
+          "metrics": {
+            "acc": 0.625,
+            "auc": 0.546875,
+            "brier": 0.3147059977054596,
+            "ece": 0.32274089753627777
+          },
+          "negative_rows": 8,
+          "positive_rows": 8,
+          "rows": 16
+        },
+        "gpqa": {
+          "metrics": {
+            "acc": 1.0,
+            "auc": 1.0,
+            "brier": 0.07997943460941315,
+            "ece": 0.2503326371312142
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.6142857142857143,
+            "auc": 0.68,
+            "brier": 0.23209062218666077,
+            "ece": 0.1286109617246049
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.675,
+            "brier": 0.20745499432086945,
+            "ece": 0.022613927558995786
+          },
+          "negative_rows": 20,
+          "positive_rows": 20,
+          "rows": 40
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.7777777777777778,
+            "auc": 0.8148148148148148,
+            "brier": 0.1637473851442337,
+            "ece": 0.19115013794766533
+          },
+          "negative_rows": 9,
+          "positive_rows": 9,
+          "rows": 18
+        },
+        "mode_advantage": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 0.8333333333333334,
+            "auc": 0.7777777777777778,
+            "brier": 0.2190461903810501,
+            "ece": 0.3111068705717723
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "test_examples": 222,
+      "test_groups": 33,
+      "test_pair_rows": 111,
+      "train_examples": 508,
+      "train_groups": 100,
+      "train_pair_rows": 254
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 0.6531531531531531,
+        "auc": 0.7515623731839948,
+        "brier": 0.20558616518974304,
+        "ece": 0.06654769863497029
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 42,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.6530612244897959,
+            "auc": 0.7330279050395668,
+            "brier": 0.21254806220531464,
+            "ece": 0.06956271142983923
+          },
+          "negative_rows": 49,
+          "positive_rows": 49,
+          "rows": 98
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5285714285714286,
+            "auc": 0.5575510204081633,
+            "brier": 0.23598897457122803,
+            "ece": 0.005527805004801069
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.8148148148148148,
+            "auc": 0.9053497942386831,
+            "brier": 0.15354055166244507,
+            "ece": 0.14460054509065767
+          },
+          "negative_rows": 27,
+          "positive_rows": 27,
+          "rows": 54
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": {
+            "acc": 0.5714285714285714,
+            "auc": 0.5873015873015873,
+            "brier": 0.2151455581188202,
+            "ece": 0.013212528611932482
+          },
+          "negative_rows": 21,
+          "positive_rows": 21,
+          "rows": 42
+        },
+        "general": {
+          "metrics": {
+            "acc": 0.625,
+            "auc": 0.546875,
+            "brier": 0.25972771644592285,
+            "ece": 0.21031522564589977
+          },
+          "negative_rows": 8,
+          "positive_rows": 8,
+          "rows": 16
+        },
+        "gpqa": {
+          "metrics": {
+            "acc": 0.7,
+            "auc": 0.8,
+            "brier": 0.19241710007190704,
+            "ece": 0.23273638188838958
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.5857142857142857,
+            "auc": 0.6546938775510204,
+            "brier": 0.21810322999954224,
+            "ece": 0.066816374872412
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.575,
+            "auc": 0.6025,
+            "brier": 0.20713317394256592,
+            "ece": 0.05567775201052428
+          },
+          "negative_rows": 20,
+          "positive_rows": 20,
+          "rows": 40
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.8333333333333334,
+            "auc": 0.9506172839506173,
+            "brier": 0.18172211945056915,
+            "ece": 0.2436721987194485
+          },
+          "negative_rows": 9,
+          "positive_rows": 9,
+          "rows": 18
+        },
+        "mode_advantage": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 0.9166666666666666,
+            "auc": 1.0,
+            "brier": 0.1676529496908188,
+            "ece": 0.31891110042730964
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "test_examples": 222,
+      "test_groups": 33,
+      "test_pair_rows": 111,
+      "train_examples": 508,
+      "train_groups": 100,
+      "train_pair_rows": 254
+    },
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.620253164556962,
+        "auc": 0.6970036853068419,
+        "brier": 0.2084921896457672,
+        "ece": 0.05434528511913517
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 7,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.6818181818181818,
+            "auc": 0.8181818181818182,
+            "brier": 0.19725632667541504,
+            "ece": 0.10357278314503757
+          },
+          "negative_rows": 11,
+          "positive_rows": 11,
+          "rows": 22
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.61,
+            "auc": 0.6776,
+            "brier": 0.1987535059452057,
+            "ece": 0.01982746109366417
+          },
+          "negative_rows": 50,
+          "positive_rows": 50,
+          "rows": 100
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.6111111111111112,
+            "auc": 0.6820987654320988,
+            "brier": 0.24241039156913757,
+            "ece": 0.18868265528645778
+          },
+          "negative_rows": 18,
+          "positive_rows": 18,
+          "rows": 36
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": {
+            "acc": 0.6086956521739131,
+            "auc": 0.6559546313799622,
+            "brier": 0.1959967017173767,
+            "ece": 0.007757520222145578
+          },
+          "negative_rows": 23,
+          "positive_rows": 23,
+          "rows": 46
+        },
+        "general": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.6,
+            "brier": 0.2540475130081177,
+            "ece": 0.3532798051834106
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.7,
+            "auc": 0.68,
+            "brier": 0.18203938007354736,
+            "ece": 0.11298239231109619
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.5227272727272727,
+            "auc": 0.4896694214876033,
+            "brier": 0.2386980652809143,
+            "ece": 0.0016748008572242477
+          },
+          "negative_rows": 22,
+          "positive_rows": 22,
+          "rows": 44
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "mode_advantage_hard": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "simpleqa": {
+          "metrics": {
+            "acc": 0.8333333333333334,
+            "auc": 0.9722222222222222,
+            "brier": 0.08940324932336807,
+            "ece": 0.2290761272112528
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 1.0,
+            "auc": 1.0,
+            "brier": 0.1808602511882782,
+            "ece": 0.42290439307689676
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        }
+      },
+      "test_examples": 158,
+      "test_groups": 33,
+      "test_pair_rows": 79,
+      "train_examples": 572,
+      "train_groups": 100,
+      "train_pair_rows": 286
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.6075949367088608,
+        "auc": 0.6893126101586284,
+        "brier": 0.20767329633235931,
+        "ece": 0.05131474976675419
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 7,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.6818181818181818,
+            "auc": 0.7933884297520661,
+            "brier": 0.1865406036376953,
+            "ece": 0.09618166021325371
+          },
+          "negative_rows": 11,
+          "positive_rows": 11,
+          "rows": 22
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.61,
+            "auc": 0.6892,
+            "brier": 0.19666723906993866,
+            "ece": 0.01038334540091455
+          },
+          "negative_rows": 50,
+          "positive_rows": 50,
+          "rows": 100
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.5555555555555556,
+            "auc": 0.7006172839506173,
+            "brier": 0.2511601448059082,
+            "ece": 0.25927168379227317
+          },
+          "negative_rows": 18,
+          "positive_rows": 18,
+          "rows": 36
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": {
+            "acc": 0.6086956521739131,
+            "auc": 0.6559546313799622,
+            "brier": 0.19566158950328827,
+            "ece": 0.0014439174783942492
+          },
+          "negative_rows": 23,
+          "positive_rows": 23,
+          "rows": 46
+        },
+        "general": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.72,
+            "brier": 0.3044453263282776,
+            "ece": 0.32966302931308744
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.7,
+            "auc": 0.68,
+            "brier": 0.15517893433570862,
+            "ece": 0.04604205340147018
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.5227272727272727,
+            "auc": 0.4896694214876033,
+            "brier": 0.23865193128585815,
+            "ece": 0.0009099593894048171
+          },
+          "negative_rows": 22,
+          "positive_rows": 22,
+          "rows": 44
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "mode_advantage_hard": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "simpleqa": {
+          "metrics": {
+            "acc": 0.8333333333333334,
+            "auc": 0.9722222222222222,
+            "brier": 0.08999910205602646,
+            "ece": 0.19032453543817002
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 0.4,
+            "auc": 0.44,
+            "brier": 0.2865567207336426,
+            "ece": 0.3081705749034882
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        }
+      },
+      "test_examples": 158,
+      "test_groups": 33,
+      "test_pair_rows": 79,
+      "train_examples": 572,
+      "train_groups": 100,
+      "train_pair_rows": 286
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 0.6518987341772152,
+        "auc": 0.7452331357154303,
+        "brier": 0.2057342827320099,
+        "ece": 0.06530638963361331
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 7,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.6818181818181818,
+            "auc": 0.7933884297520661,
+            "brier": 0.2031991332769394,
+            "ece": 0.10493964701890945
+          },
+          "negative_rows": 11,
+          "positive_rows": 11,
+          "rows": 22
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.61,
+            "auc": 0.6952,
+            "brier": 0.20198974013328552,
+            "ece": 0.0373771932721138
+          },
+          "negative_rows": 50,
+          "positive_rows": 50,
+          "rows": 100
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.75,
+            "auc": 0.7345679012345679,
+            "brier": 0.21768499910831451,
+            "ece": 0.18558856224020323
+          },
+          "negative_rows": 18,
+          "positive_rows": 18,
+          "rows": 36
+        }
+      },
+      "suite_metrics": {
+        "debugbench": {
+          "metrics": {
+            "acc": 0.6086956521739131,
+            "auc": 0.6559546313799622,
+            "brier": 0.19711144268512726,
+            "ece": 0.021806528224893235
+          },
+          "negative_rows": 23,
+          "positive_rows": 23,
+          "rows": 46
+        },
+        "general": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.6,
+            "brier": 0.28974783420562744,
+            "ece": 0.2519297242164612
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.7,
+            "auc": 0.68,
+            "brier": 0.19324851036071777,
+            "ece": 0.1330785483121872
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.5227272727272727,
+            "auc": 0.4896694214876033,
+            "brier": 0.2387527972459793,
+            "ece": 0.007076672024347565
+          },
+          "negative_rows": 22,
+          "positive_rows": 22,
+          "rows": 44
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "mode_advantage_hard": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "simpleqa": {
+          "metrics": {
+            "acc": 0.8333333333333334,
+            "auc": 0.9444444444444444,
+            "brier": 0.13176007568836212,
+            "ece": 0.20038862153887746
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 0.8,
+            "auc": 0.88,
+            "brier": 0.19717839360237122,
+            "ece": 0.18430855274200442
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        }
+      },
+      "test_examples": 158,
+      "test_groups": 33,
+      "test_pair_rows": 79,
+      "train_examples": 572,
+      "train_groups": 100,
+      "train_pair_rows": 286
+    },
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.5752688172043011,
+        "auc": 0.6282807260955023,
+        "brier": 0.25065040588378906,
+        "ece": 0.0884991369901165
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 13,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.69,
+            "brier": 0.20928218960762024,
+            "ece": 0.22277556583285332
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.53125,
+            "auc": 0.53515625,
+            "brier": 0.23438386619091034,
+            "ece": 0.0006989690009504557
+          },
+          "negative_rows": 48,
+          "positive_rows": 48,
+          "rows": 96
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.6571428571428571,
+            "auc": 0.6636734693877551,
+            "brier": 0.284778356552124,
+            "ece": 0.24758243603365762
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        }
+      },
+      "suite_metrics": {
+        "agentic": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.5961538461538461,
+            "auc": 0.6375739644970414,
+            "brier": 0.20195531845092773,
+            "ece": 0.0024735036556823896
+          },
+          "negative_rows": 26,
+          "positive_rows": 26,
+          "rows": 52
+        },
+        "general": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "gpqa": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.44,
+            "brier": 0.4215511381626129,
+            "ece": 0.5191420897841453
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "hotpotqa": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.6944444444444444,
+            "brier": 0.3150079846382141,
+            "ece": 0.33423929164807
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        },
+        "instruction_precision": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.52,
+            "auc": 0.4896,
+            "brier": 0.2400011420249939,
+            "ece": 0.00021495305933058264
+          },
+          "negative_rows": 25,
+          "positive_rows": 25,
+          "rows": 50
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.5714285714285714,
+            "auc": 0.7346938775510204,
+            "brier": 0.19402487576007843,
+            "ece": 0.3528331938598837
+          },
+          "negative_rows": 7,
+          "positive_rows": 7,
+          "rows": 14
+        },
+        "mode_advantage_hard": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.52,
+            "brier": 0.34635934233665466,
+            "ece": 0.484843472018838
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 186,
+      "test_groups": 33,
+      "test_pair_rows": 93,
+      "train_examples": 544,
+      "train_groups": 100,
+      "train_pair_rows": 272
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.5860215053763441,
+        "auc": 0.6430801248699272,
+        "brier": 0.2545330822467804,
+        "ece": 0.1215916064477736
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 13,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.77,
+            "brier": 0.22573308646678925,
+            "ece": 0.24876693412661552
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.53125,
+            "auc": 0.55859375,
+            "brier": 0.23437513411045074,
+            "ece": 0.00027970959854428656
+          },
+          "negative_rows": 48,
+          "positive_rows": 48,
+          "rows": 96
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.6571428571428571,
+            "auc": 0.6563265306122449,
+            "brier": 0.29040688276290894,
+            "ece": 0.2881997423512595
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        }
+      },
+      "suite_metrics": {
+        "agentic": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.5961538461538461,
+            "auc": 0.6375739644970414,
+            "brier": 0.20198215544223785,
+            "ece": 0.0024133158776049432
+          },
+          "negative_rows": 26,
+          "positive_rows": 26,
+          "rows": 52
+        },
+        "general": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "gpqa": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.68,
+            "brier": 0.3412645757198334,
+            "ece": 0.33294248580932617
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "hotpotqa": {
+          "metrics": {
+            "acc": 0.6666666666666666,
+            "auc": 0.5,
+            "brier": 0.33475592732429504,
+            "ece": 0.39218663672606147
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        },
+        "instruction_precision": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.52,
+            "auc": 0.4896,
+            "brier": 0.24000011384487152,
+            "ece": 0.0002868403005413711
+          },
+          "negative_rows": 25,
+          "positive_rows": 25,
+          "rows": 50
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.7142857142857143,
+            "auc": 0.7346938775510204,
+            "brier": 0.19411946833133698,
+            "ece": 0.09855100991470474
+          },
+          "negative_rows": 7,
+          "positive_rows": 7,
+          "rows": 14
+        },
+        "mode_advantage_hard": {
+          "metrics": {
+            "acc": 0.4,
+            "auc": 0.48,
+            "brier": 0.4033835530281067,
+            "ece": 0.47419001162052155
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 186,
+      "test_groups": 33,
+      "test_pair_rows": 93,
+      "train_examples": 544,
+      "train_groups": 100,
+      "train_pair_rows": 272
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 0.5913978494623656,
+        "auc": 0.6466643542606082,
+        "brier": 0.23064447939395905,
+        "ece": 0.09835933821816599
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 13,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.61,
+            "brier": 0.24046950042247772,
+            "ece": 0.17684661597013476
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.53125,
+            "auc": 0.5399305555555556,
+            "brier": 0.23469114303588867,
+            "ece": 0.008123047882691026
+          },
+          "negative_rows": 48,
+          "positive_rows": 48,
+          "rows": 96
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.7,
+            "auc": 0.6995918367346938,
+            "brier": 0.22228758037090302,
+            "ece": 0.24330244128193174
+          },
+          "negative_rows": 35,
+          "positive_rows": 35,
+          "rows": 70
+        }
+      },
+      "suite_metrics": {
+        "agentic": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.5961538461538461,
+            "auc": 0.6375739644970414,
+            "brier": 0.20287252962589264,
+            "ece": 0.015706556061139472
+          },
+          "negative_rows": 26,
+          "positive_rows": 26,
+          "rows": 52
+        },
+        "general": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        },
+        "gpqa": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.45,
+            "brier": 0.2908181846141815,
+            "ece": 0.42133035250008105
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "hotpotqa": {
+          "metrics": {
+            "acc": 0.6666666666666666,
+            "auc": 0.7777777777777778,
+            "brier": 0.1942000836133957,
+            "ece": 0.23962426682313281
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        },
+        "instruction_precision": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.52,
+            "auc": 0.4896,
+            "brier": 0.24014736711978912,
+            "ece": 0.006970061212778091
+          },
+          "negative_rows": 25,
+          "positive_rows": 25,
+          "rows": 50
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.6428571428571429,
+            "auc": 0.7551020408163265,
+            "brier": 0.2030356228351593,
+            "ece": 0.11398345977067947
+          },
+          "negative_rows": 7,
+          "positive_rows": 7,
+          "rows": 14
+        },
+        "mode_advantage_hard": {
+          "metrics": {
+            "acc": 0.6,
+            "auc": 0.6,
+            "brier": 0.29126304388046265,
+            "ece": 0.3439854055643082
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "simpleqa": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 186,
+      "test_groups": 33,
+      "test_pair_rows": 93,
+      "train_examples": 544,
+      "train_groups": 100,
+      "train_pair_rows": 272
+    },
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.6524390243902439,
+        "auc": 0.7444973230220107,
+        "brier": 0.1941843330860138,
+        "ece": 0.03569029653217735
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 101,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.4305555555555556,
+            "brier": 0.29466280341148376,
+            "ece": 0.16459066544969875
+          },
+          "negative_rows": 12,
+          "positive_rows": 12,
+          "rows": 24
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5465116279069767,
+            "auc": 0.5824770146024878,
+            "brier": 0.2271248996257782,
+            "ece": 0.005939261164776114
+          },
+          "negative_rows": 43,
+          "positive_rows": 43,
+          "rows": 86
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.8888888888888888,
+            "auc": 0.9382716049382716,
+            "brier": 0.09706638753414154,
+            "ece": 0.0675174663602202
+          },
+          "negative_rows": 27,
+          "positive_rows": 27,
+          "rows": 54
+        }
+      },
+      "suite_metrics": {
+        "coder": {
+          "metrics": {
+            "acc": 0.75,
+            "auc": 0.8125,
+            "brier": 0.17316442728042603,
+            "ece": 0.04075852036476135
+          },
+          "negative_rows": 8,
+          "positive_rows": 8,
+          "rows": 16
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.55,
+            "auc": 0.5,
+            "brier": 0.22540196776390076,
+            "ece": 0.006340014189481736
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.4,
+            "auc": 0.32,
+            "brier": 0.36933693289756775,
+            "ece": 0.45846605896949766
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.6341463414634146,
+            "auc": 0.7132659131469363,
+            "brier": 0.18972131609916687,
+            "ece": 0.03266730990896865
+          },
+          "negative_rows": 41,
+          "positive_rows": 41,
+          "rows": 82
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.6363636363636364,
+            "auc": 0.768595041322314,
+            "brier": 0.18824982643127441,
+            "ece": 0.16350608437576078
+          },
+          "negative_rows": 11,
+          "positive_rows": 11,
+          "rows": 22
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 164,
+      "test_groups": 33,
+      "test_pair_rows": 82,
+      "train_examples": 566,
+      "train_groups": 100,
+      "train_pair_rows": 283
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.6524390243902439,
+        "auc": 0.7526769779892921,
+        "brier": 0.19152246415615082,
+        "ece": 0.045131080170593606
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 101,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.5,
+            "auc": 0.6597222222222222,
+            "brier": 0.2427435666322708,
+            "ece": 0.28946769672135514
+          },
+          "negative_rows": 12,
+          "positive_rows": 12,
+          "rows": 24
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5465116279069767,
+            "auc": 0.5857220118983234,
+            "brier": 0.2267499715089798,
+            "ece": 0.0007912057863418446
+          },
+          "negative_rows": 43,
+          "positive_rows": 43,
+          "rows": 86
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.8888888888888888,
+            "auc": 0.9382716049382716,
+            "brier": 0.11265446245670319,
+            "ece": 0.13305541541841295
+          },
+          "negative_rows": 27,
+          "positive_rows": 27,
+          "rows": 54
+        }
+      },
+      "suite_metrics": {
+        "coder": {
+          "metrics": {
+            "acc": 0.9375,
+            "auc": 0.96875,
+            "brier": 0.09934146702289581,
+            "ece": 0.1815124584827572
+          },
+          "negative_rows": 8,
+          "positive_rows": 8,
+          "rows": 16
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.55,
+            "auc": 0.5,
+            "brier": 0.22500041127204895,
+            "ece": 0.0004442015546374024
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.8,
+            "auc": 0.92,
+            "brier": 0.11888550221920013,
+            "ece": 0.3014523103833198
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.6219512195121951,
+            "auc": 0.7120761451516954,
+            "brier": 0.19436076283454895,
+            "ece": 0.03499937982003136
+          },
+          "negative_rows": 41,
+          "positive_rows": 41,
+          "rows": 82
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.5454545454545454,
+            "auc": 0.6942148760330579,
+            "brier": 0.22831092774868011,
+            "ece": 0.2011816471137784
+          },
+          "negative_rows": 11,
+          "positive_rows": 11,
+          "rows": 22
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 164,
+      "test_groups": 33,
+      "test_pair_rows": 82,
+      "train_examples": 566,
+      "train_groups": 100,
+      "train_pair_rows": 283
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 0.7012195121951219,
+        "auc": 0.803837001784652,
+        "brier": 0.19443827867507935,
+        "ece": 0.11157364343724599
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 101,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.75,
+            "auc": 0.7291666666666666,
+            "brier": 0.22668993473052979,
+            "ece": 0.18964234491189322
+          },
+          "negative_rows": 12,
+          "positive_rows": 12,
+          "rows": 24
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5465116279069767,
+            "auc": 0.5857220118983234,
+            "brier": 0.2273613065481186,
+            "ece": 0.009606993735529656
+          },
+          "negative_rows": 43,
+          "positive_rows": 43,
+          "rows": 86
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.9259259259259259,
+            "auc": 0.9807956104252401,
+            "brier": 0.1276712417602539,
+            "ece": 0.2525490416144883
+          },
+          "negative_rows": 27,
+          "positive_rows": 27,
+          "rows": 54
+        }
+      },
+      "suite_metrics": {
+        "coder": {
+          "metrics": {
+            "acc": 1.0,
+            "auc": 1.0,
+            "brier": 0.1306707262992859,
+            "ece": 0.3317241691984236
+          },
+          "negative_rows": 8,
+          "positive_rows": 8,
+          "rows": 16
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.55,
+            "auc": 0.5,
+            "brier": 0.22537846863269806,
+            "ece": 0.007234609313309193
+          },
+          "negative_rows": 10,
+          "positive_rows": 10,
+          "rows": 20
+        },
+        "gpqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "hotpotqa": {
+          "metrics": null,
+          "negative_rows": 1,
+          "positive_rows": 1,
+          "rows": 2
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.8,
+            "auc": 0.8,
+            "brier": 0.2106568068265915,
+            "ece": 0.24142863452434538
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.6341463414634146,
+            "auc": 0.7132659131469363,
+            "brier": 0.19717887043952942,
+            "ece": 0.056264816987805256
+          },
+          "negative_rows": 41,
+          "positive_rows": 41,
+          "rows": 82
+        },
+        "long_context": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "math": {
+          "metrics": {
+            "acc": 0.6818181818181818,
+            "auc": 0.7107438016528925,
+            "brier": 0.21444784104824066,
+            "ece": 0.12880460105159064
+          },
+          "negative_rows": 11,
+          "positive_rows": 11,
+          "rows": 22
+        },
+        "thinking": {
+          "metrics": null,
+          "negative_rows": 3,
+          "positive_rows": 3,
+          "rows": 6
+        }
+      },
+      "test_examples": 164,
+      "test_groups": 33,
+      "test_pair_rows": 82,
+      "train_examples": 566,
+      "train_groups": 100,
+      "train_pair_rows": 283
+    },
+    {
+      "family": "logistic_l2",
+      "metrics": {
+        "acc": 0.6726190476190477,
+        "auc": 0.7827380952380952,
+        "brier": 0.1824166476726532,
+        "ece": 0.03660335875160637
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 2026,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.7692307692307693,
+            "auc": 0.8757396449704142,
+            "brier": 0.17766475677490234,
+            "ece": 0.1490454971790314
+          },
+          "negative_rows": 13,
+          "positive_rows": 13,
+          "rows": 26
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5465116279069767,
+            "auc": 0.5824770146024878,
+            "brier": 0.22731457650661469,
+            "ece": 0.007262172740559245
+          },
+          "negative_rows": 43,
+          "positive_rows": 43,
+          "rows": 86
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.8214285714285714,
+            "auc": 0.9247448979591837,
+            "brier": 0.11567247658967972,
+            "ece": 0.06246268097311258
+          },
+          "negative_rows": 28,
+          "positive_rows": 28,
+          "rows": 56
+        }
+      },
+      "suite_metrics": {
+        "agentic": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "coder": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.7391304347826086,
+            "auc": 0.8431001890359168,
+            "brier": 0.13364239037036896,
+            "ece": 0.03128990692936856
+          },
+          "negative_rows": 23,
+          "positive_rows": 23,
+          "rows": 46
+        },
+        "general": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "hotpotqa": {
+          "metrics": {
+            "acc": 0.7142857142857143,
+            "auc": 0.8775510204081632,
+            "brier": 0.1884305775165558,
+            "ece": 0.19838256495339532
+          },
+          "negative_rows": 7,
+          "positive_rows": 7,
+          "rows": 14
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.8,
+            "auc": 0.96,
+            "brier": 0.13184182345867157,
+            "ece": 0.33554523587226864
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.5344827586206896,
+            "auc": 0.5552913198573127,
+            "brier": 0.2332189381122589,
+            "ece": 0.005614798901409939
+          },
+          "negative_rows": 29,
+          "positive_rows": 29,
+          "rows": 58
+        },
+        "math": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 1.0,
+            "auc": 1.0,
+            "brier": 0.09609172493219376,
+            "ece": 0.30074390023946757
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "test_examples": 168,
+      "test_groups": 33,
+      "test_pair_rows": 84,
+      "train_examples": 562,
+      "train_groups": 100,
+      "train_pair_rows": 281
+    },
+    {
+      "family": "hist_gradient_boosting",
+      "metrics": {
+        "acc": 0.6964285714285714,
+        "auc": 0.8093820861678005,
+        "brier": 0.17016083002090454,
+        "ece": 0.04891280271112919
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 2026,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.7307692307692307,
+            "auc": 0.8579881656804734,
+            "brier": 0.16624435782432556,
+            "ece": 0.17073670402169228
+          },
+          "negative_rows": 13,
+          "positive_rows": 13,
+          "rows": 26
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5465116279069767,
+            "auc": 0.5857220118983234,
+            "brier": 0.2267453670501709,
+            "ece": 0.0004956612233505693
+          },
+          "negative_rows": 43,
+          "positive_rows": 43,
+          "rows": 86
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.9107142857142857,
+            "auc": 0.9591836734693877,
+            "brier": 0.08508149534463882,
+            "ece": 0.10172609213207448
+          },
+          "negative_rows": 28,
+          "positive_rows": 28,
+          "rows": 56
+        }
+      },
+      "suite_metrics": {
+        "agentic": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "coder": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.7391304347826086,
+            "auc": 0.8431001890359168,
+            "brier": 0.13902153074741364,
+            "ece": 0.03374939282303271
+          },
+          "negative_rows": 23,
+          "positive_rows": 23,
+          "rows": 46
+        },
+        "general": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "hotpotqa": {
+          "metrics": {
+            "acc": 0.8571428571428571,
+            "auc": 0.8979591836734694,
+            "brier": 0.1368589699268341,
+            "ece": 0.12274618653048362
+          },
+          "negative_rows": 7,
+          "positive_rows": 7,
+          "rows": 14
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.8,
+            "auc": 0.96,
+            "brier": 0.1305890530347824,
+            "ece": 0.17716544941067697
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.5344827586206896,
+            "auc": 0.5552913198573127,
+            "brier": 0.23276010155677795,
+            "ece": 0.0005842334077019116
+          },
+          "negative_rows": 29,
+          "positive_rows": 29,
+          "rows": 58
+        },
+        "math": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 0.9166666666666666,
+            "auc": 0.9722222222222222,
+            "brier": 0.06431291252374649,
+            "ece": 0.11845672316849229
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "test_examples": 168,
+      "test_groups": 33,
+      "test_pair_rows": 84,
+      "train_examples": 562,
+      "train_groups": 100,
+      "train_pair_rows": 281
+    },
+    {
+      "family": "random_forest",
+      "metrics": {
+        "acc": 0.6785714285714286,
+        "auc": 0.7903911564625851,
+        "brier": 0.18215200304985046,
+        "ece": 0.0753895417742786
+      },
+      "random_baseline": {
+        "acc": 0.5,
+        "auc": 0.5,
+        "brier": 0.25,
+        "ece": 0.0
+      },
+      "seed": 2026,
+      "source_family_metrics": {
+        "orchestrator_live_seed": {
+          "metrics": {
+            "acc": 0.6538461538461539,
+            "auc": 0.727810650887574,
+            "brier": 0.2096932828426361,
+            "ece": 0.07639390516739626
+          },
+          "negative_rows": 13,
+          "positive_rows": 13,
+          "rows": 26
+        },
+        "seeding_eval": {
+          "metrics": {
+            "acc": 0.5465116279069767,
+            "auc": 0.586803677663602,
+            "brier": 0.22721616923809052,
+            "ece": 0.00838620406250621
+          },
+          "negative_rows": 43,
+          "positive_rows": 43,
+          "rows": 86
+        },
+        "three_way_eval": {
+          "metrics": {
+            "acc": 0.8928571428571429,
+            "auc": 0.9808673469387755,
+            "brier": 0.10015920549631119,
+            "ece": 0.1925900323050363
+          },
+          "negative_rows": 28,
+          "positive_rows": 28,
+          "rows": 56
+        }
+      },
+      "suite_metrics": {
+        "agentic": {
+          "metrics": null,
+          "negative_rows": 2,
+          "positive_rows": 2,
+          "rows": 4
+        },
+        "coder": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "debugbench": {
+          "metrics": {
+            "acc": 0.7391304347826086,
+            "auc": 0.8431001890359168,
+            "brier": 0.1403755247592926,
+            "ece": 0.06617713006942169
+          },
+          "negative_rows": 23,
+          "positive_rows": 23,
+          "rows": 46
+        },
+        "general": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "hotpotqa": {
+          "metrics": {
+            "acc": 0.7142857142857143,
+            "auc": 0.9183673469387755,
+            "brier": 0.16018164157867432,
+            "ece": 0.25705303251743317
+          },
+          "negative_rows": 7,
+          "positive_rows": 7,
+          "rows": 14
+        },
+        "instruction_precision": {
+          "metrics": {
+            "acc": 0.8,
+            "auc": 0.84,
+            "brier": 0.17534254491329193,
+            "ece": 0.2532677009701729
+          },
+          "negative_rows": 5,
+          "positive_rows": 5,
+          "rows": 10
+        },
+        "livecodebench": {
+          "metrics": {
+            "acc": 0.5344827586206896,
+            "auc": 0.5552913198573127,
+            "brier": 0.23312599956989288,
+            "ece": 0.007310746044948182
+          },
+          "negative_rows": 29,
+          "positive_rows": 29,
+          "rows": 58
+        },
+        "math": {
+          "metrics": null,
+          "negative_rows": 4,
+          "positive_rows": 4,
+          "rows": 8
+        },
+        "thinking": {
+          "metrics": {
+            "acc": 0.8333333333333334,
+            "auc": 0.9722222222222222,
+            "brier": 0.13578788936138153,
+            "ece": 0.2907911340395609
+          },
+          "negative_rows": 6,
+          "positive_rows": 6,
+          "rows": 12
+        }
+      },
+      "test_examples": 168,
+      "test_groups": 33,
+      "test_pair_rows": 84,
+      "train_examples": 562,
+      "train_groups": 100,
+      "train_pair_rows": 281
+    }
+  ],
+  "schema_version": "offline_reward_pairwise_ranker_eval.v1",
+  "seeds": [
+    42,
+    7,
+    13,
+    101,
+    2026
+  ],
+  "split": {
+    "group_disjoint": true,
+    "test_split": 0.25
+  }
+}

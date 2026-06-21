@@ -143,6 +143,7 @@ def test_cli_writes_pairwise_ranker_summary(tmp_path: Path) -> None:
     assert "oracle_score_delta" in summary["leakage_policy"]["target_fields_excluded_from_features"]
     assert summary["input"]["pair_rows"] == 8
     assert summary["input"]["cross_action_pair_rows"] == 8
+    assert summary["input"]["pairing_mode_counts"] == {"unknown": 8}
     assert summary["feature_contract"]["symmetric_augmentation"] is True
     assert summary["runs"][0]["train_groups"] >= 1
     assert "# Offline Reward Pairwise Ranker Eval" in summary_md.read_text(encoding="utf-8")
