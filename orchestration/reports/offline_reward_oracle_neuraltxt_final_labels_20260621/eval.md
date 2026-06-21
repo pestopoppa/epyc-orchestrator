@@ -14,6 +14,15 @@
 - Agreement at threshold: 0.7528
 - Confusion: `tp=21 fp=13 fn=31 tn=113`
 
+## Decision Gate
+
+- Gate status: `blocked`
+- Blockers: `["aggregate_agreement_below_gate", "aggregate_spearman_below_gate", "best_balanced_accuracy_below_gate", "answer_equivalence_final_label:too_few_negatives", "answer_equivalence_final_label:agreement_below_gate", "answer_equivalence_final_label:spearman_below_gate", "missing_stress_groups", "missing_paraphrase_stress_rows", "missing_confound_stress_rows"]`
+
+| Required slice | Status | Blockers |
+|---|---|---|
+| `answer_equivalence_final_label` | `blocked` | `["target_negative", "agreement_at_threshold", "spearman"]` |
+
 ## Calibration
 
 - Thresholds evaluated: 101

@@ -32,6 +32,10 @@ Target construction:
   (`tp=26 fp=18 fn=26 tn=108`, F1 `0.5417`)
 - Best no-false-positive threshold: `0.84`
   (`tp=6 fp=0 fn=46 tn=126`, agreement `0.7416`)
+- Decision gate: `blocked`
+- Gate blockers: aggregate agreement, aggregate Spearman, best balanced
+  accuracy, answer-equivalence slice negatives/agreement/Spearman, and missing
+  paraphrase/confound stress rows
 
 ## Slice Diagnosis
 
@@ -61,4 +65,6 @@ answer-equivalence positives, especially long code/livecodebench responses, not
 in paraphrase/confound robustness or the negative-heavy legacy binary rows.
 
 Status: observation, not decision. Do not feed NeuralTxt labels into
-NEXT-A2/A3 or learned-routing reward signals from this report alone.
+NEXT-A2/A3 or learned-routing reward signals from this report alone. The
+machine-readable `decision_gate` in `eval.json` is the authority for this
+report's adoption status.

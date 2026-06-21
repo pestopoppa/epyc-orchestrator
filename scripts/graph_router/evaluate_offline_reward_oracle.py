@@ -38,6 +38,24 @@ FAILURE_OUTCOMES = {"failure", "failed", "fail", "incorrect", "false", "error"}
 BASE_VARIANTS = {"base", "verbatim", "original", "reference"}
 PARAPHRASE_VARIANTS = {"paraphrase", "synonym", "synonym_swap", "reworded"}
 CONFOUND_VARIANTS = {"confound", "decoy", "plausible_wrong"}
+DECISION_GATE_CRITERIA = {
+    "min_rows": 100,
+    "min_agreement_at_threshold": 0.8,
+    "min_spearman": 0.3,
+    "min_best_balanced_accuracy": 0.75,
+    "required_target_sources": {
+        "answer_equivalence_final_label": {
+            "min_rows": 30,
+            "min_positive": 5,
+            "min_negative": 5,
+            "min_agreement_at_threshold": 0.75,
+            "min_spearman": 0.2,
+        },
+    },
+    "min_stress_groups": 1,
+    "max_paraphrase_penalty_rate": 0.1,
+    "max_confound_fooled_rate": 0.05,
+}
 
 
 @dataclass(frozen=True)
@@ -421,6 +439,197 @@ def _slice_summary(
     return summary
 
 
+def _passes_minimum(value: float | int | None, minimum: float | int) -> bool:
+    return value is not None and value >= minimum
+
+
+def _passes_maximum(value: float | int | None, maximum: float | int) -> bool:
+    return value is not None and value <= maximum
+
+
+def _gate_check(
+    checks: dict[str, dict[str, Any]],
+    blockers: list[str],
+    key: str,
+    *,
+    value: float | int | None,
+    op: str,
+    threshold: float | int,
+    blocker: str,
+) -> None:
+    if op == ">=":
+        passed = _passes_minimum(value, threshold)
+    elif op == "<=":
+        passed = _passes_maximum(value, threshold)
+    else:
+        raise ValueError(f"unsupported gate op {op!r}")
+    checks[key] = {
+        "passed": passed,
+        "value": value,
+        "op": op,
+        "threshold": threshold,
+    }
+    if not passed:
+        blockers.append(blocker)
+
+
+def _decision_gate(summary: dict[str, Any]) -> dict[str, Any]:
+    criteria = DECISION_GATE_CRITERIA
+    blockers: list[str] = []
+    checks: dict[str, dict[str, Any]] = {}
+
+    _gate_check(
+        checks,
+        blockers,
+        "rows",
+        value=summary["n"],
+        op=">=",
+        threshold=criteria["min_rows"],
+        blocker="too_few_rows",
+    )
+    _gate_check(
+        checks,
+        blockers,
+        "agreement_at_threshold",
+        value=summary["score"]["agreement_at_threshold"],
+        op=">=",
+        threshold=criteria["min_agreement_at_threshold"],
+        blocker="aggregate_agreement_below_gate",
+    )
+    _gate_check(
+        checks,
+        blockers,
+        "spearman",
+        value=summary["score"]["spearman"],
+        op=">=",
+        threshold=criteria["min_spearman"],
+        blocker="aggregate_spearman_below_gate",
+    )
+    best_balanced = summary["calibration"]["best"]["balanced_accuracy"]
+    _gate_check(
+        checks,
+        blockers,
+        "best_balanced_accuracy",
+        value=best_balanced.get("balanced_accuracy") if best_balanced else None,
+        op=">=",
+        threshold=criteria["min_best_balanced_accuracy"],
+        blocker="best_balanced_accuracy_below_gate",
+    )
+
+    target_sources = summary["slices"]["target_source"]
+    slice_checks: dict[str, dict[str, dict[str, Any]]] = {}
+    for source, source_criteria in criteria["required_target_sources"].items():
+        slice_row = target_sources.get(source)
+        source_checks: dict[str, dict[str, Any]] = {}
+        slice_checks[source] = source_checks
+        if slice_row is None:
+            blockers.append(f"missing_required_target_source:{source}")
+            source_checks["present"] = {"passed": False, "value": None, "op": "exists"}
+            continue
+        source_checks["present"] = {"passed": True, "value": True, "op": "exists"}
+        _gate_check(
+            source_checks,
+            blockers,
+            "rows",
+            value=slice_row["n"],
+            op=">=",
+            threshold=source_criteria["min_rows"],
+            blocker=f"{source}:too_few_rows",
+        )
+        _gate_check(
+            source_checks,
+            blockers,
+            "target_positive",
+            value=slice_row["target_positive"],
+            op=">=",
+            threshold=source_criteria["min_positive"],
+            blocker=f"{source}:too_few_positives",
+        )
+        _gate_check(
+            source_checks,
+            blockers,
+            "target_negative",
+            value=slice_row["target_negative"],
+            op=">=",
+            threshold=source_criteria["min_negative"],
+            blocker=f"{source}:too_few_negatives",
+        )
+        _gate_check(
+            source_checks,
+            blockers,
+            "agreement_at_threshold",
+            value=slice_row["agreement_at_threshold"],
+            op=">=",
+            threshold=source_criteria["min_agreement_at_threshold"],
+            blocker=f"{source}:agreement_below_gate",
+        )
+        _gate_check(
+            source_checks,
+            blockers,
+            "spearman",
+            value=slice_row["spearman"],
+            op=">=",
+            threshold=source_criteria["min_spearman"],
+            blocker=f"{source}:spearman_below_gate",
+        )
+
+    stress = summary["stress"]
+    _gate_check(
+        checks,
+        blockers,
+        "stress_groups",
+        value=stress["groups_evaluated"],
+        op=">=",
+        threshold=criteria["min_stress_groups"],
+        blocker="missing_stress_groups",
+    )
+    if stress["paraphrase_total"] > 0:
+        _gate_check(
+            checks,
+            blockers,
+            "paraphrase_penalty_rate",
+            value=stress["paraphrase_penalty_rate"],
+            op="<=",
+            threshold=criteria["max_paraphrase_penalty_rate"],
+            blocker="paraphrase_penalty_rate_above_gate",
+        )
+    else:
+        checks["paraphrase_penalty_rate"] = {
+            "passed": False,
+            "value": None,
+            "op": "<=",
+            "threshold": criteria["max_paraphrase_penalty_rate"],
+        }
+        blockers.append("missing_paraphrase_stress_rows")
+    if stress["confound_total"] > 0:
+        _gate_check(
+            checks,
+            blockers,
+            "confound_fooled_rate",
+            value=stress["confound_fooled_rate"],
+            op="<=",
+            threshold=criteria["max_confound_fooled_rate"],
+            blocker="confound_fooled_rate_above_gate",
+        )
+    else:
+        checks["confound_fooled_rate"] = {
+            "passed": False,
+            "value": None,
+            "op": "<=",
+            "threshold": criteria["max_confound_fooled_rate"],
+        }
+        blockers.append("missing_confound_stress_rows")
+
+    return {
+        "schema_version": "offline_reward_oracle_decision_gate.v1",
+        "status": "decision_grade" if not blockers else "blocked",
+        "criteria": criteria,
+        "checks": checks,
+        "slice_checks": slice_checks,
+        "blockers": blockers,
+    }
+
+
 def evaluate(
     rows: list[OracleRow],
     *,
@@ -431,7 +640,7 @@ def evaluate(
     confusion = _confusion(rows, oracle_threshold=oracle_threshold)
     class_counts = Counter(row.binary_target for row in rows)
     mean_abs_error = sum(abs(row.oracle_score - row.target_score) for row in rows) / len(rows)
-    return {
+    summary = {
         "schema_version": "offline_reward_oracle_eval.v1",
         "status": "observation_not_decision",
         "n": len(rows),
@@ -461,6 +670,8 @@ def evaluate(
             ),
         },
     }
+    summary["decision_gate"] = _decision_gate(summary)
+    return summary
 
 
 def write_markdown(summary: dict[str, Any], path: Path) -> None:
@@ -483,6 +694,10 @@ def write_markdown(summary: dict[str, Any], path: Path) -> None:
         f"- Agreement at threshold: {_fmt(score['agreement_at_threshold'])}",
         f"- Confusion: `tp={score['confusion']['tp']} fp={score['confusion']['fp']} "
         f"fn={score['confusion']['fn']} tn={score['confusion']['tn']}`",
+        "",
+        "## Decision Gate",
+        "",
+        *_decision_gate_markdown_lines(summary["decision_gate"]),
         "",
         "## Calibration",
         "",
@@ -533,6 +748,24 @@ def _calibration_markdown_lines(calibration: dict[str, Any]) -> list[str]:
             f"tp={confusion['tp']} fp={confusion['fp']} "
             f"fn={confusion['fn']} tn={confusion['tn']}"
         )
+    return lines
+
+
+def _decision_gate_markdown_lines(gate: dict[str, Any]) -> list[str]:
+    blockers = gate["blockers"]
+    lines = [
+        f"- Gate status: `{gate['status']}`",
+        f"- Blockers: `{json.dumps(blockers, sort_keys=True)}`",
+    ]
+    if gate["slice_checks"]:
+        lines.extend(["", "| Required slice | Status | Blockers |", "|---|---|---|"])
+        for source, checks in gate["slice_checks"].items():
+            failed = [key for key, row in checks.items() if not row.get("passed")]
+            status = "pass" if not failed else "blocked"
+            lines.append(
+                f"| `{source}` | `{status}` | "
+                f"`{json.dumps(failed, sort_keys=True)}` |"
+            )
     return lines
 
 

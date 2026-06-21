@@ -1793,6 +1793,122 @@
       }
     ]
   },
+  "decision_gate": {
+    "blockers": [
+      "aggregate_agreement_below_gate",
+      "aggregate_spearman_below_gate",
+      "best_balanced_accuracy_below_gate",
+      "answer_equivalence_final_label:too_few_negatives",
+      "answer_equivalence_final_label:agreement_below_gate",
+      "answer_equivalence_final_label:spearman_below_gate",
+      "missing_stress_groups",
+      "missing_paraphrase_stress_rows",
+      "missing_confound_stress_rows"
+    ],
+    "checks": {
+      "agreement_at_threshold": {
+        "op": ">=",
+        "passed": false,
+        "threshold": 0.8,
+        "value": 0.7528089887640449
+      },
+      "best_balanced_accuracy": {
+        "op": ">=",
+        "passed": false,
+        "threshold": 0.75,
+        "value": 0.6785714285714286
+      },
+      "confound_fooled_rate": {
+        "op": "<=",
+        "passed": false,
+        "threshold": 0.05,
+        "value": null
+      },
+      "paraphrase_penalty_rate": {
+        "op": "<=",
+        "passed": false,
+        "threshold": 0.1,
+        "value": null
+      },
+      "rows": {
+        "op": ">=",
+        "passed": true,
+        "threshold": 100,
+        "value": 178
+      },
+      "spearman": {
+        "op": ">=",
+        "passed": false,
+        "threshold": 0.3,
+        "value": 0.2416414192546791
+      },
+      "stress_groups": {
+        "op": ">=",
+        "passed": false,
+        "threshold": 1,
+        "value": 0
+      }
+    },
+    "criteria": {
+      "max_confound_fooled_rate": 0.05,
+      "max_paraphrase_penalty_rate": 0.1,
+      "min_agreement_at_threshold": 0.8,
+      "min_best_balanced_accuracy": 0.75,
+      "min_rows": 100,
+      "min_spearman": 0.3,
+      "min_stress_groups": 1,
+      "required_target_sources": {
+        "answer_equivalence_final_label": {
+          "min_agreement_at_threshold": 0.75,
+          "min_negative": 5,
+          "min_positive": 5,
+          "min_rows": 30,
+          "min_spearman": 0.2
+        }
+      }
+    },
+    "schema_version": "offline_reward_oracle_decision_gate.v1",
+    "slice_checks": {
+      "answer_equivalence_final_label": {
+        "agreement_at_threshold": {
+          "op": ">=",
+          "passed": false,
+          "threshold": 0.75,
+          "value": 0.3541666666666667
+        },
+        "present": {
+          "op": "exists",
+          "passed": true,
+          "value": true
+        },
+        "rows": {
+          "op": ">=",
+          "passed": true,
+          "threshold": 30,
+          "value": 48
+        },
+        "spearman": {
+          "op": ">=",
+          "passed": false,
+          "threshold": 0.2,
+          "value": -0.057912084992284375
+        },
+        "target_negative": {
+          "op": ">=",
+          "passed": false,
+          "threshold": 5,
+          "value": 1
+        },
+        "target_positive": {
+          "op": ">=",
+          "passed": true,
+          "threshold": 5,
+          "value": 47
+        }
+      }
+    },
+    "status": "blocked"
+  },
   "n": 178,
   "oracle_threshold": 0.5,
   "schema_version": "offline_reward_oracle_eval.v1",

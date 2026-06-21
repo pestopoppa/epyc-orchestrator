@@ -111,6 +111,15 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
     assert summary["score"]["spearman"] > 0.5
     assert summary["score"]["agreement_at_threshold"] == 5 / 6
     assert summary["score"]["confusion"] == {"tp": 3, "fp": 0, "fn": 1, "tn": 2}
+    assert summary["decision_gate"]["schema_version"] == (
+        "offline_reward_oracle_decision_gate.v1"
+    )
+    assert summary["decision_gate"]["status"] == "blocked"
+    assert "too_few_rows" in summary["decision_gate"]["blockers"]
+    assert (
+        "answer_equivalence_final_label:too_few_negatives"
+        in summary["decision_gate"]["blockers"]
+    )
     assert summary["calibration"]["schema_version"] == (
         "offline_reward_oracle_calibration.v1"
     )
@@ -179,7 +188,111 @@ def test_cli_writes_json_and_markdown(tmp_path: Path) -> None:
     assert summary["schema_version"] == "offline_reward_oracle_eval.v1"
     assert summary["score"]["agreement_at_threshold"] == 1.0
     assert summary["slices"]["target_source"]["unspecified"]["n"] == 2
+    assert summary["decision_gate"]["status"] == "blocked"
     assert summary["calibration"]["best"]["f1"]["threshold"] == 0.21
     assert "Offline Reward-Oracle Evaluation" in out_md.read_text(encoding="utf-8")
+    assert "Decision Gate" in out_md.read_text(encoding="utf-8")
     assert "Best no-false-positive recall" in out_md.read_text(encoding="utf-8")
     assert "### Target source" in out_md.read_text(encoding="utf-8")
+
+
+def test_decision_gate_passes_only_with_required_slice_and_stress_rows(
+    tmp_path: Path,
+) -> None:
+    rows: list[dict] = []
+    for index in range(34):
+        group = f"ae-{index}"
+        rows.extend(
+            [
+                {
+                    "item_id": f"ae-base-{index}",
+                    "reference": "correct",
+                    "response": "correct",
+                    "oracle_score": 0.95,
+                    "binary_reward": 1.0,
+                    "target_source": "answer_equivalence_final_label",
+                    "suite": "general",
+                    "role_key": "frontdoor",
+                    "variant_group": group,
+                    "variant_type": "base",
+                },
+                {
+                    "item_id": f"ae-para-{index}",
+                    "reference": "correct",
+                    "response": "also correct",
+                    "oracle_score": 0.9,
+                    "binary_reward": 1.0,
+                    "target_source": "answer_equivalence_final_label",
+                    "suite": "general",
+                    "role_key": "frontdoor",
+                    "variant_group": group,
+                    "variant_type": "paraphrase",
+                },
+                {
+                    "item_id": f"ae-confound-{index}",
+                    "reference": "correct",
+                    "response": "wrong",
+                    "oracle_score": 0.05,
+                    "binary_reward": 0.0,
+                    "target_source": "answer_equivalence_final_label",
+                    "suite": "general",
+                    "role_key": "frontdoor",
+                    "variant_group": group,
+                    "variant_type": "confound",
+                },
+            ]
+        )
+    rows.extend(
+        [
+            {
+                "item_id": "original-pos-1",
+                "reference": "2",
+                "response": "2",
+                "oracle_score": 0.9,
+                "q_reward": 1.0,
+                "target_source": "original_binary_reward",
+                "suite": "math",
+                "role_key": "worker",
+            },
+            {
+                "item_id": "original-pos-2",
+                "reference": "2",
+                "response": "two",
+                "oracle_score": 0.85,
+                "q_reward": 1.0,
+                "target_source": "original_binary_reward",
+                "suite": "math",
+                "role_key": "worker",
+            },
+            {
+                "item_id": "original-neg-1",
+                "reference": "2",
+                "response": "3",
+                "oracle_score": 0.1,
+                "q_reward": 0.0,
+                "target_source": "original_binary_reward",
+                "suite": "math",
+                "role_key": "worker",
+            },
+            {
+                "item_id": "original-neg-2",
+                "reference": "2",
+                "response": "4",
+                "oracle_score": 0.05,
+                "q_reward": 0.0,
+                "target_source": "original_binary_reward",
+                "suite": "math",
+                "role_key": "worker",
+            },
+        ]
+    )
+    data = _write_jsonl(tmp_path / "oracle_rows.jsonl", rows)
+
+    summary = evaluate(load_jsonl(data, target_threshold=0.5), oracle_threshold=0.5)
+
+    assert summary["n"] == 106
+    assert summary["decision_gate"]["status"] == "decision_grade"
+    assert summary["decision_gate"]["blockers"] == []
+    assert summary["decision_gate"]["slice_checks"][
+        "answer_equivalence_final_label"
+    ]["target_negative"]["passed"] is True
