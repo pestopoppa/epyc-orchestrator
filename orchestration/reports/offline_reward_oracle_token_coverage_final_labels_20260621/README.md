@@ -56,6 +56,15 @@ Committed artifacts:
   on the held-out test split, but it is not adopted as live routing weights; the
   calibration method is exploratory and the current action coverage is still
   sparse for escalation roles.
+- `offline_reward_multi_action_verifier_calibration_robustness_summary.json`
+  and `offline_reward_multi_action_verifier_calibration_robustness_summary.md`
+  repeat the broader verifier train/calibration/test evaluation across 10 split
+  seeds for both temperature/bias and quantile-histogram calibration. This
+  preregistration-style robustness check marks the current verifier
+  `not_promotion_grade`: raw gates pass on `0/10` seeds for both methods,
+  quantile-histogram calibrated gates pass on only `1/10` seeds, temperature/
+  bias calibrated gates pass on `0/10` seeds, and `architect_general` still has
+  only 10 rows.
 
 Private row data is not committed. The scored row file is:
 
@@ -101,6 +110,12 @@ Result:
 - quantile-histogram calibrated verifier Brier / ROC-AUC / ECE: `0.1784` / `0.8217` / `0.0473`
 - quantile-histogram calibrated verifier Brier delta vs best softmax / constant baseline: `+0.1290` / `+0.0694`
 - quantile-histogram calibrated verifier gate verdict: `PASS` (offline scout only)
+- calibration robustness seeds: `10`
+- temperature/bias calibrated pass count: `0/10`
+- quantile-histogram calibrated pass count: `1/10`
+- robustness decision: `not_promotion_grade`
+- robustness blockers: `quantile_histogram_calibrated_pass_rate_below_threshold`,
+  `temperature_bias_calibrated_pass_rate_below_threshold`, `sparse_action_coverage`
 
 Interpretation:
 
@@ -118,4 +133,7 @@ misses calibration. A disjoint post-hoc temperature/bias calibration improves
 Brier but leaves ECE high. Quantile-histogram calibration repairs the held-out
 ECE miss in this scout, but action coverage remains thin (`architect_general`
 has only 10 rows), so the next promotion-grade step is preregistered
-calibration/data expansion before any default-off runtime gate changes.
+calibration/data expansion before any default-off runtime gate changes. The
+10-seed robustness check confirms the seed-42 histogram pass is not stable
+enough for promotion; data expansion for sparse escalation roles is now the
+primary blocker.
