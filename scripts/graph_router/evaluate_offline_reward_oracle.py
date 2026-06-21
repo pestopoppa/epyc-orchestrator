@@ -48,6 +48,9 @@ class OracleRow:
     oracle_score: float
     target_score: float
     binary_target: int
+    target_source: str = "unspecified"
+    suite: str = "unknown"
+    role_key: str = "unknown"
     variant_group: str | None = None
     variant_type: str | None = None
 
@@ -121,6 +124,9 @@ def parse_row(
         oracle_score=oracle_score,
         target_score=target_score,
         binary_target=1 if target_score >= target_threshold else 0,
+        target_source=str(raw.get("target_source") or "unspecified"),
+        suite=str(raw.get("suite") or "unknown"),
+        role_key=str(raw.get("role_key") or raw.get("role") or "unknown"),
         variant_group=str(variant_group) if variant_group else None,
         variant_type=str(variant_type).strip().lower() if variant_type else None,
     )
@@ -383,6 +389,38 @@ def _stress_summary(
     }
 
 
+def _slice_summary(
+    rows: list[OracleRow],
+    *,
+    key: str,
+    oracle_threshold: float,
+) -> dict[str, Any]:
+    grouped: dict[str, list[OracleRow]] = defaultdict(list)
+    for row in rows:
+        grouped[str(getattr(row, key) or "unknown")].append(row)
+
+    summary: dict[str, Any] = {}
+    for value, group_rows in sorted(grouped.items()):
+        scores = [row.oracle_score for row in group_rows]
+        targets = [row.target_score for row in group_rows]
+        confusion = _confusion(group_rows, oracle_threshold=oracle_threshold)
+        class_counts = Counter(row.binary_target for row in group_rows)
+        mean_abs_error = sum(
+            abs(row.oracle_score - row.target_score) for row in group_rows
+        ) / len(group_rows)
+        summary[value] = {
+            "n": len(group_rows),
+            "target_positive": int(class_counts[1]),
+            "target_negative": int(class_counts[0]),
+            "spearman": spearman(scores, targets),
+            "pearson": pearson(scores, targets),
+            "mean_abs_error": mean_abs_error,
+            "agreement_at_threshold": _agreement_from_confusion(confusion),
+            "confusion": confusion,
+        }
+    return summary
+
+
 def evaluate(
     rows: list[OracleRow],
     *,
@@ -409,6 +447,19 @@ def evaluate(
         },
         "calibration": _threshold_sweep(rows, include_threshold=oracle_threshold),
         "stress": _stress_summary(rows, oracle_threshold=oracle_threshold),
+        "slices": {
+            "target_source": _slice_summary(
+                rows,
+                key="target_source",
+                oracle_threshold=oracle_threshold,
+            ),
+            "suite": _slice_summary(rows, key="suite", oracle_threshold=oracle_threshold),
+            "role_key": _slice_summary(
+                rows,
+                key="role_key",
+                oracle_threshold=oracle_threshold,
+            ),
+        },
     }
 
 
@@ -446,6 +497,14 @@ def write_markdown(summary: dict[str, Any], path: Path) -> None:
         f"- Confound fooled rate: {_fmt(stress['confound_fooled_rate'])} "
         f"({stress['confound_fooled']}/{stress['confound_total']})",
         "",
+        "## Slices",
+        "",
+        *_slice_markdown_lines("Target source", summary["slices"]["target_source"]),
+        "",
+        *_slice_markdown_lines("Suite", summary["slices"]["suite"]),
+        "",
+        *_slice_markdown_lines("Role", summary["slices"]["role_key"]),
+        "",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -473,6 +532,25 @@ def _calibration_markdown_lines(calibration: dict[str, Any]) -> list[str]:
             f"precision {_fmt(row['precision'])}, "
             f"tp={confusion['tp']} fp={confusion['fp']} "
             f"fn={confusion['fn']} tn={confusion['tn']}"
+        )
+    return lines
+
+
+def _slice_markdown_lines(title: str, rows: dict[str, Any]) -> list[str]:
+    lines = [
+        f"### {title}",
+        "",
+        "| Slice | Rows | Pos | Neg | Agreement | Spearman | Confusion |",
+        "|---|---:|---:|---:|---:|---:|---|",
+    ]
+    for name, row in rows.items():
+        confusion = row["confusion"]
+        lines.append(
+            f"| `{name}` | {row['n']} | {row['target_positive']} | "
+            f"{row['target_negative']} | {_fmt(row['agreement_at_threshold'])} | "
+            f"{_fmt(row['spearman'])} | "
+            f"`tp={confusion['tp']} fp={confusion['fp']} "
+            f"fn={confusion['fn']} tn={confusion['tn']}` |"
         )
     return lines
 

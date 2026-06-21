@@ -33,12 +33,32 @@ Target construction:
 - Best no-false-positive threshold: `0.84`
   (`tp=6 fp=0 fn=46 tn=126`, agreement `0.7416`)
 
+## Slice Diagnosis
+
+The aggregate agreement is mostly carried by the original binary-reward rows,
+which are negative-heavy:
+
+- `answer_equivalence_final_label`: `48` rows, `47` positives / `1` negative,
+  agreement `0.3542`, Spearman `-0.0579`,
+  confusion `tp=16 fp=0 fn=31 tn=1`;
+- `original_binary_reward`: `130` rows, `5` positives / `125` negatives,
+  agreement `0.9000`, Spearman `0.3129`,
+  confusion `tp=5 fp=13 fn=0 tn=112`.
+
+The worst suite slice is `livecodebench`: `24` positives / `0` negatives,
+agreement `0.0417`, confusion `tp=1 fp=0 fn=23 tn=0`. The role slice shows
+the same issue on `frontdoor:direct`: `44` positives / `5` negatives,
+agreement `0.3265`, confusion `tp=14 fp=3 fn=30 tn=2`.
+
 ## Interpretation
 
 The final-label target improves threshold agreement relative to the earlier
 held-out-style target, but it does not clear the label-quality concern. Rank
 agreement remains weak, the calibrated best-agreement point still admits false
 positives, and the no-false-positive point recalls only `6/52` positives.
+The slice diagnosis shows the failure is concentrated in the reviewed
+answer-equivalence positives, especially long code/livecodebench responses, not
+in paraphrase/confound robustness or the negative-heavy legacy binary rows.
 
 Status: observation, not decision. Do not feed NeuralTxt labels into
 NEXT-A2/A3 or learned-routing reward signals from this report alone.

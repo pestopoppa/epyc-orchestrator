@@ -22,6 +22,7 @@ from typing import Any, Iterable
 
 
 ROLE_RESULT_KEYS = ("role_results", "results_by_role")
+STRESS_METADATA_KEYS = ("variant_group", "variant_type", "confound_source_item_id")
 
 
 def _load_records(path: Path) -> Iterable[dict[str, Any]]:
@@ -77,6 +78,18 @@ def _row_id(path: Path, record_index: int, role_key: str) -> str:
     return f"{path.stem}:{record_index}:{safe_role}"
 
 
+def _copy_stress_metadata(
+    row: dict[str, Any],
+    *,
+    record: dict[str, Any],
+    role_result: dict[str, Any],
+) -> None:
+    for key in STRESS_METADATA_KEYS:
+        value = role_result.get(key, record.get(key))
+        if value not in (None, ""):
+            row[key] = value
+
+
 def build_rows(
     paths: Iterable[Path],
     *,
@@ -127,6 +140,7 @@ def build_rows(
                     "response": response,
                     "binary_reward": binary_reward,
                 }
+                _copy_stress_metadata(row, record=record, role_result=role_result)
                 if reward_value is not None:
                     try:
                         row["q_reward"] = float(reward_value)

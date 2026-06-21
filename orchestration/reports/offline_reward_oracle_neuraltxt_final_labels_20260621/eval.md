@@ -28,3 +28,34 @@
 - Variant counts: `{"unknown": 178}`
 - Paraphrase penalty rate: `null` (0/0)
 - Confound fooled rate: `null` (0/0)
+
+## Slices
+
+### Target source
+
+| Slice | Rows | Pos | Neg | Agreement | Spearman | Confusion |
+|---|---:|---:|---:|---:|---:|---|
+| `answer_equivalence_final_label` | 48 | 47 | 1 | 0.3542 | -0.0579 | `tp=16 fp=0 fn=31 tn=1` |
+| `original_binary_reward` | 130 | 5 | 125 | 0.9000 | 0.3129 | `tp=5 fp=13 fn=0 tn=112` |
+
+### Suite
+
+| Slice | Rows | Pos | Neg | Agreement | Spearman | Confusion |
+|---|---:|---:|---:|---:|---:|---|
+| `agentic` | 2 | 0 | 2 | 1.0000 | `null` | `tp=0 fp=0 fn=0 tn=2` |
+| `debugbench` | 25 | 20 | 5 | 0.6000 | 0.0277 | `tp=13 fp=3 fn=7 tn=2` |
+| `general` | 31 | 3 | 28 | 0.9355 | 0.5124 | `tp=3 fp=2 fn=0 tn=26` |
+| `instruction_precision` | 30 | 5 | 25 | 0.8000 | 0.4911 | `tp=4 fp=5 fn=1 tn=20` |
+| `livecodebench` | 24 | 24 | 0 | 0.0417 | `null` | `tp=1 fp=0 fn=23 tn=0` |
+| `math` | 31 | 0 | 31 | 0.9355 | `null` | `tp=0 fp=2 fn=0 tn=29` |
+| `thinking` | 35 | 0 | 35 | 0.9714 | `null` | `tp=0 fp=1 fn=0 tn=34` |
+
+### Role
+
+| Slice | Rows | Pos | Neg | Agreement | Spearman | Confusion |
+|---|---:|---:|---:|---:|---:|---|
+| `architect_general` | 10 | 1 | 9 | 0.9000 | 0.5222 | `tp=0 fp=0 fn=1 tn=9` |
+| `coder_escalation` | 39 | 3 | 36 | 0.8974 | 0.4446 | `tp=3 fp=4 fn=0 tn=32` |
+| `coder_primary` | 40 | 2 | 38 | 0.9500 | 0.3678 | `tp=2 fp=2 fn=0 tn=36` |
+| `frontdoor` | 40 | 2 | 38 | 0.9000 | 0.3677 | `tp=2 fp=4 fn=0 tn=34` |
+| `frontdoor:direct` | 49 | 44 | 5 | 0.3265 | -0.2479 | `tp=14 fp=3 fn=30 tn=2` |

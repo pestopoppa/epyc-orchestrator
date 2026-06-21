@@ -32,6 +32,9 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
                 "response": "Paris",
                 "oracle_score": 0.95,
                 "binary_reward": 1.0,
+                "role_key": "frontdoor",
+                "suite": "general",
+                "target_source": "answer_equivalence_final_label",
                 "variant_group": "a",
                 "variant_type": "base",
             },
@@ -41,6 +44,9 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
                 "response": "The French capital is Paris.",
                 "oracle_score": 0.9,
                 "binary_reward": 1.0,
+                "role_key": "frontdoor",
+                "suite": "general",
+                "target_source": "answer_equivalence_final_label",
                 "variant_group": "a",
                 "variant_type": "paraphrase",
             },
@@ -50,6 +56,9 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
                 "response": "Lyon",
                 "oracle_score": 0.2,
                 "binary_reward": 0.0,
+                "role_key": "frontdoor",
+                "suite": "general",
+                "target_source": "answer_equivalence_final_label",
                 "variant_group": "a",
                 "variant_type": "confound",
             },
@@ -59,6 +68,9 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
                 "response": "2",
                 "oracle_score": 0.8,
                 "q_reward": 1.0,
+                "role_key": "worker",
+                "suite": "math",
+                "target_source": "original_binary_reward",
                 "variant_group": "b",
                 "variant_type": "base",
             },
@@ -68,6 +80,9 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
                 "response": "two",
                 "oracle_score": 0.3,
                 "q_reward": 1.0,
+                "role_key": "worker",
+                "suite": "math",
+                "target_source": "original_binary_reward",
                 "variant_group": "b",
                 "variant_type": "synonym",
             },
@@ -77,6 +92,9 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
                 "response": "3",
                 "oracle_score": 0.1,
                 "q_reward": 0.0,
+                "role_key": "worker",
+                "suite": "math",
+                "target_source": "original_binary_reward",
                 "variant_group": "b",
                 "variant_type": "confound",
             },
@@ -115,6 +133,14 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
     assert summary["stress"]["paraphrase_total"] == 2
     assert summary["stress"]["paraphrase_penalized"] == 1
     assert summary["stress"]["confound_fooled"] == 0
+    assert summary["slices"]["target_source"]["answer_equivalence_final_label"][
+        "confusion"
+    ] == {"tp": 2, "fp": 0, "fn": 0, "tn": 1}
+    assert summary["slices"]["target_source"]["original_binary_reward"][
+        "confusion"
+    ] == {"tp": 1, "fp": 0, "fn": 1, "tn": 1}
+    assert summary["slices"]["suite"]["general"]["n"] == 3
+    assert summary["slices"]["role_key"]["worker"]["target_positive"] == 2
 
 
 def test_cli_writes_json_and_markdown(tmp_path: Path) -> None:
@@ -152,6 +178,8 @@ def test_cli_writes_json_and_markdown(tmp_path: Path) -> None:
     summary = json.loads(out_json.read_text(encoding="utf-8"))
     assert summary["schema_version"] == "offline_reward_oracle_eval.v1"
     assert summary["score"]["agreement_at_threshold"] == 1.0
+    assert summary["slices"]["target_source"]["unspecified"]["n"] == 2
     assert summary["calibration"]["best"]["f1"]["threshold"] == 0.21
     assert "Offline Reward-Oracle Evaluation" in out_md.read_text(encoding="utf-8")
     assert "Best no-false-positive recall" in out_md.read_text(encoding="utf-8")
+    assert "### Target source" in out_md.read_text(encoding="utf-8")

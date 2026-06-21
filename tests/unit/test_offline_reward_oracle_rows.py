@@ -74,6 +74,49 @@ def test_build_rows_can_emit_baseline_oracle_score_for_smoke(tmp_path: Path) -> 
     assert [row["oracle_score"] for row in rows] == [1.0, 0.0]
 
 
+def test_build_rows_preserves_stress_metadata(tmp_path: Path) -> None:
+    seed_file = tmp_path / "stress.json"
+    seed_file.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "suite": "math",
+                        "question_id": "q1",
+                        "expected": "4",
+                        "variant_group": "group-a",
+                        "variant_type": "base",
+                        "confound_source_item_id": "source-a",
+                        "role_results": {
+                            "frontdoor:direct": {
+                                "answer": "4",
+                                "passed": True,
+                            },
+                            "worker_general:direct": {
+                                "answer": "5",
+                                "passed": False,
+                                "variant_type": "confound",
+                                "confound_source_item_id": "role-source",
+                            },
+                        },
+                    }
+                ]
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    rows, _summary = build_rows([seed_file], oracle_score_mode="omit")
+
+    assert rows[0]["variant_group"] == "group-a"
+    assert rows[0]["variant_type"] == "base"
+    assert rows[0]["confound_source_item_id"] == "source-a"
+    assert rows[1]["variant_group"] == "group-a"
+    assert rows[1]["variant_type"] == "confound"
+    assert rows[1]["confound_source_item_id"] == "role-source"
+
+
 def test_cli_writes_rows_and_summary(tmp_path: Path) -> None:
     seed_file = _write_seed_file(tmp_path / "seed.json")
     rows_path = tmp_path / "rows.jsonl"
