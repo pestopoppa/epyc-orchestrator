@@ -10,6 +10,7 @@ from scripts.datasets import (
     build_planner_sft,
     build_triage_set,
     record_intake_triage_verdict,
+    train_intake_triage_baseline,
 )
 
 
@@ -307,3 +308,94 @@ def test_triage_builder_can_require_reviewed_labels(tmp_path: Path) -> None:
     assert json.loads(manifest.read_text())["counts"]["verdicts"] == {
         "worth_investigating": 2
     }
+
+
+def test_intake_triage_baseline_reports_insufficient_reviewed_labels(tmp_path: Path) -> None:
+    data = tmp_path / "triage.jsonl"
+    report = tmp_path / "report.json"
+    rows = [
+        {
+            "schema_version": "intake_triage_example.v1",
+            "example_id": f"ex-{idx}",
+            "intake_id": f"intake-{idx}",
+            "verdict": "worth_investigating",
+            "label_source": "operator",
+            "reviewed_at": "2026-06-14T00:00:00+00:00",
+            "exclude_reason": "",
+            "features_text": json.dumps({"title": f"routing paper {idx}"}),
+        }
+        for idx in range(3)
+    ]
+    data.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    result = train_intake_triage_baseline.run(
+        Namespace(
+            data=str(data),
+            report=str(report),
+            target_field="verdict",
+            text_field="features_text",
+            min_reviewed_labels=100,
+            min_accuracy=0.85,
+            heldout_frac=0.34,
+            smoothing=1.0,
+            require_reviewed=True,
+        )
+    )
+
+    payload = json.loads(report.read_text())
+    assert result["status"] == "insufficient_reviewed_labels"
+    assert payload["status"] == "insufficient_reviewed_labels"
+    assert payload["reviewed_rows"] == 3
+    assert payload["privacy"]["raw_text_in_report"] is False
+    assert "routing paper" not in report.read_text()
+
+
+def test_intake_triage_baseline_accepts_synthetic_reviewed_set(tmp_path: Path) -> None:
+    data = tmp_path / "triage.jsonl"
+    report = tmp_path / "report.json"
+    rows = []
+    for idx in range(10):
+        rows.append(
+            {
+                "schema_version": "intake_triage_example.v1",
+                "example_id": f"route-{idx}",
+                "intake_id": f"route-{idx}",
+                "verdict": "route_to_handoff",
+                "label_source": "operator",
+                "reviewed_at": "2026-06-14T00:00:00+00:00",
+                "exclude_reason": "",
+                "features_text": json.dumps({"title": f"router graph eval cell {idx}"}),
+            }
+        )
+        rows.append(
+            {
+                "schema_version": "intake_triage_example.v1",
+                "example_id": f"park-{idx}",
+                "intake_id": f"park-{idx}",
+                "verdict": "park",
+                "label_source": "operator",
+                "reviewed_at": "2026-06-14T00:00:00+00:00",
+                "exclude_reason": "",
+                "features_text": json.dumps({"title": f"archive low relevance note {idx}"}),
+            }
+        )
+    data.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    result = train_intake_triage_baseline.run(
+        Namespace(
+            data=str(data),
+            report=str(report),
+            target_field="verdict",
+            text_field="features_text",
+            min_reviewed_labels=10,
+            min_accuracy=0.85,
+            heldout_frac=0.25,
+            smoothing=1.0,
+            require_reviewed=True,
+        )
+    )
+
+    payload = json.loads(report.read_text())
+    assert result["status"] == "acceptance_pass"
+    assert payload["evaluation"]["accuracy"] == 1.0
+    assert payload["evaluation"]["heldout_rows"] >= 1
