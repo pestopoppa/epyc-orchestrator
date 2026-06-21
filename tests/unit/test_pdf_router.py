@@ -11,6 +11,7 @@ from src.services.pdf_router import (
     PDFExtractionResult,
     BoundingBox,
     ExtractedFigure,
+    ODL_TABLE_BACKEND_ENV,
     extract_pdf,
 )
 
@@ -261,6 +262,33 @@ class TestPDFRouterExtraction:
         mock_odl_figures.assert_called_once_with(pdf_path, structured)
         mock_pymupdf.assert_not_called()
         assert result.figures == [odl_figure]
+        assert result.structured_data is structured
+        assert result.method == "opendataloader_structured"
+
+    def test_odl_hybrid_table_backend_request_is_inert_for_now(self, tmp_path, monkeypatch):
+        from src.models.odl_structured import HeadingNode, ODLStructuredDocument
+
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        structured = ODLStructuredDocument(headings=[HeadingNode(level=1, text="Intro")])
+
+        monkeypatch.setenv(ODL_TABLE_BACKEND_ENV, "hybrid")
+
+        router = PDFRouter()
+        with patch.object(
+            router,
+            "_extract_with_opendataloader_structured",
+            return_value=("Intro\nBody", structured, 12.0),
+        ) as mock_local_odl:
+            with patch.object(router, "_extract_figures_from_odl_structured") as mock_figures:
+                result = router.extract_opendataloader_structured(
+                    pdf_path,
+                    extract_figures=False,
+                )
+
+        mock_local_odl.assert_called_once_with(pdf_path)
+        mock_figures.assert_not_called()
+        assert result.text == "Intro\nBody"
         assert result.structured_data is structured
         assert result.method == "opendataloader_structured"
 

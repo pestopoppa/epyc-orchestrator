@@ -53,41 +53,14 @@ def _use_local_structured_pdf_extractor() -> bool:
     )
 
 
-def _pdf_page_count(pdf_path: Path) -> int:
-    try:
-        import fitz
-    except ImportError:
-        return 0
-
-    try:
-        doc = fitz.open(str(pdf_path))
-        page_count = len(doc)
-        doc.close()
-        return page_count
-    except Exception as e:
-        logger.debug("Failed to get PDF page count for %s: %s", pdf_path, e)
-        return 0
-
-
 def _extract_local_structured_pdf(path: Path, *, extract_figures: bool) -> object:
     """Run the explicit local ODL structured path without OCR fallback."""
-    from src.services.pdf_router import PDFExtractionResult, PDFRouter
+    from src.services.pdf_router import PDFRouter
 
     router = PDFRouter()
-    text, structured_data, latency_ms = router._extract_with_opendataloader_structured(path)
-    figures = (
-        router._extract_figures_from_odl_structured(path, structured_data)
-        if extract_figures
-        else []
-    )
-    return PDFExtractionResult(
-        text=text,
-        figures=figures,
-        page_count=_pdf_page_count(path),
-        method="opendataloader_structured",
-        latency_ms=latency_ms,
-        ocr_required=False,
-        structured_data=structured_data,
+    return router.extract_opendataloader_structured(
+        path,
+        extract_figures=extract_figures,
     )
 
 

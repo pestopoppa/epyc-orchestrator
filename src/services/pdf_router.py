@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Optional
 
 logger = logging.getLogger(__name__)
 
+ODL_TABLE_BACKEND_ENV = "ORCHESTRATOR_ODL_TABLE_BACKEND"
+
 if TYPE_CHECKING:
     from src.models.odl_structured import ODLStructuredDocument
 
@@ -327,6 +329,70 @@ class PDFRouter:
             )
             return "", None, latency_ms
 
+    def _select_odl_table_backend(self, pdf_path: Path) -> str:
+        """Select the ODL table backend.
+
+        The hybrid backend is intentionally a routing seam only for now. Until a
+        sidecar/client exists, explicit hybrid requests fall back to the local
+        structured ODL path so current extraction semantics stay unchanged.
+        """
+        requested = os.environ.get(ODL_TABLE_BACKEND_ENV, "local").strip().lower()
+        if requested in {"", "local"}:
+            return "local"
+
+        if requested == "hybrid":
+            logger.info(
+                "ODL hybrid table backend requested for %s but is not configured; "
+                "using local structured OpenDataLoader",
+                pdf_path.name,
+            )
+            return "local"
+
+        logger.warning(
+            "Unsupported %s=%r for %s; using local structured OpenDataLoader",
+            ODL_TABLE_BACKEND_ENV,
+            requested,
+            pdf_path.name,
+        )
+        return "local"
+
+    def _extract_with_odl_table_backend(
+        self,
+        pdf_path: Path,
+    ) -> tuple[str, "ODLStructuredDocument | None", float]:
+        backend = self._select_odl_table_backend(pdf_path)
+        if backend == "local":
+            return self._extract_with_opendataloader_structured(pdf_path)
+
+        # Defensive fallback for future backend names added to the selector.
+        logger.warning("Unhandled ODL table backend %r; using local structured ODL", backend)
+        return self._extract_with_opendataloader_structured(pdf_path)
+
+    def extract_opendataloader_structured(
+        self,
+        pdf_path: str | Path,
+        *,
+        extract_figures: bool = True,
+    ) -> PDFExtractionResult:
+        """Run the local structured ODL extraction path without OCR fallback."""
+        pdf_path = Path(pdf_path)
+        text, structured_data, latency_ms = self._extract_with_odl_table_backend(pdf_path)
+        figures = (
+            self._extract_figures_from_odl_structured(pdf_path, structured_data)
+            if extract_figures
+            else []
+        )
+        page_count = len(self._page_dimensions_pymupdf(pdf_path))
+        return PDFExtractionResult(
+            text=text,
+            figures=figures,
+            page_count=page_count,
+            method="opendataloader_structured",
+            latency_ms=latency_ms,
+            ocr_required=False,
+            structured_data=structured_data,
+        )
+
     def _page_dimensions_pymupdf(self, pdf_path: Path) -> dict[int, tuple[float, float]]:
         """Return page dimensions in PDF points keyed by 1-indexed page."""
         if not self._has_pymupdf:
@@ -591,7 +657,7 @@ class PDFRouter:
             if use_odl_structured:
                 # Phase 2: text + structured JSON in one ODL invocation.
                 text, structured_data, extract_latency = (
-                    self._extract_with_opendataloader_structured(pdf_path)
+                    self._extract_with_odl_table_backend(pdf_path)
                 )
                 extract_method = "opendataloader_structured"
                 if not text:

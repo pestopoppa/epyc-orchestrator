@@ -474,17 +474,16 @@ class TestDocumentClient:
                     with patch(
                         "src.services.pdf_router.PDFRouter._extract_figures_pymupdf"
                     ) as mock_pymupdf_figures:
-                        with patch("src.services.document_client._pdf_page_count", return_value=2):
-                            with patch(
-                                "src.services.pdf_router.PDFRouter.extract",
-                                new_callable=AsyncMock,
-                            ) as mock_extract:
-                                result = await process_document(
-                                    DocumentProcessRequest(
-                                        file_path=str(pdf_path),
-                                        extract_figures=True,
-                                    )
+                        with patch(
+                            "src.services.pdf_router.PDFRouter.extract",
+                            new_callable=AsyncMock,
+                        ) as mock_extract:
+                            result = await process_document(
+                                DocumentProcessRequest(
+                                    file_path=str(pdf_path),
+                                    extract_figures=True,
                                 )
+                            )
 
         mock_get_client.assert_not_called()
         mock_odl.assert_called_once_with(pdf_path)
