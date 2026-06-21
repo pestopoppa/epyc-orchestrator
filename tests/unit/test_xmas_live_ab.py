@@ -223,6 +223,64 @@ def test_dry_run_can_use_builtin_smoke_set_without_inference(
     assert summary["xmas_policy"] == xmas_live_ab.XMAS_EVIDENCE_POLICY_ID
 
 
+def test_real_run_records_xmas_meta_without_inference(monkeypatch, tmp_path: Path) -> None:
+    prompts = tmp_path / "prompts.jsonl"
+    prompts.write_text(
+        '{"id": "a", "domain": "math", "function": "solve", "prompt": "2+2", "expected": "4"}\n',
+        encoding="utf-8",
+    )
+    xmas_meta = {
+        "mode": "enforce",
+        "applied": True,
+        "suggested_role": "worker_general",
+        "apply_reason": "evidence_quality_lift",
+    }
+
+    monkeypatch.setattr(xmas_live_ab, "validate_table", lambda _table: None)
+    monkeypatch.setattr(xmas_live_ab, "ensure_host_quiet", lambda: None)
+    monkeypatch.setattr(xmas_live_ab, "restart_orchestrator", lambda _env: "ok")
+    monkeypatch.setattr(
+        xmas_live_ab,
+        "chat",
+        lambda *args, **kwargs: {
+            "status": 200,
+            "elapsed_s": 0.1,
+            "body": {
+                "answer": "<answer>4</answer>",
+                "routed_to": "worker_general",
+                "routing_strategy": "xmas_enforce:learned",
+                "xmas_meta": xmas_meta,
+                "role_history": ["worker_general"],
+            },
+        },
+    )
+
+    output = tmp_path / "real"
+    rc = xmas_live_ab.run(
+        SimpleNamespace(
+            table=tmp_path / "xmas_winner_table.yaml",
+            prompts=prompts,
+            summarize_results=None,
+            sample_size=None,
+            reps=1,
+            output=output,
+            max_turns=1,
+            dry_run=False,
+            host_quiet_confirmed=True,
+            timeout_s=1.0,
+            min_decision_prompts=1,
+            min_score_delta=0.05,
+            max_domain_regression=0.0,
+            max_latency_ratio=1.10,
+            restore_baseline=True,
+        )
+    )
+
+    assert rc == 0
+    rows = [json.loads(line) for line in (output / "results.jsonl").read_text().splitlines()]
+    assert rows[0]["xmas_meta"] == xmas_meta
+
+
 def test_summarize_results_mode_does_not_reload_or_chat(
     monkeypatch,
     tmp_path: Path,

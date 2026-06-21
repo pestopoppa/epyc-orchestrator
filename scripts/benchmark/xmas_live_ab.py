@@ -910,6 +910,7 @@ def run(args: argparse.Namespace) -> int:
                         "elapsed_s": result["elapsed_s"],
                         "routed_to": body.get("routed_to", ""),
                         "routing_strategy": body.get("routing_strategy", ""),
+                        "xmas_meta": body.get("xmas_meta"),
                         "role_history": body.get("role_history", []),
                         "turns": body.get("turns"),
                         "predicted_tps": body.get("predicted_tps", 0),

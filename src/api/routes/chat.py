@@ -613,6 +613,7 @@ async def _handle_chat(
                 resp.factual_risk_band = str(getattr(routing, "factual_risk_band", "") or "")
                 resp.difficulty_score = float(getattr(routing, "difficulty_score", 0.0) or 0.0)
                 resp.difficulty_band = str(getattr(routing, "difficulty_band", "") or "")
+                resp.xmas_meta = getattr(routing, "xmas_meta", None)
             except Exception:
                 # Best-effort telemetry attachment; never break the response.
                 pass
@@ -681,14 +682,20 @@ async def _handle_chat(
         # Bypass cheap-first for: factual recall questions (coding model hallucinates),
         # and task types that require multi-step REPL execution (coder, agentic).
         _task_type = routing.task_ir.get("task_type")
-        if routing.xmas_meta and routing.xmas_meta.get("applied") is True:
+        _cheap_first_role = get_config().chat.try_cheap_first_role
+        _xmas_enforced_non_cheap_role = (
+            routing.xmas_meta
+            and routing.xmas_meta.get("applied") is True
+            and str(initial_role) != str(_cheap_first_role)
+        )
+        if _xmas_enforced_non_cheap_role:
             _log_cheap_first_counter(
                 state,
                 routing.task_id,
                 attempted=False,
                 passed=None,
                 reason="xmas_enforce",
-                cheap_role=get_config().chat.try_cheap_first_role,
+                cheap_role=_cheap_first_role,
                 phase=get_config().chat.try_cheap_first_phase,
                 detail="xmas_enforce_applied",
             )

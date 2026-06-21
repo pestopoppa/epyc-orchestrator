@@ -837,3 +837,130 @@ class TestEditModeFailClosed:
         assert result.mode == "edit"
         assert result.answer.startswith("edit transaction applied: 1 write(s), 0 delete(s)")
         assert target_file.read_text() == "VALUE = 2"
+
+
+class TestHandleChatXmasCheapFirst:
+    """X-MAS enforce should not suppress cheap-first for the cheap role itself."""
+
+    @pytest.mark.asyncio
+    async def test_xmas_enforce_to_cheap_role_still_allows_cheap_first(
+        self, mock_state, mock_primitives
+    ):
+        from contextlib import nullcontext
+        from unittest.mock import AsyncMock
+
+        mock_primitives.request_context = MagicMock(return_value=nullcontext())
+        xmas_meta = {
+            "mode": "enforce",
+            "applied": True,
+            "suggested_role": "worker_general",
+            "apply_reason": "evidence_quality_lift",
+        }
+        routing = RoutingResult(
+            task_id="xmas-cheap",
+            task_ir={"task_type": "chat", "objective": "solve"},
+            use_mock=False,
+            routing_decision=["worker_general"],
+            routing_strategy="xmas_enforce:learned",
+            xmas_meta=xmas_meta,
+        )
+        cheap_response = ChatResponse(
+            answer="<answer>42</answer>",
+            turns=1,
+            elapsed_seconds=0.01,
+            mock_mode=False,
+            real_mode=True,
+            routed_to="worker_general",
+            role_history=["worker_general"],
+            routing_strategy="cheap_first:xmas_enforce:learned",
+            mode="direct",
+        )
+        cfg = SimpleNamespace(
+            chat=SimpleNamespace(
+                try_cheap_first_role="worker_general",
+                try_cheap_first_phase="A",
+            )
+        )
+
+        with patch("src.api.routes.chat.features") as mock_features, \
+             patch("src.api.routes.chat.get_config", return_value=cfg), \
+             patch("src.api.routes.chat._route_request", return_value=routing), \
+             patch("src.api.routes.chat._preprocess", return_value=None), \
+             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
+             patch("src.api.routes.chat._plan_review_gate", return_value=None), \
+             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._select_mode", return_value="direct"), \
+             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=cheap_response)) as mock_cheap:
+            mock_features.return_value.script_interception = False
+            result = await _handle_chat(
+                ChatRequest(prompt="Solve this arithmetic problem.", mock_mode=False, real_mode=True),
+                mock_state,
+            )
+
+        assert mock_cheap.await_count == 1
+        assert result.routing_strategy == "cheap_first:xmas_enforce:learned"
+        assert result.xmas_meta is xmas_meta
+
+    @pytest.mark.asyncio
+    async def test_xmas_enforce_to_non_cheap_role_keeps_cheap_first_bypass(
+        self, mock_state, mock_primitives
+    ):
+        from contextlib import nullcontext
+        from unittest.mock import AsyncMock
+
+        mock_primitives.request_context = MagicMock(return_value=nullcontext())
+        xmas_meta = {
+            "mode": "enforce",
+            "applied": True,
+            "suggested_role": "architect_general",
+            "apply_reason": "evidence_quality_lift",
+        }
+        routing = RoutingResult(
+            task_id="xmas-architect",
+            task_ir={"task_type": "chat", "objective": "verify"},
+            use_mock=False,
+            routing_decision=["architect_general"],
+            routing_strategy="xmas_enforce:learned",
+            xmas_meta=xmas_meta,
+        )
+        direct_response = ChatResponse(
+            answer="<answer>valid</answer>",
+            turns=1,
+            elapsed_seconds=0.01,
+            mock_mode=False,
+            real_mode=True,
+            routed_to="architect_general",
+            role_history=["architect_general"],
+            routing_strategy="xmas_enforce:learned",
+            mode="direct",
+        )
+        cfg = SimpleNamespace(
+            chat=SimpleNamespace(
+                try_cheap_first_role="worker_general",
+                try_cheap_first_phase="A",
+            )
+        )
+
+        with patch("src.api.routes.chat.features") as mock_features, \
+             patch("src.api.routes.chat.get_config", return_value=cfg), \
+             patch("src.api.routes.chat._route_request", return_value=routing), \
+             patch("src.api.routes.chat._preprocess", return_value=None), \
+             patch("src.api.routes.chat._init_primitives", return_value=mock_primitives), \
+             patch("src.api.routes.chat._plan_review_gate", return_value=None), \
+             patch("src.api.routes.chat._execute_vision", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_vision_multimodal", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._execute_proactive", new=AsyncMock(return_value=None)), \
+             patch("src.api.routes.chat._select_mode", return_value="direct"), \
+             patch("src.api.routes.chat._try_cheap_first", new=AsyncMock(return_value=None)) as mock_cheap, \
+             patch("src.api.routes.chat._execute_direct", return_value=direct_response):
+            mock_features.return_value.script_interception = False
+            result = await _handle_chat(
+                ChatRequest(prompt="Verify this reasoning.", mock_mode=False, real_mode=True),
+                mock_state,
+            )
+
+        assert mock_cheap.await_count == 0
+        assert result.routing_strategy == "xmas_enforce:learned"
+        assert result.xmas_meta is xmas_meta

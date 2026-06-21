@@ -90,6 +90,10 @@ class ChatResponse(BaseModel):
     routing_strategy: str = Field(
         default="", description="How routing was decided: learned|rules|default"
     )
+    xmas_meta: dict[str, Any] | None = Field(
+        default=None,
+        description="X-MAS routing metadata when shadow/enforce routing is enabled",
+    )
     mode: str = Field(
         default="", description="Execution mode: direct, react, repl, delegated, or mock"
     )
