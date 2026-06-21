@@ -1,0 +1,67 @@
+{
+  "feature_contract": {
+    "embedding_dim_required": 1024,
+    "engineered_feature_dim": 11,
+    "engineered_features": [
+      "task_type_onehot[5]",
+      "source_family_onehot[4]",
+      "log1p(context_length)/12.0",
+      "has_images"
+    ],
+    "next_step": "embed source prompt/context text for each row, append engineered features, then join to oracle_binary_label by join_key"
+  },
+  "feature_row_schema_version": "offline_reward_feature_input.v1",
+  "labels_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_holdout_expansion_labels.jsonl",
+  "privacy": {
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "roles": {
+    "architect_coding:delegated": 207,
+    "architect_general:delegated": 206,
+    "frontdoor:direct": 162,
+    "frontdoor:repl": 203
+  },
+  "rows": 778,
+  "schema_version": "offline_reward_feature_manifest_summary.v1",
+  "sources": {
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_191211.jsonl": 2,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_034823/3way_20260207_231109.jsonl": 4,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl": 12,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl": 24,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_153610.jsonl": 4,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_170043/3way_20260209_164557.jsonl": 4,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_234637/3way_20260209_203417.jsonl": 4,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl": 16,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl": 20,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl": 36,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl": 52,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl": 37,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260213_144247.jsonl": 4,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl": 32,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl": 44,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_105435.jsonl": 4,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_154625/3way_20260216_120731.jsonl": 8,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl": 128,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260221_112710/3way_20260220_235112.jsonl": 17,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260223_142056/3way_20260221_114901.jsonl": 4,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260223_142056/3way_20260221_124331.jsonl": 8,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260223_142056/3way_20260221_144449.jsonl": 11,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260223_142056/3way_20260221_225910.jsonl": 112,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260227_132459/3way_20260223_163017.jsonl": 84,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260303_004253/3way_20260227_132521.jsonl": 21,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260303_004253/3way_20260227_210343.jsonl": 3,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260303_004253/3way_20260227_225934.jsonl": 80,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260303_013430/3way_20260303_005719.jsonl": 3
+  },
+  "suites": {
+    "livecodebench": 778
+  },
+  "unique_source_records": 207
+}

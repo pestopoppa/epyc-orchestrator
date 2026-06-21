@@ -1,0 +1,34 @@
+{
+  "candidates_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_holdout_expansion_candidates.jsonl",
+  "label_schema_version": "offline_reward_oracle_label.v1",
+  "manifest_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/adoption_manifest.json",
+  "oracle": {
+    "model_id": "deterministic/reference-token-coverage-v1",
+    "oracle_score_source": "reference_token_coverage",
+    "oracle_threshold": 0.86
+  },
+  "oracle_negative": 292,
+  "oracle_positive": 486,
+  "privacy": {
+    "commits_private_rows": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ]
+  },
+  "role_counts": {
+    "architect_coding:delegated": 207,
+    "architect_general:delegated": 206,
+    "frontdoor:direct": 162,
+    "frontdoor:repl": 203
+  },
+  "rows": 778,
+  "schema_version": "offline_reward_expansion_label_export_summary.v1",
+  "scored_rows_jsonl": "/tmp/offline_reward_pairwise_holdout_expansion_scored_rows.jsonl",
+  "target_agreement": 0.9948586118251928,
+  "target_compared": 778,
+  "target_source": "verifier_sparse_action_expansion"
+}

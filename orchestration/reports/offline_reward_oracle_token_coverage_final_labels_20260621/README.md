@@ -129,6 +129,23 @@ Committed artifacts:
   conflict-dropped response-telemetry NPZ. This tests whether the remaining
   blocker is the prior NLL calibration objective; it is not a live verifier
   weight promotion and does not enable a runtime gate.
+- `offline_reward_pairwise_holdout_expansion_candidates.jsonl`,
+  `offline_reward_pairwise_holdout_expansion_plan_summary.json`, and
+  `offline_reward_pairwise_holdout_expansion_plan_summary.md` are the
+  prompt-free non-overlapping candidate plan for failed independent pairwise
+  holdout strata. The real expansion repairs `suite:livecodebench`; a focused
+  seeding-only diagnostic found no new non-overlapping `seeding_eval`
+  candidates in the current scan.
+- `offline_reward_pairwise_holdout_expansion_labels.jsonl`,
+  `offline_reward_feature_manifest_pairwise_holdout_expansion.jsonl`, and
+  `offline_reward_feature_manifest_with_pairwise_holdout_expansion.jsonl` are
+  the prompt-free deterministic scoring/export/combined-manifest artifacts for
+  that holdout repair.
+- `offline_reward_pairwise_preference_contract_score_ordered_holdout_expanded.jsonl`
+  and
+  `offline_reward_pairwise_ranker_score_ordered_holdout_expanded_summary.json`
+  rebuild the score-ordered pairwise contract and independent holdout eval
+  after the livecodebench expansion. Runtime gate changes remain disallowed.
 
 Private row data is not committed. The scored row file is:
 

@@ -1,0 +1,440 @@
+{
+  "contract": {
+    "learning_target": "within_source_record_score_ordered_preference",
+    "material_difference_from_stopped_family": [
+      "uses pairwise preference labels instead of absolute binary labels",
+      "controls prompt and expected answer by pairing only within the same source task",
+      "keeps conflicting absolute model-input groups as contrastive evidence instead of dropping all conflicting rows",
+      "can expand beyond binary labels by ordering rows with distinct offline oracle scores",
+      "does not train a classifier or authorize a runtime gate"
+    ],
+    "min_score_delta": 0.01,
+    "name": "within_task_pairwise_preference_v1",
+    "pairing_mode": "score_ordered",
+    "row_schema_version": "offline_reward_pairwise_preference.v1"
+  },
+  "coverage": {
+    "action_pair_counts": {
+      "architect_general>architect_general": 71,
+      "architect_general>coder_escalation": 12,
+      "architect_general>frontdoor": 260,
+      "coder_escalation>architect_general": 3,
+      "coder_escalation>coder_escalation": 35,
+      "coder_escalation>frontdoor": 25,
+      "frontdoor>architect_general": 193,
+      "frontdoor>coder_escalation": 19,
+      "frontdoor>frontdoor": 271
+    },
+    "contrastive_groups": 301,
+    "cross_action_pair_rows": 512,
+    "pair_rows": 889,
+    "same_action_pair_rows": 377,
+    "skipped_no_contrast_groups": 190,
+    "source_family_pair_counts": {
+      "orchestrator_live_seed": 101,
+      "seeding_eval": 156,
+      "three_way_eval": 632
+    },
+    "source_record_groups": 491,
+    "suite_pair_counts": {
+      "agentic": 10,
+      "coder": 9,
+      "debugbench": 82,
+      "general": 23,
+      "gpqa": 11,
+      "hotpotqa": 13,
+      "instruction_precision": 50,
+      "livecodebench": 616,
+      "long_context": 4,
+      "math": 23,
+      "mode_advantage": 2,
+      "mode_advantage_hard": 8,
+      "simpleqa": 10,
+      "thinking": 28
+    },
+    "unique_action_pairs": 9
+  },
+  "decision": {
+    "min_cross_action_pairs": 50,
+    "min_pairs": 100,
+    "recommended_next": "train_pairwise_reward_ranker_offline",
+    "runtime_gate_change_allowed": false,
+    "status": "contract_ready"
+  },
+  "generated_at": "2026-06-21T20:48:52.078612+00:00",
+  "group_diagnostics": [
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_023815.jsonl|0|gpqa_Organic Chemistry_0116|1cb0200558e9e6dfa09becb6705398cfc7f4199c0a1d48e0fd5ecf7c52dff78c|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|0|gpqa_Organic Chemistry_0319|0c4207df9d1268751bf55c3a14db32dfc2f6bbefa0f4b599dc26748075a78ad2|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 3,
+      "pairs": 3,
+      "positive_rows": 1,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|10|needle_010|8aee2f600c48e4dce0cf1f43d7a4fb7a97a4c6f5e2f17e369aec733fe17f96e4|c7abc2e769b17a0e03c9cfe589a2ad1a139f34bd9cfe2d0c6e5da9fad47db303",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|11|ma_multi_001|07177038eaa5748650a5fa66afde3917e84bd30abf6ae47ed52821f9f00b2126|081198e8ace6e567f2b5cf6b179d86c7c68121abd8f45f27d0c44a6a2d205da0",
+      "negative_rows": 2,
+      "pairs": 2,
+      "positive_rows": 1,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|18|leetcode_minimum-cost-to-change-the-final-value-of-expression|0c40b96b16c5ec127246d11ed24d85d840a34219562abc4db472a5114a58296d|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 1,
+      "pairs": 3,
+      "positive_rows": 3,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|19|debugbench_partition-array-according-to-given-pivot_python|9bfd1122028d75b414b6882690a913f0c00ebf85bd1802f7ee6e8336a42f0c36|adeddc67c837062265fe6512cd1029c13a105450c0eb9383cd0fb45da5aad959",
+      "negative_rows": 3,
+      "pairs": 2,
+      "positive_rows": 0,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|21|gsm8k_00606|b79db569f24ef5ba2a387f6d92f0aef15b2906bd375354079ad5ba4a705a43a0|e7f6c011776e8db7cd330b54174fd76f7d0216b612387a5ffcfb81e6f0919683",
+      "negative_rows": 2,
+      "pairs": 4,
+      "positive_rows": 2,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|22|hotpot_comparison_5abf12f25542997719eab667|7defad538d0b5594d48fba5b6360f723d8c7cfeac9db960116a73f7975268263|9390298f3fb0c5b160498935d79cb139aef28e1c47358b4bbba61862b9c26e59",
+      "negative_rows": 2,
+      "pairs": 4,
+      "positive_rows": 2,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|24|bfcl_007|7fc08a820c4aa01c13f72543e846a4d8444a850651ca0498a05ed5a82d56ff11|a999984bbdc93134c255113df64f366e7a044a85743c69db6b960a552d9cab72",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|25|mbpp_0465|4ee96134f3e6d83c0c3a1b5719bb4034a9dfba7213062879900f9c3438a50ac3|179acde505f9642378bf3ebd22100db54dbcdb1f91218b2083a1b148a30e6353",
+      "negative_rows": 2,
+      "pairs": 4,
+      "positive_rows": 2,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|28|hellaswag_05288|f29e47b8095c4b3e31a756f85078783c934b987a248b4d49c19bd2ac98ea8658|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|34|leetcode_magic-squares-in-grid|4ca4e98f2e530bea31b4e91c7886874d0d101e4027e8f74678c7df68d597ca69|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 2,
+      "pairs": 4,
+      "positive_rows": 2,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|35|debugbench_jewels-and-stones_java|124600ecb53c37d02daa737239be4ec6e1bb526207ace1ce28f62dcc7d599763|0b4e33aa568667d5f5f64000284e816ecd7b619d0b1920b39d6098e0b963bc8d",
+      "negative_rows": 1,
+      "pairs": 3,
+      "positive_rows": 3,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|37|gsm8k_00625|689aef32ac2485e6bbb2f78e041eb951e893032397a2d8e397c13a638dd073c6|a512db2741cd20693e4b16f19891e72b9ff12cead72761fc5e92d2aaf34740c1",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|38|hotpot_bridge_5a7b74485542997c3ec97190|fe7dd14cc95df62aed3dcffabf1b64782a2ba4d2497859970253b481cdb9311b|7b957a73fc6a8c468740742e4a1a0be2ff52757fbba1181ed959c9e2650ac392",
+      "negative_rows": 3,
+      "pairs": 5,
+      "positive_rows": 1,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|39|simpleqa_general_04086|0ad171878c7083bc578c362b11edec07ddba37e96c3a05270310b3bafa10fe91|1343e34c98eb6b0bec7dc32d86d01a60eb6cc9a7b9e1048f47474527762c9b09",
+      "negative_rows": 4,
+      "pairs": 4,
+      "positive_rows": 0,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|3|debugbench_maximum-rows-covered-by-columns_cpp|1eef59e9d2fa4d43b6a32c17773b3e6ae43802993095f3447df313ac9290b657|2710f55b40da74816716699c12f76187ec2d81aff848c708c2eb90641f408807",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|40|bfcl_014|3896420930ed20dbf0cad4520e1aa1f8ae6cd65a434a18a528c17255d8d7fe64|612707890e630dd0f38a5f7adc984e6353eeba48e81b6df5c7938169b6a66001",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|44|hellaswag_32877|86531a5b3ed671b669509b71d8ec0c582f389f07633125218c6279f6ee32989c|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|45|mmlu_computer_security_01526|0744b11c20c6632ab1e3cc2cb66a2a32293a335f4fb6b537d5de9bb1e51032f2|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 2,
+      "pairs": 2,
+      "positive_rows": 1,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|48|gpqa_Molecular Biology_0242|28788d57ceeeacc514de0b0993ceed030b6aec69e04e2b28f66de808f3cb9d37|df7e70e5021544f4834bbee64a9e3789febc4be81470df629cad6ddb03320a5c",
+      "negative_rows": 2,
+      "pairs": 4,
+      "positive_rows": 2,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|50|leetcode_zuma-game|f765c68890ce3089223367175a5418703abc8674ba52546c8605cc9e1e3fa82f|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 2,
+      "pairs": 2,
+      "positive_rows": 1,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|51|debugbench_tuple-with-same-product_java|92551d40181997b9a2a3d227278dbca3e8cbca46c9d2ca83f0395ab54c2d5bd3|17fc2600c5ebe6477a386c8ad065adafc4cd0b8d186c78cc47db95b2048b29eb",
+      "negative_rows": 1,
+      "pairs": 3,
+      "positive_rows": 3,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|52|ma_hard_comp_014|3db38b3e9091dc5f5aaa5cfe216612dcd3f778bddbd1709ed67d447385454f4f|9204ba9543abdd0a9a693c74f0d558a8c7e22e872d2062a9f95f893cbd545447",
+      "negative_rows": 2,
+      "pairs": 5,
+      "positive_rows": 2,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|53|math500_Algebra_00218|4e67c45dddd7b842417707e41b860a4330e053f3baccca12e14486fabeb553db|b53aca34ed51e498744b2b9f7288eb13c4b7672ab7722aeb32e91b61b67a9f74",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|54|hotpot_bridge_5ab7de455542992aa3b8c864|3b3cdcacaa09ed5d3b45d4ce445d248b8395168ed0664c3d75d5723ef42d4700|23aa12d068f91213975c591a7403b5019e23d84087155bcf7aa396c57176732d",
+      "negative_rows": 3,
+      "pairs": 2,
+      "positive_rows": 0,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|56|agentic_ma_003|49b8a2c2b3098932f4805398252383b9e297d24a135f17552e287470a5ed76b1|a79dec3e7e4d4964a00d4dabbaf1911ea7e79d9080cb136441f1fbbd2eeab494",
+      "negative_rows": 2,
+      "pairs": 3,
+      "positive_rows": 1,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|58|lc_ma_003|7646972dc9c211b1d81648cda7934cc482f6ff3a975e2e5ea98874afa6f406a4|12116c2fc0c6dfdf8159ee9c9b8794dc394c63b90dff1eaf85e73ad338c74382",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|61|mmlu_high_school_psychology_05043|6f2cab618bd55f6524988cf18d0e1a75ba800c321cb2b6a1b436db9a409a73aa|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "negative_rows": 2,
+      "pairs": 2,
+      "positive_rows": 1,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|64|gpqa_Molecular Biology_0141|1df62fcafca94b8ae3a38de19c5e68fef71527cee4ae9c8dc2dc091d7c26e71e|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "negative_rows": 1,
+      "pairs": 3,
+      "positive_rows": 3,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|66|leetcode_score-of-parentheses|961e3c6f9a185f81ad6fa1017febdb3c7897644e8b2b6c317d5663a0dcb11efc|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 2,
+      "pairs": 2,
+      "positive_rows": 1,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|67|debugbench_find-positive-integer-solution-for-a-given-equation_python|ae6751cdd40532be3771bab453de98dec32c1b9d9b73749b75cda5adc4652002|df8d6844034a10fedc2a7d4ad59eee10fc052bdda0124b45f966ac989259fa52",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|68|ma_hard_synth_002|2985805cf5a48909ca83a711a13a95557703919b8e50ca0340a917a432c95c26|c0f7c0be2df73e42f3efadec327e70537bdd84d2c1b0016ff3c850ddd5a44e83",
+      "negative_rows": 3,
+      "pairs": 3,
+      "positive_rows": 1,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|69|gsm8k_00603|b45d5f6b9ef83f08f26cca43f28d9ce3aa397c51a2ef45af98bb4093ab3485ed|e49ec846db7527df7ff483009fe61700e6435072c8c5b551ab08f0a13fc45a07",
+      "negative_rows": 1,
+      "pairs": 3,
+      "positive_rows": 3,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|8|bfcl_010|4ba8bc2ded003a062454c90f6fed61b99227191fa8c57dfb30548a7ea7b6dd22|59e058611779470662caa9bcf24ca15ee76c665118616fdf5abbd8d631315252",
+      "negative_rows": 1,
+      "pairs": 3,
+      "positive_rows": 3,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl|9|mbpp_0135|25ac0894264588b0ac085cc81278f52832447d6183dfb389a1ed10657019a2dc|aa7ef5a395d3fdb969ae6976504e1c78c744816e8ad854a468bb9a144fd9882d",
+      "negative_rows": 2,
+      "pairs": 4,
+      "positive_rows": 2,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_191211.jsonl|1|leetcode_count-the-digits-that-divide-a-number|bbde6f3a5fb4598b150727863adf635741dcae0d993833ff2e393ae7944de7cf|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 1,
+      "pairs": 2,
+      "positive_rows": 2,
+      "rows": 3
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl|2|simpleqa_general_01253|53ad8aca71893360c4b006463dffe1e9285ed1f407b9b6e6da87c38bea42fed5|2a137bf0604f2c9571c97faff85207372c66022f6aa60ec20a9e7c361b8d4a22",
+      "negative_rows": 2,
+      "pairs": 1,
+      "positive_rows": 0,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|16|hotpot_comparison_5ab7ff1d5542990e739ec7b9|f3d6e97254497da968811125b65eb46424d7f15b66339b5d1b4988c8f8be3b53|ef0beb3bb7d448d53a133e6c0c78794c8b122a66e2edba9a327724567b1ec10e",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|20|mmlu_professional_psychology_12495|eb0f1586814bb1240432b89cd3328deda07f32490f4ff030ce6b318ca2c56fcb|3f39d5c348e5b79d06e842c114e6cc571583bbf44e4b0ebfda1a01ec05745d43",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|23|hotpot_bridge_5a83b01c5542996488c2e489|04877f1b65d3c0b43b702aa57762a4ce4d9b765c030bc9e348bde5600887fa6a|2863b8e5ff2c19bc8b83d6d5f9aec1bbaaa88622dfff0534ce8aa33f0d2fd425",
+      "negative_rows": 2,
+      "pairs": 1,
+      "positive_rows": 0,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|31|mbpp_0358|f1ec643734443dc520e8dd573c582ffbabb9c7db695659f3ce940f435ba057cf|69b7654f4a7f2792b72e6403b374d827268b46a07232a24d830a597e08625d55",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|33|hellaswag_17219|cfcdec51542d9a97823f86bd1d5279c624c02d3e98974b94e6b5f78c221413c7|559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|4|math500_Algebra_00112|8cba8f3afb1fcd0aab067afe8f6e85c48f89ce0adec69f561ae2ac83b603f410|3fdba35f04dc8c462986c992bcf875546257113072a909c162f7e470e581e278",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl|6|mmlu_professional_law_10912|dbc180db47b73a7d15d6600c8b66bc2552d5d6751df7b0ed6b2feed4bf823c57|6b23c0d5f35d1b11f9b683f0b0a617355deb11277d91ae091d399c655b87940d",
+      "negative_rows": 1,
+      "pairs": 1,
+      "positive_rows": 1,
+      "rows": 2
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_034823/3way_20260207_231109.jsonl|2|leetcode_gray-code|e2deb130d338ff566cf8c7360ca6cc7c995a04c3050d3679bd85109f9808b4be|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 2,
+      "pairs": 4,
+      "positive_rows": 2,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl|16|leetcode_beautiful-arrangement-ii|6c0d4f9cd0a92db275d996a505db293c0934efb03886fadd7f4699014fd1cb50|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 1,
+      "pairs": 3,
+      "positive_rows": 3,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl|2|leetcode_summary-ranges|8d4aa37d82d4d887503c054ba48518447e85aad8ebbce9464f27d162fe38055d|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 1,
+      "pairs": 3,
+      "positive_rows": 3,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl|18|leetcode_find-words-that-can-be-formed-by-characters|9688ffdd2c6d9eb7052ae15502314d7ca71a537c1435d681941d641de2c13d1d|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 3,
+      "pairs": 3,
+      "positive_rows": 1,
+      "rows": 4
+    },
+    {
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl|2|leetcode_super-pow|afd303104fe6cb07b12a6eb5f2bb710f32142aaec9572e2a5a142971cbfd8ff1|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "negative_rows": 2,
+      "pairs": 4,
+      "positive_rows": 2,
+      "rows": 4
+    }
+  ],
+  "inputs": {
+    "eligible_rows": 1498,
+    "manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_holdout_expansion.jsonl",
+    "manifest_rows": 1498,
+    "skipped_unmapped_or_unlabeled_rows": 0
+  },
+  "outputs": {
+    "pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_holdout_expanded.jsonl",
+    "summary_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_holdout_expanded_summary.json",
+    "summary_md": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered_holdout_expanded_summary.md"
+  },
+  "privacy": {
+    "commits_prompt_answer_expected_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_lengths_and_deltas": true
+  },
+  "schema_version": "offline_reward_pairwise_contract_summary.v1"
+}

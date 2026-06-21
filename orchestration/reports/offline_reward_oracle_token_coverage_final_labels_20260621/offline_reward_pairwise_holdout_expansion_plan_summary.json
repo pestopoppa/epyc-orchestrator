@@ -1,0 +1,1791 @@
+{
+  "candidate_action_counts": {
+    "architect_general": 413,
+    "frontdoor": 365
+  },
+  "candidate_group_source_family_counts": {
+    "three_way_eval": 209
+  },
+  "candidate_group_suite_counts": {
+    "livecodebench": 209
+  },
+  "candidate_groups": 209,
+  "candidate_rows": 778,
+  "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
+  "candidate_source_family_counts": {
+    "three_way_eval": 778
+  },
+  "candidate_suite_counts": {
+    "livecodebench": 778
+  },
+  "decision": {
+    "recommended_next": "score_selected_candidates_and_rebuild_pairwise_contract",
+    "runtime_gate_change_allowed": false,
+    "status": "expansion_plan_ready"
+  },
+  "existing_manifest": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_seeding_eval_expansion.jsonl",
+  "existing_manifest_source_family_counts": {
+    "orchestrator_live_seed": 141,
+    "seeding_eval": 297,
+    "three_way_eval": 282
+  },
+  "existing_manifest_suite_counts": {
+    "agentic": 15,
+    "coder": 22,
+    "debugbench": 162,
+    "general": 54,
+    "gpqa": 38,
+    "hotpotqa": 27,
+    "instruction_precision": 42,
+    "livecodebench": 144,
+    "long_context": 14,
+    "math": 59,
+    "mode_advantage": 3,
+    "mode_advantage_hard": 18,
+    "simpleqa": 64,
+    "thinking": 58
+  },
+  "existing_pairwise_group_count": 133,
+  "existing_pairwise_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_pairwise_preference_contract_score_ordered.jsonl",
+  "inputs": [
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results"
+  ],
+  "min_cross_action_candidate_groups": 20,
+  "privacy": {
+    "commits_prompt_reference_response_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "schema_version": "offline_reward_pairwise_holdout_expansion_plan.v1",
+  "selected_groups": [
+    {
+      "candidate_actions": [
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [
+        "architect_general"
+      ],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_191211.jsonl|1|leetcode_count-the-digits-that-divide-a-number|bbde6f3a5fb4598b150727863adf635741dcae0d993833ff2e393ae7944de7cf|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_191211.jsonl",
+      "source_record_offset": 1,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_034823/3way_20260207_231109.jsonl|2|leetcode_gray-code|e2deb130d338ff566cf8c7360ca6cc7c995a04c3050d3679bd85109f9808b4be|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_034823/3way_20260207_231109.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl|16|leetcode_beautiful-arrangement-ii|6c0d4f9cd0a92db275d996a505db293c0934efb03886fadd7f4699014fd1cb50|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl",
+      "source_record_offset": 16,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl|2|leetcode_summary-ranges|8d4aa37d82d4d887503c054ba48518447e85aad8ebbce9464f27d162fe38055d|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl|32|leetcode_split-array-into-fibonacci-sequence|ebe2cce92dc2ffc690c6b17ea9c10611bdf1a837f141d044f1ee8aade88da66c|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260208_171657/3way_20260208_045445.jsonl",
+      "source_record_offset": 32,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl|18|leetcode_find-words-that-can-be-formed-by-characters|9688ffdd2c6d9eb7052ae15502314d7ca71a537c1435d681941d641de2c13d1d|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl",
+      "source_record_offset": 18,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl|2|leetcode_super-pow|afd303104fe6cb07b12a6eb5f2bb710f32142aaec9572e2a5a142971cbfd8ff1|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl|34|leetcode_maximum-trailing-zeros-in-a-cornered-path|fc807852a688a0a66b54601a168837b9a7a6b2ad2800d8a99af5218857aca423|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl",
+      "source_record_offset": 34,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl|50|leetcode_probability-of-a-two-boxes-having-the-same-number-of-distinct-balls|fe04ae29b3304a52f49d650312cb6cd40208061bb2aaefb83358c30300dc928a|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl",
+      "source_record_offset": 50,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl|66|leetcode_minimum-cost-to-reach-destination-in-time|02de8afb36089bc472c85c7478d3453cd73f221eeca3126c24c946ff741f723b|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl",
+      "source_record_offset": 66,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl|98|leetcode_minimum-moves-to-convert-string|c140e568783f062ded00ab9b3f13ab7246ae0effba06dd1db41f52d6f0ec8660|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_062235.jsonl",
+      "source_record_offset": 98,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_153610.jsonl|2|leetcode_widest-vertical-area-between-two-points-containing-no-points|bc6831864127bf009a776b8af49a0e8d00d980fb6040356c8dc9b1501de51561|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_162931/3way_20260209_153610.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_170043/3way_20260209_164557.jsonl|2|leetcode_smallest-string-with-a-given-numeric-value|b5368ef44cb0d62c990991a3e4fc52c28d00eb1b02dd086f86000d83ba073b14|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_170043/3way_20260209_164557.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_234637/3way_20260209_203417.jsonl|2|leetcode_string-matching-in-an-array|c2a2995da837bf272f3df0eb10b567a638f97cdc0b2e1a0f41e730ad855e0637|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260209_234637/3way_20260209_203417.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl|18|leetcode_count-binary-substrings|0588920296dabcaff4d3ad1831df01aeed561b24a46ee459c6d213ab2b1f56c1|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl",
+      "source_record_offset": 18,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl|2|leetcode_minimum-time-to-repair-cars|86eba6bf2a9d8b0648c6b1783d394da3a017b11e15e957803ad0820bcda3b2e3|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl|34|leetcode_remove-duplicates-from-sorted-array-ii|4b082753d5f92514ff769055c4130b4f790f25cf15c65c6dbac1bd964516b26e|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl",
+      "source_record_offset": 34,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl|50|leetcode_minimum-number-of-flips-to-convert-binary-matrix-to-zero-matrix|d14b70628eacd9bdb9e9a0c07396131736769741b8ca15a402d15117a9822bf5|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260209_235424.jsonl",
+      "source_record_offset": 50,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl|18|leetcode_out-of-boundary-paths|55d39779e9b7fd8949bc807290a019df0d4ad417d704775440c76816a3f58cda|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl",
+      "source_record_offset": 18,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl|48|leetcode_pascals-triangle|f998fe2d0e69c19192745a148d53a901def439b75daa35bd3e19387210c16988|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl",
+      "source_record_offset": 48,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl|64|leetcode_find-minimum-time-to-finish-all-jobs-ii|c67ad2312fbd1f1dcae77ca43b03447adecde3d75960793b816aa6c72edf13c5|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl",
+      "source_record_offset": 64,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl|80|leetcode_split-a-string-in-balanced-strings|ca2e6e96ac403a5df2b562155d883a3bc690160226ae0cc51a461a34dba46114|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl",
+      "source_record_offset": 80,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl|96|leetcode_scramble-string|891a0113c89f858296bb0a36bdbda79ccdc90bef6ad646f60ef5f8aba1de3ea5|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_055332.jsonl",
+      "source_record_offset": 96,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|14|leetcode_maximum-number-of-non-overlapping-subarrays-with-sum-equals-target|a8c6622998be177b843f3cddb4fca42465de46960a201f941132dc41c031985a|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 14,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|21|leetcode_video-stitching|fce9a2e0d0e497bca67f32b4622e64cca0efaa5e4b5088d1d973e458906e950d|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 21,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|24|leetcode_capacity-to-ship-packages-within-d-days|c60747f3e4ab3040825d6bfe140588ddea77afef1c2022504b31a827752303ab|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 24,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|29|leetcode_maximum-number-of-non-overlapping-subarrays-with-sum-equals-target|a8c6622998be177b843f3cddb4fca42465de46960a201f941132dc41c031985a|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 29,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|33|leetcode_video-stitching|fce9a2e0d0e497bca67f32b4622e64cca0efaa5e4b5088d1d973e458906e950d|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 33,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|36|leetcode_capacity-to-ship-packages-within-d-days|c60747f3e4ab3040825d6bfe140588ddea77afef1c2022504b31a827752303ab|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 36,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|41|leetcode_super-washing-machines|1d643b83ceedd53476b79ce069f07e0f04bf10251b179e0a24be7ffe06ffc4df|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 41,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|50|leetcode_capacity-to-ship-packages-within-d-days|c60747f3e4ab3040825d6bfe140588ddea77afef1c2022504b31a827752303ab|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 50,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl|51|leetcode_maximum-number-of-non-overlapping-subarrays-with-sum-equals-target|a8c6622998be177b843f3cddb4fca42465de46960a201f941132dc41c031985a|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260210_170027.jsonl",
+      "source_record_offset": 51,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|108|leetcode_sort-features-by-popularity|c16451b3720a60b6d74ced2aec9adac9b363ecc961df17a1f9ee6c1019d30d46|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 108,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|122|leetcode_merge-operations-to-turn-array-into-a-palindrome|2b10ea665861ade502b50fab6b2e18989ffd383b2a9c50a0f0afe7a09303334c|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 122,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|138|leetcode_best-time-to-buy-and-sell-stock-iii|95b6dbf8e2ca1c7c7e486418f901a8afd594b5536514a7da19220b4ce2d75dd0|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 138,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|154|leetcode_parsing-a-boolean-expression|15849040e1efb4c930126ffd9f333d33103702b442075fdfe508e247b1137767|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 154,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|170|leetcode_maximum-width-of-binary-tree|68484d40a465bf487fa1d8128a960ebb2ab1eecd1b9ee23f2f27a0d9d2b74474|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 170,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|186|leetcode_design-add-and-search-words-data-structure|93136db6a4f43b44e2c35017efdf950a80ee80b9ecb826bcdd657e74198b2a93|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 186,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|18|leetcode_shuffle-the-array|e3d3901bd7f14e6a0c47ca8e6c51e3df9037625c7bc2524f57f2ed1ee0d556eb|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 18,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|2|leetcode_image-overlap|3bad22ec68a4cc643af2a5384bc21d12af481bb5f2100fa1b72c1d5aa5d36ab3|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|34|leetcode_delete-columns-to-make-sorted|eb4c8f32915010094c798ac2fba00a5187a57cea4e925bf65ed40604ba07d713|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 34,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|50|leetcode_successful-pairs-of-spells-and-potions|d2b25954fd76b27311db37d044aae21059dd2bd472b66909a214786f5b1a8094|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 50,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|66|leetcode_strings-differ-by-one-character|332fcc5afc7c316ccb3e2090270254a0bfff81f6bd885054badb3e4b079025e3|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 66,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|76|leetcode_maximize-grid-happiness|028f0da12a2457a5e4deec27274f3dab939ebb0f90d24dfbf7e2be1b4812812c|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 76,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl|92|leetcode_number-of-distinct-averages|e50413c49da5806da61c4228c4a283d8917e0173c1150f72e62bd3231f357692|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260211_124549/3way_20260211_031504.jsonl",
+      "source_record_offset": 92,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|15|leetcode_sum-of-total-strength-of-wizards|dc3d0269c82733da725306d9089319f1b7bb958e11c69b7c82bbf1895ebc1a7b|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 15,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|29|leetcode_sum-of-total-strength-of-wizards|dc3d0269c82733da725306d9089319f1b7bb958e11c69b7c82bbf1895ebc1a7b|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 29,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|34|leetcode_longest-word-in-dictionary-through-deleting|80a0169191cf23ad8449bddd1af0b2ec515b2af39653cc9c35f08f6313a4b867|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 34,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|38|leetcode_making-file-names-unique|1cb9df832778fa39381fbc4d930be2872efa3bc9cc853ddbcb7c1238fdfc684c|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 38,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|42|leetcode_sum-of-total-strength-of-wizards|dc3d0269c82733da725306d9089319f1b7bb958e11c69b7c82bbf1895ebc1a7b|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 42,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|49|leetcode_longest-word-in-dictionary-through-deleting|80a0169191cf23ad8449bddd1af0b2ec515b2af39653cc9c35f08f6313a4b867|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 49,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|53|leetcode_making-file-names-unique|1cb9df832778fa39381fbc4d930be2872efa3bc9cc853ddbcb7c1238fdfc684c|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 53,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 3,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|60|leetcode_vowel-spellchecker|34b6fdd4b2fd1f24b23304d5c9f510f340404c25f542731d2008e5bf081e3512|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 60,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|65|leetcode_subarray-with-elements-greater-than-varying-threshold|ccfd3c9e3d9ac840a15e68d7687d4d7ec67955533cd3bd54b13c88a6ac1cf529|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 65,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 2,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|72|leetcode_sum-of-total-strength-of-wizards|dc3d0269c82733da725306d9089319f1b7bb958e11c69b7c82bbf1895ebc1a7b|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 72,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl|73|leetcode_longest-word-in-dictionary-through-deleting|80a0169191cf23ad8449bddd1af0b2ec515b2af39653cc9c35f08f6313a4b867|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260211_205721.jsonl",
+      "source_record_offset": 73,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260213_144247.jsonl|3|leetcode_shortest-palindrome|bd191600daa979dc76644b16348f9040cc64bbd12490c47311ccef36c83744b4|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260213_144247.jsonl",
+      "source_record_offset": 3,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl|112|leetcode_campus-bikes-ii|1b86e5ccc60dad9f1fdc1d4f3cc14dcf0adb187a08759a582f20b9fe99d20a66|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl",
+      "source_record_offset": 112,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl|18|leetcode_check-if-a-number-is-majority-element-in-a-sorted-array|a0a776e88b5f76c43bdea11d4e4dbcb11c05e5016d4ce8f6a9365d5c03ed75cb|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl",
+      "source_record_offset": 18,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl|2|leetcode_my-calendar-i|54d765725c38e843b581355a998734b627bd043ccc22713ae7f3dd25361f894b|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl|34|leetcode_check-if-all-as-appears-before-all-bs|021be255b76085b098e87f0d4382326142cd102011ee1251fe7adcff33878608|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl",
+      "source_record_offset": 34,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl|50|leetcode_the-employee-that-worked-on-the-longest-task|097629071baf058eceef68f34916512ab009e15ebd8356cfacaaff5d2bc005d7|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl",
+      "source_record_offset": 50,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl|66|leetcode_unique-paths-ii|6935de089f8633e66d4bc37ced87bef09cbf58479e94de905615572672f3fde6|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl",
+      "source_record_offset": 66,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl|82|leetcode_minimum-degree-of-a-connected-trio-in-a-graph|a20ce8ca520c6c89897c96fe24755a24193c11d4b3516058c7d3830aaf4e8adf|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl",
+      "source_record_offset": 82,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl|96|leetcode_richest-customer-wealth|23c47bc76be984c8854b128d41f8cf3c2ff40ccd2838c0075a5b382787d66a7b|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260215_232300.jsonl",
+      "source_record_offset": 96,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|10|leetcode_count-equal-and-divisible-pairs-in-an-array|2fb652f595f32cb4091a869d74b2e3fecfa7478c5720c39efc88e991aadac115|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 10,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|11|leetcode_degree-of-an-array|9eda9c960b85dfcde3b2f0097f12929ad16afc5f32a605bcf8122bef3b20d273|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 11,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|12|leetcode_reordered-power-of-2|425fdc39fc56c9a0b5d4d80a78f10a04d2a44eb38a74e24626f4a10ec742df92|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 12,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|13|leetcode_minimum-cost-tree-from-leaf-values|525e8b19e6a943a410621b6dd3831fe277dedc2fde0b36d387d2cea74206fb19|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 13,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|2|leetcode_reordered-power-of-2|425fdc39fc56c9a0b5d4d80a78f10a04d2a44eb38a74e24626f4a10ec742df92|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|3|leetcode_reordered-power-of-2|425fdc39fc56c9a0b5d4d80a78f10a04d2a44eb38a74e24626f4a10ec742df92|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 3,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|4|leetcode_minimum-cost-tree-from-leaf-values|525e8b19e6a943a410621b6dd3831fe277dedc2fde0b36d387d2cea74206fb19|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 4,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|5|leetcode_maximum-value-of-k-coins-from-piles|651474ba6b049d5431e63aff5bd04b1a978a39d56a84c15bb77b45ad74f319bf|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 5,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|6|leetcode_reordered-power-of-2|425fdc39fc56c9a0b5d4d80a78f10a04d2a44eb38a74e24626f4a10ec742df92|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 6,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|8|leetcode_minimum-cost-tree-from-leaf-values|525e8b19e6a943a410621b6dd3831fe277dedc2fde0b36d387d2cea74206fb19|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 8,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl|9|leetcode_maximum-value-of-k-coins-from-piles|651474ba6b049d5431e63aff5bd04b1a978a39d56a84c15bb77b45ad74f319bf|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_084700.jsonl",
+      "source_record_offset": 9,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_105435.jsonl|2|leetcode_redundant-connection|4ed197ea41520cc7a844c3d93600638bd688cee5a91e78dca009846d6c2afdc1|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_120404/3way_20260216_105435.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_154625/3way_20260216_120731.jsonl|1|leetcode_merge-in-between-linked-lists|693ce74338b96f24953e2a6c10d3525b0157009449dd457b6bb9acf36336bde3|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_154625/3way_20260216_120731.jsonl",
+      "source_record_offset": 1,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_154625/3way_20260216_120731.jsonl|3|leetcode_find-nearest-point-that-has-the-same-x-or-y-coordinate|2fa723f971d5e361df5dd93e02f8db78d19e3fedbb6129a05507c0bbdd8564ec|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260216_154625/3way_20260216_120731.jsonl",
+      "source_record_offset": 3,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|119|leetcode_bomb-enemy|3bd3ae6a2407d549c226ba09cc9a9629e0279602e839f44d6ffb4fa3c07a8e8a|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 119,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|11|leetcode_find-k-th-smallest-pair-distance|1704162021dabe6341938dd949b830b03cdc5bd7de823e6020b6da0b180a5e3f|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 11,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|135|leetcode_most-profit-assigning-work|95b71a1ca437e530d570a2bc38e6b70a56d9c2588fb9fa9ba1a2456d35502f8a|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 135,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|13|leetcode_design-circular-deque|c25da571c50867014571c80d08d9caaf6897174d0e38d8c6beb7a6163d43d7a6|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 13,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|151|leetcode_relative-sort-array|4f6fda49ebdec72e1b9919dd6c98cc1aa6b402229844bc04be189203fe0bf3a0|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 151,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|15|leetcode_shortest-unsorted-continuous-subarray|d96328511cec31e475a4878579479cab08214d6456d3e19647f3caae692d99ae|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 15,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|167|leetcode_defanging-an-ip-address|cf68632077dd2037dc05ac5a50f0aa7edd6f89c868a9a55eab693d94ec83fd8f|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 167,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|17|leetcode_find-k-th-smallest-pair-distance|1704162021dabe6341938dd949b830b03cdc5bd7de823e6020b6da0b180a5e3f|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 17,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|183|leetcode_minimum-health-to-beat-game|f19105717f8a9f2a8491f49e50da80bdbc895738bc919e75cc263fe85a6200ee|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 183,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|18|leetcode_number-of-subarrays-with-lcm-equal-to-k|c76e5023eb14a7fdc7f636cddf6158314be084d6d72afbcad5fbd03b1cf19837|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 18,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|21|leetcode_shortest-unsorted-continuous-subarray|d96328511cec31e475a4878579479cab08214d6456d3e19647f3caae692d99ae|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 21,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|23|leetcode_minimum-number-of-work-sessions-to-finish-the-tasks|541c074bb7acdde7547dbcb26e31ea494e40086d10addb578ea5ab647952e7b3|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 23,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|25|leetcode_longest-happy-string|26307b10e4879e41bc5636c27935f7882dd04528ab8df4e4262eb9bd91e38ad6|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 25,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|27|leetcode_number-of-subarrays-with-lcm-equal-to-k|c76e5023eb14a7fdc7f636cddf6158314be084d6d72afbcad5fbd03b1cf19837|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 27,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|28|leetcode_shortest-unsorted-continuous-subarray|d96328511cec31e475a4878579479cab08214d6456d3e19647f3caae692d99ae|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 28,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|2|leetcode_number-of-subarrays-with-lcm-equal-to-k|c76e5023eb14a7fdc7f636cddf6158314be084d6d72afbcad5fbd03b1cf19837|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 2,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|32|leetcode_minimum-number-of-work-sessions-to-finish-the-tasks|541c074bb7acdde7547dbcb26e31ea494e40086d10addb578ea5ab647952e7b3|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 32,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|33|leetcode_maximum-deletions-on-a-string|bb2c1177351a1a917ca5137306f5a97196e45a67e1f6653f41436139fe24f5d9|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 33,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|35|leetcode_strange-printer|7aa45e6cb503b86404d761e649a7496faba10d6be8c0689f17e77ec583b17042|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 35,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|37|leetcode_number-of-subarrays-with-lcm-equal-to-k|c76e5023eb14a7fdc7f636cddf6158314be084d6d72afbcad5fbd03b1cf19837|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 37,
+      "suite": "livecodebench"
+    },
+    {
+      "candidate_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "candidate_rows": 4,
+      "existing_manifest_actions": [],
+      "group_key": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl|38|leetcode_find-k-th-smallest-pair-distance|1704162021dabe6341938dd949b830b03cdc5bd7de823e6020b6da0b180a5e3f|7ad9153304a6fd472b715b3957df599eb2777cd7c036fec2b058cf08d847eaab",
+      "potential_actions": [
+        "architect_general",
+        "frontdoor"
+      ],
+      "source_family": "three_way_eval",
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/archive_20260217_184655/3way_20260217_010032.jsonl",
+      "source_record_offset": 38,
+      "suite": "livecodebench"
+    }
+  ],
+  "skipped_no_cross_action_groups": 336,
+  "skipped_pairwise_overlap_groups": 0,
+  "stats": {
+    "candidate_rows": 1132,
+    "files_scanned": 2555,
+    "skipped_existing_row": 183,
+    "skipped_missing_prompt": 331,
+    "skipped_missing_response": 181,
+    "skipped_non_target_suite_record": 38598
+  },
+  "target_actions": [
+    "architect_general",
+    "coder_escalation",
+    "frontdoor"
+  ],
+  "target_match_mode": "any",
+  "target_source_families": [
+    "seeding_eval"
+  ],
+  "target_suites": [
+    "livecodebench"
+  ]
+}
