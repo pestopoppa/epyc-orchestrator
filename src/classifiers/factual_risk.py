@@ -211,20 +211,19 @@ def _role_tiers_from_stack_priors(
 ) -> dict[str, str]:
     """Return live role -> factual-risk tier from generated stack priors."""
     try:
-        from src.registry.stack_priors import live_stack_role_records
+        from src.registry.stack_priors import (
+            live_stack_role_records,
+            stack_prior_model_mem_gb,
+        )
     except Exception:
         return {}
 
     tiers: dict[str, str] = {}
     for role, record in live_stack_role_records(stack_priors_path).items():
-        model = record.get("model")
-        if not isinstance(model, dict):
+        mem_gb = stack_prior_model_mem_gb(record)
+        if mem_gb is None:
             continue
-        mem_gb = model.get("mem_gb")
-        try:
-            tiers[role] = _tier_from_model_mem(float(mem_gb))
-        except (TypeError, ValueError):
-            continue
+        tiers[role] = _tier_from_model_mem(mem_gb)
     return tiers
 
 

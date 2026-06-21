@@ -183,6 +183,21 @@ class TestRoleAdjustment:
         assert _role_tier_for_role("frontdoor") == "tier_2"
         assert _role_adjustment("frontdoor") == pytest.approx(0.824178)
 
+    def test_role_tier_uses_live_stack_prior_model_memory(self, tmp_path):
+        priors = tmp_path / "stack_priors.yaml"
+        priors.write_text(
+            """
+roles:
+  swapped_role:
+    deployment_status: live_stack
+    model:
+      mem_gb: 69.0
+""",
+            encoding="utf-8",
+        )
+
+        assert _role_tier_for_role("swapped_role", priors) == "tier_1"
+
     def test_role_tier_ignores_candidate_stack_prior_records(self, tmp_path):
         priors = tmp_path / "stack_priors.yaml"
         priors.write_text(
