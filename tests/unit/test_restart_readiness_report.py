@@ -171,6 +171,7 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
     assert report["blockers"] == []
     assert report["summary"]["snapshot_restart_readiness"] == "tail_fold_ready"
     assert report["summary"]["baseline_authority_source"] == "state_baseline"
+    assert report["summary"]["baseline_authority_enabled"] is False
     assert report["summary"]["baseline_seed_status"] == "ready"
     assert report["summary"]["baseline_seed_append_ready"] is True
     assert report["summary"]["baseline_seed_append_required"] is True
@@ -208,7 +209,8 @@ def test_baseline_seed_preflight_skips_when_ledger_fold_ready(monkeypatch) -> No
 
     report = report_mod.build_restart_readiness_report(_state(), [])
 
-    assert report["summary"]["baseline_authority_source"] == "ledger_fold"
+    assert report["summary"]["baseline_authority_source"] == "state_baseline"
+    assert report["summary"]["baseline_authority_enabled"] is False
     assert report["summary"]["baseline_seed_status"] == "ledger_fold_ready"
     assert report["summary"]["baseline_seed_append_ready"] is False
     assert report["summary"]["baseline_seed_append_required"] is False

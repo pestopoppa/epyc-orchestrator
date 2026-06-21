@@ -14,6 +14,7 @@ from typing import Any
 
 
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
+BASELINE_LEDGER_AUTHORITY_STATE_FLAG = "baseline_ledger_authority_enabled"
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,11 @@ def reconcile_baseline_ledger(
     )
 
 
+def baseline_ledger_authority_enabled(state: dict[str, Any]) -> bool:
+    """Return whether persisted state permits baseline cache removal."""
+    return state.get(BASELINE_LEDGER_AUTHORITY_STATE_FLAG) is True
+
+
 def apply_baseline_ledger_authority(
     state: dict[str, Any],
     events: list[dict[str, Any]],
@@ -177,6 +183,8 @@ def apply_baseline_ledger_authority(
     if reconciliation.status in {"no_events", "unreconstructable"}:
         return None
     if not reconciliation.cutover_ready:
+        return False
+    if not baseline_ledger_authority_enabled(state):
         return False
     if "baseline_state" not in state:
         return False

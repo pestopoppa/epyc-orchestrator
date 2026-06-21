@@ -656,6 +656,7 @@ def test_save_state_with_journal_authority_removes_baseline_cache(
     )
     state = {
         "trial_counter": 9,
+        "baseline_ledger_authority_enabled": True,
         "baseline_state": {"baselines_by_tier": {"1": 1.8}},
     }
     saved: list[dict] = []
@@ -673,6 +674,43 @@ def test_save_state_with_journal_authority_removes_baseline_cache(
     assert used_journal is True
     assert "baseline_state" not in state
     assert saved and "baseline_state" not in saved[-1]
+
+
+def test_save_state_with_journal_authority_requires_baseline_enable_flag(
+    journal: ExperimentJournal,
+    archive: ParetoArchive,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.record(_make_entry(1, quality=1.1))
+    journal.append_baseline_promotion_event(
+        source_trial_id=8,
+        tier=1,
+        previous_quality=1.5,
+        new_quality=1.8,
+        reason="accepted",
+        proof={"matrix_status": "ok"},
+        result_metrics={"quality": 1.8},
+        baseline_state={"baselines_by_tier": {"1": 1.8}},
+        actor="unit-test",
+    )
+    state = {
+        "trial_counter": 9,
+        "baseline_state": {"baselines_by_tier": {"1": 1.8}},
+    }
+    saved: list[dict] = []
+
+    monkeypatch.setattr(autopilot, "save_state", lambda updated: saved.append(dict(updated)))
+
+    used_journal = autopilot._save_state_with_journal_archive_authority(
+        state,
+        journal,
+        archive,
+        context="unit-test",
+    )
+
+    assert used_journal is True
+    assert state["baseline_state"] == {"baselines_by_tier": {"1": 1.8}}
+    assert saved and saved[-1]["baseline_state"] == {"baselines_by_tier": {"1": 1.8}}
 
 
 def test_save_state_with_journal_authority_keeps_drifted_baseline_cache(

@@ -17,6 +17,7 @@ sys.path.insert(0, str(ORCH_ROOT))
 from preflight_audit import JOURNAL_PATH, STATE_PATH, _load_jsonl  # noqa: E402
 from src.autopilot_core.baseline_ledger import (  # noqa: E402
     BaselineLedgerReconciliation,
+    baseline_ledger_authority_enabled,
     format_baseline_ledger_summary,
     reconcile_baseline_ledger,
 )
@@ -36,9 +37,18 @@ def _latest_event_view(
     }
 
 
-def _recommendation(reconciliation: BaselineLedgerReconciliation) -> str:
-    if reconciliation.cutover_ready:
+def _recommendation(
+    reconciliation: BaselineLedgerReconciliation,
+    *,
+    authority_enabled: bool,
+) -> str:
+    if reconciliation.cutover_ready and authority_enabled:
         return "baseline ledger fold is ready for evidence-plane W4 acceptance"
+    if reconciliation.cutover_ready:
+        return (
+            "baseline ledger fold is ready; enable baseline ledger authority "
+            "after restart cutover gates pass"
+        )
     if reconciliation.status == "no_events":
         return "keep live baseline_state authority; no baseline promotion ledger exists"
     if reconciliation.status == "unreconstructable":
@@ -56,15 +66,20 @@ def build_baseline_authority_report(
         journal_rows,
         state_baseline if isinstance(state_baseline, dict) else None,
     )
+    authority_enabled = baseline_ledger_authority_enabled(state)
     report: dict[str, Any] = {
         "ok": reconciliation.cutover_ready,
         "status": reconciliation.status,
+        "authority_enabled": authority_enabled,
         "event_count": reconciliation.event_count,
         "valid_snapshot_count": reconciliation.valid_snapshot_count,
         "cutover_ready": reconciliation.cutover_ready,
         "cutover_blockers": reconciliation.cutover_blockers,
         "warnings": reconciliation.warnings,
-        "recommendation": _recommendation(reconciliation),
+        "recommendation": _recommendation(
+            reconciliation,
+            authority_enabled=authority_enabled,
+        ),
     }
     report.update(_latest_event_view(reconciliation))
     return report
@@ -89,6 +104,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "# AutoPilot Baseline Authority Report",
         "",
         *[f"- {line}" for line in format_baseline_ledger_summary(reconciliation)],
+        f"- Baseline ledger authority enabled: {str(report.get('authority_enabled')).lower()}",
         f"- Recommendation: {report.get('recommendation')}",
     ]
     return "\n".join(lines)

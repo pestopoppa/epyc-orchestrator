@@ -16,6 +16,9 @@ from baseline_authority_report import (  # noqa: E402
     main,
     render_markdown,
 )
+from src.autopilot_core.baseline_ledger import (  # noqa: E402
+    BASELINE_LEDGER_AUTHORITY_STATE_FLAG,
+)
 
 
 def _promotion(
@@ -44,13 +47,17 @@ def _promotion(
 def test_report_marks_matching_baseline_fold_ok() -> None:
     rows = [_promotion(7, new_quality=1.9)]
     report = build_baseline_authority_report(
-        {"baseline_state": {"baselines_by_tier": {"1": 1.9}}},
+        {
+            BASELINE_LEDGER_AUTHORITY_STATE_FLAG: True,
+            "baseline_state": {"baselines_by_tier": {"1": 1.9}},
+        },
         rows,
     )
 
     assert report == {
         "ok": True,
         "status": "match",
+        "authority_enabled": True,
         "event_count": 1,
         "valid_snapshot_count": 1,
         "cutover_ready": True,
@@ -64,6 +71,21 @@ def test_report_marks_matching_baseline_fold_ok() -> None:
         "latest_previous_quality": 1.4,
         "latest_new_quality": 1.9,
     }
+
+
+def test_report_distinguishes_ready_fold_from_enabled_authority() -> None:
+    rows = [_promotion(7, new_quality=1.9)]
+    report = build_baseline_authority_report(
+        {"baseline_state": {"baselines_by_tier": {"1": 1.9}}},
+        rows,
+    )
+
+    assert report["ok"] is True
+    assert report["authority_enabled"] is False
+    assert report["recommendation"] == (
+        "baseline ledger fold is ready; enable baseline ledger authority "
+        "after restart cutover gates pass"
+    )
 
 
 def test_report_marks_drift_not_ok_with_recommendation() -> None:
@@ -85,7 +107,10 @@ def test_report_marks_drift_not_ok_with_recommendation() -> None:
 
 def test_render_markdown_uses_baseline_ledger_summary() -> None:
     report = build_baseline_authority_report(
-        {"baseline_state": {"baselines_by_tier": {"1": 1.9}}},
+        {
+            BASELINE_LEDGER_AUTHORITY_STATE_FLAG: True,
+            "baseline_state": {"baselines_by_tier": {"1": 1.9}},
+        },
         [_promotion(7, new_quality=1.9)],
     )
 
@@ -94,6 +119,7 @@ def test_render_markdown_uses_baseline_ledger_summary() -> None:
     assert "# AutoPilot Baseline Authority Report" in rendered
     assert "- Baseline promotion events: 1" in rendered
     assert "- Latest baseline event: trial #7 T1 1.400 -> 1.900" in rendered
+    assert "- Baseline ledger authority enabled: true" in rendered
     assert (
         "- Recommendation: baseline ledger fold is ready for evidence-plane W4 "
         "acceptance"

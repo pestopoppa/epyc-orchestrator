@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from src.autopilot_core.baseline_ledger import (
+    BASELINE_LEDGER_AUTHORITY_STATE_FLAG,
     BASELINE_PROMOTION_EVENT_TYPE,
     apply_baseline_ledger_authority,
+    baseline_ledger_authority_enabled,
     format_baseline_ledger_summary,
     reconcile_baseline_ledger,
 )
@@ -151,12 +153,25 @@ def test_reconcile_quality_mismatch_is_warning_only() -> None:
 
 
 def test_apply_baseline_ledger_authority_removes_matching_state_cache() -> None:
-    state = {"baseline_state": {"baselines_by_tier": {"1": 1.8}}}
+    state = {
+        BASELINE_LEDGER_AUTHORITY_STATE_FLAG: True,
+        "baseline_state": {"baselines_by_tier": {"1": 1.8}},
+    }
 
     changed = apply_baseline_ledger_authority(state, [_event(1, new_quality=1.8)])
 
     assert changed is True
     assert "baseline_state" not in state
+
+
+def test_apply_baseline_ledger_authority_requires_explicit_enable() -> None:
+    state = {"baseline_state": {"baselines_by_tier": {"1": 1.8}}}
+
+    changed = apply_baseline_ledger_authority(state, [_event(1, new_quality=1.8)])
+
+    assert changed is False
+    assert state["baseline_state"] == {"baselines_by_tier": {"1": 1.8}}
+    assert not baseline_ledger_authority_enabled(state)
 
 
 def test_apply_baseline_ledger_authority_keeps_cold_start_state() -> None:

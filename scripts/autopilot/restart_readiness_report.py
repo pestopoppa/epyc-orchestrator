@@ -68,12 +68,13 @@ def _baseline_restart_report(
 ) -> dict[str, Any]:
     report = build_baseline_authority_report(state, journal_rows)
     state_cache_present = isinstance(state.get("baseline_state"), dict)
+    authority_enabled = bool(report.get("authority_enabled"))
     startup_safe = bool(report.get("ok")) or state_cache_present
     authority_source = (
-        "ledger_fold"
-        if report.get("ok")
-        else "state_baseline"
+        "state_baseline"
         if state_cache_present
+        else "ledger_fold"
+        if report.get("ok")
         else "missing"
     )
     seed_preflight = _baseline_seed_preflight(
@@ -85,6 +86,7 @@ def _baseline_restart_report(
         **report,
         "startup_safe": startup_safe,
         "authority_source": authority_source,
+        "authority_enabled": authority_enabled,
         "state_baseline_present": state_cache_present,
         "seed_preflight": seed_preflight,
     }
@@ -197,6 +199,7 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "snapshot_restart_readiness": snapshot.get("restart_readiness"),
         "snapshot_payload_available": snapshot.get("payload_available"),
         "baseline_authority_source": baseline.get("authority_source"),
+        "baseline_authority_enabled": baseline.get("authority_enabled"),
         "baseline_startup_safe": baseline.get("startup_safe"),
         "baseline_seed_status": baseline_seed.get("status"),
         "baseline_seed_append_ready": baseline_seed.get("append_ready"),
