@@ -190,6 +190,90 @@ def _apply_quantile_histogram_calibrator(
     return values[idx]
 
 
+def _fit_isotonic_calibrator(
+    probs: np.ndarray,
+    labels: np.ndarray,
+) -> dict[str, Any]:
+    """Fit a monotone isotonic calibrator with pool-adjacent-violators."""
+    p = np.asarray(probs, dtype=np.float32)
+    y = np.asarray(labels, dtype=np.float32)
+    order = np.argsort(p)
+    sorted_p = p[order]
+    sorted_y = y[order]
+
+    blocks: list[dict[str, float]] = []
+    for score, label in zip(sorted_p, sorted_y):
+        blocks.append(
+            {
+                "lo": float(score),
+                "hi": float(score),
+                "weight": 1.0,
+                "value": float(label),
+            }
+        )
+        while len(blocks) >= 2 and blocks[-2]["value"] > blocks[-1]["value"]:
+            right = blocks.pop()
+            left = blocks.pop()
+            weight = left["weight"] + right["weight"]
+            value = (
+                (left["value"] * left["weight"] + right["value"] * right["weight"])
+                / weight
+            )
+            blocks.append(
+                {
+                    "lo": left["lo"],
+                    "hi": right["hi"],
+                    "weight": weight,
+                    "value": value,
+                }
+            )
+    return {
+        "method": "isotonic_regression",
+        "thresholds": [block["hi"] for block in blocks[:-1]],
+        "values": [block["value"] for block in blocks],
+        "block_count": len(blocks),
+    }
+
+
+def _apply_isotonic_calibrator(
+    probs: np.ndarray,
+    calibrator: dict[str, Any],
+) -> np.ndarray:
+    thresholds = np.asarray(calibrator["thresholds"], dtype=np.float32)
+    values = np.asarray(calibrator["values"], dtype=np.float32)
+    idx = np.searchsorted(thresholds, probs.astype(np.float32), side="right")
+    return values[idx]
+
+
+def _fit_feature_normalizer(
+    Z: np.ndarray,
+    train_idx: np.ndarray,
+    feature_dim: int,
+) -> dict[str, Any]:
+    features = Z[train_idx, :feature_dim].astype(np.float32)
+    mean = features.mean(axis=0).astype(np.float32)
+    scale = features.std(axis=0).astype(np.float32)
+    zero_scale_mask = scale < 1e-6
+    scale = np.where(zero_scale_mask, 1.0, scale).astype(np.float32)
+    return {
+        "mean": mean,
+        "scale": scale,
+        "zero_scale_count": int(zero_scale_mask.sum()),
+    }
+
+
+def _apply_feature_normalizer(
+    Z: np.ndarray,
+    feature_dim: int,
+    normalizer: dict[str, Any],
+) -> np.ndarray:
+    Z_norm = Z.copy()
+    Z_norm[:, :feature_dim] = (
+        Z_norm[:, :feature_dim] - normalizer["mean"]
+    ) / normalizer["scale"]
+    return Z_norm
+
+
 def _reliability(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> None:
     bins = np.linspace(0.0, 1.0, n_bins + 1)
     print(f"\n{'bin':<14} {'n':>8} {'mean_p':>10} {'frac_pos':>10} {'|gap|':>10}")
@@ -248,6 +332,8 @@ def train_and_eval(
     lr: float = 0.05,
     batch_size: int = 256,
     patience: int = 20,
+    hidden1: int = 64,
+    hidden2: int = 32,
     val_seed: int = 42,
     val_split: float = 0.2,
     calibration_split: float = 0.0,
@@ -255,6 +341,7 @@ def train_and_eval(
     calibration_method: str = "temperature_bias",
     calibration_bins: int = 7,
     calibration_alpha: float = 0.0,
+    normalize_features: bool = False,
 ) -> dict:
     # ── Load data ──
     logger.info("Loading verifier data from %s", data_path)
@@ -285,28 +372,36 @@ def train_and_eval(
         test_idx = idx[:n_test]
         cal_idx = idx[n_test:n_test + n_cal]
         train_idx = idx[n_test + n_cal:]
-        Z_fit = Z[train_idx]
-        y_fit = correct[train_idx]
-        w_fit = sample_weights[train_idx]
         eval_idx = test_idx
         eval_split_name = "test"
     else:
         train_idx = idx
         cal_idx = np.array([], dtype=np.int64)
-        Z_fit = Z
-        y_fit = correct
-        w_fit = sample_weights
         n_val = max(1, int(N * val_split))
         eval_idx = idx[:n_val]
         eval_split_name = "val"
+
+    feature_normalizer: dict[str, Any] | None = None
+    if normalize_features:
+        feature_normalizer = _fit_feature_normalizer(Z, train_idx, feature_dim)
+        Z = _apply_feature_normalizer(Z, feature_dim, feature_normalizer)
+
+    Z_fit = Z[train_idx]
+    y_fit = correct[train_idx]
+    w_fit = sample_weights[train_idx]
 
     # ── Train ──
     verifier = VerifierHead(
         feature_dim=feature_dim,
         n_actions=n_actions,
-        hidden1=64,
-        hidden2=32,
+        hidden1=hidden1,
+        hidden2=hidden2,
     )
+    if feature_normalizer is not None:
+        verifier.set_feature_normalizer(
+            feature_normalizer["mean"],
+            feature_normalizer["scale"],
+        )
     logger.info("Verifier params: %d (input_dim=%d)", verifier.param_count, verifier.input_dim)
 
     history = verifier.train(
@@ -355,6 +450,15 @@ def train_and_eval(
                 smoothing_alpha=calibration_alpha,
             )
             p_calibrated = _apply_quantile_histogram_calibrator(p_verifier, calibrator)
+            calibration = {
+                **calibrator,
+                "calibration_rows": int(n_cal),
+                "test_rows": int(len(y_val)),
+                "calibrated_verifier": _metrics(p_calibrated, y_val),
+            }
+        elif calibration_method == "isotonic":
+            calibrator = _fit_isotonic_calibrator(p_cal, y_cal)
+            p_calibrated = _apply_isotonic_calibrator(p_verifier, calibrator)
             calibration = {
                 **calibrator,
                 "calibration_rows": int(n_cal),
@@ -482,6 +586,17 @@ def train_and_eval(
         "test_rows": int(n_test),
         "feature_dim": int(feature_dim),
         "n_actions": int(n_actions),
+        "hidden1": int(hidden1),
+        "hidden2": int(hidden2),
+        "normalize_features": bool(normalize_features),
+        "feature_normalizer": (
+            {
+                "scope": "feature_prefix",
+                "zero_scale_count": feature_normalizer["zero_scale_count"],
+            }
+            if feature_normalizer is not None
+            else None
+        ),
         "positive_rows": int(correct.sum()),
         "negative_rows": int(N - int(correct.sum())),
         "val_positive_rate": float(y_val.mean()),
@@ -522,6 +637,8 @@ def _summary_markdown(summary: dict) -> str:
         f"- Rows: `{summary['rows']}` ({summary['positive_rows']} positive / {summary['negative_rows']} negative)",
         f"- Evaluation split: `{summary.get('eval_split', 'val')}`",
         f"- Evaluation rows: `{summary.get('eval_rows', summary['val_rows'])}`",
+        f"- Hidden widths: `{summary['hidden1']}` / `{summary['hidden2']}`",
+        f"- Feature normalization: `{summary['normalize_features']}`",
         f"- Actions represented: `{summary['action_counts']}`",
         f"- Brier: `{verifier['brier']:.4f}`",
         f"- ROC-AUC: `{verifier['auc']:.4f}`",
@@ -583,7 +700,7 @@ def main():
     parser.add_argument("--test-split", type=float, default=0.0)
     parser.add_argument(
         "--calibration-method",
-        choices=("temperature_bias", "quantile_histogram"),
+        choices=("temperature_bias", "quantile_histogram", "isotonic"),
         default="temperature_bias",
         help="Held-out calibration method to fit when --calibration-split is set.",
     )
@@ -599,6 +716,13 @@ def main():
         default=0.0,
         help="Base-rate smoothing alpha for quantile histogram calibration.",
     )
+    parser.add_argument("--hidden1", type=int, default=64)
+    parser.add_argument("--hidden2", type=int, default=32)
+    parser.add_argument(
+        "--normalize-features",
+        action="store_true",
+        help="Standardize the verifier feature prefix using the train split.",
+    )
     args = parser.parse_args()
 
     summary = train_and_eval(
@@ -610,11 +734,14 @@ def main():
         lr=args.lr,
         batch_size=args.batch_size,
         patience=args.patience,
+        hidden1=args.hidden1,
+        hidden2=args.hidden2,
         calibration_split=args.calibration_split,
         test_split=args.test_split,
         calibration_method=args.calibration_method,
         calibration_bins=args.calibration_bins,
         calibration_alpha=args.calibration_alpha,
+        normalize_features=args.normalize_features,
     )
     if args.summary_json:
         path = Path(args.summary_json)

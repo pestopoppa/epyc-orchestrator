@@ -136,6 +136,12 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
 
     assert summary["rows"] == 4
     assert summary["unique_source_records_embedded"] == 1
+    diagnostics = summary["model_input_group_diagnostics"]
+    assert diagnostics["unique_model_input_groups"] == 3
+    assert diagnostics["duplicate_model_input_groups"] == 1
+    assert diagnostics["duplicate_model_input_rows"] == 2
+    assert diagnostics["conflicting_model_input_groups"] == 1
+    assert diagnostics["conflicting_model_input_rows"] == 2
     assert calls == ["What is 2+2?"]
     assert data["Z"].shape == (4, 1031 + 3)
     assert data["Z"].dtype == np.float32

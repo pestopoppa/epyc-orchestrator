@@ -8,6 +8,25 @@
   "feature_dim": 1031,
   "label_source": "offline_reward_feature_manifest/reference_token_coverage@0.86",
   "manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_expansion.jsonl",
+  "model_input_group_diagnostics": {
+    "conflicting_model_input_groups": 66,
+    "conflicting_model_input_rows": 229,
+    "duplicate_model_input_groups": 182,
+    "duplicate_model_input_rows": 463,
+    "group_key": [
+      "source_path",
+      "source_record_offset",
+      "canonical_action_index"
+    ],
+    "top_conflicting_sources": {
+      "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_023815.jsonl": 1,
+      "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl": 12,
+      "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl": 6,
+      "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_203724.jsonl": 43,
+      "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_seed42.json": 4
+    },
+    "unique_model_input_groups": 243
+  },
   "n_actions": 10,
   "n_neg": 271,
   "n_pos": 253,

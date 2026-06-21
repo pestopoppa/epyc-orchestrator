@@ -4,6 +4,9 @@
 - Output: `orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion.npz`
 - Rows: `524`
 - Unique source records embedded: `193`
+- Unique model-input groups: `243`
+- Duplicate model-input groups: `182`
+- Conflicting model-input groups: `66`
 - Feature dimension: `1031`
 - Action count: `10`
 - Z dimension: `1041`

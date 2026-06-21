@@ -64,12 +64,16 @@ class VerifierHead:
         n_actions: int = 8,
         hidden1: int = 64,
         hidden2: int = 32,
+        feature_mean: Optional[np.ndarray] = None,
+        feature_scale: Optional[np.ndarray] = None,
     ):
         self.feature_dim = feature_dim
         self.n_actions = n_actions
         self.input_dim = feature_dim + n_actions
         self.hidden1 = hidden1
         self.hidden2 = hidden2
+        self.feature_mean = self._coerce_normalizer(feature_mean, "feature_mean")
+        self.feature_scale = self._coerce_normalizer(feature_scale, "feature_scale")
 
         rng = np.random.default_rng(42)
 
@@ -89,6 +93,40 @@ class VerifierHead:
     @property
     def param_count(self) -> int:
         return sum(w.size for w in self._weights.values())
+
+    @property
+    def has_feature_normalizer(self) -> bool:
+        return self.feature_mean is not None and self.feature_scale is not None
+
+    def _coerce_normalizer(
+        self,
+        values: Optional[np.ndarray],
+        name: str,
+    ) -> Optional[np.ndarray]:
+        if values is None:
+            return None
+        arr = np.asarray(values, dtype=np.float32).reshape(-1)
+        if arr.shape[0] != self.feature_dim:
+            raise ValueError(
+                f"{name} has dim={arr.shape[0]}, expected {self.feature_dim}"
+            )
+        return arr
+
+    def set_feature_normalizer(
+        self,
+        mean: np.ndarray,
+        scale: np.ndarray,
+    ) -> None:
+        self.feature_mean = self._coerce_normalizer(mean, "feature_mean")
+        self.feature_scale = self._coerce_normalizer(scale, "feature_scale")
+
+    def normalize_features(self, features: np.ndarray) -> np.ndarray:
+        feats = features.astype(np.float32)
+        if not self.has_feature_normalizer:
+            return feats
+        assert self.feature_mean is not None
+        assert self.feature_scale is not None
+        return (feats - self.feature_mean) / self.feature_scale
 
     @staticmethod
     def join(features: np.ndarray, action_idx: int, n_actions: int) -> np.ndarray:
@@ -139,7 +177,7 @@ class VerifierHead:
 
     def predict(self, features: np.ndarray, action_idx: int) -> float:
         """Predict P(correct) for a single (features, action) pair."""
-        z = self.join(features, action_idx, self.n_actions)
+        z = self.join(self.normalize_features(features), action_idx, self.n_actions)
         p, _ = self.forward(z)
         return float(p[0])
 
@@ -274,6 +312,11 @@ class VerifierHead:
             [self.feature_dim, self.n_actions, self.hidden1, self.hidden2],
             dtype=np.int64,
         )
+        if self.has_feature_normalizer:
+            assert self.feature_mean is not None
+            assert self.feature_scale is not None
+            save_dict["_feature_mean"] = self.feature_mean.astype(np.float32)
+            save_dict["_feature_scale"] = self.feature_scale.astype(np.float32)
         np.savez_compressed(path, **save_dict)
         logger.info("Saved verifier weights to %s (%d params)", path, self.param_count)
 
@@ -293,6 +336,11 @@ class VerifierHead:
             )
             for key in ["W1", "b1", "W2", "b2", "W3", "b3"]:
                 v._weights[key] = data[key].astype(np.float32)
+            if "_feature_mean" in data.files and "_feature_scale" in data.files:
+                v.set_feature_normalizer(
+                    data["_feature_mean"].astype(np.float32),
+                    data["_feature_scale"].astype(np.float32),
+                )
             logger.info("Loaded verifier: %d params", v.param_count)
             return v
         except Exception as e:

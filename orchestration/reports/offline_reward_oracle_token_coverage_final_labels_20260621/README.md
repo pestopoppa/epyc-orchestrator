@@ -89,6 +89,12 @@ Committed artifacts:
   repeat the 10-seed calibration robustness check on the expanded verifier
   data. Sparse action coverage is repaired, but the verifier remains
   `not_promotion_grade` because calibrated pass rates remain `0/10`.
+- `offline_reward_multi_action_verifier_with_expansion_normalized_isotonic_robustness_summary.json`
+  and `offline_reward_multi_action_verifier_with_expansion_normalized_isotonic_robustness_summary.md`
+  repeat the expanded robustness check with train-split feature normalization,
+  wider `128/64` hidden layers, and monotone isotonic calibration alongside the
+  prior calibration methods. This improves the measured verifier ceiling but
+  remains `not_promotion_grade`.
 
 Private row data is not committed. The scored row file is:
 
@@ -150,12 +156,25 @@ Result:
 - expanded merged labels: `524` rows
 - expanded verifier NPZ rows: `524`
 - expanded verifier NPZ unique source records embedded: `193`
+- expanded verifier NPZ unique model-input groups: `243`
+- expanded verifier NPZ duplicate model-input groups / rows: `182` / `463`
+- expanded verifier NPZ conflicting model-input groups / rows: `66` / `229`
 - expanded verifier NPZ action coverage: `architect_general=210`,
   `coder_escalation=90`, `frontdoor=224`
 - expanded robustness temperature/bias calibrated pass count: `0/10`
 - expanded robustness quantile-histogram calibrated pass count: `0/10`
 - expanded robustness decision: `not_promotion_grade`
 - expanded robustness blockers:
+  `quantile_histogram_calibrated_pass_rate_below_threshold`,
+  `temperature_bias_calibrated_pass_rate_below_threshold`
+- normalized/isotonic robustness training params: `hidden1=128`, `hidden2=64`,
+  `normalize_features=true`, `epochs=150`, `batch_size=128`, `patience=30`
+- normalized/isotonic robustness isotonic calibrated pass count: `1/10`
+- normalized/isotonic robustness isotonic calibrated Brier / ROC-AUC / ECE
+  means: `0.1921` / `0.7514` / `0.0905`
+- normalized/isotonic robustness decision: `not_promotion_grade`
+- normalized/isotonic robustness blockers:
+  `isotonic_calibrated_pass_rate_below_threshold`,
   `quantile_histogram_calibrated_pass_rate_below_threshold`,
   `temperature_bias_calibrated_pass_rate_below_threshold`
 
@@ -177,5 +196,9 @@ ECE scout, but the 10-seed robustness check confirms the seed-42 histogram pass
 is not stable enough for promotion. The expansion rebuild repairs the immediate
 row-count deficit (`architect_general=210`, `coder_escalation=90`,
 `frontdoor=224`), but robustness remains `not_promotion_grade`: both calibrated
-methods pass `0/10` seeds. The next promotion-grade step is therefore verifier
-model/calibration improvement, not a default-off runtime gate change.
+methods pass `0/10` seeds. Feature normalization plus isotonic calibration is
+the best current calibration path, but it still passes only `1/10` seeds. The
+expanded NPZ also exposes 66 conflicting prompt/action groups covering 229 rows:
+those rows are indistinguishable to a prompt/action-only verifier, so the next
+promotion-grade step is conflict-aware data repair or a richer offline feature
+contract, not a default-off runtime gate change.

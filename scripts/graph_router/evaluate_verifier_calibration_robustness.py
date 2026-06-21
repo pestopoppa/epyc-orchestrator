@@ -34,7 +34,7 @@ def _parse_csv_strings(value: str) -> list[str]:
     methods = [part.strip() for part in value.split(",") if part.strip()]
     if not methods:
         raise argparse.ArgumentTypeError("expected at least one method")
-    allowed = {"temperature_bias", "quantile_histogram"}
+    allowed = {"temperature_bias", "quantile_histogram", "isotonic"}
     invalid = sorted(set(methods) - allowed)
     if invalid:
         raise argparse.ArgumentTypeError(f"unsupported method(s): {', '.join(invalid)}")
@@ -118,6 +118,7 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
         f"- Data: `{summary['data_path']}`",
         f"- Seeds: `{summary['seeds']}`",
         f"- Methods: `{summary['methods_requested']}`",
+        f"- Training params: `{summary['training_params']}`",
         f"- Decision: `{summary['aggregate']['decision']['status']}`",
         f"- Blockers: `{summary['aggregate']['decision']['blockers']}`",
         f"- Action counts: `{summary['aggregate']['action_counts']}`",
@@ -170,6 +171,8 @@ def run_robustness(args: argparse.Namespace) -> dict[str, Any]:
                 lr=args.lr,
                 batch_size=args.batch_size,
                 patience=args.patience,
+                hidden1=args.hidden1,
+                hidden2=args.hidden2,
                 val_seed=seed,
                 val_split=args.val_split,
                 calibration_split=args.calibration_split,
@@ -177,6 +180,7 @@ def run_robustness(args: argparse.Namespace) -> dict[str, Any]:
                 calibration_method=method,
                 calibration_bins=args.calibration_bins,
                 calibration_alpha=args.calibration_alpha,
+                normalize_features=args.normalize_features,
             )
             runs.append(
                 {
@@ -211,6 +215,15 @@ def run_robustness(args: argparse.Namespace) -> dict[str, Any]:
             "val_split": args.val_split,
             "calibration_split": args.calibration_split,
             "test_split": args.test_split,
+        },
+        "training_params": {
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "batch_size": args.batch_size,
+            "patience": args.patience,
+            "hidden1": args.hidden1,
+            "hidden2": args.hidden2,
+            "normalize_features": args.normalize_features,
         },
         "calibration_params": {
             "calibration_bins": args.calibration_bins,
@@ -252,6 +265,9 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument("--hidden1", type=int, default=64)
+    parser.add_argument("--hidden2", type=int, default=32)
+    parser.add_argument("--normalize-features", action="store_true")
     parser.add_argument("--val-split", type=float, default=0.2)
     parser.add_argument("--calibration-split", type=float, default=0.2)
     parser.add_argument("--test-split", type=float, default=0.2)

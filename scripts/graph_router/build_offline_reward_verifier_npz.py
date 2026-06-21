@@ -157,6 +157,46 @@ def _sample_weights(correct: np.ndarray) -> np.ndarray:
     return np.where(correct == 1.0, pos_weight, neg_weight).astype(np.float32)
 
 
+def _model_input_group_diagnostics(
+    metadata_rows: list[dict[str, Any]],
+    correct: np.ndarray,
+    actions: np.ndarray,
+) -> dict[str, Any]:
+    groups: dict[tuple[str, int, int], list[int]] = {}
+    for index, (metadata, action) in enumerate(zip(metadata_rows, actions)):
+        key = (
+            str(metadata["source_path"]),
+            int(metadata["source_record_offset"]),
+            int(action),
+        )
+        groups.setdefault(key, []).append(index)
+
+    duplicate_groups = {
+        key: indexes
+        for key, indexes in groups.items()
+        if len(indexes) > 1
+    }
+    conflicting_groups = {
+        key: indexes
+        for key, indexes in duplicate_groups.items()
+        if len({int(correct[index]) for index in indexes}) > 1
+    }
+    top_conflicting_sources = Counter(key[0] for key in conflicting_groups)
+    return {
+        "group_key": [
+            "source_path",
+            "source_record_offset",
+            "canonical_action_index",
+        ],
+        "unique_model_input_groups": len(groups),
+        "duplicate_model_input_groups": len(duplicate_groups),
+        "duplicate_model_input_rows": sum(len(indexes) for indexes in duplicate_groups.values()),
+        "conflicting_model_input_groups": len(conflicting_groups),
+        "conflicting_model_input_rows": sum(len(indexes) for indexes in conflicting_groups.values()),
+        "top_conflicting_sources": dict(top_conflicting_sources.most_common(10)),
+    }
+
+
 def _assert_prompt_free_metadata(metadata_rows: Iterable[dict[str, Any]]) -> None:
     for index, row in enumerate(metadata_rows, start=1):
         present = sorted(PRIVATE_FIELDS & set(row))
@@ -318,6 +358,11 @@ def build_verifier_npz(
         "out_npz": str(out_npz),
         "rows": int(Z.shape[0]),
         "unique_source_records_embedded": len(embedding_cache),
+        "model_input_group_diagnostics": _model_input_group_diagnostics(
+            metadata_rows,
+            correct,
+            actions,
+        ),
         "feature_dim": int(X.shape[1]),
         "n_actions": n_actions,
         "z_dim": int(Z.shape[1]),
@@ -369,6 +414,12 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
             f"- Output: `{summary['out_npz']}`",
             f"- Rows: `{summary['rows']}`",
             f"- Unique source records embedded: `{summary['unique_source_records_embedded']}`",
+            f"- Unique model-input groups: "
+            f"`{summary['model_input_group_diagnostics']['unique_model_input_groups']}`",
+            f"- Duplicate model-input groups: "
+            f"`{summary['model_input_group_diagnostics']['duplicate_model_input_groups']}`",
+            f"- Conflicting model-input groups: "
+            f"`{summary['model_input_group_diagnostics']['conflicting_model_input_groups']}`",
             f"- Feature dimension: `{summary['feature_dim']}`",
             f"- Action count: `{summary['n_actions']}`",
             f"- Z dimension: `{summary['z_dim']}`",

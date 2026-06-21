@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from scripts.graph_router import train_verifier_head as mod
+from orchestration.repl_memory.verifier_head import VerifierHead
 
 
 def test_load_classifier_features_falls_back_to_verifier_prefix(tmp_path: Path) -> None:
@@ -37,6 +38,9 @@ def test_summary_markdown_records_null_promotion_metrics() -> None:
             "positive_rows": 2,
             "negative_rows": 2,
             "val_rows": 1,
+            "hidden1": 64,
+            "hidden2": 32,
+            "normalize_features": False,
             "action_counts": {"0": 2, "1": 2},
             "verifier": {"brier": 0.2, "auc": 0.8, "ece": 0.1, "acc": 0.75},
             "brier_delta_vs_best_softmax_baseline": 0.03,
@@ -93,3 +97,35 @@ def test_quantile_histogram_calibrator_maps_bins_to_empirical_rates() -> None:
     assert calibrator["bin_positives"] == [1, 3]
     np.testing.assert_allclose(calibrated[:3], np.full(3, 1.0 / 3.0))
     np.testing.assert_allclose(calibrated[3:], np.ones(3))
+
+
+def test_isotonic_calibrator_is_monotone() -> None:
+    labels = np.array([0, 1, 0, 1, 1, 1], dtype=np.float32)
+    probs = np.array([0.10, 0.20, 0.30, 0.70, 0.80, 0.90], dtype=np.float32)
+
+    calibrator = mod._fit_isotonic_calibrator(probs, labels)
+    calibrated = mod._apply_isotonic_calibrator(probs, calibrator)
+
+    assert calibrator["method"] == "isotonic_regression"
+    assert calibrator["block_count"] < len(probs)
+    assert np.all(np.diff(calibrated) >= 0.0)
+
+
+def test_verifier_feature_normalizer_persists_with_weights(tmp_path: Path) -> None:
+    verifier = VerifierHead(feature_dim=3, n_actions=2, hidden1=4, hidden2=3)
+    mean = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    scale = np.array([2.0, 4.0, 8.0], dtype=np.float32)
+    verifier.set_feature_normalizer(mean, scale)
+    path = tmp_path / "verifier.npz"
+
+    verifier.save(path)
+    loaded = VerifierHead.load(path)
+
+    assert loaded is not None
+    assert loaded.has_feature_normalizer
+    np.testing.assert_allclose(loaded.feature_mean, mean)
+    np.testing.assert_allclose(loaded.feature_scale, scale)
+    np.testing.assert_allclose(
+        loaded.normalize_features(np.array([3.0, 10.0, 19.0], dtype=np.float32)),
+        np.array([1.0, 2.0, 2.0], dtype=np.float32),
+    )
