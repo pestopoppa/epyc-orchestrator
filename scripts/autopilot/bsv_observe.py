@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 BSV_METRIC_VERSION = "bsv-2-observe-v1"
+BSV_CONFLICT_VERSION = "bsv-3-conflict-ledger-v1"
 
 # per_suite_quality is on a 0-3 scale; >= this is treated as a suite-level "pass" proxy. This is a
 # coarse stand-in for true per-sentinel outcomes (which need the URE trace store) and is the reason
@@ -144,3 +145,232 @@ def compute_bsv_observe_payload(
         payload["severity"] = severity
         payload["reasons"] = reasons[:8]
     return payload
+
+
+def _listify(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, dict):
+        return [str(k) for k in sorted(value)]
+    if isinstance(value, (list, tuple, set)):
+        return [str(v) for v in value if str(v)]
+    return [str(value)]
+
+
+def _path_subsystem(path: str) -> str:
+    p = path.replace("\\", "/").lower()
+    if "prompt" in p or p.endswith(".md"):
+        return "prompt"
+    if "routing" in p or "router" in p:
+        return "routing"
+    if "stack" in p or "model_registry" in p or "orchestration/" in p:
+        return "stack"
+    if "eval" in p or "benchmark" in p:
+        return "eval"
+    if "memory" in p or "repl_memory" in p:
+        return "memory"
+    return "code"
+
+
+def _action_subsystem(action: dict[str, Any], files: list[str]) -> str:
+    explicit = action.get("subsystem") or action.get("surface") or action.get("target")
+    if explicit:
+        text = str(explicit).lower()
+        if "routing" in text or "router" in text:
+            return "routing"
+        if "prompt" in text or "forge" in text:
+            return "prompt"
+        if "stack" in text or "model" in text:
+            return "stack"
+        if "eval" in text or "tower" in text:
+            return "eval"
+        if "memory" in text:
+            return "memory"
+        return text
+    if files:
+        subsystems = sorted({_path_subsystem(path) for path in files})
+        if len(subsystems) == 1:
+            return subsystems[0]
+        return "+".join(subsystems)
+    action_type = str(action.get("type") or "unknown")
+    if action_type == "seed_batch":
+        return "seeding"
+    if action_type == "structural_experiment":
+        return "feature_flags"
+    if action_type == "numeric_trial":
+        return "numeric"
+    return action_type
+
+
+def _extract_files(action: dict[str, Any]) -> list[str]:
+    files: list[str] = []
+    for key in ("file", "target_file", "path"):
+        files.extend(_listify(action.get(key)))
+    files.extend(_listify(action.get("files")))
+    return sorted({f for f in files if f and f not in {"None", "null"}})
+
+
+def _extract_prompt_sections(action: dict[str, Any]) -> list[str]:
+    sections: list[str] = []
+    for key in ("section", "sections", "prompt_section", "prompt_sections"):
+        sections.extend(_listify(action.get(key)))
+    return sorted(set(sections))
+
+
+def _extract_feature_flags(action: dict[str, Any]) -> dict[str, Any]:
+    flags = action.get("flags")
+    if isinstance(flags, dict):
+        return {str(k): v for k, v in sorted(flags.items())}
+    return {}
+
+
+def _signature_delta(
+    bsv_payload: dict[str, Any],
+    incumbent_signature: dict[str, Any] | None,
+) -> dict[str, Any]:
+    signature = bsv_payload.get("signature") or {}
+    old_outcomes = (incumbent_signature or {}).get("sentinel_outcomes") or {}
+    new_outcomes = signature.get("sentinel_outcomes") or {}
+    improved: list[str] = []
+    regressed: list[str] = []
+    for sid, old in old_outcomes.items():
+        new = new_outcomes.get(sid)
+        if old == "fail" and new == "pass":
+            improved.append(str(sid))
+        elif old == "pass" and new in {"fail", "error"}:
+            regressed.append(str(sid))
+
+    changed_fields = []
+    if incumbent_signature:
+        for field in (
+            "route_path_hash",
+            "tool_sequence_hash",
+            "escalation_path_hash",
+            "latency_bucket",
+            "token_bucket",
+        ):
+            if (incumbent_signature or {}).get(field) != signature.get(field):
+                changed_fields.append(field)
+
+    return {
+        "severity": bsv_payload.get("severity"),
+        "reasons": list(bsv_payload.get("reasons") or [])[:8],
+        "signature_hash": bsv_payload.get("signature_hash"),
+        "signature_confidence": bsv_payload.get("signature_confidence"),
+        "changed_fields": changed_fields,
+        "improved_sentinels": sorted(improved),
+        "regressed_sentinels": sorted(regressed),
+    }
+
+
+def build_mutation_dependency_entry(
+    *,
+    trial_id: int,
+    action: dict[str, Any],
+    parent_trial: int | None,
+    bsv_payload: dict[str, Any],
+    incumbent_signature: dict[str, Any] | None,
+    pareto_status: str,
+) -> dict[str, Any]:
+    """Build a BSV-3 mutation-dependency ledger row for an accepted mutation."""
+    files = _extract_files(action)
+    return {
+        "version": BSV_CONFLICT_VERSION,
+        "trial_id": int(trial_id),
+        "action_type": str(action.get("type") or ""),
+        "subsystem": _action_subsystem(action, files),
+        "files_touched": files,
+        "prompt_sections_touched": _extract_prompt_sections(action),
+        "feature_flags": _extract_feature_flags(action),
+        "behavior_signature_delta": _signature_delta(bsv_payload, incumbent_signature),
+        "parent_trial": parent_trial,
+        "pareto_status": pareto_status,
+        "archive_member_id": bsv_payload.get("archive_member_id"),
+    }
+
+
+def _entry_overlap(a: dict[str, Any], b: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if a.get("subsystem") and a.get("subsystem") == b.get("subsystem"):
+        reasons.append(f"same subsystem {a['subsystem']}")
+    for key, label in (
+        ("files_touched", "file"),
+        ("prompt_sections_touched", "prompt section"),
+    ):
+        shared = sorted(set(a.get(key) or []) & set(b.get(key) or []))
+        if shared:
+            reasons.append(f"shared {label}: {', '.join(shared[:4])}")
+    shared_flags = sorted(set((a.get("feature_flags") or {}).keys()) & set((b.get("feature_flags") or {}).keys()))
+    if shared_flags:
+        reasons.append(f"shared feature flag: {', '.join(shared_flags[:4])}")
+    return reasons
+
+
+def _conflict_severity(new_entry: dict[str, Any], prior: dict[str, Any]) -> tuple[str, list[str]]:
+    reasons = _entry_overlap(new_entry, prior)
+    if not reasons:
+        return "none", []
+
+    severity = "watch"
+    new_delta = new_entry.get("behavior_signature_delta") or {}
+    old_delta = prior.get("behavior_signature_delta") or {}
+    if new_delta.get("severity") == "blocking" or old_delta.get("severity") == "blocking":
+        severity = "blocking"
+
+    new_changed = set(new_delta.get("changed_fields") or [])
+    old_changed = set(old_delta.get("changed_fields") or [])
+    if new_changed and old_changed and new_changed != old_changed:
+        reasons.append(
+            "different behavior surfaces changed: "
+            f"new={sorted(new_changed)}, prior={sorted(old_changed)}"
+        )
+
+    new_improved = set(new_delta.get("improved_sentinels") or [])
+    old_improved = set(old_delta.get("improved_sentinels") or [])
+    new_regressed = set(new_delta.get("regressed_sentinels") or [])
+    old_regressed = set(old_delta.get("regressed_sentinels") or [])
+    if (new_improved and old_improved and new_improved.isdisjoint(old_improved)) or (
+        new_regressed & old_improved
+    ) or (old_regressed & new_improved):
+        severity = "blocking"
+        reasons.append("opposing or disjoint sentinel movement across accepted mutations")
+
+    return severity, reasons
+
+
+def build_conflict_report(
+    new_entry: dict[str, Any],
+    existing_ledger: list[dict[str, Any]] | None,
+    *,
+    max_conflicts: int = 8,
+) -> dict[str, Any]:
+    """Compare a new accepted mutation against the existing dependency ledger."""
+    conflicts: list[dict[str, Any]] = []
+    worst = "none"
+    rank = {"none": 0, "watch": 1, "blocking": 2}
+    for prior in existing_ledger or []:
+        if not isinstance(prior, dict):
+            continue
+        severity, reasons = _conflict_severity(new_entry, prior)
+        if severity == "none":
+            continue
+        if rank[severity] > rank[worst]:
+            worst = severity
+        conflicts.append(
+            {
+                "prior_trial": prior.get("trial_id"),
+                "prior_action_type": prior.get("action_type"),
+                "prior_subsystem": prior.get("subsystem"),
+                "severity": severity,
+                "reasons": reasons[:8],
+            }
+        )
+
+    return {
+        "version": BSV_CONFLICT_VERSION,
+        "severity": worst,
+        "conflicts": conflicts[:max_conflicts],
+        "conflict_count": len(conflicts),
+    }

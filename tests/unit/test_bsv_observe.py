@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopi
 
 from bsv_observe import (  # noqa: E402
     SUITE_PASS_QUALITY,
+    build_conflict_report,
+    build_mutation_dependency_entry,
     compute_bsv_observe_payload,
     _question_outcomes,
     _suite_outcomes,
@@ -173,3 +175,101 @@ def test_diagnostics_are_named_not_fake_signature_ids():
     assert p["metric_schema_version"] == 3
     assert p["oracle_adequacy_count"] == 2
     assert "harness_metrics_id" not in p["signature"]  # signature is the diffable subset only
+
+
+def test_mutation_dependency_entry_extracts_bsv3_keys():
+    incumbent = compute_bsv_observe_payload(
+        _er(question_results=[{"qid": "q1", "correct": False}]),
+        species_name="s",
+        trial_id=1,
+        incumbent_signature=None,
+    )["signature"]
+    payload = compute_bsv_observe_payload(
+        _er(
+            routing_distribution={"frontdoor": 1.0},
+            question_results=[{"qid": "q1", "correct": True}],
+        ),
+        species_name="s",
+        trial_id=2,
+        incumbent_signature=incumbent,
+        archive_member_id="trial:2",
+    )
+    entry = build_mutation_dependency_entry(
+        trial_id=2,
+        action={
+            "type": "prompt_mutation",
+            "file": "prompts/frontdoor.md",
+            "section": "rubric",
+            "flags": {"AUTOPILOT_BSV_OBSERVE": True},
+        },
+        parent_trial=1,
+        bsv_payload=payload,
+        incumbent_signature=incumbent,
+        pareto_status="frontier",
+    )
+    assert entry["subsystem"] == "prompt"
+    assert entry["files_touched"] == ["prompts/frontdoor.md"]
+    assert entry["prompt_sections_touched"] == ["rubric"]
+    assert entry["feature_flags"] == {"AUTOPILOT_BSV_OBSERVE": True}
+    assert entry["behavior_signature_delta"]["improved_sentinels"] == ["q1"]
+    assert entry["parent_trial"] == 1
+    assert entry["archive_member_id"] == "trial:2"
+
+
+def test_conflict_report_flags_shared_subsystem_and_file():
+    prior = {
+        "trial_id": 10,
+        "action_type": "prompt_mutation",
+        "subsystem": "prompt",
+        "files_touched": ["prompts/frontdoor.md"],
+        "prompt_sections_touched": ["rubric"],
+        "feature_flags": {},
+        "behavior_signature_delta": {
+            "severity": "watch",
+            "changed_fields": ["route_path_hash"],
+            "improved_sentinels": ["q1"],
+            "regressed_sentinels": [],
+        },
+    }
+    new = {
+        "trial_id": 11,
+        "action_type": "prompt_mutation",
+        "subsystem": "prompt",
+        "files_touched": ["prompts/frontdoor.md"],
+        "prompt_sections_touched": ["rubric"],
+        "feature_flags": {},
+        "behavior_signature_delta": {
+            "severity": "watch",
+            "changed_fields": ["token_bucket"],
+            "improved_sentinels": ["q2"],
+            "regressed_sentinels": [],
+        },
+    }
+    report = build_conflict_report(new, [prior])
+    assert report["severity"] == "blocking"
+    assert report["conflict_count"] == 1
+    assert report["conflicts"][0]["prior_trial"] == 10
+    assert any("shared file" in reason for reason in report["conflicts"][0]["reasons"])
+    assert any("sentinel movement" in reason for reason in report["conflicts"][0]["reasons"])
+
+
+def test_conflict_report_ignores_disjoint_mutations():
+    prior = {
+        "trial_id": 10,
+        "subsystem": "prompt",
+        "files_touched": ["prompts/frontdoor.md"],
+        "prompt_sections_touched": [],
+        "feature_flags": {},
+        "behavior_signature_delta": {"severity": "watch"},
+    }
+    new = {
+        "trial_id": 11,
+        "subsystem": "routing",
+        "files_touched": ["src/routing/policy.py"],
+        "prompt_sections_touched": [],
+        "feature_flags": {},
+        "behavior_signature_delta": {"severity": "watch"},
+    }
+    report = build_conflict_report(new, [prior])
+    assert report["severity"] == "none"
+    assert report["conflict_count"] == 0

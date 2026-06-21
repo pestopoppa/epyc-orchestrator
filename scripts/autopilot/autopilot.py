@@ -3637,52 +3637,8 @@ def _run_loop_inner(
             eval_result.harness_metrics = hle_payload["harness_metrics"]
             eval_result.oracle_adequacy = hle_payload["oracle_adequacy"]
 
-        # J11/BSV-2: observe-only behavior-signature differential vs the last frontier-accepted
-        # incumbent. Flag-gated (AUTOPILOT_BSV_OBSERVE=1), default-OFF. Same observe-only zone as
-        # HLE (after SafetyGate + ParetoArchive) so it CANNOT affect trial acceptance, Pareto
-        # promotion, routing, or baseline mutation — it only journals diagnostics.
-        bsv_payload: dict = {}
-        if os.environ.get("AUTOPILOT_BSV_OBSERVE") == "1":
-            try:
-                from bsv_observe import compute_bsv_observe_payload  # type: ignore
-
-                bsv_payload = compute_bsv_observe_payload(
-                    eval_result,
-                    species_name=species_name,
-                    trial_id=trial_counter,
-                    archive_member_id=f"trial:{trial_counter}",
-                    incumbent_signature=state.get("bsv_incumbent_signature"),
-                    incumbent_archive_member_id=state.get("bsv_incumbent_archive_member_id"),
-                )
-                # Incumbent = last frontier entry that ALSO PASSED the SafetyGate (verdict truthy =
-                # SafetyVerdict.passed). archive.update runs even on gate-FAILED trials, so frontier
-                # alone could promote a failed trial's signature as the incumbent (finding #1).
-                if pareto_status == "frontier" and verdict:
-                    archive_member_id = bsv_payload.get("archive_member_id")
-                    signature = bsv_payload.get("signature")
-                    state["bsv_incumbent_signature"] = signature
-                    state["bsv_incumbent_archive_member_id"] = archive_member_id
-                    if archive_member_id and signature:
-                        archive_signatures = state.setdefault("bsv_archive_signatures", {})
-                        archive_signatures[archive_member_id] = {
-                            "trial_id": trial_counter,
-                            "signature_hash": bsv_payload.get("signature_hash"),
-                            "signature_confidence": bsv_payload.get("signature_confidence"),
-                            "severity_vs_previous_incumbent": bsv_payload.get("severity"),
-                            "reasons": list(bsv_payload.get("reasons") or [])[:8],
-                            "signature": signature,
-                        }
-            except Exception as _bsv_err:  # observe-only must never disrupt the trial loop
-                log.debug("BSV observe skipped (trial %s): %s", trial_counter, _bsv_err)
-
-        # Git tag
-        phase.set("post_trial_artifacts", trial_id=trial_counter, species=species_name)
-        git_tag = ""
-        if not dry_run:
-            git_tag = f"autopilot/trial-{trial_counter}"
-            _git_tag(git_tag, f"Trial {trial_counter}: {species_name}/{action.get('type', '')}")
-
-        # Compute trial lineage (AP-3): find most recent trial from same species
+        # Compute trial lineage (AP-3) before BSV observe so BSV-3 dependency rows
+        # can carry the same parent-trial identity as the journal entry.
         parent_trial_id = None
         config_diff: dict[str, Any] = {}
         species_history = journal.by_species(species_name)
@@ -3696,6 +3652,83 @@ def _run_loop_inner(
                 new_val = action.get(key)
                 if old_val != new_val:
                     config_diff[key] = {"old": old_val, "new": new_val}
+
+        # J11/BSV-2: observe-only behavior-signature differential vs the last frontier-accepted
+        # incumbent. Flag-gated (AUTOPILOT_BSV_OBSERVE=1), default-OFF. Same observe-only zone as
+        # HLE (after SafetyGate + ParetoArchive) so it CANNOT affect trial acceptance, Pareto
+        # promotion, routing, or baseline mutation — it only journals diagnostics.
+        bsv_payload: dict = {}
+        if os.environ.get("AUTOPILOT_BSV_OBSERVE") == "1":
+            try:
+                from bsv_observe import (  # type: ignore
+                    build_conflict_report,
+                    build_mutation_dependency_entry,
+                    compute_bsv_observe_payload,
+                )
+
+                incumbent_signature = state.get("bsv_incumbent_signature")
+                bsv_payload = compute_bsv_observe_payload(
+                    eval_result,
+                    species_name=species_name,
+                    trial_id=trial_counter,
+                    archive_member_id=f"trial:{trial_counter}",
+                    incumbent_signature=incumbent_signature,
+                    incumbent_archive_member_id=state.get("bsv_incumbent_archive_member_id"),
+                )
+                # Incumbent = last frontier entry that ALSO PASSED the SafetyGate (verdict truthy =
+                # SafetyVerdict.passed). archive.update runs even on gate-FAILED trials, so frontier
+                # alone could promote a failed trial's signature as the incumbent (finding #1).
+                if pareto_status == "frontier" and verdict:
+                    archive_member_id = bsv_payload.get("archive_member_id")
+                    signature = bsv_payload.get("signature")
+                    dependency_entry = build_mutation_dependency_entry(
+                        trial_id=trial_counter,
+                        action=action,
+                        parent_trial=parent_trial_id,
+                        bsv_payload=bsv_payload,
+                        incumbent_signature=incumbent_signature,
+                        pareto_status=pareto_status,
+                    )
+                    existing_ledger = state.get("bsv_mutation_dependency_ledger", [])
+                    if not isinstance(existing_ledger, list):
+                        existing_ledger = []
+                    conflict_report = build_conflict_report(dependency_entry, existing_ledger)
+                    bsv_payload["mutation_dependency"] = dependency_entry
+                    bsv_payload["conflict_report"] = conflict_report
+                    if conflict_report.get("severity") in {"watch", "blocking"}:
+                        log.warning(
+                            "BSV-3 conflict review signal for trial %d: severity=%s conflicts=%s",
+                            trial_counter,
+                            conflict_report.get("severity"),
+                            conflict_report.get("conflict_count"),
+                        )
+                    state["bsv_mutation_dependency_ledger"] = [
+                        *existing_ledger[-499:],
+                        dependency_entry,
+                    ]
+                    state["bsv_incumbent_signature"] = signature
+                    state["bsv_incumbent_archive_member_id"] = archive_member_id
+                    if archive_member_id and signature:
+                        archive_signatures = state.setdefault("bsv_archive_signatures", {})
+                        archive_signatures[archive_member_id] = {
+                            "trial_id": trial_counter,
+                            "signature_hash": bsv_payload.get("signature_hash"),
+                            "signature_confidence": bsv_payload.get("signature_confidence"),
+                            "severity_vs_previous_incumbent": bsv_payload.get("severity"),
+                            "reasons": list(bsv_payload.get("reasons") or [])[:8],
+                            "conflict_severity": (bsv_payload.get("conflict_report") or {}).get("severity"),
+                            "conflict_count": (bsv_payload.get("conflict_report") or {}).get("conflict_count"),
+                            "signature": signature,
+                        }
+            except Exception as _bsv_err:  # observe-only must never disrupt the trial loop
+                log.debug("BSV observe skipped (trial %s): %s", trial_counter, _bsv_err)
+
+        # Git tag
+        phase.set("post_trial_artifacts", trial_id=trial_counter, species=species_name)
+        git_tag = ""
+        if not dry_run:
+            git_tag = f"autopilot/trial-{trial_counter}"
+            _git_tag(git_tag, f"Trial {trial_counter}: {species_name}/{action.get('type', '')}")
 
         # Build active_flags from action context
         active_flags_dict = action.get("flags", {})
