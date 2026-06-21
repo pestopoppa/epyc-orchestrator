@@ -6,15 +6,16 @@ decides later whether the differential accept-test has enough signal to ever gat
 
 Scope honesty (review 2026-05-27, finding #2): an autopilot trial's `EvalResult` is a *trial-level
 aggregate*. It exposes `routing_distribution`, `per_suite_quality`, cost/token stats and the HLE
-ids, but NOT per-request `tool_sequence` / `escalation_path` / true per-sentinel outcomes (those
-live in the URE trace store — a richer follow-up). So the signature is built from what is reliably
-present and tagged `signature_confidence="partial"`; `diff_signatures` then refuses to certify a
-partial comparison as BENIGN (bumps to WATCH), which is the correct conservative behaviour here.
+ids, but NOT per-request `tool_sequence` / `escalation_path` / answer traces. So the signature is
+built from what is reliably present and tagged `signature_confidence="partial"`; `diff_signatures`
+then refuses to certify a partial comparison as BENIGN (bumps to WATCH), which is the correct
+conservative behaviour here.
 
 What the coarse signature captures + what the diff therefore flags:
   - route_path  = sorted roles, each tagged with a coarse weight quartile -> WATCH on a role-set
                   change OR a major weight shift across the same roles (finding #3)
-  - sentinel_outcomes = per_suite pass/fail proxy (>=2.0/3)  -> BLOCKING on a suite pass->fail
+  - sentinel_outcomes = per-question pass/fail when available, else per-suite proxy (>=2.0/3)
+                                                               -> BLOCKING on prior pass->fail
   - token_bucket = avg_prompt_tokens                         -> WATCH/BLOCKING on cost regression
 """
 from __future__ import annotations
@@ -38,6 +39,22 @@ def _suite_outcomes(per_suite_quality: dict[str, float] | None) -> dict[str, str
             out[str(suite)] = "pass" if float(q) >= SUITE_PASS_QUALITY else "fail"
         except (TypeError, ValueError):
             continue
+    return out
+
+
+def _question_outcomes(question_results: Any) -> dict[str, str]:
+    """Normalize compact per-question eval rows into BSV sentinel outcomes."""
+    if not isinstance(question_results, list):
+        return {}
+
+    out: dict[str, str] = {}
+    for item in question_results:
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("qid") or item.get("question_id") or "").strip()
+        if not qid:
+            continue
+        out[qid] = "pass" if bool(item.get("correct")) else "fail"
     return out
 
 
@@ -80,13 +97,23 @@ def compute_bsv_observe_payload(
 
     routing = getattr(eval_result, "routing_distribution", {}) or {}
     per_suite = getattr(eval_result, "per_suite_quality", {}) or {}
+    question_outcomes = _question_outcomes(getattr(eval_result, "question_results", None))
+    suite_outcomes = _suite_outcomes(per_suite)
+    sentinel_outcomes = question_outcomes or suite_outcomes
+    sentinel_outcome_source = (
+        "question_results"
+        if question_outcomes
+        else "suite_quality_proxy"
+        if suite_outcomes
+        else "none"
+    )
     oracle = getattr(eval_result, "oracle_adequacy", {}) or {}
     avg_tokens = float(getattr(eval_result, "avg_prompt_tokens", 0.0) or 0.0)
 
     sig = compute_behavior_signature(
         archive_member_id=str(archive_member_id or species_name or "?"),
         trial_id=trial_id,
-        sentinel_outcomes=_suite_outcomes(per_suite),
+        sentinel_outcomes=sentinel_outcomes,
         route_path=_route_path(routing),
         total_tokens=avg_tokens or None,
         harness_metrics_id=None,        # no real trace-store ID yet (finding #2); see diagnostics below
@@ -109,6 +136,8 @@ def compute_bsv_observe_payload(
         # into the signature hash (which strips IDs anyway).
         "metric_schema_version": int(getattr(eval_result, "metric_schema_version", 1) or 1),
         "oracle_adequacy_count": len(oracle),
+        "sentinel_outcome_source": sentinel_outcome_source,
+        "sentinel_outcome_count": len(sentinel_outcomes),
     }
     if incumbent_signature is not None:
         severity, reasons = diff_signatures(incumbent_signature, sig_dict)

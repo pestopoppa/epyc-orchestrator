@@ -12,7 +12,12 @@ from types import SimpleNamespace
 # scripts/autopilot is not a package / not on the default test path (mirror autopilot.py's runtime).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "autopilot"))
 
-from bsv_observe import compute_bsv_observe_payload, _suite_outcomes, SUITE_PASS_QUALITY  # noqa: E402
+from bsv_observe import (  # noqa: E402
+    SUITE_PASS_QUALITY,
+    compute_bsv_observe_payload,
+    _question_outcomes,
+    _suite_outcomes,
+)
 
 
 def _er(**kw) -> SimpleNamespace:
@@ -28,6 +33,18 @@ def test_suite_outcomes_proxy_uses_bsv_vocab():
     assert _suite_outcomes(None) == {}
 
 
+def test_question_outcomes_use_bsv_vocab_and_skip_malformed_rows():
+    out = _question_outcomes([
+        {"qid": "q1", "correct": True},
+        {"question_id": "q2", "correct": False},
+        {"qid": " ", "correct": True},
+        {"qid": "q3"},
+        "not-a-row",
+    ])
+    assert out == {"q1": "pass", "q2": "fail", "q3": "fail"}
+    assert _question_outcomes(None) == {}
+
+
 def test_no_incumbent_has_no_severity():
     p = compute_bsv_observe_payload(
         _er(routing_distribution={"frontdoor": 1.0}), species_name="seeder", trial_id=1,
@@ -39,6 +56,41 @@ def test_no_incumbent_has_no_severity():
     assert "route_path_hash" in p["signature"]
     assert p["archive_member_id"] == "seeder"
     assert p["signature_hash"] == p["signature"]["signature_hash"]
+    assert p["sentinel_outcome_source"] == "none"
+    assert p["sentinel_outcome_count"] == 0
+
+
+def test_question_results_are_preferred_over_suite_proxy():
+    p = compute_bsv_observe_payload(
+        _er(
+            question_results=[
+                {"qid": "suite_a/q1", "correct": True},
+                {"question_id": "suite_a/q2", "correct": False},
+            ],
+            per_suite_quality={"suite_a": 2.8},
+        ),
+        species_name="seeder",
+        trial_id=1,
+        incumbent_signature=None,
+    )
+    assert p["signature"]["sentinel_outcomes"] == {
+        "suite_a/q1": "pass",
+        "suite_a/q2": "fail",
+    }
+    assert p["sentinel_outcome_source"] == "question_results"
+    assert p["sentinel_outcome_count"] == 2
+
+
+def test_suite_proxy_remains_fallback_when_question_results_absent():
+    p = compute_bsv_observe_payload(
+        _er(per_suite_quality={"qa": 2.6, "coding": 1.0}),
+        species_name="seeder",
+        trial_id=1,
+        incumbent_signature=None,
+    )
+    assert p["signature"]["sentinel_outcomes"] == {"qa": "pass", "coding": "fail"}
+    assert p["sentinel_outcome_source"] == "suite_quality_proxy"
+    assert p["sentinel_outcome_count"] == 2
 
 
 def test_archive_member_identity_overrides_species_name():
