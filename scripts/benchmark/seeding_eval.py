@@ -1193,7 +1193,16 @@ def evaluate_question_per_role(
 
             # Binary reward (skip infrastructure errors)
             if rr.error_type == "infrastructure":
-                logger.info("    [INFRA_SKIP] %s", role_name)
+                logger.info(
+                    "    [INFRA_SKIP] %s error=%r elapsed=%.1fs task=%s "
+                    "decoded=%s source=%s",
+                    role_name,
+                    rr.error,
+                    rr.elapsed_seconds,
+                    rr.backend_task_id,
+                    rr.tokens_generated_estimate,
+                    rr.slot_progress_source or "none",
+                )
             else:
                 rewards[role_name] = success_reward(rr.passed)
 

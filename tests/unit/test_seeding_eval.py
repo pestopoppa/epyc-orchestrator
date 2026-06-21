@@ -263,6 +263,67 @@ def test_evaluate_question_per_role_skips_hot_roles_and_records_timeouts(monkeyp
     record_mock.assert_called_once_with("frontdoor", "natural", 2.0, False)
 
 
+def test_evaluate_question_per_role_logs_infra_skip_context(monkeypatch):
+    monkeypatch.setenv("AUTOPILOT_SEED_QUEUE_ALLOWANCE_S", "90")
+    monkeypatch.setenv("SEEDING_PER_QUESTION_BUDGET_S", "600")
+
+    active_roles = [
+        {"name": "worker_general", "is_heavy": False, "timeout_s": 60},
+    ]
+    rr_worker = _rr(
+        role="worker_general",
+        mode="",
+        passed=False,
+        error_type="infrastructure",
+        error="slot idle while request pending after 16s on port 8072",
+        elapsed_seconds=16.2,
+        backend_task_id=465469,
+        tokens_generated_estimate=4,
+        slot_progress_source="slots_poll",
+    )
+
+    with (
+        patch.object(_MOD, "_seed_role_waves", return_value=[[active_roles[0]]]),
+        patch.object(_MOD, "_telemetry_should_skip", return_value=(False, "")),
+        patch.object(_MOD, "_telemetry_timeout", side_effect=lambda _r, _m, base: base),
+        patch.object(_MOD, "_adaptive_timeout_s", side_effect=lambda **kw: kw["hard_timeout_s"]),
+        patch.object(_MOD, "_telemetry_record"),
+        patch.object(_MOD, "_eval_single_config", return_value=(rr_worker, {})),
+        patch.object(_MOD.logger, "info") as info_mock,
+    ):
+        role_results, rewards, metadata = _MOD.evaluate_question_per_role(
+            prompt_info={
+                "prompt": "What is 2+2?",
+                "expected": "4",
+                "suite": "debug",
+            },
+            active_roles=active_roles,
+            url="http://localhost:8000",
+            timeout=120,
+            client=object(),
+        )
+
+    assert list(role_results) == ["worker_general"]
+    assert rewards == {}
+    assert metadata["all_infra"] is True
+    assert any(
+        args
+        and args[0] == (
+            "    [INFRA_SKIP] %s error=%r elapsed=%.1fs task=%s "
+            "decoded=%s source=%s"
+        )
+        and args[1:] == (
+            "worker_general",
+            "slot idle while request pending after 16s on port 8072",
+            16.2,
+            465469,
+            4,
+            "slots_poll",
+        )
+        for args, _kwargs in info_mock.call_args_list
+    )
+
+
 def test_eval_single_config_merges_slot_progress_and_emits_format_lines():
     rr = _rr(role="frontdoor", mode="direct", passed=True, error_type="none")
     format_lines = []
