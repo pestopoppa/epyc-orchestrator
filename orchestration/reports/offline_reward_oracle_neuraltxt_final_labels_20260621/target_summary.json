@@ -1,0 +1,19 @@
+{
+  "eval_input_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-final-label-eval-input-20260621.jsonl",
+  "privacy": {
+    "committed_rows_include_reference_response": false,
+    "private_scored_rows_committed": false
+  },
+  "review_manifest": "orchestration/reports/offline_reward_oracle_answer_equivalence_review_20260621/manifest.jsonl",
+  "rows": 178,
+  "schema_version": "offline_reward_oracle_final_label_targets.v1",
+  "source_scored_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-final-label-scored-20260621.jsonl",
+  "target_score_counts": {
+    "0.0": 126,
+    "1.0": 52
+  },
+  "target_source_counts": {
+    "answer_equivalence_final_label": 48,
+    "original_binary_reward": 130
+  }
+}
