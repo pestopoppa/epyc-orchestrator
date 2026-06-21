@@ -395,6 +395,7 @@ def test_call_orchestrator_with_slot_poll_idle_orphan_watchdog(monkeypatch):
         concurrent.futures.TimeoutError(),
         concurrent.futures.TimeoutError(),
         concurrent.futures.TimeoutError(),
+        concurrent.futures.TimeoutError(),
     ])
     slot_progress = [
         {"is_processing": True, "n_decoded": 4, "n_remain": 10, "task_id": 8},
@@ -421,6 +422,43 @@ def test_call_orchestrator_with_slot_poll_idle_orphan_watchdog(monkeypatch):
         )
     assert resp["failure_reason"] == "slot_idle_orphan"
     assert "slot idle while request pending" in resp["error"]
+    assert progress["task_id"] == 8
+    assert elapsed >= 0.0
+
+
+def test_call_orchestrator_with_slot_poll_idle_slot_allows_completion_grace(monkeypatch):
+    monkeypatch.setenv("SEEDING_SLOT_IDLE_ORPHAN_WATCHDOG_S", "2")
+    fut = _Future([
+        concurrent.futures.TimeoutError(),
+        concurrent.futures.TimeoutError(),
+        concurrent.futures.TimeoutError(),
+        {"answer": "ok-after-idle"},
+    ])
+    slot_progress = [
+        {"is_processing": True, "n_decoded": 4, "n_remain": 10, "task_id": 8},
+        {"is_processing": False, "n_decoded": 4, "n_remain": 10, "task_id": 8},
+        {"is_processing": False, "n_decoded": 4, "n_remain": 10, "task_id": 8},
+    ]
+    with (
+        patch("seeding_orchestrator_test.concurrent.futures.ThreadPoolExecutor", return_value=_Executor(fut)),
+        patch("seeding_orchestrator_test._read_slot_progress", side_effect=slot_progress),
+        patch.object(_MOD.time, "perf_counter", side_effect=[0.0, 1.0, 2.0, 5.0, 6.0]),
+    ):
+        resp, elapsed, progress = _MOD._call_orchestrator_with_slot_poll(
+            prompt="p",
+            force_role="worker",
+            force_mode="direct",
+            url="http://localhost:8000",
+            timeout=300,
+            image_path="",
+            cache_prompt=None,
+            client=None,
+            allow_delegation=None,
+            log_label="test",
+            poll_port=8080,
+        )
+    assert resp["answer"] == "ok-after-idle"
+    assert "failure_reason" not in resp
     assert progress["task_id"] == 8
     assert elapsed >= 0.0
 

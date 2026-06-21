@@ -12,16 +12,14 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from seeding_types import (
     DEFAULT_ORCHESTRATOR_URL,
     DEFAULT_TIMEOUT,
     HEAVY_PORTS,
     PROJECT_ROOT,
-    ROLE_PORT,
     STACK_SCRIPT,
-    state,
 )
 from seeding_infra import _wait_for_heavy_models_idle
 
@@ -38,6 +36,9 @@ __all__ = [
 ]
 
 logger = logging.getLogger("seed_specialist_routing")
+
+if TYPE_CHECKING:
+    import httpx
 
 
 # Per-port slot erase strategy cache.
@@ -307,6 +308,10 @@ def _call_orchestrator_with_slot_poll(
     # useful progress. Defaults are conservative and can be disabled with 0.
     slot_stall_watchdog_s = _env_float("SEEDING_SLOT_STALL_WATCHDOG_S", 150.0)
     slot_idle_orphan_s = _env_float("SEEDING_SLOT_IDLE_ORPHAN_WATCHDOG_S", 30.0)
+    slot_idle_completion_grace_s = _env_float(
+        "SEEDING_SLOT_IDLE_COMPLETION_GRACE_S",
+        20.0,
+    )
     last_progress_at = t0
     last_progress_decoded = 0
     last_progress_task_id = 0
@@ -390,24 +395,31 @@ def _call_orchestrator_with_slot_poll(
                         idle_since = now
                     idle_for = now - idle_since
                     if slot_idle_orphan_s > 0 and idle_for >= slot_idle_orphan_s:
-                        elapsed = time.perf_counter() - t0
-                        resp = {
-                            "answer": "",
-                            "error": (
-                                f"slot idle while request pending after {elapsed:.0f}s "
-                                f"on port {poll_port}"
-                            ),
-                            "failure_reason": "slot_idle_orphan",
-                        }
-                        logger.warning(
-                            "  [slot-idle-orphan] %s port=%d pending %.0fs "
-                            "(last task=%s decoded=%s)",
-                            log_label,
-                            poll_port,
-                            elapsed,
-                            progress["task_id"],
-                            progress["last_decoded"],
-                        )
+                        try:
+                            resp = fut.result(timeout=slot_idle_completion_grace_s)
+                            elapsed = time.perf_counter() - t0
+                        except concurrent.futures.TimeoutError:
+                            elapsed = time.perf_counter() - t0
+                            resp = {
+                                "answer": "",
+                                "error": (
+                                    f"slot idle while request pending after {elapsed:.0f}s "
+                                    f"on port {poll_port}"
+                                ),
+                                "failure_reason": "slot_idle_orphan",
+                            }
+                            logger.warning(
+                                "  [slot-idle-orphan] %s port=%d pending %.0fs "
+                                "(last task=%s decoded=%s)",
+                                log_label,
+                                poll_port,
+                                elapsed,
+                                progress["task_id"],
+                                progress["last_decoded"],
+                            )
+                        except Exception as exc:
+                            elapsed = time.perf_counter() - t0
+                            resp = {"answer": "", "error": str(exc)}
                         break
 
                 if decoded > progress["max_decoded"]:
