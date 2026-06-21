@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from controller_io import validate_single_variable
-from orchestration.repl_memory.strategy_store import excluded_strategy_evidence_trial_ids
 from safety_gate import EvalResult, SafetyGate
 
 
@@ -276,12 +275,11 @@ def _build_mutation_context(
                 k=3,
             )
         else:
-            excluded_trial_ids = excluded_strategy_evidence_trial_ids(ctx.journal)
-            strategies = ctx.strategy_store.retrieve(
-                query,
-                k=3,
-                excluded_trial_ids=excluded_trial_ids,
+            log.warning(
+                "Skipping strategy retrieval: StrategyStore lacks journal-aware "
+                "retrieve_for_journal()"
             )
+            strategies = []
         if strategies:
             strategy_lines = "\n".join(
                 f"- Trial #{s.source_trial_id} ({s.species}): {s.description} → {s.insight}"

@@ -904,6 +904,25 @@ def test_mutation_context_filters_strategy_trials_superseded_by_journal() -> Non
     assert "src/example.py" in store.query
 
 
+def test_mutation_context_skips_legacy_strategy_store_without_journal_view(caplog) -> None:
+    class LegacyStrategyStore:
+        def retrieve(self, *args, **kwargs):
+            raise AssertionError("raw retrieve fallback should not be called")
+
+    failure_context, last_per_suite = actions._build_mutation_context(
+        {
+            "file": "src/example.py",
+            "mutation": "targeted_fix",
+            "description": "example",
+        },
+        _ctx(journal=_FakeJournal(), strategy_store=LegacyStrategyStore(), state={}),
+    )
+
+    assert last_per_suite is None
+    assert "Past Strategy Insights" not in failure_context
+    assert "retrieve_for_journal" in caplog.text
+
+
 def test_reset_memories_returns_none_eval() -> None:
     class FakeLab:
         def reset_and_reseed(self, **kw):
