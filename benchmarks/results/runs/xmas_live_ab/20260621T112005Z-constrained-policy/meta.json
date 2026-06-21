@@ -1,0 +1,49 @@
+{
+  "api_url": "http://127.0.0.1:8000",
+  "arm_sequence": [
+    "baseline",
+    "xmas",
+    "xmas",
+    "baseline"
+  ],
+  "decision_thresholds": {
+    "max_domain_regression": 0.0,
+    "max_latency_ratio": 1.1,
+    "min_prompts_per_arm": 25,
+    "min_score_delta": 0.05
+  },
+  "max_turns": 1,
+  "mode": "real",
+  "prompt_ids": [
+    "math_solve_gsm8k_00005",
+    "math_verify_gsm8k_00006",
+    "math_plan_gsm8k_00007",
+    "math_refine_gsm8k_00008",
+    "math_extract_gsm8k_00009",
+    "code_solve_cruxeval_output_0005",
+    "code_verify_cruxeval_output_0006",
+    "code_plan_cruxeval_output_0007",
+    "code_refine_cruxeval_output_0008",
+    "code_extract_cruxeval_output_0009",
+    "knowledge_solve_simpleqa_general_00000",
+    "knowledge_verify_simpleqa_general_00001",
+    "knowledge_plan_simpleqa_general_00002",
+    "knowledge_refine_simpleqa_general_00003",
+    "knowledge_extract_simpleqa_general_00004",
+    "long_context_solve_needle_006",
+    "long_context_verify_needle_007",
+    "long_context_plan_needle_008",
+    "long_context_refine_needle_009",
+    "long_context_extract_needle_010",
+    "reasoning_solve_gpqa_Molecular_Biology_0000",
+    "reasoning_verify_gpqa_Physics_(general)_0001",
+    "reasoning_plan_gpqa_Organic_Chemistry_0002",
+    "reasoning_refine_gpqa_Organic_Chemistry_0003",
+    "reasoning_extract_gpqa_Chemistry_(general)_0004"
+  ],
+  "prompt_manifest": "benchmarks/results/runs/xmas_live_ab/20260618-heldout-resilient/prompts.jsonl",
+  "reps": 2,
+  "table": "/mnt/raid0/llm/epyc-orchestrator/orchestration/xmas_winner_table.yaml",
+  "xmas_policy": "incumbent_constrained_v1",
+  "xmas_policy_min_commit": "24baac44"
+}
