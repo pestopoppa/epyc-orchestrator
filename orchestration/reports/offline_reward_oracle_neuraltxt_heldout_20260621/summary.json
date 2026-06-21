@@ -1,0 +1,90 @@
+{
+  "eval_compact": {
+    "n": 144,
+    "score": {
+      "agreement_at_threshold": 0.6180555555555556,
+      "confusion": {
+        "fn": 55,
+        "fp": 0,
+        "tn": 48,
+        "tp": 41
+      },
+      "mean_abs_error": 0.4423719299520599,
+      "pearson": 0.4405440005908134,
+      "spearman": 0.2728068228916042
+    },
+    "stress": {
+      "confound_fooled": 0,
+      "confound_fooled_rate": 0.0,
+      "confound_total": 48,
+      "groups_evaluated": 48,
+      "paraphrase_penalized": 0,
+      "paraphrase_penalty_rate": 0.0,
+      "paraphrase_total": 48,
+      "variant_counts": {
+        "base": 48,
+        "confound": 48,
+        "paraphrase": 48
+      }
+    },
+    "target_negative": 48,
+    "target_positive": 96
+  },
+  "inputs": [
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_seed42.json",
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_203724.jsonl"
+  ],
+  "intermediate_dir": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-Sh6cVX",
+  "rows_summary": {
+    "oracle_score_mode": "omit",
+    "role_counts": {
+      "architect_general": 10,
+      "coder_escalation": 39,
+      "coder_primary": 40,
+      "frontdoor": 40,
+      "frontdoor:direct": 49
+    },
+    "rows": 178,
+    "schema_version": "offline_reward_oracle_rows.v1",
+    "stats": {
+      "rows": 178,
+      "skipped_missing_response": 112
+    },
+    "suite_counts": {
+      "agentic": 2,
+      "debugbench": 25,
+      "general": 31,
+      "instruction_precision": 30,
+      "livecodebench": 24,
+      "math": 31,
+      "thinking": 35
+    }
+  },
+  "schema_version": "offline_reward_oracle_neuraltxt_heldout_report.v1",
+  "score_summary": {
+    "model_id": "paperbd/neuraltxt-reward-tiny",
+    "oracle_score_source": "neuraltxt_reward_tiny",
+    "rows": 144,
+    "schema_version": "offline_reward_oracle_neuraltxt_scores.v1",
+    "score_max": 0.9297105073928833,
+    "score_mean": 0.3105724184796499,
+    "score_min": 0.0,
+    "stats": {
+      "rows": 144,
+      "variant_type:base": 48,
+      "variant_type:confound": 48,
+      "variant_type:paraphrase": 48
+    }
+  },
+  "status": "observation_not_decision",
+  "stress_summary": {
+    "groups": 48,
+    "include_base": true,
+    "rows": 144,
+    "schema_version": "offline_reward_oracle_stress_rows.v1",
+    "stats": {
+      "groups": 48,
+      "skipped_non_positive_base": 130
+    }
+  }
+}
