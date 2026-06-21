@@ -294,6 +294,29 @@ def test_phase_health_report_blocks_dead_pid(tmp_path, monkeypatch):
     assert report["blockers"] == ["phase heartbeat pid is not alive: 123"]
 
 
+def test_phase_health_report_accepts_stopped_dead_pid(tmp_path, monkeypatch):
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "stopped",
+                "pid": 123,
+                "reason": "autopilot process exiting",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: False)
+
+    report = build_phase_health_report(path=snapshot, now=5000.0, stale_after_s=900.0)
+
+    assert report["ok"] is True
+    assert report["status"] == "stopped"
+    assert report["pid_alive"] is False
+    assert report["blockers"] == []
+
+
 def test_phase_health_report_handles_missing_file(tmp_path):
     report = build_phase_health_report(
         path=tmp_path / "missing.json",

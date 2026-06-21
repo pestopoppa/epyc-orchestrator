@@ -274,17 +274,19 @@ def build_phase_health_report(
     except (KeyError, TypeError, ValueError):
         pid = None
     pid_alive = _process_exists(pid)
+    phase_name = payload.get("phase")
+    terminal_stopped = phase_name == "stopped"
     stale = heartbeat_age_s is None or heartbeat_age_s > stale_after_s
     blockers: list[str] = []
-    if pid_alive is False:
+    if pid_alive is False and not terminal_stopped:
         blockers.append(f"phase heartbeat pid is not alive: {pid}")
     if heartbeat_age_s is None:
         blockers.append("phase heartbeat has no numeric updated_at")
-    elif stale:
+    elif stale and not terminal_stopped:
         blockers.append(
             f"phase heartbeat is stale: {heartbeat_age_s:.1f}s > {stale_after_s:.1f}s"
         )
-    status = "active"
+    status = "stopped" if terminal_stopped else "active"
     if blockers:
         status = "stale" if stale else "pid_dead"
     report = {
@@ -295,7 +297,7 @@ def build_phase_health_report(
         "heartbeat_age_s": heartbeat_age_s,
         "pid": pid,
         "pid_alive": pid_alive,
-        "phase": payload.get("phase"),
+        "phase": phase_name,
         "phase_started_at": payload.get("phase_started_at"),
         "phase_age_s_recorded": payload.get("phase_age_s"),
         "trial_id": payload.get("trial_id"),
