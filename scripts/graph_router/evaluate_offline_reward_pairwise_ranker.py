@@ -37,6 +37,7 @@ SUMMARY_SCHEMA_VERSION = "offline_reward_pairwise_ranker_eval.v1"
 FEATURE_CONTRACT = "pairwise_action_response_delta_v1"
 DEFAULT_SEEDS = [42, 7, 13, 101, 2026]
 MODEL_FAMILIES = ("logistic_l2", "hist_gradient_boosting", "random_forest")
+HOLDOUT_FIELDS = ("source_family", "suite")
 TARGET_LEAKAGE_FIELDS = {"oracle_score_delta", "preferred_oracle_score", "rejected_oracle_score"}
 
 
@@ -229,6 +230,17 @@ def _rows_for_groups(rows: list[dict[str, Any]], groups: set[str]) -> list[dict[
     return [row for row in rows if str(row["group_key"]) in groups]
 
 
+def _split_rows_by_holdout(
+    rows: list[dict[str, Any]],
+    *,
+    field: str,
+    value: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    test_rows = [row for row in rows if str(row.get(field) or "unknown") == value]
+    train_rows = [row for row in rows if str(row.get(field) or "unknown") != value]
+    return train_rows, test_rows
+
+
 def _model_for_family(family: str, seed: int) -> Any:
     if family == "logistic_l2":
         return make_pipeline(
@@ -317,6 +329,54 @@ def _stratum_metrics(
     return out
 
 
+def _evaluate_model_runs(
+    *,
+    train_rows: list[dict[str, Any]],
+    test_rows: list[dict[str, Any]],
+    encoders: Encoders,
+    seed: int,
+    families: list[str],
+    min_stratum_rows: int,
+) -> list[dict[str, Any]]:
+    x_train, y_train, _train_meta = build_symmetric_examples(train_rows, encoders)
+    x_test, y_test, test_meta = build_symmetric_examples(test_rows, encoders)
+    random_metrics = _random_baseline_metrics(y_test)
+    runs: list[dict[str, Any]] = []
+    for family in families:
+        model = _model_for_family(family, seed)
+        model.fit(x_train, y_train.astype(np.int64))
+        probs = _predict_positive(model, x_test)
+        runs.append(
+            {
+                "seed": seed,
+                "family": family,
+                "train_pair_rows": len(train_rows),
+                "test_pair_rows": len(test_rows),
+                "train_examples": int(x_train.shape[0]),
+                "test_examples": int(x_test.shape[0]),
+                "train_groups": len({str(row["group_key"]) for row in train_rows}),
+                "test_groups": len({str(row["group_key"]) for row in test_rows}),
+                "metrics": _metrics(probs, y_test),
+                "random_baseline": random_metrics,
+                "source_family_metrics": _stratum_metrics(
+                    probs,
+                    y_test,
+                    test_meta,
+                    "source_family",
+                    min_rows=min_stratum_rows,
+                ),
+                "suite_metrics": _stratum_metrics(
+                    probs,
+                    y_test,
+                    test_meta,
+                    "suite",
+                    min_rows=min_stratum_rows,
+                ),
+            }
+        )
+    return runs
+
+
 def _leakage_policy() -> dict[str, Any]:
     return {
         "target_fields_excluded_from_features": sorted(TARGET_LEAKAGE_FIELDS),
@@ -383,6 +443,108 @@ def aggregate_runs(
     }
 
 
+def _holdout_candidates(
+    rows: list[dict[str, Any]],
+    *,
+    field: str,
+    min_holdout_pair_rows: int,
+    min_train_pair_rows: int,
+) -> list[str]:
+    counts = Counter(str(row.get(field) or "unknown") for row in rows)
+    candidates: list[str] = []
+    for value, count in sorted(counts.items()):
+        if count < min_holdout_pair_rows:
+            continue
+        if len(rows) - count < min_train_pair_rows:
+            continue
+        candidates.append(value)
+    return candidates
+
+
+def _evaluate_holdout_splits(
+    rows: list[dict[str, Any]],
+    encoders: Encoders,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    results: dict[str, Any] = {}
+    for field in args.holdout_fields:
+        field_results: dict[str, Any] = {}
+        for value in _holdout_candidates(
+            rows,
+            field=field,
+            min_holdout_pair_rows=args.min_holdout_pair_rows,
+            min_train_pair_rows=args.min_train_pair_rows,
+        ):
+            runs: list[dict[str, Any]] = []
+            train_rows, test_rows = _split_rows_by_holdout(rows, field=field, value=value)
+            for seed in args.seeds:
+                runs.extend(
+                    _evaluate_model_runs(
+                        train_rows=train_rows,
+                        test_rows=test_rows,
+                        encoders=encoders,
+                        seed=seed,
+                        families=args.families,
+                        min_stratum_rows=args.min_stratum_rows,
+                    )
+                )
+            aggregate = aggregate_runs(
+                runs,
+                min_mean_accuracy=args.min_mean_accuracy,
+                min_mean_auc=args.min_mean_auc,
+            )
+            field_results[value] = {
+                "holdout_field": field,
+                "holdout_value": value,
+                "train_pair_rows": len(train_rows),
+                "test_pair_rows": len(test_rows),
+                "train_groups": len({str(row["group_key"]) for row in train_rows}),
+                "test_groups": len({str(row["group_key"]) for row in test_rows}),
+                "runs": runs,
+                "aggregate": aggregate,
+            }
+        results[field] = {
+            "eligible_holdout_values": sorted(field_results),
+            "skipped_values": sorted(
+                set(str(row.get(field) or "unknown") for row in rows) - set(field_results)
+            ),
+            "results": field_results,
+        }
+    return results
+
+
+def _holdout_decision(holdout: dict[str, Any]) -> dict[str, Any]:
+    blockers: list[str] = []
+    eligible_count = 0
+    passing_count = 0
+    for field, payload in sorted(holdout.items()):
+        for value, result in sorted(payload["results"].items()):
+            eligible_count += 1
+            status = result["aggregate"]["decision"]["status"]
+            if status == "pairwise_ranker_signal":
+                passing_count += 1
+            else:
+                blockers.append(f"{field}:{value}:{status}")
+    if eligible_count == 0:
+        status = "no_eligible_holdouts"
+    elif blockers:
+        status = "mixed_holdout_signal"
+    else:
+        status = "holdout_signal_consistent"
+    return {
+        "status": status,
+        "eligible_holdouts": eligible_count,
+        "passing_holdouts": passing_count,
+        "blockers": blockers,
+        "runtime_gate_change_allowed": False,
+        "recommended_next": (
+            "collect_more_non_overlapping_cross_action_preferences"
+            if blockers or eligible_count == 0
+            else "preregister_downstream_pairwise_reward_use"
+        ),
+    }
+
+
 def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
     rows = load_jsonl(Path(args.pairwise_jsonl))
     encoders = build_encoders(rows)
@@ -391,41 +553,16 @@ def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
         train_groups, test_groups = split_group_keys(rows, seed=seed, test_split=args.test_split)
         train_rows = _rows_for_groups(rows, train_groups)
         test_rows = _rows_for_groups(rows, test_groups)
-        x_train, y_train, train_meta = build_symmetric_examples(train_rows, encoders)
-        x_test, y_test, test_meta = build_symmetric_examples(test_rows, encoders)
-        random_metrics = _random_baseline_metrics(y_test)
-        for family in args.families:
-            model = _model_for_family(family, seed)
-            model.fit(x_train, y_train.astype(np.int64))
-            probs = _predict_positive(model, x_test)
-            runs.append(
-                {
-                    "seed": seed,
-                    "family": family,
-                    "train_pair_rows": len(train_rows),
-                    "test_pair_rows": len(test_rows),
-                    "train_examples": int(x_train.shape[0]),
-                    "test_examples": int(x_test.shape[0]),
-                    "train_groups": len(train_groups),
-                    "test_groups": len(test_groups),
-                    "metrics": _metrics(probs, y_test),
-                    "random_baseline": random_metrics,
-                    "source_family_metrics": _stratum_metrics(
-                        probs,
-                        y_test,
-                        test_meta,
-                        "source_family",
-                        min_rows=args.min_stratum_rows,
-                    ),
-                    "suite_metrics": _stratum_metrics(
-                        probs,
-                        y_test,
-                        test_meta,
-                        "suite",
-                        min_rows=args.min_stratum_rows,
-                    ),
-                }
+        runs.extend(
+            _evaluate_model_runs(
+                train_rows=train_rows,
+                test_rows=test_rows,
+                encoders=encoders,
+                seed=seed,
+                families=args.families,
+                min_stratum_rows=args.min_stratum_rows,
             )
+        )
     source_family_counts = Counter(str(row.get("source_family") or "unknown") for row in rows)
     suite_counts = Counter(str(row.get("suite") or "unknown") for row in rows)
     pairing_mode_counts = Counter(str(row.get("pairing_mode") or "unknown") for row in rows)
@@ -436,6 +573,7 @@ def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
     cross_action_rows = sum(
         count for pair, count in action_pair_counts.items() if pair.split(">", 1)[0] != pair.split(">", 1)[1]
     )
+    holdout = _evaluate_holdout_splits(rows, encoders, args)
     return {
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "pairwise_jsonl": str(args.pairwise_jsonl),
@@ -468,6 +606,8 @@ def run_pairwise_ranker_eval(args: argparse.Namespace) -> dict[str, Any]:
             min_mean_accuracy=args.min_mean_accuracy,
             min_mean_auc=args.min_mean_auc,
         ),
+        "independent_holdout": holdout,
+        "holdout_decision": _holdout_decision(holdout),
     }
 
 
@@ -501,6 +641,35 @@ def render_markdown(summary: dict[str, Any]) -> str:
             f"ECE mean `{stats['ece']['mean']:.4f}`, "
             f"acc delta vs random `{stats['acc_delta_vs_random']['mean']:.4f}`"
         )
+    holdout = summary.get("independent_holdout") or {}
+    if holdout:
+        lines.extend(["", "## Independent Holdout Summary", ""])
+        decision = summary.get("holdout_decision") or {}
+        if decision:
+            lines.extend(
+                [
+                    f"- Holdout decision: `{decision['status']}`",
+                    f"- Passing holdouts: `{decision['passing_holdouts']}/{decision['eligible_holdouts']}`",
+                    f"- Runtime gate change allowed: `{decision['runtime_gate_change_allowed']}`",
+                    f"- Recommended next: `{decision['recommended_next']}`",
+                    "",
+                ]
+            )
+        for field, payload in holdout.items():
+            lines.append(f"### `{field}`")
+            if not payload["results"]:
+                lines.append("- no eligible holdout values")
+                continue
+            for value, result in payload["results"].items():
+                split_decision = result["aggregate"]["decision"]
+                best_family = split_decision["best_family"]
+                best_stats = result["aggregate"]["families"][best_family]
+                lines.append(
+                    f"- `{value}`: decision `{split_decision['status']}`, "
+                    f"best `{best_family}`, acc mean `{best_stats['accuracy']['mean']:.4f}`, "
+                    f"AUC mean `{best_stats['auc']['mean']:.4f}`, "
+                    f"test pairs `{result['test_pair_rows']}`"
+                )
     lines.extend(
         [
             "",
@@ -556,6 +725,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-mean-accuracy", type=float, default=0.60)
     parser.add_argument("--min-mean-auc", type=float, default=0.60)
     parser.add_argument("--min-stratum-rows", type=int, default=10)
+    parser.add_argument(
+        "--holdout-fields",
+        type=lambda value: _parse_csv(value, allowed=HOLDOUT_FIELDS),
+        default=list(HOLDOUT_FIELDS),
+    )
+    parser.add_argument("--min-holdout-pair-rows", type=int, default=20)
+    parser.add_argument("--min-train-pair-rows", type=int, default=50)
     return parser
 
 

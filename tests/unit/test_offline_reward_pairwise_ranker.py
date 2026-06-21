@@ -147,3 +147,60 @@ def test_cli_writes_pairwise_ranker_summary(tmp_path: Path) -> None:
     assert summary["feature_contract"]["symmetric_augmentation"] is True
     assert summary["runs"][0]["train_groups"] >= 1
     assert "# Offline Reward Pairwise Ranker Eval" in summary_md.read_text(encoding="utf-8")
+
+
+def test_cli_reports_independent_source_family_holdout(tmp_path: Path) -> None:
+    pairwise_path = tmp_path / "pairs.jsonl"
+    rows = []
+    for idx in range(12):
+        source_family = "heldout_family" if idx < 4 else "train_family"
+        rows.append(
+            _pair_row(
+                pair_id=f"pair-{idx}",
+                group_key=f"g{idx}",
+                preferred_action="frontdoor",
+                rejected_action="coder_escalation",
+                source_family=source_family,
+                suite="debugbench" if idx % 2 else "math",
+                answer_delta=1.0 + idx / 10.0,
+            )
+        )
+    pairwise_path.write_text(
+        "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    summary_json = tmp_path / "summary.json"
+    summary_md = tmp_path / "summary.md"
+
+    assert mod.main(
+        [
+            "--pairwise-jsonl",
+            str(pairwise_path),
+            "--summary-json",
+            str(summary_json),
+            "--summary-md",
+            str(summary_md),
+            "--families",
+            "logistic_l2",
+            "--seeds",
+            "42",
+            "--test-split",
+            "0.25",
+            "--holdout-fields",
+            "source_family",
+            "--min-holdout-pair-rows",
+            "4",
+            "--min-train-pair-rows",
+            "4",
+        ]
+    ) == 0
+
+    summary = json.loads(summary_json.read_text(encoding="utf-8"))
+    holdout = summary["independent_holdout"]["source_family"]
+    assert holdout["eligible_holdout_values"] == ["heldout_family", "train_family"]
+    assert holdout["results"]["heldout_family"]["test_pair_rows"] == 4
+    assert holdout["results"]["heldout_family"]["train_pair_rows"] == 8
+    assert holdout["results"]["heldout_family"]["aggregate"]["decision"]["runtime_gate_change_allowed"] is False
+    assert summary["holdout_decision"]["eligible_holdouts"] == 2
+    assert summary["holdout_decision"]["runtime_gate_change_allowed"] is False
+    assert "Independent Holdout Summary" in summary_md.read_text(encoding="utf-8")
