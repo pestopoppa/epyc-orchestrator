@@ -1,0 +1,61 @@
+{
+  "builder": "scripts/tasks/select_real_suite_v1.py",
+  "counts": {
+    "candidate_by_class": {
+      "benchmark_eval_measurement": 33,
+      "code_change_implementation": 193,
+      "debug_root_cause": 17,
+      "governance_docs_handoff": 21,
+      "ops_deploy_process": 34,
+      "planning_architecture_review": 29,
+      "research_intake_deep_dive": 45
+    },
+    "candidate_rows": 372,
+    "selected_by_class": {
+      "benchmark_eval_measurement": 8,
+      "code_change_implementation": 7,
+      "debug_root_cause": 7,
+      "governance_docs_handoff": 7,
+      "ops_deploy_process": 7,
+      "planning_architecture_review": 7,
+      "research_intake_deep_dive": 7
+    },
+    "selected_by_outcome": {
+      "failure": 22,
+      "success": 28
+    },
+    "selected_rows": 50
+  },
+  "generated_at": "2026-06-21T01:09:22+00:00",
+  "next_step": "Materialize benchmarks/prompts/debug/real_suite_v1.yaml from approved private prompts and deterministic or llm_judge rubrics, then add the suite to YAML_ONLY_SUITES.",
+  "privacy": {
+    "prompt_ref_present": false,
+    "prompt_text_present": false,
+    "selected_prompt_key_paths": []
+  },
+  "schema_version": "real_suite_v1_selection.v1",
+  "selection": {
+    "class_order": [
+      "benchmark_eval_measurement",
+      "ops_deploy_process",
+      "code_change_implementation",
+      "debug_root_cause",
+      "governance_docs_handoff",
+      "research_intake_deep_dive",
+      "planning_architecture_review"
+    ],
+    "class_quotas": {
+      "benchmark_eval_measurement": 8,
+      "code_change_implementation": 7,
+      "debug_root_cause": 7,
+      "governance_docs_handoff": 7,
+      "ops_deploy_process": 7,
+      "planning_architecture_review": 7,
+      "research_intake_deep_dive": 7
+    },
+    "total_requested": 50,
+    "within_class_policy": "reserve up to 40% failures, then longest wall_s, duplicate_count, task_id"
+  },
+  "source_input": "orchestration/reports/real_task_corpus_20260620/real_tasks.training_eligible.compact.jsonl",
+  "status": "selection_manifest_ready_yaml_materialization_pending"
+}
