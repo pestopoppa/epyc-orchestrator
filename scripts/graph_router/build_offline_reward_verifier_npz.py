@@ -29,8 +29,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.graph_router.action_space import (
-    action_index_for_raw_label,
     load_live_canonical_actions,
+    normalize_action,
 )
 from scripts.graph_router.build_offline_reward_feature_manifest import (
     FEATURE_ROW_SCHEMA_VERSION,
@@ -44,6 +44,7 @@ NPZ_SUMMARY_SCHEMA_VERSION = "offline_reward_verifier_npz_summary.v1"
 ROLE_ALIASES = {
     "coder_primary": "coder_escalation",
 }
+ROLE_SUFFIXES = (":delegated", ":direct", ":repl", ":react")
 PRIVATE_FIELDS = {"answer", "expected", "prompt", "reference", "response"}
 
 
@@ -165,6 +166,28 @@ def _assert_prompt_free_metadata(metadata_rows: Iterable[dict[str, Any]]) -> Non
             )
 
 
+def _canonical_action_for_role(role_key: str, canonical_actions: list[str]) -> str | None:
+    action_set = set(canonical_actions)
+    alias = ROLE_ALIASES.get(role_key, role_key)
+    candidates: list[str] = []
+    for suffix in ROLE_SUFFIXES:
+        if alias.endswith(suffix):
+            candidates.append(alias[: -len(suffix)])
+            break
+    candidates.append(alias)
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate in action_set:
+            return candidate
+        canonical = normalize_action(candidate, include_seeded_frontdoor=True)
+        if canonical in action_set:
+            return canonical
+    return None
+
+
 def build_verifier_npz(
     manifest_jsonl: Path,
     out_npz: Path,
@@ -184,6 +207,7 @@ def build_verifier_npz(
     n_actions = len(canonical_actions)
     if n_actions == 0:
         raise OfflineRewardVerifierNpzError("no canonical actions available")
+    action_lookup = {action: idx for idx, action in enumerate(canonical_actions)}
 
     ports = embedding_ports or [8090, 8091, 8092, 8093, 8094, 8095]
     source_cache: dict[Path, list[dict[str, Any]]] = {}
@@ -203,19 +227,15 @@ def build_verifier_npz(
                 f"{manifest_jsonl}:{row_number}: expected schema_version={FEATURE_ROW_SCHEMA_VERSION!r}"
             )
         role_key = str(row.get("role_key") or "")
-        canonical_role = ROLE_ALIASES.get(role_key, role_key)
-        action_idx = action_index_for_raw_label(
-            canonical_role,
-            canonical_actions,
-            include_seeded_frontdoor=True,
-        )
-        if action_idx is None:
+        canonical_action = _canonical_action_for_role(role_key, canonical_actions)
+        if canonical_action is None:
             if drop_unmapped_actions:
                 dropped_unmapped[role_key] += 1
                 continue
             raise OfflineRewardVerifierNpzError(
                 f"{manifest_jsonl}:{row_number}: cannot map role_key={role_key!r}"
             )
+        action_idx = action_lookup[canonical_action]
 
         source_path = Path(str(row.get("source_path") or ""))
         offset = row.get("source_record_offset")
@@ -257,7 +277,7 @@ def build_verifier_npz(
         action_labels.append(action_idx)
         q_weights.append(max(0.01, float(oracle_score)))
         role_counts[role_key] += 1
-        canonical_role_counts[canonical_actions[action_idx]] += 1
+        canonical_role_counts[canonical_action] += 1
         metadata_rows.append(
             {
                 "item_id": row.get("item_id"),
@@ -265,7 +285,7 @@ def build_verifier_npz(
                 "question_id": row.get("question_id"),
                 "suite": row.get("suite"),
                 "role_key": role_key,
-                "canonical_action": canonical_actions[action_idx],
+                "canonical_action": canonical_action,
                 "source_path": str(source_path),
                 "source_record_offset": offset,
                 "source_record_index": row.get("source_record_index"),

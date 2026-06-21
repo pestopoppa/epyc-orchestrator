@@ -100,3 +100,39 @@ def test_build_plan_excludes_existing_rows_and_strips_private_text(tmp_path: Pat
     assert summary["candidate_action_counts"] == {"architect_general": 1}
     assert summary["existing_rows_excluded"] == 1
     assert summary["recommended_sources"][0]["source_path"] == str(source)
+
+
+def test_build_plan_deduplicates_repeated_input_paths(tmp_path: Path) -> None:
+    source = tmp_path / "results.jsonl"
+    _write_jsonl(
+        source,
+        [
+            {
+                "question_id": "q1",
+                "suite": "architecture",
+                "prompt": "Design the thing",
+                "expected": "Use a queue",
+                "role_results": {
+                    "architect_general:delegated": {
+                        "answer": "Use a queue with backpressure",
+                        "passed": True,
+                    },
+                },
+            }
+        ],
+    )
+
+    candidates, summary = mod.build_plan(
+        argparse.Namespace(
+            input=[source, source],
+            existing_manifest=None,
+            existing_summary=None,
+            target_actions="architect_general",
+            min_action_rows=30,
+            max_candidates_per_action=20,
+        )
+    )
+
+    assert len(candidates) == 1
+    assert summary["files_scanned"] == 2
+    assert summary["candidate_action_counts"] == {"architect_general": 1}

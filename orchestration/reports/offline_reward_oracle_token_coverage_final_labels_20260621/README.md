@@ -74,6 +74,21 @@ Committed artifacts:
   responses, excludes feature-manifest rows already used, and recommends source
   files for the next scoring/rebuild pass. It is an offline candidate manifest,
   not scored labels or live verifier weights.
+- `offline_reward_expansion_labels.jsonl`,
+  `offline_reward_expansion_labels_summary.json`, and
+  `offline_reward_expansion_labels_summary.md` score the deduplicated expansion
+  candidates with the adopted deterministic token-coverage oracle. They remain
+  prompt-free and are not a live verifier gate.
+- `offline_reward_labels_with_expansion.jsonl`,
+  `offline_reward_feature_manifest_with_expansion.jsonl`, and
+  `offline_reward_verifier_data_with_expansion.npz` merge the original
+  decision-grade labels with the scored expansion rows and rebuild the
+  verifier-compatible NPZ.
+- `offline_reward_multi_action_verifier_with_expansion_calibration_robustness_summary.json`
+  and `offline_reward_multi_action_verifier_with_expansion_calibration_robustness_summary.md`
+  repeat the 10-seed calibration robustness check on the expanded verifier
+  data. Sparse action coverage is repaired, but the verifier remains
+  `not_promotion_grade` because calibrated pass rates remain `0/10`.
 
 Private row data is not committed. The scored row file is:
 
@@ -125,12 +140,24 @@ Result:
 - robustness decision: `not_promotion_grade`
 - robustness blockers: `quantile_histogram_calibrated_pass_rate_below_threshold`,
   `temperature_bias_calibrated_pass_rate_below_threshold`, `sparse_action_coverage`
-- verifier expansion candidate rows: `204`
+- verifier expansion candidate rows: `202`
 - verifier expansion candidate action counts: `architect_general=200`,
-  `coder_escalation=4`
+  `coder_escalation=2`
 - verifier expansion recommended source:
   `/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl`
-  (`188` candidate `architect_general` rows)
+  (`105` candidate `architect_general` rows)
+- expansion labels: `202` rows, target agreement `0.9406`
+- expanded merged labels: `524` rows
+- expanded verifier NPZ rows: `524`
+- expanded verifier NPZ unique source records embedded: `193`
+- expanded verifier NPZ action coverage: `architect_general=210`,
+  `coder_escalation=90`, `frontdoor=224`
+- expanded robustness temperature/bias calibrated pass count: `0/10`
+- expanded robustness quantile-histogram calibrated pass count: `0/10`
+- expanded robustness decision: `not_promotion_grade`
+- expanded robustness blockers:
+  `quantile_histogram_calibrated_pass_rate_below_threshold`,
+  `temperature_bias_calibrated_pass_rate_below_threshold`
 
 Interpretation:
 
@@ -145,13 +172,10 @@ The verifier NPZ is still offline preparation, not a serve-time routing change.
 The first frontdoor-specialist train/eval from this NPZ failed the A2 gates. A
 broader multi-action verifier improves substantially on Brier and ROC-AUC, but
 misses calibration. A disjoint post-hoc temperature/bias calibration improves
-Brier but leaves ECE high. Quantile-histogram calibration repairs the held-out
-ECE miss in this scout, but action coverage remains thin (`architect_general`
-has only 10 rows), so the next promotion-grade step is preregistered
-calibration/data expansion before any default-off runtime gate changes. The
-10-seed robustness check confirms the seed-42 histogram pass is not stable
-enough for promotion; data expansion for sparse escalation roles is now the
-primary blocker. The expansion plan identifies enough prompt-free historical
-`architect_general` candidates to clear the immediate row-count deficit after
-rescoring/rebuilding, while `coder_escalation` already exceeds the minimum row
-gate in the current NPZ.
+Brier but leaves ECE high. Quantile-histogram calibration repairs one held-out
+ECE scout, but the 10-seed robustness check confirms the seed-42 histogram pass
+is not stable enough for promotion. The expansion rebuild repairs the immediate
+row-count deficit (`architect_general=210`, `coder_escalation=90`,
+`frontdoor=224`), but robustness remains `not_promotion_grade`: both calibrated
+methods pass `0/10` seeds. The next promotion-grade step is therefore verifier
+model/calibration improvement, not a default-off runtime gate change.

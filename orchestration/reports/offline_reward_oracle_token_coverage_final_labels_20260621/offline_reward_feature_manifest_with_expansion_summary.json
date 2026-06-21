@@ -1,0 +1,68 @@
+{
+  "feature_contract": {
+    "embedding_dim_required": 1024,
+    "engineered_feature_dim": 7,
+    "engineered_features": [
+      "task_type_onehot[5]",
+      "log1p(context_length)/12.0",
+      "has_images"
+    ],
+    "next_step": "embed source prompt/context text for each row, append engineered features, then join to oracle_binary_label by join_key"
+  },
+  "feature_row_schema_version": "offline_reward_feature_input.v1",
+  "labels_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_labels_with_expansion.jsonl",
+  "privacy": {
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "roles": {
+    "architect_coding:delegated": 98,
+    "architect_general": 10,
+    "architect_general:delegated": 102,
+    "coder_escalation": 45,
+    "coder_escalation:direct": 1,
+    "coder_escalation:repl": 1,
+    "coder_primary": 43,
+    "frontdoor": 43,
+    "frontdoor:direct": 181
+  },
+  "rows": 524,
+  "schema_version": "offline_reward_feature_manifest_summary.v1",
+  "sources": {
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_013442.jsonl": 2,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_015745.jsonl": 2,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_023815.jsonl": 2,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl": 105,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_184110.jsonl": 4,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260304_191211.jsonl": 2,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260309_213147.jsonl": 10,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_181746.jsonl": 2,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260329_182428.jsonl": 71,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_192103.jsonl": 2,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_203724.jsonl": 181,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_seed42.json": 141
+  },
+  "suites": {
+    "agentic": 9,
+    "coder": 16,
+    "debugbench": 100,
+    "general": 48,
+    "gpqa": 30,
+    "hotpotqa": 20,
+    "instruction_precision": 42,
+    "livecodebench": 107,
+    "long_context": 8,
+    "math": 51,
+    "mode_advantage": 2,
+    "mode_advantage_hard": 10,
+    "simpleqa": 29,
+    "thinking": 52
+  },
+  "unique_source_records": 193
+}

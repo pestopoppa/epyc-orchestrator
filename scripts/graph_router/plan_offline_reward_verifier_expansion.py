@@ -224,6 +224,7 @@ def _cap_candidates(
     max_per_action: int,
 ) -> list[dict[str, Any]]:
     counts = Counter()
+    seen_keys: set[tuple[str, int, str]] = set()
     capped: list[dict[str, Any]] = []
     for row in sorted(
         candidates,
@@ -234,6 +235,14 @@ def _cap_candidates(
             str(r["role_key"]),
         ),
     ):
+        key = (
+            str(row["source_path"]),
+            int(row["source_record_offset"]),
+            str(row["role_key"]),
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
         action = str(row["canonical_action"])
         if counts[action] >= max_per_action:
             continue
@@ -298,7 +307,8 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         raise ValueError(f"unknown target action(s): {', '.join(unknown_targets)}")
 
     existing = _existing_keys(args.existing_manifest)
-    files = _iter_input_files(args.input)
+    input_paths = args.input or [DEFAULT_RESULTS_ROOT]
+    files = _iter_input_files(input_paths)
     all_candidates: list[dict[str, Any]] = []
     stats = Counter()
     for path in files:
@@ -331,7 +341,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
     summary = {
         "schema_version": SCHEMA_VERSION,
         "candidate_schema_version": CANDIDATE_SCHEMA_VERSION,
-        "inputs": [str(path) for path in args.input],
+        "inputs": [str(path) for path in input_paths],
         "files_scanned": int(stats["files_scanned"]),
         "existing_manifest": str(args.existing_manifest) if args.existing_manifest else None,
         "existing_rows_excluded": int(stats["skipped_existing_row"]),
@@ -402,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Plan prompt-free verifier-data expansion for sparse actions",
     )
-    parser.add_argument("--input", action="append", type=Path, default=[DEFAULT_RESULTS_ROOT])
+    parser.add_argument("--input", action="append", type=Path, default=None)
     parser.add_argument("--existing-manifest", type=Path, default=DEFAULT_EXISTING_MANIFEST)
     parser.add_argument(
         "--existing-summary",

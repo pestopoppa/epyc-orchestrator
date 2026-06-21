@@ -1,0 +1,42 @@
+{
+  "inputs": [
+    "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_labels.jsonl",
+    "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_expansion_labels.jsonl"
+  ],
+  "oracle_negative": 271,
+  "oracle_positive": 253,
+  "output_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_labels_with_expansion.jsonl",
+  "privacy": {
+    "commits_private_rows": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ]
+  },
+  "role_counts": {
+    "architect_coding:delegated": 98,
+    "architect_general": 10,
+    "architect_general:delegated": 102,
+    "coder_escalation": 45,
+    "coder_escalation:direct": 1,
+    "coder_escalation:repl": 1,
+    "coder_primary": 43,
+    "frontdoor": 43,
+    "frontdoor:direct": 181
+  },
+  "rows": 524,
+  "schema_version": "offline_reward_oracle_label_merge_summary.v1",
+  "source_rows": {
+    "offline_reward_expansion_labels.jsonl": 202,
+    "offline_reward_labels.jsonl": 322
+  },
+  "target_source_counts": {
+    "answer_equivalence_final_label": 173,
+    "heldout_stress_binary_reward": 144,
+    "original_binary_reward": 5,
+    "verifier_sparse_action_expansion": 202
+  }
+}

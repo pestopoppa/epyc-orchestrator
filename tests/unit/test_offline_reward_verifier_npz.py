@@ -104,6 +104,18 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
         [
             _manifest_row(source_path, role_key="frontdoor:direct", label=1, score=1.0),
             _manifest_row(source_path, role_key="coder_primary", label=0, score=0.0),
+            _manifest_row(
+                source_path,
+                role_key="architect_general:delegated",
+                label=1,
+                score=0.9,
+            ),
+            _manifest_row(
+                source_path,
+                role_key="architect_coding:delegated",
+                label=0,
+                score=0.2,
+            ),
         ],
     )
     out_npz = tmp_path / "verifier.npz"
@@ -122,14 +134,14 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
     )
     data = np.load(out_npz, allow_pickle=True)
 
-    assert summary["rows"] == 2
+    assert summary["rows"] == 4
     assert summary["unique_source_records_embedded"] == 1
     assert calls == ["What is 2+2?"]
-    assert data["Z"].shape == (2, 1031 + 3)
+    assert data["Z"].shape == (4, 1031 + 3)
     assert data["Z"].dtype == np.float32
-    assert data["correct"].astype(np.float32).tolist() == [1.0, 0.0]
-    assert data["actions"].astype(np.int64).tolist() == [0, 2]
-    np.testing.assert_allclose(data["q_weights"].astype(np.float32), [1.0, 0.01])
+    assert data["correct"].astype(np.float32).tolist() == [1.0, 0.0, 1.0, 0.0]
+    assert data["actions"].astype(np.int64).tolist() == [0, 2, 1, 1]
+    np.testing.assert_allclose(data["q_weights"].astype(np.float32), [1.0, 0.01, 0.9, 0.2])
     assert int(data["feature_dim"]) == 1031
     assert int(data["n_actions"]) == 3
     assert [str(row[1]) for row in data["label_map"]] == [
@@ -142,7 +154,11 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
     assert "answer" not in metadata[0]
     assert metadata[0]["source_record_index_base"] == "one_based"
     assert metadata[0]["oracle_threshold"] == 0.86
-    assert json.loads(summary_json.read_text(encoding="utf-8"))["n_neg"] == 1
+    assert metadata[2]["canonical_action"] == "architect_general"
+    assert metadata[3]["canonical_action"] == "architect_general"
+    summary_payload = json.loads(summary_json.read_text(encoding="utf-8"))
+    assert summary_payload["n_neg"] == 2
+    assert summary_payload["canonical_action_counts"]["architect_general"] == 2
 
 
 def test_build_verifier_npz_rejects_unmapped_actions(

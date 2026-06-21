@@ -5,7 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.graph_router.build_offline_reward_oracle_rows import build_rows, main
+from scripts.graph_router.build_offline_reward_oracle_rows import (
+    build_rows,
+    load_candidate_keys,
+    main,
+)
 
 
 def _write_seed_file(path: Path) -> Path:
@@ -140,3 +144,36 @@ def test_cli_writes_rows_and_summary(tmp_path: Path) -> None:
     assert len(rows) == 2
     assert rows[0]["oracle_score"] == 1.0
     assert summary["suite_counts"] == {"math": 2}
+
+
+def test_candidate_manifest_filters_exact_source_offset_role(tmp_path: Path) -> None:
+    seed_file = _write_seed_file(tmp_path / "seed.json")
+    candidate_path = tmp_path / "candidates.jsonl"
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "source_path": str(seed_file),
+                "source_record_offset": 0,
+                "role_key": "worker_general:direct",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows, summary = build_rows(
+        [seed_file],
+        candidate_keys=load_candidate_keys(candidate_path),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["role_key"] == "worker_general:direct"
+    assert rows[0]["source_record_offset"] == 0
+    assert summary["candidate_filter"] == {
+        "enabled": True,
+        "candidate_rows": 1,
+        "matched_candidate_rows": 1,
+        "missing_candidate_rows": 0,
+    }
+    assert summary["stats"]["skipped_not_candidate"] == 2

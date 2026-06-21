@@ -73,6 +73,34 @@ def _binary_reward(role_result: dict[str, Any], reward_value: Any) -> float:
     return 0.0
 
 
+def load_candidate_keys(path: Path) -> set[tuple[str, int, str]]:
+    """Load expansion-candidate join keys as (source_path, offset, role_key)."""
+    keys: set[tuple[str, int, str]] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            value = json.loads(stripped)
+            if not isinstance(value, dict):
+                raise ValueError(f"{path}:{line_number}: expected object")
+            source_path = str(value.get("source_path") or "")
+            offset = value.get("source_record_offset")
+            role_key = str(value.get("role_key") or "")
+            if not source_path or not isinstance(offset, int) or not role_key:
+                raise ValueError(
+                    f"{path}:{line_number}: source_path, source_record_offset, "
+                    "and role_key are required"
+                )
+            key = (source_path, offset, role_key)
+            if key in keys:
+                raise ValueError(f"{path}:{line_number}: duplicate candidate key {key!r}")
+            keys.add(key)
+    if not keys:
+        raise ValueError(f"{path}: no candidate keys")
+    return keys
+
+
 def _row_id(path: Path, record_index: int, role_key: str) -> str:
     safe_role = role_key.replace(":", "_").replace("/", "_")
     return f"{path.stem}:{record_index}:{safe_role}"
@@ -95,11 +123,13 @@ def build_rows(
     *,
     oracle_score_mode: str = "omit",
     max_rows: int | None = None,
+    candidate_keys: set[tuple[str, int, str]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     stats = Counter()
     suite_counts = Counter()
     role_counts = Counter()
+    matched_candidate_keys: set[tuple[str, int, str]] = set()
 
     for path in paths:
         for record_index, record in enumerate(_load_records(path), start=1):
@@ -119,6 +149,12 @@ def build_rows(
             question_id = str(record.get("question_id") or record.get("qid") or "")
 
             for role_key, role_result in role_results.items():
+                role_key_str = str(role_key)
+                source_record_offset = record_index - 1
+                candidate_key = (str(path), source_record_offset, role_key_str)
+                if candidate_keys is not None and candidate_key not in candidate_keys:
+                    stats["skipped_not_candidate"] += 1
+                    continue
                 if not isinstance(role_result, dict):
                     stats["skipped_bad_role_result"] += 1
                     continue
@@ -129,12 +165,13 @@ def build_rows(
                 reward_value = rewards.get(role_key)
                 binary_reward = _binary_reward(role_result, reward_value)
                 row = {
-                    "item_id": _row_id(path, record_index, str(role_key)),
+                    "item_id": _row_id(path, record_index, role_key_str),
                     "source_path": str(path),
                     "source_record_index": record_index,
+                    "source_record_offset": source_record_offset,
                     "question_id": question_id,
                     "suite": suite,
-                    "role_key": str(role_key),
+                    "role_key": role_key_str,
                     "role": str(role_result.get("role") or ""),
                     "reference": reference,
                     "response": response,
@@ -153,12 +190,27 @@ def build_rows(
 
                 rows.append(row)
                 suite_counts[suite] += 1
-                role_counts[str(role_key)] += 1
+                role_counts[role_key_str] += 1
                 stats["rows"] += 1
+                matched_candidate_keys.add(candidate_key)
                 if max_rows is not None and len(rows) >= max_rows:
-                    return rows, _summary(stats, suite_counts, role_counts, oracle_score_mode)
+                    return rows, _summary(
+                        stats,
+                        suite_counts,
+                        role_counts,
+                        oracle_score_mode,
+                        candidate_keys=candidate_keys,
+                        matched_candidate_keys=matched_candidate_keys,
+                    )
 
-    return rows, _summary(stats, suite_counts, role_counts, oracle_score_mode)
+    return rows, _summary(
+        stats,
+        suite_counts,
+        role_counts,
+        oracle_score_mode,
+        candidate_keys=candidate_keys,
+        matched_candidate_keys=matched_candidate_keys,
+    )
 
 
 def _summary(
@@ -166,7 +218,12 @@ def _summary(
     suite_counts: Counter,
     role_counts: Counter,
     oracle_score_mode: str,
+    *,
+    candidate_keys: set[tuple[str, int, str]] | None = None,
+    matched_candidate_keys: set[tuple[str, int, str]] | None = None,
 ) -> dict[str, Any]:
+    candidate_count = len(candidate_keys or set())
+    matched_count = len(matched_candidate_keys or set())
     return {
         "schema_version": "offline_reward_oracle_rows.v1",
         "oracle_score_mode": oracle_score_mode,
@@ -174,6 +231,12 @@ def _summary(
         "stats": {key: int(value) for key, value in sorted(stats.items())},
         "suite_counts": {key: int(value) for key, value in sorted(suite_counts.items())},
         "role_counts": {key: int(value) for key, value in sorted(role_counts.items())},
+        "candidate_filter": {
+            "enabled": candidate_keys is not None,
+            "candidate_rows": candidate_count,
+            "matched_candidate_rows": matched_count,
+            "missing_candidate_rows": max(0, candidate_count - matched_count),
+        },
     }
 
 
@@ -198,15 +261,31 @@ def main(argv: list[str] | None = None) -> int:
         help="How to populate oracle_score. Default omits it for external scorer input.",
     )
     parser.add_argument("--max-rows", type=int, default=None)
+    parser.add_argument(
+        "--candidate-manifest-jsonl",
+        type=Path,
+        help="Optional prompt-free expansion candidate manifest to filter exact source/role rows.",
+    )
     args = parser.parse_args(argv)
 
+    candidate_keys = (
+        load_candidate_keys(args.candidate_manifest_jsonl)
+        if args.candidate_manifest_jsonl
+        else None
+    )
     rows, summary = build_rows(
         args.input,
         oracle_score_mode=args.oracle_score_mode,
         max_rows=args.max_rows,
+        candidate_keys=candidate_keys,
     )
     if not rows:
         raise SystemExit("no rows extracted")
+    if summary["candidate_filter"]["missing_candidate_rows"]:
+        raise SystemExit(
+            "candidate rows missing: "
+            f"{summary['candidate_filter']['missing_candidate_rows']}"
+        )
 
     write_jsonl(rows, args.output_jsonl)
     args.summary_json.parent.mkdir(parents=True, exist_ok=True)
