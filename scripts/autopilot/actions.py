@@ -63,6 +63,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("autopilot")
 _SKILL_EFFICACY_GATE_ENV = "AUTOPILOT_SKILL_EFFICACY_GATE"
+_BSV2_ACCEPT_GATE_ENV = "AUTOPILOT_BSV2_ACCEPT_GATE"
+_BSV2_MIN_SHARED_QIDS_ENV = "AUTOPILOT_BSV2_MIN_SHARED_QIDS"
+_BSV2_MAX_ACCURACY_REGRESSION_ENV = "AUTOPILOT_BSV2_MAX_ACCURACY_REGRESSION"
 
 
 @dataclass
@@ -440,6 +443,13 @@ def _skill_efficacy_without_result(ctx: _ActionContext) -> EvalResult | None:
     return ctx.tower.hybrid_eval()
 
 
+def _bsv2_baseline_result(ctx: _ActionContext) -> EvalResult | None:
+    """Run the pre-mutation BSV-2 baseline arm when explicitly enabled."""
+    if not _env_flag_enabled(_BSV2_ACCEPT_GATE_ENV):
+        return None
+    return ctx.tower.hybrid_eval()
+
+
 def _skill_efficacy_accepts(
     *,
     without_result: EvalResult | None,
@@ -487,6 +497,143 @@ def _skill_efficacy_accepts(
     return verdict.accept
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        log.warning("Invalid integer %s=%r; using %d", name, raw, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        log.warning("Invalid float %s=%r; using %.6f", name, raw, default)
+        return default
+
+
+def _bsv2_eval_payload(
+    result: EvalResult,
+    *,
+    label: str,
+    artifact_kind: str,
+    target: str,
+    mutation_type: str,
+) -> dict[str, Any]:
+    details = dict(getattr(result, "details", {}) or {})
+    details.setdefault("question_results", list(getattr(result, "question_results", []) or []))
+    details.setdefault("archive_member_id", f"bsv2:{label}:{artifact_kind}:{target}:{mutation_type}")
+    return {
+        "tier": result.tier,
+        "quality": result.quality,
+        "speed": result.speed,
+        "cost": result.cost,
+        "reliability": result.reliability,
+        "per_suite_quality": dict(result.per_suite_quality),
+        "routing_distribution": dict(getattr(result, "routing_distribution", {}) or {}),
+        "n_questions": getattr(result, "n_questions", 0),
+        "question_results": list(getattr(result, "question_results", []) or []),
+        "core_id": getattr(result, "core_id", ""),
+        "avg_prompt_tokens": getattr(result, "instruction_token_count", 0),
+        "eval_details": details,
+        "archive_member_id": details["archive_member_id"],
+    }
+
+
+def _bsv2_accepts(
+    *,
+    baseline_result: EvalResult | None,
+    candidate_result: EvalResult,
+    artifact_kind: str,
+    target: str,
+    mutation_type: str,
+) -> bool:
+    """Default-off BSV-2 behavior-signature accept hook.
+
+    When enabled, the caller supplies a pre-mutation baseline eval and the
+    post-mutation candidate eval. The existing paired-report backend decides
+    whether the candidate is behaviorally safe to keep.
+    """
+    if baseline_result is None:
+        return True
+
+    detail: dict[str, Any] = {
+        "enabled": True,
+        "artifact_kind": artifact_kind,
+        "target": target,
+        "mutation_type": mutation_type,
+    }
+    candidate_result.details["bsv2_accept_gate"] = detail
+
+    try:
+        from bsv_paired_report import (
+            DEFAULT_MIN_SHARED_QIDS,
+            build_eval_result_pair_report,
+        )
+
+        report = build_eval_result_pair_report(
+            _bsv2_eval_payload(
+                baseline_result,
+                label="baseline",
+                artifact_kind=artifact_kind,
+                target=target,
+                mutation_type=mutation_type,
+            ),
+            _bsv2_eval_payload(
+                candidate_result,
+                label="candidate",
+                artifact_kind=artifact_kind,
+                target=target,
+                mutation_type=mutation_type,
+            ),
+            baseline_label="baseline",
+            candidate_label="candidate",
+            min_shared_qids=_env_int(_BSV2_MIN_SHARED_QIDS_ENV, DEFAULT_MIN_SHARED_QIDS),
+            max_accuracy_regression=_env_float(_BSV2_MAX_ACCURACY_REGRESSION_ENV, 0.0),
+        )
+    except Exception as exc:  # pragma: no cover - exact exception type is backend-owned
+        detail.update({
+            "accept": False,
+            "gate_decision": "block",
+            "blockers": [f"paired report failed: {exc}"],
+            "error": str(exc),
+        })
+        log.warning(
+            "BSV-2 accept gate failed closed for %s mutation on %s: %s",
+            artifact_kind,
+            target,
+            exc,
+        )
+        return False
+
+    signature_diff = dict(report.get("signature_diff") or {})
+    blockers = list(report.get("blockers") or [])
+    accept = report.get("gate_decision") == "pass" and signature_diff.get("severity") != "blocking"
+    detail.update({
+        "accept": accept,
+        "gate_decision": report.get("gate_decision"),
+        "blockers": blockers,
+        "paired_stats": report.get("paired_stats"),
+        "signature_diff": signature_diff,
+        "thresholds": report.get("thresholds"),
+    })
+    if not accept:
+        log.warning(
+            "BSV-2 accept gate rejected %s mutation on %s: %s",
+            artifact_kind,
+            target,
+            "; ".join(blockers) or signature_diff.get("severity") or "blocked",
+        )
+    return accept
+
+
 def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     target = action.get("file", "frontdoor.md")
     mutation_type = action.get("mutation", "targeted_fix")
@@ -511,6 +658,7 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
         )
         return None, "prompt_forge"
     skill_without = _skill_efficacy_without_result(ctx)
+    bsv2_baseline = _bsv2_baseline_result(ctx)
     ctx.forge.apply_mutation(mutation)
     eval_result = ctx.tower.hybrid_eval()
 
@@ -534,6 +682,16 @@ def _action_prompt_mutation(action: dict[str, Any], ctx: _ActionContext):
     if not _skill_efficacy_accepts(
         without_result=skill_without,
         with_result=eval_result,
+        artifact_kind="prompt",
+        target=target,
+        mutation_type=mutation_type,
+    ):
+        ctx.forge.revert_mutation(mutation)
+        return eval_result, "prompt_forge"
+
+    if not _bsv2_accepts(
+        baseline_result=bsv2_baseline,
+        candidate_result=eval_result,
         artifact_kind="prompt",
         target=target,
         mutation_type=mutation_type,
@@ -573,6 +731,7 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
         return eval_result, "prompt_forge"
 
     skill_without = _skill_efficacy_without_result(ctx)
+    bsv2_baseline = _bsv2_baseline_result(ctx)
     ctx.forge.apply_mutation(mutation)
     eval_result = ctx.tower.hybrid_eval()
 
@@ -596,6 +755,16 @@ def _action_gepa_optimize(action: dict[str, Any], ctx: _ActionContext):
     if not _skill_efficacy_accepts(
         without_result=skill_without,
         with_result=eval_result,
+        artifact_kind="prompt",
+        target=target,
+        mutation_type="gepa",
+    ):
+        ctx.forge.revert_mutation(mutation)
+        return eval_result, "prompt_forge"
+
+    if not _bsv2_accepts(
+        baseline_result=bsv2_baseline,
+        candidate_result=eval_result,
         artifact_kind="prompt",
         target=target,
         mutation_type="gepa",
@@ -649,6 +818,7 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
         )
 
     skill_without = _skill_efficacy_without_result(ctx)
+    bsv2_baseline = _bsv2_baseline_result(ctx)
     ctx.forge.apply_code_mutation(mutation)
     eval_result = ctx.tower.hybrid_eval()
 
@@ -671,6 +841,16 @@ def _action_code_mutation(action: dict[str, Any], ctx: _ActionContext):
     if not _skill_efficacy_accepts(
         without_result=skill_without,
         with_result=eval_result,
+        artifact_kind="code",
+        target=target,
+        mutation_type=mutation_type,
+    ):
+        ctx.forge.revert_code_mutation(mutation)
+        return eval_result, "prompt_forge"
+
+    if not _bsv2_accepts(
+        baseline_result=bsv2_baseline,
+        candidate_result=eval_result,
         artifact_kind="code",
         target=target,
         mutation_type=mutation_type,

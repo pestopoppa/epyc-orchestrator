@@ -266,6 +266,7 @@ def _eval_result(
     *,
     quality: float = 1.0,
     per_suite_quality: dict[str, float] | None = None,
+    question_results: list[dict] | None = None,
 ) -> actions.EvalResult:
     return actions.EvalResult(
         tier=1,
@@ -274,6 +275,7 @@ def _eval_result(
         cost=0.0,
         reliability=1.0,
         per_suite_quality=per_suite_quality or {},
+        question_results=question_results or [],
     )
 
 
@@ -386,6 +388,7 @@ class _QueuedTower:
 
 def test_prompt_mutation_skill_gate_default_off_single_eval(monkeypatch) -> None:
     monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
+    monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
 
     class FakeForge:
         def __init__(self):
@@ -417,10 +420,71 @@ def test_prompt_mutation_skill_gate_default_off_single_eval(monkeypatch) -> None
 
     assert species == "prompt_forge"
     assert result.details.get("skill_efficacy") is None
+    assert result.details.get("bsv2_accept_gate") is None
     assert tower.calls == 1
     assert forge.applied == 1
     assert forge.reverted == 0
     assert swarm.epochs == ["prompt_mutation:frontdoor.md/targeted_fix"]
+
+
+def test_prompt_mutation_bsv2_gate_rejects_behavior_regression(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
+    monkeypatch.setenv("AUTOPILOT_BSV2_ACCEPT_GATE", "1")
+    monkeypatch.setenv("AUTOPILOT_BSV2_MIN_SHARED_QIDS", "2")
+
+    class FakeForge:
+        def __init__(self):
+            self.applied = 0
+            self.reverted = 0
+
+        def propose_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="new",
+            )
+
+        def apply_mutation(self, mutation):
+            self.applied += 1
+
+        def revert_mutation(self, mutation):
+            self.reverted += 1
+
+    baseline = _eval_result(
+        question_results=[
+            {"qid": "q1", "suite": "math", "correct": True},
+            {"qid": "q2", "suite": "math", "correct": True},
+        ]
+    )
+    candidate = _eval_result(
+        question_results=[
+            {"qid": "q1", "suite": "math", "correct": False},
+            {"qid": "q2", "suite": "math", "correct": True},
+        ]
+    )
+    tower = _QueuedTower([baseline, candidate])
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+
+    result, species = actions._action_prompt_mutation(
+        {"type": "prompt_mutation", "file": "frontdoor.md", "mutation": "targeted_fix"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=swarm, journal=_FakeJournal()),
+    )
+
+    assert species == "prompt_forge"
+    assert tower.calls == 2
+    assert forge.applied == 1
+    assert forge.reverted == 1
+    assert swarm.epochs == []
+    detail = result.details["bsv2_accept_gate"]
+    assert detail["accept"] is False
+    assert detail["gate_decision"] == "block"
+    assert detail["artifact_kind"] == "prompt"
+    assert detail["paired_stats"]["shared_qids"] == 2
+    assert detail["paired_stats"]["delta_b_minus_a"] == pytest.approx(-0.5)
+    assert detail["signature_diff"]["severity"] == "blocking"
 
 
 def test_prompt_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None:
@@ -504,6 +568,7 @@ def test_prompt_mutation_skill_gate_rejects_per_suite_regression(monkeypatch) ->
 
 def test_code_mutation_skill_gate_accepts_clean_gain(monkeypatch) -> None:
     monkeypatch.setenv("AUTOPILOT_SKILL_EFFICACY_GATE", "true")
+    monkeypatch.delenv("AUTOPILOT_BSV2_ACCEPT_GATE", raising=False)
 
     class FakeForge:
         def __init__(self):
@@ -546,6 +611,59 @@ def test_code_mutation_skill_gate_accepts_clean_gain(monkeypatch) -> None:
     assert detail["accept"] is True
     assert detail["artifact_kind"] == "code"
     assert detail["aggregate_delta"] == pytest.approx(0.15)
+
+
+def test_code_mutation_bsv2_gate_accepts_watch_behavior(monkeypatch) -> None:
+    monkeypatch.delenv("AUTOPILOT_SKILL_EFFICACY_GATE", raising=False)
+    monkeypatch.setenv("AUTOPILOT_BSV2_ACCEPT_GATE", "true")
+    monkeypatch.setenv("AUTOPILOT_BSV2_MIN_SHARED_QIDS", "2")
+
+    class FakeForge:
+        def __init__(self):
+            self.reverted = 0
+
+        def propose_code_mutation(self, **kwargs):
+            return SimpleNamespace(
+                file=kwargs["target_file"],
+                mutation_type=kwargs["mutation_type"],
+                description="test",
+                original_content="old",
+                mutated_content="new",
+                syntax_valid=True,
+                safety_valid=True,
+            )
+
+        def apply_code_mutation(self, mutation):
+            pass
+
+        def revert_code_mutation(self, mutation):
+            self.reverted += 1
+
+    shared_vector = [
+        {"qid": "q1", "suite": "math", "correct": True},
+        {"qid": "q2", "suite": "math", "correct": False},
+    ]
+    tower = _QueuedTower([
+        _eval_result(question_results=shared_vector),
+        _eval_result(question_results=shared_vector),
+    ])
+    forge = FakeForge()
+    swarm = _FakeSwarm()
+
+    result, species = actions._action_code_mutation(
+        {"type": "code_mutation", "file": "src/escalation.py", "mutation": "targeted_fix"},
+        _ctx(forge=forge, tower=tower, gate=_AlwaysPassGate(), swarm=swarm, journal=_FakeJournal()),
+    )
+
+    assert species == "prompt_forge"
+    assert tower.calls == 2
+    assert forge.reverted == 0
+    assert swarm.epochs == ["code_mutation:src/escalation.py/targeted_fix"]
+    detail = result.details["bsv2_accept_gate"]
+    assert detail["accept"] is True
+    assert detail["gate_decision"] == "pass"
+    assert detail["artifact_kind"] == "code"
+    assert detail["signature_diff"]["severity"] == "watch"
 
 
 def test_code_mutation_transfer_safety_skip_stops_before_apply_or_eval() -> None:
