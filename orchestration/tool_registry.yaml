@@ -807,6 +807,52 @@ tools:
       - input: {image_base64: "<base64 encoded PNG>"}
         description: "Extract text from a document image"
 
+  vision_analyze:
+    category: specialized
+    description: "Analyze an image with the vision pipeline using EXIF, VL description/OCR, face, or CLIP analyzers."
+    parameters:
+      image_path: {type: string, required: true, description: "Path to image file"}
+      analyzers: {type: string, required: false, description: "Comma-separated analyzer names, e.g. exif,vl_describe"}
+      vl_prompt: {type: string, required: false, description: "Optional prompt for VL analyzers"}
+    returns: {type: string, description: "JSON string with image analysis results"}
+    implementation:
+      type: python
+      module: src.tools.vision.analyze
+      function: vision_analyze
+    permissions: [compute, network]
+    allowed_callers: ["direct", "chain"]
+    side_effects: ["calls_llm", "system_state"]
+
+  vision_search:
+    category: specialized
+    description: "Search analyzed images by natural-language text query."
+    parameters:
+      query: {type: string, required: true, description: "Natural-language image search query"}
+      limit: {type: integer, required: false, default: 5, description: "Maximum results"}
+    returns: {type: string, description: "JSON string with matching image records"}
+    implementation:
+      type: python
+      module: src.tools.vision.analyze
+      function: vision_search
+    permissions: [compute]
+    allowed_callers: ["direct", "chain"]
+    side_effects: ["read_only"]
+
+  vision_face_identify:
+    category: specialized
+    description: "Detect faces in an image and match them against the vision face index."
+    parameters:
+      image_path: {type: string, required: true, description: "Path to image file"}
+      threshold: {type: string, required: false, default: "0.6", description: "Similarity threshold"}
+    returns: {type: string, description: "JSON string with detected face matches"}
+    implementation:
+      type: python
+      module: src.tools.vision.analyze
+      function: vision_face_identify
+    permissions: [compute]
+    allowed_callers: ["direct", "chain"]
+    side_effects: ["read_only"]
+
   # ============ SPECIALIZED TASK TRACKING TOOLS ============
   task_create:
     category: data

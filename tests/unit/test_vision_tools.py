@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import pytest
+from PIL import Image
 
 from src.registry.tool_loader import ToolPluginLoader
 
@@ -50,6 +50,20 @@ class TestVisionPluginLoading:
         handler = loader.get_handler("vision_search")
         assert handler is not None
         assert callable(handler)
+
+
+class TestVisionRegistryLoading:
+    """Test central registry exposure for vision tools."""
+
+    def test_tool_registry_exposes_vision_tools(self):
+        """Vision plugin handlers are exposed through tool_registry.yaml."""
+        from src.registry.tool_registry import ToolRegistry, load_from_yaml
+
+        registry = ToolRegistry()
+        load_from_yaml(registry, "orchestration/tool_registry.yaml")
+        tool_names = {tool["name"] for tool in registry.list_tools()}
+
+        assert {"vision_analyze", "vision_search", "vision_face_identify"} <= tool_names
 
 
 class TestVisionAnalyzeHandler:
@@ -142,3 +156,63 @@ class TestMultimodalDetection:
 
         with patch("src.tools.vision.analyze._load_registry_roles", side_effect=Exception("no registry")):
             assert _check_multimodal_available() is False
+
+
+class TestVLDescribeServerBackend:
+    """Test server-backed VL analyzer behavior without live inference."""
+
+    def test_initialize_accepts_available_server_without_cli(self, monkeypatch):
+        """Server backend does not require the local mtmd CLI path."""
+        from src.vision.analyzers.vl_describe import VLDescribeAnalyzer
+
+        analyzer = VLDescribeAnalyzer(backend="server")
+        monkeypatch.setattr(analyzer, "_server_available", lambda: True)
+
+        analyzer.initialize()
+
+        assert analyzer.is_initialized is True
+
+    def test_analyze_posts_openai_multimodal_payload(self, monkeypatch, tmp_path):
+        """Analyzer sends image_url + text content to the live VL server endpoint."""
+        from src.vision.analyzers import vl_describe
+
+        image_path = tmp_path / "sample.jpg"
+        Image.new("RGB", (4, 4), color="white").save(image_path)
+
+        requests = []
+
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "choices": [{"message": {"content": "A white square."}}],
+                }).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            requests.append((request, timeout))
+            return FakeResponse()
+
+        monkeypatch.setattr(vl_describe.urllib.request, "urlopen", fake_urlopen)
+
+        analyzer = vl_describe.VLDescribeAnalyzer(backend="server", prompt="Describe it.")
+        analyzer._initialized = True
+        result = analyzer.analyze(Image.open(image_path), image_path)
+
+        assert result.success is True
+        assert result.data["description"] == "A white square."
+        assert requests
+        request = requests[0][0]
+        assert request.full_url == "http://127.0.0.1:8086/v1/chat/completions"
+
+        payload = json.loads(request.data.decode("utf-8"))
+        content = payload["messages"][0]["content"]
+        assert content[0]["type"] == "image_url"
+        assert content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        assert content[1] == {"type": "text", "text": "Describe it."}

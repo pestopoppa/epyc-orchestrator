@@ -21,6 +21,9 @@ _LEGACY_VL_PORTS = {"worker_vision": 8086, "vision_escalation": 8087}
 def _vision_roles_from_records(records: dict[str, dict[str, Any]]) -> frozenset[str]:
     roles: set[str] = set()
     for role, record in records.items():
+        if role in LEGACY_VISION_ROLES:
+            roles.add(role)
+            continue
         if "vision" in stack_prior_launch_modes(record):
             roles.add(role)
             continue
