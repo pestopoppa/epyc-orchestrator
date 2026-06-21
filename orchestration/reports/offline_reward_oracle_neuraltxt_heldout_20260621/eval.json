@@ -1,4 +1,1798 @@
 {
+  "calibration": {
+    "best": {
+      "agreement": {
+        "agreement": 0.7222222222222222,
+        "balanced_accuracy": 0.7708333333333333,
+        "confusion": {
+          "fn": 36,
+          "fp": 4,
+          "tn": 44,
+          "tp": 60
+        },
+        "f1": 0.75,
+        "precision": 0.9375,
+        "predicted_negative": 80,
+        "predicted_positive": 64,
+        "recall": 0.625,
+        "specificity": 0.9166666666666666,
+        "threshold": 0.16
+      },
+      "balanced_accuracy": {
+        "agreement": 0.7013888888888888,
+        "balanced_accuracy": 0.7760416666666667,
+        "confusion": {
+          "fn": 43,
+          "fp": 0,
+          "tn": 48,
+          "tp": 53
+        },
+        "f1": 0.7114093959731543,
+        "precision": 1.0,
+        "predicted_negative": 91,
+        "predicted_positive": 53,
+        "recall": 0.5520833333333334,
+        "specificity": 1.0,
+        "threshold": 0.25
+      },
+      "f1": {
+        "agreement": 0.6666666666666666,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 0,
+          "fp": 48,
+          "tn": 0,
+          "tp": 96
+        },
+        "f1": 0.8,
+        "precision": 0.6666666666666666,
+        "predicted_negative": 0,
+        "predicted_positive": 144,
+        "recall": 1.0,
+        "specificity": 0.0,
+        "threshold": 0.0
+      },
+      "no_false_positive": {
+        "agreement": 0.7013888888888888,
+        "balanced_accuracy": 0.7760416666666667,
+        "confusion": {
+          "fn": 43,
+          "fp": 0,
+          "tn": 48,
+          "tp": 53
+        },
+        "f1": 0.7114093959731543,
+        "precision": 1.0,
+        "predicted_negative": 91,
+        "predicted_positive": 53,
+        "recall": 0.5520833333333334,
+        "specificity": 1.0,
+        "threshold": 0.25
+      }
+    },
+    "schema_version": "offline_reward_oracle_calibration.v1",
+    "threshold_count": 101,
+    "threshold_step": 0.01,
+    "threshold_sweep": [
+      {
+        "agreement": 0.6666666666666666,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 0,
+          "fp": 48,
+          "tn": 0,
+          "tp": 96
+        },
+        "f1": 0.8,
+        "precision": 0.6666666666666666,
+        "predicted_negative": 0,
+        "predicted_positive": 144,
+        "recall": 1.0,
+        "specificity": 0.0,
+        "threshold": 0.0
+      },
+      {
+        "agreement": 0.6319444444444444,
+        "balanced_accuracy": 0.4739583333333333,
+        "confusion": {
+          "fn": 5,
+          "fp": 48,
+          "tn": 0,
+          "tp": 91
+        },
+        "f1": 0.774468085106383,
+        "precision": 0.6546762589928058,
+        "predicted_negative": 5,
+        "predicted_positive": 139,
+        "recall": 0.9479166666666666,
+        "specificity": 0.0,
+        "threshold": 0.01
+      },
+      {
+        "agreement": 0.6319444444444444,
+        "balanced_accuracy": 0.4739583333333333,
+        "confusion": {
+          "fn": 5,
+          "fp": 48,
+          "tn": 0,
+          "tp": 91
+        },
+        "f1": 0.774468085106383,
+        "precision": 0.6546762589928058,
+        "predicted_negative": 5,
+        "predicted_positive": 139,
+        "recall": 0.9479166666666666,
+        "specificity": 0.0,
+        "threshold": 0.02
+      },
+      {
+        "agreement": 0.6180555555555556,
+        "balanced_accuracy": 0.4635416666666667,
+        "confusion": {
+          "fn": 7,
+          "fp": 48,
+          "tn": 0,
+          "tp": 89
+        },
+        "f1": 0.7639484978540773,
+        "precision": 0.6496350364963503,
+        "predicted_negative": 7,
+        "predicted_positive": 137,
+        "recall": 0.9270833333333334,
+        "specificity": 0.0,
+        "threshold": 0.03
+      },
+      {
+        "agreement": 0.5694444444444444,
+        "balanced_accuracy": 0.4270833333333333,
+        "confusion": {
+          "fn": 14,
+          "fp": 48,
+          "tn": 0,
+          "tp": 82
+        },
+        "f1": 0.7256637168141593,
+        "precision": 0.6307692307692307,
+        "predicted_negative": 14,
+        "predicted_positive": 130,
+        "recall": 0.8541666666666666,
+        "specificity": 0.0,
+        "threshold": 0.04
+      },
+      {
+        "agreement": 0.5416666666666666,
+        "balanced_accuracy": 0.40625,
+        "confusion": {
+          "fn": 18,
+          "fp": 48,
+          "tn": 0,
+          "tp": 78
+        },
+        "f1": 0.7027027027027026,
+        "precision": 0.6190476190476191,
+        "predicted_negative": 18,
+        "predicted_positive": 126,
+        "recall": 0.8125,
+        "specificity": 0.0,
+        "threshold": 0.05
+      },
+      {
+        "agreement": 0.5694444444444444,
+        "balanced_accuracy": 0.453125,
+        "confusion": {
+          "fn": 19,
+          "fp": 43,
+          "tn": 5,
+          "tp": 77
+        },
+        "f1": 0.7129629629629629,
+        "precision": 0.6416666666666667,
+        "predicted_negative": 24,
+        "predicted_positive": 120,
+        "recall": 0.8020833333333334,
+        "specificity": 0.10416666666666667,
+        "threshold": 0.06
+      },
+      {
+        "agreement": 0.5625,
+        "balanced_accuracy": 0.453125,
+        "confusion": {
+          "fn": 21,
+          "fp": 42,
+          "tn": 6,
+          "tp": 75
+        },
+        "f1": 0.7042253521126761,
+        "precision": 0.6410256410256411,
+        "predicted_negative": 27,
+        "predicted_positive": 117,
+        "recall": 0.78125,
+        "specificity": 0.125,
+        "threshold": 0.07
+      },
+      {
+        "agreement": 0.5347222222222222,
+        "balanced_accuracy": 0.4322916666666667,
+        "confusion": {
+          "fn": 25,
+          "fp": 42,
+          "tn": 6,
+          "tp": 71
+        },
+        "f1": 0.6794258373205742,
+        "precision": 0.6283185840707964,
+        "predicted_negative": 31,
+        "predicted_positive": 113,
+        "recall": 0.7395833333333334,
+        "specificity": 0.125,
+        "threshold": 0.08
+      },
+      {
+        "agreement": 0.5347222222222222,
+        "balanced_accuracy": 0.4427083333333333,
+        "confusion": {
+          "fn": 27,
+          "fp": 40,
+          "tn": 8,
+          "tp": 69
+        },
+        "f1": 0.673170731707317,
+        "precision": 0.6330275229357798,
+        "predicted_negative": 35,
+        "predicted_positive": 109,
+        "recall": 0.71875,
+        "specificity": 0.16666666666666666,
+        "threshold": 0.09
+      },
+      {
+        "agreement": 0.5277777777777778,
+        "balanced_accuracy": 0.4479166666666667,
+        "confusion": {
+          "fn": 30,
+          "fp": 38,
+          "tn": 10,
+          "tp": 66
+        },
+        "f1": 0.6599999999999999,
+        "precision": 0.6346153846153846,
+        "predicted_negative": 40,
+        "predicted_positive": 104,
+        "recall": 0.6875,
+        "specificity": 0.20833333333333334,
+        "threshold": 0.1
+      },
+      {
+        "agreement": 0.5277777777777778,
+        "balanced_accuracy": 0.453125,
+        "confusion": {
+          "fn": 31,
+          "fp": 37,
+          "tn": 11,
+          "tp": 65
+        },
+        "f1": 0.6565656565656566,
+        "precision": 0.6372549019607843,
+        "predicted_negative": 42,
+        "predicted_positive": 102,
+        "recall": 0.6770833333333334,
+        "specificity": 0.22916666666666666,
+        "threshold": 0.11
+      },
+      {
+        "agreement": 0.5347222222222222,
+        "balanced_accuracy": 0.47395833333333337,
+        "confusion": {
+          "fn": 33,
+          "fp": 34,
+          "tn": 14,
+          "tp": 63
+        },
+        "f1": 0.6528497409326426,
+        "precision": 0.6494845360824743,
+        "predicted_negative": 47,
+        "predicted_positive": 97,
+        "recall": 0.65625,
+        "specificity": 0.2916666666666667,
+        "threshold": 0.12
+      },
+      {
+        "agreement": 0.5416666666666666,
+        "balanced_accuracy": 0.484375,
+        "confusion": {
+          "fn": 33,
+          "fp": 33,
+          "tn": 15,
+          "tp": 63
+        },
+        "f1": 0.65625,
+        "precision": 0.65625,
+        "predicted_negative": 48,
+        "predicted_positive": 96,
+        "recall": 0.65625,
+        "specificity": 0.3125,
+        "threshold": 0.13
+      },
+      {
+        "agreement": 0.7013888888888888,
+        "balanced_accuracy": 0.7291666666666667,
+        "confusion": {
+          "fn": 34,
+          "fp": 9,
+          "tn": 39,
+          "tp": 62
+        },
+        "f1": 0.7425149700598803,
+        "precision": 0.8732394366197183,
+        "predicted_negative": 73,
+        "predicted_positive": 71,
+        "recall": 0.6458333333333334,
+        "specificity": 0.8125,
+        "threshold": 0.14
+      },
+      {
+        "agreement": 0.7152777777777778,
+        "balanced_accuracy": 0.75,
+        "confusion": {
+          "fn": 34,
+          "fp": 7,
+          "tn": 41,
+          "tp": 62
+        },
+        "f1": 0.7515151515151515,
+        "precision": 0.8985507246376812,
+        "predicted_negative": 75,
+        "predicted_positive": 69,
+        "recall": 0.6458333333333334,
+        "specificity": 0.8541666666666666,
+        "threshold": 0.15
+      },
+      {
+        "agreement": 0.7222222222222222,
+        "balanced_accuracy": 0.7708333333333333,
+        "confusion": {
+          "fn": 36,
+          "fp": 4,
+          "tn": 44,
+          "tp": 60
+        },
+        "f1": 0.75,
+        "precision": 0.9375,
+        "predicted_negative": 80,
+        "predicted_positive": 64,
+        "recall": 0.625,
+        "specificity": 0.9166666666666666,
+        "threshold": 0.16
+      },
+      {
+        "agreement": 0.7222222222222222,
+        "balanced_accuracy": 0.7708333333333333,
+        "confusion": {
+          "fn": 36,
+          "fp": 4,
+          "tn": 44,
+          "tp": 60
+        },
+        "f1": 0.75,
+        "precision": 0.9375,
+        "predicted_negative": 80,
+        "predicted_positive": 64,
+        "recall": 0.625,
+        "specificity": 0.9166666666666666,
+        "threshold": 0.17
+      },
+      {
+        "agreement": 0.7083333333333334,
+        "balanced_accuracy": 0.7604166666666666,
+        "confusion": {
+          "fn": 38,
+          "fp": 4,
+          "tn": 44,
+          "tp": 58
+        },
+        "f1": 0.7341772151898733,
+        "precision": 0.9354838709677419,
+        "predicted_negative": 82,
+        "predicted_positive": 62,
+        "recall": 0.6041666666666666,
+        "specificity": 0.9166666666666666,
+        "threshold": 0.18
+      },
+      {
+        "agreement": 0.6944444444444444,
+        "balanced_accuracy": 0.75,
+        "confusion": {
+          "fn": 40,
+          "fp": 4,
+          "tn": 44,
+          "tp": 56
+        },
+        "f1": 0.7179487179487181,
+        "precision": 0.9333333333333333,
+        "predicted_negative": 84,
+        "predicted_positive": 60,
+        "recall": 0.5833333333333334,
+        "specificity": 0.9166666666666666,
+        "threshold": 0.19
+      },
+      {
+        "agreement": 0.6944444444444444,
+        "balanced_accuracy": 0.75,
+        "confusion": {
+          "fn": 40,
+          "fp": 4,
+          "tn": 44,
+          "tp": 56
+        },
+        "f1": 0.7179487179487181,
+        "precision": 0.9333333333333333,
+        "predicted_negative": 84,
+        "predicted_positive": 60,
+        "recall": 0.5833333333333334,
+        "specificity": 0.9166666666666666,
+        "threshold": 0.2
+      },
+      {
+        "agreement": 0.6875,
+        "balanced_accuracy": 0.7447916666666666,
+        "confusion": {
+          "fn": 41,
+          "fp": 4,
+          "tn": 44,
+          "tp": 55
+        },
+        "f1": 0.7096774193548386,
+        "precision": 0.9322033898305084,
+        "predicted_negative": 85,
+        "predicted_positive": 59,
+        "recall": 0.5729166666666666,
+        "specificity": 0.9166666666666666,
+        "threshold": 0.21
+      },
+      {
+        "agreement": 0.6875,
+        "balanced_accuracy": 0.7447916666666666,
+        "confusion": {
+          "fn": 41,
+          "fp": 4,
+          "tn": 44,
+          "tp": 55
+        },
+        "f1": 0.7096774193548386,
+        "precision": 0.9322033898305084,
+        "predicted_negative": 85,
+        "predicted_positive": 59,
+        "recall": 0.5729166666666666,
+        "specificity": 0.9166666666666666,
+        "threshold": 0.22
+      },
+      {
+        "agreement": 0.6944444444444444,
+        "balanced_accuracy": 0.7552083333333333,
+        "confusion": {
+          "fn": 41,
+          "fp": 3,
+          "tn": 45,
+          "tp": 55
+        },
+        "f1": 0.7142857142857142,
+        "precision": 0.9482758620689655,
+        "predicted_negative": 86,
+        "predicted_positive": 58,
+        "recall": 0.5729166666666666,
+        "specificity": 0.9375,
+        "threshold": 0.23
+      },
+      {
+        "agreement": 0.6875,
+        "balanced_accuracy": 0.75,
+        "confusion": {
+          "fn": 42,
+          "fp": 3,
+          "tn": 45,
+          "tp": 54
+        },
+        "f1": 0.7058823529411765,
+        "precision": 0.9473684210526315,
+        "predicted_negative": 87,
+        "predicted_positive": 57,
+        "recall": 0.5625,
+        "specificity": 0.9375,
+        "threshold": 0.24
+      },
+      {
+        "agreement": 0.7013888888888888,
+        "balanced_accuracy": 0.7760416666666667,
+        "confusion": {
+          "fn": 43,
+          "fp": 0,
+          "tn": 48,
+          "tp": 53
+        },
+        "f1": 0.7114093959731543,
+        "precision": 1.0,
+        "predicted_negative": 91,
+        "predicted_positive": 53,
+        "recall": 0.5520833333333334,
+        "specificity": 1.0,
+        "threshold": 0.25
+      },
+      {
+        "agreement": 0.6944444444444444,
+        "balanced_accuracy": 0.7708333333333333,
+        "confusion": {
+          "fn": 44,
+          "fp": 0,
+          "tn": 48,
+          "tp": 52
+        },
+        "f1": 0.7027027027027027,
+        "precision": 1.0,
+        "predicted_negative": 92,
+        "predicted_positive": 52,
+        "recall": 0.5416666666666666,
+        "specificity": 1.0,
+        "threshold": 0.26
+      },
+      {
+        "agreement": 0.6944444444444444,
+        "balanced_accuracy": 0.7708333333333333,
+        "confusion": {
+          "fn": 44,
+          "fp": 0,
+          "tn": 48,
+          "tp": 52
+        },
+        "f1": 0.7027027027027027,
+        "precision": 1.0,
+        "predicted_negative": 92,
+        "predicted_positive": 52,
+        "recall": 0.5416666666666666,
+        "specificity": 1.0,
+        "threshold": 0.27
+      },
+      {
+        "agreement": 0.6944444444444444,
+        "balanced_accuracy": 0.7708333333333333,
+        "confusion": {
+          "fn": 44,
+          "fp": 0,
+          "tn": 48,
+          "tp": 52
+        },
+        "f1": 0.7027027027027027,
+        "precision": 1.0,
+        "predicted_negative": 92,
+        "predicted_positive": 52,
+        "recall": 0.5416666666666666,
+        "specificity": 1.0,
+        "threshold": 0.28
+      },
+      {
+        "agreement": 0.6944444444444444,
+        "balanced_accuracy": 0.7708333333333333,
+        "confusion": {
+          "fn": 44,
+          "fp": 0,
+          "tn": 48,
+          "tp": 52
+        },
+        "f1": 0.7027027027027027,
+        "precision": 1.0,
+        "predicted_negative": 92,
+        "predicted_positive": 52,
+        "recall": 0.5416666666666666,
+        "specificity": 1.0,
+        "threshold": 0.29
+      },
+      {
+        "agreement": 0.6875,
+        "balanced_accuracy": 0.765625,
+        "confusion": {
+          "fn": 45,
+          "fp": 0,
+          "tn": 48,
+          "tp": 51
+        },
+        "f1": 0.6938775510204082,
+        "precision": 1.0,
+        "predicted_negative": 93,
+        "predicted_positive": 51,
+        "recall": 0.53125,
+        "specificity": 1.0,
+        "threshold": 0.3
+      },
+      {
+        "agreement": 0.6805555555555556,
+        "balanced_accuracy": 0.7604166666666667,
+        "confusion": {
+          "fn": 46,
+          "fp": 0,
+          "tn": 48,
+          "tp": 50
+        },
+        "f1": 0.684931506849315,
+        "precision": 1.0,
+        "predicted_negative": 94,
+        "predicted_positive": 50,
+        "recall": 0.5208333333333334,
+        "specificity": 1.0,
+        "threshold": 0.31
+      },
+      {
+        "agreement": 0.6736111111111112,
+        "balanced_accuracy": 0.7552083333333333,
+        "confusion": {
+          "fn": 47,
+          "fp": 0,
+          "tn": 48,
+          "tp": 49
+        },
+        "f1": 0.6758620689655173,
+        "precision": 1.0,
+        "predicted_negative": 95,
+        "predicted_positive": 49,
+        "recall": 0.5104166666666666,
+        "specificity": 1.0,
+        "threshold": 0.32
+      },
+      {
+        "agreement": 0.6736111111111112,
+        "balanced_accuracy": 0.7552083333333333,
+        "confusion": {
+          "fn": 47,
+          "fp": 0,
+          "tn": 48,
+          "tp": 49
+        },
+        "f1": 0.6758620689655173,
+        "precision": 1.0,
+        "predicted_negative": 95,
+        "predicted_positive": 49,
+        "recall": 0.5104166666666666,
+        "specificity": 1.0,
+        "threshold": 0.33
+      },
+      {
+        "agreement": 0.6666666666666666,
+        "balanced_accuracy": 0.75,
+        "confusion": {
+          "fn": 48,
+          "fp": 0,
+          "tn": 48,
+          "tp": 48
+        },
+        "f1": 0.6666666666666666,
+        "precision": 1.0,
+        "predicted_negative": 96,
+        "predicted_positive": 48,
+        "recall": 0.5,
+        "specificity": 1.0,
+        "threshold": 0.34
+      },
+      {
+        "agreement": 0.6597222222222222,
+        "balanced_accuracy": 0.7447916666666666,
+        "confusion": {
+          "fn": 49,
+          "fp": 0,
+          "tn": 48,
+          "tp": 47
+        },
+        "f1": 0.6573426573426574,
+        "precision": 1.0,
+        "predicted_negative": 97,
+        "predicted_positive": 47,
+        "recall": 0.4895833333333333,
+        "specificity": 1.0,
+        "threshold": 0.35
+      },
+      {
+        "agreement": 0.6597222222222222,
+        "balanced_accuracy": 0.7447916666666666,
+        "confusion": {
+          "fn": 49,
+          "fp": 0,
+          "tn": 48,
+          "tp": 47
+        },
+        "f1": 0.6573426573426574,
+        "precision": 1.0,
+        "predicted_negative": 97,
+        "predicted_positive": 47,
+        "recall": 0.4895833333333333,
+        "specificity": 1.0,
+        "threshold": 0.36
+      },
+      {
+        "agreement": 0.6597222222222222,
+        "balanced_accuracy": 0.7447916666666666,
+        "confusion": {
+          "fn": 49,
+          "fp": 0,
+          "tn": 48,
+          "tp": 47
+        },
+        "f1": 0.6573426573426574,
+        "precision": 1.0,
+        "predicted_negative": 97,
+        "predicted_positive": 47,
+        "recall": 0.4895833333333333,
+        "specificity": 1.0,
+        "threshold": 0.37
+      },
+      {
+        "agreement": 0.6597222222222222,
+        "balanced_accuracy": 0.7447916666666666,
+        "confusion": {
+          "fn": 49,
+          "fp": 0,
+          "tn": 48,
+          "tp": 47
+        },
+        "f1": 0.6573426573426574,
+        "precision": 1.0,
+        "predicted_negative": 97,
+        "predicted_positive": 47,
+        "recall": 0.4895833333333333,
+        "specificity": 1.0,
+        "threshold": 0.38
+      },
+      {
+        "agreement": 0.6527777777777778,
+        "balanced_accuracy": 0.7395833333333334,
+        "confusion": {
+          "fn": 50,
+          "fp": 0,
+          "tn": 48,
+          "tp": 46
+        },
+        "f1": 0.647887323943662,
+        "precision": 1.0,
+        "predicted_negative": 98,
+        "predicted_positive": 46,
+        "recall": 0.4791666666666667,
+        "specificity": 1.0,
+        "threshold": 0.39
+      },
+      {
+        "agreement": 0.6527777777777778,
+        "balanced_accuracy": 0.7395833333333334,
+        "confusion": {
+          "fn": 50,
+          "fp": 0,
+          "tn": 48,
+          "tp": 46
+        },
+        "f1": 0.647887323943662,
+        "precision": 1.0,
+        "predicted_negative": 98,
+        "predicted_positive": 46,
+        "recall": 0.4791666666666667,
+        "specificity": 1.0,
+        "threshold": 0.4
+      },
+      {
+        "agreement": 0.6527777777777778,
+        "balanced_accuracy": 0.7395833333333334,
+        "confusion": {
+          "fn": 50,
+          "fp": 0,
+          "tn": 48,
+          "tp": 46
+        },
+        "f1": 0.647887323943662,
+        "precision": 1.0,
+        "predicted_negative": 98,
+        "predicted_positive": 46,
+        "recall": 0.4791666666666667,
+        "specificity": 1.0,
+        "threshold": 0.41
+      },
+      {
+        "agreement": 0.6458333333333334,
+        "balanced_accuracy": 0.734375,
+        "confusion": {
+          "fn": 51,
+          "fp": 0,
+          "tn": 48,
+          "tp": 45
+        },
+        "f1": 0.6382978723404256,
+        "precision": 1.0,
+        "predicted_negative": 99,
+        "predicted_positive": 45,
+        "recall": 0.46875,
+        "specificity": 1.0,
+        "threshold": 0.42
+      },
+      {
+        "agreement": 0.625,
+        "balanced_accuracy": 0.71875,
+        "confusion": {
+          "fn": 54,
+          "fp": 0,
+          "tn": 48,
+          "tp": 42
+        },
+        "f1": 0.6086956521739131,
+        "precision": 1.0,
+        "predicted_negative": 102,
+        "predicted_positive": 42,
+        "recall": 0.4375,
+        "specificity": 1.0,
+        "threshold": 0.43
+      },
+      {
+        "agreement": 0.625,
+        "balanced_accuracy": 0.71875,
+        "confusion": {
+          "fn": 54,
+          "fp": 0,
+          "tn": 48,
+          "tp": 42
+        },
+        "f1": 0.6086956521739131,
+        "precision": 1.0,
+        "predicted_negative": 102,
+        "predicted_positive": 42,
+        "recall": 0.4375,
+        "specificity": 1.0,
+        "threshold": 0.44
+      },
+      {
+        "agreement": 0.625,
+        "balanced_accuracy": 0.71875,
+        "confusion": {
+          "fn": 54,
+          "fp": 0,
+          "tn": 48,
+          "tp": 42
+        },
+        "f1": 0.6086956521739131,
+        "precision": 1.0,
+        "predicted_negative": 102,
+        "predicted_positive": 42,
+        "recall": 0.4375,
+        "specificity": 1.0,
+        "threshold": 0.45
+      },
+      {
+        "agreement": 0.625,
+        "balanced_accuracy": 0.71875,
+        "confusion": {
+          "fn": 54,
+          "fp": 0,
+          "tn": 48,
+          "tp": 42
+        },
+        "f1": 0.6086956521739131,
+        "precision": 1.0,
+        "predicted_negative": 102,
+        "predicted_positive": 42,
+        "recall": 0.4375,
+        "specificity": 1.0,
+        "threshold": 0.46
+      },
+      {
+        "agreement": 0.625,
+        "balanced_accuracy": 0.71875,
+        "confusion": {
+          "fn": 54,
+          "fp": 0,
+          "tn": 48,
+          "tp": 42
+        },
+        "f1": 0.6086956521739131,
+        "precision": 1.0,
+        "predicted_negative": 102,
+        "predicted_positive": 42,
+        "recall": 0.4375,
+        "specificity": 1.0,
+        "threshold": 0.47
+      },
+      {
+        "agreement": 0.6180555555555556,
+        "balanced_accuracy": 0.7135416666666666,
+        "confusion": {
+          "fn": 55,
+          "fp": 0,
+          "tn": 48,
+          "tp": 41
+        },
+        "f1": 0.5985401459854015,
+        "precision": 1.0,
+        "predicted_negative": 103,
+        "predicted_positive": 41,
+        "recall": 0.4270833333333333,
+        "specificity": 1.0,
+        "threshold": 0.48
+      },
+      {
+        "agreement": 0.6180555555555556,
+        "balanced_accuracy": 0.7135416666666666,
+        "confusion": {
+          "fn": 55,
+          "fp": 0,
+          "tn": 48,
+          "tp": 41
+        },
+        "f1": 0.5985401459854015,
+        "precision": 1.0,
+        "predicted_negative": 103,
+        "predicted_positive": 41,
+        "recall": 0.4270833333333333,
+        "specificity": 1.0,
+        "threshold": 0.49
+      },
+      {
+        "agreement": 0.6180555555555556,
+        "balanced_accuracy": 0.7135416666666666,
+        "confusion": {
+          "fn": 55,
+          "fp": 0,
+          "tn": 48,
+          "tp": 41
+        },
+        "f1": 0.5985401459854015,
+        "precision": 1.0,
+        "predicted_negative": 103,
+        "predicted_positive": 41,
+        "recall": 0.4270833333333333,
+        "specificity": 1.0,
+        "threshold": 0.5
+      },
+      {
+        "agreement": 0.6111111111111112,
+        "balanced_accuracy": 0.7083333333333334,
+        "confusion": {
+          "fn": 56,
+          "fp": 0,
+          "tn": 48,
+          "tp": 40
+        },
+        "f1": 0.5882352941176471,
+        "precision": 1.0,
+        "predicted_negative": 104,
+        "predicted_positive": 40,
+        "recall": 0.4166666666666667,
+        "specificity": 1.0,
+        "threshold": 0.51
+      },
+      {
+        "agreement": 0.6041666666666666,
+        "balanced_accuracy": 0.703125,
+        "confusion": {
+          "fn": 57,
+          "fp": 0,
+          "tn": 48,
+          "tp": 39
+        },
+        "f1": 0.5777777777777777,
+        "precision": 1.0,
+        "predicted_negative": 105,
+        "predicted_positive": 39,
+        "recall": 0.40625,
+        "specificity": 1.0,
+        "threshold": 0.52
+      },
+      {
+        "agreement": 0.6041666666666666,
+        "balanced_accuracy": 0.703125,
+        "confusion": {
+          "fn": 57,
+          "fp": 0,
+          "tn": 48,
+          "tp": 39
+        },
+        "f1": 0.5777777777777777,
+        "precision": 1.0,
+        "predicted_negative": 105,
+        "predicted_positive": 39,
+        "recall": 0.40625,
+        "specificity": 1.0,
+        "threshold": 0.53
+      },
+      {
+        "agreement": 0.6041666666666666,
+        "balanced_accuracy": 0.703125,
+        "confusion": {
+          "fn": 57,
+          "fp": 0,
+          "tn": 48,
+          "tp": 39
+        },
+        "f1": 0.5777777777777777,
+        "precision": 1.0,
+        "predicted_negative": 105,
+        "predicted_positive": 39,
+        "recall": 0.40625,
+        "specificity": 1.0,
+        "threshold": 0.54
+      },
+      {
+        "agreement": 0.6041666666666666,
+        "balanced_accuracy": 0.703125,
+        "confusion": {
+          "fn": 57,
+          "fp": 0,
+          "tn": 48,
+          "tp": 39
+        },
+        "f1": 0.5777777777777777,
+        "precision": 1.0,
+        "predicted_negative": 105,
+        "predicted_positive": 39,
+        "recall": 0.40625,
+        "specificity": 1.0,
+        "threshold": 0.55
+      },
+      {
+        "agreement": 0.6041666666666666,
+        "balanced_accuracy": 0.703125,
+        "confusion": {
+          "fn": 57,
+          "fp": 0,
+          "tn": 48,
+          "tp": 39
+        },
+        "f1": 0.5777777777777777,
+        "precision": 1.0,
+        "predicted_negative": 105,
+        "predicted_positive": 39,
+        "recall": 0.40625,
+        "specificity": 1.0,
+        "threshold": 0.56
+      },
+      {
+        "agreement": 0.5972222222222222,
+        "balanced_accuracy": 0.6979166666666666,
+        "confusion": {
+          "fn": 58,
+          "fp": 0,
+          "tn": 48,
+          "tp": 38
+        },
+        "f1": 0.5671641791044776,
+        "precision": 1.0,
+        "predicted_negative": 106,
+        "predicted_positive": 38,
+        "recall": 0.3958333333333333,
+        "specificity": 1.0,
+        "threshold": 0.57
+      },
+      {
+        "agreement": 0.5972222222222222,
+        "balanced_accuracy": 0.6979166666666666,
+        "confusion": {
+          "fn": 58,
+          "fp": 0,
+          "tn": 48,
+          "tp": 38
+        },
+        "f1": 0.5671641791044776,
+        "precision": 1.0,
+        "predicted_negative": 106,
+        "predicted_positive": 38,
+        "recall": 0.3958333333333333,
+        "specificity": 1.0,
+        "threshold": 0.58
+      },
+      {
+        "agreement": 0.5972222222222222,
+        "balanced_accuracy": 0.6979166666666666,
+        "confusion": {
+          "fn": 58,
+          "fp": 0,
+          "tn": 48,
+          "tp": 38
+        },
+        "f1": 0.5671641791044776,
+        "precision": 1.0,
+        "predicted_negative": 106,
+        "predicted_positive": 38,
+        "recall": 0.3958333333333333,
+        "specificity": 1.0,
+        "threshold": 0.59
+      },
+      {
+        "agreement": 0.5972222222222222,
+        "balanced_accuracy": 0.6979166666666666,
+        "confusion": {
+          "fn": 58,
+          "fp": 0,
+          "tn": 48,
+          "tp": 38
+        },
+        "f1": 0.5671641791044776,
+        "precision": 1.0,
+        "predicted_negative": 106,
+        "predicted_positive": 38,
+        "recall": 0.3958333333333333,
+        "specificity": 1.0,
+        "threshold": 0.6
+      },
+      {
+        "agreement": 0.5902777777777778,
+        "balanced_accuracy": 0.6927083333333334,
+        "confusion": {
+          "fn": 59,
+          "fp": 0,
+          "tn": 48,
+          "tp": 37
+        },
+        "f1": 0.556390977443609,
+        "precision": 1.0,
+        "predicted_negative": 107,
+        "predicted_positive": 37,
+        "recall": 0.3854166666666667,
+        "specificity": 1.0,
+        "threshold": 0.61
+      },
+      {
+        "agreement": 0.5833333333333334,
+        "balanced_accuracy": 0.6875,
+        "confusion": {
+          "fn": 60,
+          "fp": 0,
+          "tn": 48,
+          "tp": 36
+        },
+        "f1": 0.5454545454545454,
+        "precision": 1.0,
+        "predicted_negative": 108,
+        "predicted_positive": 36,
+        "recall": 0.375,
+        "specificity": 1.0,
+        "threshold": 0.62
+      },
+      {
+        "agreement": 0.5763888888888888,
+        "balanced_accuracy": 0.6822916666666666,
+        "confusion": {
+          "fn": 61,
+          "fp": 0,
+          "tn": 48,
+          "tp": 35
+        },
+        "f1": 0.5343511450381679,
+        "precision": 1.0,
+        "predicted_negative": 109,
+        "predicted_positive": 35,
+        "recall": 0.3645833333333333,
+        "specificity": 1.0,
+        "threshold": 0.63
+      },
+      {
+        "agreement": 0.5763888888888888,
+        "balanced_accuracy": 0.6822916666666666,
+        "confusion": {
+          "fn": 61,
+          "fp": 0,
+          "tn": 48,
+          "tp": 35
+        },
+        "f1": 0.5343511450381679,
+        "precision": 1.0,
+        "predicted_negative": 109,
+        "predicted_positive": 35,
+        "recall": 0.3645833333333333,
+        "specificity": 1.0,
+        "threshold": 0.64
+      },
+      {
+        "agreement": 0.5763888888888888,
+        "balanced_accuracy": 0.6822916666666666,
+        "confusion": {
+          "fn": 61,
+          "fp": 0,
+          "tn": 48,
+          "tp": 35
+        },
+        "f1": 0.5343511450381679,
+        "precision": 1.0,
+        "predicted_negative": 109,
+        "predicted_positive": 35,
+        "recall": 0.3645833333333333,
+        "specificity": 1.0,
+        "threshold": 0.65
+      },
+      {
+        "agreement": 0.5763888888888888,
+        "balanced_accuracy": 0.6822916666666666,
+        "confusion": {
+          "fn": 61,
+          "fp": 0,
+          "tn": 48,
+          "tp": 35
+        },
+        "f1": 0.5343511450381679,
+        "precision": 1.0,
+        "predicted_negative": 109,
+        "predicted_positive": 35,
+        "recall": 0.3645833333333333,
+        "specificity": 1.0,
+        "threshold": 0.66
+      },
+      {
+        "agreement": 0.5694444444444444,
+        "balanced_accuracy": 0.6770833333333334,
+        "confusion": {
+          "fn": 62,
+          "fp": 0,
+          "tn": 48,
+          "tp": 34
+        },
+        "f1": 0.5230769230769231,
+        "precision": 1.0,
+        "predicted_negative": 110,
+        "predicted_positive": 34,
+        "recall": 0.3541666666666667,
+        "specificity": 1.0,
+        "threshold": 0.67
+      },
+      {
+        "agreement": 0.5625,
+        "balanced_accuracy": 0.671875,
+        "confusion": {
+          "fn": 63,
+          "fp": 0,
+          "tn": 48,
+          "tp": 33
+        },
+        "f1": 0.5116279069767442,
+        "precision": 1.0,
+        "predicted_negative": 111,
+        "predicted_positive": 33,
+        "recall": 0.34375,
+        "specificity": 1.0,
+        "threshold": 0.68
+      },
+      {
+        "agreement": 0.5486111111111112,
+        "balanced_accuracy": 0.6614583333333334,
+        "confusion": {
+          "fn": 65,
+          "fp": 0,
+          "tn": 48,
+          "tp": 31
+        },
+        "f1": 0.4881889763779528,
+        "precision": 1.0,
+        "predicted_negative": 113,
+        "predicted_positive": 31,
+        "recall": 0.3229166666666667,
+        "specificity": 1.0,
+        "threshold": 0.69
+      },
+      {
+        "agreement": 0.5486111111111112,
+        "balanced_accuracy": 0.6614583333333334,
+        "confusion": {
+          "fn": 65,
+          "fp": 0,
+          "tn": 48,
+          "tp": 31
+        },
+        "f1": 0.4881889763779528,
+        "precision": 1.0,
+        "predicted_negative": 113,
+        "predicted_positive": 31,
+        "recall": 0.3229166666666667,
+        "specificity": 1.0,
+        "threshold": 0.7
+      },
+      {
+        "agreement": 0.5416666666666666,
+        "balanced_accuracy": 0.65625,
+        "confusion": {
+          "fn": 66,
+          "fp": 0,
+          "tn": 48,
+          "tp": 30
+        },
+        "f1": 0.47619047619047616,
+        "precision": 1.0,
+        "predicted_negative": 114,
+        "predicted_positive": 30,
+        "recall": 0.3125,
+        "specificity": 1.0,
+        "threshold": 0.71
+      },
+      {
+        "agreement": 0.5138888888888888,
+        "balanced_accuracy": 0.6354166666666666,
+        "confusion": {
+          "fn": 70,
+          "fp": 0,
+          "tn": 48,
+          "tp": 26
+        },
+        "f1": 0.4262295081967213,
+        "precision": 1.0,
+        "predicted_negative": 118,
+        "predicted_positive": 26,
+        "recall": 0.2708333333333333,
+        "specificity": 1.0,
+        "threshold": 0.72
+      },
+      {
+        "agreement": 0.4930555555555556,
+        "balanced_accuracy": 0.6197916666666666,
+        "confusion": {
+          "fn": 73,
+          "fp": 0,
+          "tn": 48,
+          "tp": 23
+        },
+        "f1": 0.3865546218487395,
+        "precision": 1.0,
+        "predicted_negative": 121,
+        "predicted_positive": 23,
+        "recall": 0.23958333333333334,
+        "specificity": 1.0,
+        "threshold": 0.73
+      },
+      {
+        "agreement": 0.4861111111111111,
+        "balanced_accuracy": 0.6145833333333334,
+        "confusion": {
+          "fn": 74,
+          "fp": 0,
+          "tn": 48,
+          "tp": 22
+        },
+        "f1": 0.37288135593220334,
+        "precision": 1.0,
+        "predicted_negative": 122,
+        "predicted_positive": 22,
+        "recall": 0.22916666666666666,
+        "specificity": 1.0,
+        "threshold": 0.74
+      },
+      {
+        "agreement": 0.4791666666666667,
+        "balanced_accuracy": 0.609375,
+        "confusion": {
+          "fn": 75,
+          "fp": 0,
+          "tn": 48,
+          "tp": 21
+        },
+        "f1": 0.358974358974359,
+        "precision": 1.0,
+        "predicted_negative": 123,
+        "predicted_positive": 21,
+        "recall": 0.21875,
+        "specificity": 1.0,
+        "threshold": 0.75
+      },
+      {
+        "agreement": 0.4652777777777778,
+        "balanced_accuracy": 0.5989583333333334,
+        "confusion": {
+          "fn": 77,
+          "fp": 0,
+          "tn": 48,
+          "tp": 19
+        },
+        "f1": 0.33043478260869563,
+        "precision": 1.0,
+        "predicted_negative": 125,
+        "predicted_positive": 19,
+        "recall": 0.19791666666666666,
+        "specificity": 1.0,
+        "threshold": 0.76
+      },
+      {
+        "agreement": 0.4513888888888889,
+        "balanced_accuracy": 0.5885416666666666,
+        "confusion": {
+          "fn": 79,
+          "fp": 0,
+          "tn": 48,
+          "tp": 17
+        },
+        "f1": 0.3008849557522124,
+        "precision": 1.0,
+        "predicted_negative": 127,
+        "predicted_positive": 17,
+        "recall": 0.17708333333333334,
+        "specificity": 1.0,
+        "threshold": 0.77
+      },
+      {
+        "agreement": 0.4305555555555556,
+        "balanced_accuracy": 0.5729166666666666,
+        "confusion": {
+          "fn": 82,
+          "fp": 0,
+          "tn": 48,
+          "tp": 14
+        },
+        "f1": 0.2545454545454546,
+        "precision": 1.0,
+        "predicted_negative": 130,
+        "predicted_positive": 14,
+        "recall": 0.14583333333333334,
+        "specificity": 1.0,
+        "threshold": 0.78
+      },
+      {
+        "agreement": 0.4097222222222222,
+        "balanced_accuracy": 0.5572916666666666,
+        "confusion": {
+          "fn": 85,
+          "fp": 0,
+          "tn": 48,
+          "tp": 11
+        },
+        "f1": 0.205607476635514,
+        "precision": 1.0,
+        "predicted_negative": 133,
+        "predicted_positive": 11,
+        "recall": 0.11458333333333333,
+        "specificity": 1.0,
+        "threshold": 0.79
+      },
+      {
+        "agreement": 0.3888888888888889,
+        "balanced_accuracy": 0.5416666666666666,
+        "confusion": {
+          "fn": 88,
+          "fp": 0,
+          "tn": 48,
+          "tp": 8
+        },
+        "f1": 0.15384615384615385,
+        "precision": 1.0,
+        "predicted_negative": 136,
+        "predicted_positive": 8,
+        "recall": 0.08333333333333333,
+        "specificity": 1.0,
+        "threshold": 0.8
+      },
+      {
+        "agreement": 0.3819444444444444,
+        "balanced_accuracy": 0.5364583333333334,
+        "confusion": {
+          "fn": 89,
+          "fp": 0,
+          "tn": 48,
+          "tp": 7
+        },
+        "f1": 0.13592233009708737,
+        "precision": 1.0,
+        "predicted_negative": 137,
+        "predicted_positive": 7,
+        "recall": 0.07291666666666667,
+        "specificity": 1.0,
+        "threshold": 0.81
+      },
+      {
+        "agreement": 0.3819444444444444,
+        "balanced_accuracy": 0.5364583333333334,
+        "confusion": {
+          "fn": 89,
+          "fp": 0,
+          "tn": 48,
+          "tp": 7
+        },
+        "f1": 0.13592233009708737,
+        "precision": 1.0,
+        "predicted_negative": 137,
+        "predicted_positive": 7,
+        "recall": 0.07291666666666667,
+        "specificity": 1.0,
+        "threshold": 0.82
+      },
+      {
+        "agreement": 0.3819444444444444,
+        "balanced_accuracy": 0.5364583333333334,
+        "confusion": {
+          "fn": 89,
+          "fp": 0,
+          "tn": 48,
+          "tp": 7
+        },
+        "f1": 0.13592233009708737,
+        "precision": 1.0,
+        "predicted_negative": 137,
+        "predicted_positive": 7,
+        "recall": 0.07291666666666667,
+        "specificity": 1.0,
+        "threshold": 0.83
+      },
+      {
+        "agreement": 0.3819444444444444,
+        "balanced_accuracy": 0.5364583333333334,
+        "confusion": {
+          "fn": 89,
+          "fp": 0,
+          "tn": 48,
+          "tp": 7
+        },
+        "f1": 0.13592233009708737,
+        "precision": 1.0,
+        "predicted_negative": 137,
+        "predicted_positive": 7,
+        "recall": 0.07291666666666667,
+        "specificity": 1.0,
+        "threshold": 0.84
+      },
+      {
+        "agreement": 0.375,
+        "balanced_accuracy": 0.53125,
+        "confusion": {
+          "fn": 90,
+          "fp": 0,
+          "tn": 48,
+          "tp": 6
+        },
+        "f1": 0.11764705882352941,
+        "precision": 1.0,
+        "predicted_negative": 138,
+        "predicted_positive": 6,
+        "recall": 0.0625,
+        "specificity": 1.0,
+        "threshold": 0.85
+      },
+      {
+        "agreement": 0.3611111111111111,
+        "balanced_accuracy": 0.5208333333333334,
+        "confusion": {
+          "fn": 92,
+          "fp": 0,
+          "tn": 48,
+          "tp": 4
+        },
+        "f1": 0.07999999999999999,
+        "precision": 1.0,
+        "predicted_negative": 140,
+        "predicted_positive": 4,
+        "recall": 0.041666666666666664,
+        "specificity": 1.0,
+        "threshold": 0.86
+      },
+      {
+        "agreement": 0.3541666666666667,
+        "balanced_accuracy": 0.515625,
+        "confusion": {
+          "fn": 93,
+          "fp": 0,
+          "tn": 48,
+          "tp": 3
+        },
+        "f1": 0.06060606060606061,
+        "precision": 1.0,
+        "predicted_negative": 141,
+        "predicted_positive": 3,
+        "recall": 0.03125,
+        "specificity": 1.0,
+        "threshold": 0.87
+      },
+      {
+        "agreement": 0.3541666666666667,
+        "balanced_accuracy": 0.515625,
+        "confusion": {
+          "fn": 93,
+          "fp": 0,
+          "tn": 48,
+          "tp": 3
+        },
+        "f1": 0.06060606060606061,
+        "precision": 1.0,
+        "predicted_negative": 141,
+        "predicted_positive": 3,
+        "recall": 0.03125,
+        "specificity": 1.0,
+        "threshold": 0.88
+      },
+      {
+        "agreement": 0.3541666666666667,
+        "balanced_accuracy": 0.515625,
+        "confusion": {
+          "fn": 93,
+          "fp": 0,
+          "tn": 48,
+          "tp": 3
+        },
+        "f1": 0.06060606060606061,
+        "precision": 1.0,
+        "predicted_negative": 141,
+        "predicted_positive": 3,
+        "recall": 0.03125,
+        "specificity": 1.0,
+        "threshold": 0.89
+      },
+      {
+        "agreement": 0.3472222222222222,
+        "balanced_accuracy": 0.5104166666666666,
+        "confusion": {
+          "fn": 94,
+          "fp": 0,
+          "tn": 48,
+          "tp": 2
+        },
+        "f1": 0.04081632653061225,
+        "precision": 1.0,
+        "predicted_negative": 142,
+        "predicted_positive": 2,
+        "recall": 0.020833333333333332,
+        "specificity": 1.0,
+        "threshold": 0.9
+      },
+      {
+        "agreement": 0.3472222222222222,
+        "balanced_accuracy": 0.5104166666666666,
+        "confusion": {
+          "fn": 94,
+          "fp": 0,
+          "tn": 48,
+          "tp": 2
+        },
+        "f1": 0.04081632653061225,
+        "precision": 1.0,
+        "predicted_negative": 142,
+        "predicted_positive": 2,
+        "recall": 0.020833333333333332,
+        "specificity": 1.0,
+        "threshold": 0.91
+      },
+      {
+        "agreement": 0.3472222222222222,
+        "balanced_accuracy": 0.5104166666666666,
+        "confusion": {
+          "fn": 94,
+          "fp": 0,
+          "tn": 48,
+          "tp": 2
+        },
+        "f1": 0.04081632653061225,
+        "precision": 1.0,
+        "predicted_negative": 142,
+        "predicted_positive": 2,
+        "recall": 0.020833333333333332,
+        "specificity": 1.0,
+        "threshold": 0.92
+      },
+      {
+        "agreement": 0.3333333333333333,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 96,
+          "fp": 0,
+          "tn": 48,
+          "tp": 0
+        },
+        "f1": null,
+        "precision": null,
+        "predicted_negative": 144,
+        "predicted_positive": 0,
+        "recall": 0.0,
+        "specificity": 1.0,
+        "threshold": 0.93
+      },
+      {
+        "agreement": 0.3333333333333333,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 96,
+          "fp": 0,
+          "tn": 48,
+          "tp": 0
+        },
+        "f1": null,
+        "precision": null,
+        "predicted_negative": 144,
+        "predicted_positive": 0,
+        "recall": 0.0,
+        "specificity": 1.0,
+        "threshold": 0.94
+      },
+      {
+        "agreement": 0.3333333333333333,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 96,
+          "fp": 0,
+          "tn": 48,
+          "tp": 0
+        },
+        "f1": null,
+        "precision": null,
+        "predicted_negative": 144,
+        "predicted_positive": 0,
+        "recall": 0.0,
+        "specificity": 1.0,
+        "threshold": 0.95
+      },
+      {
+        "agreement": 0.3333333333333333,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 96,
+          "fp": 0,
+          "tn": 48,
+          "tp": 0
+        },
+        "f1": null,
+        "precision": null,
+        "predicted_negative": 144,
+        "predicted_positive": 0,
+        "recall": 0.0,
+        "specificity": 1.0,
+        "threshold": 0.96
+      },
+      {
+        "agreement": 0.3333333333333333,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 96,
+          "fp": 0,
+          "tn": 48,
+          "tp": 0
+        },
+        "f1": null,
+        "precision": null,
+        "predicted_negative": 144,
+        "predicted_positive": 0,
+        "recall": 0.0,
+        "specificity": 1.0,
+        "threshold": 0.97
+      },
+      {
+        "agreement": 0.3333333333333333,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 96,
+          "fp": 0,
+          "tn": 48,
+          "tp": 0
+        },
+        "f1": null,
+        "precision": null,
+        "predicted_negative": 144,
+        "predicted_positive": 0,
+        "recall": 0.0,
+        "specificity": 1.0,
+        "threshold": 0.98
+      },
+      {
+        "agreement": 0.3333333333333333,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 96,
+          "fp": 0,
+          "tn": 48,
+          "tp": 0
+        },
+        "f1": null,
+        "precision": null,
+        "predicted_negative": 144,
+        "predicted_positive": 0,
+        "recall": 0.0,
+        "specificity": 1.0,
+        "threshold": 0.99
+      },
+      {
+        "agreement": 0.3333333333333333,
+        "balanced_accuracy": 0.5,
+        "confusion": {
+          "fn": 96,
+          "fp": 0,
+          "tn": 48,
+          "tp": 0
+        },
+        "f1": null,
+        "precision": null,
+        "predicted_negative": 144,
+        "predicted_positive": 0,
+        "recall": 0.0,
+        "specificity": 1.0,
+        "threshold": 1.0
+      }
+    ]
+  },
   "n": 144,
   "oracle_threshold": 0.5,
   "schema_version": "offline_reward_oracle_eval.v1",

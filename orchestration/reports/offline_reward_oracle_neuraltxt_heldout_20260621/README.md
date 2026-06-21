@@ -29,12 +29,22 @@ NEXT-A2/A3 label source without calibration or a better target definition.
 - Confusion: `tp=41 fp=0 fn=55 tn=48`
 - Paraphrase penalty rate: 0.0000 (0/48)
 - Confound fooled rate: 0.0000 (0/48)
+- Best agreement threshold: 0.16 (`tp=60 fp=4 fn=36 tn=44`,
+  agreement 0.7222)
+- Best no-false-positive threshold: 0.25 (`tp=53 fp=0 fn=43 tn=48`,
+  agreement 0.7014)
+- Best F1 threshold: 0.00, a degenerate all-positive classifier
+  (`tp=96 fp=48 fn=0 tn=0`)
 
 ## Interpretation
 
 The scorer remains conservative at threshold `0.5`: it generated no false
 positives, but missed `55/96` positive targets. This makes it unsuitable as a
-drop-in binary accept/reject oracle for learned-routing labels. The next useful
-A9 step is not more same-shaped smoke; it is either threshold/calibration
-analysis on graded targets or a stronger target construction that separates
-answer equivalence from current binary `q_reward` artifacts.
+drop-in binary accept/reject oracle for learned-routing labels. Calibration
+helps but does not close the gap: the best-F1 point is the degenerate
+all-positive threshold, the best agreement point (`0.16`) buys recall at the
+cost of four false positives, and the best zero-false-positive point (`0.25`)
+still misses `43/96` positives. The next useful A9 step is not more
+same-shaped smoke; it is a stronger target construction that separates answer
+equivalence from current binary `q_reward` artifacts, followed by calibration
+against that target.

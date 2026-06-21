@@ -210,6 +210,112 @@ def _agreement_from_confusion(confusion: dict[str, int]) -> float | None:
     return (confusion["tp"] + confusion["tn"]) / total
 
 
+def _safe_div(numerator: float, denominator: float) -> float | None:
+    if denominator == 0.0:
+        return None
+    return numerator / denominator
+
+
+def _threshold_metrics(
+    rows: Iterable[OracleRow],
+    *,
+    oracle_threshold: float,
+) -> dict[str, Any]:
+    confusion = _confusion(rows, oracle_threshold=oracle_threshold)
+    tp = confusion["tp"]
+    fp = confusion["fp"]
+    fn = confusion["fn"]
+    tn = confusion["tn"]
+    precision = _safe_div(tp, tp + fp)
+    recall = _safe_div(tp, tp + fn)
+    specificity = _safe_div(tn, tn + fp)
+    f1 = None
+    if precision is not None and recall is not None and precision + recall > 0:
+        f1 = 2 * precision * recall / (precision + recall)
+    balanced_accuracy = None
+    if recall is not None and specificity is not None:
+        balanced_accuracy = (recall + specificity) / 2
+    return {
+        "threshold": oracle_threshold,
+        "agreement": _agreement_from_confusion(confusion),
+        "precision": precision,
+        "recall": recall,
+        "specificity": specificity,
+        "f1": f1,
+        "balanced_accuracy": balanced_accuracy,
+        "predicted_positive": tp + fp,
+        "predicted_negative": tn + fn,
+        "confusion": confusion,
+    }
+
+
+def _metric_value(row: dict[str, Any], metric: str) -> float:
+    value = row.get(metric)
+    if value is None:
+        return -1.0
+    return float(value)
+
+
+def _best_threshold(
+    sweep: list[dict[str, Any]],
+    *,
+    metric: str,
+) -> dict[str, Any] | None:
+    if not sweep:
+        return None
+    return max(
+        sweep,
+        key=lambda row: (
+            _metric_value(row, metric),
+            row["confusion"]["tp"],
+            -row["confusion"]["fp"],
+            -row["threshold"],
+        ),
+    )
+
+
+def _best_no_false_positive_threshold(
+    sweep: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    candidates = [row for row in sweep if row["confusion"]["fp"] == 0]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda row: (
+            row["confusion"]["tp"],
+            _metric_value(row, "recall"),
+            _metric_value(row, "agreement"),
+            -row["threshold"],
+        ),
+    )
+
+
+def _threshold_sweep(
+    rows: list[OracleRow],
+    *,
+    include_threshold: float,
+) -> dict[str, Any]:
+    thresholds = {round(step / 100, 2) for step in range(101)}
+    thresholds.add(round(include_threshold, 6))
+    sweep = [
+        _threshold_metrics(rows, oracle_threshold=threshold)
+        for threshold in sorted(thresholds)
+    ]
+    return {
+        "schema_version": "offline_reward_oracle_calibration.v1",
+        "threshold_step": 0.01,
+        "threshold_count": len(sweep),
+        "best": {
+            "agreement": _best_threshold(sweep, metric="agreement"),
+            "balanced_accuracy": _best_threshold(sweep, metric="balanced_accuracy"),
+            "f1": _best_threshold(sweep, metric="f1"),
+            "no_false_positive": _best_no_false_positive_threshold(sweep),
+        },
+        "threshold_sweep": sweep,
+    }
+
+
 def _stress_summary(
     rows: list[OracleRow],
     *,
@@ -301,6 +407,7 @@ def evaluate(
             "agreement_at_threshold": _agreement_from_confusion(confusion),
             "confusion": confusion,
         },
+        "calibration": _threshold_sweep(rows, include_threshold=oracle_threshold),
         "stress": _stress_summary(rows, oracle_threshold=oracle_threshold),
     }
 
@@ -326,6 +433,10 @@ def write_markdown(summary: dict[str, Any], path: Path) -> None:
         f"- Confusion: `tp={score['confusion']['tp']} fp={score['confusion']['fp']} "
         f"fn={score['confusion']['fn']} tn={score['confusion']['tn']}`",
         "",
+        "## Calibration",
+        "",
+        *_calibration_markdown_lines(summary["calibration"]),
+        "",
         "## Stress Metrics",
         "",
         f"- Groups evaluated: {stress['groups_evaluated']}",
@@ -338,6 +449,32 @@ def write_markdown(summary: dict[str, Any], path: Path) -> None:
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _calibration_markdown_lines(calibration: dict[str, Any]) -> list[str]:
+    best = calibration["best"]
+    lines = [
+        f"- Thresholds evaluated: {calibration['threshold_count']}",
+    ]
+    for label, key in (
+        ("Best F1", "f1"),
+        ("Best balanced accuracy", "balanced_accuracy"),
+        ("Best agreement", "agreement"),
+        ("Best no-false-positive recall", "no_false_positive"),
+    ):
+        row = best.get(key)
+        if not row:
+            lines.append(f"- {label}: `null`")
+            continue
+        confusion = row["confusion"]
+        lines.append(
+            f"- {label}: threshold `{row['threshold']:.2f}`, "
+            f"agreement {_fmt(row['agreement'])}, recall {_fmt(row['recall'])}, "
+            f"precision {_fmt(row['precision'])}, "
+            f"tp={confusion['tp']} fp={confusion['fp']} "
+            f"fn={confusion['fn']} tn={confusion['tn']}"
+        )
+    return lines
 
 
 def _fmt(value: float | None) -> str:

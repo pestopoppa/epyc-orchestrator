@@ -93,6 +93,24 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
     assert summary["score"]["spearman"] > 0.5
     assert summary["score"]["agreement_at_threshold"] == 5 / 6
     assert summary["score"]["confusion"] == {"tp": 3, "fp": 0, "fn": 1, "tn": 2}
+    assert summary["calibration"]["schema_version"] == (
+        "offline_reward_oracle_calibration.v1"
+    )
+    assert summary["calibration"]["threshold_count"] == 101
+    assert summary["calibration"]["best"]["f1"]["threshold"] == 0.21
+    assert summary["calibration"]["best"]["f1"]["confusion"] == {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0,
+        "tn": 2,
+    }
+    assert summary["calibration"]["best"]["no_false_positive"]["threshold"] == 0.21
+    assert summary["calibration"]["best"]["no_false_positive"]["confusion"] == {
+        "tp": 4,
+        "fp": 0,
+        "fn": 0,
+        "tn": 2,
+    }
     assert summary["stress"]["groups_evaluated"] == 2
     assert summary["stress"]["paraphrase_total"] == 2
     assert summary["stress"]["paraphrase_penalized"] == 1
@@ -134,4 +152,6 @@ def test_cli_writes_json_and_markdown(tmp_path: Path) -> None:
     summary = json.loads(out_json.read_text(encoding="utf-8"))
     assert summary["schema_version"] == "offline_reward_oracle_eval.v1"
     assert summary["score"]["agreement_at_threshold"] == 1.0
+    assert summary["calibration"]["best"]["f1"]["threshold"] == 0.21
     assert "Offline Reward-Oracle Evaluation" in out_md.read_text(encoding="utf-8")
+    assert "Best no-false-positive recall" in out_md.read_text(encoding="utf-8")
