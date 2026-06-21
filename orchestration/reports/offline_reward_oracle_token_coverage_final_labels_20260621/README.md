@@ -49,6 +49,13 @@ Committed artifacts:
   disjoint train/calibration/test split with post-hoc temperature/bias
   calibration. Calibration improves Brier but does not repair ECE, so the
   generated weights are intentionally not adopted as live routing weights.
+- `offline_reward_multi_action_verifier_histogram_eval_summary.json` and
+  `offline_reward_multi_action_verifier_histogram_eval_summary.md` record a
+  follow-up disjoint train/calibration/test split with quantile-histogram
+  calibration. This offline scout clears the calibrated Brier/ROC-AUC/ECE gate
+  on the held-out test split, but it is not adopted as live routing weights; the
+  calibration method is exploratory and the current action coverage is still
+  sparse for escalation roles.
 
 Private row data is not committed. The scored row file is:
 
@@ -90,6 +97,10 @@ Result:
 - calibrated holdout verifier Brier / ROC-AUC / ECE: `0.1854` / `0.8709` / `0.1788`
 - calibrated holdout verifier Brier delta vs best softmax / constant baseline: `+0.1220` / `+0.0624`
 - calibrated holdout verifier gate verdict: `FAIL`
+- quantile-histogram holdout verifier train / calibration / test rows: `194` / `64` / `64`
+- quantile-histogram calibrated verifier Brier / ROC-AUC / ECE: `0.1784` / `0.8217` / `0.0473`
+- quantile-histogram calibrated verifier Brier delta vs best softmax / constant baseline: `+0.1290` / `+0.0694`
+- quantile-histogram calibrated verifier gate verdict: `PASS` (offline scout only)
 
 Interpretation:
 
@@ -104,5 +115,7 @@ The verifier NPZ is still offline preparation, not a serve-time routing change.
 The first frontdoor-specialist train/eval from this NPZ failed the A2 gates. A
 broader multi-action verifier improves substantially on Brier and ROC-AUC, but
 misses calibration. A disjoint post-hoc temperature/bias calibration improves
-Brier but leaves ECE high, so the current next step is data/model calibration
-improvement before any default-off runtime gate changes.
+Brier but leaves ECE high. Quantile-histogram calibration repairs the held-out
+ECE miss in this scout, but action coverage remains thin (`architect_general`
+has only 10 rows), so the next promotion-grade step is preregistered
+calibration/data expansion before any default-off runtime gate changes.

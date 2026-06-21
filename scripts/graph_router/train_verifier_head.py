@@ -132,6 +132,64 @@ def _apply_temperature_bias_calibrator(
     )
 
 
+def _fit_quantile_histogram_calibrator(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    n_bins: int,
+    smoothing_alpha: float,
+) -> dict[str, Any]:
+    """Fit empirical quantile-bin calibration on a held-out calibration split."""
+    if n_bins < 2:
+        raise ValueError("quantile histogram calibration requires at least two bins")
+    if smoothing_alpha < 0.0:
+        raise ValueError("quantile histogram smoothing alpha must be non-negative")
+
+    p = np.asarray(probs, dtype=np.float32)
+    y = np.asarray(labels, dtype=np.float32)
+    quantiles = np.linspace(0.0, 1.0, n_bins + 1)
+    edges = np.quantile(p, quantiles).astype(np.float32)
+    edges[0] = 0.0
+    edges[-1] = 1.0
+    edges = np.maximum.accumulate(edges)
+    base_rate = float(y.mean())
+    values: list[float] = []
+    counts: list[int] = []
+    positives: list[int] = []
+    for i in range(n_bins):
+        lo, hi = edges[i], edges[i + 1]
+        mask = (p >= lo) & (p < hi if i < n_bins - 1 else p <= hi)
+        count = int(mask.sum())
+        positive = int(y[mask].sum())
+        counts.append(count)
+        positives.append(positive)
+        if count:
+            numerator = positive + smoothing_alpha * base_rate
+            denominator = count + smoothing_alpha
+            values.append(float(numerator / denominator))
+        else:
+            values.append(base_rate)
+    return {
+        "method": "quantile_histogram",
+        "n_bins": int(n_bins),
+        "smoothing_alpha": float(smoothing_alpha),
+        "base_rate": base_rate,
+        "edges": edges.tolist(),
+        "values": values,
+        "bin_counts": counts,
+        "bin_positives": positives,
+    }
+
+
+def _apply_quantile_histogram_calibrator(
+    probs: np.ndarray,
+    calibrator: dict[str, Any],
+) -> np.ndarray:
+    edges = np.asarray(calibrator["edges"], dtype=np.float32)
+    values = np.asarray(calibrator["values"], dtype=np.float32)
+    idx = np.searchsorted(edges[1:-1], probs.astype(np.float32), side="right")
+    return values[idx]
+
+
 def _reliability(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> None:
     bins = np.linspace(0.0, 1.0, n_bins + 1)
     print(f"\n{'bin':<14} {'n':>8} {'mean_p':>10} {'frac_pos':>10} {'|gap|':>10}")
@@ -194,6 +252,9 @@ def train_and_eval(
     val_split: float = 0.2,
     calibration_split: float = 0.0,
     test_split: float = 0.0,
+    calibration_method: str = "temperature_bias",
+    calibration_bins: int = 7,
+    calibration_alpha: float = 0.0,
 ) -> dict:
     # ── Load data ──
     logger.info("Loading verifier data from %s", data_path)
@@ -274,17 +335,34 @@ def train_and_eval(
     if n_cal:
         p_cal, _ = verifier.forward(Z[cal_idx])
         y_cal = correct[cal_idx]
-        calibrator = _fit_temperature_bias_calibrator(p_cal, y_cal)
-        p_calibrated = _apply_temperature_bias_calibrator(p_verifier, calibrator)
-        calibration = {
-            "method": "temperature_bias_grid",
-            "calibration_rows": int(n_cal),
-            "test_rows": int(len(y_val)),
-            "temperature": calibrator["temperature"],
-            "bias": calibrator["bias"],
-            "calibration_nll": calibrator["nll"],
-            "calibrated_verifier": _metrics(p_calibrated, y_val),
-        }
+        if calibration_method == "temperature_bias":
+            calibrator = _fit_temperature_bias_calibrator(p_cal, y_cal)
+            p_calibrated = _apply_temperature_bias_calibrator(p_verifier, calibrator)
+            calibration = {
+                "method": "temperature_bias_grid",
+                "calibration_rows": int(n_cal),
+                "test_rows": int(len(y_val)),
+                "temperature": calibrator["temperature"],
+                "bias": calibrator["bias"],
+                "calibration_nll": calibrator["nll"],
+                "calibrated_verifier": _metrics(p_calibrated, y_val),
+            }
+        elif calibration_method == "quantile_histogram":
+            calibrator = _fit_quantile_histogram_calibrator(
+                p_cal,
+                y_cal,
+                n_bins=calibration_bins,
+                smoothing_alpha=calibration_alpha,
+            )
+            p_calibrated = _apply_quantile_histogram_calibrator(p_verifier, calibrator)
+            calibration = {
+                **calibrator,
+                "calibration_rows": int(n_cal),
+                "test_rows": int(len(y_val)),
+                "calibrated_verifier": _metrics(p_calibrated, y_val),
+            }
+        else:
+            raise SystemExit(f"Unsupported calibration method: {calibration_method}")
 
     # ── Baseline: softmax magnitude of the proposed action ──
     # Load classifier + cached features, recover softmax(taken_action | features)
@@ -366,8 +444,24 @@ def train_and_eval(
         f"{'PASS' if ece_verifier <= 0.05 else 'FAIL'}"
     )
     all_pass = (brier_delta >= 0.02) and (auc_verifier >= 0.75) and (ece_verifier <= 0.05)
+    if calibration is not None:
+        calibrated = calibration["calibrated_verifier"]
+        calibrated_gates = calibration["gates"]
+        print(
+            f"\nCalibrated gates ({calibration['method']}):\n"
+            f"  ΔBrier vs best baseline ({base_brier_name}): "
+            f"{calibration['brier_delta_vs_best_softmax_baseline']:+.4f}  (gate: ≥ +0.02)  "
+            f"{'PASS' if calibrated_gates['brier_delta_ge_0_02'] else 'FAIL'}\n"
+            f"  ROC-AUC:                                       {calibrated['auc']:.4f}        "
+            f"(gate: ≥ 0.75)   {'PASS' if calibrated_gates['auc_ge_0_75'] else 'FAIL'}\n"
+            f"  ECE:                                           {calibrated['ece']:.4f}        "
+            f"(gate: ≤ 0.05)   {'PASS' if calibrated_gates['ece_le_0_05'] else 'FAIL'}\n"
+            f"  Overall:                                       "
+            f"{'PASS' if calibrated_gates['pass'] else 'FAIL'}"
+        )
     print(
-        f"\nP6.2.5 overall: {'PASS — wire ORCHESTRATOR_VERIFIER_GATE (default OFF)' if all_pass else 'FAIL — archive Hypothesis C; close Phase 6'}"
+        f"\nRaw P6.2.5 overall: "
+        f"{'PASS — wire ORCHESTRATOR_VERIFIER_GATE (default OFF)' if all_pass else 'FAIL'}"
     )
 
     verifier.save(output_path)
@@ -487,6 +581,24 @@ def main():
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--calibration-split", type=float, default=0.0)
     parser.add_argument("--test-split", type=float, default=0.0)
+    parser.add_argument(
+        "--calibration-method",
+        choices=("temperature_bias", "quantile_histogram"),
+        default="temperature_bias",
+        help="Held-out calibration method to fit when --calibration-split is set.",
+    )
+    parser.add_argument(
+        "--calibration-bins",
+        type=int,
+        default=7,
+        help="Quantile bins for --calibration-method quantile_histogram.",
+    )
+    parser.add_argument(
+        "--calibration-alpha",
+        type=float,
+        default=0.0,
+        help="Base-rate smoothing alpha for quantile histogram calibration.",
+    )
     args = parser.parse_args()
 
     summary = train_and_eval(
@@ -500,6 +612,9 @@ def main():
         patience=args.patience,
         calibration_split=args.calibration_split,
         test_split=args.test_split,
+        calibration_method=args.calibration_method,
+        calibration_bins=args.calibration_bins,
+        calibration_alpha=args.calibration_alpha,
     )
     if args.summary_json:
         path = Path(args.summary_json)

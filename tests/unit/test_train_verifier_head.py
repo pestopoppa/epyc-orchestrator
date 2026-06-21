@@ -74,3 +74,22 @@ def test_temperature_bias_calibrator_improves_shifted_probabilities() -> None:
 
     assert calibrator["temperature"] > 0.0
     assert mod._brier(calibrated, labels) < mod._brier(probs, labels)
+
+
+def test_quantile_histogram_calibrator_maps_bins_to_empirical_rates() -> None:
+    labels = np.array([0, 0, 1, 1, 1, 1], dtype=np.float32)
+    probs = np.array([0.10, 0.20, 0.30, 0.70, 0.80, 0.90], dtype=np.float32)
+
+    calibrator = mod._fit_quantile_histogram_calibrator(
+        probs,
+        labels,
+        n_bins=2,
+        smoothing_alpha=0.0,
+    )
+    calibrated = mod._apply_quantile_histogram_calibrator(probs, calibrator)
+
+    assert calibrator["method"] == "quantile_histogram"
+    assert calibrator["bin_counts"] == [3, 3]
+    assert calibrator["bin_positives"] == [1, 3]
+    np.testing.assert_allclose(calibrated[:3], np.full(3, 1.0 / 3.0))
+    np.testing.assert_allclose(calibrated[3:], np.ones(3))

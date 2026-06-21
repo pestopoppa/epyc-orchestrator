@@ -1,0 +1,122 @@
+{
+  "action_counts": {
+    "0": 224,
+    "1": 10,
+    "2": 88
+  },
+  "action_positive_counts": {
+    "0": 142,
+    "1": 2,
+    "2": 17
+  },
+  "best_softmax_baseline_name": "softmax_taken",
+  "brier_delta_vs_best_softmax_baseline": 0.07494692504405975,
+  "brier_delta_vs_constant_baseline": 0.015324696898460388,
+  "calibration": {
+    "base_rate": 0.59375,
+    "bin_counts": [
+      9,
+      8,
+      10,
+      9,
+      8,
+      10,
+      10
+    ],
+    "bin_positives": [
+      2,
+      2,
+      5,
+      8,
+      4,
+      8,
+      9
+    ],
+    "brier_delta_vs_best_softmax_baseline": 0.12897926568984985,
+    "brier_delta_vs_constant_baseline": 0.06935703754425049,
+    "calibrated_verifier": {
+      "acc": 0.71875,
+      "auc": 0.8216748768472907,
+      "brier": 0.1784456968307495,
+      "ece": 0.04730904893949628
+    },
+    "calibration_rows": 64,
+    "edges": [
+      0.0,
+      0.4181222915649414,
+      0.42167389392852783,
+      0.4753267168998718,
+      0.47829505801200867,
+      0.48279425501823425,
+      0.5161905884742737,
+      1.0
+    ],
+    "gates": {
+      "auc_ge_0_75": true,
+      "brier_delta_ge_0_02": true,
+      "ece_le_0_05": true,
+      "pass": true
+    },
+    "method": "quantile_histogram",
+    "n_bins": 7,
+    "smoothing_alpha": 0.0,
+    "test_rows": 64,
+    "values": [
+      0.2222222222222222,
+      0.25,
+      0.5,
+      0.8888888888888888,
+      0.5,
+      0.8,
+      0.9
+    ]
+  },
+  "calibration_rows": 64,
+  "classifier_data_path": null,
+  "classifier_feature_source": "verifier_npz:Z_feature_prefix",
+  "classifier_weights_path": "orchestration/repl_memory/routing_classifier_weights.npz",
+  "constant_base_rate": {
+    "brier": 0.247802734375
+  },
+  "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data.npz",
+  "eval_rows": 64,
+  "eval_split": "test",
+  "feature_dim": 1031,
+  "gates": {
+    "auc_ge_0_75": true,
+    "brier_delta_ge_0_02": true,
+    "ece_le_0_05": false,
+    "pass": false
+  },
+  "history_final": {
+    "train_loss": 0.6655169129371643,
+    "val_acc": 0.6842105263157895,
+    "val_loss": 0.6458927989006042
+  },
+  "n_actions": 10,
+  "negative_rows": 161,
+  "output_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_histogram_weights.npz",
+  "positive_rows": 161,
+  "rows": 322,
+  "schema_version": "verifier_head_eval.v1",
+  "softmax_max": {
+    "auc": 0.5438423645320197,
+    "brier": 0.32766273617744446,
+    "ece": 0.2551316632889211
+  },
+  "softmax_taken": {
+    "auc": 0.6866995073891625,
+    "brier": 0.30742496252059937,
+    "ece": 0.307994497474283
+  },
+  "test_rows": 64,
+  "train_rows": 194,
+  "val_positive_rate": 0.546875,
+  "val_rows": 64,
+  "verifier": {
+    "acc": 0.71875,
+    "auc": 0.870935960591133,
+    "brier": 0.2324780374765396,
+    "ece": 0.18103653332218528
+  }
+}
