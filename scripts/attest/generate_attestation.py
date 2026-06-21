@@ -26,6 +26,7 @@ import yaml
 DEFAULT_REGISTRY = Path("orchestration/model_registry.yaml")
 DEFAULT_OUT_DIR = Path("orchestration/attestation")
 DEFAULT_PROC_ROOT = Path("/proc")
+DEFAULT_DCP_J7_RESULTS_ROOT = Path("benchmarks/results/runs/dcp_j7")
 DEFAULT_CONFIG_URL = "http://127.0.0.1:8000"
 DEFAULT_SENTINEL_FILES = (
     Path("orchestration/instrument_eras.yaml"),
@@ -621,6 +622,108 @@ def collect_drift_checks(
     }
 
 
+def _latest_summary_path(results_root: Path) -> Path | None:
+    try:
+        candidates = [
+            path
+            for path in results_root.glob("*/summary.json")
+            if path.is_file()
+        ]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: (path.stat().st_mtime, str(path)))
+
+
+def _load_json_file(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def collect_dcp_j7_status(
+    *,
+    results_root: Path = DEFAULT_DCP_J7_RESULTS_ROOT,
+) -> dict[str, Any]:
+    """Return latest DCP/J7 A/B decision state without running inference."""
+    summary_path = _latest_summary_path(results_root)
+    if summary_path is None:
+        return {
+            "status": "missing",
+            "results_root": str(results_root),
+            "latest_run": None,
+            "summary_path": None,
+            "decision": None,
+            "blockers": [],
+            "recommendation": "run scripts/benchmark/dcp_j7_ab.py when host is quiet",
+        }
+    run_dir = summary_path.parent
+    meta_path = run_dir / "meta.json"
+    try:
+        summary = _load_json_file(summary_path)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "results_root": str(results_root),
+            "latest_run": str(run_dir),
+            "summary_path": str(summary_path),
+            "decision": None,
+            "blockers": ["summary_unreadable"],
+            "error": str(exc),
+            "recommendation": "repair or rerun DCP/J7 A/B artifact",
+        }
+    try:
+        meta = _load_json_file(meta_path) if meta_path.exists() else {}
+    except Exception as exc:
+        meta = {"error": str(exc)}
+
+    decision = summary.get("decision") or {}
+    off = summary.get("off") or {}
+    on = summary.get("on") or {}
+    delta = summary.get("delta") or {}
+    try:
+        summary_mtime = datetime.fromtimestamp(
+            summary_path.stat().st_mtime,
+            tz=timezone.utc,
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except OSError:
+        summary_mtime = None
+    return {
+        "status": decision.get("status", "unknown"),
+        "results_root": str(results_root),
+        "latest_run": str(run_dir),
+        "summary_path": str(summary_path),
+        "summary_mtime": summary_mtime,
+        "mode": meta.get("mode"),
+        "created_at": meta.get("created_at"),
+        "orch_head_before": meta.get("orch_head_before"),
+        "orch_head_after": meta.get("orch_head_after"),
+        "orch_checkout_unchanged": meta.get("orch_checkout_unchanged"),
+        "host_quiet_confirmed": meta.get("host_quiet_confirmed"),
+        "decision": decision,
+        "blockers": decision.get("blockers") or [],
+        "recommendation": decision.get("recommendation"),
+        "off": {
+            "n": off.get("n"),
+            "p50_elapsed_s": off.get("p50_elapsed_s"),
+            "errors": off.get("errors"),
+            "quality_scored": off.get("quality_scored"),
+        },
+        "on": {
+            "n": on.get("n"),
+            "p50_elapsed_s": on.get("p50_elapsed_s"),
+            "errors": on.get("errors"),
+            "quality_scored": on.get("quality_scored"),
+        },
+        "delta": {
+            "p50_elapsed_pct": delta.get("p50_elapsed_pct"),
+            "avg_tokens_generated_delta": delta.get("avg_tokens_generated_delta"),
+            "avg_delegation_event_tokens_delta": delta.get(
+                "avg_delegation_event_tokens_delta"
+            ),
+        },
+    }
+
+
 def parse_readelf_dynamic(output: str) -> dict[str, Any]:
     needed: list[str] = []
     rpaths: list[str] = []
@@ -844,6 +947,7 @@ def summarize(
     serving_config: list[dict[str, Any]] | None = None,
     eval_instrument: dict[str, Any] | None = None,
     drift: dict[str, Any] | None = None,
+    dcp_j7: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     by_kind: dict[str, int] = {}
@@ -932,6 +1036,15 @@ def summarize(
                 "issues": [f"gitnexus_stale_or_error={len(drift.get('stale_or_error') or [])}"],
             }
         )
+    if dcp_j7 and dcp_j7.get("status") == "error":
+        issues.append(
+            {
+                "pid": "",
+                "kind": "dcp_j7",
+                "port": "",
+                "issues": dcp_j7.get("blockers") or ["dcp_j7_attestation_error"],
+            }
+        )
     return {
         "process_count": len(processes),
         "by_kind": dict(sorted(by_kind.items())),
@@ -949,6 +1062,7 @@ def build_report(
     flag_delay_s: float = 0.05,
     flag_min_workers: int = 1,
     gitnexus_repos: tuple[Path, ...] = (),
+    dcp_j7_results_root: Path = DEFAULT_DCP_J7_RESULTS_ROOT,
     trigger: str = "manual",
     generated_at: str | None = None,
 ) -> dict[str, Any]:
@@ -965,6 +1079,7 @@ def build_report(
     )
     eval_instrument = collect_eval_instrument(processes, proc_root=proc_root)
     drift = collect_drift_checks(gitnexus_repos=gitnexus_repos)
+    dcp_j7 = collect_dcp_j7_status(results_root=dcp_j7_results_root)
     report = {
         "schema_version": 4,
         "generated_at": generated_at or utc_now(),
@@ -974,6 +1089,7 @@ def build_report(
             "proc_root": str(proc_root),
             "registry": str(registry),
             "config_url": config_url,
+            "dcp_j7_results_root": str(dcp_j7_results_root),
         },
         "registry_ports": {str(port): entries for port, entries in sorted(registry_ports.items())},
         "numa_ports": {str(port): entry for port, entry in sorted(numa_ports.items())},
@@ -983,6 +1099,7 @@ def build_report(
             "serving_config": serving_config,
             "eval_instrument": eval_instrument,
             "drift": drift,
+            "dcp_j7": dcp_j7,
         },
         "summary": summarize(
             processes,
@@ -990,6 +1107,7 @@ def build_report(
             serving_config=serving_config,
             eval_instrument=eval_instrument,
             drift=drift,
+            dcp_j7=dcp_j7,
         ),
         "pending_sections": [
             "backup_w3",
@@ -1162,6 +1280,48 @@ def render_markdown(report: dict[str, Any]) -> str:
                 status=item.get("status", ""),
             )
         )
+    dcp_j7 = report["sections"].get("dcp_j7") or {}
+    delta = dcp_j7.get("delta") or {}
+    off = dcp_j7.get("off") or {}
+    on = dcp_j7.get("on") or {}
+    lines.extend(
+        [
+            "",
+            "## DCP/J7 Status",
+            "",
+            f"Status: `{dcp_j7.get('status', 'unknown')}`",
+            f"Latest run: `{dcp_j7.get('latest_run') or ''}`",
+            f"Mode: `{dcp_j7.get('mode') or ''}`",
+            f"Recommendation: `{dcp_j7.get('recommendation') or ''}`",
+            f"Blockers: `{', '.join(dcp_j7.get('blockers') or [])}`",
+            "",
+            "| arm | n | p50 elapsed s | errors | quality scored |",
+            "|---|---:|---:|---:|---:|",
+            "| off | {n} | {p50} | {errors} | {quality} |".format(
+                n=off.get("n") if off.get("n") is not None else "",
+                p50=off.get("p50_elapsed_s") if off.get("p50_elapsed_s") is not None else "",
+                errors=off.get("errors") if off.get("errors") is not None else "",
+                quality=off.get("quality_scored")
+                if off.get("quality_scored") is not None
+                else "",
+            ),
+            "| on | {n} | {p50} | {errors} | {quality} |".format(
+                n=on.get("n") if on.get("n") is not None else "",
+                p50=on.get("p50_elapsed_s") if on.get("p50_elapsed_s") is not None else "",
+                errors=on.get("errors") if on.get("errors") is not None else "",
+                quality=on.get("quality_scored")
+                if on.get("quality_scored") is not None
+                else "",
+            ),
+            "",
+            "Delta p50 elapsed: `{}`".format(
+                delta.get("p50_elapsed_pct")
+                if delta.get("p50_elapsed_pct") is not None
+                else ""
+            ),
+            "",
+        ]
+    )
     if summary["issues"]:
         lines.extend(["", "## Issues", "", "| pid | kind | port | issues |", "|---:|---|---:|---|"])
         for issue in summary["issues"]:
@@ -1213,6 +1373,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Repository path to include in GitNexus freshness checks; repeatable.",
     )
+    parser.add_argument("--dcp-j7-results-root", type=Path, default=DEFAULT_DCP_J7_RESULTS_ROOT)
     parser.add_argument("--generated-at", default=None)
     parser.add_argument("--trigger", default="manual")
     parser.add_argument("--print-md", action="store_true")
@@ -1227,6 +1388,7 @@ def main(argv: list[str] | None = None) -> int:
         flag_delay_s=args.flag_delay_s,
         flag_min_workers=args.flag_min_workers,
         gitnexus_repos=gitnexus_repos,
+        dcp_j7_results_root=args.dcp_j7_results_root,
         trigger=args.trigger,
         generated_at=args.generated_at,
     )

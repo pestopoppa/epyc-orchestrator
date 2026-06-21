@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 
 from scripts.attest import generate_attestation as attest
@@ -284,6 +286,7 @@ def test_build_report_from_fake_proc(monkeypatch, tmp_path: Path) -> None:
     report = attest.build_report(
         registry=registry,
         proc_root=proc_root,
+        dcp_j7_results_root=tmp_path / "missing_dcp_j7",
         trigger="unit_test",
         generated_at="2026-06-12T00:00:00Z",
     )
@@ -300,4 +303,85 @@ def test_build_report_from_fake_proc(monkeypatch, tmp_path: Path) -> None:
     assert process["start_time"] == "2023-11-14T22:13:20Z"
     assert report["sections"]["feature_flags"]["status"] == "disabled"
     assert report["sections"]["serving_config"][0]["numa_match"] is True
+    assert report["sections"]["dcp_j7"]["status"] == "missing"
     assert report["summary"]["issue_count"] == 0
+
+
+def test_collect_dcp_j7_status_picks_latest_run_and_renders(tmp_path: Path) -> None:
+    results_root = tmp_path / "benchmarks" / "results" / "runs" / "dcp_j7"
+    old_run = results_root / "20260618T000000Z"
+    latest_run = results_root / "20260619T113143Z"
+    for run_dir, status in ((old_run, "insufficient"), (latest_run, "hold")):
+        run_dir.mkdir(parents=True)
+        (run_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "decision": {
+                        "schema_version": "dcp_j7_decision.v1",
+                        "status": status,
+                        "recommendation": "keep dcp_pre_assembly default-off",
+                        "blockers": ["latency_not_improved", "quality_not_scored"],
+                    },
+                    "off": {
+                        "n": 3,
+                        "p50_elapsed_s": 20.219,
+                        "errors": 0,
+                        "quality_scored": 0,
+                    },
+                    "on": {
+                        "n": 3,
+                        "p50_elapsed_s": 32.628,
+                        "errors": 0,
+                        "quality_scored": 0,
+                    },
+                    "delta": {"p50_elapsed_pct": -0.6137},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (run_dir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "mode": "real",
+                    "created_at": "2026-06-19T11:31:43+00:00",
+                    "host_quiet_confirmed": True,
+                    "orch_head_before": "f96a6ab",
+                    "orch_head_after": "f96a6ab",
+                    "orch_checkout_unchanged": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+    os.utime(old_run / "summary.json", (1_000_000, 1_000_000))
+    os.utime(latest_run / "summary.json", (2_000_000, 2_000_000))
+
+    status = attest.collect_dcp_j7_status(results_root=results_root)
+
+    assert status["latest_run"] == str(latest_run)
+    assert status["decision"]["schema_version"] == "dcp_j7_decision.v1"
+    assert status["status"] == "hold"
+    assert status["blockers"] == ["latency_not_improved", "quality_not_scored"]
+    assert status["mode"] == "real"
+    assert status["delta"]["p50_elapsed_pct"] == -0.6137
+
+    rendered = attest.render_markdown(
+        {
+            "generated_at": "2026-06-21T00:00:00Z",
+            "trigger": "unit_test",
+            "scope": "test",
+            "summary": {"process_count": 0, "issue_count": 0, "by_kind": {}, "issues": []},
+            "sections": {
+                "processes": [],
+                "feature_flags": {},
+                "serving_config": [],
+                "eval_instrument": {},
+                "drift": {},
+                "dcp_j7": status,
+            },
+            "pending_sections": [],
+        }
+    )
+
+    assert "## DCP/J7 Status" in rendered
+    assert "Status: `hold`" in rendered
+    assert "Blockers: `latency_not_improved, quality_not_scored`" in rendered

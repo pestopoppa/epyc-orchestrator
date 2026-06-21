@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from scripts.benchmark import dcp_j7_ab as dcp
 
 
@@ -210,3 +212,6 @@ def test_stub_main_writes_artifacts(tmp_path, monkeypatch):
     rows = (tmp_path / "results.jsonl").read_text().strip().splitlines()
     assert len(rows) == len(dcp.PROMPTS) * 2
     assert '"orch_checkout_unchanged": true' in (tmp_path / "meta.json").read_text()
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["decision"]["schema_version"] == "dcp_j7_decision.v1"
+    assert isinstance(summary["decision"]["blockers"], list)
