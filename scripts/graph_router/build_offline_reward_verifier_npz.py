@@ -49,7 +49,12 @@ ROLE_ALIASES = {
 ROLE_SUFFIXES = (":delegated", ":direct", ":repl", ":react")
 PRIVATE_FIELDS = {"answer", "expected", "prompt", "reference", "response"}
 CONFLICT_POLICIES = ("keep", "drop_conflicting_model_inputs")
-FEATURE_CONTRACTS = ("prompt_only", "response_telemetry", "source_family_response_telemetry")
+FEATURE_CONTRACTS = (
+    "prompt_only",
+    "response_telemetry",
+    "source_family_response_telemetry",
+    "source_action_response_telemetry",
+)
 
 
 class OfflineRewardVerifierNpzError(ValueError):
@@ -94,13 +99,16 @@ def _safe_log_feature(value: Any, scale: float, *, default: float = 0.0) -> floa
     return float(np.log1p(float(value)) / scale)
 
 
-def _engineered_feature_names(feature_contract: str) -> list[str]:
+def _engineered_feature_names(feature_contract: str, *, n_actions: int = 0) -> list[str]:
     names = [
         "task_type_onehot[5]",
         "log1p(context_length)/12.0",
         "has_images",
     ]
-    if feature_contract == "source_family_response_telemetry":
+    if feature_contract in {
+        "source_family_response_telemetry",
+        "source_action_response_telemetry",
+    }:
         names.insert(1, f"source_family_onehot[{len(SOURCE_FAMILIES)}]")
     if feature_contract in {"response_telemetry", "source_family_response_telemetry"}:
         names.extend(
@@ -111,10 +119,46 @@ def _engineered_feature_names(feature_contract: str) -> list[str]:
                 "source_error_present",
             ]
         )
+    elif feature_contract == "source_action_response_telemetry":
+        if n_actions <= 0:
+            raise OfflineRewardVerifierNpzError(
+                "source_action_response_telemetry requires n_actions"
+            )
+        names.extend(
+            [
+                f"source_family_x_action_onehot[{len(SOURCE_FAMILIES) * n_actions}]",
+                "log1p(answer_chars)/12.0",
+                "log1p(expected_chars)/12.0",
+                "log1p(source_elapsed_seconds)/8.0",
+                "source_error_present",
+            ]
+        )
     return names
 
 
-def _engineered_features(row: dict[str, Any], *, feature_contract: str) -> np.ndarray:
+def _source_family_vec(row: dict[str, Any]) -> list[float]:
+    context = row.get("feature_context")
+    if not isinstance(context, dict):
+        raise OfflineRewardVerifierNpzError(f"{row.get('item_id')}: feature_context must be object")
+    source_family_vec = context.get("source_family_onehot")
+    if (
+        not isinstance(source_family_vec, list)
+        or len(source_family_vec) != len(SOURCE_FAMILIES)
+    ):
+        raise OfflineRewardVerifierNpzError(
+            f"{row.get('item_id')}: source_family_onehot must have length "
+            f"{len(SOURCE_FAMILIES)}"
+        )
+    return [float(value) for value in source_family_vec]
+
+
+def _engineered_features(
+    row: dict[str, Any],
+    *,
+    feature_contract: str,
+    action_idx: int | None = None,
+    n_actions: int | None = None,
+) -> np.ndarray:
     context = row.get("feature_context")
     if not isinstance(context, dict):
         raise OfflineRewardVerifierNpzError(f"{row.get('item_id')}: feature_context must be object")
@@ -134,18 +178,33 @@ def _engineered_features(row: dict[str, Any], *, feature_contract: str) -> np.nd
         float(np.log1p(context_length) / 12.0),
         1.0 if has_images else 0.0,
     ]
-    if feature_contract == "source_family_response_telemetry":
-        source_family_vec = context.get("source_family_onehot")
-        if (
-            not isinstance(source_family_vec, list)
-            or len(source_family_vec) != len(SOURCE_FAMILIES)
-        ):
-            raise OfflineRewardVerifierNpzError(
-                f"{row.get('item_id')}: source_family_onehot must have length "
-                f"{len(SOURCE_FAMILIES)}"
-            )
-        features[5:5] = map(float, source_family_vec)
-    if feature_contract in {"response_telemetry", "source_family_response_telemetry"}:
+    source_family_vec: list[float] | None = None
+    if feature_contract in {
+        "source_family_response_telemetry",
+        "source_action_response_telemetry",
+    }:
+        source_family_vec = _source_family_vec(row)
+        features[5:5] = source_family_vec
+    if feature_contract in {
+        "response_telemetry",
+        "source_family_response_telemetry",
+        "source_action_response_telemetry",
+    }:
+        if feature_contract == "source_action_response_telemetry":
+            if action_idx is None or n_actions is None or n_actions <= 0:
+                raise OfflineRewardVerifierNpzError(
+                    "source_action_response_telemetry requires action_idx and n_actions"
+                )
+            if action_idx < 0 or action_idx >= n_actions:
+                raise OfflineRewardVerifierNpzError(
+                    f"{row.get('item_id')}: action_idx={action_idx} outside 0..{n_actions - 1}"
+                )
+            assert source_family_vec is not None
+            interaction = np.outer(
+                np.asarray(source_family_vec, dtype=np.float32),
+                np.eye(n_actions, dtype=np.float32)[action_idx],
+            ).reshape(-1)
+            features.extend(float(value) for value in interaction.tolist())
         features.extend(
             [
                 _safe_log_feature(row.get("answer_chars"), 12.0),
@@ -375,7 +434,12 @@ def build_verifier_npz(
                 )
             embedding_cache[cache_key] = embedding
 
-        engineered = _engineered_features(row, feature_contract=feature_contract)
+        engineered = _engineered_features(
+            row,
+            feature_contract=feature_contract,
+            action_idx=action_idx,
+            n_actions=n_actions,
+        )
         features = np.concatenate([embedding_cache[cache_key], engineered]).astype(np.float32)
         expected_feature_dim = 1024 + len(engineered)
         if features.shape[0] != expected_feature_dim:
@@ -485,7 +549,10 @@ def build_verifier_npz(
             "name": feature_contract,
             "embedding_dim_required": 1024,
             "engineered_feature_dim": int(X.shape[1] - 1024),
-            "engineered_features": _engineered_feature_names(feature_contract),
+            "engineered_features": _engineered_feature_names(
+                feature_contract,
+                n_actions=n_actions,
+            ),
             "classifier_feature_dim": CLASSIFIER_FEATURE_DIM,
             "label_leakage_excluded_fields": [
                 "oracle_binary_label",
