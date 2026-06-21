@@ -44,6 +44,11 @@ Committed artifacts:
   multi-action verifier train/eval attempt on the same NPZ. The run is promising
   but still not promotable: Brier and ROC-AUC pass, but ECE misses the gate. The
   generated weights are intentionally not adopted as live routing weights.
+- `offline_reward_multi_action_verifier_calibrated_eval_summary.json` and
+  `offline_reward_multi_action_verifier_calibrated_eval_summary.md` record a
+  disjoint train/calibration/test split with post-hoc temperature/bias
+  calibration. Calibration improves Brier but does not repair ECE, so the
+  generated weights are intentionally not adopted as live routing weights.
 
 Private row data is not committed. The scored row file is:
 
@@ -81,6 +86,10 @@ Result:
 - multi-action verifier Brier / ROC-AUC / ECE: `0.2066` / `0.8916` / `0.1783`
 - multi-action verifier Brier delta vs best softmax / constant baseline: `+0.1008` / `+0.0412`
 - multi-action verifier gate verdict: `FAIL`
+- calibrated holdout verifier train / calibration / test rows: `194` / `64` / `64`
+- calibrated holdout verifier Brier / ROC-AUC / ECE: `0.1854` / `0.8709` / `0.1788`
+- calibrated holdout verifier Brier delta vs best softmax / constant baseline: `+0.1220` / `+0.0624`
+- calibrated holdout verifier gate verdict: `FAIL`
 
 Interpretation:
 
@@ -94,5 +103,6 @@ routing feature.
 The verifier NPZ is still offline preparation, not a serve-time routing change.
 The first frontdoor-specialist train/eval from this NPZ failed the A2 gates. A
 broader multi-action verifier improves substantially on Brier and ROC-AUC, but
-misses calibration, so the current next step is calibration/data improvement
-before any default-off runtime gate changes.
+misses calibration. A disjoint post-hoc temperature/bias calibration improves
+Brier but leaves ECE high, so the current next step is data/model calibration
+improvement before any default-off runtime gate changes.

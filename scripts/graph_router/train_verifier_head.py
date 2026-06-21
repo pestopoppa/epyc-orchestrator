@@ -77,6 +77,61 @@ def _ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> float:
     return float(ece)
 
 
+def _metrics(probs: np.ndarray, labels: np.ndarray) -> dict[str, float]:
+    return {
+        "brier": _brier(probs, labels),
+        "auc": _roc_auc(probs, labels.astype(int)),
+        "ece": _ece(probs, labels),
+        "acc": float(((probs >= 0.5).astype(np.float32) == labels).mean()),
+    }
+
+
+def _logit(probs: np.ndarray) -> np.ndarray:
+    clipped = np.clip(probs.astype(np.float32), 1e-6, 1.0 - 1e-6)
+    return np.log(clipped / (1.0 - clipped))
+
+
+def _sigmoid_np(values: np.ndarray) -> np.ndarray:
+    out = np.empty_like(values, dtype=np.float32)
+    pos = values >= 0
+    out[pos] = 1.0 / (1.0 + np.exp(-values[pos]))
+    exp_x = np.exp(values[~pos])
+    out[~pos] = exp_x / (1.0 + exp_x)
+    return out
+
+
+def _fit_temperature_bias_calibrator(
+    probs: np.ndarray,
+    labels: np.ndarray,
+) -> dict[str, float]:
+    """Fit a Platt-style calibrator by deterministic NLL grid search."""
+    x = _logit(probs)
+    y = labels.astype(np.float32)
+    best = {"temperature": 1.0, "bias": 0.0, "nll": float("inf")}
+    for temperature in np.geomspace(0.25, 8.0, 65):
+        scaled = x / float(temperature)
+        for bias in np.linspace(-3.0, 3.0, 121):
+            p = _sigmoid_np(scaled + float(bias))
+            p = np.clip(p, 1e-7, 1.0 - 1e-7)
+            nll = float(-np.mean(y * np.log(p) + (1.0 - y) * np.log(1.0 - p)))
+            if nll < best["nll"]:
+                best = {
+                    "temperature": float(temperature),
+                    "bias": float(bias),
+                    "nll": nll,
+                }
+    return best
+
+
+def _apply_temperature_bias_calibrator(
+    probs: np.ndarray,
+    calibrator: dict[str, float],
+) -> np.ndarray:
+    return _sigmoid_np(
+        _logit(probs) / float(calibrator["temperature"]) + float(calibrator["bias"])
+    )
+
+
 def _reliability(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> None:
     bins = np.linspace(0.0, 1.0, n_bins + 1)
     print(f"\n{'bin':<14} {'n':>8} {'mean_p':>10} {'frac_pos':>10} {'|gap|':>10}")
@@ -137,6 +192,8 @@ def train_and_eval(
     patience: int = 20,
     val_seed: int = 42,
     val_split: float = 0.2,
+    calibration_split: float = 0.0,
+    test_split: float = 0.0,
 ) -> dict:
     # ── Load data ──
     logger.info("Loading verifier data from %s", data_path)
@@ -152,6 +209,36 @@ def train_and_eval(
                 N, Z.shape, feature_dim, n_actions)
     logger.info("Correctness base rate: %.4f", correct.mean())
 
+    rng = np.random.default_rng(val_seed)
+    idx = np.arange(N)
+    rng.shuffle(idx)
+    n_test = int(N * test_split) if test_split > 0.0 else 0
+    n_cal = int(N * calibration_split) if calibration_split > 0.0 else 0
+    if n_test or n_cal:
+        if n_test < 2 or n_cal < 2:
+            raise SystemExit(
+                "calibration/test mode requires at least two rows in each requested split"
+            )
+        if n_test + n_cal >= N:
+            raise SystemExit("calibration/test splits leave no rows for training")
+        test_idx = idx[:n_test]
+        cal_idx = idx[n_test:n_test + n_cal]
+        train_idx = idx[n_test + n_cal:]
+        Z_fit = Z[train_idx]
+        y_fit = correct[train_idx]
+        w_fit = sample_weights[train_idx]
+        eval_idx = test_idx
+        eval_split_name = "test"
+    else:
+        train_idx = idx
+        cal_idx = np.array([], dtype=np.int64)
+        Z_fit = Z
+        y_fit = correct
+        w_fit = sample_weights
+        n_val = max(1, int(N * val_split))
+        eval_idx = idx[:n_val]
+        eval_split_name = "val"
+
     # ── Train ──
     verifier = VerifierHead(
         feature_dim=feature_dim,
@@ -162,7 +249,7 @@ def train_and_eval(
     logger.info("Verifier params: %d (input_dim=%d)", verifier.param_count, verifier.input_dim)
 
     history = verifier.train(
-        Z, correct, sample_weights,
+        Z_fit, y_fit, w_fit,
         epochs=epochs,
         lr=lr,
         val_split=val_split,
@@ -171,15 +258,10 @@ def train_and_eval(
         rng_seed=val_seed,
     )
 
-    # ── Recompute the same val split for evaluation ──
-    rng = np.random.default_rng(val_seed)
-    idx = np.arange(N)
-    rng.shuffle(idx)
-    n_val = max(1, int(N * val_split))
-    val_idx = idx[:n_val]
-    Z_val = Z[val_idx]
-    y_val = correct[val_idx]
-    actions_val = actions[val_idx]
+    # ── Evaluate on the selected holdout split ──
+    Z_val = Z[eval_idx]
+    y_val = correct[eval_idx]
+    actions_val = actions[eval_idx]
 
     # Verifier predictions on val
     p_verifier, _ = verifier.forward(Z_val)
@@ -188,6 +270,21 @@ def train_and_eval(
     brier_verifier = _brier(p_verifier, y_val)
     auc_verifier = _roc_auc(p_verifier, y_val.astype(int))
     ece_verifier = _ece(p_verifier, y_val)
+    calibration: dict[str, Any] | None = None
+    if n_cal:
+        p_cal, _ = verifier.forward(Z[cal_idx])
+        y_cal = correct[cal_idx]
+        calibrator = _fit_temperature_bias_calibrator(p_cal, y_cal)
+        p_calibrated = _apply_temperature_bias_calibrator(p_verifier, calibrator)
+        calibration = {
+            "method": "temperature_bias_grid",
+            "calibration_rows": int(n_cal),
+            "test_rows": int(len(y_val)),
+            "temperature": calibrator["temperature"],
+            "bias": calibrator["bias"],
+            "calibration_nll": calibrator["nll"],
+            "calibrated_verifier": _metrics(p_calibrated, y_val),
+        }
 
     # ── Baseline: softmax magnitude of the proposed action ──
     # Load classifier + cached features, recover softmax(taken_action | features)
@@ -203,9 +300,9 @@ def train_and_eval(
     X_raw, classifier_feature_source = _load_classifier_features(
         classifier_data_path, d, Z, feature_dim, N
     )
-    # ── Critical: align the val split.  The verifier extractor preserves row
-    # order, so val_idx (computed above) indexes the same rows in X_raw.
-    X_val = X_raw[val_idx]
+    # ── Critical: align the eval split.  The verifier extractor preserves row
+    # order, so eval_idx indexes the same rows in X_raw.
+    X_val = X_raw[eval_idx]
     probs_clf, _ = clf.forward(X_val)
     softmax_taken = probs_clf[np.arange(len(actions_val)), actions_val]
     max_softmax = probs_clf.max(axis=1)
@@ -230,6 +327,9 @@ def train_and_eval(
     print(f"{'softmax_taken (clf p(a|x))':<32} {brier_sm_taken:>10.4f} {auc_sm_taken:>10.4f} {ece_sm_taken:>10.4f}  {'-':>8}")
     print(f"{'softmax_max (clf top-1 prob)':<32} {brier_sm_max:>10.4f} {auc_sm_max:>10.4f} {ece_sm_max:>10.4f}  {'-':>8}")
     print(f"{'constant base rate':<32} {brier_base:>10.4f} {'-':>10} {'-':>10}  {'-':>8}")
+    if calibration is not None:
+        calibrated = calibration["calibrated_verifier"]
+        print(f"{'verifier + calibration':<32} {calibrated['brier']:>10.4f} {calibrated['auc']:>10.4f} {calibrated['ece']:>10.4f}  {calibrated['acc']:>8.4f}")
     print("=" * 90)
 
     _reliability(p_verifier, y_val, n_bins=10)
@@ -240,6 +340,22 @@ def train_and_eval(
     base_brier_name = "softmax_taken" if brier_sm_taken < brier_sm_max else "softmax_max"
     brier_delta = base_brier - brier_verifier   # positive = improvement
     brier_delta_constant = brier_base - brier_verifier
+    if calibration is not None:
+        calibrated = calibration["calibrated_verifier"]
+        calibrated_brier_delta = base_brier - calibrated["brier"]
+        calibrated_brier_delta_constant = brier_base - calibrated["brier"]
+        calibration["brier_delta_vs_best_softmax_baseline"] = calibrated_brier_delta
+        calibration["brier_delta_vs_constant_baseline"] = calibrated_brier_delta_constant
+        calibration["gates"] = {
+            "brier_delta_ge_0_02": bool(calibrated_brier_delta >= 0.02),
+            "auc_ge_0_75": bool(calibrated["auc"] >= 0.75),
+            "ece_le_0_05": bool(calibrated["ece"] <= 0.05),
+            "pass": bool(
+                (calibrated_brier_delta >= 0.02)
+                and (calibrated["auc"] >= 0.75)
+                and (calibrated["ece"] <= 0.05)
+            ),
+        }
     print(
         f"\nGates (P6.2.5):\n"
         f"  ΔBrier vs best baseline ({base_brier_name}): {brier_delta:+.4f}  (gate: ≥ +0.02)  "
@@ -264,7 +380,12 @@ def train_and_eval(
         "classifier_feature_source": classifier_feature_source,
         "output_path": str(output_path),
         "rows": int(N),
+        "eval_split": eval_split_name,
+        "eval_rows": int(len(y_val)),
         "val_rows": int(len(y_val)),
+        "train_rows": int(len(train_idx)),
+        "calibration_rows": int(n_cal),
+        "test_rows": int(n_test),
         "feature_dim": int(feature_dim),
         "n_actions": int(n_actions),
         "positive_rows": int(correct.sum()),
@@ -291,6 +412,7 @@ def train_and_eval(
             "ece_le_0_05": bool(ece_verifier <= 0.05),
             "pass": bool(all_pass),
         },
+        "calibration": calibration,
         "history_final": {k: v[-1] for k, v in history.items()},
     }
 
@@ -304,7 +426,8 @@ def _summary_markdown(summary: dict) -> str:
         f"- Output weights: `{summary['output_path']}`",
         f"- Classifier feature source: `{summary['classifier_feature_source']}`",
         f"- Rows: `{summary['rows']}` ({summary['positive_rows']} positive / {summary['negative_rows']} negative)",
-        f"- Validation rows: `{summary['val_rows']}`",
+        f"- Evaluation split: `{summary.get('eval_split', 'val')}`",
+        f"- Evaluation rows: `{summary.get('eval_rows', summary['val_rows'])}`",
         f"- Actions represented: `{summary['action_counts']}`",
         f"- Brier: `{verifier['brier']:.4f}`",
         f"- ROC-AUC: `{verifier['auc']:.4f}`",
@@ -315,11 +438,31 @@ def _summary_markdown(summary: dict) -> str:
         f"- Delta Brier vs constant base-rate baseline: "
         f"`{summary['brier_delta_vs_constant_baseline']:+.4f}`",
         f"- Gates passed: `{summary['gates']['pass']}`",
-        "",
-        "This is an offline evaluation artifact. It is not a live verifier",
-        "weight promotion and does not enable the verifier gate.",
-        "",
     ]
+    if summary.get("calibration"):
+        calibrated = summary["calibration"]["calibrated_verifier"]
+        lines.extend(
+            [
+                f"- Calibration method: `{summary['calibration']['method']}`",
+                f"- Calibrated Brier: `{calibrated['brier']:.4f}`",
+                f"- Calibrated ROC-AUC: `{calibrated['auc']:.4f}`",
+                f"- Calibrated ECE: `{calibrated['ece']:.4f}`",
+                f"- Calibrated Accuracy@0.5: `{calibrated['acc']:.4f}`",
+                f"- Calibrated delta Brier vs best softmax baseline: "
+                f"`{summary['calibration']['brier_delta_vs_best_softmax_baseline']:+.4f}`",
+                f"- Calibrated delta Brier vs constant base-rate baseline: "
+                f"`{summary['calibration']['brier_delta_vs_constant_baseline']:+.4f}`",
+                f"- Calibrated gates passed: `{summary['calibration']['gates']['pass']}`",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "This is an offline evaluation artifact. It is not a live verifier",
+            "weight promotion and does not enable the verifier gate.",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -342,6 +485,8 @@ def main():
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--patience", type=int, default=20)
+    parser.add_argument("--calibration-split", type=float, default=0.0)
+    parser.add_argument("--test-split", type=float, default=0.0)
     args = parser.parse_args()
 
     summary = train_and_eval(
@@ -353,6 +498,8 @@ def main():
         lr=args.lr,
         batch_size=args.batch_size,
         patience=args.patience,
+        calibration_split=args.calibration_split,
+        test_split=args.test_split,
     )
     if args.summary_json:
         path = Path(args.summary_json)

@@ -42,9 +42,35 @@ def test_summary_markdown_records_null_promotion_metrics() -> None:
             "brier_delta_vs_best_softmax_baseline": 0.03,
             "brier_delta_vs_constant_baseline": -0.01,
             "gates": {"pass": False},
+            "calibration": {
+                "method": "temperature_bias_grid",
+                "calibrated_verifier": {
+                    "brier": 0.18,
+                    "auc": 0.8,
+                    "ece": 0.04,
+                    "acc": 0.75,
+                },
+                "brier_delta_vs_best_softmax_baseline": 0.05,
+                "brier_delta_vs_constant_baseline": 0.02,
+                "gates": {"pass": False},
+            },
         }
     )
 
     assert "Offline Multi-Action Verifier Evaluation" in markdown
     assert "Delta Brier vs constant base-rate baseline: `-0.0100`" in markdown
+    assert "Calibration method: `temperature_bias_grid`" in markdown
+    assert "Calibrated ECE: `0.0400`" in markdown
+    assert "Calibrated gates passed: `False`" in markdown
     assert "Gates passed: `False`" in markdown
+
+
+def test_temperature_bias_calibrator_improves_shifted_probabilities() -> None:
+    labels = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
+    probs = np.array([0.30, 0.35, 0.40, 0.45, 0.50, 0.55], dtype=np.float32)
+
+    calibrator = mod._fit_temperature_bias_calibrator(probs, labels)
+    calibrated = mod._apply_temperature_bias_calibrator(probs, calibrator)
+
+    assert calibrator["temperature"] > 0.0
+    assert mod._brier(calibrated, labels) < mod._brier(probs, labels)
