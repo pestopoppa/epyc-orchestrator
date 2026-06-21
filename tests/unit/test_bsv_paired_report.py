@@ -97,6 +97,46 @@ def test_fingerprint_pair_uses_majority_vectors_and_records_trials() -> None:
     assert report["candidate_trials"] == [3, 4]
 
 
+def test_eval_result_pair_compares_standalone_payloads() -> None:
+    baseline = {
+        "archive_member_id": "archive:base",
+        "trial_id": 101,
+        "avg_prompt_tokens": 900,
+        "routing_distribution": {"frontdoor": 1.0},
+        "question_results": [
+            {"qid": "q1", "suite": "suite", "correct": True},
+            {"qid": "q2", "suite": "suite", "correct": True},
+            {"qid": "q3", "suite": "suite", "correct": False},
+        ],
+    }
+    candidate = {
+        "archive_member_id": "archive:cand",
+        "trial_id": 102,
+        "avg_prompt_tokens": 900,
+        "routing_distribution": {"frontdoor": 1.0},
+        "question_results": [
+            {"qid": "q1", "suite": "suite", "correct": True},
+            {"qid": "q2", "suite": "suite", "correct": False},
+            {"qid": "q3", "suite": "suite", "correct": False},
+        ],
+    }
+
+    report = bsv_paired_report.build_eval_result_pair_report(
+        baseline,
+        candidate,
+        baseline_label="base-json",
+        candidate_label="cand-json",
+        min_shared_qids=3,
+    )
+
+    assert report["comparison_type"] == "eval_result_pair"
+    assert report["gate_decision"] == "block"
+    assert report["paired_stats"]["trial_a"] == "baseline:base-json"
+    assert report["paired_stats"]["trial_b"] == "candidate:cand-json"
+    assert report["baseline_signature"]["archive_member_id"] == "archive:base"
+    assert report["candidate_signature"]["trial_id"] == 102
+
+
 def test_blocks_when_shared_qid_coverage_is_too_low() -> None:
     rows = [
         _row(1, "base", [("q1", True)]),
@@ -159,3 +199,46 @@ def test_cli_markdown_no_fail(tmp_path: Path, capsys: pytest.CaptureFixture[str]
 
     assert code == 0
     assert "# BSV-2 Paired Behavior Report" in capsys.readouterr().out
+
+
+def test_cli_eval_result_pair_reads_json_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    baseline = tmp_path / "baseline.json"
+    candidate = tmp_path / "candidate.json"
+    baseline.write_text(json.dumps({
+        "eval_details": {
+            "question_results": [
+                {"qid": "q1", "suite": "suite", "correct": True},
+                {"qid": "q2", "suite": "suite", "correct": False},
+            ]
+        }
+    }))
+    candidate.write_text(json.dumps({
+        "eval_result": {
+            "eval_details": {
+                "details": {
+                    "question_results": [
+                        {"question_id": "q1", "suite": "suite", "correct": True},
+                        {"question_id": "q2", "suite": "suite", "correct": True},
+                    ]
+                }
+            }
+        }
+    }))
+
+    code = bsv_paired_report.main([
+        "--min-shared-qids",
+        "2",
+        "eval-result-pair",
+        str(baseline),
+        str(candidate),
+        "--baseline-label",
+        "base-file",
+        "--candidate-label",
+        "cand-file",
+    ])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["comparison_type"] == "eval_result_pair"
+    assert payload["gate_decision"] == "pass"
+    assert payload["paired_stats"]["shared_qids"] == 2

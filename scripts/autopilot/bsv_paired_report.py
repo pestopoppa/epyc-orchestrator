@@ -28,6 +28,7 @@ try:
         DEFAULT_JOURNAL_DIR,
         McNemarResult,
         QuestionOutcome,
+        extract_question_outcomes,
         group_rows_by_fingerprint,
         iter_journal_rows,
         majority_vector,
@@ -39,6 +40,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution path
         DEFAULT_JOURNAL_DIR,
         McNemarResult,
         QuestionOutcome,
+        extract_question_outcomes,
         group_rows_by_fingerprint,
         iter_journal_rows,
         majority_vector,
@@ -240,6 +242,101 @@ def build_fingerprint_pair_report(
     return report
 
 
+def build_eval_result_pair_report(
+    baseline_payload: dict[str, Any],
+    candidate_payload: dict[str, Any],
+    *,
+    baseline_label: str = "baseline",
+    candidate_label: str = "candidate",
+    min_shared_qids: int = DEFAULT_MIN_SHARED_QIDS,
+    max_accuracy_regression: float = 0.0,
+) -> dict[str, Any]:
+    baseline_row = _eval_result_row(
+        baseline_payload,
+        label=baseline_label,
+        synthetic_trial_id=0,
+    )
+    candidate_row = _eval_result_row(
+        candidate_payload,
+        label=candidate_label,
+        synthetic_trial_id=1,
+    )
+    baseline_vector = _vector_from_eval_result_row(baseline_row, baseline_label)
+    candidate_vector = _vector_from_eval_result_row(candidate_row, candidate_label)
+    stats = mcnemar_from_vectors(
+        baseline_vector,
+        candidate_vector,
+        f"baseline:{baseline_label}",
+        f"candidate:{candidate_label}",
+    )
+    baseline_sig = _signature(
+        archive_member_id=_archive_member_id(baseline_row, fallback=f"eval:{baseline_label}"),
+        trial_id=_trial_id_or_none(baseline_row),
+        vector=baseline_vector,
+        rows=[baseline_row],
+    )
+    candidate_sig = _signature(
+        archive_member_id=_archive_member_id(candidate_row, fallback=f"eval:{candidate_label}"),
+        trial_id=_trial_id_or_none(candidate_row),
+        vector=candidate_vector,
+        rows=[candidate_row],
+    )
+    return _paired_report(
+        comparison_type="eval_result_pair",
+        baseline_label=baseline_label,
+        candidate_label=candidate_label,
+        stats=stats,
+        baseline_signature=baseline_sig,
+        candidate_signature=candidate_sig,
+        min_shared_qids=min_shared_qids,
+        max_accuracy_regression=max_accuracy_regression,
+    )
+
+
+def _eval_result_row(
+    payload: dict[str, Any],
+    *,
+    label: str,
+    synthetic_trial_id: int,
+) -> dict[str, Any]:
+    row = dict(payload.get("eval_result") or payload)
+    trial_id = _trial_id_or_none(row)
+    row.setdefault("trial_id", trial_id if trial_id is not None else synthetic_trial_id)
+    if not isinstance(row.get("eval_details"), dict):
+        row["eval_details"] = {}
+    if "question_results" in row and "question_results" not in row["eval_details"]:
+        row["eval_details"] = {
+            **row["eval_details"],
+            "question_results": row["question_results"],
+        }
+    if not isinstance(row.get("config_snapshot"), dict):
+        row["config_snapshot"] = {}
+    row["config_snapshot"].setdefault("config_fingerprint", label)
+    return row
+
+
+def _vector_from_eval_result_row(row: dict[str, Any], label: str) -> dict[str, QuestionOutcome]:
+    outcomes = extract_question_outcomes(row)
+    if not outcomes:
+        raise ValueError(f"eval result has no question_results vector: {label}")
+    return {outcome.qid: outcome for outcome in outcomes}
+
+
+def _trial_id_or_none(payload: dict[str, Any]) -> int | None:
+    trial_id = payload.get("trial_id")
+    try:
+        return int(trial_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _archive_member_id(payload: dict[str, Any], *, fallback: str) -> str:
+    value = payload.get("archive_member_id") or (payload.get("eval_details") or {}).get(
+        "archive_member_id"
+    )
+    return str(value) if value else fallback
+
+
 def _paired_report(
     *,
     comparison_type: str,
@@ -307,6 +404,13 @@ def _load_rows(path: Path | str) -> list[dict[str, Any]]:
     return [dict(row) for row in iter_journal_rows(path)]
 
 
+def _load_json_object(path: Path | str) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f"expected JSON object in {path}")
+    return payload
+
+
 def _cmd_trial_pair(args: argparse.Namespace) -> int:
     report = build_trial_pair_report(
         _load_rows(args.journal),
@@ -324,6 +428,21 @@ def _cmd_fingerprint_pair(args: argparse.Namespace) -> int:
         _load_rows(args.journal),
         baseline_fingerprint=args.baseline_fingerprint,
         candidate_fingerprint=args.candidate_fingerprint,
+        min_shared_qids=args.min_shared_qids,
+        max_accuracy_regression=args.max_accuracy_regression,
+    )
+    _print_report(report, markdown=args.markdown)
+    return 0 if args.no_fail or report["gate_decision"] == "pass" else 1
+
+
+def _cmd_eval_result_pair(args: argparse.Namespace) -> int:
+    baseline_label = args.baseline_label or Path(args.baseline_json).stem
+    candidate_label = args.candidate_label or Path(args.candidate_json).stem
+    report = build_eval_result_pair_report(
+        _load_json_object(args.baseline_json),
+        _load_json_object(args.candidate_json),
+        baseline_label=baseline_label,
+        candidate_label=candidate_label,
         min_shared_qids=args.min_shared_qids,
         max_accuracy_regression=args.max_accuracy_regression,
     )
@@ -356,6 +475,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     fp.add_argument("baseline_fingerprint")
     fp.add_argument("candidate_fingerprint")
     fp.set_defaults(func=_cmd_fingerprint_pair)
+
+    er = sub.add_parser(
+        "eval-result-pair",
+        help="compare two standalone EvalResult-like JSON artifacts",
+    )
+    er.add_argument("baseline_json")
+    er.add_argument("candidate_json")
+    er.add_argument("--baseline-label")
+    er.add_argument("--candidate-label")
+    er.set_defaults(func=_cmd_eval_result_pair)
     return parser
 
 
