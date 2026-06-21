@@ -437,6 +437,88 @@ class TestDocumentClient:
 
         await client.close()
 
+    @pytest.mark.asyncio
+    async def test_process_document_uses_local_odl_structured_extractor(
+        self, tmp_path, monkeypatch
+    ):
+        """ODL structured mode should bypass OCR server and preserve structure."""
+        from src.models.document import DocumentProcessRequest
+        from src.models.odl_structured import HeadingNode, ODLStructuredDocument
+        from src.services.pdf_router import (
+            BoundingBox as PDFBoundingBox,
+            ExtractedFigure,
+        )
+        from src.services.document_client import process_document
+
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        structured = ODLStructuredDocument(headings=[HeadingNode(level=1, text="Intro")])
+
+        monkeypatch.setenv("PDF_EXTRACTOR", "opendataloader")
+        monkeypatch.setenv("ORCHESTRATOR_ODL_STRUCTURED", "1")
+
+        with patch("src.services.document_client.get_document_client") as mock_get_client:
+            with patch(
+                "src.services.pdf_router.PDFRouter._extract_with_opendataloader_structured",
+                return_value=("Intro\nBody", structured, 250.0),
+            ) as mock_odl:
+                with patch(
+                    "src.services.pdf_router.PDFRouter._extract_figures_pymupdf",
+                    return_value=[
+                        ExtractedFigure(
+                            index=1,
+                            bbox=PDFBoundingBox(x0=0.1, y0=0.2, x1=0.5, y1=0.6, page=2),
+                        )
+                    ],
+                ) as mock_figures:
+                    with patch("src.services.document_client._pdf_page_count", return_value=2):
+                        with patch(
+                            "src.services.pdf_router.PDFRouter.extract",
+                            new_callable=AsyncMock,
+                        ) as mock_extract:
+                            result = await process_document(
+                                DocumentProcessRequest(file_path=str(pdf_path), extract_figures=True)
+                            )
+
+        mock_get_client.assert_not_called()
+        mock_odl.assert_called_once_with(pdf_path)
+        mock_figures.assert_called_once_with(pdf_path)
+        mock_extract.assert_not_called()
+        assert result.structured_data is structured
+        assert result.total_pages == 2
+        assert result.full_text.strip() == "Intro\nBody"
+        assert result.pages[1].bboxes[0].page == 2
+        assert result.pages[1].bboxes[0].x1 == 100
+
+    @pytest.mark.asyncio
+    async def test_process_document_default_pdf_uses_ocr_client(self, tmp_path, monkeypatch):
+        """Default PDF processing should keep the existing OCR-server path."""
+        from src.models.document import DocumentProcessRequest, OCRResult, PageOCRResult
+        from src.services.document_client import process_document
+
+        pdf_path = tmp_path / "default.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        monkeypatch.delenv("PDF_EXTRACTOR", raising=False)
+        monkeypatch.delenv("ORCHESTRATOR_ODL_STRUCTURED", raising=False)
+
+        mock_client = MagicMock()
+        mock_client.ocr_pdf = AsyncMock(
+            return_value=OCRResult(
+                pages=[PageOCRResult(page=1, text="OCR text", bboxes=[])],
+                total_pages=1,
+                elapsed_sec=0.1,
+                pages_per_sec=10.0,
+            )
+        )
+
+        with patch("src.services.document_client.get_document_client", return_value=mock_client):
+            with patch("src.services.pdf_router.PDFRouter.extract", new_callable=AsyncMock) as mock_extract:
+                result = await process_document(DocumentProcessRequest(file_path=str(pdf_path)))
+
+        mock_client.ocr_pdf.assert_awaited_once()
+        mock_extract.assert_not_called()
+        assert result.full_text == "OCR text"
+
 
 # =============================================================================
 # Test Document Preprocessor

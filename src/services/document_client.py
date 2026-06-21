@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from src.models.document import (
+    BoundingBox,
     DocumentProcessRequest,
     OCRResult,
     PageOCRResult,
@@ -40,6 +41,91 @@ DEFAULT_OCR_URL = _get_config().server_urls.ocr_server
 SINGLE_PAGE_TIMEOUT = _get_config().timeouts.ocr_single_page
 PDF_TIMEOUT = _get_config().timeouts.ocr_pdf
 HEALTH_CHECK_TIMEOUT = _get_config().timeouts.health_check
+
+
+def _use_local_structured_pdf_extractor() -> bool:
+    """Return whether local ODL structured PDF extraction is explicitly enabled."""
+    import os
+
+    return (
+        os.environ.get("PDF_EXTRACTOR", "pdftotext").lower() == "opendataloader"
+        and os.environ.get("ORCHESTRATOR_ODL_STRUCTURED", "0") == "1"
+    )
+
+
+def _pdf_page_count(pdf_path: Path) -> int:
+    try:
+        import fitz
+    except ImportError:
+        return 0
+
+    try:
+        doc = fitz.open(str(pdf_path))
+        page_count = len(doc)
+        doc.close()
+        return page_count
+    except Exception as e:
+        logger.debug("Failed to get PDF page count for %s: %s", pdf_path, e)
+        return 0
+
+
+def _extract_local_structured_pdf(path: Path, *, extract_figures: bool) -> object:
+    """Run the explicit local ODL structured path without OCR fallback."""
+    from src.services.pdf_router import PDFExtractionResult, PDFRouter
+
+    router = PDFRouter()
+    text, structured_data, latency_ms = router._extract_with_opendataloader_structured(path)
+    figures = router._extract_figures_pymupdf(path) if extract_figures else []
+    return PDFExtractionResult(
+        text=text,
+        figures=figures,
+        page_count=_pdf_page_count(path),
+        method="opendataloader_structured",
+        latency_ms=latency_ms,
+        ocr_required=False,
+        structured_data=structured_data,
+    )
+
+
+def _ocr_result_from_pdf_extraction(result: object) -> OCRResult:
+    """Adapt PDF extraction output into the OCRResult shape used downstream."""
+    figures = list(getattr(result, "figures", []) or [])
+    max_figure_page = max((int(getattr(figure.bbox, "page", 1) or 1) for figure in figures), default=1)
+    page_count = max(int(getattr(result, "page_count", 0) or 0), max_figure_page, 1)
+    bboxes_by_page: dict[int, list[BoundingBox]] = {page: [] for page in range(1, page_count + 1)}
+
+    for figure in figures:
+        bbox = figure.bbox
+        page = max(int(getattr(bbox, "page", 1) or 1), 1)
+        bboxes_by_page.setdefault(page, []).append(
+            BoundingBox(
+                id=int(getattr(figure, "index", len(bboxes_by_page.get(page, [])) + 1)),
+                x1=round(float(getattr(bbox, "x0", 0.0)) * 1000),
+                y1=round(float(getattr(bbox, "y0", 0.0)) * 1000),
+                x2=round(float(getattr(bbox, "x1", 0.0)) * 1000),
+                y2=round(float(getattr(bbox, "y1", 0.0)) * 1000),
+                normalized=True,
+                page=page,
+            )
+        )
+
+    pages = [
+        PageOCRResult(
+            page=page,
+            text=getattr(result, "text", "") if page == 1 else "",
+            bboxes=bboxes_by_page.get(page, []),
+        )
+        for page in range(1, page_count + 1)
+    ]
+
+    elapsed_sec = float(getattr(result, "latency_ms", 0.0) or 0.0) / 1000.0
+    return OCRResult(
+        pages=pages,
+        total_pages=page_count,
+        elapsed_sec=elapsed_sec,
+        pages_per_sec=(page_count / elapsed_sec) if elapsed_sec > 0 else 0.0,
+        structured_data=getattr(result, "structured_data", None),
+    )
 
 
 class OCRServerError(Exception):
@@ -352,8 +438,6 @@ async def process_document(request: DocumentProcessRequest) -> OCRResult:
     Returns:
         OCRResult with processed pages.
     """
-    client = get_document_client()
-
     if request.file_path is None and request.file_base64 is None:
         raise ValueError("Either file_path or file_base64 must be provided")
 
@@ -362,6 +446,14 @@ async def process_document(request: DocumentProcessRequest) -> OCRResult:
         ext = path.suffix.lower()
 
         if ext == ".pdf":
+            if _use_local_structured_pdf_extractor():
+                result = _extract_local_structured_pdf(
+                    path,
+                    extract_figures=request.extract_figures,
+                )
+                return _ocr_result_from_pdf_extraction(result)
+
+            client = get_document_client()
             # Use server-side PDF processing (faster, handles parallelism internally)
             return await client.ocr_pdf(
                 path,
@@ -372,6 +464,7 @@ async def process_document(request: DocumentProcessRequest) -> OCRResult:
             # Single image
             from PIL import Image
 
+            client = get_document_client()
             image = Image.open(path)
             page_result = await client.ocr_image(image, request.output_format)
             return OCRResult(
@@ -385,6 +478,7 @@ async def process_document(request: DocumentProcessRequest) -> OCRResult:
 
     else:
         # Base64 encoded image
+        client = get_document_client()
         image_bytes = base64.b64decode(request.file_base64)
         page_result = await client.ocr_image(image_bytes, request.output_format)
         return OCRResult(
