@@ -397,24 +397,53 @@ class StrategyStore:
         self._conn.commit()
         return conv_id
 
-    def list_conventions(self) -> list[dict[str, Any]]:
+    def list_conventions(
+        self,
+        *,
+        journal: Any | None = None,
+        excluded_trial_ids: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """List promoted conventions, optionally through folded-journal evidence.
+
+        Convention rows are a generated strategy view. When a folded journal is
+        supplied, conventions whose evidence includes superseded, failed, or
+        learning-excluded trials are omitted rather than surfaced to audits or
+        dashboards as live guidance.
+        """
+        excluded = set(excluded_trial_ids or set())
+        if journal is not None:
+            excluded.update(excluded_strategy_evidence_trial_ids(journal))
+
         rows = self._conn.execute(
             "SELECT id, representative, member_ids, compression_ratio, span_trials, "
             "evidence_trial_ids, promoted_at "
             "FROM strategy_conventions ORDER BY promoted_at DESC"
         ).fetchall()
-        return [
-            {
+        conventions: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                evidence_trial_ids = json.loads(r["evidence_trial_ids"] or "[]")
+            except (TypeError, json.JSONDecodeError):
+                evidence_trial_ids = []
+            normalized_evidence_trial_ids: list[int] = []
+            for tid in evidence_trial_ids:
+                try:
+                    normalized_evidence_trial_ids.append(int(tid))
+                except (TypeError, ValueError):
+                    continue
+            evidence_trial_ids = normalized_evidence_trial_ids
+            if excluded and excluded.intersection(evidence_trial_ids):
+                continue
+            conventions.append({
                 "id": r["id"],
                 "representative": r["representative"],
                 "member_ids": json.loads(r["member_ids"]),
                 "compression_ratio": r["compression_ratio"],
                 "span_trials": json.loads(r["span_trials"]),
-                "evidence_trial_ids": json.loads(r["evidence_trial_ids"] or "[]"),
+                "evidence_trial_ids": evidence_trial_ids,
                 "promoted_at": r["promoted_at"],
-            }
-            for r in rows
-        ]
+            })
+        return conventions
 
     def update_validity(
         self,

@@ -629,6 +629,37 @@ class TestAP32InsightFormat:
         assert excluded_id not in finding_ids
         assert kept_id in finding_ids
 
+    def test_list_conventions_skips_folded_journal_excluded_evidence(self, store):
+        excluded_id = store.add_convention(
+            representative="excluded convention",
+            member_ids=["a", "b"],
+            compression_ratio=0.25,
+            span_trials=(10, 11),
+            evidence_trial_ids=[10, 11],
+        )
+        kept_id = store.add_convention(
+            representative="kept convention",
+            member_ids=["c", "d"],
+            compression_ratio=0.30,
+            span_trials=(12, 13),
+            evidence_trial_ids=[12, 13],
+        )
+
+        class FakeJournal:
+            def entries_with_supersessions(self):
+                return [
+                    SimpleNamespace(trial_id=11, bug_corrupted_by="superseded"),
+                ]
+
+        default_ids = {item["id"] for item in store.list_conventions()}
+        filtered_ids = {
+            item["id"]
+            for item in store.list_conventions(journal=FakeJournal())
+        }
+
+        assert default_ids == {excluded_id, kept_id}
+        assert filtered_ids == {kept_id}
+
 
 class TestAP28HybridRetrieval:
     """AP-28: FTS5 + RRF fusion, content-hash staleness, validity weighting."""
