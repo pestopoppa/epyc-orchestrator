@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 PRIVATE_FIELDS = {"prompt", "expected", "reference", "response", "answer"}
 LABEL_OPTIONS = ("equivalent", "not_equivalent", "needs_semantic_judge")
+MANUAL_LABEL_SCHEMA = "answer_equivalence_manual_label.v1"
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -161,6 +162,52 @@ def _seed_label(*, source_passed: Any, disagreement_type: str) -> dict[str, str 
     }
 
 
+def load_manual_labels(path: Path | None) -> dict[str, dict[str, Any]]:
+    if path is None:
+        return {}
+    rows = load_jsonl(path)
+    labels: dict[str, dict[str, Any]] = {}
+    for line_number, row in enumerate(rows, start=1):
+        item_id = str(row.get("item_id") or "")
+        if not item_id:
+            raise SystemExit(f"{path}:{line_number}: missing item_id")
+        if item_id in labels:
+            raise SystemExit(f"{path}:{line_number}: duplicate item_id={item_id!r}")
+        manual_label = row.get("manual_label")
+        if manual_label not in ("equivalent", "not_equivalent"):
+            raise SystemExit(
+                f"{path}:{line_number}: manual_label must be equivalent or not_equivalent"
+            )
+        for field in PRIVATE_FIELDS:
+            if field in row:
+                raise SystemExit(f"{path}:{line_number}: manual label includes private field {field}")
+        if "review_rationale" in row:
+            raise SystemExit(f"{path}:{line_number}: use review_note_code, not review_rationale")
+        labels[item_id] = row
+    return labels
+
+
+def _apply_manual_label(
+    row: dict[str, Any],
+    labels: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    label = labels.get(str(row.get("item_id") or ""))
+    if label is None:
+        return row
+    manual_label = str(label["manual_label"])
+    updated = dict(row)
+    updated["manual_label"] = manual_label
+    updated["semantic_label"] = manual_label
+    updated["final_label"] = manual_label
+    updated["label_source"] = str(label.get("label_source") or "manual_review")
+    updated["label_status"] = str(label.get("label_status") or "manual_reviewed")
+    if label.get("review_note_code"):
+        updated["review_note_code"] = str(label["review_note_code"])
+    if label.get("schema_version"):
+        updated["manual_label_schema_version"] = str(label["schema_version"])
+    return updated
+
+
 def _public_manifest_row(private_row: dict[str, Any]) -> dict[str, Any]:
     row = {key: value for key, value in private_row.items() if key not in PRIVATE_FIELDS}
     row["schema_version"] = "answer_equivalence_review_manifest.v1"
@@ -203,6 +250,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
     lines.extend(["", "## Label Status", "", "| Status | Rows |", "|---|---:|"])
     for key, value in summary["by_label_status"].items():
         lines.append(f"| `{key}` | {value} |")
+    lines.extend(["", "## Final Labels", "", "| Label | Rows |", "|---|---:|"])
+    for key, value in summary["by_final_label"].items():
+        lines.append(f"| `{key}` | {value} |")
     lines.extend(["", "## Suites", "", "| Suite | Rows |", "|---|---:|"])
     for key, value in summary["by_suite"].items():
         lines.append(f"| `{key}` | {value} |")
@@ -226,24 +276,37 @@ def prepare_review(
     public_manifest_jsonl: Path,
     summary_json: Path,
     summary_md: Path,
+    manual_labels: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    private_rows = [_private_review_row(row) for row in disagreement_rows]
+    labels = manual_labels or {}
+    private_rows = [_apply_manual_label(_private_review_row(row), labels) for row in disagreement_rows]
     public_rows = [_public_manifest_row(row) for row in private_rows]
+    missing = sorted(set(labels) - {str(row.get("item_id") or "") for row in private_rows})
+    if missing:
+        raise SystemExit(f"manual labels do not match review rows: {', '.join(missing)}")
     write_jsonl(private_review_jsonl, private_rows)
     write_jsonl(public_manifest_jsonl, public_rows)
     by_type = Counter(row["disagreement_type"] for row in public_rows)
     by_suite = Counter(str(row.get("suite") or "unknown") for row in public_rows)
     by_role = Counter(str(row.get("role_key") or "unknown") for row in public_rows)
     by_label_status = Counter(str(row.get("label_status") or "unknown") for row in public_rows)
+    by_final_label = Counter(str(row.get("final_label") or "unlabeled") for row in public_rows)
+    status = (
+        "labeling_complete"
+        if by_final_label.get("unlabeled", 0) == 0
+        else "ready_for_manual_or_judge_labeling"
+    )
     summary = {
         "schema_version": "answer_equivalence_review_packet.v1",
-        "status": "ready_for_manual_or_judge_labeling",
+        "status": status,
         "review_rows": len(private_rows),
+        "manual_label_rows": len(labels),
         "private_review_jsonl": str(private_review_jsonl),
         "public_manifest_jsonl": str(public_manifest_jsonl),
         "label_options": list(LABEL_OPTIONS),
         "by_disagreement_type": dict(sorted(by_type.items())),
         "by_label_status": dict(sorted(by_label_status.items())),
+        "by_final_label": dict(sorted(by_final_label.items())),
         "by_suite": dict(sorted(by_suite.items())),
         "by_role": dict(sorted(by_role.items())),
         "privacy": {
@@ -264,15 +327,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--public-manifest-jsonl", type=Path, required=True)
     parser.add_argument("--summary-json", type=Path, required=True)
     parser.add_argument("--summary-md", type=Path, required=True)
+    parser.add_argument("--manual-labels-jsonl", type=Path)
     args = parser.parse_args(argv)
 
     rows = load_jsonl(args.disagreements_jsonl)
+    manual_labels = load_manual_labels(args.manual_labels_jsonl)
     summary = prepare_review(
         rows,
         private_review_jsonl=args.private_review_jsonl,
         public_manifest_jsonl=args.public_manifest_jsonl,
         summary_json=args.summary_json,
         summary_md=args.summary_md,
+        manual_labels=manual_labels,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

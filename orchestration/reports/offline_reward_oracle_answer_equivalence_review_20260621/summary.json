@@ -3,8 +3,12 @@
     "current_negative_deterministically_equivalent": 5,
     "current_positive_not_deterministically_reconstructable": 43
   },
+  "by_final_label": {
+    "equivalent": 47,
+    "not_equivalent": 1
+  },
   "by_label_status": {
-    "needs_semantic_judge": 5,
+    "manual_reviewed": 5,
     "seeded": 43
   },
   "by_role": {
@@ -25,6 +29,7 @@
     "not_equivalent",
     "needs_semantic_judge"
   ],
+  "manual_label_rows": 5,
   "privacy": {
     "private_packet_committable": false,
     "public_manifest_excludes": [
@@ -39,5 +44,5 @@
   "public_manifest_jsonl": "orchestration/reports/offline_reward_oracle_answer_equivalence_review_20260621/manifest.jsonl",
   "review_rows": 48,
   "schema_version": "answer_equivalence_review_packet.v1",
-  "status": "ready_for_manual_or_judge_labeling"
+  "status": "labeling_complete"
 }
