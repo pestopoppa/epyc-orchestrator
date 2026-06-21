@@ -1,0 +1,58 @@
+{
+  "action_counts": {
+    "0": 224,
+    "1": 10,
+    "2": 88
+  },
+  "action_positive_counts": {
+    "0": 142,
+    "1": 2,
+    "2": 17
+  },
+  "best_softmax_baseline_name": "softmax_taken",
+  "brier_delta_vs_best_softmax_baseline": 0.10084684193134308,
+  "brier_delta_vs_constant_baseline": 0.04122461378574371,
+  "classifier_data_path": null,
+  "classifier_feature_source": "verifier_npz:Z_feature_prefix",
+  "classifier_weights_path": "orchestration/repl_memory/routing_classifier_weights.npz",
+  "constant_base_rate": {
+    "brier": 0.247802734375
+  },
+  "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data.npz",
+  "feature_dim": 1031,
+  "gates": {
+    "auc_ge_0_75": true,
+    "brier_delta_ge_0_02": true,
+    "ece_le_0_05": false,
+    "pass": false
+  },
+  "history_final": {
+    "train_loss": 0.6935403645038605,
+    "val_acc": 0.703125,
+    "val_loss": 0.6048212051391602
+  },
+  "n_actions": 10,
+  "negative_rows": 161,
+  "output_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_weights.npz",
+  "positive_rows": 161,
+  "rows": 322,
+  "schema_version": "verifier_head_eval.v1",
+  "softmax_max": {
+    "auc": 0.5438423645320197,
+    "brier": 0.32766273617744446,
+    "ece": 0.2551316632889211
+  },
+  "softmax_taken": {
+    "auc": 0.6866995073891625,
+    "brier": 0.30742496252059937,
+    "ece": 0.307994497474283
+  },
+  "val_positive_rate": 0.546875,
+  "val_rows": 64,
+  "verifier": {
+    "acc": 0.703125,
+    "auc": 0.8916256157635468,
+    "brier": 0.2065781205892563,
+    "ece": 0.17834803042933345
+  }
+}

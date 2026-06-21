@@ -39,6 +39,11 @@ Committed artifacts:
   baseline but not against the constant base-rate baseline, and ROC-AUC/ECE miss
   the A2 gates. The generated weights are intentionally not adopted as live
   routing weights.
+- `offline_reward_multi_action_verifier_eval_summary.json` and
+  `offline_reward_multi_action_verifier_eval_summary.md` record the broader
+  multi-action verifier train/eval attempt on the same NPZ. The run is promising
+  but still not promotable: Brier and ROC-AUC pass, but ECE misses the gate. The
+  generated weights are intentionally not adopted as live routing weights.
 
 Private row data is not committed. The scored row file is:
 
@@ -71,6 +76,11 @@ Result:
 - frontdoor verifier Brier / ROC-AUC / ECE: `0.2415` / `0.7478` / `0.1465`
 - frontdoor verifier Brier delta vs best softmax / constant baseline: `+0.0298` / `-0.0101`
 - frontdoor verifier gate verdict: `FAIL`
+- multi-action verifier rows: `322`
+- multi-action verifier validation rows: `64`
+- multi-action verifier Brier / ROC-AUC / ECE: `0.2066` / `0.8916` / `0.1783`
+- multi-action verifier Brier delta vs best softmax / constant baseline: `+0.1008` / `+0.0412`
+- multi-action verifier gate verdict: `FAIL`
 
 Interpretation:
 
@@ -82,6 +92,7 @@ baseline for reference-grounded answer-equivalence targets, not as a serve-time
 routing feature.
 
 The verifier NPZ is still offline preparation, not a serve-time routing change.
-The first frontdoor-specialist train/eval from this NPZ failed the A2 gates, so
-the current next step is scorer/data/model improvement or a broader reward-signal
-consumer evaluation before any default-off runtime gate changes.
+The first frontdoor-specialist train/eval from this NPZ failed the A2 gates. A
+broader multi-action verifier improves substantially on Brier and ROC-AUC, but
+misses calibration, so the current next step is calibration/data improvement
+before any default-off runtime gate changes.

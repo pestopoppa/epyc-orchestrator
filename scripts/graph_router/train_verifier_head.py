@@ -29,9 +29,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -91,10 +93,43 @@ def _reliability(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> Non
         print(f"[{lo:.2f},{hi:.2f}]   {n:>8} {mean_p:>10.3f} {frac_pos:>10.3f} {gap:>10.3f}")
 
 
+def _load_classifier_features(
+    classifier_data_path: Path | None,
+    verifier_npz: Any,
+    Z: np.ndarray,
+    feature_dim: int,
+    expected_rows: int,
+) -> tuple[np.ndarray, str]:
+    if classifier_data_path is not None:
+        raw = np.load(classifier_data_path, allow_pickle=True)
+        if "X" in raw.files:
+            X_raw = raw["X"].astype(np.float32)
+            if X_raw.shape[0] != expected_rows:
+                raise SystemExit(
+                    f"classifier-data row count {X_raw.shape[0]} does not match verifier rows {expected_rows}"
+                )
+            return X_raw, f"{classifier_data_path}:X"
+        logger.info(
+            "Classifier data %s has no X matrix; using verifier feature prefix",
+            classifier_data_path,
+        )
+
+    if "X" in verifier_npz.files:
+        X_raw = verifier_npz["X"].astype(np.float32)
+        if X_raw.shape[0] != expected_rows:
+            raise SystemExit(
+                f"verifier X row count {X_raw.shape[0]} does not match verifier rows {expected_rows}"
+            )
+        return X_raw, f"{classifier_data_path or 'verifier_npz'}:X"
+
+    source = f"{classifier_data_path}:Z_feature_prefix" if classifier_data_path else "verifier_npz:Z_feature_prefix"
+    return Z[:, :feature_dim].astype(np.float32), source
+
+
 def train_and_eval(
     data_path: Path,
     classifier_weights_path: Path,
-    classifier_data_path: Path,
+    classifier_data_path: Path | None,
     output_path: Path,
     epochs: int = 100,
     lr: float = 0.05,
@@ -110,7 +145,6 @@ def train_and_eval(
     correct = d["correct"].astype(np.float32)
     sample_weights = d["sample_weights"].astype(np.float32)
     actions = d["actions"].astype(np.int64)
-    q_weights = d["q_weights"].astype(np.float32)
     feature_dim = int(d["feature_dim"])
     n_actions = int(d["n_actions"])
     N = Z.shape[0]
@@ -161,8 +195,14 @@ def train_and_eval(
     clf = RoutingClassifier.load(classifier_weights_path)
     if clf is None:
         raise SystemExit(f"Failed to load classifier weights from {classifier_weights_path}")
-    raw = np.load(classifier_data_path, allow_pickle=True)
-    X_raw = raw["X"].astype(np.float32)
+    if len(actions_val) and int(actions_val.max()) >= clf.n_actions:
+        raise SystemExit(
+            f"classifier has {clf.n_actions} actions but validation labels include action "
+            f"{int(actions_val.max())}"
+        )
+    X_raw, classifier_feature_source = _load_classifier_features(
+        classifier_data_path, d, Z, feature_dim, N
+    )
     # ── Critical: align the val split.  The verifier extractor preserves row
     # order, so val_idx (computed above) indexes the same rows in X_raw.
     X_val = X_raw[val_idx]
@@ -199,6 +239,7 @@ def train_and_eval(
     base_brier = min(brier_sm_taken, brier_sm_max)
     base_brier_name = "softmax_taken" if brier_sm_taken < brier_sm_max else "softmax_max"
     brier_delta = base_brier - brier_verifier   # positive = improvement
+    brier_delta_constant = brier_base - brier_verifier
     print(
         f"\nGates (P6.2.5):\n"
         f"  ΔBrier vs best baseline ({base_brier_name}): {brier_delta:+.4f}  (gate: ≥ +0.02)  "
@@ -216,14 +257,70 @@ def train_and_eval(
     verifier.save(output_path)
 
     return {
+        "schema_version": "verifier_head_eval.v1",
+        "data_path": str(data_path),
+        "classifier_weights_path": str(classifier_weights_path),
+        "classifier_data_path": str(classifier_data_path) if classifier_data_path else None,
+        "classifier_feature_source": classifier_feature_source,
+        "output_path": str(output_path),
+        "rows": int(N),
+        "val_rows": int(len(y_val)),
+        "feature_dim": int(feature_dim),
+        "n_actions": int(n_actions),
+        "positive_rows": int(correct.sum()),
+        "negative_rows": int(N - int(correct.sum())),
+        "val_positive_rate": float(y_val.mean()),
+        "action_counts": {
+            str(action): int((actions == action).sum())
+            for action in sorted(set(int(a) for a in actions.tolist()))
+        },
+        "action_positive_counts": {
+            str(action): int(correct[actions == action].sum())
+            for action in sorted(set(int(a) for a in actions.tolist()))
+        },
+        "best_softmax_baseline_name": base_brier_name,
         "verifier": {"brier": brier_verifier, "auc": auc_verifier, "ece": ece_verifier, "acc": acc_verifier},
         "softmax_taken": {"brier": brier_sm_taken, "auc": auc_sm_taken, "ece": ece_sm_taken},
         "softmax_max": {"brier": brier_sm_max, "auc": auc_sm_max, "ece": ece_sm_max},
-        "base_brier": brier_base,
-        "gates": {"brier_delta": brier_delta, "auc": auc_verifier, "ece": ece_verifier, "pass": all_pass},
+        "constant_base_rate": {"brier": brier_base},
+        "brier_delta_vs_best_softmax_baseline": brier_delta,
+        "brier_delta_vs_constant_baseline": brier_delta_constant,
+        "gates": {
+            "brier_delta_ge_0_02": bool(brier_delta >= 0.02),
+            "auc_ge_0_75": bool(auc_verifier >= 0.75),
+            "ece_le_0_05": bool(ece_verifier <= 0.05),
+            "pass": bool(all_pass),
+        },
         "history_final": {k: v[-1] for k, v in history.items()},
-        "output_path": str(output_path),
     }
+
+
+def _summary_markdown(summary: dict) -> str:
+    verifier = summary["verifier"]
+    lines = [
+        "# Offline Multi-Action Verifier Evaluation",
+        "",
+        f"- Data: `{summary['data_path']}`",
+        f"- Output weights: `{summary['output_path']}`",
+        f"- Classifier feature source: `{summary['classifier_feature_source']}`",
+        f"- Rows: `{summary['rows']}` ({summary['positive_rows']} positive / {summary['negative_rows']} negative)",
+        f"- Validation rows: `{summary['val_rows']}`",
+        f"- Actions represented: `{summary['action_counts']}`",
+        f"- Brier: `{verifier['brier']:.4f}`",
+        f"- ROC-AUC: `{verifier['auc']:.4f}`",
+        f"- ECE: `{verifier['ece']:.4f}`",
+        f"- Accuracy@0.5: `{verifier['acc']:.4f}`",
+        f"- Delta Brier vs best softmax baseline: "
+        f"`{summary['brier_delta_vs_best_softmax_baseline']:+.4f}`",
+        f"- Delta Brier vs constant base-rate baseline: "
+        f"`{summary['brier_delta_vs_constant_baseline']:+.4f}`",
+        f"- Gates passed: `{summary['gates']['pass']}`",
+        "",
+        "This is an offline evaluation artifact. It is not a live verifier",
+        "weight promotion and does not enable the verifier gate.",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def main():
@@ -232,26 +329,39 @@ def main():
                         help="Verifier training NPZ (from extract_verifier_training_data.py)")
     parser.add_argument("--classifier-weights", type=str, required=True,
                         help="Classifier weights NPZ for softmax-baseline comparison")
-    parser.add_argument("--classifier-data", type=str, required=True,
-                        help="Classifier training NPZ (must be row-aligned with the verifier NPZ)")
+    parser.add_argument("--classifier-data", type=str,
+                        help=(
+                            "Classifier training NPZ. If omitted or if it has no X matrix, "
+                            "use the verifier NPZ feature prefix for the classifier baseline."
+                        ))
     parser.add_argument("--output", type=str, required=True,
                         help="Output path for trained verifier weights")
+    parser.add_argument("--summary-json", type=str)
+    parser.add_argument("--summary-md", type=str)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--patience", type=int, default=20)
     args = parser.parse_args()
 
-    train_and_eval(
+    summary = train_and_eval(
         data_path=Path(args.data),
         classifier_weights_path=Path(args.classifier_weights),
-        classifier_data_path=Path(args.classifier_data),
+        classifier_data_path=Path(args.classifier_data) if args.classifier_data else None,
         output_path=Path(args.output),
         epochs=args.epochs,
         lr=args.lr,
         batch_size=args.batch_size,
         patience=args.patience,
     )
+    if args.summary_json:
+        path = Path(args.summary_json)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.summary_md:
+        path = Path(args.summary_md)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_summary_markdown(summary), encoding="utf-8")
 
 
 if __name__ == "__main__":
