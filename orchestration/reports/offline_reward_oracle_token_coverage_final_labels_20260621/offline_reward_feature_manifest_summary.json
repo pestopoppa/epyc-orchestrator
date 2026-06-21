@@ -1,0 +1,47 @@
+{
+  "feature_contract": {
+    "embedding_dim_required": 1024,
+    "engineered_feature_dim": 7,
+    "engineered_features": [
+      "task_type_onehot[5]",
+      "log1p(context_length)/12.0",
+      "has_images"
+    ],
+    "next_step": "embed source prompt/context text for each row, append engineered features, then join to oracle_binary_label by join_key"
+  },
+  "feature_row_schema_version": "offline_reward_feature_input.v1",
+  "labels_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_labels.jsonl",
+  "privacy": {
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "roles": {
+    "architect_general": 10,
+    "coder_escalation": 45,
+    "coder_primary": 43,
+    "frontdoor": 43,
+    "frontdoor:direct": 181
+  },
+  "rows": 322,
+  "schema_version": "offline_reward_feature_manifest_summary.v1",
+  "sources": {
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_203724.jsonl": 181,
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_seed42.json": 141
+  },
+  "suites": {
+    "agentic": 2,
+    "debugbench": 85,
+    "general": 31,
+    "instruction_precision": 42,
+    "livecodebench": 96,
+    "math": 31,
+    "thinking": 35
+  },
+  "unique_source_records": 89
+}

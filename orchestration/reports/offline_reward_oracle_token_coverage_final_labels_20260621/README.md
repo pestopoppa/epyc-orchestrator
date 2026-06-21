@@ -18,6 +18,12 @@ Committed artifacts:
   derived from the adoption manifest plus the private scored rows. These files
   carry `oracle_binary_label` at threshold `0.86` and exclude prompt/reference/
   response text.
+- `offline_reward_feature_manifest.jsonl`,
+  `offline_reward_feature_manifest_summary.json`, and
+  `offline_reward_feature_manifest_summary.md` are the prompt-free source/role
+  feature-input join manifest for downstream NEXT-A2/A3 embedding extraction.
+  They validate each exported label against its source benchmark record and
+  represent prompt/expected/answer text only with SHA-256 hashes and lengths.
 
 Private row data is not committed. The scored row file is:
 
@@ -37,6 +43,9 @@ Result:
 - decision gate: `decision_grade`
 - exported oracle positives / negatives: `161` / `161`
 - exported label target agreement: `0.9410`
+- feature manifest rows: `322`
+- feature manifest unique source records: `89`
+- feature manifest index base: `one_based` for all rows
 
 Interpretation:
 
@@ -46,3 +55,8 @@ unique lowercase alphanumeric/underscore reference tokens present in the
 response divided by unique reference tokens. Treat it as an evidence-backed
 baseline for reference-grounded answer-equivalence targets, not as a serve-time
 routing feature.
+
+The feature manifest is still offline preparation, not a verifier model or
+serve-time routing change. The next integration step is an embedding/NPZ
+extractor that consumes the manifest, embeds the source prompt/context rows,
+appends the documented 7 engineered features, and joins labels by `join_key`.
