@@ -166,6 +166,7 @@ class OCRResult:
     failed_pages: list[dict[str, Any]] = field(default_factory=list)
     job_id: str | None = None
     status: ProcessingStatus = ProcessingStatus.COMPLETED
+    structured_data: object | None = None
 
     @property
     def success_rate(self) -> float:
@@ -210,6 +211,7 @@ class OCRResult:
             failed_pages=data.get("failed_pages", []),
             job_id=data.get("job_id"),
             status=status,
+            structured_data=data.get("structured_data"),
         )
 
     def to_cache_dict(self) -> dict[str, Any]:
@@ -222,6 +224,7 @@ class OCRResult:
             "failed_pages": self.failed_pages,
             "job_id": self.job_id,
             "status": self.status.value,
+            "structured_data": self.structured_data,
         }
 
     @classmethod
@@ -235,6 +238,7 @@ class OCRResult:
             failed_pages=data.get("failed_pages", []),
             job_id=data.get("job_id"),
             status=ProcessingStatus(data.get("status", "completed")),
+            structured_data=data.get("structured_data"),
         )
 
 

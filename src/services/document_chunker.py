@@ -242,25 +242,41 @@ class DocumentChunker:
         self,
         ocr_result: OCRResult,
         original_path: str,
+        structured_doc: object | None = None,
     ) -> DocumentPreprocessResult:
         """Process an OCR result into chunked sections and figures.
 
         Args:
             ocr_result: OCR result to process.
             original_path: Original document path.
+            structured_doc: Optional ODL structured payload used for heading-
+                aware chunking when available.
 
         Returns:
             DocumentPreprocessResult with sections and figures.
         """
         import time
+        from src.models.odl_structured import coerce_structured_document
 
         start_time = time.time()
 
         # Get full text
         full_text = ocr_result.full_text
 
-        # Chunk by headers
-        sections = self.chunk_by_headers(full_text)
+        # Prefer ODL heading hierarchy when present; fall back to the
+        # existing regex splitter if the structured payload is absent or
+        # does not align with the extracted text.
+        structured = coerce_structured_document(structured_doc)
+        if structured and structured.headings:
+            sections = chunk_by_odl_headings(
+                full_text,
+                structured,
+                max_section_length=self.config.max_section_length,
+            )
+            if len(sections) == 1 and sections[0].title == "(unstructured)" and sections[0].content == full_text:
+                sections = self.chunk_by_headers(full_text)
+        else:
+            sections = self.chunk_by_headers(full_text)
 
         # Assign page ranges
         self.assign_page_ranges(sections, ocr_result)
@@ -305,6 +321,7 @@ def chunk_document(
     ocr_result: OCRResult,
     original_path: str,
     config: ChunkingConfig | None = None,
+    structured_doc: object | None = None,
 ) -> DocumentPreprocessResult:
     """Convenience function to chunk a document.
 
@@ -312,6 +329,8 @@ def chunk_document(
         ocr_result: OCR result to chunk.
         original_path: Original document path.
         config: Optional chunking configuration.
+        structured_doc: Optional ODL structured payload used for heading-
+            aware chunking when available.
 
     Returns:
         DocumentPreprocessResult with sections and figures.
@@ -321,7 +340,7 @@ def chunk_document(
     else:
         chunker = get_document_chunker()
 
-    return chunker.process(ocr_result, original_path)
+    return chunker.process(ocr_result, original_path, structured_doc=structured_doc)
 
 
 # ─── ODL-driven structural chunking (Phase 2 additive helper) ─────────────────

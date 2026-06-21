@@ -215,6 +215,7 @@ class FigureAnalyzer:
         self,
         image_base64: str,
         figure_id: str,
+        vl_prompt: str | None = None,
     ) -> str:
         """Send a single figure to the vision API for analysis.
 
@@ -233,7 +234,7 @@ class FigureAnalyzer:
                 json={
                     "image_base64": image_base64,
                     "analyzers": ["vl_describe"],
-                    "vl_prompt": self.vl_prompt,
+                    "vl_prompt": vl_prompt or self.vl_prompt,
                     "store_results": False,  # Don't store in vision DB
                 },
             )
@@ -264,6 +265,7 @@ class FigureAnalyzer:
         pdf_path: str | Path,
         figures: list[FigureRef],
         dpi: int = 200,
+        figure_contexts: list["FigureContext"] | None = None,
     ) -> list[FigureRef]:
         """Analyze all figures in a document.
 
@@ -271,6 +273,8 @@ class FigureAnalyzer:
             pdf_path: Path to the PDF document.
             figures: List of FigureRef objects with bboxes.
             dpi: Resolution for page rendering.
+            figure_contexts: Optional ODL figure contexts aligned to the
+                figures list (by 1-indexed figure_index when available).
 
         Returns:
             List of FigureRef objects with descriptions populated.
@@ -287,6 +291,12 @@ class FigureAnalyzer:
         figures_by_page: dict[int, list[tuple[int, FigureRef]]] = defaultdict(list)
         for idx, fig in enumerate(figures):
             figures_by_page[fig.page].append((idx, fig))
+
+        context_by_index = {
+            ctx.figure_index: ctx
+            for ctx in (figure_contexts or [])
+            if ctx is not None
+        }
 
         logger.info(f"Analyzing {len(figures)} figures across {len(figures_by_page)} pages")
 
@@ -309,8 +319,11 @@ class FigureAnalyzer:
                 # Optionally store the base64 in the figure
                 fig.image_base64 = image_b64
 
+                figure_context = context_by_index.get(idx + 1)
+                prompt = build_figure_prompt_with_context(self.vl_prompt, figure_context)
+
                 # Get description from vision model
-                description = await self._analyze_single_figure(image_b64, fig.id)
+                description = await self._analyze_single_figure(image_b64, fig.id, prompt)
 
                 return (idx, description)
 
@@ -371,6 +384,7 @@ async def analyze_figures(
     pdf_path: str | Path,
     figures: list[FigureRef],
     vl_prompt: str | None = None,
+    figure_contexts: list["FigureContext"] | None = None,
 ) -> list[FigureRef]:
     """Convenience function to analyze figures in a document.
 
@@ -388,8 +402,16 @@ async def analyze_figures(
         original_prompt = analyzer.vl_prompt
         analyzer.vl_prompt = vl_prompt
         try:
-            return await analyzer.analyze_figures(pdf_path, figures)
+            return await analyzer.analyze_figures(
+                pdf_path,
+                figures,
+                figure_contexts=figure_contexts,
+            )
         finally:
             analyzer.vl_prompt = original_prompt
     else:
-        return await analyzer.analyze_figures(pdf_path, figures)
+        return await analyzer.analyze_figures(
+            pdf_path,
+            figures,
+            figure_contexts=figure_contexts,
+        )

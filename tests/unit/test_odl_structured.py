@@ -10,6 +10,8 @@ Per handoffs/active/opendataloader-pipeline-integration.md Phase 2.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 # Mock mode so config loading doesn't try to reach servers.
 os.environ.setdefault("ORCHESTRATOR_MOCK_MODE", "1")
@@ -21,15 +23,17 @@ from src.models.odl_structured import (
     HeadingNode,
     ODLBoundingBox,
     ODLStructuredDocument,
-    TableContext,
+    coerce_structured_document,
     build_heading_tree,
     flatten_heading_tree,
 )
 from src.services.figure_analyzer import (
     DEFAULT_FIGURE_PROMPT,
+    FigureAnalyzer,
     build_figure_prompt_with_context,
 )
-from src.services.document_chunker import chunk_by_odl_headings, _split_long_body
+from src.services.document_chunker import DocumentChunker, chunk_by_odl_headings, _split_long_body
+from src.models.document import BoundingBox, FigureRef, OCRResult, PageOCRResult
 from src.services.pdf_router import PDFExtractionResult
 
 
@@ -95,6 +99,52 @@ def test_odl_doc_tolerates_partial_payload() -> None:
     assert doc.headings[0].text == "OK"
     assert len(doc.figures) == 1
     assert doc.figures[0].bbox.page == 1
+
+
+def test_coerce_structured_document_accepts_dict_and_instance() -> None:
+    payload = {"headings": [{"level": 1, "text": "Intro"}]}
+    doc_from_dict = coerce_structured_document(payload)
+    assert doc_from_dict is not None
+    assert doc_from_dict.headings[0].text == "Intro"
+
+    doc_from_instance = coerce_structured_document(doc_from_dict)
+    assert doc_from_instance is doc_from_dict
+    assert coerce_structured_document(None) is None
+
+
+def test_ocr_result_preserves_structured_data_payload() -> None:
+    payload = {"headings": [{"level": 1, "text": "Intro"}]}
+    result = OCRResult.from_dict(
+        {
+            "pages": [{"page": 1, "text": "Intro\nBody", "bboxes": []}],
+            "total_pages": 1,
+            "elapsed_sec": 0.0,
+            "pages_per_sec": 0.0,
+            "structured_data": payload,
+        }
+    )
+
+    assert result.structured_data == payload
+    assert result.to_cache_dict()["structured_data"] == payload
+    assert OCRResult.from_cache_dict(result.to_cache_dict()).structured_data == payload
+
+
+def test_document_preprocessor_extracts_structured_data_from_ocr_result() -> None:
+    from src.services.document_preprocessor import DocumentPreprocessor
+
+    payload = {"headings": [{"level": 1, "text": "Intro"}]}
+    ocr_result = OCRResult(
+        pages=[PageOCRResult(page=1, text="Intro\nBody", bboxes=[])],
+        total_pages=1,
+        elapsed_sec=0.0,
+        pages_per_sec=0.0,
+        structured_data=payload,
+    )
+
+    structured = DocumentPreprocessor()._extract_structured_document({}, ocr_result)
+
+    assert structured is not None
+    assert structured.headings[0].text == "Intro"
 
 
 def test_bbox_from_list_or_kwargs() -> None:
@@ -233,6 +283,32 @@ def test_chunk_by_odl_headings_subsplits_long_section() -> None:
         assert len(s.content) <= 2200  # max_chars + small slack
 
 
+def test_document_chunker_uses_structured_headings_when_available() -> None:
+    text = (
+        "Introduction\nThis is the introduction paragraph.\n\n"
+        "Results\nThe results section follows.\n"
+    )
+    ocr_result = OCRResult(
+        pages=[PageOCRResult(page=1, text=text, bboxes=[])],
+        total_pages=1,
+        elapsed_sec=0.0,
+        pages_per_sec=1.0,
+    )
+    structured_doc = ODLStructuredDocument(
+        headings=[
+            HeadingNode(level=1, text="Introduction"),
+            HeadingNode(level=1, text="Results"),
+        ]
+    )
+
+    result = DocumentChunker().process(ocr_result, "/doc.pdf", structured_doc=structured_doc)
+    titles = [section.title for section in result.sections]
+
+    assert len(result.sections) == 2
+    assert "Introduction" in titles
+    assert "Results" in titles
+
+
 def test_split_long_body_breaks_at_paragraphs() -> None:
     body = "para1\n\n" + ("para2 line. " * 200) + "\n\npara3"
     pieces = _split_long_body(body, max_chars=1000)
@@ -255,3 +331,51 @@ def test_pdf_extraction_result_carries_structured_doc() -> None:
     r = PDFExtractionResult(text="t", structured_data=doc)
     assert r.structured_data is doc
     assert r.structured_data.page_count == 2
+
+
+@pytest.mark.asyncio
+async def test_analyze_figures_uses_matching_figure_context_prompt(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "doc.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+
+    analyzer = FigureAnalyzer()
+
+    figures = [
+        FigureRef(
+            id="p1_fig0",
+            page=1,
+            bbox=BoundingBox(id=0, x1=100, y1=100, x2=500, y2=400),
+        )
+    ]
+    figure_contexts = [
+        FigureContext(
+            figure_index=1,
+            bbox=ODLBoundingBox(page=1, x0=100, y0=100, x1=500, y1=400),
+            semantic_type="chart",
+            caption="Figure 1: accuracy",
+            surrounding_text="The system improves accuracy.",
+            heading_breadcrumb=["Results", "Throughput"],
+        )
+    ]
+
+    with patch.object(analyzer, "_render_pdf_page") as mock_render, patch.object(
+        analyzer,
+        "_analyze_single_figure",
+        new=AsyncMock(return_value="A chart."),
+    ) as mock_analyze:
+        from PIL import Image
+
+        mock_render.return_value = Image.new("RGB", (1000, 1000), color="white")
+
+        result = await analyzer.analyze_figures(
+            pdf_path,
+            figures,
+            figure_contexts=figure_contexts,
+        )
+
+    assert result[0].description == "A chart."
+    prompt = mock_analyze.await_args.args[2]
+    assert "Results > Throughput" in prompt
+    assert "chart" in prompt
+    assert "Figure 1: accuracy" in prompt
+    assert "improves accuracy" in prompt

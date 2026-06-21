@@ -185,6 +185,22 @@ class ODLStructuredDocument:
         )
 
 
+def coerce_structured_document(payload: object | None) -> ODLStructuredDocument | None:
+    """Normalize a structured-context payload into an ODLStructuredDocument.
+
+    Accepts the already-parsed dataclass, a raw JSON-like dict, or `None`.
+    Returns `None` for anything else so callers can treat structured context
+    as an optional additive input.
+    """
+    if payload is None:
+        return None
+    if isinstance(payload, ODLStructuredDocument):
+        return payload
+    if isinstance(payload, dict):
+        return ODLStructuredDocument.from_json(payload)
+    return None
+
+
 def build_heading_tree(headings: list[HeadingNode]) -> list[HeadingNode]:
     """Convert a flat ordered list of headings into a tree by `level`.
 

@@ -254,6 +254,36 @@ class DocumentPreprocessor:
             return None
         return FIGURE_PROMPT_WITH_CONTEXT.format(summary=summary)
 
+    def _extract_structured_document(
+        self,
+        task_ir: dict[str, Any],
+        ocr_result: object | None = None,
+    ) -> object | None:
+        """Extract an ODL structured document from task metadata when present.
+
+        The structured payload is treated as optional additive context. It
+        may arrive directly on the task or nested under OCR/pdf result data
+        from an upstream stage.
+        """
+        structured_payload: object | None = task_ir.get("structured_data")
+
+        if structured_payload is None:
+            task_ocr_result = task_ir.get("ocr_result")
+            if isinstance(task_ocr_result, dict):
+                structured_payload = task_ocr_result.get("structured_data")
+
+        if structured_payload is None:
+            pdf_result = task_ir.get("pdf_result")
+            if isinstance(pdf_result, dict):
+                structured_payload = pdf_result.get("structured_data")
+
+        if structured_payload is None and ocr_result is not None:
+            structured_payload = getattr(ocr_result, "structured_data", None)
+
+        from src.models.odl_structured import coerce_structured_document
+
+        return coerce_structured_document(structured_payload)
+
     def needs_preprocessing(self, task_ir: dict[str, Any]) -> bool:
         """Check if a TaskIR needs document preprocessing.
 
@@ -371,6 +401,7 @@ class DocumentPreprocessor:
 
             # Run OCR
             ocr_result = await process_document(request)
+            structured_doc = self._extract_structured_document(task_ir, ocr_result)
 
             # Check for partial success
             if ocr_result.status == ProcessingStatus.PARTIAL:
@@ -392,6 +423,7 @@ class DocumentPreprocessor:
                     max_section_length=self.config.max_section_length,
                     min_figure_area=self.config.min_figure_area,
                 ),
+                structured_doc=structured_doc,
             )
 
             # Optionally analyze figures with vision model.
@@ -409,9 +441,14 @@ class DocumentPreprocessor:
                             doc_path,
                         )
                     else:
-                    # Extract summary context for better figure understanding
+                        # Extract summary context for better figure understanding
                         summary = self._extract_summary_context(document_result)
                         vl_prompt = self._build_figure_prompt(summary)
+                        figure_contexts = (
+                            structured_doc.figures
+                            if structured_doc and structured_doc.figures
+                            else None
+                        )
 
                         if summary:
                             logger.info(
@@ -422,6 +459,7 @@ class DocumentPreprocessor:
                             pdf_path=str(doc_path),
                             figures=document_result.figures,
                             vl_prompt=vl_prompt,
+                            figure_contexts=figure_contexts,
                         )
                         logger.info(
                             f"Analyzed {len(document_result.figures)} figures with vision model"

@@ -542,6 +542,74 @@ class TestDocumentPreprocessor:
         assert "sections" in enriched["ocr_result"]
         assert len(enriched["ocr_result"]["sections"]) == 1
 
+    @pytest.mark.asyncio
+    async def test_preprocess_uses_structured_context_when_available(self, tmp_path):
+        """Structured payloads should drive heading chunking and figure prompts."""
+        from unittest.mock import patch
+
+        from src.models.document import BoundingBox, OCRResult, PageOCRResult
+        from src.services.document_preprocessor import (
+            DocumentPreprocessor,
+            PreprocessingConfig,
+        )
+
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+
+        preprocessor = DocumentPreprocessor(config=PreprocessingConfig(describe_figures=True))
+        task_ir = {
+            "inputs": [{"type": "path", "value": str(pdf_path)}],
+            "structured_data": {
+                "headings": [
+                    {"level": 1, "text": "Introduction"},
+                    {"level": 1, "text": "Results"},
+                ],
+                "figures": [
+                    {
+                        "bbox": [100, 100, 500, 400],
+                        "page": 1,
+                        "type": "chart",
+                        "caption": "Figure 1: accuracy",
+                        "surrounding_text": "The system improves accuracy.",
+                        "heading_breadcrumb": ["Results"],
+                    }
+                ],
+            },
+        }
+        ocr_result = OCRResult(
+            pages=[
+                PageOCRResult(
+                    page=1,
+                    text="Introduction\nThis is the introduction.\n\nResults\nThe results follow.",
+                    bboxes=[BoundingBox(id=1, x1=100, y1=100, x2=500, y2=400)],
+                )
+            ],
+            total_pages=1,
+            elapsed_sec=0.0,
+            pages_per_sec=1.0,
+        )
+
+        with patch("src.services.document_preprocessor.process_document", return_value=ocr_result):
+            with patch("src.services.document_preprocessor.analyze_figures_async") as mock_analyze:
+                async def _analyze(pdf_path, figures, vl_prompt=None, figure_contexts=None):
+                    assert figure_contexts is not None
+                    assert figure_contexts[0].caption == "Figure 1: accuracy"
+                    for fig in figures:
+                        fig.description = f"Analyzed {fig.id}"
+                    return figures
+
+                mock_analyze.side_effect = _analyze
+
+                result = await preprocessor.preprocess(task_ir)
+
+        assert result.success
+        assert result.document_result is not None
+        titles = [section.title for section in result.document_result.sections]
+        assert "Introduction" in titles
+        assert "Results" in titles
+        assert mock_analyze.await_count == 1
+        assert result.document_result.figures[0].description == "Analyzed p1_fig1"
+
 
 # =============================================================================
 # Test Document REPL
