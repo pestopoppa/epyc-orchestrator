@@ -19,6 +19,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
+import numpy as np
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -30,6 +32,10 @@ from scripts.graph_router.build_offline_reward_oracle_rows import (
     _binary_reward,
     _load_records,
     _role_results,
+)
+from scripts.graph_router.build_offline_reward_feature_manifest import (
+    SOURCE_FAMILIES,
+    _source_family_onehot,
 )
 
 SCHEMA_VERSION = "offline_reward_verifier_expansion_plan.v1"
@@ -66,6 +72,10 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _parse_csv(value: str | None) -> list[str]:
+    return [part.strip() for part in (value or "").split(",") if part.strip()]
+
+
 def _existing_keys(path: Path | None) -> set[tuple[str, int, str]]:
     if path is None or not path.exists():
         return set()
@@ -77,6 +87,62 @@ def _existing_keys(path: Path | None) -> set[tuple[str, int, str]]:
         if isinstance(offset, int) and source_path and role_key:
             keys.add((source_path, offset, role_key))
     return keys
+
+
+def _existing_manifest_counts(
+    path: Path | None,
+    *,
+    canonical_actions: set[str],
+) -> tuple[dict[str, int], dict[str, int]]:
+    if path is None or not path.exists():
+        return {}, {}
+    source_family_counts = Counter()
+    source_family_action_counts = Counter()
+    for row in _load_jsonl(path):
+        context = row.get("feature_context")
+        source_family = None
+        if isinstance(context, dict):
+            source_family = context.get("source_family")
+        if not isinstance(source_family, str) or not source_family:
+            source_path = str(row.get("source_path") or "")
+            if source_path:
+                source_family, _ = _source_family_onehot(Path(source_path))
+        if not source_family:
+            continue
+        source_family_counts[source_family] += 1
+        role_key = str(row.get("role_key") or "")
+        canonical = _canonical_action(role_key, canonical_actions) if role_key else None
+        if canonical:
+            source_family_action_counts[f"{source_family}:{canonical}"] += 1
+    return dict(sorted(source_family_counts.items())), dict(
+        sorted(source_family_action_counts.items())
+    )
+
+
+def _existing_npz_counts(path: Path | None) -> tuple[dict[str, int], dict[str, int], dict[str, int]]:
+    if path is None or not path.exists():
+        return {}, {}, {}
+    data = np.load(path, allow_pickle=True)
+    metadata_rows = data["metadata"].tolist()
+    action_counts = Counter()
+    source_family_counts = Counter()
+    source_family_action_counts = Counter()
+    for row in metadata_rows:
+        if not isinstance(row, dict):
+            continue
+        action = str(row.get("canonical_action") or "")
+        source_path = str(row.get("source_path") or "")
+        if not action or not source_path:
+            continue
+        source_family, _ = _source_family_onehot(Path(source_path))
+        action_counts[action] += 1
+        source_family_counts[source_family] += 1
+        source_family_action_counts[f"{source_family}:{action}"] += 1
+    return (
+        dict(sorted(action_counts.items())),
+        dict(sorted(source_family_counts.items())),
+        dict(sorted(source_family_action_counts.items())),
+    )
 
 
 def _iter_input_files(paths: Iterable[Path]) -> list[Path]:
@@ -129,10 +195,15 @@ def _scan_file(
     *,
     canonical_actions: set[str],
     target_actions: set[str],
+    target_source_families: set[str],
     existing: set[tuple[str, int, str]],
 ) -> tuple[list[dict[str, Any]], Counter]:
     candidates: list[dict[str, Any]] = []
     stats = Counter()
+    source_family, _ = _source_family_onehot(path)
+    if target_source_families and source_family not in target_source_families:
+        stats["skipped_non_target_source_family_file"] += 1
+        return candidates, stats
     try:
         records = list(_load_records(path))
     except Exception:
@@ -189,6 +260,7 @@ def _scan_file(
                 "suite": str(record.get("suite") or "unknown"),
                 "role_key": raw_role,
                 "canonical_action": canonical,
+                "source_family": source_family,
                 "source_passed": role_result.get("passed"),
                 "source_error_present": bool(role_result.get("error")),
                 "source_elapsed_seconds": role_result.get("elapsed_seconds"),
@@ -257,31 +329,57 @@ def _recommend_sources(
     existing_action_counts: dict[str, int],
     target_actions: list[str],
     min_action_rows: int,
+    existing_source_family_action_counts: dict[str, int],
+    target_source_families: list[str],
+    min_source_family_action_rows: int,
 ) -> list[dict[str, Any]]:
     by_source: dict[str, Counter] = defaultdict(Counter)
+    by_source_family_action: dict[str, Counter] = defaultdict(Counter)
     for row in candidates:
-        by_source[str(row["source_path"])][str(row["canonical_action"])] += 1
+        source = str(row["source_path"])
+        action = str(row["canonical_action"])
+        source_family = str(row["source_family"])
+        by_source[source][action] += 1
+        by_source_family_action[source][f"{source_family}:{action}"] += 1
 
     deficits = {
         action: max(0, min_action_rows - int(existing_action_counts.get(action, 0)))
         for action in target_actions
     }
+    source_family_action_deficits = {
+        f"{source_family}:{action}": max(
+            0,
+            min_source_family_action_rows
+            - int(existing_source_family_action_counts.get(f"{source_family}:{action}", 0)),
+        )
+        for source_family in target_source_families
+        for action in target_actions
+    }
     selected: list[dict[str, Any]] = []
     remaining_sources = set(by_source)
-    while remaining_sources and any(value > 0 for value in deficits.values()):
+    while remaining_sources and (
+        any(value > 0 for value in deficits.values())
+        or any(value > 0 for value in source_family_action_deficits.values())
+    ):
         best_source: str | None = None
         best_score = 0
         for source in sorted(remaining_sources):
-            score = sum(
+            action_score = sum(
                 min(by_source[source].get(action, 0), deficits[action])
                 for action in target_actions
             )
+            family_action_score = sum(
+                min(by_source_family_action[source].get(key, 0), deficit)
+                for key, deficit in source_family_action_deficits.items()
+            )
+            score = action_score + family_action_score
             if score > best_score:
                 best_score = score
                 best_source = source
         if best_source is None or best_score <= 0:
             break
         counts = by_source[best_source]
+        family_action_counts = by_source_family_action[best_source]
         selected.append(
             {
                 "source_path": best_source,
@@ -290,23 +388,51 @@ def _recommend_sources(
                     for action in target_actions
                     if counts.get(action, 0)
                 },
+                "target_source_family_action_counts": {
+                    key: int(family_action_counts.get(key, 0))
+                    for key in sorted(source_family_action_deficits)
+                    if family_action_counts.get(key, 0)
+                },
                 "deficit_reduction": int(best_score),
             }
         )
         for action in target_actions:
             deficits[action] = max(0, deficits[action] - int(counts.get(action, 0)))
+        for key in source_family_action_deficits:
+            source_family_action_deficits[key] = max(
+                0,
+                source_family_action_deficits[key] - int(family_action_counts.get(key, 0)),
+            )
         remaining_sources.remove(best_source)
     return selected
 
 
 def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     canonical_actions = set(load_live_canonical_actions())
-    target_actions = [part.strip() for part in args.target_actions.split(",") if part.strip()]
+    target_actions = _parse_csv(args.target_actions)
     unknown_targets = sorted(set(target_actions) - canonical_actions)
     if unknown_targets:
         raise ValueError(f"unknown target action(s): {', '.join(unknown_targets)}")
+    target_source_families = _parse_csv(getattr(args, "target_source_families", "")) or [
+        "seeding_eval",
+        "three_way_eval",
+    ]
+    unknown_source_families = sorted(set(target_source_families) - set(SOURCE_FAMILIES))
+    if unknown_source_families:
+        raise ValueError(
+            f"unknown target source family/families: {', '.join(unknown_source_families)}"
+        )
+    min_source_family_action_rows = int(
+        getattr(args, "min_source_family_action_rows", 20)
+    )
 
     existing = _existing_keys(args.existing_manifest)
+    manifest_source_family_counts, manifest_source_family_action_counts = (
+        _existing_manifest_counts(args.existing_manifest, canonical_actions=canonical_actions)
+    )
+    retained_action_counts, retained_source_family_counts, retained_source_family_action_counts = (
+        _existing_npz_counts(getattr(args, "existing_npz", None))
+    )
     input_paths = args.input or [DEFAULT_RESULTS_ROOT]
     files = _iter_input_files(input_paths)
     all_candidates: list[dict[str, Any]] = []
@@ -316,6 +442,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             path,
             canonical_actions=canonical_actions,
             target_actions=set(target_actions),
+            target_source_families=set(target_source_families),
             existing=existing,
         )
         all_candidates.extend(rows)
@@ -326,6 +453,10 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
     _assert_prompt_free(all_candidates)
 
     action_counts = Counter(str(row["canonical_action"]) for row in all_candidates)
+    source_family_counts = Counter(str(row["source_family"]) for row in all_candidates)
+    source_family_action_counts = Counter(
+        f"{row['source_family']}:{row['canonical_action']}" for row in all_candidates
+    )
     source_counts: dict[str, Counter] = defaultdict(Counter)
     for row in all_candidates:
         source_counts[str(row["source_path"])][str(row["canonical_action"])] += 1
@@ -337,6 +468,13 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
             str(k): int(v)
             for k, v in summary.get("canonical_action_counts", {}).items()
         }
+    if retained_action_counts:
+        existing_action_counts = retained_action_counts
+
+    existing_source_family_counts = retained_source_family_counts or manifest_source_family_counts
+    existing_source_family_action_counts = (
+        retained_source_family_action_counts or manifest_source_family_action_counts
+    )
 
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -346,16 +484,30 @@ def build_plan(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str
         "existing_manifest": str(args.existing_manifest) if args.existing_manifest else None,
         "existing_rows_excluded": int(stats["skipped_existing_row"]),
         "target_actions": target_actions,
+        "target_source_families": target_source_families,
         "min_action_rows": args.min_action_rows,
+        "min_source_family_action_rows": min_source_family_action_rows,
         "max_candidates_per_action": args.max_candidates_per_action,
         "candidate_rows": len(all_candidates),
         "candidate_action_counts": dict(sorted(action_counts.items())),
+        "candidate_source_family_counts": dict(sorted(source_family_counts.items())),
+        "candidate_source_family_action_counts": dict(
+            sorted(source_family_action_counts.items())
+        ),
         "existing_action_counts": dict(sorted(existing_action_counts.items())),
+        "existing_npz": str(args.existing_npz) if getattr(args, "existing_npz", None) else None,
+        "existing_source_family_counts": existing_source_family_counts,
+        "existing_source_family_action_counts": existing_source_family_action_counts,
+        "existing_manifest_source_family_counts": manifest_source_family_counts,
+        "existing_manifest_source_family_action_counts": manifest_source_family_action_counts,
         "recommended_sources": _recommend_sources(
             all_candidates,
             existing_action_counts=existing_action_counts,
             target_actions=target_actions,
             min_action_rows=args.min_action_rows,
+            existing_source_family_action_counts=existing_source_family_action_counts,
+            target_source_families=target_source_families,
+            min_source_family_action_rows=min_source_family_action_rows,
         ),
         "stats": {key: int(value) for key, value in sorted(stats.items())},
         "privacy": {
@@ -385,8 +537,12 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         "",
         f"- Candidate rows: `{summary['candidate_rows']}`",
         f"- Target actions: `{summary['target_actions']}`",
+        f"- Target source families: `{summary['target_source_families']}`",
         f"- Candidate action counts: `{summary['candidate_action_counts']}`",
+        f"- Candidate source-family counts: `{summary['candidate_source_family_counts']}`",
+        f"- Candidate source-family/action counts: `{summary['candidate_source_family_action_counts']}`",
         f"- Existing action counts: `{summary['existing_action_counts']}`",
+        f"- Existing source-family/action counts: `{summary['existing_source_family_action_counts']}`",
         f"- Recommended source count: `{len(summary['recommended_sources'])}`",
         "",
         "## Recommended Sources",
@@ -394,7 +550,8 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
     ]
     for source in summary["recommended_sources"]:
         lines.append(
-            f"- `{source['source_path']}` -> `{source['target_action_counts']}`"
+            f"- `{source['source_path']}` -> actions `{source['target_action_counts']}`, "
+            f"source-family/actions `{source['target_source_family_action_counts']}`"
         )
     lines.extend(
         [
@@ -414,6 +571,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--input", action="append", type=Path, default=None)
     parser.add_argument("--existing-manifest", type=Path, default=DEFAULT_EXISTING_MANIFEST)
+    parser.add_argument("--existing-npz", type=Path)
     parser.add_argument(
         "--existing-summary",
         type=Path,
@@ -423,7 +581,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--summary-json", type=Path, required=True)
     parser.add_argument("--summary-md", type=Path)
     parser.add_argument("--target-actions", default="architect_general,coder_escalation")
+    parser.add_argument("--target-source-families", default="seeding_eval,three_way_eval")
     parser.add_argument("--min-action-rows", type=int, default=30)
+    parser.add_argument("--min-source-family-action-rows", type=int, default=20)
     parser.add_argument("--max-candidates-per-action", type=int, default=200)
     args = parser.parse_args(argv)
 
