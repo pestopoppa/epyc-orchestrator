@@ -1,12 +1,17 @@
 {
   "model_id": "paperbd/neuraltxt-reward-tiny",
   "oracle_score_source": "neuraltxt_reward_tiny",
-  "rows": 178,
+  "rows": 322,
   "schema_version": "offline_reward_oracle_neuraltxt_scores.v1",
   "score_max": 0.9619231224060059,
-  "score_mean": 0.25687369058468495,
+  "score_mean": 0.2808880285252904,
   "score_min": 0.0,
+  "score_source_note": "base rows scored in final-label run; stress rows reused from held-out NeuralTxt stress scorer run",
   "stats": {
-    "rows": 178
+    "base_final_label_rows": 178,
+    "stress_rows": 144,
+    "variant_type:base": 48,
+    "variant_type:confound": 48,
+    "variant_type:paraphrase": 48
   }
 }

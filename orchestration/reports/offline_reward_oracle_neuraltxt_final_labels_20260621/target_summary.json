@@ -1,19 +1,28 @@
 {
-  "eval_input_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-final-label-eval-input-20260621.jsonl",
+  "base_eval_input_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-final-label-eval-input-20260621.jsonl",
+  "base_rows": 178,
+  "eval_input_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-final-label-with-stress-eval-input-20260621.jsonl",
   "privacy": {
     "committed_rows_include_reference_response": false,
     "private_scored_rows_committed": false
   },
   "review_manifest": "orchestration/reports/offline_reward_oracle_answer_equivalence_review_20260621/manifest.jsonl",
-  "rows": 178,
-  "schema_version": "offline_reward_oracle_final_label_targets.v1",
-  "source_scored_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-final-label-scored-20260621.jsonl",
+  "rows": 322,
+  "schema_version": "offline_reward_oracle_final_label_with_stress_targets.v1",
+  "stress_rows": 144,
+  "stress_scored_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-Sh6cVX/scored.jsonl",
+  "stress_variant_counts": {
+    "base": 48,
+    "confound": 48,
+    "paraphrase": 48
+  },
   "target_score_counts": {
-    "0.0": 126,
-    "1.0": 52
+    "0.0": 174,
+    "1.0": 148
   },
   "target_source_counts": {
     "answer_equivalence_final_label": 48,
+    "heldout_stress_binary_reward": 144,
     "original_binary_reward": 130
   }
 }

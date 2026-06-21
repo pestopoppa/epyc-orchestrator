@@ -1,0 +1,11 @@
+{
+  "groups": 48,
+  "rows": 144,
+  "schema_version": "offline_reward_oracle_stress_rows.v1",
+  "source": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-Sh6cVX/scored.jsonl",
+  "stats": {
+    "variant_type:base": 48,
+    "variant_type:confound": 48,
+    "variant_type:paraphrase": 48
+  }
+}
