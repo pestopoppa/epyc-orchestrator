@@ -34,7 +34,7 @@ def _parse_csv_strings(value: str) -> list[str]:
     methods = [part.strip() for part in value.split(",") if part.strip()]
     if not methods:
         raise argparse.ArgumentTypeError("expected at least one method")
-    allowed = {"temperature_bias", "quantile_histogram", "isotonic"}
+    allowed = {"temperature_bias", "ece_temperature_bias", "quantile_histogram", "isotonic"}
     invalid = sorted(set(methods) - allowed)
     if invalid:
         raise argparse.ArgumentTypeError(f"unsupported method(s): {', '.join(invalid)}")

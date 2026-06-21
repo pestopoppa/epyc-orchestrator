@@ -123,6 +123,12 @@ Committed artifacts:
   repeat the normalized/wider/isotonic robustness check after dropping exact
   conflicts. It improves discrimination metrics but still fails calibrated ECE
   promotion gates.
+- `offline_reward_multi_action_verifier_with_expansion_response_telemetry_conflict_dropped_ece_temperature_robustness_summary.json`
+  and `offline_reward_multi_action_verifier_with_expansion_response_telemetry_conflict_dropped_ece_temperature_robustness_summary.md`
+  add an ECE-targeted temperature/bias calibration diagnostic on the
+  conflict-dropped response-telemetry NPZ. This tests whether the remaining
+  blocker is the prior NLL calibration objective; it is not a live verifier
+  weight promotion and does not enable a runtime gate.
 
 Private row data is not committed. The scored row file is:
 
@@ -235,6 +241,15 @@ Result:
 - conflict-dropped response-telemetry robustness temperature/bias calibrated
   pass count: `0/10`
 - conflict-dropped response-telemetry robustness decision: `not_promotion_grade`
+- conflict-dropped response-telemetry existing-parameter sweep best result:
+  quantile histogram `bins=5`, `alpha=0.5` with calibrated pass count `2/10`,
+  mean Brier / ROC-AUC / ECE `0.1614` / `0.8093` / `0.0960`
+- conflict-dropped response-telemetry ECE-targeted temperature/bias calibrated
+  pass count: `0/10`
+- conflict-dropped response-telemetry ECE-targeted temperature/bias Brier /
+  ROC-AUC / ECE means: `0.1793` / `0.8314` / `0.1388`
+- conflict-dropped response-telemetry ECE-targeted temperature/bias decision:
+  `not_promotion_grade`
 
 Interpretation:
 
@@ -278,3 +293,12 @@ calibration; isotonic calibrated ECE is still `0.1113`, and all three
 calibration methods pass `0/10` seeds. The remaining blocker is now calibration
 quality and possibly coverage after dropping frontdoor-heavy conflicts, not the
 presence of exact contradictory rows.
+
+The follow-up calibration-objective diagnostic does not change that conclusion.
+An existing-parameter sweep found a best quantile-histogram setting of
+`bins=5`, `alpha=0.5`, but that still passed only `2/10` split seeds. The
+ECE-targeted temperature/bias grid directly optimizes held-out calibration ECE,
+but its 10-seed run passes `0/10` and worsens mean ECE versus isotonic. The
+next A9 verifier step is therefore not another scalar post-hoc objective; it
+needs either stronger non-label features, more representative conflict-free
+coverage, or a different verifier model family before any runtime gate work.

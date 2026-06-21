@@ -103,6 +103,22 @@ def test_temperature_bias_calibrator_improves_shifted_probabilities() -> None:
     assert mod._brier(calibrated, labels) < mod._brier(probs, labels)
 
 
+def test_temperature_bias_calibrator_can_optimize_ece_objective() -> None:
+    labels = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
+    probs = np.array([0.30, 0.35, 0.40, 0.45, 0.50, 0.55], dtype=np.float32)
+
+    calibrator = mod._fit_temperature_bias_calibrator(
+        probs,
+        labels,
+        objective="ece",
+    )
+    calibrated = mod._apply_temperature_bias_calibrator(probs, calibrator)
+
+    assert calibrator["objective"] == "ece"
+    assert calibrator["temperature"] > 0.0
+    assert mod._ece(calibrated, labels) <= mod._ece(probs, labels)
+
+
 def test_quantile_histogram_calibrator_maps_bins_to_empirical_rates() -> None:
     labels = np.array([0, 0, 1, 1, 1, 1], dtype=np.float32)
     probs = np.array([0.10, 0.20, 0.30, 0.70, 0.80, 0.90], dtype=np.float32)

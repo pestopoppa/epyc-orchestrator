@@ -103,22 +103,42 @@ def _sigmoid_np(values: np.ndarray) -> np.ndarray:
 def _fit_temperature_bias_calibrator(
     probs: np.ndarray,
     labels: np.ndarray,
+    *,
+    objective: str = "nll",
 ) -> dict[str, float]:
-    """Fit a Platt-style calibrator by deterministic NLL grid search."""
+    """Fit a Platt-style calibrator by deterministic grid search."""
+    if objective not in {"nll", "ece"}:
+        raise ValueError(f"unsupported temperature-bias objective: {objective}")
     x = _logit(probs)
     y = labels.astype(np.float32)
-    best = {"temperature": 1.0, "bias": 0.0, "nll": float("inf")}
+    best = {
+        "temperature": 1.0,
+        "bias": 0.0,
+        "nll": float("inf"),
+        "brier": float("inf"),
+        "ece": float("inf"),
+        "objective": objective,
+    }
+    best_key = (float("inf"), float("inf"), float("inf"))
     for temperature in np.geomspace(0.25, 8.0, 65):
         scaled = x / float(temperature)
         for bias in np.linspace(-3.0, 3.0, 121):
             p = _sigmoid_np(scaled + float(bias))
             p = np.clip(p, 1e-7, 1.0 - 1e-7)
             nll = float(-np.mean(y * np.log(p) + (1.0 - y) * np.log(1.0 - p)))
-            if nll < best["nll"]:
+            brier = _brier(p, y)
+            ece = _ece(p, y)
+            primary = nll if objective == "nll" else ece
+            key = (primary, brier, nll)
+            if key < best_key:
+                best_key = key
                 best = {
                     "temperature": float(temperature),
                     "bias": float(bias),
                     "nll": nll,
+                    "brier": brier,
+                    "ece": ece,
+                    "objective": objective,
                 }
     return best
 
@@ -443,16 +463,28 @@ def train_and_eval(
     if n_cal:
         p_cal, _ = verifier.forward(Z[cal_idx])
         y_cal = correct[cal_idx]
-        if calibration_method == "temperature_bias":
-            calibrator = _fit_temperature_bias_calibrator(p_cal, y_cal)
+        if calibration_method in {"temperature_bias", "ece_temperature_bias"}:
+            objective = "ece" if calibration_method == "ece_temperature_bias" else "nll"
+            calibrator = _fit_temperature_bias_calibrator(
+                p_cal,
+                y_cal,
+                objective=objective,
+            )
             p_calibrated = _apply_temperature_bias_calibrator(p_verifier, calibrator)
             calibration = {
-                "method": "temperature_bias_grid",
+                "method": (
+                    "ece_temperature_bias_grid"
+                    if calibration_method == "ece_temperature_bias"
+                    else "temperature_bias_grid"
+                ),
                 "calibration_rows": int(n_cal),
                 "test_rows": int(len(y_val)),
                 "temperature": calibrator["temperature"],
                 "bias": calibrator["bias"],
+                "calibration_objective": calibrator["objective"],
                 "calibration_nll": calibrator["nll"],
+                "calibration_brier": calibrator["brier"],
+                "calibration_ece": calibrator["ece"],
                 "calibrated_verifier": _metrics(p_calibrated, y_val),
             }
         elif calibration_method == "quantile_histogram":
@@ -713,7 +745,7 @@ def main():
     parser.add_argument("--test-split", type=float, default=0.0)
     parser.add_argument(
         "--calibration-method",
-        choices=("temperature_bias", "quantile_histogram", "isotonic"),
+        choices=("temperature_bias", "ece_temperature_bias", "quantile_histogram", "isotonic"),
         default="temperature_bias",
         help="Held-out calibration method to fit when --calibration-split is set.",
     )

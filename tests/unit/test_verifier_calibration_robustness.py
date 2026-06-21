@@ -29,6 +29,13 @@ def test_parse_methods_rejects_unknown_method() -> None:
         mod._parse_csv_strings("quantile_histogram,unknown")
 
 
+def test_parse_methods_accepts_ece_temperature_bias() -> None:
+    assert mod._parse_csv_strings("temperature_bias,ece_temperature_bias") == [
+        "temperature_bias",
+        "ece_temperature_bias",
+    ]
+
+
 def test_aggregate_runs_flags_sparse_actions_and_unstable_pass_rate() -> None:
     summary = mod.aggregate_runs(
         [
