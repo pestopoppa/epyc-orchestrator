@@ -284,6 +284,62 @@ class DocumentPreprocessor:
 
         return coerce_structured_document(structured_payload)
 
+    def _filter_structured_context_for_injection(
+        self,
+        structured_doc: object | None,
+        warnings: list[str],
+    ) -> object | None:
+        """Suppress additive ODL context when prompt-injection scans fail."""
+        if structured_doc is None:
+            return None
+
+        from src.features import features
+
+        if not features().injection_scanning:
+            return structured_doc
+
+        from src.security.injection_scanner import scan_content
+
+        def _structured_samples() -> list[tuple[str, str]]:
+            samples: list[tuple[str, str]] = []
+
+            for idx, heading in enumerate(getattr(structured_doc, "headings", []) or [], start=1):
+                text = str(getattr(heading, "text", "") or "")
+                if text.strip():
+                    samples.append((f"heading:{idx}", text))
+
+            for idx, figure in enumerate(getattr(structured_doc, "figures", []) or [], start=1):
+                for field_name in ("caption", "surrounding_text"):
+                    text = str(getattr(figure, field_name, "") or "")
+                    if text.strip():
+                        samples.append((f"figure:{idx}:{field_name}", text))
+                breadcrumb = getattr(figure, "heading_breadcrumb", None) or []
+                if breadcrumb:
+                    samples.append((f"figure:{idx}:heading_breadcrumb", "\n".join(map(str, breadcrumb))))
+
+            for idx, table in enumerate(getattr(structured_doc, "tables", []) or [], start=1):
+                for field_name in ("caption", "markdown_form"):
+                    text = str(getattr(table, field_name, "") or "")
+                    if text.strip():
+                        samples.append((f"table:{idx}:{field_name}", text))
+                rows = getattr(table, "rows", None) or []
+                if rows:
+                    samples.append((f"table:{idx}:rows", "\n".join(map(str, rows))))
+
+            return samples
+
+        for label, text in _structured_samples():
+            scan = scan_content(text, source=f"odl_structured:{label}")
+            if not scan.safe:
+                threats = ", ".join(scan.threats)
+                warnings.append(
+                    "ODL structured context suppressed after injection scan "
+                    f"({label}: {threats})"
+                )
+                return None
+
+        return structured_doc
+
     def needs_preprocessing(self, task_ir: dict[str, Any]) -> bool:
         """Check if a TaskIR needs document preprocessing.
 
@@ -412,6 +468,11 @@ class DocumentPreprocessor:
                     error="OCR processing failed for all pages",
                     warnings=warnings,
                 )
+
+            structured_doc = self._filter_structured_context_for_injection(
+                structured_doc,
+                warnings,
+            )
 
             # Chunk the document
             document_result = chunk_document(
