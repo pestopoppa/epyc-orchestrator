@@ -52,7 +52,14 @@ def _make_watcher(
 def _make_response(status: int = 200, json_payload: dict | None = None):
     r = MagicMock()
     r.status_code = status
-    r.raise_for_status.return_value = None
+    if status >= 400:
+        r.raise_for_status.side_effect = httpx.HTTPStatusError(
+            f"HTTP {status}",
+            request=httpx.Request("POST", "http://localhost:8000/chat"),
+            response=httpx.Response(status),
+        )
+    else:
+        r.raise_for_status.return_value = None
     r.json.return_value = json_payload or {"answer": "ok"}
     r.text = "ok"
     return r
@@ -231,6 +238,34 @@ def test_watcher_none_legacy_behavior_on_exception() -> None:
     assert "ConnectError" in resp["error"]
     assert meta["real_failure"] is True
     # No retry, no watcher methods called (it's None).
+
+
+def test_structured_http_error_body_is_returned_without_retry() -> None:
+    client = _make_client([
+        _make_response(
+            502,
+            {
+                "answer": "[ERROR: Direct LLM call failed after retry: model returned no answer]",
+                "error_code": 502,
+                "error_detail": "Direct LLM call failed after retry: model returned no answer",
+            },
+        )
+    ])
+    watcher = _make_watcher(was_restarted_since_result={"orchestrator": CLASS_OPERATOR_RELOAD})
+
+    resp, meta = resilient_post(
+        "http://localhost:8000/chat",
+        json={"q": "x"},
+        timeout=30,
+        client=client,
+        watcher=watcher,
+    )
+
+    assert resp["error_code"] == 502
+    assert resp["error_detail"].startswith("Direct LLM call failed")
+    assert meta["clean"] is True
+    assert meta["retry_count"] == 0
+    watcher.invalidate_cache.assert_not_called()
 
 
 # ───────── non-retryable exceptions bypass retry ──────────

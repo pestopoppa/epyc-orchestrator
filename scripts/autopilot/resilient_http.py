@@ -139,6 +139,16 @@ def resilient_post(
             r = client.post(url, json=json, timeout=timeout)
         else:
             r = httpx.post(url, json=json, timeout=timeout)
+        if r.status_code >= 400:
+            try:
+                data = r.json()
+            except Exception:
+                r.raise_for_status()
+                raise
+            if isinstance(data, dict) and (
+                data.get("error_code") or data.get("error_detail")
+            ):
+                return data
         r.raise_for_status()
         try:
             return r.json()

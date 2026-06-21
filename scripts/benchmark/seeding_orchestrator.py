@@ -701,6 +701,20 @@ def call_orchestrator_forced(
                     json=payload,
                     timeout=timeout,
                 )
+            if response.status_code >= 400:
+                try:
+                    data = response.json()
+                except Exception:
+                    response.raise_for_status()
+                    raise
+                if isinstance(data, dict) and (
+                    data.get("error_code") or data.get("error_detail")
+                ):
+                    error_code = data.get("error_code")
+                    if error_code and not data.get("error"):
+                        data["error"] = data.get("error_detail") or f"HTTP {error_code}"
+                    _normalize_tool_telemetry(data)
+                    return data
             response.raise_for_status()
             data = response.json()
             if isinstance(data, dict):

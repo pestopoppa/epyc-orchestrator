@@ -220,6 +220,30 @@ def test_call_orchestrator_forced_normalizes_tool_data_and_handles_errors():
     assert "network down" in err["error"]
 
 
+def test_call_orchestrator_forced_preserves_structured_http_error_body():
+    client = Mock()
+    client.post.return_value = _Resp(
+        502,
+        {
+            "answer": "[ERROR: Direct LLM call failed after retry: model returned no answer]",
+            "error_code": 502,
+            "error_detail": "Direct LLM call failed after retry: model returned no answer",
+            "tools_called": "web_search",
+        },
+    )
+
+    data = _MOD.call_orchestrator_forced(
+        prompt="hello",
+        force_role="worker",
+        client=client,
+    )
+
+    assert data["answer"].startswith("[ERROR: Direct LLM call failed")
+    assert data["error"] == "Direct LLM call failed after retry: model returned no answer"
+    assert data["error_code"] == 502
+    assert data["tools_called"] == ["web_search"]
+
+
 def test_call_orchestrator_forced_includes_optional_payload_fields():
     client = Mock()
     client.post.return_value = _Resp(200, {"answer": "ok"})
