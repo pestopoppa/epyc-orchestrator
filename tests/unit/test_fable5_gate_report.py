@@ -80,6 +80,14 @@ xmas_routing:
                 "w6_untrusted_audited_trial_ids": [889],
                 "w6_gaming_alarm": True,
                 "w6_potential_overfit_divergences": 4,
+                "cutover_horizon_clean_trials_remaining": 58,
+                "cutover_horizon_blocker": "seq_trusted_vectors",
+                "cutover_horizon_components": {
+                    "seq_trusted_vectors": 58,
+                    "seq_shadow_rows": 20,
+                    "w6_audited_trials": 0,
+                    "w6_alarm_clearance": 4,
+                },
                 "baseline_seed_append_ready": True,
                 "baseline_seed_append_expect_trial_counter": 896,
                 "baseline_seed_append_expect_journal_max_trial_id": 895,
@@ -152,6 +160,14 @@ xmas_routing:
     assert restart["details"]["baseline_seed_append_expect_journal_max_trial_id"] == 895
     assert restart["details"]["w6_untrusted_audited_trial_count"] == 1
     assert restart["details"]["w6_untrusted_audited_trial_ids"] == [889]
+    assert restart["details"]["cutover_horizon_clean_trials_remaining"] == 58
+    assert restart["details"]["cutover_horizon_blocker"] == "seq_trusted_vectors"
+    assert restart["details"]["cutover_horizon_components"] == {
+        "seq_trusted_vectors": 58,
+        "seq_shadow_rows": 20,
+        "w6_audited_trials": 0,
+        "w6_alarm_clearance": 4,
+    }
     assert [action["key"] for action in report["next_actions"]] == [
         "continue_w4_w6_accrual",
         "run_ds_e1_kv_measurements",
@@ -170,6 +186,16 @@ xmas_routing:
             "w6_alarm_clearance_clean_trials_required"
         ]
         == 4
+    )
+    assert (
+        report["next_actions"][0]["evidence"][
+            "cutover_horizon_clean_trials_remaining"
+        ]
+        == 58
+    )
+    assert (
+        report["next_actions"][0]["evidence"]["cutover_horizon_blocker"]
+        == "seq_trusted_vectors"
     )
     assert "restart_readiness_report.py" in report["next_actions"][0]["command"]
     assert "--require-seq-cutover --require-w6-audit" in report["next_actions"][0]["command"]

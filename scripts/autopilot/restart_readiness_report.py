@@ -178,6 +178,18 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
     seq_min_shadow = seq_thresholds.get("min_seq_shadow_rows")
     w6_audited_count = w6.get("audited_trial_count")
     w6_min_audited = w6.get("min_audited_trials")
+    seq_trusted_remaining = _remaining_count(seq_trusted_count, seq_min_trusted)
+    seq_shadow_remaining = _remaining_count(seq_shadow_rows, seq_min_shadow)
+    w6_audited_remaining = _remaining_count(w6_audited_count, w6_min_audited)
+    w6_alarm_clearance_remaining = w6.get("alarm_clearance_clean_trials_required")
+    cutover_horizon = _cutover_horizon(
+        {
+            "seq_trusted_vectors": seq_trusted_remaining,
+            "seq_shadow_rows": seq_shadow_remaining,
+            "w6_audited_trials": w6_audited_remaining,
+            "w6_alarm_clearance": w6_alarm_clearance_remaining,
+        }
+    )
     return {
         "restart_ready": report["restart_ready"],
         "blockers": report["blockers"],
@@ -198,13 +210,10 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "seq_cutover_ready": seq.get("cutover_ready"),
         "seq_trusted_vector_trials": seq_trusted_count,
         "seq_min_trusted_vector_trials": seq_min_trusted,
-        "seq_trusted_vector_trials_remaining": _remaining_count(
-            seq_trusted_count,
-            seq_min_trusted,
-        ),
+        "seq_trusted_vector_trials_remaining": seq_trusted_remaining,
         "seq_shadow_rows": seq_shadow_rows,
         "seq_min_shadow_rows": seq_min_shadow,
-        "seq_shadow_rows_remaining": _remaining_count(seq_shadow_rows, seq_min_shadow),
+        "seq_shadow_rows_remaining": seq_shadow_remaining,
         "w6_audit_cutover_ready": w6.get("cutover_ready"),
         "w6_audited_trial_count": w6_audited_count,
         "w6_raw_audited_trial_count": w6.get("raw_audited_trial_count"),
@@ -212,10 +221,7 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "w6_untrusted_audited_trial_count": w6.get("untrusted_audited_trial_count"),
         "w6_untrusted_audited_trial_ids": w6.get("untrusted_audited_trial_ids"),
         "w6_min_audited_trials": w6_min_audited,
-        "w6_audited_trial_count_remaining": _remaining_count(
-            w6_audited_count,
-            w6_min_audited,
-        ),
+        "w6_audited_trial_count_remaining": w6_audited_remaining,
         "w6_alarm_window": w6.get("alarm_window"),
         "w6_alarm_window_trial_count": w6.get("alarm_window_trial_count"),
         "w6_alarm_clearance_clean_trials_required": w6.get(
@@ -227,6 +233,9 @@ def _summary_report(report: dict[str, Any]) -> dict[str, Any]:
         "w6_cumulative_potential_overfit_divergences": w6.get(
             "cumulative_potential_overfit_divergences"
         ),
+        "cutover_horizon_clean_trials_remaining": cutover_horizon["remaining"],
+        "cutover_horizon_blocker": cutover_horizon["blocker"],
+        "cutover_horizon_components": cutover_horizon["components"],
     }
 
 
@@ -235,6 +244,19 @@ def _remaining_count(current: Any, minimum: Any) -> int | None:
         return max(0, int(minimum) - int(current))
     except (TypeError, ValueError):
         return None
+
+
+def _cutover_horizon(components: dict[str, Any]) -> dict[str, Any]:
+    remaining: dict[str, int] = {}
+    for key, value in components.items():
+        try:
+            remaining[key] = max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    if not remaining:
+        return {"remaining": None, "blocker": None, "components": components}
+    blocker, count = max(remaining.items(), key=lambda item: (item[1], item[0]))
+    return {"remaining": count, "blocker": blocker, "components": remaining}
 
 
 def build_restart_readiness_report(
@@ -332,6 +354,11 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{summary['w6_potential_overfit_divergences']}, "
             "cumulative_divergences="
             f"{summary['w6_cumulative_potential_overfit_divergences']}"
+        ),
+        (
+            "- W4/W6 clean-trial horizon: "
+            f"{summary['cutover_horizon_clean_trials_remaining']} "
+            f"(blocker={summary['cutover_horizon_blocker']})"
         ),
     ]
     if report["blockers"]:

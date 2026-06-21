@@ -183,6 +183,13 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
             "w6_potential_overfit_divergences": summary.get(
                 "w6_potential_overfit_divergences"
             ),
+            "cutover_horizon_clean_trials_remaining": summary.get(
+                "cutover_horizon_clean_trials_remaining"
+            ),
+            "cutover_horizon_blocker": summary.get("cutover_horizon_blocker"),
+            "cutover_horizon_components": summary.get(
+                "cutover_horizon_components"
+            ),
             "baseline_seed_append_ready": summary.get("baseline_seed_append_ready"),
             "baseline_seed_append_expect_trial_counter": summary.get(
                 "baseline_seed_append_expect_trial_counter"
@@ -536,6 +543,15 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
                     "w6_gaming_alarm": details.get("w6_gaming_alarm"),
                     "w6_alarm_clearance_clean_trials_required": details.get(
                         "w6_alarm_clearance_clean_trials_required"
+                    ),
+                    "cutover_horizon_clean_trials_remaining": details.get(
+                        "cutover_horizon_clean_trials_remaining"
+                    ),
+                    "cutover_horizon_blocker": details.get(
+                        "cutover_horizon_blocker"
+                    ),
+                    "cutover_horizon_components": details.get(
+                        "cutover_horizon_components"
                     ),
                 },
                 "command": STRICT_RESTART_READINESS_COMMAND,

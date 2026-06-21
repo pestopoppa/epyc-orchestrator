@@ -190,6 +190,12 @@ def test_restart_ready_accepts_tail_fold_snapshot_and_state_baseline(monkeypatch
     assert report["summary"]["seq_shadow_rows_remaining"] is None
     assert report["summary"]["w6_audited_trial_count"] == 0
     assert report["summary"]["w6_audited_trial_count_remaining"] == 30
+    assert report["summary"]["cutover_horizon_clean_trials_remaining"] == 30
+    assert report["summary"]["cutover_horizon_blocker"] == "w6_audited_trials"
+    assert report["summary"]["cutover_horizon_components"] == {
+        "w6_audited_trials": 30,
+        "w6_alarm_clearance": 0,
+    }
 
 
 def test_baseline_seed_preflight_skips_when_ledger_fold_ready(monkeypatch) -> None:
@@ -294,6 +300,48 @@ def test_w6_audit_summary_is_visible_without_blocking_restart(monkeypatch) -> No
         "audited trial history too small: 29 < 30",
         "W6 audit gaming alarm is triggered",
     ]
+
+
+def test_cutover_horizon_reports_largest_remaining_clean_trial_blocker(
+    monkeypatch,
+) -> None:
+    _patch_ready_dependencies(
+        monkeypatch,
+        audit_report=_audit_report(
+            audited_trial_count=34,
+            gaming_alarm=True,
+            divergences=4,
+        ),
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_seq_readiness_report",
+        lambda rows: {
+            "cutover_ready": False,
+            "trusted_vector_trials": 80,
+            "seq_shadow": {"seq_shadow_rows": 28},
+            "thresholds": {
+                "min_trusted_vector_trials": 120,
+                "min_seq_shadow_rows": 30,
+            },
+            "cutover_blockers": ["trusted vector history too small"],
+        },
+    )
+
+    report = report_mod.build_restart_readiness_report(_state(), [])
+
+    assert report["summary"]["seq_trusted_vector_trials_remaining"] == 40
+    assert report["summary"]["seq_shadow_rows_remaining"] == 2
+    assert report["summary"]["w6_audited_trial_count_remaining"] == 0
+    assert report["summary"]["w6_alarm_clearance_clean_trials_required"] == 4
+    assert report["summary"]["cutover_horizon_clean_trials_remaining"] == 40
+    assert report["summary"]["cutover_horizon_blocker"] == "seq_trusted_vectors"
+    assert report["summary"]["cutover_horizon_components"] == {
+        "seq_trusted_vectors": 40,
+        "seq_shadow_rows": 2,
+        "w6_audited_trials": 0,
+        "w6_alarm_clearance": 4,
+    }
 
 
 def test_require_w6_audit_blocks_on_sample_size_and_alarm(monkeypatch) -> None:
