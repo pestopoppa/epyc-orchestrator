@@ -1,0 +1,732 @@
+{
+  "n": 87,
+  "oracle_threshold": 0.5,
+  "schema_version": "offline_reward_oracle_eval.v1",
+  "score": {
+    "agreement_at_threshold": 0.7701149425287356,
+    "confusion": {
+      "fn": 20,
+      "fp": 0,
+      "tn": 29,
+      "tp": 38
+    },
+    "mean_abs_error": 0.29844109452832707,
+    "pearson": 0.8121882454606075,
+    "spearman": 0.8018234865654122
+  },
+  "status": "observation_not_decision",
+  "stress": {
+    "confound_fooled": 0,
+    "confound_fooled_rate": 0.0,
+    "confound_total": 29,
+    "groups": [
+      {
+        "base_score": 0.6918594837188721,
+        "variant_group": "seeding_20260304_172815:1:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.6918594837188721,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.5843675583600998,
+            "mean_oracle_score": 0.10749192535877228,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.12489265203475952,
+            "mean_oracle_score": 0.8167521357536316,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.8777984380722046,
+        "variant_group": "seeding_20260304_172815:2:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.8777984380722046,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.8777984380722046,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.0227547287940979,
+            "mean_oracle_score": 0.9005531668663025,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.7988250851631165,
+        "variant_group": "seeding_20260305_192034:23:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.7988250851631165,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.6755584180355072,
+            "mean_oracle_score": 0.12326666712760925,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.08982634544372559,
+            "mean_oracle_score": 0.888651430606842,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.6646885871887207,
+        "variant_group": "seeding_20260305_192034:24:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.6646885871887207,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.5842919573187828,
+            "mean_oracle_score": 0.0803966298699379,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.2895626425743103,
+            "mean_oracle_score": 0.954251229763031,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.34985828399658203,
+        "variant_group": "seeding_20260305_192034:29:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.34985828399658203,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.34985828399658203,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.2540130019187927,
+            "mean_oracle_score": 0.6038712859153748,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.4690825939178467,
+        "variant_group": "seeding_20260305_192034:4:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.4690825939178467,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.4303169846534729,
+            "mean_oracle_score": 0.03876560926437378,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.2854687571525574,
+            "mean_oracle_score": 0.754551351070404,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.48391857743263245,
+        "variant_group": "seeding_20260305_192809:11:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.48391857743263245,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.3426853120326996,
+            "mean_oracle_score": 0.14123326539993286,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": -0.0898352563381195,
+            "mean_oracle_score": 0.39408332109451294,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.7094860076904297,
+        "variant_group": "seeding_20260305_192809:13:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.7094860076904297,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.41761142015457153,
+            "mean_oracle_score": 0.29187458753585815,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": -0.06384819746017456,
+            "mean_oracle_score": 0.6456378102302551,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.3146427571773529,
+        "variant_group": "seeding_20260305_192809:15:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.3146427571773529,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.16998159885406494,
+            "mean_oracle_score": 0.14466115832328796,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.06302788853645325,
+            "mean_oracle_score": 0.37767064571380615,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.793721616268158,
+        "variant_group": "seeding_20260305_192809:17:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.793721616268158,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.793721616268158,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": -0.08205127716064453,
+            "mean_oracle_score": 0.7116703391075134,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.27849599719047546,
+        "variant_group": "seeding_20260305_192809:1:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.27849599719047546,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.27849599719047546,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.06737136840820312,
+            "mean_oracle_score": 0.3458673655986786,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.8075218796730042,
+        "variant_group": "seeding_20260305_192809:21:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.8075218796730042,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.751499205827713,
+            "mean_oracle_score": 0.05602267384529114,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.07962208986282349,
+            "mean_oracle_score": 0.8871439695358276,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.6465023756027222,
+        "variant_group": "seeding_20260305_192809:23:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.6465023756027222,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.6465023756027222,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.15560394525527954,
+            "mean_oracle_score": 0.8021063208580017,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.6878727674484253,
+        "variant_group": "seeding_20260305_192809:25:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.6878727674484253,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.6878727674484253,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.07915705442428589,
+            "mean_oracle_score": 0.7670298218727112,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.6811573505401611,
+        "variant_group": "seeding_20260305_192809:30:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.6811573505401611,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.6280640698969364,
+            "mean_oracle_score": 0.053093280643224716,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.0035175085067749023,
+            "mean_oracle_score": 0.684674859046936,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.6095961928367615,
+        "variant_group": "seeding_20260305_192809:31:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.6095961928367615,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.48656054586172104,
+            "mean_oracle_score": 0.12303564697504044,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.029769718647003174,
+            "mean_oracle_score": 0.6393659114837646,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.6400204300880432,
+        "variant_group": "seeding_20260305_192809:33:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.6400204300880432,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.468475341796875,
+            "mean_oracle_score": 0.1715450882911682,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.02639824151992798,
+            "mean_oracle_score": 0.6664186716079712,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.4274582862854004,
+        "variant_group": "seeding_20260305_192809:35:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.4274582862854004,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.23480725288391113,
+            "mean_oracle_score": 0.19265103340148926,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.3374420404434204,
+            "mean_oracle_score": 0.7649003267288208,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.667694091796875,
+        "variant_group": "seeding_20260305_192809:37:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.667694091796875,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.5710648149251938,
+            "mean_oracle_score": 0.09662927687168121,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.0053539276123046875,
+            "mean_oracle_score": 0.6730480194091797,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.637047529220581,
+        "variant_group": "seeding_20260305_192809:39:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.637047529220581,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.637047529220581,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": -0.046452879905700684,
+            "mean_oracle_score": 0.5905946493148804,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.3587375581264496,
+        "variant_group": "seeding_20260305_192809:3:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.3587375581264496,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.3587375581264496,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.005845755338668823,
+            "mean_oracle_score": 0.3645833134651184,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.279175728559494,
+        "variant_group": "seeding_20260305_192809:41:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.279175728559494,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.1064816564321518,
+            "mean_oracle_score": 0.17269407212734222,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.07375335693359375,
+            "mean_oracle_score": 0.35292908549308777,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.329310804605484,
+        "variant_group": "seeding_20260305_192809:45:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.329310804605484,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.15661673247814178,
+            "mean_oracle_score": 0.17269407212734222,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.3538000285625458,
+            "mean_oracle_score": 0.6831108331680298,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.18414761126041412,
+        "variant_group": "seeding_20260305_192809:47:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.18414761126041412,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.18414761126041412,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.3501003235578537,
+            "mean_oracle_score": 0.5342479348182678,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.6271364688873291,
+        "variant_group": "seeding_20260305_192809:48:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.6271364688873291,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.5261175036430359,
+            "mean_oracle_score": 0.10101896524429321,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.03735315799713135,
+            "mean_oracle_score": 0.6644896268844604,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.4621836543083191,
+        "variant_group": "seeding_20260305_192809:49:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.4621836543083191,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.4621836543083191,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.02812919020652771,
+            "mean_oracle_score": 0.4903128445148468,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.3313334584236145,
+        "variant_group": "seeding_20260305_192809:5:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.3313334584236145,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.2154540866613388,
+            "mean_oracle_score": 0.1158793717622757,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.3776895999908447,
+            "mean_oracle_score": 0.7090230584144592,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.7527559399604797,
+        "variant_group": "seeding_20260305_192809:7:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.7527559399604797,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": -0.7527559399604797,
+            "mean_oracle_score": 0.0,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.1092907190322876,
+            "mean_oracle_score": 0.8620466589927673,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      },
+      {
+        "base_score": 0.13689540326595306,
+        "variant_group": "seeding_20260305_192809:9:frontdoor_direct",
+        "variants": {
+          "base": {
+            "delta_vs_base": 0.0,
+            "mean_oracle_score": 0.13689540326595306,
+            "mean_target_score": 1.0,
+            "n": 1
+          },
+          "confound": {
+            "delta_vs_base": 0.055006638169288635,
+            "mean_oracle_score": 0.1919020414352417,
+            "mean_target_score": 0.0,
+            "n": 1
+          },
+          "paraphrase": {
+            "delta_vs_base": 0.04507379233837128,
+            "mean_oracle_score": 0.18196919560432434,
+            "mean_target_score": 1.0,
+            "n": 1
+          }
+        }
+      }
+    ],
+    "groups_evaluated": 29,
+    "paraphrase_penalized": 0,
+    "paraphrase_penalty_rate": 0.0,
+    "paraphrase_total": 29,
+    "variant_counts": {
+      "base": 29,
+      "confound": 29,
+      "paraphrase": 29
+    }
+  },
+  "target_negative": 29,
+  "target_positive": 58
+}

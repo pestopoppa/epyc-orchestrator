@@ -1,0 +1,15 @@
+{
+  "model_id": "paperbd/neuraltxt-reward-tiny",
+  "oracle_score_source": "neuraltxt_reward_tiny",
+  "rows": 87,
+  "schema_version": "offline_reward_oracle_neuraltxt_scores.v1",
+  "score_max": 0.954251229763031,
+  "score_mean": 0.42281994835912495,
+  "score_min": 0.0,
+  "stats": {
+    "rows": 87,
+    "variant_type:base": 29,
+    "variant_type:confound": 29,
+    "variant_type:paraphrase": 29
+  }
+}

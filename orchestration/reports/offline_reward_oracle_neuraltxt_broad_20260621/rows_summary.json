@@ -1,0 +1,18 @@
+{
+  "oracle_score_mode": "omit",
+  "role_counts": {
+    "frontdoor:direct": 88,
+    "frontdoor:repl": 1
+  },
+  "rows": 89,
+  "schema_version": "offline_reward_oracle_rows.v1",
+  "stats": {
+    "rows": 89,
+    "skipped_missing_response": 6
+  },
+  "suite_counts": {
+    "debugbench": 28,
+    "simpleqa": 25,
+    "skill_transfer": 36
+  }
+}
