@@ -28,8 +28,11 @@ ORCH_ROOT = Path(__file__).resolve().parents[2]
 PHASE_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.json")
 PHASE_EVENTS_PATH = Path("/mnt/raid0/llm/tmp/autopilot_phase.jsonl")
 DEFAULT_AUTOPILOT_LOG_PATH = ORCH_ROOT / "logs" / "autopilot.log"
+DEFAULT_TMP_AUTOPILOT_LOG_DIR = Path("/mnt/raid0/llm/tmp")
+DEFAULT_TMP_AUTOPILOT_LOG_PATTERN = "autopilot*.log"
 DEFAULT_STALE_AFTER_S = 900.0
 LOG_TAIL_BYTES = 65536
+LOG_TAIL_CANDIDATE_LIMIT = 8
 EVAL_PROGRESS_FIELDS = (
     "eval_label",
     "eval_completed_questions",
@@ -185,6 +188,43 @@ def _tail_eval_progress(log_path: Path, *, trial_id: Any | None = None) -> dict[
     return latest
 
 
+def _recent_tmp_autopilot_logs() -> list[Path]:
+    try:
+        candidates = list(DEFAULT_TMP_AUTOPILOT_LOG_DIR.glob(DEFAULT_TMP_AUTOPILOT_LOG_PATTERN))
+    except OSError:
+        return []
+
+    def _mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return sorted(
+        (path for path in candidates if path.is_file()),
+        key=_mtime,
+        reverse=True,
+    )[:LOG_TAIL_CANDIDATE_LIMIT]
+
+
+def _eval_progress_log_candidates(
+    *, path: Path, log_path: Path | None
+) -> list[Path]:
+    if log_path is not None:
+        return [log_path]
+    if not _same_path(path, PHASE_PATH):
+        return []
+
+    candidates = [DEFAULT_AUTOPILOT_LOG_PATH]
+    candidates.extend(_recent_tmp_autopilot_logs())
+    unique: list[Path] = []
+    for candidate in candidates:
+        if any(_same_path(candidate, existing) for existing in unique):
+            continue
+        unique.append(candidate)
+    return unique
+
+
 def _process_exists(pid: int | None) -> bool | None:
     if pid is None:
         return None
@@ -267,21 +307,22 @@ def build_phase_health_report(
         "heartbeat": payload,
     }
     report.update({field: payload.get(field) for field in EVAL_PROGRESS_FIELDS})
-    action_type = report.get("action_type")
     should_tail_log = (
         report.get("eval_total_questions") is None
-        and action_type in {"deep_eval", "structural_experiment"}
+        and report.get("trial_id") is not None
+        and not blockers
     )
-    if log_path is None and _same_path(path, PHASE_PATH):
-        log_path = DEFAULT_AUTOPILOT_LOG_PATH
-    if should_tail_log and log_path is not None:
-        progress = _tail_eval_progress(log_path, trial_id=report.get("trial_id"))
-        if progress:
+    if should_tail_log:
+        for candidate_log_path in _eval_progress_log_candidates(path=path, log_path=log_path):
+            progress = _tail_eval_progress(candidate_log_path, trial_id=report.get("trial_id"))
+            if not progress:
+                continue
             for field in EVAL_PROGRESS_FIELDS:
                 if report.get(field) is None and field in progress:
                     report[field] = progress[field]
             report["eval_progress_source"] = progress.get("eval_progress_source")
             report["eval_progress_log_path"] = progress.get("eval_progress_log_path")
+            break
     return report
 
 

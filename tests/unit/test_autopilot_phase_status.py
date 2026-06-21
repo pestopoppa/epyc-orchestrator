@@ -122,6 +122,64 @@ def test_phase_health_report_tails_eval_progress_when_heartbeat_lacks_counters(
     assert "Eval progress: 400/500 (70% correct)" in formatted
 
 
+def test_phase_health_report_tails_numeric_trial_progress_from_recent_tmp_log(
+    tmp_path, monkeypatch
+):
+    snapshot = tmp_path / "autopilot_phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 916,
+                "action_type": "numeric_trial",
+                "updated_at": 100.0,
+                "updated_at_iso": "2026-06-21T03:33:26+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    default_log = tmp_path / "logs" / "autopilot.log"
+    default_log.parent.mkdir()
+    default_log.write_text(
+        "\n".join(
+            [
+                '2026-06-21 03:22:19 [autopilot] INFO: Trial 915: {"type": "seed_batch"}',
+                "2026-06-21 03:22:18 [autopilot.eval] INFO: T1 progress: 60/60 (67% correct)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tmp_log_dir = tmp_path / "tmp"
+    tmp_log_dir.mkdir()
+    redirected_log = tmp_log_dir / "autopilot_w4w6_codex_pair.log"
+    redirected_log.write_text(
+        "\n".join(
+            [
+                '2026-06-21 03:22:56 [autopilot] INFO: Trial 916: {"type": "numeric_trial"}',
+                "2026-06-21 03:27:14 [autopilot.eval] INFO: T1 progress: 10/60 (100% correct)",
+                "2026-06-21 03:33:26 [autopilot.eval] INFO: T1 progress: 40/60 (70% correct)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+    monkeypatch.setattr("phase_status.PHASE_PATH", snapshot)
+    monkeypatch.setattr("phase_status.DEFAULT_AUTOPILOT_LOG_PATH", default_log)
+    monkeypatch.setattr("phase_status.DEFAULT_TMP_AUTOPILOT_LOG_DIR", tmp_log_dir)
+
+    report = build_phase_health_report(path=snapshot, now=120.0, stale_after_s=60.0)
+
+    assert report["ok"] is True
+    assert report["action_type"] == "numeric_trial"
+    assert report["eval_label"] == "T1"
+    assert report["eval_completed_questions"] == 40
+    assert report["eval_total_questions"] == 60
+    assert report["eval_correct_pct"] == 70.0
+    assert report["eval_progress_source"] == "log_tail"
+    assert report["eval_progress_log_path"] == str(redirected_log)
+
+
 def test_phase_health_report_does_not_tail_other_trial_progress(tmp_path, monkeypatch):
     snapshot = tmp_path / "phase.json"
     snapshot.write_text(
