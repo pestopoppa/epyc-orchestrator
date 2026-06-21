@@ -19,3 +19,13 @@ Rules live in `orchestration/economic_rules.yaml`.
 
 Ledger reviews are decision support only. They do not mutate handoff priority,
 start cloud jobs, or promote autonomous behavior.
+
+## Monthly Review Log
+
+- 2026-06 first review:
+  `orchestration/reports/economic_review_2026-06.md`. The 2026-06-06 weekly
+  ledger triggered the planner-spend rule (`$410.75` projected monthly spend
+  versus `$250.00` threshold), while the 2026-06-21 live trailing digest had
+  returned to hold (`$192.55 / $250.00`). Outcome: preserve F3-W3a
+  planner-distill as economically justified for operator review, but keep it
+  HW-gated and do not bypass F3 acceptance gates.
