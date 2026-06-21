@@ -1,0 +1,58 @@
+{
+  "candidate_action_counts": {
+    "architect_general": 200,
+    "coder_escalation": 4
+  },
+  "candidate_rows": 204,
+  "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
+  "existing_action_counts": {
+    "architect_general": 10,
+    "coder_escalation": 88,
+    "frontdoor": 224
+  },
+  "existing_manifest": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest.jsonl",
+  "existing_rows_excluded": 356,
+  "files_scanned": 5110,
+  "inputs": [
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results",
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results"
+  ],
+  "max_candidates_per_action": 200,
+  "min_action_rows": 30,
+  "next_step": "Run build_offline_reward_oracle_rows on recommended source_path values, score with reference_token_coverage, export labels, rebuild feature manifest/NPZ, then rerun verifier robustness.",
+  "privacy": {
+    "commits_prompt_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "recommended_sources": [
+    {
+      "deficit_reduction": 20,
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl",
+      "target_action_counts": {
+        "architect_general": 188
+      }
+    }
+  ],
+  "schema_version": "offline_reward_verifier_expansion_plan.v1",
+  "stats": {
+    "candidate_rows": 13722,
+    "files_scanned": 5110,
+    "skipped_existing_row": 356,
+    "skipped_missing_prompt": 1928,
+    "skipped_missing_reference": 68492,
+    "skipped_missing_response": 3426,
+    "skipped_non_target_action": 14656,
+    "skipped_unmapped_role": 292
+  },
+  "target_actions": [
+    "architect_general",
+    "coder_escalation"
+  ]
+}

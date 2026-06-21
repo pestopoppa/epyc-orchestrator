@@ -65,6 +65,15 @@ Committed artifacts:
   quantile-histogram calibrated gates pass on only `1/10` seeds, temperature/
   bias calibrated gates pass on `0/10` seeds, and `architect_general` still has
   only 10 rows.
+- `offline_reward_verifier_expansion_candidates.jsonl`,
+  `offline_reward_verifier_expansion_plan_summary.json`, and
+  `offline_reward_verifier_expansion_plan_summary.md` are the prompt-free
+  sparse-action expansion plan for the robustness blocker above. The planner
+  scans existing benchmark result files, maps historical suffixed role labels
+  to current canonical actions without emitting raw prompts/references/
+  responses, excludes feature-manifest rows already used, and recommends source
+  files for the next scoring/rebuild pass. It is an offline candidate manifest,
+  not scored labels or live verifier weights.
 
 Private row data is not committed. The scored row file is:
 
@@ -116,6 +125,12 @@ Result:
 - robustness decision: `not_promotion_grade`
 - robustness blockers: `quantile_histogram_calibrated_pass_rate_below_threshold`,
   `temperature_bias_calibrated_pass_rate_below_threshold`, `sparse_action_coverage`
+- verifier expansion candidate rows: `204`
+- verifier expansion candidate action counts: `architect_general=200`,
+  `coder_escalation=4`
+- verifier expansion recommended source:
+  `/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/3way_20260303_025953.jsonl`
+  (`188` candidate `architect_general` rows)
 
 Interpretation:
 
@@ -136,4 +151,7 @@ has only 10 rows), so the next promotion-grade step is preregistered
 calibration/data expansion before any default-off runtime gate changes. The
 10-seed robustness check confirms the seed-42 histogram pass is not stable
 enough for promotion; data expansion for sparse escalation roles is now the
-primary blocker.
+primary blocker. The expansion plan identifies enough prompt-free historical
+`architect_general` candidates to clear the immediate row-count deficit after
+rescoring/rebuilding, while `coder_escalation` already exceeds the minimum row
+gate in the current NPZ.
