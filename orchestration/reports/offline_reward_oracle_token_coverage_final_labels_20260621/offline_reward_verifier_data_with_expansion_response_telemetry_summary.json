@@ -1,0 +1,80 @@
+{
+  "canonical_action_counts": {
+    "architect_general": 210,
+    "coder_escalation": 90,
+    "frontdoor": 224
+  },
+  "dropped_unmapped_actions": {},
+  "feature_contract": {
+    "classifier_feature_dim": 1031,
+    "embedding_dim_required": 1024,
+    "engineered_feature_dim": 11,
+    "engineered_features": [
+      "task_type_onehot[5]",
+      "log1p(context_length)/12.0",
+      "has_images",
+      "log1p(answer_chars)/12.0",
+      "log1p(expected_chars)/12.0",
+      "log1p(source_elapsed_seconds)/8.0",
+      "source_error_present"
+    ],
+    "label_leakage_excluded_fields": [
+      "oracle_binary_label",
+      "oracle_score",
+      "source_passed",
+      "target_binary_label"
+    ],
+    "name": "response_telemetry"
+  },
+  "feature_dim": 1035,
+  "label_source": "offline_reward_feature_manifest/reference_token_coverage@0.86",
+  "manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_expansion.jsonl",
+  "model_input_group_diagnostics": {
+    "conflicting_model_input_groups": 47,
+    "conflicting_model_input_rows": 188,
+    "duplicate_model_input_groups": 48,
+    "duplicate_model_input_rows": 192,
+    "group_key": [
+      "feature_vector",
+      "canonical_action_index"
+    ],
+    "top_conflicting_sources": {
+      "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_203724.jsonl": 43,
+      "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_seed42.json": 4
+    },
+    "unique_model_input_groups": 380
+  },
+  "n_actions": 10,
+  "n_neg": 271,
+  "n_pos": 253,
+  "out_npz": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion_response_telemetry.npz",
+  "privacy": {
+    "npz_contains_embeddings_not_prompt_text": true,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "role_aliases": {
+    "coder_primary": "coder_escalation"
+  },
+  "role_counts": {
+    "architect_coding:delegated": 98,
+    "architect_general": 10,
+    "architect_general:delegated": 102,
+    "coder_escalation": 45,
+    "coder_escalation:direct": 1,
+    "coder_escalation:repl": 1,
+    "coder_primary": 43,
+    "frontdoor": 43,
+    "frontdoor:direct": 181
+  },
+  "rows": 524,
+  "schema_version": "offline_reward_verifier_npz_summary.v1",
+  "unique_source_records_embedded": 193,
+  "z_dim": 1045
+}

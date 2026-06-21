@@ -297,6 +297,11 @@ def _load_classifier_features(
     feature_dim: int,
     expected_rows: int,
 ) -> tuple[np.ndarray, str]:
+    classifier_feature_dim = (
+        int(verifier_npz["classifier_feature_dim"])
+        if "classifier_feature_dim" in verifier_npz.files
+        else feature_dim
+    )
     if classifier_data_path is not None:
         raw = np.load(classifier_data_path, allow_pickle=True)
         if "X" in raw.files:
@@ -319,8 +324,16 @@ def _load_classifier_features(
             )
         return X_raw, f"{classifier_data_path or 'verifier_npz'}:X"
 
-    source = f"{classifier_data_path}:Z_feature_prefix" if classifier_data_path else "verifier_npz:Z_feature_prefix"
-    return Z[:, :feature_dim].astype(np.float32), source
+    if classifier_feature_dim > feature_dim:
+        raise SystemExit(
+            f"classifier_feature_dim {classifier_feature_dim} exceeds verifier feature_dim {feature_dim}"
+        )
+    source = (
+        f"{classifier_data_path}:Z_feature_prefix[{classifier_feature_dim}]"
+        if classifier_data_path
+        else f"verifier_npz:Z_feature_prefix[{classifier_feature_dim}]"
+    )
+    return Z[:, :classifier_feature_dim].astype(np.float32), source
 
 
 def train_and_eval(

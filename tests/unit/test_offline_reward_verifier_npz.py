@@ -136,6 +136,9 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
 
     assert summary["rows"] == 4
     assert summary["unique_source_records_embedded"] == 1
+    assert summary["feature_contract"]["name"] == "prompt_only"
+    assert summary["feature_contract"]["engineered_feature_dim"] == 7
+    assert summary["feature_contract"]["classifier_feature_dim"] == 1031
     diagnostics = summary["model_input_group_diagnostics"]
     assert diagnostics["unique_model_input_groups"] == 3
     assert diagnostics["duplicate_model_input_groups"] == 1
@@ -149,6 +152,7 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
     assert data["actions"].astype(np.int64).tolist() == [0, 2, 1, 1]
     np.testing.assert_allclose(data["q_weights"].astype(np.float32), [1.0, 0.01, 0.9, 0.2])
     assert int(data["feature_dim"]) == 1031
+    assert int(data["classifier_feature_dim"]) == 1031
     assert int(data["n_actions"]) == 3
     assert [str(row[1]) for row in data["label_map"]] == [
         "frontdoor",
@@ -165,6 +169,47 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
     summary_payload = json.loads(summary_json.read_text(encoding="utf-8"))
     assert summary_payload["n_neg"] == 2
     assert summary_payload["canonical_action_counts"]["architect_general"] == 2
+
+
+def test_build_verifier_npz_response_telemetry_contract_adds_prompt_free_features(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mod,
+        "load_live_canonical_actions",
+        lambda: ["frontdoor", "architect_general", "coder_escalation"],
+    )
+    source_path = _source(tmp_path / "source.json")
+    manifest_path = _write_jsonl(
+        tmp_path / "manifest.jsonl",
+        [
+            _manifest_row(source_path, role_key="frontdoor", label=1, score=1.0),
+            {
+                **_manifest_row(source_path, role_key="frontdoor", label=0, score=0.0),
+                "answer_chars": 42,
+                "source_elapsed_seconds": 9.5,
+            },
+        ],
+    )
+    out_npz = tmp_path / "verifier.npz"
+
+    summary = mod.build_verifier_npz(
+        manifest_path,
+        out_npz,
+        embed_fn=lambda _text: np.ones(1024, dtype=np.float32),
+        feature_contract="response_telemetry",
+    )
+    data = np.load(out_npz, allow_pickle=True)
+
+    assert summary["feature_contract"]["name"] == "response_telemetry"
+    assert summary["feature_contract"]["engineered_feature_dim"] == 11
+    assert int(data["feature_dim"]) == 1035
+    assert int(data["classifier_feature_dim"]) == 1031
+    assert data["Z"].shape == (2, 1035 + 3)
+    diagnostics = summary["model_input_group_diagnostics"]
+    assert diagnostics["duplicate_model_input_groups"] == 0
+    assert diagnostics["conflicting_model_input_groups"] == 0
 
 
 def test_build_verifier_npz_rejects_unmapped_actions(

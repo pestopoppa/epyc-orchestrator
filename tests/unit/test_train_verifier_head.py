@@ -25,7 +25,30 @@ def test_load_classifier_features_falls_back_to_verifier_prefix(tmp_path: Path) 
         )
 
     np.testing.assert_array_equal(X, Z[:, :4])
-    assert source == f"{data_path}:Z_feature_prefix"
+    assert source == f"{data_path}:Z_feature_prefix[4]"
+
+
+def test_load_classifier_features_uses_npz_classifier_prefix(tmp_path: Path) -> None:
+    data_path = tmp_path / "verifier.npz"
+    Z = np.arange(14, dtype=np.float32).reshape(2, 7)
+    np.savez_compressed(
+        data_path,
+        Z=Z,
+        feature_dim=np.int64(5),
+        classifier_feature_dim=np.int64(4),
+    )
+
+    with np.load(data_path, allow_pickle=True) as data:
+        X, source = mod._load_classifier_features(
+            data_path,
+            data,
+            Z,
+            feature_dim=5,
+            expected_rows=2,
+        )
+
+    np.testing.assert_array_equal(X, Z[:, :4])
+    assert source == f"{data_path}:Z_feature_prefix[4]"
 
 
 def test_summary_markdown_records_null_promotion_metrics() -> None:

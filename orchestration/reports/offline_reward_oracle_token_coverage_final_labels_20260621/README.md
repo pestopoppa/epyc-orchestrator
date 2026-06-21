@@ -95,6 +95,22 @@ Committed artifacts:
   wider `128/64` hidden layers, and monotone isotonic calibration alongside the
   prior calibration methods. This improves the measured verifier ceiling but
   remains `not_promotion_grade`.
+- `offline_reward_verifier_data_with_expansion_response_telemetry.npz`,
+  `offline_reward_verifier_data_with_expansion_response_telemetry_summary.json`,
+  and `offline_reward_verifier_data_with_expansion_response_telemetry_summary.md`
+  rebuild the expanded verifier dataset with an offline-only
+  `response_telemetry` feature contract. The contract keeps the original
+  prompt embedding/action features and adds prompt-free response telemetry:
+  answer length, expected-answer length, elapsed seconds, and source-error
+  presence. It deliberately excludes label-adjacent fields such as
+  `oracle_binary_label`, `oracle_score`, `source_passed`, and
+  `target_binary_label`.
+- `offline_reward_multi_action_verifier_with_expansion_response_telemetry_robustness_summary.json`
+  and `offline_reward_multi_action_verifier_with_expansion_response_telemetry_robustness_summary.md`
+  repeat the normalized/wider/isotonic robustness check on the response
+  telemetry dataset. This is a diagnostic artifact only; response telemetry is
+  observed after a candidate answer exists and is not a pre-route serve-time
+  feature.
 
 Private row data is not committed. The scored row file is:
 
@@ -177,6 +193,21 @@ Result:
   `isotonic_calibrated_pass_rate_below_threshold`,
   `quantile_histogram_calibrated_pass_rate_below_threshold`,
   `temperature_bias_calibrated_pass_rate_below_threshold`
+- response-telemetry verifier NPZ rows: `524`
+- response-telemetry verifier NPZ feature dimension: `1035`
+- response-telemetry verifier NPZ classifier feature prefix: `1031`
+- response-telemetry verifier NPZ unique model-input groups: `380`
+- response-telemetry verifier NPZ duplicate model-input groups / rows:
+  `48` / `192`
+- response-telemetry verifier NPZ conflicting model-input groups / rows:
+  `47` / `188`
+- response-telemetry robustness isotonic calibrated pass count: `2/10`
+- response-telemetry robustness isotonic calibrated Brier / ROC-AUC / ECE
+  means: `0.1968` / `0.7496` / `0.1014`
+- response-telemetry robustness quantile-histogram calibrated pass count:
+  `0/10`
+- response-telemetry robustness temperature/bias calibrated pass count: `0/10`
+- response-telemetry robustness decision: `not_promotion_grade`
 
 Interpretation:
 
@@ -202,3 +233,12 @@ expanded NPZ also exposes 66 conflicting prompt/action groups covering 229 rows:
 those rows are indistinguishable to a prompt/action-only verifier, so the next
 promotion-grade step is conflict-aware data repair or a richer offline feature
 contract, not a default-off runtime gate change.
+
+The response-telemetry contract partially repairs that collision problem by
+using prompt-free answer length, expected-answer length, elapsed time, and
+source-error presence. It reduces conflicting model-input groups from `66` to
+`47` and conflicting rows from `229` to `188`, and isotonic pass count improves
+from `1/10` to `2/10`. It still remains `not_promotion_grade`, and its mean
+Brier/ECE are slightly worse than the prompt-only normalized/isotonic scout.
+Treat it as evidence that the verifier needs richer non-label features or
+conflict-aware row repair, not as a live routing gate candidate.

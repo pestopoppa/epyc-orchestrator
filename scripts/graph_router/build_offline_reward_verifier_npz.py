@@ -41,6 +41,7 @@ logger = logging.getLogger("offline_reward_verifier_npz")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 NPZ_SUMMARY_SCHEMA_VERSION = "offline_reward_verifier_npz_summary.v1"
+CLASSIFIER_FEATURE_DIM = 1031
 ROLE_ALIASES = {
     "coder_primary": "coder_escalation",
 }
@@ -84,7 +85,31 @@ def _source_prompt(row: dict[str, Any], source_cache: dict[Path, list[dict[str, 
     return prompt
 
 
-def _engineered_features(row: dict[str, Any]) -> np.ndarray:
+def _safe_log_feature(value: Any, scale: float, *, default: float = 0.0) -> float:
+    if not isinstance(value, (int, float)) or value < 0:
+        return default
+    return float(np.log1p(float(value)) / scale)
+
+
+def _engineered_feature_names(feature_contract: str) -> list[str]:
+    names = [
+        "task_type_onehot[5]",
+        "log1p(context_length)/12.0",
+        "has_images",
+    ]
+    if feature_contract == "response_telemetry":
+        names.extend(
+            [
+                "log1p(answer_chars)/12.0",
+                "log1p(expected_chars)/12.0",
+                "log1p(source_elapsed_seconds)/8.0",
+                "source_error_present",
+            ]
+        )
+    return names
+
+
+def _engineered_features(row: dict[str, Any], *, feature_contract: str) -> np.ndarray:
     context = row.get("feature_context")
     if not isinstance(context, dict):
         raise OfflineRewardVerifierNpzError(f"{row.get('item_id')}: feature_context must be object")
@@ -99,10 +124,25 @@ def _engineered_features(row: dict[str, Any]) -> np.ndarray:
             f"{row.get('item_id')}: context_length_chars must be non-negative int"
         )
     has_images = bool(context.get("has_images", False))
-    return np.array(
-        [*map(float, task_vec), float(np.log1p(context_length) / 12.0), 1.0 if has_images else 0.0],
-        dtype=np.float32,
-    )
+    features = [
+        *map(float, task_vec),
+        float(np.log1p(context_length) / 12.0),
+        1.0 if has_images else 0.0,
+    ]
+    if feature_contract == "response_telemetry":
+        features.extend(
+            [
+                _safe_log_feature(row.get("answer_chars"), 12.0),
+                _safe_log_feature(row.get("expected_chars"), 12.0),
+                _safe_log_feature(row.get("source_elapsed_seconds"), 8.0),
+                1.0 if bool(row.get("source_error_present", False)) else 0.0,
+            ]
+        )
+    elif feature_contract != "prompt_only":
+        raise OfflineRewardVerifierNpzError(
+            f"unsupported feature_contract={feature_contract!r}"
+        )
+    return np.asarray(features, dtype=np.float32)
 
 
 def _embedding_from_response(data: Any) -> np.ndarray:
@@ -161,12 +201,12 @@ def _model_input_group_diagnostics(
     metadata_rows: list[dict[str, Any]],
     correct: np.ndarray,
     actions: np.ndarray,
+    features: np.ndarray,
 ) -> dict[str, Any]:
-    groups: dict[tuple[str, int, int], list[int]] = {}
+    groups: dict[tuple[bytes, int], list[int]] = {}
     for index, (metadata, action) in enumerate(zip(metadata_rows, actions)):
         key = (
-            str(metadata["source_path"]),
-            int(metadata["source_record_offset"]),
+            features[index].astype(np.float32).tobytes(),
             int(action),
         )
         groups.setdefault(key, []).append(index)
@@ -181,11 +221,13 @@ def _model_input_group_diagnostics(
         for key, indexes in duplicate_groups.items()
         if len({int(correct[index]) for index in indexes}) > 1
     }
-    top_conflicting_sources = Counter(key[0] for key in conflicting_groups)
+    top_conflicting_sources = Counter(
+        str(metadata_rows[indexes[0]]["source_path"])
+        for indexes in conflicting_groups.values()
+    )
     return {
         "group_key": [
-            "source_path",
-            "source_record_offset",
+            "feature_vector",
             "canonical_action_index",
         ],
         "unique_model_input_groups": len(groups),
@@ -238,6 +280,7 @@ def build_verifier_npz(
     embedding_timeout: float = 120.0,
     embed_fn: Callable[[str], np.ndarray] | None = None,
     drop_unmapped_actions: bool = False,
+    feature_contract: str = "prompt_only",
 ) -> dict[str, Any]:
     rows = load_jsonl(manifest_jsonl)
     if not rows:
@@ -294,11 +337,13 @@ def build_verifier_npz(
                 )
             embedding_cache[cache_key] = embedding
 
-        engineered = _engineered_features(row)
+        engineered = _engineered_features(row, feature_contract=feature_contract)
         features = np.concatenate([embedding_cache[cache_key], engineered]).astype(np.float32)
-        if features.shape[0] != 1031:
+        expected_feature_dim = 1024 + len(engineered)
+        if features.shape[0] != expected_feature_dim:
             raise OfflineRewardVerifierNpzError(
-                f"{manifest_jsonl}:{row_number}: feature dim={features.shape[0]}, expected 1031"
+                f"{manifest_jsonl}:{row_number}: feature dim={features.shape[0]}, "
+                f"expected {expected_feature_dim}"
             )
 
         oracle_label = row.get("oracle_binary_label")
@@ -358,10 +403,24 @@ def build_verifier_npz(
         "out_npz": str(out_npz),
         "rows": int(Z.shape[0]),
         "unique_source_records_embedded": len(embedding_cache),
+        "feature_contract": {
+            "name": feature_contract,
+            "embedding_dim_required": 1024,
+            "engineered_feature_dim": int(X.shape[1] - 1024),
+            "engineered_features": _engineered_feature_names(feature_contract),
+            "classifier_feature_dim": CLASSIFIER_FEATURE_DIM,
+            "label_leakage_excluded_fields": [
+                "oracle_binary_label",
+                "oracle_score",
+                "source_passed",
+                "target_binary_label",
+            ],
+        },
         "model_input_group_diagnostics": _model_input_group_diagnostics(
             metadata_rows,
             correct,
             actions,
+            X,
         ),
         "feature_dim": int(X.shape[1]),
         "n_actions": n_actions,
@@ -389,6 +448,7 @@ def build_verifier_npz(
         actions=actions,
         q_weights=q_arr,
         feature_dim=np.int64(X.shape[1]),
+        classifier_feature_dim=np.int64(min(CLASSIFIER_FEATURE_DIM, X.shape[1])),
         n_actions=np.int64(n_actions),
         label_map=np.array(list(enumerate(canonical_actions)), dtype=object),
         canonical_actions=np.array(canonical_actions, dtype=object),
@@ -414,6 +474,9 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
             f"- Output: `{summary['out_npz']}`",
             f"- Rows: `{summary['rows']}`",
             f"- Unique source records embedded: `{summary['unique_source_records_embedded']}`",
+            f"- Feature contract: `{summary['feature_contract']['name']}`",
+            f"- Engineered feature dimension: "
+            f"`{summary['feature_contract']['engineered_feature_dim']}`",
             f"- Unique model-input groups: "
             f"`{summary['model_input_group_diagnostics']['unique_model_input_groups']}`",
             f"- Duplicate model-input groups: "
@@ -450,6 +513,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--embedding-ports", type=_parse_ports, default=[8090, 8091, 8092, 8093, 8094, 8095])
     parser.add_argument("--embedding-timeout", type=float, default=120.0)
     parser.add_argument("--drop-unmapped-actions", action="store_true")
+    parser.add_argument(
+        "--feature-contract",
+        choices=("prompt_only", "response_telemetry"),
+        default="prompt_only",
+    )
     args = parser.parse_args(argv)
     try:
         summary = build_verifier_npz(
@@ -460,6 +528,7 @@ def main(argv: list[str] | None = None) -> int:
             embedding_ports=args.embedding_ports,
             embedding_timeout=args.embedding_timeout,
             drop_unmapped_actions=args.drop_unmapped_actions,
+            feature_contract=args.feature_contract,
         )
     except (OfflineRewardVerifierNpzError, OSError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
