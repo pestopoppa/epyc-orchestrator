@@ -941,6 +941,26 @@ class PromptForge:
                 lines.append(f"  {suite}: {quality:.2f} {bar}")
             lines.append("")
 
+        lines.append(
+            "## Proposer-prior contract (MH-6):\n"
+            "Read inputs in this order and do not skip ahead:\n"
+            "1. Failed traces and recent regressions in the context above.\n"
+            "2. Current frontier or accepted behavior implied by the existing code.\n"
+            "3. Strategy-store or prior-mutation notes present in the context.\n"
+            "4. The operator request / mutation goal.\n"
+            "\n"
+            "Before proposing code, estimate:\n"
+            "- expected_quality_delta: signed expected quality change on the cited "
+            "failure surface; use a small numeric value and say when evidence is weak.\n"
+            "- expected_cost_delta: signed expected runtime/token/complexity change; "
+            "use 0.0 when the change should be behavior-only.\n"
+            "\n"
+            "no-task-specific-hints: do not hard-code benchmark IDs, exact prompts, "
+            "known answers, or dataset-specific shortcuts. Generalize only from "
+            "observable failure mechanisms."
+        )
+        lines.append("")
+
         lines.append(self._negative_transfer_safety_block())
         lines.append("")
 
@@ -955,7 +975,10 @@ class PromptForge:
 
         lines.append(
             "## Output format:\n"
-            "Return the complete modified file inside a ```python fenced block."
+            "Return the complete modified file inside a ```python fenced block first. "
+            "Then include a ```json:autopilot_actions block with keys "
+            "`expected_quality_delta`, `expected_cost_delta`, `read_order_used`, "
+            "`no_task_specific_hints`, and `rationale`."
         )
 
         return "\n".join(lines)

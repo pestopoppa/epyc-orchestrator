@@ -206,6 +206,32 @@ def test_mutation_prompt_includes_negative_transfer_safety_block(tmp_path: Path)
     assert "suite-specific fixes" in prompt
 
 
+def test_code_mutation_prompt_includes_mh6_proposer_prior_contract(
+    tmp_path: Path,
+) -> None:
+    forge = _forge_with_prompt(tmp_path)
+
+    prompt = forge._build_code_mutation_prompt(
+        target_file="src/escalation.py",
+        mutation_type="targeted_fix",
+        original_content="def route():\n    return 'frontdoor'\n",
+        failure_context="Trial #1 failed after an escalation loop.",
+        per_suite_quality={"agentic": 1.0},
+        description="Reduce escalation loops",
+    )
+
+    assert "Proposer-prior contract (MH-6)" in prompt
+    assert "Read inputs in this order" in prompt
+    assert "Failed traces and recent regressions" in prompt
+    assert "Current frontier or accepted behavior" in prompt
+    assert "Strategy-store or prior-mutation notes" in prompt
+    assert "operator request / mutation goal" in prompt
+    assert "expected_quality_delta" in prompt
+    assert "expected_cost_delta" in prompt
+    assert "no-task-specific-hints" in prompt
+    assert "no_task_specific_hints" in prompt
+
+
 def test_rejects_mismatched_suite_anchor_introduced_by_mutation(
     tmp_path: Path, monkeypatch
 ) -> None:
