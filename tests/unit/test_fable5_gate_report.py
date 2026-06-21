@@ -89,6 +89,7 @@ xmas_routing:
                     "w6_alarm_clearance": 4,
                 },
                 "baseline_seed_append_ready": True,
+                "baseline_seed_append_required": True,
                 "baseline_seed_append_expect_trial_counter": 896,
                 "baseline_seed_append_expect_journal_max_trial_id": 895,
             },
@@ -158,6 +159,7 @@ xmas_routing:
     assert restart["details"]["w6_alarm_clearance_clean_trials_required"] == 4
     assert restart["details"]["snapshot_restart_readiness"] == "tail_fold_ready"
     assert restart["details"]["snapshot_payload_journal_max_trial_id"] == 895
+    assert restart["details"]["baseline_seed_append_required"] is True
     assert restart["details"]["baseline_seed_append_expect_trial_counter"] == 896
     assert restart["details"]["baseline_seed_append_expect_journal_max_trial_id"] == 895
     assert restart["details"]["w6_untrusted_audited_trial_count"] == 1
@@ -171,45 +173,65 @@ xmas_routing:
         "w6_alarm_clearance": 4,
     }
     assert [action["key"] for action in report["next_actions"]] == [
+        "append_baseline_seed_event",
         "continue_w4_w6_accrual",
         "run_ds_e1_kv_measurements",
         "collect_ri10_canary_arm_telemetry",
         "run_xmas_constrained_policy_ab",
     ]
-    assert report["next_actions"][0]["status"] == "active"
-    assert report["next_actions"][0]["evidence"]["trusted_vectors_required"] == 120
-    assert report["next_actions"][0]["evidence"]["trusted_vectors_remaining"] == 58
-    assert report["next_actions"][0]["evidence"]["seq_shadow_rows_required"] == 30
-    assert report["next_actions"][0]["evidence"]["seq_shadow_rows_remaining"] == 20
-    assert report["next_actions"][0]["evidence"]["w6_audited_rows_required"] == 30
-    assert report["next_actions"][0]["evidence"]["w6_audited_rows_remaining"] == 0
+    seed_action = report["next_actions"][0]
+    assert seed_action["status"] == "blocked"
+    assert seed_action["blocked_by"] == [
+        "active AutoPilot process; seed tool refuses live append"
+    ]
+    assert seed_action["evidence"] == {
+        "baseline_seed_append_ready": True,
+        "baseline_seed_append_required": True,
+        "expect_trial_counter": 896,
+        "expect_journal_max_trial_id": 895,
+    }
+    assert "baseline_authority_seed.py --append" in seed_action["command"]
+    assert "--expect-trial-counter 896" in seed_action["command"]
+    assert "--expect-journal-max-trial-id 895" in seed_action["command"]
+    assert seed_action["follow_up"] == (
+        "cd /mnt/raid0/llm/epyc-orchestrator && "
+        "python3 scripts/autopilot/restart_readiness_report.py "
+        "--json --strict --require-seq-cutover --require-w6-audit"
+    )
+    assert report["next_actions"][1]["status"] == "active"
+    assert report["next_actions"][1]["evidence"]["trusted_vectors_required"] == 120
+    assert report["next_actions"][1]["evidence"]["trusted_vectors_remaining"] == 58
+    assert report["next_actions"][1]["evidence"]["seq_shadow_rows_required"] == 30
+    assert report["next_actions"][1]["evidence"]["seq_shadow_rows_remaining"] == 20
+    assert report["next_actions"][1]["evidence"]["w6_audited_rows_required"] == 30
+    assert report["next_actions"][1]["evidence"]["w6_audited_rows_remaining"] == 0
     assert (
-        report["next_actions"][0]["evidence"][
+        report["next_actions"][1]["evidence"][
             "w6_alarm_clearance_clean_trials_required"
         ]
         == 4
     )
     assert (
-        report["next_actions"][0]["evidence"][
+        report["next_actions"][1]["evidence"][
             "cutover_horizon_clean_trials_remaining"
         ]
         == 58
     )
     assert (
-        report["next_actions"][0]["evidence"]["cutover_horizon_blocker"]
+        report["next_actions"][1]["evidence"]["cutover_horizon_blocker"]
         == "seq_trusted_vectors"
     )
-    assert "restart_readiness_report.py" in report["next_actions"][0]["command"]
-    assert "--require-seq-cutover --require-w6-audit" in report["next_actions"][0]["command"]
-    assert report["next_actions"][0]["follow_up"] == (
+    assert "restart_readiness_report.py" in report["next_actions"][1]["command"]
+    assert "--require-seq-cutover --require-w6-audit" in report["next_actions"][1]["command"]
+    assert report["next_actions"][1]["follow_up"] == (
         "python3 scripts/autopilot/fable5_gate_report.py --json --strict"
     )
-    assert "ds_e1_kv_measurements.sh --execute" in report["next_actions"][1]["command"]
-    assert report["next_actions"][1]["status"] == "blocked"
-    assert report["next_actions"][2]["command"] == (
+    assert "ds_e1_kv_measurements.sh --execute" in report["next_actions"][2]["command"]
+    assert report["next_actions"][2]["status"] == "blocked"
+    assert report["next_actions"][3]["command"] == (
         "python3 scripts/analysis/ri10_canary_sample_report.py"
     )
-    xmas_action = report["next_actions"][3]
+    xmas_action = report["next_actions"][4]
     assert xmas_action["status"] == "blocked"
     assert xmas_action["blocked_by"] == ["active AutoPilot process(es): 123"]
     assert "latest X-MAS held-out A/B decision is hold" in xmas_action["evidence_blockers"]

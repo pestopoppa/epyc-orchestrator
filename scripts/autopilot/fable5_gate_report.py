@@ -191,6 +191,9 @@ def restart_section(restart_report: dict[str, Any]) -> GateSection:
                 "cutover_horizon_components"
             ),
             "baseline_seed_append_ready": summary.get("baseline_seed_append_ready"),
+            "baseline_seed_append_required": summary.get(
+                "baseline_seed_append_required"
+            ),
             "baseline_seed_append_expect_trial_counter": summary.get(
                 "baseline_seed_append_expect_trial_counter"
             ),
@@ -519,6 +522,56 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
     restart = by_key.get("w4_w6_restart_cutover")
     if restart and restart.status != "ready":
         details = restart.details
+        if details.get("baseline_seed_append_required"):
+            command_parts = [
+                "cd /mnt/raid0/llm/epyc-orchestrator &&",
+                "python3 scripts/autopilot/baseline_authority_seed.py",
+                "--append",
+            ]
+            expected_trial_counter = details.get(
+                "baseline_seed_append_expect_trial_counter"
+            )
+            expected_journal_max = details.get(
+                "baseline_seed_append_expect_journal_max_trial_id"
+            )
+            if expected_trial_counter is not None:
+                command_parts.extend(
+                    ["--expect-trial-counter", str(expected_trial_counter)]
+                )
+            if expected_journal_max is not None:
+                command_parts.extend(
+                    ["--expect-journal-max-trial-id", str(expected_journal_max)]
+                )
+            command_parts.append("--json")
+            autopilot_active = bool(phase and phase.details.get("status") == "active")
+            actions.append(
+                {
+                    "key": "append_baseline_seed_event",
+                    "priority": "P0",
+                    "status": "blocked" if autopilot_active else "ready",
+                    "reason": (
+                        "Baseline-as-fold authority has a ready seed preflight; "
+                        "append the guarded seed event before restart cutover."
+                    ),
+                    "blocked_by": (
+                        ["active AutoPilot process; seed tool refuses live append"]
+                        if autopilot_active
+                        else []
+                    ),
+                    "evidence": {
+                        "baseline_seed_append_ready": details.get(
+                            "baseline_seed_append_ready"
+                        ),
+                        "baseline_seed_append_required": details.get(
+                            "baseline_seed_append_required"
+                        ),
+                        "expect_trial_counter": expected_trial_counter,
+                        "expect_journal_max_trial_id": expected_journal_max,
+                    },
+                    "command": " ".join(command_parts),
+                    "follow_up": STRICT_RESTART_READINESS_COMMAND,
+                }
+            )
         actions.append(
             {
                 "key": "continue_w4_w6_accrual",
