@@ -1,0 +1,40 @@
+{
+  "canonical_action_counts": {
+    "architect_general": 10,
+    "coder_escalation": 88,
+    "frontdoor": 224
+  },
+  "dropped_unmapped_actions": {},
+  "feature_dim": 1031,
+  "label_source": "offline_reward_feature_manifest/reference_token_coverage@0.86",
+  "manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest.jsonl",
+  "n_actions": 10,
+  "n_neg": 161,
+  "n_pos": 161,
+  "out_npz": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data.npz",
+  "privacy": {
+    "npz_contains_embeddings_not_prompt_text": true,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "role_aliases": {
+    "coder_primary": "coder_escalation"
+  },
+  "role_counts": {
+    "architect_general": 10,
+    "coder_escalation": 45,
+    "coder_primary": 43,
+    "frontdoor": 43,
+    "frontdoor:direct": 181
+  },
+  "rows": 322,
+  "schema_version": "offline_reward_verifier_npz_summary.v1",
+  "unique_source_records_embedded": 89,
+  "z_dim": 1041
+}

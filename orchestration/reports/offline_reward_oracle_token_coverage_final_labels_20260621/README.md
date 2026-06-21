@@ -24,6 +24,14 @@ Committed artifacts:
   feature-input join manifest for downstream NEXT-A2/A3 embedding extraction.
   They validate each exported label against its source benchmark record and
   represent prompt/expected/answer text only with SHA-256 hashes and lengths.
+- `offline_reward_verifier_data.npz`,
+  `offline_reward_verifier_data_summary.json`, and
+  `offline_reward_verifier_data_summary.md` are the verifier-compatible
+  offline training-data export built from the feature manifest. The NPZ
+  contains source-prompt embeddings plus the documented 7 engineered features,
+  oracle labels, action indices, sample weights, and prompt-free provenance
+  metadata. It does not contain prompt/expected/answer text and is not a live
+  routing weight file.
 
 Private row data is not committed. The scored row file is:
 
@@ -46,6 +54,11 @@ Result:
 - feature manifest rows: `322`
 - feature manifest unique source records: `89`
 - feature manifest index base: `one_based` for all rows
+- verifier NPZ rows: `322`
+- verifier NPZ unique source records embedded: `89`
+- verifier NPZ feature dimension: `1031`
+- verifier NPZ action count: `10`
+- verifier NPZ positives / negatives: `161` / `161`
 
 Interpretation:
 
@@ -56,7 +69,8 @@ response divided by unique reference tokens. Treat it as an evidence-backed
 baseline for reference-grounded answer-equivalence targets, not as a serve-time
 routing feature.
 
-The feature manifest is still offline preparation, not a verifier model or
-serve-time routing change. The next integration step is an embedding/NPZ
-extractor that consumes the manifest, embeds the source prompt/context rows,
-appends the documented 7 engineered features, and joins labels by `join_key`.
+The verifier NPZ is still offline preparation, not a verifier model or
+serve-time routing change. The next integration step is to train/evaluate the
+frontdoor verifier or reward-signal consumer from this NPZ and compare against
+the existing outcome-backed verifier baseline before any default-off runtime
+gate changes.
