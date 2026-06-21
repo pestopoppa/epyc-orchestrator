@@ -471,6 +471,15 @@ def test_extract_tokens_accepts_runtime_token_fields() -> None:
         ]
     ) == {"total": 42}
     assert harvest_tasks._extract_tokens(
+        [_row("task_completed", "a2", "2026-06-12T00:00:00+00:00", {"output_tokens": 17})]
+    ) == {"total": 17}
+    assert harvest_tasks._extract_tokens(
+        [_row("task_completed", "a3", "2026-06-12T00:00:00+00:00", {"completion_tokens": 11})]
+    ) == {"total": 11}
+    assert harvest_tasks._extract_tokens(
+        [_row("task_completed", "a4", "2026-06-12T00:00:00+00:00", {"total_tokens": 99})]
+    ) == {"total": 99}
+    assert harvest_tasks._extract_tokens(
         [
             _row(
                 "task_completed",
@@ -489,7 +498,37 @@ def test_extract_tokens_accepts_runtime_token_fields() -> None:
                 {"chat_meta": {"usage": {"total_tokens": 9}}},
             )
         ]
-    ) == {"total_tokens": 9}
+    ) == {"total": 9}
+    assert harvest_tasks._extract_tokens(
+        [
+            _row(
+                "task_completed",
+                "d",
+                "2026-06-12T00:00:00+00:00",
+                {"usage": {"prompt_tokens": 3, "completion_tokens": 7}},
+            )
+        ]
+    ) == {"prompt_tokens": 3, "completion_tokens": 7, "total": 10}
+    assert harvest_tasks._extract_tokens(
+        [
+            _row(
+                "task_completed",
+                "e",
+                "2026-06-12T00:00:00+00:00",
+                {"token_usage": {"usage": {"output_tokens": 8}}},
+            )
+        ]
+    ) == {"total": 8}
+    assert harvest_tasks._extract_tokens(
+        [
+            _row(
+                "task_completed",
+                "f",
+                "2026-06-12T00:00:00+00:00",
+                {"chat_meta": {"usage": {"prompt_tokens": 4, "completion_tokens": 6}}},
+            )
+        ]
+    ) == {"prompt_tokens": 4, "completion_tokens": 6, "total": 10}
 
 
 def test_compact_evidence_keeps_gate_fields_without_bulk_attempts() -> None:

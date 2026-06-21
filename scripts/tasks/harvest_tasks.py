@@ -251,37 +251,52 @@ def synthetic_like(text: str) -> bool:
     return any(pattern.search(text) for pattern in SYNTHETIC_MARKERS)
 
 
-def _token_payload(data: dict[str, Any]) -> dict[str, Any] | None:
-    prompt_tokens = data.get("prompt_tokens")
-    completion_tokens = data.get("completion_tokens")
+def _token_payload_from_value(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, int | float):
+        return {"total": value}
+    if not isinstance(value, dict):
+        return None
+
+    prompt_tokens = value.get("prompt_tokens")
+    completion_tokens = value.get("completion_tokens")
     if isinstance(prompt_tokens, int | float) and isinstance(completion_tokens, int | float):
         return {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total": prompt_tokens + completion_tokens,
         }
+
     for key in (
         "tokens",
         "token_usage",
         "usage",
+        "chat_meta",
         "tokens_generated",
         "total_tokens",
         "output_tokens",
         "completion_tokens",
     ):
-        value = data.get(key)
-        if isinstance(value, dict):
-            return value
-        if isinstance(value, int | float):
-            return {"total": value}
-    chat_meta = data.get("chat_meta")
-    if isinstance(chat_meta, dict):
-        usage = chat_meta.get("usage")
-        if isinstance(usage, dict):
-            return usage
-        if isinstance(usage, int | float):
-            return {"total": usage}
+        nested = value.get(key)
+        if key in {"token_usage", "usage"} and isinstance(nested, dict):
+            payload = _token_payload_from_value(nested)
+            if payload:
+                return payload
+        if key == "tokens" and isinstance(nested, dict):
+            payload = _token_payload_from_value(nested)
+            if payload:
+                return payload
+        if key == "chat_meta" and isinstance(nested, dict):
+            usage = nested.get("usage")
+            payload = _token_payload_from_value(usage)
+            if payload:
+                return payload
+        if isinstance(nested, int | float):
+            return {"total": nested}
     return None
+
+
+def _token_payload(data: dict[str, Any]) -> dict[str, Any] | None:
+    return _token_payload_from_value(data)
 
 
 def _extract_tokens(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
