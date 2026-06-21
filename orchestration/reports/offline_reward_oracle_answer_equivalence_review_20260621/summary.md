@@ -12,6 +12,13 @@
 | `current_negative_deterministically_equivalent` | 5 |
 | `current_positive_not_deterministically_reconstructable` | 43 |
 
+## Label Status
+
+| Status | Rows |
+|---|---:|
+| `needs_semantic_judge` | 5 |
+| `seeded` | 43 |
+
 ## Suites
 
 | Suite | Rows |

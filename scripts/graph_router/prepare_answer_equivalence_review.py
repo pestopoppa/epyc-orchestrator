@@ -97,6 +97,12 @@ def _private_review_row(disagreement: dict[str, Any]) -> dict[str, Any]:
             f"{disagreement.get('item_id')}: missing prompt/expected/answer "
             f"from {source_path}:{source_index} role={role_key}"
         )
+    source_passed = role.get("passed")
+    disagreement_type = _disagreement_type(disagreement)
+    seed_label = _seed_label(
+        source_passed=source_passed,
+        disagreement_type=disagreement_type,
+    )
     return {
         "schema_version": "answer_equivalence_review_private.v1",
         "item_id": disagreement.get("item_id", ""),
@@ -111,15 +117,17 @@ def _private_review_row(disagreement: dict[str, Any]) -> dict[str, Any]:
         "binary_reward": disagreement.get("binary_reward"),
         "oracle_score": disagreement.get("oracle_score"),
         "token_f1": disagreement.get("token_f1"),
+        "source_passed": source_passed if isinstance(source_passed, bool) else None,
+        "source_error_type": role.get("error_type"),
         "prompt": prompt,
         "reference": reference,
         "response": response,
         "manual_label": None,
         "judge_label": None,
-        "semantic_label": None,
-        "final_label": None,
-        "label_source": None,
-        "label_status": "needs_label",
+        "semantic_label": seed_label["semantic_label"],
+        "final_label": seed_label["final_label"],
+        "label_source": seed_label["label_source"],
+        "label_status": seed_label["label_status"],
         "label_options": list(LABEL_OPTIONS),
     }
 
@@ -132,6 +140,25 @@ def _disagreement_type(row: dict[str, Any]) -> str:
     if truth == 0 and proxy == 1:
         return "current_negative_deterministically_equivalent"
     return "other_disagreement"
+
+
+def _seed_label(*, source_passed: Any, disagreement_type: str) -> dict[str, str | None]:
+    if (
+        source_passed is True
+        and disagreement_type == "current_positive_not_deterministically_reconstructable"
+    ):
+        return {
+            "semantic_label": "equivalent",
+            "final_label": "equivalent",
+            "label_source": "source_passed_true",
+            "label_status": "seeded",
+        }
+    return {
+        "semantic_label": None,
+        "final_label": None,
+        "label_source": None,
+        "label_status": "needs_semantic_judge",
+    }
 
 
 def _public_manifest_row(private_row: dict[str, Any]) -> dict[str, Any]:
@@ -173,6 +200,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
     ]
     for key, value in summary["by_disagreement_type"].items():
         lines.append(f"| `{key}` | {value} |")
+    lines.extend(["", "## Label Status", "", "| Status | Rows |", "|---|---:|"])
+    for key, value in summary["by_label_status"].items():
+        lines.append(f"| `{key}` | {value} |")
     lines.extend(["", "## Suites", "", "| Suite | Rows |", "|---|---:|"])
     for key, value in summary["by_suite"].items():
         lines.append(f"| `{key}` | {value} |")
@@ -204,6 +234,7 @@ def prepare_review(
     by_type = Counter(row["disagreement_type"] for row in public_rows)
     by_suite = Counter(str(row.get("suite") or "unknown") for row in public_rows)
     by_role = Counter(str(row.get("role_key") or "unknown") for row in public_rows)
+    by_label_status = Counter(str(row.get("label_status") or "unknown") for row in public_rows)
     summary = {
         "schema_version": "answer_equivalence_review_packet.v1",
         "status": "ready_for_manual_or_judge_labeling",
@@ -212,6 +243,7 @@ def prepare_review(
         "public_manifest_jsonl": str(public_manifest_jsonl),
         "label_options": list(LABEL_OPTIONS),
         "by_disagreement_type": dict(sorted(by_type.items())),
+        "by_label_status": dict(sorted(by_label_status.items())),
         "by_suite": dict(sorted(by_suite.items())),
         "by_role": dict(sorted(by_role.items())),
         "privacy": {

@@ -60,8 +60,9 @@ def test_prepare_review_writes_private_packet_and_redacted_manifest(tmp_path: Pa
     assert private_rows[0]["reference"] == "private reference"
     assert private_rows[0]["response"] == "private response"
     assert private_rows[0]["final_label"] is None
-    assert private_rows[0]["label_status"] == "needs_label"
-    assert public_rows[0]["label_status"] == "needs_label"
+    assert private_rows[0]["source_passed"] is False
+    assert private_rows[0]["label_status"] == "needs_semantic_judge"
+    assert public_rows[0]["label_status"] == "needs_semantic_judge"
     assert public_rows[0]["disagreement_type"] == "current_negative_deterministically_equivalent"
     assert public_rows[0]["review_bucket"] == "current_negative_deterministically_equivalent"
     assert public_rows[0]["final_label"] is None
@@ -70,6 +71,58 @@ def test_prepare_review_writes_private_packet_and_redacted_manifest(tmp_path: Pa
     assert "response" not in public_rows[0]
     assert "answer" not in public_rows[0]
     assert "private prompt" not in (tmp_path / "summary.md").read_text()
+
+
+def test_source_passed_positive_disagreement_gets_seeded_equivalent_label(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "suite": "debugbench",
+                        "question_id": "q1",
+                        "prompt": "private prompt",
+                        "expected": "private reference",
+                        "role_results": {
+                            "frontdoor": {
+                                "answer": "different but passing implementation",
+                                "passed": True,
+                                "error_type": "none",
+                            }
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    summary = review.prepare_review(
+        [
+            {
+                "item_id": "source:0:frontdoor",
+                "source_path": str(source),
+                "source_record_index": 0,
+                "question_id": "q1",
+                "suite": "debugbench",
+                "role_key": "frontdoor",
+                "truth_label": 1,
+                "equivalence_proxy_label": 0,
+            }
+        ],
+        private_review_jsonl=tmp_path / "private.jsonl",
+        public_manifest_jsonl=tmp_path / "manifest.jsonl",
+        summary_json=tmp_path / "summary.json",
+        summary_md=tmp_path / "summary.md",
+    )
+
+    row = json.loads((tmp_path / "manifest.jsonl").read_text())
+    assert row["source_passed"] is True
+    assert row["semantic_label"] == "equivalent"
+    assert row["final_label"] == "equivalent"
+    assert row["label_source"] == "source_passed_true"
+    assert row["label_status"] == "seeded"
+    assert summary["by_label_status"] == {"seeded": 1}
 
 
 def test_role_key_with_colon_matches_exact_role_result(tmp_path: Path) -> None:
