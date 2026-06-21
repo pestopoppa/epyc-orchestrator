@@ -1,0 +1,139 @@
+{
+  "label_schema_version": "offline_reward_oracle_label.v1",
+  "manifest_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/adoption_manifest.json",
+  "oracle": {
+    "model_id": "deterministic/reference-token-coverage-v1",
+    "oracle_score_source": "reference_token_coverage",
+    "oracle_threshold": 0.86
+  },
+  "oracle_negative": 161,
+  "oracle_positive": 161,
+  "privacy": {
+    "commits_private_rows": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ]
+  },
+  "rows": 322,
+  "schema_version": "offline_reward_oracle_label_export_summary.v1",
+  "scored_rows_jsonl": "/mnt/raid0/llm/tmp/a9-token-coverage-final-label-with-stress-scored-20260621.jsonl",
+  "slices": {
+    "role_key": {
+      "architect_general": {
+        "oracle_negative": 8,
+        "oracle_positive": 2,
+        "rows": 10,
+        "target_agreement": 0.9,
+        "target_compared": 10
+      },
+      "coder_escalation": {
+        "oracle_negative": 36,
+        "oracle_positive": 9,
+        "rows": 45,
+        "target_agreement": 0.9555555555555556,
+        "target_compared": 45
+      },
+      "coder_primary": {
+        "oracle_negative": 35,
+        "oracle_positive": 8,
+        "rows": 43,
+        "target_agreement": 0.9069767441860465,
+        "target_compared": 43
+      },
+      "frontdoor": {
+        "oracle_negative": 35,
+        "oracle_positive": 8,
+        "rows": 43,
+        "target_agreement": 0.9069767441860465,
+        "target_compared": 43
+      },
+      "frontdoor:direct": {
+        "oracle_negative": 47,
+        "oracle_positive": 134,
+        "rows": 181,
+        "target_agreement": 0.9558011049723757,
+        "target_compared": 181
+      }
+    },
+    "suite": {
+      "agentic": {
+        "oracle_negative": 2,
+        "oracle_positive": 0,
+        "rows": 2,
+        "target_agreement": 1.0,
+        "target_compared": 2
+      },
+      "debugbench": {
+        "oracle_negative": 23,
+        "oracle_positive": 62,
+        "rows": 85,
+        "target_agreement": 0.9058823529411765,
+        "target_compared": 85
+      },
+      "general": {
+        "oracle_negative": 23,
+        "oracle_positive": 8,
+        "rows": 31,
+        "target_agreement": 0.8387096774193549,
+        "target_compared": 31
+      },
+      "instruction_precision": {
+        "oracle_negative": 23,
+        "oracle_positive": 19,
+        "rows": 42,
+        "target_agreement": 0.8571428571428571,
+        "target_compared": 42
+      },
+      "livecodebench": {
+        "oracle_negative": 24,
+        "oracle_positive": 72,
+        "rows": 96,
+        "target_agreement": 1.0,
+        "target_compared": 96
+      },
+      "math": {
+        "oracle_negative": 31,
+        "oracle_positive": 0,
+        "rows": 31,
+        "target_agreement": 1.0,
+        "target_compared": 31
+      },
+      "thinking": {
+        "oracle_negative": 35,
+        "oracle_positive": 0,
+        "rows": 35,
+        "target_agreement": 1.0,
+        "target_compared": 35
+      }
+    },
+    "target_source": {
+      "answer_equivalence_final_label": {
+        "oracle_negative": 111,
+        "oracle_positive": 62,
+        "rows": 173,
+        "target_agreement": 0.9017341040462428,
+        "target_compared": 173
+      },
+      "heldout_stress_binary_reward": {
+        "oracle_negative": 50,
+        "oracle_positive": 94,
+        "rows": 144,
+        "target_agreement": 0.9861111111111112,
+        "target_compared": 144
+      },
+      "original_binary_reward": {
+        "oracle_negative": 0,
+        "oracle_positive": 5,
+        "rows": 5,
+        "target_agreement": 1.0,
+        "target_compared": 5
+      }
+    }
+  },
+  "target_agreement": 0.9409937888198758,
+  "target_compared": 322
+}

@@ -13,6 +13,11 @@ Committed artifacts:
 - `adoption_manifest.json` is the fail-closed, machine-readable adoption packet
   for offline NEXT-A2/A3 reward-signal consumers. It is emitted only when
   `decision_gate.status=decision_grade`.
+- `offline_reward_labels.jsonl`, `offline_reward_labels_summary.json`, and
+  `offline_reward_labels_summary.md` are the prompt-free row-level label export
+  derived from the adoption manifest plus the private scored rows. These files
+  carry `oracle_binary_label` at threshold `0.86` and exclude prompt/reference/
+  response text.
 
 Private row data is not committed. The scored row file is:
 
@@ -30,6 +35,8 @@ Result:
 - stress checks: `48` groups, paraphrase penalty `0.0000`, confound fooled
   `0.0000`
 - decision gate: `decision_grade`
+- exported oracle positives / negatives: `161` / `161`
+- exported label target agreement: `0.9410`
 
 Interpretation:
 
