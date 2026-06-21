@@ -75,7 +75,11 @@ def _extract_local_structured_pdf(path: Path, *, extract_figures: bool) -> objec
 
     router = PDFRouter()
     text, structured_data, latency_ms = router._extract_with_opendataloader_structured(path)
-    figures = router._extract_figures_pymupdf(path) if extract_figures else []
+    figures = (
+        router._extract_figures_from_odl_structured(path, structured_data)
+        if extract_figures
+        else []
+    )
     return PDFExtractionResult(
         text=text,
         figures=figures,

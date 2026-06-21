@@ -156,6 +156,114 @@ class TestPDFRouterExtraction:
         figures = router._extract_figures_pymupdf(Path("/fake/test.pdf"))
         assert figures == []
 
+    def test_extract_figures_from_odl_structured_normalizes_points(self):
+        from src.models.odl_structured import (
+            FigureContext,
+            ODLBoundingBox,
+            ODLStructuredDocument,
+        )
+
+        router = PDFRouter()
+        structured = ODLStructuredDocument(
+            figures=[
+                FigureContext(
+                    figure_index=7,
+                    bbox=ODLBoundingBox(page=2, x0=100, y0=200, x1=500, y1=400),
+                    semantic_type="chart",
+                )
+            ]
+        )
+
+        with patch.object(router, "_page_dimensions_pymupdf", return_value={2: (1000, 800)}):
+            figures = router._extract_figures_from_odl_structured(
+                Path("/fake/structured.pdf"),
+                structured,
+            )
+
+        assert len(figures) == 1
+        assert figures[0].index == 7
+        assert figures[0].bbox.page == 2
+        assert figures[0].bbox.x0 == pytest.approx(0.1)
+        assert figures[0].bbox.y0 == pytest.approx(0.25)
+        assert figures[0].bbox.x1 == pytest.approx(0.5)
+        assert figures[0].bbox.y1 == pytest.approx(0.5)
+
+    def test_extract_figures_from_odl_structured_needs_page_dimensions(self):
+        from src.models.odl_structured import (
+            FigureContext,
+            ODLBoundingBox,
+            ODLStructuredDocument,
+        )
+
+        router = PDFRouter()
+        structured = ODLStructuredDocument(
+            figures=[
+                FigureContext(
+                    figure_index=1,
+                    bbox=ODLBoundingBox(page=1, x0=10, y0=10, x1=20, y1=20),
+                )
+            ]
+        )
+
+        with patch.object(router, "_page_dimensions_pymupdf", return_value={}):
+            figures = router._extract_figures_from_odl_structured(
+                Path("/fake/structured.pdf"),
+                structured,
+            )
+
+        assert figures == []
+
+    @pytest.mark.asyncio
+    async def test_extract_structured_odl_uses_odl_figures_not_pymupdf(
+        self, tmp_path, monkeypatch
+    ):
+        from src.models.odl_structured import (
+            FigureContext,
+            ODLBoundingBox,
+            ODLStructuredDocument,
+        )
+
+        pdf_path = tmp_path / "structured.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%EOF\n")
+        structured = ODLStructuredDocument(
+            figures=[
+                FigureContext(
+                    figure_index=1,
+                    bbox=ODLBoundingBox(page=1, x0=100, y0=100, x1=500, y1=400),
+                )
+            ]
+        )
+        odl_figure = ExtractedFigure(
+            index=1,
+            bbox=BoundingBox(x0=0.1, y0=0.1, x1=0.5, y1=0.4, page=1),
+        )
+
+        monkeypatch.setenv("PDF_EXTRACTOR", "opendataloader")
+        monkeypatch.setenv("ORCHESTRATOR_ODL_STRUCTURED", "1")
+
+        router = PDFRouter()
+        with patch.object(router, "_page_dimensions_pymupdf", return_value={1: (1000, 1000)}):
+            with patch.object(
+                router,
+                "_extract_with_opendataloader_structured",
+                return_value=("Enough text for quality", structured, 5.0),
+            ) as mock_odl:
+                with patch.object(router, "_assess_text_quality", return_value=(0.9, False)):
+                    with patch.object(
+                        router,
+                        "_extract_figures_from_odl_structured",
+                        return_value=[odl_figure],
+                    ) as mock_odl_figures:
+                        with patch.object(router, "_extract_figures_pymupdf") as mock_pymupdf:
+                            result = await router.extract(pdf_path, extract_figures=True)
+
+        mock_odl.assert_called_once_with(pdf_path)
+        mock_odl_figures.assert_called_once_with(pdf_path, structured)
+        mock_pymupdf.assert_not_called()
+        assert result.figures == [odl_figure]
+        assert result.structured_data is structured
+        assert result.method == "opendataloader_structured"
+
 
 @pytest.mark.skipif(
     os.environ.get("ORCHESTRATOR_MOCK_MODE", "").lower() == "true",

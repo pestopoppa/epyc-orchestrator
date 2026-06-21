@@ -29,9 +29,12 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from src.models.odl_structured import ODLStructuredDocument
 
 
 @dataclass
@@ -324,6 +327,88 @@ class PDFRouter:
             )
             return "", None, latency_ms
 
+    def _page_dimensions_pymupdf(self, pdf_path: Path) -> dict[int, tuple[float, float]]:
+        """Return page dimensions in PDF points keyed by 1-indexed page."""
+        if not self._has_pymupdf:
+            return {}
+
+        import fitz
+
+        dimensions: dict[int, tuple[float, float]] = {}
+        try:
+            doc = fitz.open(str(pdf_path))
+            for page_num, page in enumerate(doc, start=1):
+                dimensions[page_num] = (float(page.rect.width), float(page.rect.height))
+            doc.close()
+        except Exception as e:
+            logger.debug("Failed to get page dimensions for %s: %s", pdf_path, e)
+        return dimensions
+
+    def _extract_figures_from_odl_structured(
+        self,
+        pdf_path: Path,
+        structured_data: object | None,
+    ) -> list[ExtractedFigure]:
+        """Adapt ODL figure bboxes into ExtractedFigure records.
+
+        ODL reports page-local PDF-point coordinates, while downstream figure
+        cropping expects normalized 0-1 PDFRouter bboxes. We use PyMuPDF only
+        for page dimensions; we do not enumerate images or extract bytes here.
+        """
+        contexts = list(getattr(structured_data, "figures", []) or [])
+        if not contexts:
+            return []
+
+        page_dimensions = self._page_dimensions_pymupdf(pdf_path)
+        if not page_dimensions:
+            logger.warning("Cannot adapt ODL figure bboxes without page dimensions: %s", pdf_path)
+            return []
+
+        figures: list[ExtractedFigure] = []
+        for fallback_index, ctx in enumerate(contexts, start=1):
+            bbox = getattr(ctx, "bbox", None)
+            if bbox is None:
+                continue
+
+            page = max(int(getattr(bbox, "page", 1) or 1), 1)
+            width, height = page_dimensions.get(page, (0.0, 0.0))
+            if width <= 0 or height <= 0:
+                logger.debug("Skipping ODL figure on page %s without dimensions", page)
+                continue
+
+            x0 = float(getattr(bbox, "x0", 0.0) or 0.0)
+            y0 = float(getattr(bbox, "y0", 0.0) or 0.0)
+            x1 = float(getattr(bbox, "x1", 0.0) or 0.0)
+            y1 = float(getattr(bbox, "y1", 0.0) or 0.0)
+
+            if max(abs(x0), abs(y0), abs(x1), abs(y1)) > 1.0:
+                x0, x1 = x0 / width, x1 / width
+                y0, y1 = y0 / height, y1 / height
+
+            x0, x1 = sorted((max(0.0, min(1.0, x0)), max(0.0, min(1.0, x1))))
+            y0, y1 = sorted((max(0.0, min(1.0, y0)), max(0.0, min(1.0, y1))))
+            if x1 <= x0 or y1 <= y0:
+                logger.debug("Skipping degenerate ODL figure bbox on page %s", page)
+                continue
+
+            figure_index = int(getattr(ctx, "figure_index", fallback_index) or fallback_index)
+            figures.append(
+                ExtractedFigure(
+                    index=figure_index,
+                    bbox=BoundingBox(
+                        x0=x0,
+                        y0=y0,
+                        x1=x1,
+                        y1=y1,
+                        page=page,
+                        width_px=round((x1 - x0) * width),
+                        height_px=round((y1 - y0) * height),
+                    ),
+                )
+            )
+
+        return figures
+
     def _extract_figures_pymupdf(
         self, pdf_path: Path, output_dir: Optional[Path] = None
     ) -> list[ExtractedFigure]:
@@ -493,17 +578,7 @@ class PDFRouter:
 
         total_start = time.perf_counter()
 
-        # Get page count using PyMuPDF if available
-        page_count = 0
-        if self._has_pymupdf:
-            import fitz
-
-            try:
-                doc = fitz.open(str(pdf_path))
-                page_count = len(doc)
-                doc.close()
-            except Exception as e:
-                logger.debug("Failed to get page count: %s", e)
+        page_count = len(self._page_dimensions_pymupdf(pdf_path))
 
         # Step 1: Try text extraction (pdftotext or OpenDataLoader)
         structured_data = None
@@ -540,10 +615,16 @@ class PDFRouter:
                 # Good quality text - use fast path
                 figures = []
                 if extract_figures:
-                    output_dir = self.temp_dir / pdf_path.stem if save_figures else None
-                    if output_dir:
-                        output_dir.mkdir(parents=True, exist_ok=True)
-                    figures = self._extract_figures_pymupdf(pdf_path, output_dir)
+                    if structured_data is not None:
+                        figures = self._extract_figures_from_odl_structured(
+                            pdf_path,
+                            structured_data,
+                        )
+                    else:
+                        output_dir = self.temp_dir / pdf_path.stem if save_figures else None
+                        if output_dir:
+                            output_dir.mkdir(parents=True, exist_ok=True)
+                        figures = self._extract_figures_pymupdf(pdf_path, output_dir)
 
                 total_latency = (time.perf_counter() - total_start) * 1000
 

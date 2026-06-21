@@ -463,26 +463,33 @@ class TestDocumentClient:
                 return_value=("Intro\nBody", structured, 250.0),
             ) as mock_odl:
                 with patch(
-                    "src.services.pdf_router.PDFRouter._extract_figures_pymupdf",
+                    "src.services.pdf_router.PDFRouter._extract_figures_from_odl_structured",
                     return_value=[
                         ExtractedFigure(
                             index=1,
                             bbox=PDFBoundingBox(x0=0.1, y0=0.2, x1=0.5, y1=0.6, page=2),
                         )
                     ],
-                ) as mock_figures:
-                    with patch("src.services.document_client._pdf_page_count", return_value=2):
-                        with patch(
-                            "src.services.pdf_router.PDFRouter.extract",
-                            new_callable=AsyncMock,
-                        ) as mock_extract:
-                            result = await process_document(
-                                DocumentProcessRequest(file_path=str(pdf_path), extract_figures=True)
-                            )
+                ) as mock_odl_figures:
+                    with patch(
+                        "src.services.pdf_router.PDFRouter._extract_figures_pymupdf"
+                    ) as mock_pymupdf_figures:
+                        with patch("src.services.document_client._pdf_page_count", return_value=2):
+                            with patch(
+                                "src.services.pdf_router.PDFRouter.extract",
+                                new_callable=AsyncMock,
+                            ) as mock_extract:
+                                result = await process_document(
+                                    DocumentProcessRequest(
+                                        file_path=str(pdf_path),
+                                        extract_figures=True,
+                                    )
+                                )
 
         mock_get_client.assert_not_called()
         mock_odl.assert_called_once_with(pdf_path)
-        mock_figures.assert_called_once_with(pdf_path)
+        mock_odl_figures.assert_called_once_with(pdf_path, structured)
+        mock_pymupdf_figures.assert_not_called()
         mock_extract.assert_not_called()
         assert result.structured_data is structured
         assert result.total_pages == 2
