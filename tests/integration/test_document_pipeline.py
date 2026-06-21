@@ -612,7 +612,7 @@ class TestDocumentPreprocessor:
     def test_enrich_task_ir(self):
         """Test TaskIR enrichment."""
         from src.services.document_preprocessor import DocumentPreprocessor
-        from src.models.document import DocumentPreprocessResult, Section
+        from src.models.document import DocumentPreprocessResult, Section, TableRef
 
         preprocessor = DocumentPreprocessor()
 
@@ -622,6 +622,15 @@ class TestDocumentPreprocessor:
             original_path="/doc.pdf",
             sections=[Section(id="s1", title="Intro", level=1, content="Text")],
             figures=[],
+            tables=[
+                TableRef(
+                    id="p1_table1",
+                    page=1,
+                    markdown="| a | b |",
+                    caption="Table 1",
+                    section_id="s1",
+                )
+            ],
             total_pages=1,
         )
 
@@ -630,6 +639,15 @@ class TestDocumentPreprocessor:
         assert "ocr_result" in enriched
         assert "sections" in enriched["ocr_result"]
         assert len(enriched["ocr_result"]["sections"]) == 1
+        assert enriched["ocr_result"]["tables"] == [
+            {
+                "id": "p1_table1",
+                "page": 1,
+                "caption": "Table 1",
+                "markdown": "| a | b |",
+                "section_id": "s1",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_preprocess_uses_structured_context_when_available(self, tmp_path):

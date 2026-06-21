@@ -13,10 +13,12 @@ import threading
 from dataclasses import dataclass, field
 
 from src.models.document import (
+    BoundingBox,
     DocumentPreprocessResult,
     FigureRef,
     OCRResult,
     Section,
+    TableRef,
 )
 
 logger = logging.getLogger(__name__)
@@ -188,6 +190,54 @@ class DocumentChunker:
 
         return figures
 
+    def extract_tables_from_structured(
+        self,
+        structured_doc: object | None,
+        sections: list[Section] | None = None,
+    ) -> list[TableRef]:
+        """Extract table references from ODL structured metadata."""
+        from src.models.odl_structured import coerce_structured_document
+
+        structured = coerce_structured_document(structured_doc)
+        if not structured or not structured.tables:
+            return []
+
+        tables: list[TableRef] = []
+        for table in structured.tables:
+            bbox_data = getattr(table, "bbox", None)
+            page = int(getattr(bbox_data, "page", 1) if bbox_data is not None else 1)
+            table_index = int(getattr(table, "table_index", len(tables) + 1))
+            bbox = None
+            if bbox_data is not None:
+                bbox = BoundingBox(
+                    id=table_index,
+                    x1=int(round(getattr(bbox_data, "x0", 0.0))),
+                    y1=int(round(getattr(bbox_data, "y0", 0.0))),
+                    x2=int(round(getattr(bbox_data, "x1", 0.0))),
+                    y2=int(round(getattr(bbox_data, "y1", 0.0))),
+                    normalized=False,
+                    page=page,
+                )
+
+            table_ref = TableRef(
+                id=f"p{page}_table{table_index}",
+                page=page,
+                bbox=bbox,
+                markdown=str(getattr(table, "markdown_form", "") or ""),
+                caption=str(getattr(table, "caption", "") or ""),
+                rows=list(getattr(table, "rows", []) or []),
+            )
+
+            if sections:
+                for section in sections:
+                    if section.page_start <= page <= section.page_end:
+                        table_ref.section_id = section.id
+                        break
+
+            tables.append(table_ref)
+
+        return tables
+
     def assign_page_ranges(
         self,
         sections: list[Section],
@@ -283,6 +333,7 @@ class DocumentChunker:
 
         # Extract figures
         figures = self.extract_figures(ocr_result, sections)
+        tables = self.extract_tables_from_structured(structured, sections)
 
         processing_time = time.time() - start_time
 
@@ -294,6 +345,7 @@ class DocumentChunker:
             original_path=original_path,
             sections=sections,
             figures=figures,
+            tables=tables,
             total_pages=ocr_result.total_pages,
             failed_pages=failed_pages,
             processing_time=ocr_result.elapsed_sec + processing_time,

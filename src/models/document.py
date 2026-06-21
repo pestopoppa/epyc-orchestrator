@@ -327,6 +327,44 @@ class FigureRef:
 
 
 @dataclass
+class TableRef:
+    """Reference to an extracted table."""
+
+    id: str  # e.g., "p1_table1"
+    page: int
+    bbox: BoundingBox | None = None
+    markdown: str = ""
+    caption: str = ""
+    rows: list[list[Any]] = field(default_factory=list)
+    section_id: str | None = None
+
+    def to_cache_dict(self) -> dict[str, Any]:
+        """Serialize for session cache."""
+        return {
+            "id": self.id,
+            "page": self.page,
+            "bbox": self.bbox.to_cache_dict() if self.bbox else None,
+            "markdown": self.markdown,
+            "caption": self.caption,
+            "rows": self.rows,
+            "section_id": self.section_id,
+        }
+
+    @classmethod
+    def from_cache_dict(cls, data: dict[str, Any]) -> "TableRef":
+        """Deserialize from session cache."""
+        return cls(
+            id=data["id"],
+            page=data["page"],
+            bbox=BoundingBox.from_cache_dict(data["bbox"]) if data.get("bbox") else None,
+            markdown=data.get("markdown", ""),
+            caption=data.get("caption", ""),
+            rows=data.get("rows", []),
+            section_id=data.get("section_id"),
+        )
+
+
+@dataclass
 class DocumentPreprocessResult:
     """Complete preprocessing result for a document.
 
@@ -344,6 +382,7 @@ class DocumentPreprocessResult:
 
     # Raw OCR result for reference
     ocr_result: OCRResult | None = None
+    tables: list[TableRef] = field(default_factory=list)
 
     @property
     def success_rate(self) -> float:
@@ -370,6 +409,7 @@ class DocumentPreprocessResult:
             "total_pages": self.total_pages,
             "sections": len(self.sections),
             "figures": [f.id for f in self.figures],
+            "tables": [t.id for t in self.tables],
             "failed_pages": self.failed_pages,
             "processing_time": self.processing_time,
             "success_rate": self.success_rate,
@@ -389,6 +429,7 @@ class DocumentPreprocessResult:
             "original_path": self.original_path,
             "sections": [s.to_cache_dict() for s in self.sections],
             "figures": [f.to_cache_dict() for f in self.figures],
+            "tables": [t.to_cache_dict() for t in self.tables],
             "total_pages": self.total_pages,
             "failed_pages": self.failed_pages,
             "processing_time": self.processing_time,
@@ -408,6 +449,7 @@ class DocumentPreprocessResult:
             original_path=data["original_path"],
             sections=[Section.from_cache_dict(s) for s in data.get("sections", [])],
             figures=[FigureRef.from_cache_dict(f) for f in data.get("figures", [])],
+            tables=[TableRef.from_cache_dict(t) for t in data.get("tables", [])],
             total_pages=data["total_pages"],
             failed_pages=data.get("failed_pages", []),
             processing_time=data.get("processing_time", 0.0),

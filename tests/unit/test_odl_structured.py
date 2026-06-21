@@ -23,6 +23,7 @@ from src.models.odl_structured import (
     HeadingNode,
     ODLBoundingBox,
     ODLStructuredDocument,
+    TableContext,
     coerce_structured_document,
     build_heading_tree,
     flatten_heading_tree,
@@ -307,6 +308,41 @@ def test_document_chunker_uses_structured_headings_when_available() -> None:
     assert len(result.sections) == 2
     assert "Introduction" in titles
     assert "Results" in titles
+
+
+def test_document_chunker_extracts_structured_tables_when_available() -> None:
+    text = "Results\nThe table summarizes latency."
+    ocr_result = OCRResult(
+        pages=[PageOCRResult(page=1, text=text, bboxes=[])],
+        total_pages=1,
+        elapsed_sec=0.0,
+        pages_per_sec=1.0,
+    )
+    structured_doc = ODLStructuredDocument(
+        headings=[HeadingNode(level=1, text="Results")],
+        tables=[
+            TableContext(
+                table_index=1,
+                bbox=ODLBoundingBox(page=1, x0=72, y0=120, x1=540, y1=300),
+                rows=[["model", "latency"], ["frontdoor", "42 ms"]],
+                markdown_form="| model | latency |\n|---|---|\n| frontdoor | 42 ms |",
+                caption="Table 1: latency",
+            )
+        ],
+    )
+
+    result = DocumentChunker().process(ocr_result, "/doc.pdf", structured_doc=structured_doc)
+
+    assert len(result.tables) == 1
+    table = result.tables[0]
+    assert table.id == "p1_table1"
+    assert table.page == 1
+    assert table.caption == "Table 1: latency"
+    assert "frontdoor" in table.markdown
+    assert table.rows[1] == ["frontdoor", "42 ms"]
+    assert table.bbox is not None
+    assert table.bbox.normalized is False
+    assert table.section_id == "s1"
 
 
 def test_split_long_body_breaks_at_paragraphs() -> None:

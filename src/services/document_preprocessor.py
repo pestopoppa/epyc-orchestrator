@@ -27,6 +27,7 @@ from src.models.document import (
     FigureRef,
     ProcessingStatus,
     Section,
+    TableRef,
 )
 from src.services.document_client import (
     DocumentFormalizerClient,
@@ -716,6 +717,7 @@ class DocumentPreprocessor:
             # (merge all sections and figures)
             merged_sections: list[Section] = []
             merged_figures: list[FigureRef] = []
+            merged_tables: list[TableRef] = []
             total_pages = 0
 
             for filename, doc in documents.items():
@@ -743,12 +745,25 @@ class DocumentPreprocessor:
                     )
                     merged_figures.append(new_figure)
 
+                for table in doc.tables:
+                    new_table = TableRef(
+                        id=f"{filename}:{table.id}",
+                        page=total_pages + table.page,
+                        bbox=table.bbox,
+                        markdown=table.markdown,
+                        caption=table.caption,
+                        rows=table.rows,
+                        section_id=f"{filename}:{table.section_id}" if table.section_id else None,
+                    )
+                    merged_tables.append(new_table)
+
                 total_pages += doc.total_pages
 
             merged_result = DocumentPreprocessResult(
                 original_path=str(archive_path),
                 sections=merged_sections,
                 figures=merged_figures,
+                tables=merged_tables,
                 total_pages=total_pages,
                 processing_time=multi_result.processing_time,
                 status=ProcessingStatus.COMPLETED,
@@ -831,6 +846,16 @@ class DocumentPreprocessor:
                     "section_id": f.section_id,
                 }
                 for f in document_result.figures
+            ],
+            "tables": [
+                {
+                    "id": t.id,
+                    "page": t.page,
+                    "caption": t.caption,
+                    "markdown": t.markdown,
+                    "section_id": t.section_id,
+                }
+                for t in document_result.tables
             ],
             "total_pages": document_result.total_pages,
             "failed_pages": document_result.failed_pages,

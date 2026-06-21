@@ -8,7 +8,7 @@ import uuid
 import pytest
 
 from src.session.document_cache import DocumentCache
-from src.models.document import DocumentPreprocessResult, Section
+from src.models.document import BoundingBox, DocumentPreprocessResult, Section, TableRef
 
 
 @pytest.fixture
@@ -47,6 +47,17 @@ def sample_preprocess_result():
             ),
         ],
         figures=[],
+        tables=[
+            TableRef(
+                id="p1_table1",
+                page=1,
+                bbox=BoundingBox(id=1, x1=10, y1=20, x2=300, y2=200, normalized=False),
+                markdown="| a | b |",
+                caption="Table 1",
+                rows=[["a", "b"]],
+                section_id="sec-1",
+            )
+        ],
         failed_pages=[],
         processing_time=1.5,
     )
@@ -90,6 +101,10 @@ class TestDocumentCache:
         assert cached_result.total_pages == 5
         assert len(cached_result.sections) == 1
         assert cached_result.sections[0].title == "Introduction"
+        assert len(cached_result.tables) == 1
+        assert cached_result.tables[0].caption == "Table 1"
+        assert cached_result.tables[0].bbox is not None
+        assert cached_result.tables[0].bbox.normalized is False
 
     def test_cache_invalidation_on_file_change(
         self, temp_cache, tmp_path, sample_preprocess_result
