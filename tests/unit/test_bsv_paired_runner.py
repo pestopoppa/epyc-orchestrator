@@ -114,7 +114,7 @@ def test_candidate_apply_failure_raises_before_candidate_eval(tmp_path: Path) ->
     else:  # pragma: no cover
         raise AssertionError("expected candidate failure")
 
-    assert calls == [{"flag": False}, {"flag": True}]
+    assert calls == [{"flag": False}, {"flag": True}, {"flag": False}]
     assert tower.calls == [("t1", 3, 123)]
     assert (tmp_path / "baseline_eval.json").exists()
     assert not (tmp_path / "candidate_eval.json").exists()

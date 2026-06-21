@@ -186,6 +186,8 @@ def run_paired_evaluation(
 
     candidate_apply = apply_params_func(candidate_params) if candidate_params else {"status": "ok", "noop": True}
     if candidate_apply.get("status") == "error":
+        if restore_baseline and baseline_params:
+            candidate_apply["restore_baseline_result"] = apply_params_func(baseline_params)
         raise RuntimeError(f"candidate params failed: {candidate_apply}")
     try:
         candidate_result = _eval_once(
