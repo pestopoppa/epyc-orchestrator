@@ -48,15 +48,53 @@ def test_summarize_response_extracts_delegation_metrics():
     assert summary["delegation_inference_hops"] == 2
     assert summary["delegation_event_tokens"] == 20
     assert summary["delegation_event_prompt_ms"] == 13.0
+    assert summary["quality_score"] is None
+    assert summary["quality_pass"] is None
     assert summary["answer_chars"] == 4
 
 
 def test_aggregate_reports_arm_deltas():
     rows = [
-        {"arm": "off", "summary": {"elapsed_s": 10, "tokens_generated": 100, "delegation_event_tokens": 80, "delegation_events_count": 2, "status": 200}},
-        {"arm": "off", "summary": {"elapsed_s": 20, "tokens_generated": 120, "delegation_event_tokens": 90, "delegation_events_count": 2, "status": 200}},
-        {"arm": "on", "summary": {"elapsed_s": 8, "tokens_generated": 70, "delegation_event_tokens": 50, "delegation_events_count": 1, "status": 200}},
-        {"arm": "on", "summary": {"elapsed_s": 12, "tokens_generated": 90, "delegation_event_tokens": 60, "delegation_events_count": 1, "status": 200}},
+        {
+            "arm": "off",
+            "summary": {
+                "elapsed_s": 10,
+                "tokens_generated": 100,
+                "delegation_event_tokens": 80,
+                "delegation_events_count": 2,
+                "status": 200,
+            },
+        },
+        {
+            "arm": "off",
+            "summary": {
+                "elapsed_s": 20,
+                "tokens_generated": 120,
+                "delegation_event_tokens": 90,
+                "delegation_events_count": 2,
+                "status": 200,
+            },
+        },
+        {
+            "arm": "on",
+            "summary": {
+                "elapsed_s": 8,
+                "tokens_generated": 70,
+                "delegation_event_tokens": 50,
+                "delegation_events_count": 1,
+                "status": 200,
+            },
+        },
+        {
+            "arm": "on",
+            "summary": {
+                "elapsed_s": 12,
+                "tokens_generated": 90,
+                "delegation_event_tokens": 60,
+                "delegation_events_count": 1,
+                "status": 200,
+            },
+        },
     ]
 
     agg = dcp._aggregate(rows)
@@ -68,6 +106,90 @@ def test_aggregate_reports_arm_deltas():
     assert agg["delta"]["p50_elapsed_pct"] == 0.4
     assert agg["delta"]["avg_tokens_generated_delta"] == -30
     assert agg["delta"]["avg_delegation_event_tokens_delta"] == -30
+    assert agg["decision"]["status"] == "insufficient"
+    assert "too_few_rows_per_arm" in agg["decision"]["blockers"]
+    assert "quality_not_scored" in agg["decision"]["blockers"]
+
+
+def test_decision_holds_on_latency_regression():
+    rows = []
+    for index in range(3):
+        rows.append(
+            {
+                "arm": "off",
+                "summary": {
+                    "elapsed_s": 20 + index,
+                    "tokens_generated": 100,
+                    "delegation_event_tokens": 80,
+                    "delegation_events_count": 2,
+                    "delegation_success": True,
+                    "quality_score": 1.0,
+                    "quality_pass": True,
+                    "status": 200,
+                },
+            }
+        )
+        rows.append(
+            {
+                "arm": "on",
+                "summary": {
+                    "elapsed_s": 30 + index,
+                    "tokens_generated": 80,
+                    "delegation_event_tokens": 60,
+                    "delegation_events_count": 1,
+                    "delegation_success": True,
+                    "quality_score": 1.0,
+                    "quality_pass": True,
+                    "status": 200,
+                },
+            }
+        )
+
+    agg = dcp._aggregate(rows)
+
+    assert agg["decision"]["status"] == "hold"
+    assert agg["decision"]["recommendation"] == "keep dcp_pre_assembly default-off"
+    assert "latency_not_improved" in agg["decision"]["blockers"]
+
+
+def test_decision_promotes_only_with_quality_and_latency_pass():
+    rows = []
+    for index in range(3):
+        rows.append(
+            {
+                "arm": "off",
+                "summary": {
+                    "elapsed_s": 20 + index,
+                    "tokens_generated": 100,
+                    "delegation_event_tokens": 80,
+                    "delegation_events_count": 2,
+                    "delegation_success": True,
+                    "quality_score": 1.0,
+                    "quality_pass": True,
+                    "status": 200,
+                },
+            }
+        )
+        rows.append(
+            {
+                "arm": "on",
+                "summary": {
+                    "elapsed_s": 10 + index,
+                    "tokens_generated": 80,
+                    "delegation_event_tokens": 60,
+                    "delegation_events_count": 1,
+                    "delegation_success": True,
+                    "quality_score": 1.0,
+                    "quality_pass": True,
+                    "status": 200,
+                },
+            }
+        )
+
+    agg = dcp._aggregate(rows)
+
+    assert agg["decision"]["status"] == "promote_advisory"
+    assert agg["decision"]["blockers"] == []
 
 
 def test_real_run_refuses_without_host_quiet(capsys):

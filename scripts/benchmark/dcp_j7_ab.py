@@ -24,6 +24,8 @@ from typing import Any
 ORCH = Path("/mnt/raid0/llm/epyc-orchestrator")
 API_URL = "http://127.0.0.1:8000"
 RESULTS_ROOT = ORCH / "benchmarks" / "results" / "runs" / "dcp_j7"
+MIN_ROWS_PER_ARM = 3
+MIN_LATENCY_IMPROVEMENT = 0.10
 
 PROMPTS: list[dict[str, str]] = [
     {
@@ -154,6 +156,8 @@ def _summarize_response(data: dict[str, Any], elapsed_s: float, status: int) -> 
         "delegation_inference_hops": diagnostics.get("delegation_inference_hops"),
         "delegation_event_tokens": sum(event_tokens),
         "delegation_event_prompt_ms": round(sum(event_prompt_ms), 3),
+        "quality_score": data.get("quality_score"),
+        "quality_pass": data.get("quality_pass"),
         "error_code": data.get("error_code"),
         "error_detail": data.get("error_detail"),
         "answer_chars": len(data.get("answer") or ""),
@@ -186,6 +190,8 @@ def _stub_row(block: int, arm: str, prompt: dict[str, str]) -> dict[str, Any]:
             "delegation_inference_hops": 0,
             "delegation_event_tokens": 0,
             "delegation_event_prompt_ms": 0.0,
+            "quality_score": None,
+            "quality_pass": None,
             "error_code": None,
             "error_detail": None,
             "answer_chars": 0,
@@ -224,6 +230,11 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 sum(float(s.get("delegation_events_count") or 0.0) for s in summaries) / len(summaries),
                 3,
             ),
+            "delegation_successes": sum(1 for s in summaries if s.get("delegation_success") is True),
+            "delegation_failures": sum(1 for s in summaries if s.get("delegation_success") is False),
+            "quality_scored": sum(1 for s in summaries if s.get("quality_score") is not None),
+            "quality_passes": sum(1 for s in summaries if s.get("quality_pass") is True),
+            "quality_failures": sum(1 for s in summaries if s.get("quality_pass") is False),
             "errors": sum(1 for s in summaries if s.get("error_code") or int(s.get("status") or 0) >= 400),
         }
     if out.get("off") and out.get("on") and out["off"]["p50_elapsed_s"]:
@@ -243,7 +254,63 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 3,
             ),
         }
+    out["decision"] = _decision(out)
     return out
+
+
+def _decision(summary: dict[str, Any]) -> dict[str, Any]:
+    off = summary.get("off") or {}
+    on = summary.get("on") or {}
+    delta = summary.get("delta") or {}
+    blockers: list[str] = []
+
+    if off.get("n", 0) < MIN_ROWS_PER_ARM or on.get("n", 0) < MIN_ROWS_PER_ARM:
+        blockers.append("too_few_rows_per_arm")
+    if off.get("errors", 0) or on.get("errors", 0):
+        blockers.append("errors_present")
+
+    latency_delta = delta.get("p50_elapsed_pct")
+    if latency_delta is None:
+        blockers.append("missing_latency_delta")
+    elif latency_delta < MIN_LATENCY_IMPROVEMENT:
+        blockers.append("latency_not_improved")
+
+    if on.get("avg_delegation_event_tokens", 0.0) > off.get("avg_delegation_event_tokens", 0.0):
+        blockers.append("delegation_event_tokens_regressed")
+
+    quality_required = min(off.get("n", 0), on.get("n", 0))
+    if off.get("quality_scored", 0) < quality_required or on.get("quality_scored", 0) < quality_required:
+        blockers.append("quality_not_scored")
+    elif on.get("quality_failures", 0) > off.get("quality_failures", 0):
+        blockers.append("quality_failures_regressed")
+
+    if off.get("delegation_failures", 0) or on.get("delegation_failures", 0):
+        blockers.append("delegation_failures_present")
+
+    if not blockers:
+        status = "promote_advisory"
+        recommendation = "keep advisory DCP enabled for a second confirmatory run"
+    elif "latency_not_improved" in blockers or "errors_present" in blockers:
+        status = "hold"
+        recommendation = "keep dcp_pre_assembly default-off"
+    else:
+        status = "insufficient"
+        recommendation = "rerun with enough rows and quality-scored prompts"
+
+    return {
+        "schema_version": "dcp_j7_decision.v1",
+        "status": status,
+        "recommendation": recommendation,
+        "blockers": blockers,
+        "criteria": {
+            "min_rows_per_arm": MIN_ROWS_PER_ARM,
+            "min_latency_improvement": MIN_LATENCY_IMPROVEMENT,
+            "requires_zero_errors": True,
+            "requires_quality_scored_rows": True,
+            "requires_no_quality_regression": True,
+            "requires_no_delegation_failures": True,
+        },
+    }
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
