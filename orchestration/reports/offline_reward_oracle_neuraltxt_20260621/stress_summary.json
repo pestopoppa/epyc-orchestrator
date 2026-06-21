@@ -1,0 +1,10 @@
+{
+  "groups": 23,
+  "include_base": true,
+  "rows": 69,
+  "schema_version": "offline_reward_oracle_stress_rows.v1",
+  "stats": {
+    "groups": 23,
+    "skipped_non_positive_base": 27
+  }
+}

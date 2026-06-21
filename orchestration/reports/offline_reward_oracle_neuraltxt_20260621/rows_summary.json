@@ -1,0 +1,15 @@
+{
+  "oracle_score_mode": "omit",
+  "role_counts": {
+    "frontdoor:direct": 50
+  },
+  "rows": 50,
+  "schema_version": "offline_reward_oracle_rows.v1",
+  "stats": {
+    "rows": 50
+  },
+  "suite_counts": {
+    "debugbench": 25,
+    "simpleqa": 25
+  }
+}
