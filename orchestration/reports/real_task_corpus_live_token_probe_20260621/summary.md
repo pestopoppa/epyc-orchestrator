@@ -1,25 +1,25 @@
 # Live Real-Task Token Coverage Probe
 
-- Generated: `2026-06-21T03:12:39+00:00`
+- Generated: `2026-06-21T13:17:54+00:00`
 - Window: `2026-06-21` to `2026-06-21`
-- Output inspected: `/mnt/raid0/llm/tmp/f1-live-token-probe-20260621/real_tasks.jsonl`
-- Manifest inspected: `/mnt/raid0/llm/tmp/f1-live-token-probe-20260621/manifest.json`
+- Output inspected: `orchestration/reports/real_task_corpus_live_token_probe_20260621/real_tasks.jsonl`
+- Manifest inspected: `orchestration/reports/real_task_corpus_live_token_probe_20260621/manifest.json`
 
 ## Readout
 
 | Metric | Value |
 |---|---:|
-| Training-eligible rows | 57 |
-| Duplicate prompt attempts collapsed | 103 |
-| Rows with wall time | 57 |
-| Rows with token payloads | 46 |
+| Training-eligible rows | 213 |
+| Duplicate prompt attempts collapsed | 328 |
+| Rows with wall time | 213 |
+| Rows with token payloads | 202 |
 | Prompt text rows | 0 |
 
 ## Gate Readout
 
 | Check | Status |
 |---|---|
-| `class_outcome_count_gate` | `False` |
+| `class_outcome_count_gate` | `True` |
 | `wall_time_coverage` | `True` |
 | `token_payload_coverage` | `True` |
 | `privacy_prompt_text_free` | `True` |
@@ -29,24 +29,24 @@
 
 | Class | Rows |
 |---|---:|
-| benchmark_eval_measurement | 12 |
-| code_change_implementation | 22 |
-| debug_root_cause | 4 |
-| governance_docs_handoff | 1 |
-| ops_deploy_process | 10 |
-| planning_architecture_review | 5 |
-| research_intake_deep_dive | 3 |
+| benchmark_eval_measurement | 25 |
+| code_change_implementation | 102 |
+| debug_root_cause | 11 |
+| governance_docs_handoff | 12 |
+| ops_deploy_process | 25 |
+| planning_architecture_review | 16 |
+| research_intake_deep_dive | 22 |
 
 ## Deployment Check
 
 - Latest telemetry mtime: `2026-06-20T23:02:35.835387+00:00`
-- Stale for token telemetry: `True`
-- Stale AutoPilot PIDs: `[1091014, 1091018]`
+- Stale for token telemetry: `False`
+- Stale AutoPilot PIDs: `[]`
 
 | PID | Started at | Elapsed s |
 |---:|---|---:|
-| 1091014 | `2026-06-20T17:29:27+00:00` | 34992 |
-| 1091018 | `2026-06-20T17:29:27+00:00` | 34992 |
+| 2472032 | `2026-06-21T11:49:28+00:00` | 5306 |
+| 2472037 | `2026-06-21T11:49:28+00:00` | 5306 |
 
 ## Notes
 

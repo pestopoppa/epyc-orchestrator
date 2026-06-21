@@ -1,0 +1,75 @@
+{
+  "builder": "scripts/tasks/harvest_tasks.py",
+  "counts": {
+    "by_class": {
+      "benchmark_eval_measurement": 25,
+      "code_change_implementation": 102,
+      "debug_root_cause": 11,
+      "governance_docs_handoff": 12,
+      "ops_deploy_process": 25,
+      "planning_architecture_review": 16,
+      "research_intake_deep_dive": 22
+    },
+    "by_outcome": {
+      "failure": 4,
+      "success": 209
+    },
+    "by_source": {
+      "orchestrator_progress_jsonl": 213
+    },
+    "by_source_family": {
+      "orchestrator_progress_jsonl": 213
+    },
+    "duplicates_collapsed": 328,
+    "synthetic_like": 0,
+    "taxonomy_class": 213,
+    "training_eligible": 213,
+    "written": 213
+  },
+  "generated_at": "2026-06-21T13:17:54+00:00",
+  "options": {
+    "compact_evidence": true,
+    "dedupe_prompt": true,
+    "end_date": "2026-06-21",
+    "exclude_synthetic_like": true,
+    "historical_conversation_paths": [],
+    "include_historical_sidechains": false,
+    "include_open": false,
+    "lab_task_records": [],
+    "limit": 0,
+    "omit_prompt_text": true,
+    "progress_log_dir": "/mnt/raid0/llm/epyc-orchestrator/logs/progress",
+    "start_date": "2026-06-21",
+    "training_eligible_only": true,
+    "workload_model": "orchestration/workload_model.yaml"
+  },
+  "output_path": "orchestration/reports/real_task_corpus_live_token_probe_20260621/real_tasks.jsonl",
+  "privacy_note": "Records are local-private; do not publish prompt text under F6.",
+  "schema_version": "task_harvest_manifest.v1",
+  "sources": {
+    "historical": {
+      "records": 0,
+      "skipped": {},
+      "source": "historical_conversation_jsonl",
+      "source_paths": []
+    },
+    "lab": {
+      "records": 0,
+      "skipped": {},
+      "source": "lab_task_record_jsonl"
+    },
+    "progress": {
+      "malformed_or_ignored": 0,
+      "records": 2134,
+      "skipped": {
+        "missing_start": 1,
+        "open_task": 379
+      },
+      "source": "orchestrator_progress_jsonl",
+      "source_paths": [
+        "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-06-21.jsonl"
+      ],
+      "task_states_seen": 2514
+    }
+  }
+}
