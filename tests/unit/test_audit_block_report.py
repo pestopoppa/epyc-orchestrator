@@ -119,10 +119,30 @@ def test_cli_writes_json_and_markdown(tmp_path: Path) -> None:
     report = json.loads(out_json.read_text(encoding="utf-8"))
     assert report["trials"][0]["trial_id"] == 7
     assert report["trials"][0]["audit_quality_0_3"] == 3.0
+    assert report["gaming_alarm_window"] == 30
+    assert report["transfer_diagnostic"]["alarm_window"] == 30
     markdown = out_md.read_text(encoding="utf-8")
     assert "# W6 Rotating Audit Block Report" in markdown
+    assert "Gaming alarm window: last 30 audited trials" in markdown
     assert "| trial_id | core | audit | core_q | audit_q | delta_audit_minus_core |" in markdown
     assert "7 | 1/2 | 2/2 | 1.500 | 3.000 | +1.500" in markdown
+
+
+def test_build_report_default_keeps_all_history_alarm_window_none(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "autopilot_journal.jsonl"
+    _write_journal(
+        journal,
+        [
+            _trial(1, core_correct=1, core_total=2, audit_correct=1, audit_total=2),
+        ],
+    )
+
+    report = audit_block_report.build_report(audit_block_report.load_journal_rows([journal]))
+
+    assert report["gaming_alarm_window"] is None
+    assert report["transfer_diagnostic"]["alarm_window"] is None
 
 
 def test_transfer_diagnostic_counts_divergences(tmp_path: Path) -> None:

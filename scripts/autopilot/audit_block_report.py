@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 UNTRUSTED_OUTCOME_STATUSES = frozenset({"invalid", "skipped"})
+DEFAULT_ALARM_WINDOW = 30
 
 
 def _expand_journal_paths(raw_paths: Iterable[Path]) -> list[Path]:
@@ -429,9 +430,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--alarm-window",
         type=int,
+        default=DEFAULT_ALARM_WINDOW,
         help=(
             "Evaluate the active gaming alarm over the last N audited trials while "
-            "preserving cumulative divergence evidence in the report."
+            "preserving cumulative divergence evidence in the report. "
+            f"Defaults to {DEFAULT_ALARM_WINDOW}; use 0 for all audited history."
         ),
     )
     return parser.parse_args(argv)
