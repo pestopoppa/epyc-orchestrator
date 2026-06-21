@@ -1,0 +1,358 @@
+{
+  "artifact_counts": {
+    "by_schema": {
+      "offline_reward_verifier_model_family_robustness.v1": 3,
+      "verifier_calibration_robustness.v1": 11
+    },
+    "failed": 14,
+    "promotion_grade": 0,
+    "total": 14
+  },
+  "attempts": [
+    {
+      "best_auc_mean": 0.731729,
+      "best_brier_mean": 0.228273,
+      "best_ece_mean": 0.161232,
+      "best_label": "quantile_histogram",
+      "best_pass_count": 1,
+      "best_pass_rate": 0.1,
+      "blockers": [
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold",
+        "sparse_action_coverage"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_calibration_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.711955,
+      "best_brier_mean": 0.226651,
+      "best_ece_mean": 0.116197,
+      "best_label": "temperature_bias",
+      "best_pass_count": 0,
+      "best_pass_rate": 0.0,
+      "blockers": [
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_expansion_calibration_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.751357,
+      "best_brier_mean": 0.19209,
+      "best_ece_mean": 0.090468,
+      "best_label": "isotonic",
+      "best_pass_count": 1,
+      "best_pass_rate": 0.1,
+      "blockers": [
+        "isotonic_calibrated_pass_rate_below_threshold",
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_expansion_normalized_isotonic_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.831422,
+      "best_brier_mean": 0.179334,
+      "best_ece_mean": 0.138786,
+      "best_label": "ece_temperature_bias",
+      "best_pass_count": 0,
+      "best_pass_rate": 0.0,
+      "blockers": [
+        "ece_temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_expansion_response_telemetry_conflict_dropped_ece_temperature_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.831422,
+      "best_brier_mean": 0.162892,
+      "best_ece_mean": 0.152219,
+      "best_label": "temperature_bias",
+      "best_pass_count": 0,
+      "best_pass_rate": 0.0,
+      "blockers": [
+        "isotonic_calibrated_pass_rate_below_threshold",
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_expansion_response_telemetry_conflict_dropped_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.749552,
+      "best_brier_mean": 0.196848,
+      "best_ece_mean": 0.101351,
+      "best_label": "isotonic",
+      "best_pass_count": 2,
+      "best_pass_rate": 0.2,
+      "blockers": [
+        "isotonic_calibrated_pass_rate_below_threshold",
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion_response_telemetry.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_expansion_response_telemetry_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.796031,
+      "best_brier_mean": 0.167822,
+      "best_ece_mean": 0.117363,
+      "best_label": "quantile_histogram",
+      "best_pass_count": 1,
+      "best_pass_rate": 0.1,
+      "blockers": [
+        "ece_temperature_bias_calibrated_pass_rate_below_threshold",
+        "isotonic_calibrated_pass_rate_below_threshold",
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion_source_family_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_expansion_source_family_response_telemetry_conflict_dropped_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.705422,
+      "best_brier_mean": 0.21401,
+      "best_ece_mean": 0.130784,
+      "best_label": "temperature_bias",
+      "best_pass_count": 0,
+      "best_pass_rate": 0.0,
+      "blockers": [
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_seeding_eval_expansion_source_action_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_seeding_eval_expansion_source_action_response_telemetry_conflict_dropped_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.717042,
+      "best_brier_mean": 0.219304,
+      "best_ece_mean": 0.104991,
+      "best_label": "ece_temperature_bias",
+      "best_pass_count": 0,
+      "best_pass_rate": 0.0,
+      "blockers": [
+        "ece_temperature_bias_calibrated_pass_rate_below_threshold",
+        "isotonic_calibrated_pass_rate_below_threshold",
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_seeding_eval_expansion_source_family_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_seeding_eval_expansion_source_family_response_telemetry_conflict_dropped_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.721996,
+      "best_brier_mean": 0.225658,
+      "best_ece_mean": 0.09871,
+      "best_label": "ece_temperature_bias",
+      "best_pass_count": 0,
+      "best_pass_rate": 0.0,
+      "blockers": [
+        "ece_temperature_bias_calibrated_pass_rate_below_threshold",
+        "isotonic_calibrated_pass_rate_below_threshold",
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_source_family_expansion_source_action_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_source_family_expansion_source_action_response_telemetry_conflict_dropped_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.765291,
+      "best_brier_mean": 0.200244,
+      "best_ece_mean": 0.120839,
+      "best_label": "isotonic",
+      "best_pass_count": 1,
+      "best_pass_rate": 0.1,
+      "blockers": [
+        "ece_temperature_bias_calibrated_pass_rate_below_threshold",
+        "isotonic_calibrated_pass_rate_below_threshold",
+        "quantile_histogram_calibrated_pass_rate_below_threshold",
+        "temperature_bias_calibrated_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_source_family_expansion_source_family_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_multi_action_verifier_with_source_family_expansion_source_family_response_telemetry_conflict_dropped_robustness_summary.json",
+      "schema_version": "verifier_calibration_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.89511,
+      "best_brier_mean": 0.210774,
+      "best_ece_mean": 0.09677,
+      "best_label": "random_forest:ece_temperature_bias",
+      "best_pass_count": 2,
+      "best_pass_rate": 0.2,
+      "blockers": [
+        "hist_gradient_boosting_ece_temperature_bias_pass_rate_below_threshold",
+        "hist_gradient_boosting_isotonic_pass_rate_below_threshold",
+        "hist_gradient_boosting_quantile_histogram_pass_rate_below_threshold",
+        "hist_gradient_boosting_raw_pass_rate_below_threshold",
+        "hist_gradient_boosting_temperature_bias_pass_rate_below_threshold",
+        "logistic_l2_ece_temperature_bias_pass_rate_below_threshold",
+        "logistic_l2_isotonic_pass_rate_below_threshold",
+        "logistic_l2_quantile_histogram_pass_rate_below_threshold",
+        "logistic_l2_raw_pass_rate_below_threshold",
+        "logistic_l2_temperature_bias_pass_rate_below_threshold",
+        "mlp_sklearn_ece_temperature_bias_pass_rate_below_threshold",
+        "mlp_sklearn_isotonic_pass_rate_below_threshold",
+        "mlp_sklearn_quantile_histogram_pass_rate_below_threshold",
+        "mlp_sklearn_raw_pass_rate_below_threshold",
+        "mlp_sklearn_temperature_bias_pass_rate_below_threshold",
+        "random_forest_ece_temperature_bias_pass_rate_below_threshold",
+        "random_forest_isotonic_pass_rate_below_threshold",
+        "random_forest_quantile_histogram_pass_rate_below_threshold",
+        "random_forest_raw_pass_rate_below_threshold",
+        "random_forest_temperature_bias_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion_source_family_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_model_family_source_family_response_telemetry_conflict_dropped_summary.json",
+      "schema_version": "offline_reward_verifier_model_family_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.810262,
+      "best_brier_mean": 0.221479,
+      "best_ece_mean": 0.098846,
+      "best_label": "random_forest:ece_temperature_bias",
+      "best_pass_count": 2,
+      "best_pass_rate": 0.2,
+      "blockers": [
+        "hist_gradient_boosting_ece_temperature_bias_pass_rate_below_threshold",
+        "hist_gradient_boosting_isotonic_pass_rate_below_threshold",
+        "hist_gradient_boosting_quantile_histogram_pass_rate_below_threshold",
+        "hist_gradient_boosting_raw_pass_rate_below_threshold",
+        "hist_gradient_boosting_temperature_bias_pass_rate_below_threshold",
+        "logistic_l2_ece_temperature_bias_pass_rate_below_threshold",
+        "logistic_l2_isotonic_pass_rate_below_threshold",
+        "logistic_l2_quantile_histogram_pass_rate_below_threshold",
+        "logistic_l2_raw_pass_rate_below_threshold",
+        "logistic_l2_temperature_bias_pass_rate_below_threshold",
+        "mlp_sklearn_ece_temperature_bias_pass_rate_below_threshold",
+        "mlp_sklearn_isotonic_pass_rate_below_threshold",
+        "mlp_sklearn_quantile_histogram_pass_rate_below_threshold",
+        "mlp_sklearn_raw_pass_rate_below_threshold",
+        "mlp_sklearn_temperature_bias_pass_rate_below_threshold",
+        "random_forest_ece_temperature_bias_pass_rate_below_threshold",
+        "random_forest_isotonic_pass_rate_below_threshold",
+        "random_forest_quantile_histogram_pass_rate_below_threshold",
+        "random_forest_raw_pass_rate_below_threshold",
+        "random_forest_temperature_bias_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_source_family_expansion_source_action_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_model_family_with_source_family_expansion_source_action_response_telemetry_conflict_dropped_summary.json",
+      "schema_version": "offline_reward_verifier_model_family_robustness.v1",
+      "status": "not_promotion_grade"
+    },
+    {
+      "best_auc_mean": 0.808682,
+      "best_brier_mean": 0.212806,
+      "best_ece_mean": 0.096458,
+      "best_label": "random_forest:ece_temperature_bias",
+      "best_pass_count": 2,
+      "best_pass_rate": 0.2,
+      "blockers": [
+        "hist_gradient_boosting_ece_temperature_bias_pass_rate_below_threshold",
+        "hist_gradient_boosting_isotonic_pass_rate_below_threshold",
+        "hist_gradient_boosting_quantile_histogram_pass_rate_below_threshold",
+        "hist_gradient_boosting_raw_pass_rate_below_threshold",
+        "hist_gradient_boosting_temperature_bias_pass_rate_below_threshold",
+        "logistic_l2_ece_temperature_bias_pass_rate_below_threshold",
+        "logistic_l2_isotonic_pass_rate_below_threshold",
+        "logistic_l2_quantile_histogram_pass_rate_below_threshold",
+        "logistic_l2_raw_pass_rate_below_threshold",
+        "logistic_l2_temperature_bias_pass_rate_below_threshold",
+        "mlp_sklearn_ece_temperature_bias_pass_rate_below_threshold",
+        "mlp_sklearn_isotonic_pass_rate_below_threshold",
+        "mlp_sklearn_quantile_histogram_pass_rate_below_threshold",
+        "mlp_sklearn_raw_pass_rate_below_threshold",
+        "mlp_sklearn_temperature_bias_pass_rate_below_threshold",
+        "random_forest_ece_temperature_bias_pass_rate_below_threshold",
+        "random_forest_isotonic_pass_rate_below_threshold",
+        "random_forest_quantile_histogram_pass_rate_below_threshold",
+        "random_forest_raw_pass_rate_below_threshold",
+        "random_forest_temperature_bias_pass_rate_below_threshold"
+      ],
+      "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_source_family_expansion_source_family_response_telemetry_conflict_dropped.npz",
+      "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_model_family_with_source_family_expansion_source_family_response_telemetry_conflict_dropped_summary.json",
+      "schema_version": "offline_reward_verifier_model_family_robustness.v1",
+      "status": "not_promotion_grade"
+    }
+  ],
+  "best_attempt": {
+    "best_auc_mean": 0.89511,
+    "best_brier_mean": 0.210774,
+    "best_ece_mean": 0.09677,
+    "best_label": "random_forest:ece_temperature_bias",
+    "best_pass_count": 2,
+    "best_pass_rate": 0.2,
+    "blockers": [
+      "hist_gradient_boosting_ece_temperature_bias_pass_rate_below_threshold",
+      "hist_gradient_boosting_isotonic_pass_rate_below_threshold",
+      "hist_gradient_boosting_quantile_histogram_pass_rate_below_threshold",
+      "hist_gradient_boosting_raw_pass_rate_below_threshold",
+      "hist_gradient_boosting_temperature_bias_pass_rate_below_threshold",
+      "logistic_l2_ece_temperature_bias_pass_rate_below_threshold",
+      "logistic_l2_isotonic_pass_rate_below_threshold",
+      "logistic_l2_quantile_histogram_pass_rate_below_threshold",
+      "logistic_l2_raw_pass_rate_below_threshold",
+      "logistic_l2_temperature_bias_pass_rate_below_threshold",
+      "mlp_sklearn_ece_temperature_bias_pass_rate_below_threshold",
+      "mlp_sklearn_isotonic_pass_rate_below_threshold",
+      "mlp_sklearn_quantile_histogram_pass_rate_below_threshold",
+      "mlp_sklearn_raw_pass_rate_below_threshold",
+      "mlp_sklearn_temperature_bias_pass_rate_below_threshold",
+      "random_forest_ece_temperature_bias_pass_rate_below_threshold",
+      "random_forest_isotonic_pass_rate_below_threshold",
+      "random_forest_quantile_histogram_pass_rate_below_threshold",
+      "random_forest_raw_pass_rate_below_threshold",
+      "random_forest_temperature_bias_pass_rate_below_threshold"
+    ],
+    "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_expansion_source_family_response_telemetry_conflict_dropped.npz",
+    "path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_model_family_source_family_response_telemetry_conflict_dropped_summary.json",
+    "schema_version": "offline_reward_verifier_model_family_robustness.v1",
+    "status": "not_promotion_grade"
+  },
+  "criteria": {
+    "min_failed_artifacts": 3,
+    "requires_calibration_sweep": true,
+    "requires_model_family_sweep": true
+  },
+  "decision": {
+    "blockers": [
+      "no_promotion_grade_artifact",
+      "calibration_sweeps_failed",
+      "model_family_sweeps_failed"
+    ],
+    "recommended_next": "design_materially_different_reward_oracle_or_balanced_label_contract",
+    "runtime_gate_change_allowed": false,
+    "status": "stop_current_verifier_family"
+  },
+  "generated_at": "2026-06-21T19:45:00+00:00",
+  "guardrails": [
+    "Do not enable a runtime verifier gate from a not_promotion_grade artifact.",
+    "Do not spend further cycles retuning the same prompt/action verifier family after the stop condition fires.",
+    "Next evidence should change the reward-oracle/label contract, not only the classifier family or calibrator."
+  ],
+  "schema_version": "offline_reward_verifier_decision.v1"
+}
