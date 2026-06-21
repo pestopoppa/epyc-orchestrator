@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from scripts.graph_router import prepare_answer_equivalence_review as review
+
+
+def test_prepare_review_writes_private_packet_and_redacted_manifest(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "suite": "general",
+                        "question_id": "q1",
+                        "prompt": "private prompt",
+                        "expected": "private reference",
+                        "role_results": {
+                            "frontdoor": {
+                                "answer": "private response",
+                                "passed": False,
+                            }
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    disagreements = [
+        {
+            "item_id": "source:0:frontdoor",
+            "source_path": str(source),
+            "source_record_index": 0,
+            "question_id": "q1",
+            "suite": "general",
+            "role_key": "frontdoor",
+            "truth_label": 0,
+            "equivalence_proxy_label": 1,
+            "q_reward": -0.5,
+            "binary_reward": 0.0,
+            "oracle_score": None,
+            "token_f1": 1.0,
+        }
+    ]
+
+    summary = review.prepare_review(
+        disagreements,
+        private_review_jsonl=tmp_path / "private.jsonl",
+        public_manifest_jsonl=tmp_path / "manifest.jsonl",
+        summary_json=tmp_path / "summary.json",
+        summary_md=tmp_path / "summary.md",
+    )
+
+    private_rows = [json.loads(line) for line in (tmp_path / "private.jsonl").read_text().splitlines()]
+    public_rows = [json.loads(line) for line in (tmp_path / "manifest.jsonl").read_text().splitlines()]
+    assert summary["review_rows"] == 1
+    assert private_rows[0]["prompt"] == "private prompt"
+    assert private_rows[0]["reference"] == "private reference"
+    assert private_rows[0]["response"] == "private response"
+    assert private_rows[0]["final_label"] is None
+    assert private_rows[0]["label_status"] == "needs_label"
+    assert public_rows[0]["label_status"] == "needs_label"
+    assert public_rows[0]["disagreement_type"] == "current_negative_deterministically_equivalent"
+    assert public_rows[0]["review_bucket"] == "current_negative_deterministically_equivalent"
+    assert public_rows[0]["final_label"] is None
+    assert "prompt" not in public_rows[0]
+    assert "reference" not in public_rows[0]
+    assert "response" not in public_rows[0]
+    assert "answer" not in public_rows[0]
+    assert "private prompt" not in (tmp_path / "summary.md").read_text()
+
+
+def test_role_key_with_colon_matches_exact_role_result(tmp_path: Path) -> None:
+    source = tmp_path / "source.jsonl"
+    source.write_text(
+        json.dumps(
+            {
+                "suite": "debugbench",
+                "question_id": "q2",
+                "prompt": "p",
+                "expected": "e",
+                "role_results": {"frontdoor:direct": {"answer": "a"}},
+            }
+        )
+        + "\n"
+    )
+
+    row = review._private_review_row(
+        {
+            "item_id": "source:0:frontdoor_direct",
+            "source_path": str(source),
+            "source_record_index": 0,
+            "role_key": "frontdoor:direct",
+            "truth_label": 1,
+            "equivalence_proxy_label": 0,
+        }
+    )
+
+    assert row["role_key"] == "frontdoor:direct"
+    assert row["response"] == "a"
+
+
+def test_source_record_index_can_be_one_based_when_question_id_matches(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "suite": "debugbench",
+                        "question_id": "q1",
+                        "prompt": "p1",
+                        "expected": "e1",
+                        "role_results": {"frontdoor": {"answer": "a1"}},
+                    },
+                    {
+                        "suite": "debugbench",
+                        "question_id": "q2",
+                        "prompt": "p2",
+                        "expected": "e2",
+                        "role_results": {"frontdoor": {"answer": "a2"}},
+                    },
+                ]
+            }
+        )
+    )
+
+    row = review._private_review_row(
+        {
+            "item_id": "source:2:frontdoor",
+            "source_path": str(source),
+            "source_record_index": 2,
+            "question_id": "q2",
+            "role_key": "frontdoor",
+            "truth_label": 1,
+            "equivalence_proxy_label": 0,
+        }
+    )
+
+    assert row["prompt"] == "p2"
+    assert row["reference"] == "e2"
+    assert row["response"] == "a2"
