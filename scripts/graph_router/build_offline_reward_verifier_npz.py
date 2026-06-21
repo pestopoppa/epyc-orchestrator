@@ -47,6 +47,7 @@ ROLE_ALIASES = {
 }
 ROLE_SUFFIXES = (":delegated", ":direct", ":repl", ":react")
 PRIVATE_FIELDS = {"answer", "expected", "prompt", "reference", "response"}
+CONFLICT_POLICIES = ("keep", "drop_conflicting_model_inputs")
 
 
 class OfflineRewardVerifierNpzError(ValueError):
@@ -239,6 +240,25 @@ def _model_input_group_diagnostics(
     }
 
 
+def _conflicting_model_input_indexes(
+    correct: np.ndarray,
+    actions: np.ndarray,
+    features: np.ndarray,
+) -> set[int]:
+    groups: dict[tuple[bytes, int], list[int]] = {}
+    for index, action in enumerate(actions):
+        key = (
+            features[index].astype(np.float32).tobytes(),
+            int(action),
+        )
+        groups.setdefault(key, []).append(index)
+    conflicting_indexes: set[int] = set()
+    for indexes in groups.values():
+        if len(indexes) > 1 and len({int(correct[index]) for index in indexes}) > 1:
+            conflicting_indexes.update(indexes)
+    return conflicting_indexes
+
+
 def _assert_prompt_free_metadata(metadata_rows: Iterable[dict[str, Any]]) -> None:
     for index, row in enumerate(metadata_rows, start=1):
         present = sorted(PRIVATE_FIELDS & set(row))
@@ -281,7 +301,10 @@ def build_verifier_npz(
     embed_fn: Callable[[str], np.ndarray] | None = None,
     drop_unmapped_actions: bool = False,
     feature_contract: str = "prompt_only",
+    conflict_policy: str = "keep",
 ) -> dict[str, Any]:
+    if conflict_policy not in CONFLICT_POLICIES:
+        raise OfflineRewardVerifierNpzError(f"unsupported conflict_policy={conflict_policy!r}")
     rows = load_jsonl(manifest_jsonl)
     if not rows:
         raise OfflineRewardVerifierNpzError("manifest is empty")
@@ -391,11 +414,44 @@ def build_verifier_npz(
     X = np.stack(X_rows).astype(np.float32)
     correct = np.asarray(correct_labels, dtype=np.float32)
     actions = np.asarray(action_labels, dtype=np.int64)
+    rows_before_filter = int(X.shape[0])
+    pre_filter_diagnostics = _model_input_group_diagnostics(metadata_rows, correct, actions, X)
+    dropped_conflict_rows = 0
+    if conflict_policy == "drop_conflicting_model_inputs":
+        conflicting_indexes = _conflicting_model_input_indexes(correct, actions, X)
+        dropped_conflict_rows = len(conflicting_indexes)
+        if dropped_conflict_rows:
+            keep_mask = np.asarray(
+                [index not in conflicting_indexes for index in range(X.shape[0])],
+                dtype=bool,
+            )
+            X = X[keep_mask]
+            correct = correct[keep_mask]
+            actions = actions[keep_mask]
+            q_weights = [
+                weight
+                for index, weight in enumerate(q_weights)
+                if index not in conflicting_indexes
+            ]
+            metadata_rows = [
+                row
+                for index, row in enumerate(metadata_rows)
+                if index not in conflicting_indexes
+            ]
+        if X.shape[0] == 0:
+            raise OfflineRewardVerifierNpzError(
+                "conflict_policy dropped all verifier rows"
+            )
+
     one_hot = np.zeros((X.shape[0], n_actions), dtype=np.float32)
     one_hot[np.arange(X.shape[0]), actions] = 1.0
     Z = np.concatenate([X, one_hot], axis=1).astype(np.float32)
     q_arr = np.asarray(q_weights, dtype=np.float32)
     sample_weights = _sample_weights(correct)
+    post_filter_role_counts = Counter(str(row["role_key"]) for row in metadata_rows)
+    post_filter_canonical_action_counts = Counter(
+        str(row["canonical_action"]) for row in metadata_rows
+    )
 
     summary = {
         "schema_version": NPZ_SUMMARY_SCHEMA_VERSION,
@@ -403,6 +459,13 @@ def build_verifier_npz(
         "out_npz": str(out_npz),
         "rows": int(Z.shape[0]),
         "unique_source_records_embedded": len(embedding_cache),
+        "conflict_policy": {
+            "name": conflict_policy,
+            "rows_before_filter": rows_before_filter,
+            "rows_after_filter": int(X.shape[0]),
+            "dropped_conflicting_rows": dropped_conflict_rows,
+            "pre_filter_model_input_group_diagnostics": pre_filter_diagnostics,
+        },
         "feature_contract": {
             "name": feature_contract,
             "embedding_dim_required": 1024,
@@ -427,8 +490,10 @@ def build_verifier_npz(
         "z_dim": int(Z.shape[1]),
         "n_pos": int(correct.sum()),
         "n_neg": int(correct.shape[0] - int(correct.sum())),
-        "role_counts": dict(sorted(role_counts.items())),
-        "canonical_action_counts": dict(sorted(canonical_role_counts.items())),
+        "role_counts": dict(sorted(post_filter_role_counts.items())),
+        "canonical_action_counts": dict(sorted(post_filter_canonical_action_counts.items())),
+        "pre_filter_role_counts": dict(sorted(role_counts.items())),
+        "pre_filter_canonical_action_counts": dict(sorted(canonical_role_counts.items())),
         "role_aliases": ROLE_ALIASES,
         "dropped_unmapped_actions": dict(sorted(dropped_unmapped.items())),
         "label_source": "offline_reward_feature_manifest/reference_token_coverage@0.86",
@@ -475,6 +540,9 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
             f"- Rows: `{summary['rows']}`",
             f"- Unique source records embedded: `{summary['unique_source_records_embedded']}`",
             f"- Feature contract: `{summary['feature_contract']['name']}`",
+            f"- Conflict policy: `{summary['conflict_policy']['name']}`",
+            f"- Conflict-policy dropped rows: "
+            f"`{summary['conflict_policy']['dropped_conflicting_rows']}`",
             f"- Engineered feature dimension: "
             f"`{summary['feature_contract']['engineered_feature_dim']}`",
             f"- Unique model-input groups: "
@@ -518,6 +586,11 @@ def main(argv: list[str] | None = None) -> int:
         choices=("prompt_only", "response_telemetry"),
         default="prompt_only",
     )
+    parser.add_argument(
+        "--conflict-policy",
+        choices=CONFLICT_POLICIES,
+        default="keep",
+    )
     args = parser.parse_args(argv)
     try:
         summary = build_verifier_npz(
@@ -529,6 +602,7 @@ def main(argv: list[str] | None = None) -> int:
             embedding_timeout=args.embedding_timeout,
             drop_unmapped_actions=args.drop_unmapped_actions,
             feature_contract=args.feature_contract,
+            conflict_policy=args.conflict_policy,
         )
     except (OfflineRewardVerifierNpzError, OSError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)

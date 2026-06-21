@@ -111,6 +111,18 @@ Committed artifacts:
   telemetry dataset. This is a diagnostic artifact only; response telemetry is
   observed after a candidate answer exists and is not a pre-route serve-time
   feature.
+- `offline_reward_verifier_data_with_expansion_response_telemetry_conflict_dropped.npz`,
+  `offline_reward_verifier_data_with_expansion_response_telemetry_conflict_dropped_summary.json`,
+  and `offline_reward_verifier_data_with_expansion_response_telemetry_conflict_dropped_summary.md`
+  rebuild the response-telemetry dataset with
+  `conflict_policy=drop_conflicting_model_inputs`, dropping all rows from exact
+  same feature-vector/action groups that contain both positive and negative
+  labels. This is conservative conflict repair, not relabeling.
+- `offline_reward_multi_action_verifier_with_expansion_response_telemetry_conflict_dropped_robustness_summary.json`
+  and `offline_reward_multi_action_verifier_with_expansion_response_telemetry_conflict_dropped_robustness_summary.md`
+  repeat the normalized/wider/isotonic robustness check after dropping exact
+  conflicts. It improves discrimination metrics but still fails calibrated ECE
+  promotion gates.
 
 Private row data is not committed. The scored row file is:
 
@@ -208,6 +220,21 @@ Result:
   `0/10`
 - response-telemetry robustness temperature/bias calibrated pass count: `0/10`
 - response-telemetry robustness decision: `not_promotion_grade`
+- conflict-dropped response-telemetry verifier NPZ rows: `336`
+- conflict-dropped response-telemetry verifier dropped rows: `188`
+- conflict-dropped response-telemetry verifier action coverage:
+  `architect_general=210`, `coder_escalation=78`, `frontdoor=48`
+- conflict-dropped response-telemetry verifier conflicting model-input groups /
+  rows: `0` / `0`
+- conflict-dropped response-telemetry robustness isotonic calibrated pass
+  count: `0/10`
+- conflict-dropped response-telemetry robustness isotonic calibrated Brier /
+  ROC-AUC / ECE means: `0.1641` / `0.8183` / `0.1113`
+- conflict-dropped response-telemetry robustness quantile-histogram calibrated
+  pass count: `0/10`
+- conflict-dropped response-telemetry robustness temperature/bias calibrated
+  pass count: `0/10`
+- conflict-dropped response-telemetry robustness decision: `not_promotion_grade`
 
 Interpretation:
 
@@ -242,3 +269,12 @@ from `1/10` to `2/10`. It still remains `not_promotion_grade`, and its mean
 Brier/ECE are slightly worse than the prompt-only normalized/isotonic scout.
 Treat it as evidence that the verifier needs richer non-label features or
 conflict-aware row repair, not as a live routing gate candidate.
+
+Dropping exact conflicting model-input groups completes the conservative
+conflict-repair diagnostic: the post-filter NPZ has no conflicting groups and
+only one non-conflicting duplicate group. This improves mean isotonic Brier and
+ROC-AUC to `0.1641` and `0.8183`, respectively, but it does not solve
+calibration; isotonic calibrated ECE is still `0.1113`, and all three
+calibration methods pass `0/10` seeds. The remaining blocker is now calibration
+quality and possibly coverage after dropping frontdoor-heavy conflicts, not the
+presence of exact contradictory rows.

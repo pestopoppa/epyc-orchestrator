@@ -139,6 +139,8 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
     assert summary["feature_contract"]["name"] == "prompt_only"
     assert summary["feature_contract"]["engineered_feature_dim"] == 7
     assert summary["feature_contract"]["classifier_feature_dim"] == 1031
+    assert summary["conflict_policy"]["name"] == "keep"
+    assert summary["conflict_policy"]["dropped_conflicting_rows"] == 0
     diagnostics = summary["model_input_group_diagnostics"]
     assert diagnostics["unique_model_input_groups"] == 3
     assert diagnostics["duplicate_model_input_groups"] == 1
@@ -169,6 +171,62 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
     summary_payload = json.loads(summary_json.read_text(encoding="utf-8"))
     assert summary_payload["n_neg"] == 2
     assert summary_payload["canonical_action_counts"]["architect_general"] == 2
+
+
+def test_build_verifier_npz_can_drop_conflicting_model_input_groups(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mod,
+        "load_live_canonical_actions",
+        lambda: ["frontdoor", "architect_general", "coder_escalation"],
+    )
+    source_path = _source(tmp_path / "source.json")
+    manifest_path = _write_jsonl(
+        tmp_path / "manifest.jsonl",
+        [
+            _manifest_row(source_path, role_key="frontdoor:direct", label=1, score=1.0),
+            _manifest_row(source_path, role_key="coder_primary", label=0, score=0.0),
+            _manifest_row(
+                source_path,
+                role_key="architect_general:delegated",
+                label=1,
+                score=0.9,
+            ),
+            _manifest_row(
+                source_path,
+                role_key="architect_coding:delegated",
+                label=0,
+                score=0.2,
+            ),
+        ],
+    )
+    out_npz = tmp_path / "verifier.npz"
+
+    summary = mod.build_verifier_npz(
+        manifest_path,
+        out_npz,
+        embed_fn=lambda _text: np.ones(1024, dtype=np.float32),
+        conflict_policy="drop_conflicting_model_inputs",
+    )
+    data = np.load(out_npz, allow_pickle=True)
+
+    assert summary["rows"] == 2
+    assert summary["conflict_policy"]["name"] == "drop_conflicting_model_inputs"
+    assert summary["conflict_policy"]["rows_before_filter"] == 4
+    assert summary["conflict_policy"]["rows_after_filter"] == 2
+    assert summary["conflict_policy"]["dropped_conflicting_rows"] == 2
+    pre_filter = summary["conflict_policy"]["pre_filter_model_input_group_diagnostics"]
+    assert pre_filter["conflicting_model_input_groups"] == 1
+    assert summary["model_input_group_diagnostics"]["conflicting_model_input_groups"] == 0
+    assert data["correct"].astype(np.float32).tolist() == [1.0, 0.0]
+    assert data["actions"].astype(np.int64).tolist() == [0, 2]
+    assert summary["canonical_action_counts"] == {
+        "coder_escalation": 1,
+        "frontdoor": 1,
+    }
+    assert summary["pre_filter_canonical_action_counts"]["architect_general"] == 2
 
 
 def test_build_verifier_npz_response_telemetry_contract_adds_prompt_free_features(
