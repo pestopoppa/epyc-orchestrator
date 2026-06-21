@@ -25,7 +25,6 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 RESEARCH_ROOT = Path(os.environ.get(
@@ -43,7 +42,7 @@ _HEADER_KEY = "__pool_metadata__"
 _STALE_DAYS = 30
 
 
-def build_pool(output_path: Path | None = None) -> dict[str, int]:
+def build_pool(output_path: Path | None = None, *, yaml_only: bool = False) -> dict[str, int]:
     """Extract all questions from all adapters + YAML suites into a JSONL file.
 
     Returns dict mapping suite_name -> count of questions extracted.
@@ -57,23 +56,24 @@ def build_pool(output_path: Path | None = None) -> dict[str, int]:
     all_questions: list[dict] = []
 
     # 1. Extract from HF dataset adapters
-    for suite_name in sorted(ADAPTER_SUITES):
-        adapter = get_adapter(suite_name)
-        if adapter is None:
-            logger.warning(f"  [{suite_name}] No adapter found, skipping")
-            continue
-        try:
-            questions = adapter.extract_all()
-            # Ensure suite field is set
-            for q in questions:
-                q.setdefault("suite", suite_name)
-                q.setdefault("dataset_source", "hf_adapter")
-            stats[suite_name] = len(questions)
-            all_questions.extend(questions)
-            logger.info(f"  [{suite_name}] Extracted {len(questions)} questions")
-        except Exception as e:
-            logger.error(f"  [{suite_name}] Extraction failed: {e}")
-            stats[suite_name] = 0
+    if not yaml_only:
+        for suite_name in sorted(ADAPTER_SUITES):
+            adapter = get_adapter(suite_name)
+            if adapter is None:
+                logger.warning(f"  [{suite_name}] No adapter found, skipping")
+                continue
+            try:
+                questions = adapter.extract_all()
+                # Ensure suite field is set
+                for q in questions:
+                    q.setdefault("suite", suite_name)
+                    q.setdefault("dataset_source", "hf_adapter")
+                stats[suite_name] = len(questions)
+                all_questions.extend(questions)
+                logger.info(f"  [{suite_name}] Extracted {len(questions)} questions")
+            except Exception as e:
+                logger.error(f"  [{suite_name}] Extraction failed: {e}")
+                stats[suite_name] = 0
 
     # 2. Extract from YAML-only suites
     try:
@@ -117,6 +117,7 @@ def build_pool(output_path: Path | None = None) -> dict[str, int]:
         _HEADER_KEY: True,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "generator": "question_pool.py",
+        "yaml_only": yaml_only,
         "total_questions": len(all_questions),
         "suites": stats,
     }
@@ -341,12 +342,16 @@ def main():
         "--output", type=str, default=None,
         help=f"Output path (default: {POOL_FILE})",
     )
+    parser.add_argument(
+        "--yaml-only", action="store_true",
+        help="Build only YAML debug suites, skipping HuggingFace dataset adapters",
+    )
     args = parser.parse_args()
 
     if args.build:
         out = Path(args.output) if args.output else POOL_FILE
         t0 = time.monotonic()
-        stats = build_pool(out)
+        stats = build_pool(out, yaml_only=args.yaml_only)
         elapsed = time.monotonic() - t0
         total = sum(stats.values())
         print(f"\nPool built in {elapsed:.1f}s: {total} questions across {len(stats)} suites")

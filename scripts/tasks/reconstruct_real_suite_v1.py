@@ -94,6 +94,9 @@ def scan_tap_events(paths: list[Path], task_ids: set[str]) -> dict[str, dict[str
         task_id: {"prompt_candidates": [], "response_text_parts": [], "tap_events": 0}
         for task_id in task_ids
     }
+    if not task_ids:
+        return by_task
+    task_id_pattern = re.compile("|".join(re.escape(task_id) for task_id in sorted(task_ids)))
     for path in paths:
         try:
             fh = path.open("r", encoding="utf-8", errors="replace")
@@ -101,8 +104,8 @@ def scan_tap_events(paths: list[Path], task_ids: set[str]) -> dict[str, dict[str
             continue
         with fh:
             for lineno, raw in enumerate(fh, start=1):
-                # Fast substring guard before JSON parsing large tap logs.
-                if not any(task_id in raw for task_id in task_ids):
+                # Fast guard before JSON parsing large tap logs.
+                if not task_id_pattern.search(raw):
                     continue
                 try:
                     event = json.loads(raw)
