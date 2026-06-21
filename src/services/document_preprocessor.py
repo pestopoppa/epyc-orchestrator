@@ -16,6 +16,7 @@ The preprocessor:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -94,6 +95,18 @@ OCR_TRIGGER_PHRASES = frozenset(
 
 # Maximum characters for document summary context passed to VL model
 MAX_SUMMARY_CONTEXT_CHARS = 8000
+
+# Primary OCR/PDF body text is high-signal user content. Keep body scanning
+# explicit while ODL additive metadata remains governed by INJECTION_SCANNING.
+DOCUMENT_BODY_INJECTION_POLICY_ENV = "ORCHESTRATOR_DOCUMENT_BODY_INJECTION_POLICY"
+DOCUMENT_BODY_INJECTION_POLICY_SOURCE = "source"
+DOCUMENT_BODY_INJECTION_POLICY_WARN = "warn"
+DOCUMENT_BODY_INJECTION_POLICIES = frozenset(
+    {
+        DOCUMENT_BODY_INJECTION_POLICY_SOURCE,
+        DOCUMENT_BODY_INJECTION_POLICY_WARN,
+    }
+)
 
 # Figure analysis prompt template with document context
 FIGURE_PROMPT_WITH_CONTEXT = """You are analyzing a figure from a technical document. Below is a summary of the document for context.
@@ -341,6 +354,52 @@ class DocumentPreprocessor:
 
         return structured_doc
 
+    def _document_body_injection_policy(self, warnings: list[str]) -> str:
+        """Return the configured primary document body injection policy."""
+        raw_policy = os.environ.get(
+            DOCUMENT_BODY_INJECTION_POLICY_ENV,
+            DOCUMENT_BODY_INJECTION_POLICY_SOURCE,
+        )
+        policy = raw_policy.strip().lower()
+        if policy in DOCUMENT_BODY_INJECTION_POLICIES:
+            return policy
+
+        warnings.append(
+            f"Unknown {DOCUMENT_BODY_INJECTION_POLICY_ENV}={raw_policy!r}; "
+            f"using {DOCUMENT_BODY_INJECTION_POLICY_SOURCE}"
+        )
+        return DOCUMENT_BODY_INJECTION_POLICY_SOURCE
+
+    def _scan_document_body_for_injection(
+        self,
+        ocr_result: object,
+        warnings: list[str],
+    ) -> None:
+        """Warn on unsafe primary OCR body text without mutating document text."""
+        from src.features import features
+
+        if not features().injection_scanning:
+            return
+
+        if self._document_body_injection_policy(warnings) != DOCUMENT_BODY_INJECTION_POLICY_WARN:
+            return
+
+        from src.security.injection_scanner import scan_content
+
+        pages = getattr(ocr_result, "pages", []) or []
+        for idx, page in enumerate(pages, start=1):
+            text = str(getattr(page, "text", "") or "")
+            if not text.strip():
+                continue
+            page_number = getattr(page, "page", idx)
+            scan = scan_content(text, source=f"document_body:page:{page_number}")
+            if not scan.safe:
+                threats = ", ".join(scan.threats)
+                warnings.append(
+                    "Document body injection scan warning "
+                    f"(page {page_number}: {threats})"
+                )
+
     def needs_preprocessing(self, task_ir: dict[str, Any]) -> bool:
         """Check if a TaskIR needs document preprocessing.
 
@@ -474,6 +533,7 @@ class DocumentPreprocessor:
                 structured_doc,
                 warnings,
             )
+            self._scan_document_body_for_injection(ocr_result, warnings)
 
             # Chunk the document
             document_result = chunk_document(
