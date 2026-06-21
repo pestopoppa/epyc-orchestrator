@@ -1,0 +1,46 @@
+{
+  "builder": "scripts/tasks/reconstruct_real_suite_v1.py",
+  "counts": {
+    "by_class": {
+      "benchmark_eval_measurement": 8,
+      "code_change_implementation": 7,
+      "debug_root_cause": 7,
+      "governance_docs_handoff": 7,
+      "ops_deploy_process": 7,
+      "planning_architecture_review": 7,
+      "research_intake_deep_dive": 7
+    },
+    "by_materialization_status": {
+      "expected_backed_ready": 39,
+      "missing_prompt": 4,
+      "needs_reference_or_rubric": 7
+    },
+    "by_prompt_source": {
+      "": 4,
+      "architect_question_block": 1,
+      "raw_task_prompt": 45
+    },
+    "prompt_recovered": 46,
+    "question_pool_expected_match": 39,
+    "response_recovered": 37,
+    "selected_rows": 50
+  },
+  "generated_at": "2026-06-21T01:20:01+00:00",
+  "next_step": "Use the private output JSONL to fill deterministic expected answers or EV-9-style llm_judge rubrics for rows marked needs_reference_or_rubric, then emit benchmarks/prompts/debug/real_suite_v1.yaml and add real_suite_v1 to YAML_ONLY_SUITES.",
+  "privacy": {
+    "committed_outputs_omit_expected_text": true,
+    "committed_outputs_omit_prompt_text": true,
+    "committed_outputs_omit_response_text": true,
+    "private_output_option": "--private-output-jsonl"
+  },
+  "question_pool_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/prompts/question_pool.jsonl",
+  "schema_version": "real_suite_v1_reconstruction_summary.v1",
+  "selection_path": "orchestration/reports/real_suite_v1_selection_20260621/selection.jsonl",
+  "tap_paths": [
+    "/mnt/raid0/llm/tmp/inference_tap_events.jsonl",
+    "/mnt/raid0/llm/tmp/inference_tap_events.jsonl.1",
+    "/mnt/raid0/llm/tmp/inference_tap_events.jsonl.2",
+    "/mnt/raid0/llm/tmp/inference_tap_events.jsonl.3",
+    "/mnt/raid0/llm/tmp/inference_tap_events.jsonl.lock"
+  ]
+}
