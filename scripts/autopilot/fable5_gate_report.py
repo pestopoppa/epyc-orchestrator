@@ -361,6 +361,9 @@ def xmas_section(
     details["latest_ab_summary_path"] = (
         str(ab_summary["path"]) if ab_summary else None
     )
+    details["latest_ab_results_path"] = (
+        str(ab_summary["path"].with_name("results.jsonl")) if ab_summary else None
+    )
     details["latest_ab_decision_status"] = (
         ab_summary.get("decision_status") if ab_summary else None
     )
@@ -596,6 +599,44 @@ def build_next_actions(sections: list[GateSection]) -> list[dict[str, Any]]:
 
     xmas = by_key.get("xmas_production_path")
     if xmas and xmas.status != "ready":
+        latest_policy = xmas.details.get("latest_ab_policy")
+        latest_decision = xmas.details.get("latest_ab_decision_status")
+        latest_results_path = xmas.details.get("latest_ab_results_path")
+        if latest_policy == REQUIRED_XMAS_AB_POLICY and latest_decision not in (
+            None,
+            "promote_candidate",
+        ):
+            actions.append(
+                {
+                    "key": "diagnose_xmas_policy_regressions",
+                    "priority": "P0",
+                    "status": "ready",
+                    "reason": (
+                        "The latest X-MAS held-out A/B used the required "
+                        "incumbent-constrained policy and did not promote; "
+                        "repair the policy/table regressions before rerunning."
+                    ),
+                    "evidence_blockers": xmas.blockers,
+                    "latest_ab_summary_path": xmas.details.get(
+                        "latest_ab_summary_path"
+                    ),
+                    "latest_ab_results_path": latest_results_path,
+                    "latest_ab_decision_status": latest_decision,
+                    "latest_ab_score_delta": xmas.details.get(
+                        "latest_ab_score_delta"
+                    ),
+                    "latest_ab_latency_ratio": xmas.details.get(
+                        "latest_ab_latency_ratio"
+                    ),
+                    "command": (
+                        "cd /mnt/raid0/llm/epyc-orchestrator && "
+                        "uv run python scripts/benchmark/xmas_live_ab.py "
+                        f"--summarize-results {latest_results_path or '<results.jsonl>'} "
+                        "--output /tmp/xmas-constrained-policy-diagnostics"
+                    ),
+                }
+            )
+            return actions
         quiet_window_blockers = list(xmas.details.get("quiet_window_blockers") or [])
         actions.append(
             {

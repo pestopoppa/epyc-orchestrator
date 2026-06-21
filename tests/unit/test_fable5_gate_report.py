@@ -247,6 +247,67 @@ def test_phase_section_surfaces_eval_progress() -> None:
     assert section.details["eval_correct_pct"] == 72.0
 
 
+def test_xmas_required_policy_hold_points_to_regression_diagnosis(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config = tmp_path / "classifier_config.yaml"
+    config.write_text(
+        """
+xmas_routing:
+  mode: "off"
+  winner_table_path: "orchestration/xmas_winner_table.yaml"
+  require_complete_table: true
+""",
+        encoding="utf-8",
+    )
+    table = tmp_path / "xmas_winner_table.yaml"
+    table.write_text("placeholder: true\n", encoding="utf-8")
+    ab_root = tmp_path / "xmas_live_ab"
+    run = ab_root / "20260621T112005Z-constrained-policy"
+    run.mkdir(parents=True)
+    (run / "results.jsonl").write_text("{}\n", encoding="utf-8")
+    (run / "summary.json").write_text(
+        """
+{
+  "decision": {
+    "status": "hold",
+    "blockers": ["overall score delta -0.250 < required 0.050"]
+  },
+  "xmas_policy": "incumbent_constrained_v1",
+  "score_delta_xmas_minus_baseline": -0.25,
+  "latency_ratio_xmas_over_baseline": 0.714
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(report_mod, "validate_xmas_config", lambda path: [])
+    monkeypatch.setattr(
+        report_mod, "validate_xmas_table", lambda path, **kwargs: []
+    )
+
+    section = report_mod.xmas_section(
+        config_path=config,
+        candidate_table_path=table,
+        ab_root=ab_root,
+        quiet_window={"ready": True, "blockers": []},
+    )
+    actions = report_mod.build_next_actions([section])
+
+    assert section.status == "blocked"
+    assert "latest X-MAS held-out A/B decision is hold" in section.blockers
+    assert [action["key"] for action in actions] == [
+        "diagnose_xmas_policy_regressions"
+    ]
+    action = actions[0]
+    assert action["status"] == "ready"
+    assert action["latest_ab_decision_status"] == "hold"
+    assert action["latest_ab_score_delta"] == -0.25
+    assert action["latest_ab_latency_ratio"] == 0.714
+    assert action["latest_ab_results_path"] == str(run / "results.jsonl")
+    assert "--summarize-results" in action["command"]
+    assert str(run / "results.jsonl") in action["command"]
+
+
 def test_ds_e1_section_surfaces_clean_window_blockers() -> None:
     section = report_mod.ds_e1_section(
         {
