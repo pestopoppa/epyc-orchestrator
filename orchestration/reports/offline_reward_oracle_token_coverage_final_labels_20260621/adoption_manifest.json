@@ -1,0 +1,193 @@
+{
+  "evidence": {
+    "decision_gate": {
+      "blockers": [],
+      "checks": {
+        "agreement_at_threshold": {
+          "op": ">=",
+          "passed": true,
+          "threshold": 0.8,
+          "value": 0.9409937888198758
+        },
+        "best_balanced_accuracy": {
+          "op": ">=",
+          "passed": true,
+          "threshold": 0.75,
+          "value": 0.943887853370612
+        },
+        "confound_fooled_rate": {
+          "op": "<=",
+          "passed": true,
+          "threshold": 0.05,
+          "value": 0.0
+        },
+        "paraphrase_penalty_rate": {
+          "op": "<=",
+          "passed": true,
+          "threshold": 0.1,
+          "value": 0.0
+        },
+        "rows": {
+          "op": ">=",
+          "passed": true,
+          "threshold": 100,
+          "value": 322
+        },
+        "spearman": {
+          "op": ">=",
+          "passed": true,
+          "threshold": 0.3,
+          "value": 0.8269829614640313
+        },
+        "stress_groups": {
+          "op": ">=",
+          "passed": true,
+          "threshold": 1,
+          "value": 48
+        }
+      },
+      "criteria": {
+        "max_confound_fooled_rate": 0.05,
+        "max_paraphrase_penalty_rate": 0.1,
+        "min_agreement_at_threshold": 0.8,
+        "min_best_balanced_accuracy": 0.75,
+        "min_rows": 100,
+        "min_spearman": 0.3,
+        "min_stress_groups": 1,
+        "required_target_sources": {
+          "answer_equivalence_final_label": {
+            "min_agreement_at_threshold": 0.75,
+            "min_negative": 5,
+            "min_positive": 5,
+            "min_rows": 30,
+            "min_spearman": 0.2
+          }
+        }
+      },
+      "status": "decision_grade"
+    },
+    "eval_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/eval.json",
+    "eval_schema_version": "offline_reward_oracle_eval.v1",
+    "required_target_sources": {
+      "answer_equivalence_final_label": {
+        "checks": {
+          "agreement_at_threshold": {
+            "op": ">=",
+            "passed": true,
+            "threshold": 0.75,
+            "value": 0.9017341040462428
+          },
+          "present": {
+            "op": "exists",
+            "passed": true,
+            "value": true
+          },
+          "rows": {
+            "op": ">=",
+            "passed": true,
+            "threshold": 30,
+            "value": 173
+          },
+          "spearman": {
+            "op": ">=",
+            "passed": true,
+            "threshold": 0.2,
+            "value": 0.6866120337015418
+          },
+          "target_negative": {
+            "op": ">=",
+            "passed": true,
+            "threshold": 5,
+            "value": 126
+          },
+          "target_positive": {
+            "op": ">=",
+            "passed": true,
+            "threshold": 5,
+            "value": 47
+          }
+        },
+        "metrics": {
+          "agreement_at_threshold": 0.9017341040462428,
+          "confusion": {
+            "fn": 1,
+            "fp": 16,
+            "tn": 110,
+            "tp": 46
+          },
+          "n": 173,
+          "spearman": 0.6866120337015418,
+          "target_negative": 126,
+          "target_positive": 47
+        }
+      }
+    },
+    "rows": 322,
+    "score": {
+      "agreement_at_threshold": 0.9409937888198758,
+      "confusion": {
+        "fn": 3,
+        "fp": 16,
+        "tn": 158,
+        "tp": 145
+      },
+      "mean_abs_error": 0.16923920065291925,
+      "pearson": 0.8350880606991894,
+      "spearman": 0.8269829614640313
+    },
+    "score_summary_json": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/score_summary.json",
+    "stress": {
+      "confound_fooled": 0,
+      "confound_fooled_rate": 0.0,
+      "confound_total": 48,
+      "groups_evaluated": 48,
+      "paraphrase_penalized": 0,
+      "paraphrase_penalty_rate": 0.0,
+      "paraphrase_total": 48,
+      "variant_counts": {
+        "base": 48,
+        "confound": 48,
+        "paraphrase": 48,
+        "unknown": 178
+      }
+    },
+    "target_negative": 174,
+    "target_positive": 148
+  },
+  "forbidden_use": "live routing, serve-time request gating, production policy flips, or online reward updates without a separate deployment gate",
+  "intended_use": "offline NEXT-A2/A3 reward-signal labeling and verifier-target preparation only",
+  "oracle": {
+    "model_id": "deterministic/reference-token-coverage-v1",
+    "oracle_score_source": "reference_token_coverage",
+    "oracle_threshold": 0.86,
+    "score_definition": "unique lowercase alphanumeric/underscore reference tokens present in response divided by unique reference tokens",
+    "score_schema_version": "offline_reward_oracle_token_coverage_scores.v1",
+    "score_summary": {
+      "rows": 322,
+      "score_max": 1.0,
+      "score_mean": 0.6165638222011433,
+      "score_min": 0.0,
+      "stats": {
+        "rows": 322,
+        "target_source:answer_equivalence_final_label": 173,
+        "target_source:heldout_stress_binary_reward": 144,
+        "target_source:original_binary_reward": 5,
+        "variant_type:base": 48,
+        "variant_type:confound": 48,
+        "variant_type:paraphrase": 48
+      }
+    }
+  },
+  "privacy": {
+    "commits_private_rows": false,
+    "note": "This manifest references aggregate reports only; scored JSONL rows remain private input/output artifacts.",
+    "row_text_fields_excluded": [
+      "prompt",
+      "reference",
+      "response",
+      "answer"
+    ]
+  },
+  "schema_version": "offline_reward_oracle_adoption_manifest.v1",
+  "status": "adoptable_offline_oracle"
+}

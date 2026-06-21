@@ -10,6 +10,9 @@ Committed artifacts:
   score statistics.
 - `eval.json` and `eval.md` record the calibrated gate run at oracle threshold
   `0.86`.
+- `adoption_manifest.json` is the fail-closed, machine-readable adoption packet
+  for offline NEXT-A2/A3 reward-signal consumers. It is emitted only when
+  `decision_gate.status=decision_grade`.
 
 Private row data is not committed. The scored row file is:
 
