@@ -32,6 +32,13 @@ Committed artifacts:
   oracle labels, action indices, sample weights, and prompt-free provenance
   metadata. It does not contain prompt/expected/answer text and is not a live
   routing weight file.
+- `offline_reward_frontdoor_verifier_eval_summary.json` and
+  `offline_reward_frontdoor_verifier_eval_summary.md` record the offline
+  frontdoor-specialist verifier train/eval attempt on that NPZ. The run is a
+  null result for promotion: Brier delta passes against the best softmax
+  baseline but not against the constant base-rate baseline, and ROC-AUC/ECE miss
+  the A2 gates. The generated weights are intentionally not adopted as live
+  routing weights.
 
 Private row data is not committed. The scored row file is:
 
@@ -59,6 +66,11 @@ Result:
 - verifier NPZ feature dimension: `1031`
 - verifier NPZ action count: `10`
 - verifier NPZ positives / negatives: `161` / `161`
+- frontdoor verifier rows: `224`
+- frontdoor verifier validation rows: `44`
+- frontdoor verifier Brier / ROC-AUC / ECE: `0.2415` / `0.7478` / `0.1465`
+- frontdoor verifier Brier delta vs best softmax / constant baseline: `+0.0298` / `-0.0101`
+- frontdoor verifier gate verdict: `FAIL`
 
 Interpretation:
 
@@ -69,8 +81,7 @@ response divided by unique reference tokens. Treat it as an evidence-backed
 baseline for reference-grounded answer-equivalence targets, not as a serve-time
 routing feature.
 
-The verifier NPZ is still offline preparation, not a verifier model or
-serve-time routing change. The next integration step is to train/evaluate the
-frontdoor verifier or reward-signal consumer from this NPZ and compare against
-the existing outcome-backed verifier baseline before any default-off runtime
-gate changes.
+The verifier NPZ is still offline preparation, not a serve-time routing change.
+The first frontdoor-specialist train/eval from this NPZ failed the A2 gates, so
+the current next step is scorer/data/model improvement or a broader reward-signal
+consumer evaluation before any default-off runtime gate changes.

@@ -16,8 +16,9 @@ Baselines compared on the same val split:
     - softmax max prob from the existing RoutingClassifier
     - softmax p(frontdoor | x) from the existing RoutingClassifier
 
-Decision gate (P6.2 A2): Brier improvement ≥ 0.02 AND ROC-AUC ≥ 0.75 AND
-ECE ≤ 0.05 vs the stronger softmax baseline. (Same thresholds as P6.2.5.)
+Decision gate (P6.2 A2): Brier improvement >= 0.02 AND ROC-AUC >= 0.75 AND
+ECE <= 0.05 vs the stronger softmax baseline. The summary also records the
+constant base-rate Brier comparison so null results are not over-read.
 
 Usage:
     python3 scripts/graph_router/train_frontdoor_verifier.py \
@@ -30,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -50,7 +52,8 @@ def _brier(p, y): return float(np.mean((p - y) ** 2))
 
 
 def _roc_auc(scores, labels):
-    pos = int(labels.sum()); neg = len(labels) - pos
+    pos = int(labels.sum())
+    neg = len(labels) - pos
     if pos == 0 or neg == 0:
         return float("nan")
     ranks = np.argsort(np.argsort(scores))
@@ -104,7 +107,6 @@ def train_and_eval(
     correct = d["correct"].astype(np.float32)
     actions = d["actions"].astype(np.int64)
     feature_dim = int(d["feature_dim"])        # 1031
-    n_actions_data = int(d["n_actions"])       # 8
     N_full = Z.shape[0]
     logger.info("Loaded %d samples; filtering to action=%d (frontdoor)",
                 N_full, frontdoor_action_idx)
@@ -138,7 +140,7 @@ def train_and_eval(
         verifier.input_dim, verifier.param_count,
     )
 
-    history = verifier.train(
+    verifier.train(
         X_fd, y_fd, sample_weights,
         epochs=epochs, lr=lr, val_split=val_split,
         patience=patience, batch_size=batch_size, rng_seed=val_seed,
@@ -146,7 +148,8 @@ def train_and_eval(
 
     # ── Evaluate on val split (recreated with same seed) ──
     rng = np.random.default_rng(val_seed)
-    idx = np.arange(N); rng.shuffle(idx)
+    idx = np.arange(N)
+    rng.shuffle(idx)
     n_val = max(1, int(N * val_split))
     val_idx = idx[:n_val]
     X_val = X_fd[val_idx]
@@ -203,6 +206,7 @@ def train_and_eval(
     base_brier = min(brier_sm_max, brier_sm_fd)
     base_name = "softmax_max" if brier_sm_max < brier_sm_fd else "softmax_p(fd|x)"
     brier_delta = base_brier - brier_fd
+    brier_delta_constant = brier_constant - brier_fd
     print(
         f"\nA2 decision gates:\n"
         f"  ΔBrier vs best baseline ({base_name}): {brier_delta:+.4f}  (gate: ≥ +0.02)  "
@@ -217,12 +221,59 @@ def train_and_eval(
 
     verifier.save(output_path)
     return {
+        "schema_version": "frontdoor_verifier_eval.v1",
+        "data_path": str(data_path),
+        "classifier_weights_path": str(classifier_weights_path),
+        "output_path": str(output_path),
+        "frontdoor_action_idx": frontdoor_action_idx,
+        "total_rows": int(N_full),
+        "frontdoor_rows": int(N),
+        "frontdoor_positives": int(n_pos),
+        "frontdoor_negatives": int(n_neg),
+        "val_rows": int(len(y_val)),
+        "val_positive_rate": float(y_val.mean()),
+        "best_softmax_baseline_name": base_name,
         "frontdoor": {"brier": brier_fd, "auc": auc_fd, "ece": ece_fd, "acc": acc_fd},
         "softmax_max": {"brier": brier_sm_max, "auc": auc_sm_max, "ece": ece_sm_max},
         "softmax_fd": {"brier": brier_sm_fd, "auc": auc_sm_fd, "ece": ece_sm_fd},
-        "brier_delta_vs_best_baseline": brier_delta,
+        "constant_base_rate": {"brier": brier_constant},
+        "brier_delta_vs_best_softmax_baseline": brier_delta,
+        "brier_delta_vs_constant_baseline": brier_delta_constant,
         "gates_passed": all_pass,
+        "gates": {
+            "brier_delta_ge_0_02": bool(brier_delta >= 0.02),
+            "auc_ge_0_75": bool(auc_fd >= 0.75),
+            "ece_le_0_05": bool(ece_fd <= 0.05),
+        },
     }
+
+
+def _summary_markdown(summary: dict) -> str:
+    frontdoor = summary["frontdoor"]
+    return "\n".join(
+        [
+            "# Offline Frontdoor Verifier Evaluation",
+            "",
+            f"- Data: `{summary['data_path']}`",
+            f"- Output weights: `{summary['output_path']}`",
+            f"- Frontdoor rows: `{summary['frontdoor_rows']}` "
+            f"({summary['frontdoor_positives']} positive / {summary['frontdoor_negatives']} negative)",
+            f"- Validation rows: `{summary['val_rows']}`",
+            f"- Brier: `{frontdoor['brier']:.4f}`",
+            f"- ROC-AUC: `{frontdoor['auc']:.4f}`",
+            f"- ECE: `{frontdoor['ece']:.4f}`",
+            f"- Accuracy@0.5: `{frontdoor['acc']:.4f}`",
+            f"- Delta Brier vs best softmax baseline: "
+            f"`{summary['brier_delta_vs_best_softmax_baseline']:+.4f}`",
+            f"- Delta Brier vs constant base-rate baseline: "
+            f"`{summary['brier_delta_vs_constant_baseline']:+.4f}`",
+            f"- Gates passed: `{summary['gates_passed']}`",
+            "",
+            "This is an offline evaluation artifact. It is not a live verifier",
+            "weight promotion and does not enable the frontdoor verifier gate.",
+            "",
+        ]
+    )
 
 
 def main():
@@ -231,13 +282,15 @@ def main():
     parser.add_argument("--classifier-weights", type=str, required=True)
     parser.add_argument("--classifier-data", type=str, required=True)
     parser.add_argument("--output", type=str, required=True)
+    parser.add_argument("--summary-json", type=str)
+    parser.add_argument("--summary-md", type=str)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--patience", type=int, default=15)
     args = parser.parse_args()
 
-    train_and_eval(
+    summary = train_and_eval(
         data_path=Path(args.data),
         classifier_weights_path=Path(args.classifier_weights),
         classifier_data_path=Path(args.classifier_data),
@@ -247,6 +300,14 @@ def main():
         batch_size=args.batch_size,
         patience=args.patience,
     )
+    if args.summary_json:
+        path = Path(args.summary_json)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.summary_md:
+        path = Path(args.summary_md)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_summary_markdown(summary), encoding="utf-8")
 
 
 if __name__ == "__main__":

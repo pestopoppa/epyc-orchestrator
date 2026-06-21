@@ -1,0 +1,41 @@
+{
+  "best_softmax_baseline_name": "softmax_p(fd|x)",
+  "brier_delta_vs_best_softmax_baseline": 0.029814735054969788,
+  "brier_delta_vs_constant_baseline": -0.01010403037071228,
+  "classifier_weights_path": "orchestration/repl_memory/routing_classifier_weights.npz",
+  "constant_base_rate": {
+    "brier": 0.23140497505664825
+  },
+  "data_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data.npz",
+  "frontdoor": {
+    "acc": 0.6590909090909091,
+    "auc": 0.7477678571428571,
+    "brier": 0.24150900542736053,
+    "ece": 0.14645020189610394
+  },
+  "frontdoor_action_idx": 0,
+  "frontdoor_negatives": 82,
+  "frontdoor_positives": 142,
+  "frontdoor_rows": 224,
+  "gates": {
+    "auc_ge_0_75": false,
+    "brier_delta_ge_0_02": true,
+    "ece_le_0_05": false
+  },
+  "gates_passed": false,
+  "output_path": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_frontdoor_verifier_weights.npz",
+  "schema_version": "frontdoor_verifier_eval.v1",
+  "softmax_fd": {
+    "auc": 0.5870535714285714,
+    "brier": 0.2713237404823303,
+    "ece": 0.27858668904412875
+  },
+  "softmax_max": {
+    "auc": 0.49330357142857145,
+    "brier": 0.32933270931243896,
+    "ece": 0.30440606447783386
+  },
+  "total_rows": 322,
+  "val_positive_rate": 0.6363636255264282,
+  "val_rows": 44
+}
