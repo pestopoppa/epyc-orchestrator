@@ -5,13 +5,15 @@
     "notes": [
       "Benchmark/eval rows remain valid high-volume AutoPilot RL/calibration fuel.",
       "Historical operator conversations are tracked as a separate demand-distribution stratum.",
+      "Weighted source-family shares must keep any single source family from defining the whole distribution.",
       "This summary is safe to commit because it contains aggregate counts and paths only, not raw transcript text."
     ],
     "privacy_prompt_text_free": true,
+    "source_weight_dominance_ok": true,
     "status": "summary_checkpoint_not_final_w2",
     "token_payload_coverage": true
   },
-  "generated_at": "2026-06-20T23:45:00+00:00",
+  "generated_at": "2026-06-21T16:05:00+00:00",
   "schema_version": "mixed_real_task_corpus_summary.v1",
   "sources": [
     {
@@ -113,8 +115,8 @@
       "source_family": "historical_operator_conversation",
       "token_payloads": 874,
       "wall_time_rows": 874,
-      "weight": 1.0,
-      "weighted_records": 874.0,
+      "weight": 0.6,
+      "weighted_records": 524.4,
       "written": 874
     }
   ],
@@ -129,13 +131,13 @@
       "research_intake_deep_dive": 225
     },
     "by_class_weighted": {
-      "benchmark_eval_measurement": 83.0,
-      "code_change_implementation": 615.0,
-      "debug_root_cause": 32.0,
-      "governance_docs_handoff": 122.0,
-      "ops_deploy_process": 128.0,
-      "planning_architecture_review": 41.0,
-      "research_intake_deep_dive": 225.0
+      "benchmark_eval_measurement": 63.0,
+      "code_change_implementation": 446.2,
+      "debug_root_cause": 26.0,
+      "governance_docs_handoff": 81.6,
+      "ops_deploy_process": 90.4,
+      "planning_architecture_review": 36.2,
+      "research_intake_deep_dive": 153.0
     },
     "by_evidence_role_raw": {
       "operator_demand_backfill": 874,
@@ -150,9 +152,16 @@
       "live_progress": 372
     },
     "by_source_family_weighted": {
-      "historical_operator_conversation": 874.0,
+      "historical_operator_conversation": 524.4,
       "live_progress": 372.0
     },
+    "by_source_family_weighted_share": {
+      "historical_operator_conversation": 0.585007,
+      "live_progress": 0.414993
+    },
+    "dominant_source_family": "historical_operator_conversation",
+    "max_source_family_weighted_share": 0.585007,
+    "max_weighted_source_family_share_allowed": 0.6,
     "prompt_ref_rows": 0,
     "prompt_text_rows": 0,
     "raw_records": 1246,
@@ -160,6 +169,6 @@
     "source_family_count": 2,
     "token_payloads": 874,
     "wall_time_rows": 1246,
-    "weighted_records": 1246.0
+    "weighted_records": 896.4
   }
 }

@@ -10,6 +10,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+DEFAULT_MAX_WEIGHTED_SOURCE_FAMILY_SHARE = 0.60
+
 
 def utc_now() -> str:
     return dt.datetime.now(dt.UTC).isoformat()
@@ -100,20 +102,59 @@ def _raw_counter(sources: list[dict[str, Any]], key: str) -> dict[str, int]:
     return dict(sorted(totals.items()))
 
 
+def _sum_by_source_field(
+    sources: list[dict[str, Any]], field: str, value_field: str, *, as_float: bool
+) -> dict[str, float] | dict[str, int]:
+    totals: Counter[str] = Counter()
+    for source in sources:
+        key = str(source[field])
+        value = source[value_field]
+        totals[key] += float(value) if as_float else int(value)
+    if as_float:
+        return {k: round(float(v), 6) for k, v in sorted(totals.items())}
+    return {k: int(v) for k, v in sorted(totals.items())}
+
+
+def _source_family_share_readout(
+    source_family_weighted: dict[str, float], weighted_records: float
+) -> dict[str, Any]:
+    if weighted_records <= 0 or not source_family_weighted:
+        return {
+            "by_source_family_weighted_share": {},
+            "dominant_source_family": None,
+            "max_source_family_weighted_share": 0.0,
+        }
+    shares = {
+        family: round(float(weighted) / weighted_records, 6)
+        for family, weighted in sorted(source_family_weighted.items())
+    }
+    dominant_family, max_share = max(shares.items(), key=lambda item: item[1])
+    return {
+        "by_source_family_weighted_share": shares,
+        "dominant_source_family": dominant_family,
+        "max_source_family_weighted_share": max_share,
+    }
+
+
 def build_summary(source_specs: list[dict[str, Any]], *, generated_at: str | None = None) -> dict[str, Any]:
     sources = [summarize_source(spec) for spec in source_specs]
     raw_records = sum(int(source["written"]) for source in sources)
     weighted_records = sum(float(source["weighted_records"]) for source in sources)
-    source_family_raw = {source["source_family"]: int(source["written"]) for source in sources}
-    source_family_weighted = {
-        source["source_family"]: round(float(source["weighted_records"]), 6) for source in sources
-    }
-    evidence_role_raw = {source["evidence_role"]: int(source["written"]) for source in sources}
+    source_family_raw = _sum_by_source_field(sources, "source_family", "written", as_float=False)
+    source_family_weighted = _sum_by_source_field(
+        sources, "source_family", "weighted_records", as_float=True
+    )
+    evidence_role_raw = _sum_by_source_field(sources, "evidence_role", "written", as_float=False)
+    source_family_share = _source_family_share_readout(source_family_weighted, weighted_records)
     rows_inspected = sum(int(source["rows_inspected"]) for source in sources)
     token_payloads = sum(int(source["token_payloads"]) for source in sources)
     wall_time_rows = sum(int(source["wall_time_rows"]) for source in sources)
     prompt_text_rows = sum(int(source["prompt_text_rows"]) for source in sources)
     prompt_ref_rows = sum(int(source["prompt_ref_rows"]) for source in sources)
+    source_weight_dominance_ok = (
+        source_family_share["max_source_family_weighted_share"]
+        <= DEFAULT_MAX_WEIGHTED_SOURCE_FAMILY_SHARE
+    )
 
     return {
         "schema_version": "mixed_real_task_corpus_summary.v1",
@@ -125,6 +166,8 @@ def build_summary(source_specs: list[dict[str, Any]], *, generated_at: str | Non
             "source_family_count": len({source["source_family"] for source in sources}),
             "by_source_family_raw": source_family_raw,
             "by_source_family_weighted": source_family_weighted,
+            **source_family_share,
+            "max_weighted_source_family_share_allowed": DEFAULT_MAX_WEIGHTED_SOURCE_FAMILY_SHARE,
             "by_evidence_role_raw": evidence_role_raw,
             "by_class_raw": _raw_counter(sources, "by_class"),
             "by_class_weighted": _weighted_counter(sources, "by_class"),
@@ -139,11 +182,13 @@ def build_summary(source_specs: list[dict[str, Any]], *, generated_at: str | Non
             "class_outcome_count_gate": raw_records >= 100,
             "multiple_source_families": len({source["source_family"] for source in sources}) >= 2,
             "token_payload_coverage": token_payloads > 0,
+            "source_weight_dominance_ok": source_weight_dominance_ok,
             "privacy_prompt_text_free": prompt_text_rows == 0,
             "status": "summary_checkpoint_not_final_w2",
             "notes": [
                 "Benchmark/eval rows remain valid high-volume AutoPilot RL/calibration fuel.",
                 "Historical operator conversations are tracked as a separate demand-distribution stratum.",
+                "Weighted source-family shares must keep any single source family from defining the whole distribution.",
                 "This summary is safe to commit because it contains aggregate counts and paths only, not raw transcript text.",
             ],
         },
@@ -179,6 +224,20 @@ def render_markdown(summary: dict[str, Any]) -> str:
     weighted = totals["by_source_family_weighted"]
     for family, raw_count in totals["by_source_family_raw"].items():
         lines.append(f"| {family} | {raw_count} | {weighted.get(family, 0)} |")
+
+    lines.extend(["", "## Source Weight Shares", "", "| Source family | Weighted share |"])
+    lines.append("|---|---:|")
+    for family, share in totals["by_source_family_weighted_share"].items():
+        lines.append(f"| {family} | {share} |")
+    lines.extend(
+        [
+            "",
+            f"- Dominant source family: `{totals['dominant_source_family']}`",
+            f"- Max weighted source-family share: {totals['max_source_family_weighted_share']}",
+            "- Max allowed weighted source-family share: "
+            f"{totals['max_weighted_source_family_share_allowed']}",
+        ]
+    )
 
     lines.extend(["", "## Classes", "", "| Class | Raw records | Weighted records |"])
     lines.append("|---|---:|---:|")
