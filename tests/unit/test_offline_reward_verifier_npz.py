@@ -95,6 +95,7 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    legacy_architect_coding = "architect_coding:delegated"  # stack-change-guard: allow retired-role remap fixture
     monkeypatch.setattr(
         mod,
         "load_live_canonical_actions",
@@ -114,7 +115,7 @@ def test_build_verifier_npz_emits_compatible_contract_and_aliases(
             ),
             _manifest_row(
                 source_path,
-                role_key="architect_coding:delegated",
+                role_key=legacy_architect_coding,
                 label=0,
                 score=0.2,
             ),
@@ -179,6 +180,7 @@ def test_build_verifier_npz_can_drop_conflicting_model_input_groups(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    legacy_architect_coding = "architect_coding:delegated"  # stack-change-guard: allow retired-role remap fixture
     monkeypatch.setattr(
         mod,
         "load_live_canonical_actions",
@@ -198,7 +200,7 @@ def test_build_verifier_npz_can_drop_conflicting_model_input_groups(
             ),
             _manifest_row(
                 source_path,
-                role_key="architect_coding:delegated",
+                role_key=legacy_architect_coding,
                 label=0,
                 score=0.2,
             ),

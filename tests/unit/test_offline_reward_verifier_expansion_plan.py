@@ -21,10 +21,11 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 def test_canonical_action_maps_historical_delegated_and_alias_roles(caplog) -> None:
     actions = {"frontdoor", "architect_general", "coder_escalation", "worker_vision"}
+    legacy_architect_coding = "architect_coding:delegated"  # stack-change-guard: allow retired-role remap fixture
 
     caplog.set_level(logging.WARNING, logger="scripts.graph_router.action_space")
     assert mod._canonical_action("architect_general:delegated", actions) == "architect_general"
-    assert mod._canonical_action("architect_coding:delegated", actions) == "architect_general"
+    assert mod._canonical_action(legacy_architect_coding, actions) == "architect_general"
     assert mod._canonical_action("coder_primary", actions) == "coder_escalation"
     assert mod._canonical_action("frontdoor:direct", actions) == "frontdoor"
     assert mod._canonical_action("worker_vision:direct", actions) == "worker_vision"
