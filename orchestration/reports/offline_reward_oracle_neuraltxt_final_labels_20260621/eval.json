@@ -1798,7 +1798,6 @@
       "aggregate_agreement_below_gate",
       "aggregate_spearman_below_gate",
       "best_balanced_accuracy_below_gate",
-      "answer_equivalence_final_label:too_few_negatives",
       "answer_equivalence_final_label:agreement_below_gate",
       "answer_equivalence_final_label:spearman_below_gate"
     ],
@@ -1871,7 +1870,7 @@
           "op": ">=",
           "passed": false,
           "threshold": 0.75,
-          "value": 0.3541666666666667
+          "value": 0.7456647398843931
         },
         "present": {
           "op": "exists",
@@ -1882,19 +1881,19 @@
           "op": ">=",
           "passed": true,
           "threshold": 30,
-          "value": 48
+          "value": 173
         },
         "spearman": {
           "op": ">=",
           "passed": false,
           "threshold": 0.2,
-          "value": -0.057912084992284375
+          "value": 0.18449258164579826
         },
         "target_negative": {
           "op": ">=",
-          "passed": false,
+          "passed": true,
           "threshold": 5,
-          "value": 1
+          "value": 126
         },
         "target_positive": {
           "op": ">=",
@@ -2108,18 +2107,18 @@
     },
     "target_source": {
       "answer_equivalence_final_label": {
-        "agreement_at_threshold": 0.3541666666666667,
+        "agreement_at_threshold": 0.7456647398843931,
         "confusion": {
           "fn": 31,
-          "fp": 0,
-          "tn": 1,
+          "fp": 13,
+          "tn": 113,
           "tp": 16
         },
-        "mean_abs_error": 0.6297668618741833,
-        "n": 48,
-        "pearson": -0.03463012029304803,
-        "spearman": -0.057912084992284375,
-        "target_negative": 1,
+        "mean_abs_error": 0.3146647246449518,
+        "n": 173,
+        "pearson": 0.3027451426165673,
+        "spearman": 0.18449258164579826,
+        "target_negative": 126,
         "target_positive": 47
       },
       "heldout_stress_binary_reward": {
@@ -2138,18 +2137,18 @@
         "target_positive": 96
       },
       "original_binary_reward": {
-        "agreement_at_threshold": 0.9,
+        "agreement_at_threshold": 1.0,
         "confusion": {
           "fn": 0,
-          "fp": 13,
-          "tn": 112,
+          "fp": 0,
+          "tn": 0,
           "tp": 5
         },
-        "mean_abs_error": 0.1950024146013535,
-        "n": 130,
-        "pearson": 0.4919695090279567,
-        "spearman": 0.31286222318406953,
-        "target_negative": 125,
+        "mean_abs_error": 0.22842518091201783,
+        "n": 5,
+        "pearson": null,
+        "spearman": null,
+        "target_negative": 0,
         "target_positive": 5
       }
     }

@@ -7,10 +7,12 @@
 - Disagreement: `48` (0.2697)
 - Proxy positives: `10` (0.0562)
 - F1 threshold: `0.8`
+- Review candidates: `173`
+- Included agreed negatives: `125`
 
 ## Interpretation
 
-Deterministic answer-equivalence proxies are an audit target, not a semantic-judge replacement. Disagreement rows are the review set for the next A9 label-construction pass.
+Deterministic answer-equivalence proxies are an audit target, not a semantic-judge replacement. Disagreement rows, plus any explicitly included agreed-negative rows, are the review set for the next A9 label-construction pass.
 
 ## Disagreements
 

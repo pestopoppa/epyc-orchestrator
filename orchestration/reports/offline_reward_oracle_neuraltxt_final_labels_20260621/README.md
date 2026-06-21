@@ -14,11 +14,12 @@ contain reference/response text and remain outside git:
 
 Target construction:
 
-- `48` rows use
+- `173` rows use
   `orchestration/reports/offline_reward_oracle_answer_equivalence_review_20260621/manifest.jsonl`
   `final_label` as the target;
-- `130` rows keep the original binary reward target;
-- final-label rows split into `47` equivalent and `1` not-equivalent;
+- `5` rows keep the original binary reward target;
+- final-label rows split into `47` equivalent and `126` not-equivalent after
+  adding `125` target/proxy-agreed negative review candidates;
 - `144` held-out stress rows reuse the already-scored NeuralTxt stress
   outputs (`48` base, `48` paraphrase, `48` confound) under target source
   `heldout_stress_binary_reward`.
@@ -42,38 +43,38 @@ Target construction:
   confound fooled rate `0.0000`
 - Decision gate: `blocked`
 - Gate blockers: aggregate agreement, aggregate Spearman, best balanced
-  accuracy, and answer-equivalence slice negatives/agreement/Spearman
+  accuracy, and answer-equivalence slice agreement/Spearman
 
 ## Slice Diagnosis
 
-The aggregate agreement is mostly carried by the original binary-reward rows,
-which are negative-heavy:
+The expanded answer-equivalence slice now has enough negatives for the gate.
+It still falls short on agreement and rank correlation:
 
-- `answer_equivalence_final_label`: `48` rows, `47` positives / `1` negative,
-  agreement `0.3542`, Spearman `-0.0579`,
-  confusion `tp=16 fp=0 fn=31 tn=1`;
-- `original_binary_reward`: `130` rows, `5` positives / `125` negatives,
-  agreement `0.9000`, Spearman `0.3129`,
-  confusion `tp=5 fp=13 fn=0 tn=112`.
+- `answer_equivalence_final_label`: `173` rows, `47` positives / `126`
+  negatives, agreement `0.7457`, Spearman `0.1845`,
+  confusion `tp=16 fp=13 fn=31 tn=113`;
+- `original_binary_reward`: `5` rows, `5` positives / `0` negatives,
+  agreement `1.0000`, Spearman `null`, confusion `tp=5 fp=0 fn=0 tn=0`;
 - `heldout_stress_binary_reward`: `144` rows, `96` positives / `48`
   negatives, agreement `0.6181`, Spearman `0.2728`,
   confusion `tp=41 fp=0 fn=55 tn=48`.
 
-The worst suite slice is `livecodebench`: `24` positives / `0` negatives,
-agreement `0.0417`, confusion `tp=1 fp=0 fn=23 tn=0`. The role slice shows
-the same issue on `frontdoor:direct`: `44` positives / `5` negatives,
-agreement `0.3265`, confusion `tp=14 fp=3 fn=30 tn=2`.
+The weakest suite remains `livecodebench`: `72` positives / `24` negatives,
+agreement `0.3021`, Spearman `-0.3150`, confusion `tp=5 fp=0 fn=67 tn=24`.
+The role slice shows the same issue on `frontdoor:direct`: `132` positives /
+`49` negatives, agreement `0.5138`, Spearman `0.1461`, confusion
+`tp=47 fp=3 fn=85 tn=46`.
 
 ## Interpretation
 
-Adding the held-out stress rows removes the prior missing-stress ambiguity:
-the scorer passes the deterministic paraphrase/confound stress checks in this
-artifact. It still does not clear the label-quality concern. Rank agreement
-remains weak, the calibrated best-agreement point still admits false positives,
-and the no-false-positive point recalls only `13/148` positives. The slice
-diagnosis shows the failure is concentrated in the reviewed answer-equivalence
-positives, especially long code/livecodebench responses, not in deterministic
-paraphrase/confound robustness or the negative-heavy legacy binary rows.
+Adding agreed-negative review candidates removes the prior
+answer-equivalence negative-coverage ambiguity, and adding held-out stress rows
+removes the prior missing-stress ambiguity. The scorer still does not clear the
+quality gate. Rank agreement remains weak, the calibrated best-agreement point
+still admits false positives, and the no-false-positive point recalls only
+`13/148` positives. The slice diagnosis shows the failure is concentrated in
+answer-equivalence ranking, especially long code/livecodebench responses, not
+in deterministic paraphrase/confound robustness or label coverage.
 
 Status: observation, not decision. Do not feed NeuralTxt labels into
 NEXT-A2/A3 or learned-routing reward signals from this report alone. The

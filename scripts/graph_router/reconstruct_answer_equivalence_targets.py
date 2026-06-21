@@ -153,15 +153,20 @@ def audit_rows(
     *,
     target_threshold: float = 0.5,
     f1_threshold: float = 0.8,
+    include_agreed_negatives: bool = False,
+    max_agreed_negatives: int | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     stats = Counter()
     by_suite = Counter()
     by_role = Counter()
     disagreement_types = Counter()
     disagreement_suites = Counter()
-    disagreements: list[dict[str, Any]] = []
+    review_candidate_types = Counter()
+    review_candidate_suites = Counter()
+    review_candidates: list[dict[str, Any]] = []
     recoverable_positive = 0
     recoverable_negative = 0
+    agreed_negative_candidates = 0
 
     for row in rows:
         reference = str(row.get("reference") or "")
@@ -184,6 +189,12 @@ def audit_rows(
             continue
         if truth == proxy:
             stats["agreement"] += 1
+            if truth == 0 and include_agreed_negatives:
+                if max_agreed_negatives is None or agreed_negative_candidates < max_agreed_negatives:
+                    review_candidates.append(_safe_row(row, truth=truth, proxy=proxy, features=features))
+                    review_candidate_types["agreed_negative_not_equivalent"] += 1
+                    review_candidate_suites[str(row.get("suite") or "unknown")] += 1
+                    agreed_negative_candidates += 1
         else:
             stats["disagreement"] += 1
             dtype = (
@@ -193,7 +204,9 @@ def audit_rows(
             )
             disagreement_types[dtype] += 1
             disagreement_suites[str(row.get("suite") or "unknown")] += 1
-            disagreements.append(_safe_row(row, truth=truth, proxy=proxy, features=features))
+            review_candidates.append(_safe_row(row, truth=truth, proxy=proxy, features=features))
+            review_candidate_types[dtype] += 1
+            review_candidate_suites[str(row.get("suite") or "unknown")] += 1
 
     total = int(stats["rows"])
     compared = int(stats["agreement"] + stats["disagreement"])
@@ -223,13 +236,22 @@ def audit_rows(
             "by_type": dict(sorted(disagreement_types.items())),
             "by_suite": dict(sorted(disagreement_suites.items())),
         },
+        "review_candidates": {
+            "rows": len(review_candidates),
+            "included_agreed_negative": agreed_negative_candidates,
+            "include_agreed_negatives": include_agreed_negatives,
+            "max_agreed_negatives": max_agreed_negatives,
+            "by_type": dict(sorted(review_candidate_types.items())),
+            "by_suite": dict(sorted(review_candidate_suites.items())),
+        },
         "interpretation": (
             "Deterministic answer-equivalence proxies are an audit target, not a "
-            "semantic-judge replacement. Disagreement rows are the review set for "
-            "the next A9 label-construction pass."
+            "semantic-judge replacement. Disagreement rows, plus any explicitly "
+            "included agreed-negative rows, are the review set for the next A9 "
+            "label-construction pass."
         ),
     }
-    return summary, disagreements
+    return summary, review_candidates
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -257,6 +279,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- Disagreement: `{counts['disagreement']}` ({_fmt_rate(rates['disagreement'])})",
         f"- Proxy positives: `{counts['proxy_positive']}` ({_fmt_rate(rates['proxy_positive'])})",
         f"- F1 threshold: `{summary['f1_threshold']}`",
+        f"- Review candidates: `{summary['review_candidates']['rows']}`",
+        f"- Included agreed negatives: `{summary['review_candidates']['included_agreed_negative']}`",
         "",
         "## Interpretation",
         "",
@@ -302,26 +326,42 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-jsonl", required=True, type=Path)
     parser.add_argument("--summary-json", required=True, type=Path)
     parser.add_argument("--summary-md", required=True, type=Path)
-    parser.add_argument("--disagreements-jsonl", required=True, type=Path)
+    parser.add_argument("--disagreements-jsonl", type=Path)
+    parser.add_argument("--review-candidates-jsonl", type=Path)
     parser.add_argument("--target-threshold", type=float, default=0.5)
     parser.add_argument("--f1-threshold", type=float, default=0.8)
+    parser.add_argument(
+        "--include-agreed-negatives",
+        action="store_true",
+        help="Also export target-negative/proxy-negative rows as review candidates.",
+    )
+    parser.add_argument(
+        "--max-agreed-negatives",
+        type=int,
+        help="Optional cap on exported agreed-negative review candidates.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    output_jsonl = args.review_candidates_jsonl or args.disagreements_jsonl
+    if output_jsonl is None:
+        raise SystemExit("--review-candidates-jsonl or --disagreements-jsonl is required")
     rows = load_jsonl(args.input_jsonl)
     summary, disagreements = audit_rows(
         rows,
         target_threshold=args.target_threshold,
         f1_threshold=args.f1_threshold,
+        include_agreed_negatives=args.include_agreed_negatives,
+        max_agreed_negatives=args.max_agreed_negatives,
     )
     summary["input_jsonl"] = str(args.input_jsonl)
     write_json(args.summary_json, summary)
     args.summary_md.parent.mkdir(parents=True, exist_ok=True)
     args.summary_md.write_text(render_markdown(summary), encoding="utf-8")
-    write_jsonl(args.disagreements_jsonl, disagreements)
-    assert_prompt_free(args.disagreements_jsonl)
+    write_jsonl(output_jsonl, disagreements)
+    assert_prompt_free(output_jsonl)
     print(
         "answer-equivalence audit: "
         f"rows={summary['counts']['rows']} "

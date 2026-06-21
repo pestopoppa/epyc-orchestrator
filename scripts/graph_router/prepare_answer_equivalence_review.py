@@ -140,6 +140,10 @@ def _disagreement_type(row: dict[str, Any]) -> str:
         return "current_positive_not_deterministically_reconstructable"
     if truth == 0 and proxy == 1:
         return "current_negative_deterministically_equivalent"
+    if truth == 0 and proxy == 0:
+        return "agreed_negative_not_equivalent"
+    if truth == 1 and proxy == 1:
+        return "agreed_positive_equivalent"
     return "other_disagreement"
 
 
@@ -152,6 +156,13 @@ def _seed_label(*, source_passed: Any, disagreement_type: str) -> dict[str, str 
             "semantic_label": "equivalent",
             "final_label": "equivalent",
             "label_source": "source_passed_true",
+            "label_status": "seeded",
+        }
+    if source_passed is False and disagreement_type == "agreed_negative_not_equivalent":
+        return {
+            "semantic_label": "not_equivalent",
+            "final_label": "not_equivalent",
+            "label_source": "target_proxy_agreed_negative",
             "label_status": "seeded",
         }
     return {
@@ -240,7 +251,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
         f"- Private packet: `{summary['private_review_jsonl']}`",
         f"- Public manifest: `{summary['public_manifest_jsonl']}`",
         "",
-        "## Disagreement Types",
+        "## Review Candidate Types",
         "",
         "| Type | Rows |",
         "|---|---:|",

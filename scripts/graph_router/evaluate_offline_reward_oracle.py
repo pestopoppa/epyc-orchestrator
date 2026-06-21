@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-TARGET_FIELDS = ("binary_reward", "q_reward", "target_score", "score")
+TARGET_FIELDS = ("target_score", "binary_reward", "q_reward", "score")
 SUCCESS_OUTCOMES = {"success", "passed", "pass", "ok", "correct", "true"}
 PARTIAL_OUTCOMES = {"partial", "mixed", "incomplete"}
 FAILURE_OUTCOMES = {"failure", "failed", "fail", "incorrect", "false", "error"}

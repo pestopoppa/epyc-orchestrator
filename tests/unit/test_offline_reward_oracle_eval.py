@@ -152,6 +152,35 @@ def test_evaluate_oracle_scores_against_binary_rewards_and_stress_rows(
     assert summary["slices"]["role_key"]["worker"]["target_positive"] == 2
 
 
+def test_target_score_overrides_legacy_binary_reward(tmp_path: Path) -> None:
+    data = _write_jsonl(
+        tmp_path / "oracle_rows.jsonl",
+        [
+            {
+                "item_id": "manual-positive",
+                "reference": "Paris",
+                "response": "Paris",
+                "oracle_score": 0.9,
+                "binary_reward": 0.0,
+                "target_score": 1.0,
+            },
+            {
+                "item_id": "manual-negative",
+                "reference": "Paris",
+                "response": "Lyon",
+                "oracle_score": 0.1,
+                "binary_reward": 1.0,
+                "target_score": 0.0,
+            },
+        ],
+    )
+
+    rows = load_jsonl(data, target_threshold=0.5)
+
+    assert [row.target_score for row in rows] == [1.0, 0.0]
+    assert [row.binary_target for row in rows] == [1, 0]
+
+
 def test_cli_writes_json_and_markdown(tmp_path: Path) -> None:
     data = _write_jsonl(
         tmp_path / "oracle_rows.jsonl",

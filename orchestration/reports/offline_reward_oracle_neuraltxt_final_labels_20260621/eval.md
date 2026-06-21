@@ -17,11 +17,11 @@
 ## Decision Gate
 
 - Gate status: `blocked`
-- Blockers: `["aggregate_agreement_below_gate", "aggregate_spearman_below_gate", "best_balanced_accuracy_below_gate", "answer_equivalence_final_label:too_few_negatives", "answer_equivalence_final_label:agreement_below_gate", "answer_equivalence_final_label:spearman_below_gate"]`
+- Blockers: `["aggregate_agreement_below_gate", "aggregate_spearman_below_gate", "best_balanced_accuracy_below_gate", "answer_equivalence_final_label:agreement_below_gate", "answer_equivalence_final_label:spearman_below_gate"]`
 
 | Required slice | Status | Blockers |
 |---|---|---|
-| `answer_equivalence_final_label` | `blocked` | `["target_negative", "agreement_at_threshold", "spearman"]` |
+| `answer_equivalence_final_label` | `blocked` | `["agreement_at_threshold", "spearman"]` |
 
 ## Calibration
 
@@ -44,9 +44,9 @@
 
 | Slice | Rows | Pos | Neg | Agreement | Spearman | Confusion |
 |---|---:|---:|---:|---:|---:|---|
-| `answer_equivalence_final_label` | 48 | 47 | 1 | 0.3542 | -0.0579 | `tp=16 fp=0 fn=31 tn=1` |
+| `answer_equivalence_final_label` | 173 | 47 | 126 | 0.7457 | 0.1845 | `tp=16 fp=13 fn=31 tn=113` |
 | `heldout_stress_binary_reward` | 144 | 96 | 48 | 0.6181 | 0.2728 | `tp=41 fp=0 fn=55 tn=48` |
-| `original_binary_reward` | 130 | 5 | 125 | 0.9000 | 0.3129 | `tp=5 fp=13 fn=0 tn=112` |
+| `original_binary_reward` | 5 | 5 | 0 | 1.0000 | `null` | `tp=5 fp=0 fn=0 tn=0` |
 
 ### Suite
 

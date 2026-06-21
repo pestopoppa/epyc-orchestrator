@@ -48,6 +48,42 @@ def test_answer_equivalence_audit_counts_disagreements() -> None:
     assert "response" not in disagreements[0]
 
 
+def test_answer_equivalence_audit_can_export_agreed_negative_candidates() -> None:
+    rows = [
+        {
+            "item_id": "agreed-negative",
+            "suite": "simpleqa",
+            "role_key": "frontdoor",
+            "reference": "Paris",
+            "response": "Lyon",
+            "binary_reward": 0.0,
+        },
+        {
+            "item_id": "agreed-positive",
+            "suite": "simpleqa",
+            "role_key": "frontdoor",
+            "reference": "Paris",
+            "response": "Paris",
+            "binary_reward": 1.0,
+        },
+    ]
+
+    default_summary, default_candidates = targets.audit_rows(rows)
+    expanded_summary, expanded_candidates = targets.audit_rows(rows, include_agreed_negatives=True)
+
+    assert default_summary["counts"]["agreement"] == 2
+    assert default_candidates == []
+    assert expanded_summary["review_candidates"]["included_agreed_negative"] == 1
+    assert expanded_summary["review_candidates"]["by_type"] == {
+        "agreed_negative_not_equivalent": 1
+    }
+    assert expanded_candidates[0]["item_id"] == "agreed-negative"
+    assert expanded_candidates[0]["truth_label"] == 0
+    assert expanded_candidates[0]["equivalence_proxy_label"] == 0
+    assert "reference" not in expanded_candidates[0]
+    assert "response" not in expanded_candidates[0]
+
+
 def test_negative_marker_exact_is_recoverable_positive() -> None:
     features = targets.equivalence_features("NONE", "none")
 

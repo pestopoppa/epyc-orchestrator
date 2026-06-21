@@ -1,28 +1,32 @@
 {
   "by_disagreement_type": {
+    "agreed_negative_not_equivalent": 125,
     "current_negative_deterministically_equivalent": 5,
     "current_positive_not_deterministically_reconstructable": 43
   },
   "by_final_label": {
     "equivalent": 47,
-    "not_equivalent": 1
+    "not_equivalent": 126
   },
   "by_label_status": {
     "manual_reviewed": 5,
-    "seeded": 43
+    "seeded": 168
   },
   "by_role": {
-    "architect_general": 1,
-    "coder_escalation": 1,
-    "coder_primary": 1,
-    "frontdoor": 2,
-    "frontdoor:direct": 43
+    "architect_general": 10,
+    "coder_escalation": 37,
+    "coder_primary": 39,
+    "frontdoor": 39,
+    "frontdoor:direct": 48
   },
   "by_suite": {
-    "debugbench": 19,
-    "general": 3,
-    "instruction_precision": 2,
-    "livecodebench": 24
+    "agentic": 2,
+    "debugbench": 24,
+    "general": 31,
+    "instruction_precision": 26,
+    "livecodebench": 24,
+    "math": 31,
+    "thinking": 35
   },
   "label_options": [
     "equivalent",
@@ -42,7 +46,7 @@
   },
   "private_review_jsonl": "/mnt/raid0/llm/tmp/a9_answer_equivalence_review_20260621_private.jsonl",
   "public_manifest_jsonl": "orchestration/reports/offline_reward_oracle_answer_equivalence_review_20260621/manifest.jsonl",
-  "review_rows": 48,
+  "review_rows": 173,
   "schema_version": "answer_equivalence_review_packet.v1",
   "status": "labeling_complete"
 }

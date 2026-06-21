@@ -8,7 +8,9 @@
   "score_min": 0.0,
   "score_source_note": "base rows scored in final-label run; stress rows reused from held-out NeuralTxt stress scorer run",
   "stats": {
-    "base_final_label_rows": 178,
+    "answer_equivalence_final_label_rows": 173,
+    "base_rows": 178,
+    "original_binary_reward_rows": 5,
     "stress_rows": 144,
     "variant_type:base": 48,
     "variant_type:confound": 48,

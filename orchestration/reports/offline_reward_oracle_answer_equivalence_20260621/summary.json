@@ -39,11 +39,31 @@
   },
   "f1_threshold": 0.8,
   "input_jsonl": "/mnt/raid0/llm/tmp/a9-neuraltxt-heldout-Sh6cVX/rows.jsonl",
-  "interpretation": "Deterministic answer-equivalence proxies are an audit target, not a semantic-judge replacement. Disagreement rows are the review set for the next A9 label-construction pass.",
+  "interpretation": "Deterministic answer-equivalence proxies are an audit target, not a semantic-judge replacement. Disagreement rows, plus any explicitly included agreed-negative rows, are the review set for the next A9 label-construction pass.",
   "rates": {
     "agreement": 0.7303370786516854,
     "disagreement": 0.2696629213483146,
     "proxy_positive": 0.056179775280898875
+  },
+  "review_candidates": {
+    "by_suite": {
+      "agentic": 2,
+      "debugbench": 24,
+      "general": 31,
+      "instruction_precision": 26,
+      "livecodebench": 24,
+      "math": 31,
+      "thinking": 35
+    },
+    "by_type": {
+      "agreed_negative_not_equivalent": 125,
+      "current_negative_deterministically_equivalent": 5,
+      "current_positive_not_deterministically_reconstructable": 43
+    },
+    "include_agreed_negatives": true,
+    "included_agreed_negative": 125,
+    "max_agreed_negatives": null,
+    "rows": 173
   },
   "schema_version": "answer_equivalence_target_audit.v1",
   "status": "observation_not_decision",
