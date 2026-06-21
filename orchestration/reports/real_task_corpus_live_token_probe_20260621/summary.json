@@ -1,0 +1,95 @@
+{
+  "builder": "scripts/tasks/probe_real_task_token_coverage.py",
+  "counts": {
+    "by_class": {
+      "benchmark_eval_measurement": 12,
+      "code_change_implementation": 22,
+      "debug_root_cause": 4,
+      "governance_docs_handoff": 1,
+      "ops_deploy_process": 10,
+      "planning_architecture_review": 5,
+      "research_intake_deep_dive": 3
+    },
+    "by_outcome": {
+      "failure": 3,
+      "success": 54
+    },
+    "by_source": {
+      "orchestrator_progress_jsonl": 57
+    },
+    "by_source_family": {
+      "orchestrator_progress_jsonl": 57
+    },
+    "duplicates_collapsed": 103,
+    "prompt_ref_rows": 0,
+    "prompt_text_rows": 0,
+    "synthetic_like": 0,
+    "taxonomy_class": 57,
+    "token_payload_rows": 46,
+    "training_eligible": 57,
+    "wall_time_rows": 57,
+    "written": 57
+  },
+  "deployment_check": {
+    "active_autopilot_pid": 1091014,
+    "active_autopilot_processes": [
+      {
+        "cmd": "uv run python scripts/autopilot/autopilot.py start --max-trials 930",
+        "elapsed_s": 34992,
+        "pid": 1091014,
+        "started_at": "2026-06-20T17:29:27+00:00"
+      },
+      {
+        "cmd": "/mnt/raid0/llm/epyc-orchestrator/.venv/bin/python3 scripts/autopilot/autopilot.py start --max-trials 930",
+        "elapsed_s": 34992,
+        "pid": 1091018,
+        "started_at": "2026-06-20T17:29:27+00:00"
+      }
+    ],
+    "active_autopilot_started_at": "2026-06-20T17:29:27+00:00",
+    "latest_telemetry_mtime": "2026-06-20T23:02:35.835387+00:00",
+    "stale_autopilot_pids": [
+      1091014,
+      1091018
+    ],
+    "stale_process_for_token_telemetry": true,
+    "telemetry_files": {
+      "orchestration/repl_memory/progress_logger.py": "2026-06-19T01:58:47.773808+00:00",
+      "src/api/routes/chat_pipeline/direct_stage.py": "2026-06-20T23:02:35.835387+00:00",
+      "src/api/routes/chat_pipeline/telemetry.py": "2026-06-20T23:02:05.799970+00:00"
+    }
+  },
+  "gate_readout": {
+    "class_outcome_count_gate": false,
+    "privacy_prompt_text_free": true,
+    "status": "token_payload_coverage_present",
+    "token_payload_coverage": true,
+    "wall_time_coverage": true
+  },
+  "generated_at": "2026-06-21T03:12:39+00:00",
+  "manifest_path": "/mnt/raid0/llm/tmp/f1-live-token-probe-20260621/manifest.json",
+  "notes": [
+    "This probe is prompt-free when run with the default compact harvester options.",
+    "Do not interrupt a live W4/W6 accrual run solely for this F1 token-coverage check.",
+    "If active AutoPilot predates telemetry files, refresh after controlled restart or natural post-restart traffic."
+  ],
+  "output_path": "/mnt/raid0/llm/tmp/f1-live-token-probe-20260621/real_tasks.jsonl",
+  "probe_window": {
+    "end_date": "2026-06-21",
+    "start_date": "2026-06-21"
+  },
+  "schema_version": "live_token_probe_summary.v2",
+  "source_scan": {
+    "malformed_or_ignored": 0,
+    "records": 636,
+    "skipped": {
+      "missing_start": 1,
+      "open_task": 125
+    },
+    "source": "orchestrator_progress_jsonl",
+    "source_paths": [
+      "/mnt/raid0/llm/epyc-orchestrator/logs/progress/2026-06-21.jsonl"
+    ],
+    "task_states_seen": 762
+  }
+}
