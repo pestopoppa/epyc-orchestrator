@@ -1,0 +1,49 @@
+{
+  "inputs": [
+    "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_labels_with_source_family_expansion.jsonl",
+    "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_seeding_eval_expansion_labels.jsonl"
+  ],
+  "oracle_negative": 380,
+  "oracle_positive": 340,
+  "output_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_labels_with_seeding_eval_expansion.jsonl",
+  "privacy": {
+    "commits_private_rows": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ]
+  },
+  "role_counts": {
+    "architect_coding:delegated": 98,
+    "architect_coding:direct": 1,
+    "architect_general": 10,
+    "architect_general:delegated": 102,
+    "architect_general:direct": 1,
+    "coder_escalation": 45,
+    "coder_escalation:direct": 1,
+    "coder_escalation:repl": 1,
+    "coder_primary": 43,
+    "frontdoor": 43,
+    "frontdoor:direct": 279,
+    "frontdoor:repl": 96
+  },
+  "rows": 720,
+  "schema_version": "offline_reward_oracle_label_merge_summary.v1",
+  "source_family_hint_counts": {
+    "other": 423,
+    "seeding_eval": 297
+  },
+  "source_rows": {
+    "offline_reward_labels_with_source_family_expansion.jsonl": 606,
+    "offline_reward_seeding_eval_expansion_labels.jsonl": 114
+  },
+  "target_source_counts": {
+    "answer_equivalence_final_label": 173,
+    "heldout_stress_binary_reward": 144,
+    "original_binary_reward": 5,
+    "verifier_sparse_action_expansion": 398
+  }
+}

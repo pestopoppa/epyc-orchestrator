@@ -1,0 +1,111 @@
+{
+  "candidate_action_counts": {
+    "architect_general": 2,
+    "frontdoor": 112
+  },
+  "candidate_rows": 114,
+  "candidate_schema_version": "offline_reward_verifier_expansion_candidate.v1",
+  "candidate_source_family_action_counts": {
+    "seeding_eval:architect_general": 2,
+    "seeding_eval:frontdoor": 112
+  },
+  "candidate_source_family_counts": {
+    "seeding_eval": 114
+  },
+  "existing_action_counts": {
+    "architect_general": 210,
+    "coder_escalation": 78,
+    "frontdoor": 130
+  },
+  "existing_manifest": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_source_family_expansion.jsonl",
+  "existing_manifest_source_family_action_counts": {
+    "orchestrator_live_seed:architect_general": 10,
+    "orchestrator_live_seed:coder_escalation": 88,
+    "orchestrator_live_seed:frontdoor": 43,
+    "seeding_eval:coder_escalation": 2,
+    "seeding_eval:frontdoor": 181,
+    "three_way_eval:architect_general": 200,
+    "three_way_eval:frontdoor": 82
+  },
+  "existing_manifest_source_family_counts": {
+    "orchestrator_live_seed": 141,
+    "seeding_eval": 183,
+    "three_way_eval": 282
+  },
+  "existing_npz": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_verifier_data_with_source_family_expansion_source_action_response_telemetry_conflict_dropped.npz",
+  "existing_rows_excluded": 2,
+  "existing_source_family_action_counts": {
+    "orchestrator_live_seed:architect_general": 10,
+    "orchestrator_live_seed:coder_escalation": 76,
+    "orchestrator_live_seed:frontdoor": 39,
+    "seeding_eval:coder_escalation": 2,
+    "seeding_eval:frontdoor": 9,
+    "three_way_eval:architect_general": 200,
+    "three_way_eval:frontdoor": 82
+  },
+  "existing_source_family_counts": {
+    "orchestrator_live_seed": 125,
+    "seeding_eval": 11,
+    "three_way_eval": 282
+  },
+  "files_scanned": 3,
+  "inputs": [
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260304_195000.jsonl",
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_192103.jsonl",
+    "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_202050.jsonl"
+  ],
+  "max_candidates_per_action": 500,
+  "min_action_rows": 30,
+  "min_source_family_action_rows": 30,
+  "next_step": "Run build_offline_reward_oracle_rows on recommended source_path values, score with reference_token_coverage, export labels, rebuild feature manifest/NPZ, then rerun verifier robustness.",
+  "privacy": {
+    "commits_prompt_text": false,
+    "private_fields_excluded": [
+      "answer",
+      "expected",
+      "prompt",
+      "reference",
+      "response"
+    ],
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "recommended_sources": [
+    {
+      "deficit_reduction": 21,
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260304_195000.jsonl",
+      "target_action_counts": {
+        "frontdoor": 60
+      },
+      "target_source_family_action_counts": {
+        "seeding_eval:frontdoor": 60
+      }
+    },
+    {
+      "deficit_reduction": 2,
+      "source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_20260305_192103.jsonl",
+      "target_action_counts": {
+        "architect_general": 2,
+        "frontdoor": 2
+      },
+      "target_source_family_action_counts": {
+        "seeding_eval:architect_general": 2,
+        "seeding_eval:frontdoor": 2
+      }
+    }
+  ],
+  "schema_version": "offline_reward_verifier_expansion_plan.v1",
+  "stats": {
+    "candidate_rows": 114,
+    "files_scanned": 3,
+    "skipped_existing_row": 2,
+    "skipped_missing_response": 22
+  },
+  "target_actions": [
+    "frontdoor",
+    "coder_escalation",
+    "architect_general"
+  ],
+  "target_source_families": [
+    "seeding_eval"
+  ]
+}
