@@ -2007,6 +2007,9 @@ def _archive_entry_count(payload: object) -> int:
 
 def _journal_archive_payload_for_authority(
     journal: ExperimentJournal,
+    *,
+    deinflate_before_ts: float | None = None,
+    deinflate_factor: float = 1.0,
 ) -> dict[str, Any] | None:
     rows = _journal_rows_for_archive(journal)
     if hasattr(journal, "ledger_events"):
@@ -2020,7 +2023,26 @@ def _journal_archive_payload_for_authority(
         rows,
         None,
         current_run_only=False,
+        deinflate_before_ts=deinflate_before_ts,
+        deinflate_factor=deinflate_factor,
     )
+
+
+def _deinflate_params_from_state(
+    state: dict[str, Any],
+) -> tuple[float | None, float]:
+    """Extract pareto speed-deinflation correction params from autopilot state."""
+    deinflate_before_ts: float | None = None
+    try:
+        deinflate_before_ts = float(state.get("pareto_epoch_ts") or 0.0) or None
+    except (TypeError, ValueError):
+        pass
+    deinflate_factor: float = 1.0
+    try:
+        deinflate_factor = float(state.get("pareto_pre_epoch_speed_factor", 1.0))
+    except (TypeError, ValueError):
+        pass
+    return deinflate_before_ts, deinflate_factor
 
 
 def _apply_journal_archive_authority(
@@ -2033,7 +2055,12 @@ def _apply_journal_archive_authority(
     Returns True when cached state changed, False when it already matched, and
     None when the journal has no archive-bearing rows.
     """
-    archive_payload = _journal_archive_payload_for_authority(journal)
+    deinflate_before_ts, deinflate_factor = _deinflate_params_from_state(state)
+    archive_payload = _journal_archive_payload_for_authority(
+        journal,
+        deinflate_before_ts=deinflate_before_ts,
+        deinflate_factor=deinflate_factor,
+    )
     if archive_payload is None:
         return None
     changed = "pareto_archive" in state
@@ -2057,7 +2084,14 @@ def _sync_startup_archive_from_journal_authority(
     if state.get("_allow_empty_frontier_rebase"):
         return False
     before_count = _archive_entry_count(state.get("pareto_archive"))
-    journal_count = _archive_entry_count(_journal_archive_payload_for_authority(journal))
+    deinflate_before_ts, deinflate_factor = _deinflate_params_from_state(state)
+    journal_count = _archive_entry_count(
+        _journal_archive_payload_for_authority(
+            journal,
+            deinflate_before_ts=deinflate_before_ts,
+            deinflate_factor=deinflate_factor,
+        )
+    )
     changed = _apply_journal_archive_authority(state, journal, archive)
     if changed is not True:
         return False
@@ -2392,7 +2426,12 @@ def _run_loop_inner(
     """Inner loop (separated to ensure TUI cleanup via run_loop's finally)."""
     state = load_state()
     journal = ExperimentJournal()
-    archive_payload = _journal_archive_payload_for_authority(journal)
+    _deinfl_ts, _deinfl_factor = _deinflate_params_from_state(state)
+    archive_payload = _journal_archive_payload_for_authority(
+        journal,
+        deinflate_before_ts=_deinfl_ts,
+        deinflate_factor=_deinfl_factor,
+    )
     if archive_payload is not None and not state.get("_allow_empty_frontier_rebase"):
         archive = ParetoArchive.from_archive_payload(archive_payload, read_only=False)
     else:
