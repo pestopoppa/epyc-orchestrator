@@ -24,8 +24,12 @@ outgoing:
   max_request_timeout: 10.0
   enable_http2: true
 
-# Engine tuning (SX-3): disable Google (TLS fingerprinting blocks SearXNG),
-# keep DDG/Brave/Wikipedia/Qwant as primary engine set
+# Engine tuning (SX-3): disable Google (TLS fingerprinting blocks SearXNG).
+# WS1 (2026-06-22): our egress IP is blocked by duckduckgo (CAPTCHA), qwant
+# (access denied) and startpage (Suspended: CAPTCHA). Those engines only waste
+# request time and surface CAPTCHA noise in unresponsive_engines, so they are
+# disabled here. bing is the reliable workhorse from this egress; wikipedia is
+# healthy (no errors); brave is kept best-effort (intermittently rate-limited).
 engines:
   - name: google
     engine: google
@@ -35,15 +39,33 @@ engines:
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
-    disabled: false
-    weight: 1.2               # Slight boost — proven reliable in current search.py
+    disabled: true            # WS1: egress IP blocked (CAPTCHA)
+    timeout: 3.0
+
+  - name: qwant
+    engine: qwant
+    shortcut: qw
+    disabled: true            # WS1: egress IP blocked (access denied)
+    timeout: 3.0
+
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: true            # WS1: egress IP blocked (Suspended: CAPTCHA)
     timeout: 3.0
 
   - name: brave
     engine: brave
     shortcut: br
     disabled: false
-    weight: 1.1               # Secondary preferred — fallback engine in current search.py
+    weight: 1.1               # Best-effort — intermittently rate-limited from this egress
+    timeout: 3.0
+
+  - name: bing
+    engine: bing
+    shortcut: bi
+    disabled: false
+    weight: 1.2               # Primary — reliably returns results from this egress
     timeout: 3.0
 
   - name: wikipedia
@@ -52,11 +74,3 @@ engines:
     disabled: false
     weight: 1.0
     timeout: 3.0
-
-  - name: qwant
-    engine: qwant
-    shortcut: qw
-    disabled: false
-    weight: 0.9
-    timeout: 3.0
-    retry_on_http_error: true
