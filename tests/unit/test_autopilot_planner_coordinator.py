@@ -971,3 +971,129 @@ def test_failed_critique_keeps_draft_seed_batch_still_pauses() -> None:
         planner_coordinator.uncritiqued_dispatch_block_reason(decision)
         == "critic_unavailable"
     )
+
+
+def test_cross_model_failover_codex_offline_crosses_to_claude() -> None:
+    # PRIMARY=codex + CRITIC=codex_critic both resolve to the codex binary. When
+    # codex is offline the failover draft MUST cross to a DIFFERENT model (claude),
+    # not re-hit codex. (cross-model failover, 2026-06-12)
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="draft", ok=False,
+                               text="", error="timeout after 600s")],
+    )
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(
+            provider="claude", role="draft", ok=True,
+            text=_action_text({"type": "seed_batch", "n_questions": 10}),
+        )],
+    )
+
+    def factory(name: str) -> FakeProvider:
+        # Both configured codex roles map to the codex stub; claude to claude.
+        if name in ("codex", "codex_critic"):
+            return codex
+        return claude
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt", session_id=None, planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic",
+                                 mode="draft_critique"),
+        provider_factory=factory,
+    )
+
+    assert decision.action == {"type": "seed_batch", "n_questions": 10}
+    assert decision.draft_provider == "claude"
+    assert decision.providers_unavailable is False
+
+
+def test_both_models_unavailable_sets_providers_unavailable() -> None:
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="draft", ok=False,
+                               text="", error="timeout")],
+    )
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=False,
+                               text="", error="empty response")],
+    )
+
+    def factory(name: str) -> FakeProvider:
+        if name in ("codex", "codex_critic"):
+            return codex
+        return claude
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt", session_id=None, planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic",
+                                 mode="draft_critique"),
+        provider_factory=factory,
+    )
+
+    assert decision.action is None
+    assert decision.providers_unavailable is True
+    assert "both planner models unavailable" in decision.fallback_reason
+
+
+def test_content_failure_is_not_providers_unavailable() -> None:
+    # Both models RESPOND ok but neither emits a parseable action block. This is a
+    # CONTENT failure, not an availability failure → providers_unavailable False.
+    codex = FakeProvider(
+        "codex",
+        [PlannerProviderResult(provider="codex", role="draft", ok=True,
+                               text="no json")],
+    )
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(provider="claude", role="draft", ok=True,
+                               text="also no json")],
+    )
+
+    def factory(name: str) -> FakeProvider:
+        if name in ("codex", "codex_critic"):
+            return codex
+        return claude
+
+    decision = planner_coordinator.plan_with_providers(
+        "prompt", session_id=None, planner_state={},
+        settings=PlannerSettings(primary="codex", critic="codex_critic",
+                                 mode="draft_critique"),
+        provider_factory=factory,
+    )
+
+    assert decision.action is None
+    assert decision.providers_unavailable is False
+
+
+def test_open_primary_circuit_routes_to_other_model() -> None:
+    # A pre-open primary (codex) circuit must route the draft to the OTHER model
+    # (claude), even though the configured critic (codex_critic) is also codex.
+    import time as _time
+
+    claude = FakeProvider(
+        "claude",
+        [PlannerProviderResult(
+            provider="claude", role="draft", ok=True,
+            text=_action_text({"type": "seed_batch", "n_questions": 10}),
+        )],
+    )
+    codex = FakeProvider("codex", [])  # must NOT be invoked
+
+    def factory(name: str) -> FakeProvider:
+        if name in ("codex", "codex_critic"):
+            return codex
+        return claude
+
+    state = {"codex": {"circuit_open_until": _time.time() + 600.0, "failures": 2}}
+    decision = planner_coordinator.plan_with_providers(
+        "prompt", session_id=None, planner_state=state,
+        settings=PlannerSettings(primary="codex", critic="codex_critic",
+                                 mode="draft_critique"),
+        provider_factory=factory,
+    )
+
+    assert decision.draft_provider == "claude"
+    assert decision.action == {"type": "seed_batch", "n_questions": 10}
+    assert len(codex.calls) == 0
