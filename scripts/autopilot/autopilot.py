@@ -3123,8 +3123,49 @@ def _run_loop_inner(
             )
 
         if not action:
-            log.warning("No action proposed, defaulting to seed_batch")
-            action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
+            if getattr(planner_decision, "providers_unavailable", False):
+                # BOTH planner models are offline (no usable response from any
+                # attempted model). Don't loop a model-free seed_batch silently and
+                # don't route through the LLM-critic gate (it's also offline). Pick a
+                # DETERMINISTIC, statistically-grounded Optuna numeric_trial if the
+                # numeric-swarm surfaces are available; otherwise pause for the
+                # operator. (cross-model failover, 2026-06-12)
+                _det_surface = None
+                try:
+                    from species.numeric_swarm import SURFACES as _NS_SURFACES
+
+                    if _NS_SURFACES:
+                        _surface_names = sorted(_NS_SURFACES.keys())
+                        _det_surface = (
+                            "memrl_retrieval"
+                            if "memrl_retrieval" in _NS_SURFACES
+                            else _surface_names[0]
+                        )
+                except Exception:
+                    _det_surface = None
+
+                if _det_surface is not None:
+                    # numeric_trial without "params" → Optuna fills them at execution
+                    # (trial 969 ran exactly this shape; the dispatch path handles it).
+                    action = {"type": "numeric_trial", "surface": _det_surface}
+                    log.warning(
+                        "Both planner models offline → deterministic Optuna "
+                        "numeric_trial fallback (surface=%s)",
+                        _det_surface,
+                    )
+                else:
+                    state["paused"] = True
+                    state["_dispatch_deficiency"] = "planners_offline_no_deterministic_fallback"
+                    save_state(state)
+                    log.error(
+                        "Both planner models offline and no deterministic fallback "
+                        "available — pausing for operator."
+                    )
+                    phase.set("planners_offline_halt", trial_id=trial_counter)
+                    break
+            else:
+                log.warning("No action proposed, defaulting to seed_batch")
+                action = {"type": "seed_batch", "n_questions": SAFE_FALLBACK_SEED_N}
 
         # Meta actions are allowed as occasional bookkeeping, but a repeated
         # metric-free action means the planner is avoiding the experiment loop.

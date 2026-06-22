@@ -126,6 +126,13 @@ class PlannerDecision:
     # feedback + blacklist so a substituted draft cannot silently escape the
     # feedback loop (draft_critique authority change, 2026-06-04).
     draft_action: dict[str, Any] | None = None
+    # True iff `action is None` AND every model we attempted was an AVAILABILITY
+    # failure (timeout / empty / rc / not-found / exception, or circuit-open meant
+    # we could not even attempt) — i.e. NO attempted model produced a usable
+    # RESPONSE at all. False when some model responded ok but with bad/unparseable
+    # content. The main loop uses this to pick deterministic-fallback vs pause when
+    # both planner models are offline (cross-model failover, 2026-06-12).
+    providers_unavailable: bool = False
 
 
 ProviderFactory = Callable[[str], PlannerProvider]
@@ -163,7 +170,15 @@ def plan_with_providers(
 
     primary_name = _normalize_provider(settings.primary)
     critic_name = _normalize_provider(settings.critic)
-    fallback_name = critic_name if critic_name != primary_name else _other_provider(primary_name)
+    # Compare MODELS, not provider names: the failover draft MUST target a
+    # different underlying model. With PRIMARY=codex + CRITIC=codex_critic the
+    # names differ but both resolve to the codex binary — a name-based fallback
+    # would re-hit codex when codex is offline → "no usable draft action".
+    fallback_name = (
+        critic_name
+        if _model_of(critic_name) != _model_of(primary_name)
+        else _other_provider(primary_name)
+    )
     allow_fallback = settings.mode.strip().lower() != "single"
 
     draft_provider_name = primary_name
@@ -185,6 +200,12 @@ def plan_with_providers(
     if draft_provider.supports_resume:
         session_update = draft.session_id
 
+    # Track whether ANY attempted model produced a usable RESPONSE (result.ok),
+    # regardless of whether its content parsed. Distinguishes "both planner models
+    # unavailable" (deterministic fallback / pause) from "models reachable but
+    # drafted bad content" (keep the seed_batch default). (2026-06-12)
+    any_response_ok = bool(draft.ok)
+
     action = extract_action(draft.text)
     draft_unusable = _draft_unusable_reason(draft, action)
     if draft_unusable:
@@ -205,6 +226,7 @@ def plan_with_providers(
                 timeout=timeout,
                 cwd=cwd,
             )
+            any_response_ok = any_response_ok or bool(fallback.ok)
             fallback_action = extract_action(fallback.text)
             if _draft_is_usable(fallback, fallback_action):
                 session_update = (
@@ -235,6 +257,16 @@ def plan_with_providers(
     draft_action = dict(action) if isinstance(action, dict) else action
 
     if not action:
+        # providers_unavailable iff NO attempted model produced a usable response
+        # at all (every attempt was an availability failure / circuit-open). If any
+        # model responded ok but with bad content, this is a CONTENT failure → leave
+        # it False (the loop keeps its seed_batch default). (2026-06-12)
+        providers_unavailable = not any_response_ok
+        no_action_reason = (
+            "both planner models unavailable (no usable response from any attempted model)"
+            if providers_unavailable
+            else (fallback_reason or "no usable draft action")
+        )
         decision = PlannerDecision(
             action=None,
             rationale=rationale,
@@ -244,8 +276,9 @@ def plan_with_providers(
             draft_provider=draft.provider,
             mode=settings.mode,
             degraded=True,
-            fallback_reason=fallback_reason or "no usable draft action",
+            fallback_reason=no_action_reason,
             predicted_objectives=peaf.extract_predicted_objectives(draft.text),
+            providers_unavailable=providers_unavailable,
         )
         _archive_decision(decision, planner_state)
         return decision
@@ -785,6 +818,27 @@ def _normalize_provider(name: str) -> str:
 
 def _other_provider(name: str) -> str:
     return "codex" if name == "claude" else "claude"
+
+
+# Provider-role names that resolve to the same underlying MODEL binary. Mirrors
+# the dispatch set in planner_providers.get_planner_provider: codex_critic /
+# codex-critic / codex_reviewer / codex-reviewer all launch the codex binary.
+_CODEX_ROLE_NAMES = {"codex", "codex_critic", "codex-critic", "codex_reviewer", "codex-reviewer"}
+
+
+def _model_of(name: str) -> str:
+    """Canonical underlying model for a provider-role name.
+
+    Cross-model failover compares MODELS, not provider names: with PRIMARY=codex
+    and CRITIC=codex_critic both names differ but resolve to the SAME codex binary,
+    so a name-based fallback would re-hit codex when codex is offline. (2026-06-12)
+    """
+    normalized = (name or "").strip().lower()
+    if normalized == "claude":
+        return "claude"
+    if normalized in _CODEX_ROLE_NAMES:
+        return "codex"
+    return normalized
 
 
 def _env_int(name: str, default: int) -> int:
