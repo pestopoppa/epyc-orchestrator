@@ -36,5 +36,63 @@
   ],
   "output_dir": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels",
   "soft_labels_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels/soft_labels.jsonl",
-  "suite_priors_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels/suite_priors.json"
+  "suite_priors_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels/suite_priors.json",
+  "robust_routing_misses": [
+    {
+      "suite": "cruxeval",
+      "better_route": "worker_general",
+      "better_rate": 0.8723,
+      "better_n": 188,
+      "better_ci_lo": 0.8171,
+      "frontdoor_rate": 0.0,
+      "frontdoor_n": 22,
+      "frontdoor_ci_hi": 0.1487,
+      "gain": 0.8723
+    },
+    {
+      "suite": "cruxeval",
+      "better_route": "coder_escalation",
+      "better_rate": 0.473,
+      "better_n": 74,
+      "better_ci_lo": 0.3634,
+      "frontdoor_rate": 0.0,
+      "frontdoor_n": 22,
+      "frontdoor_ci_hi": 0.1487,
+      "gain": 0.473
+    },
+    {
+      "suite": "bigcodebench",
+      "better_route": "coder_escalation",
+      "better_rate": 0.6881,
+      "better_n": 109,
+      "better_ci_lo": 0.596,
+      "frontdoor_rate": 0.3273,
+      "frontdoor_n": 165,
+      "frontdoor_ci_hi": 0.4021,
+      "gain": 0.3608
+    },
+    {
+      "suite": "gpqa",
+      "better_route": "coder_escalation",
+      "better_rate": 0.6486,
+      "better_n": 37,
+      "better_ci_lo": 0.4876,
+      "frontdoor_rate": 0.3878,
+      "frontdoor_n": 245,
+      "frontdoor_ci_hi": 0.4501,
+      "gain": 0.2609
+    },
+    {
+      "suite": "general",
+      "better_route": "architect_general",
+      "better_rate": 0.9792,
+      "better_n": 48,
+      "better_ci_lo": 0.891,
+      "frontdoor_rate": 0.8426,
+      "frontdoor_n": 591,
+      "frontdoor_ci_hi": 0.8698,
+      "gain": 0.1365
+    }
+  ],
+  "robust_min_n": 20
 }

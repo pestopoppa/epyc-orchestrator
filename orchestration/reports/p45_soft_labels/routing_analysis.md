@@ -3,13 +3,25 @@
 Per-suite per-role correctness extracted from autopilot journal.
 Temperature τ=2.0 for soft labels.
 
-## Key Findings
+## Statistically Robust Routing Misses
 
-Severe routing failures (pass rate <30% for frontdoor with a better alternative):
+Suites where a non-frontdoor route's Wilson 95% lower bound exceeds
+frontdoor's Wilson 95% upper bound — BOTH with n>=20. These are genuine
+routing gains, not sample-size noise. (Naive max-rate scans surface n=1
+flukes like simpleqa's 'architect 100%' which is a single lucky draw —
+those are excluded here.)
 
-- **cruxeval**: frontdoor 0.0% → worker_general 87.2% (+87.2%)
-- **simpleqa**: frontdoor 4.9% → ingest_long_context 14.3% (+9.4%)
-- **mode_advantage_hard**: frontdoor 29.5% → worker_vision 13.3% (+-16.1%)
+- **cruxeval**: worker_general 87% (n=188, CI_lo=82%) BEATS frontdoor 0% (n=22, CI_hi=15%) — gain +87%
+- **cruxeval**: coder_escalation 47% (n=74, CI_lo=36%) BEATS frontdoor 0% (n=22, CI_hi=15%) — gain +47%
+- **bigcodebench**: coder_escalation 69% (n=109, CI_lo=60%) BEATS frontdoor 33% (n=165, CI_hi=40%) — gain +36%
+- **gpqa**: coder_escalation 65% (n=37, CI_lo=49%) BEATS frontdoor 39% (n=245, CI_hi=45%) — gain +26%
+- **general**: architect_general 98% (n=48, CI_lo=89%) BEATS frontdoor 84% (n=591, CI_hi=87%) — gain +14%
+
+**Capability-ceiling suites (NOT routing misses)**: suites where all
+routes score similarly low (e.g. simpleqa ~5% across every route) are a
+model-capability/benchmark-difficulty ceiling — obscure factual recall
+that small quantized local models genuinely cannot do. Re-routing will
+not help; only a larger/RAG-augmented model would.
 
 ## Per-Suite Per-Role Correctness Table
 

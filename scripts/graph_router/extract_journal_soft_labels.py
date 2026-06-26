@@ -52,6 +52,9 @@ CANONICAL_ROLES = [
 ]
 
 
+_ROBUST_MIN_N = 20  # minimum sample size per arm for a routing gap to count
+
+
 def _softmax(values: list[float], tau: float = 2.0) -> list[float]:
     """Numerically stable softmax with temperature tau."""
     scaled = [v / tau for v in values]
@@ -59,6 +62,28 @@ def _softmax(values: list[float], tau: float = 2.0) -> list[float]:
     exp_v = [math.exp(x - max_v) for x in scaled]
     total = sum(exp_v)
     return [x / total for x in exp_v]
+
+
+def _wilson_lower(correct: int, total: int, z: float = 1.96) -> float:
+    """Wilson score interval lower bound for a binomial proportion."""
+    if total == 0:
+        return 0.0
+    p = correct / total
+    denom = 1 + z * z / total
+    centre = p + z * z / (2 * total)
+    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total)
+    return max(0.0, (centre - margin) / denom)
+
+
+def _wilson_upper(correct: int, total: int, z: float = 1.96) -> float:
+    """Wilson score interval upper bound for a binomial proportion."""
+    if total == 0:
+        return 1.0
+    p = correct / total
+    denom = 1 + z * z / total
+    centre = p + z * z / (2 * total)
+    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total)
+    return min(1.0, (centre + margin) / denom)
 
 
 def extract(
@@ -176,6 +201,33 @@ def extract(
     # --- Phase 4: Per-suite routing analysis ---
     _write_routing_analysis(suite_role, output_dir, tau)
 
+    # Machine-readable robust routing misses (Wilson-CI, both arms n>=20)
+    robust_misses = []
+    for suite, role_stats in sorted(suite_role.items()):
+        fd = role_stats.get("frontdoor", {})
+        if fd.get("total", 0) < _ROBUST_MIN_N:
+            continue
+        fd_hi = _wilson_upper(fd["correct"], fd["total"])
+        fd_rate = fd["correct"] / fd["total"]
+        for route, s in role_stats.items():
+            if route in ("frontdoor", "unknown") or s.get("total", 0) < _ROBUST_MIN_N:
+                continue
+            r_lo = _wilson_lower(s["correct"], s["total"])
+            r_rate = s["correct"] / s["total"]
+            if r_lo > fd_hi:
+                robust_misses.append({
+                    "suite": suite,
+                    "better_route": route,
+                    "better_rate": round(r_rate, 4),
+                    "better_n": s["total"],
+                    "better_ci_lo": round(r_lo, 4),
+                    "frontdoor_rate": round(fd_rate, 4),
+                    "frontdoor_n": fd["total"],
+                    "frontdoor_ci_hi": round(fd_hi, 4),
+                    "gain": round(r_rate - fd_rate, 4),
+                })
+    robust_misses.sort(key=lambda m: -m["gain"])
+
     # --- Phase 5: Suite-level soft label priors ---
     suite_priors = {}
     for suite, role_stats in suite_role.items():
@@ -221,6 +273,8 @@ def extract(
         "output_dir": str(output_dir),
         "soft_labels_path": str(soft_labels_path),
         "suite_priors_path": str(suite_priors_path),
+        "robust_routing_misses": robust_misses,
+        "robust_min_n": _ROBUST_MIN_N,
     }
 
     summary_path = output_dir / "extraction_summary.json"
@@ -249,33 +303,51 @@ def _write_routing_analysis(
         f"Per-suite per-role correctness extracted from autopilot journal.",
         f"Temperature τ={tau} for soft labels.",
         "",
-        "## Key Findings",
+        "## Statistically Robust Routing Misses",
         "",
-        "Severe routing failures (pass rate <30% for frontdoor with a better alternative):",
+        "Suites where a non-frontdoor route's Wilson 95% lower bound exceeds",
+        "frontdoor's Wilson 95% upper bound — BOTH with n>=20. These are genuine",
+        "routing gains, not sample-size noise. (Naive max-rate scans surface n=1",
+        "flukes like simpleqa's 'architect 100%' which is a single lucky draw —",
+        "those are excluded here.)",
         "",
     ]
 
-    fd_failscan = []
+    robust = []
     for suite, role_stats in sorted(suite_role.items()):
         fd = role_stats.get("frontdoor", {})
-        if fd.get("total", 0) < 20:
+        if fd.get("total", 0) < _ROBUST_MIN_N:
             continue
-        fd_rate = fd["correct"] / fd["total"] if fd["total"] > 0 else 0
-        if fd_rate < 0.3:
-            better = {
-                r: s["correct"]/s["total"]
-                for r, s in role_stats.items()
-                if r != "frontdoor" and s["total"] >= 5
-            }
-            if better:
-                best_role = max(better, key=better.get)
-                fd_failscan.append((suite, fd_rate, best_role, better[best_role]))
+        fd_hi = _wilson_upper(fd["correct"], fd["total"])
+        fd_rate = fd["correct"] / fd["total"]
+        for route, s in role_stats.items():
+            if route in ("frontdoor", "unknown") or s.get("total", 0) < _ROBUST_MIN_N:
+                continue
+            r_lo = _wilson_lower(s["correct"], s["total"])
+            r_rate = s["correct"] / s["total"]
+            if r_lo > fd_hi:
+                robust.append((suite, route, r_rate, s["total"], r_lo, fd_rate, fd["total"], fd_hi))
 
-    if fd_failscan:
-        for suite, fd_rate, best_role, best_rate in sorted(fd_failscan, key=lambda x: x[1]):
-            lines.append(f"- **{suite}**: frontdoor {fd_rate:.1%} → {best_role} {best_rate:.1%} (+{best_rate-fd_rate:.1%})")
+    if robust:
+        for suite, route, r_rate, r_n, r_lo, fd_rate, fd_n, fd_hi in sorted(
+            robust, key=lambda x: -(x[2] - x[5])
+        ):
+            lines.append(
+                f"- **{suite}**: {route} {r_rate:.0%} (n={r_n}, CI_lo={r_lo:.0%}) "
+                f"BEATS frontdoor {fd_rate:.0%} (n={fd_n}, CI_hi={fd_hi:.0%}) "
+                f"— gain +{(r_rate-fd_rate):.0%}"
+            )
     else:
-        lines.append("- None found.")
+        lines.append("- None found at n>=%d with non-overlapping CIs." % _ROBUST_MIN_N)
+
+    lines += [
+        "",
+        "**Capability-ceiling suites (NOT routing misses)**: suites where all",
+        "routes score similarly low (e.g. simpleqa ~5% across every route) are a",
+        "model-capability/benchmark-difficulty ceiling — obscure factual recall",
+        "that small quantized local models genuinely cannot do. Re-routing will",
+        "not help; only a larger/RAG-augmented model would.",
+    ]
 
     lines += [
         "",
@@ -385,6 +457,15 @@ def main() -> None:
     print(f"\nSuite distribution of soft-label records:")
     for suite, count in summary["suite_distribution"].items():
         print(f"  {suite:<35} {count:4d}")
+    print(f"\nStatistically robust routing misses (Wilson-CI, both arms n>={summary['robust_min_n']}):")
+    if summary["robust_routing_misses"]:
+        for m in summary["robust_routing_misses"]:
+            print(
+                f"  {m['suite']:<20} {m['better_route']} {m['better_rate']:.0%} (n={m['better_n']}) "
+                f"> frontdoor {m['frontdoor_rate']:.0%} (n={m['frontdoor_n']})  +{m['gain']:.0%}"
+            )
+    else:
+        print("  None.")
     print(f"\nOutput: {summary['output_dir']}")
     print(f"  soft_labels.jsonl   → embed with BGE for MLP training")
     print(f"  suite_priors.json   → use as label smoothing prior")
