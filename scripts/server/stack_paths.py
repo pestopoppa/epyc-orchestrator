@@ -69,11 +69,12 @@ LLAMA_MATH_TOOLS = _resolve_llama_cpp_binary(
     "llama-math-tools",
     (_PATHS["llm_root"] / "llama.cpp/tools/math-tools/build/llama-math-tools",),
 )
-# v2 binary retained for emergency fallback only. As of 2026-05-06 stack-swap,
-# all hot-tier roles use the v5 binary (production-consolidated-v5). Previously
+# v2 binary retained for emergency fallback only. As of the 2026-06-26 v6+iqk cutover,
+# all hot-tier roles use the v6 binary (production-consolidated-v6 — one kernel, incorporating
+# ik_llama's iqk AVX-512 GEMM, GGML_IQK-gated; ik_llama deprecated). Previously
 # coder_escalation needed v2 due to a Qwen2.5 spec-decode bug, but
 # coder_escalation now runs Qwen3.6-35B-A3B Q8 (same model as frontdoor) which
-# is v5-compatible.
+# is v6-compatible.
 LLAMA_SERVER_V2 = _PATHS["llama_cpp_bin"].parent / "build-v2" / "bin" / "llama-server"
 _V2_ROLES: frozenset[str] = frozenset()  # was {"coder_escalation"}; empty since 2026-05-06
 LOG_DIR = _PATHS["log_dir"]
