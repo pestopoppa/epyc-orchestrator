@@ -471,6 +471,8 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
         )
         if flags.get("flash_attn", True) is True:
             cmd.extend(["--flash-attn", "on"])
+        if cache.get("no_mmap", False) is True:
+            cmd.append("--no-mmap")
         return cmd
     # Qwen2.5-VL-7B - smaller worker model
     role_name = "worker_vision"
@@ -497,6 +499,8 @@ def _build_vision_command(port: int, vision_type: str | None, numa_instance: int
     ]
     if flags.get("flash_attn", True) is True:
         cmd.extend(["--flash-attn", "on"])
+    if cache.get("no_mmap", False) is True:
+        cmd.append("--no-mmap")
     return cmd
 
 

@@ -448,7 +448,7 @@ def test_runtime_attestation_warnings_report_runtime_flag_drift(monkeypatch) -> 
                         "jinja": True,
                         "spec": {
                             "enabled": True,
-                            "type": "mtp",
+                            "type": "draft-mtp",
                             "draft_max": 2,
                             "draft_p_min": 0.0,
                             "threads_draft": 1,
@@ -483,8 +483,8 @@ def test_runtime_attestation_warnings_report_runtime_flag_drift(monkeypatch) -> 
             "off",
             "--jinja",
             "--spec-type",
-            "mtp",
-            "--draft-max",
+            "draft-mtp",
+            "--spec-draft-n-max",
             "2",
             "--draft-p-min",
             "0.0",
@@ -549,7 +549,7 @@ def test_runtime_attestation_warnings_match_replica_by_port(monkeypatch) -> None
                     "flags": {
                         "spec": {
                             "enabled": True,
-                            "type": "mtp",
+                            "type": "draft-mtp",
                             "draft_max": 2,
                         },
                     },
@@ -568,8 +568,8 @@ def test_runtime_attestation_warnings_match_replica_by_port(monkeypatch) -> None
             "-md",
             "/models/draft.gguf",
             "--spec-type",
-            "mtp",
-            "--draft-max",
+            "draft-mtp",
+            "--spec-draft-n-max",
             "2",
         ],
     )

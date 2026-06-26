@@ -230,7 +230,7 @@ def test_build_vision_command_prefers_stack_prior_requirements(
         },
         runtime={
             "binary_path": "/prior/llama-server",
-            "cache": {"context_tokens": 12000, "slots": 1},
+            "cache": {"context_tokens": 12000, "slots": 1, "no_mmap": True},
             "flags": {
                 "flash_attn": False,
                 "override_kv": ["qwen3vlmoe.expert_used_count=int:2"],
@@ -250,6 +250,7 @@ def test_build_vision_command_prefers_stack_prior_requirements(
     ]
     assert _flag_value(cmd, "-np") == "1"
     assert _flag_value(cmd, "-c") == "12000"
+    assert "--no-mmap" in cmd
     assert "--flash-attn" not in cmd
 
 
