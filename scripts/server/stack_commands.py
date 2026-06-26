@@ -513,13 +513,20 @@ def _runtime_attestation_warnings(
     if expected_spec_enabled:
         for key, flag_names in {
             "type": ("--spec-type",),
-            "draft_max": ("--draft-max",),
+            # 2026-06-26 v6 cutover: v6 removed --draft-max (arg_removed -> exit);
+            # n-max is now emitted as --spec-draft-n-max (same draft_max value).
+            "draft_max": ("--spec-draft-n-max",),
             "draft_p_min": ("--draft-p-min",),
             "threads_draft": ("--threads-draft",),
         }.items():
             expected = spec.get(key)
             if expected is None:
                 continue
+            # 2026-06-26 v6 cutover: the only valid MTP spec-type token in v6 is
+            # 'draft-mtp'; normalize any legacy 'mtp' contract value so the
+            # reader expects 'draft-mtp' (not the removed bare 'mtp' token).
+            if key == "type" and str(expected) == "mtp":
+                expected = "draft-mtp"
             actual = _last_cmdline_flag_value(cmdline, *flag_names)
             if actual != str(expected):
                 warnings.append(_runtime_value_warning(

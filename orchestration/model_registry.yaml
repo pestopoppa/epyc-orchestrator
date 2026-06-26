@@ -361,17 +361,25 @@ server_mode:
     model_role: qwen36_q8_0
     shared_with: []
     description: Root LM — Qwen3.6-35B-A3B Q8 (quality 93%, May-4 Claude-as-Judge 170/183)
-    model: Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
-    model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
-    # No draft model — pure MoE; spec decode worth investigating but unverified
+    # 2026-06-26 v6 cutover: served model repointed to the NEXTN MTP variant for native
+    # self-draft MTP on production-consolidated-v6 (was the plain Q8 base with acceleration:none).
+    model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+    model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+    # 2026-06-26 v6 cutover: NEXTN self-draft — draft head is EMBEDDED in the base GGUF,
+    # so the drafter file is the SAME file as `model` (-md == -m). Mirrors the worker block's
+    # bare `draft_model:` filename convention (launcher resolves vs models dir).
+    draft_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
     kv_quant: {k: q8_0, v: q8_0}  # Qwen trained in bf16; q8_0 KV per HF model card (#20035)
     memory_gb: 37
     tier: hot
     numa_instances: 4  # 4×48t NUMA-quarter instances
     numa_ports: [8080, 8180, 8280, 8380]
     acceleration:
-      type: none  # Q8 baseline; revisit moe_expert_reduction after sweep
-      lookup: false
+      # 2026-06-26 v6 cutover: native MTP via NEXTN self-draft (was type:none Q8 baseline).
+      type: speculative_decoding
+      spec_type: draft-mtp   # → launcher emits --spec-type draft-mtp (NOT bare 'mtp', removed in v6)
+      draft_max: 4           # → emitted as --spec-draft-n-max 4 (v6 renamed --draft-max). Frontdoor n-max=4.
+      lookup: false          # MTP and ngram-simple lookup conflict on the spec-decode slot
       corpus_retrieval: true
     throughput: 24.3  # t/s aggregate target (May-4 baseline; canonical recipe + preflight gate)
     previous_model: Qwen3.5-35B-A3B-UD-Q4_K_M.gguf  # swapped 2026-05-04 (Qwen3.6 Q8: +11pp, +80% t/s)
@@ -392,14 +400,19 @@ server_mode:
       enable_thinking: false
     model_role: qwen36_q8_0
     description: Coding escalation — Qwen3.6-35B-A3B Q8 (May-6 swap; shares GGUF with frontdoor; 97% coder vs 77% on Qwen3-Coder-30B-A3B; REAP-246B 70% architect_coding eliminated)
-    model: Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
-    model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
-    # No draft model — pure MoE; spec decode worth investigating but unverified
+    # 2026-06-26 v6 cutover: served model repointed to the same NEXTN MTP variant as frontdoor.
+    model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+    model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+    # 2026-06-26 v6 cutover: NO separate draft block — coder_escalation is an ALIAS that SHARES
+    # frontdoor's :8070 server process (same GGUF since the May-6 swap). It therefore INHERITS
+    # frontdoor's native MTP (NEXTN self-draft) wholesale; the launcher only spins one process for
+    # this GGUF, so the spec-decode config comes from the frontdoor block above.
     kv_quant: {k: q8_0, v: q8_0}
     memory_gb: 37  # shared mmap with frontdoor — net incremental cost ~0
     tier: hot
     acceleration:
-      type: none  # Q8 baseline; revisit moe_expert_reduction after sweep
+      # 2026-06-26 v6 cutover: inherits frontdoor's MTP (shared :8070 process). No own draft.
+      type: none  # marker only — effective acceleration is frontdoor's (shared process)
       lookup: false
       corpus_retrieval: true
     throughput: 24.3   # aggregate target (May-4 baseline; canonical recipe + preflight gate)
@@ -415,26 +428,23 @@ server_mode:
     model_role: worker_general
     shared_with: [worker_math, toolrunner]
     description: Try-cheap-first worker — gemma4-26B-A4B Q4_K_M MTP (swapped 2026-05-08 from Qwen3-Coder-30B-A3B; tool_compliance 96% vs 78%, full suite 90% vs 84%)
-    model: gemma-4-26B-A4B-it-Q4_K_M.gguf
-    draft_model: gemma-4-26B-A4B-it-assistant-Q8_0.gguf  # GGUF quant of Google's official gemma-4-26B-A4B-it-assistant 4-layer MTP head (Apache-2.0; converted in-house, no community GGUF); served via ik_llama.cpp PR #1744
+    model: gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf  # 2026-06-26 v6 cutover: ORIG base (the Apr-4 gemma-4-26B-A4B-it-Q4_K_M.gguf garbles on v6 → 0%-accept "de de de"; ORIG is v6-correct)
+    draft_model: gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf  # v6-format NEXTN/gemma4-assistant head (re-converted in-house for v6; replaces the ik_llama gemma4_mtp head)
     memory_gb: 16
     tier: hot
     previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf  # swapped 2026-05-08 (tool_compliance 96% vs 78%, +18pp). Pre-2026-03-21: Qwen2.5-7B-Instruct-f16.gguf.
     acceleration:
       type: speculative_decoding
-      spec_type: mtp        # ik_llama.cpp gemma-mtp branch (PR #1744)
-      draft_max: 2          # 58% acceptance on tier-3 prompts; matches 31B sibling tuning
+      spec_type: draft-mtp  # 2026-06-26 v6 cutover: native gemma-4 MTP on production-consolidated-v6 (incl. ik's iqk AVX-512 kernels, GGML_IQK-gated); was ik_llama 'mtp'. +11% vs ik.
+      draft_max: 2          # → emitted as --spec-draft-n-max 2 (v6 renamed --draft-max). 58% accept on tier-3; matches 31B sibling tuning.
       draft_p_min: 0.0      # greedy: accept top-1 drafts, verifier rejects mismatches
       threads_draft: 16     # dedicated drafter cores; ubatch 512 (MTP recipe)
       ubatch: 512
       lookup: false         # forbidden — MTP and ngram-simple lookup conflict on spec-decode slot
       corpus_retrieval: false
-    runtime_requirements:
-      binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin    # PR #1744 patched build, NOT production llama.cpp
-      ld_library_path:                                     # gemma-mtp branch needs its own libllama / libggml
-      - /mnt/raid0/llm/ik_llama.cpp/build/src
-      - /mnt/raid0/llm/ik_llama.cpp/build/ggml/src
-      - /mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd
+    # 2026-06-26 v6 cutover: ik_llama runtime_requirements (binary_dir + ld_library_path) REMOVED.
+    # Worker now runs on production-consolidated-v6 (binary='llama.cpp') — single-kernel consolidation,
+    # ik_llama fully deprecated. GGML_IQK=1 set via stack_env (must reach worker /proc/environ).
     numa_instances: 4  # 4×48t NUMA quarters (2026-03-29 design retained; same RAM footprint).
     numa_ports: [8082, 8182, 8282, 8382]
     throughput: 60.7   # t/s per instance MTP-on (May-8 tool_compliance median); was 39.1 with Qwen3-Coder.
@@ -488,13 +498,24 @@ server_mode:
     # 110% baseline procedure, recall 0.93. Compression actively helps this model.
     # Source: data/compliance/2026-05-07-architect_general-curve/SUMMARY.md.
     agent_file_compression_operating_point: aggressive
-    model: Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf
-    draft_model: Qwen3.5-0.8B-Q8_0.gguf  # 0.8B Qwen3.5 draft (moe8+spec_q8_k8+lu = 12.6 t/s)
+    # 2026-06-26 v6 cutover: served model repointed to the NEXTN MTP variant (NEXTN head embedded),
+    # was the plain Q4_K_M base + separate 0.8B external draft. NEXTN self-draft: -md == -m.
+    model: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
+    draft_model: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf  # 2026-06-26 v6 cutover: NEXTN self-draft = SAME file as model (was Qwen3.5-0.8B-Q8_0.gguf external draft)
     memory_gb: 69
     tier: hot  # promoted from warm — half the RAM, fits NUMA node0
-    # acceleration block REMOVED 2026-05-09 — moved to roles.architect_general.acceleration
-    # (single source of truth). Previously this section disagreed with that one and
-    # silently no-op'd because RegistryLoader reads from roles.X.acceleration.
+    # acceleration block was REMOVED 2026-05-09 (single source of truth = roles.architect_general.acceleration,
+    # which is what RegistryLoader reads). 2026-06-26 v6 cutover re-adds it here too per cutover spec, but the
+    # roles-block acceleration below remains authoritative for the launcher — keep the two in sync.
+    acceleration:
+      # 2026-06-26 v6 cutover: native MTP via NEXTN self-draft (was no block here; old intent moe8+0.8B-spec).
+      type: speculative_decoding
+      spec_type: draft-mtp   # → launcher emits --spec-type draft-mtp (NOT bare 'mtp', removed in v6)
+      draft_max: 4           # → emitted as --spec-draft-n-max 4 (v6 renamed --draft-max). Architect n-max=4 (was 24 for the 0.8B draft).
+      draft_model: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf  # NEXTN self-draft = SAME file as model
+      lookup: false          # ngram-lookup is the documented zero-RAM fallback if NEXTN MTP regresses
+      # 2026-06-26 v6 cutover: dropped moe_expert_reduction (experts:8 + override_key qwen35moe.expert_used_count) —
+      # it was a no-op (8 == GGUF default == no reduction).
     numa_instances: 1  # 1×96t canonical full-machine + c2 env (Probe B 2026-05-04)
     numa_ports: [8083]
     throughput: 12.19  # t/s single-instance canonical: numactl --interleave=all + taskset -c 0-95
@@ -874,11 +895,12 @@ roles:
     backend:
       type: local
     model:
-      name: Qwen3.6-35B-A3B-Q8_0
-      path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+      name: Qwen3.6-35B-A3B-MTP-Q8_0  # 2026-06-26 v6 cutover: NEXTN MTP variant (shared frontdoor :8070 process)
+      path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
       quant: Q8_0
       size_gb: 37
       architecture: qwen35moe
+      ctx_max: 262144  # 2026-06-26 v6 cutover: Qwen3.6-35B-A3B native context (carry structured ctx_max onto the MTP variant)
       attention_layers: 28  # layer-adaptive KV compression; total blocks intentionally not asserted here
       previous_model: Qwen3.5-35B-A3B-UD-Q4_K_M (swapped 2026-05-04; +11pp, +80% t/s under canonical)
       use_chat_api: true
@@ -915,11 +937,12 @@ roles:
     tier: B
     description: Coding escalation — Qwen3.6-35B-A3B Q8 MoE (May-6 swap; same model as frontdoor, shares GGUF mmap; absorbs eliminated architect_coding role)
     model:
-      name: Qwen3.6-35B-A3B-Q8_0
-      path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+      name: Qwen3.6-35B-A3B-MTP-Q8_0  # 2026-06-26 v6 cutover: NEXTN MTP variant (shared frontdoor :8070 process)
+      path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
       quant: Q8_0
       size_gb: 37
       architecture: qwen35moe
+      ctx_max: 262144  # 2026-06-26 v6 cutover: Qwen3.6-35B-A3B native context (carry structured ctx_max onto the MTP variant)
       attention_layers: 28  # shares frontdoor runtime; layer-adaptive KV compression count
       previous_model: Qwen3-Coder-30B-A3B-Instruct-Q4_K_M (swapped 2026-05-06; +20pp coder, beats REAP-246B by 27pp)
       use_chat_api: true
@@ -1074,7 +1097,9 @@ roles:
     model:
       name: Qwen3.5-122B-A10B
       huggingface_id: unsloth/Qwen3.5-122B-A10B-GGUF
-      path: unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf
+      # 2026-06-26 v6 cutover: repointed to the NEXTN MTP variant (NEXTN draft head embedded);
+      # was unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf.
+      path: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
       quant: Q4_K_M
       size_gb: 69
       split_count: 3
@@ -1085,27 +1110,27 @@ roles:
     candidate_roles:
     - architect
     - general
-    # 2026-05-09 reconciled: this block is now the single source of truth.
-    # Previously `roles.X.acceleration` (type=speculative_decoding) and
-    # `server_mode.X.acceleration` (type=moe_expert_reduction, experts=8)
-    # disagreed; RegistryLoader reads from here, so MoE-expert-reduction
-    # never actually fired. The combined intent (moe8 + spec) lives here now.
-    # Spec decode is currently DISABLED at launch via _NO_SPEC_DECODE in
-    # orchestrator_stack.py (M-RoPE rollback bug in production llama.cpp);
-    # MoE reduction (experts=8) IS applied. Re-enable spec_decode by
-    # removing architect_general from _NO_SPEC_DECODE once M-RoPE patched.
+    # 2026-05-09 reconciled: this block is the single source of truth (RegistryLoader reads here).
+    # 2026-06-26 v6 cutover: operator chose native MTP for the architect. Switched from
+    # moe_expert_reduction(experts:8) + external-0.8B-draft to NEXTN self-draft MTP on
+    # production-consolidated-v6. The moe_expert_reduction (experts:8 + override_key
+    # qwen35moe.expert_used_count) was a no-op (8 == GGUF default == no reduction) and is removed.
     acceleration:
-      type: moe_expert_reduction
-      experts: 8                                  # full experts for quality
-      override_key: qwen35moe.expert_used_count
-      draft_role: draft_qwen35_0_8b_q8_0
-      draft_max: 24                               # sweep-verified 2026-03-21
-      k: 24                                       # alias for draft_max (RegistryLoader)
+      type: speculative_decoding
+      spec_type: draft-mtp                        # → launcher emits --spec-type draft-mtp (NOT bare 'mtp', removed in v6)
+      # 2026-06-26 v6 cutover: NEXTN self-draft — drafter is the SAME file as `model` (-md == -m).
+      # Expressed as a bare `draft_model:` filename (mirroring the worker/frontdoor blocks) rather
+      # than `draft_role: draft_qwen35_0_8b_q8_0` (the old external 0.8B draft role, now retired here).
+      draft_model: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
+      draft_max: 4                                # → emitted as --spec-draft-n-max 4 (v6 renamed --draft-max). Was 24 for the 0.8B draft; NEXTN n-max=4.
+      k: 4                                         # alias for draft_max (RegistryLoader)
       p_split: 0                                  # linear only — tree harmful on hybrid
-      lookup: false                               # DISABLED: segfaults on Qwen3.5 hybrids (2026-03-24)
+      lookup: false                               # DISABLED here; ngram-lookup is the documented zero-RAM fallback if NEXTN MTP regresses or must be re-gated off
       notes: >
-        moe8+spec_q8_k8+lu historically = 12.6 t/s. Spec decode currently
-        gated off (M-RoPE rollback bug). MoE-expert-reduction fires alone.
+        2026-06-26 v6 cutover: native NEXTN/MTP self-draft (draft-mtp, n-max 4) replaces the
+        moe8+external-0.8B-spec path (historically 12.6 t/s; moe8 was a no-op). ngram-lookup is the
+        documented zero-RAM fallback. If launch must gate spec off (e.g. M-RoPE rollback recurs),
+        remove architect_general from _NO_SPEC_DECODE in orchestrator_stack.py to re-enable.
         Swapped from 235B (133GB) to 122B (69GB) — saves 128GB across 2 instances.
       benchmarked: 2026-02-13
     performance:
@@ -2171,8 +2196,8 @@ roles:
     tier: C
     description: General worker — gemma4-26B-A4B Q4_K_M (MTP) — swapped 2026-05-08 from Qwen3-Coder-30B-A3B Q4. +6pp on master suite (90% vs 84%), +18pp on tool_compliance (96% vs 78%), +36% tps on tool_compliance (60.7 vs 44.7), 3× more concise output. Draft via Google's official gemma-4-26B-A4B-it-assistant 4-layer MTP head (Apache-2.0), GGUF-quantized in-house to Q8.
     model:
-      name: gemma-4-26B-A4B-it-Q4_K_M
-      path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf
+      name: gemma-4-26B-A4B-it-ORIG-Q4_K_M  # 2026-06-26 v6 cutover: ORIG base (old gemma-4-26B-A4B-it-Q4_K_M.gguf garbles on v6); matches the worker server_mode block
+      path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
       quant: Q4_K_M
       size_gb: 16
       architecture: gemma4
@@ -2183,8 +2208,8 @@ roles:
     - coder
     acceleration:
       type: speculative_decoding
-      spec_type: mtp                                 # ik_llama.cpp PR #1744; MTP, not ngram lookup
-      draft_role: draft_gemma4_26b_a4b_assistant_q8  # Google's official gemma-4-26B-A4B-it-assistant 4-layer MTP head (Apache-2.0), GGUF-quantized in-house to Q8
+      spec_type: draft-mtp                           # 2026-06-26 v6 cutover: native MTP on production-consolidated-v6 (was ik_llama 'mtp')
+      draft_role: draft_gemma4_26b_a4b_assistant_q8  # v6-format gemma-4-26B-A4B-it-assistant-v6-Q8_0 head (repointed in master drafter def + server draft_model)
       draft_max: 2                                   # matches research-registry tuning; 58% acceptance on tier-3 prompts
       draft_p_min: 0.0                               # accept top-1 drafts greedily (verifier rejects mismatches)
       threads_draft: 16                              # dedicated drafter cores; target keeps remaining 96
@@ -2342,11 +2367,12 @@ roles:
       trigger three_stage_summarization). Qwen3.6-35B-A3B Q8 — same model as
       frontdoor, shared GGUF mmap.
     model:
-      name: Qwen3.6-35B-A3B-Q8_0
-      path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+      name: Qwen3.6-35B-A3B-MTP-Q8_0  # 2026-06-26 v6 cutover: NEXTN MTP variant (shared frontdoor :8070 process)
+      path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
       quant: Q8_0
       size_gb: 37
       architecture: qwen35moe
+      ctx_max: 262144  # 2026-06-26 v6 cutover: Qwen3.6-35B-A3B native context (carry structured ctx_max onto the MTP variant)
       attention_layers: 28  # shares frontdoor runtime; layer-adaptive KV compression count
       previous_model: Qwen2.5-Coder-32B-Instruct-Q4_K_M (swapped 2026-05-06; +16pp canonical quality, shared mmap with frontdoor/coder_escalation)
       use_chat_api: true
@@ -2359,7 +2385,7 @@ roles:
     - ingest
     - general
     acceleration:
-      type: none  # Q8 baseline; matches frontdoor configuration
+      type: none  # 2026-06-26 v6 cutover: alias of frontdoor (shared :8070 process) — inherits frontdoor's NEXTN MTP at runtime; own launch record carries no draft (mirrors coder_escalation)
       lookup: false
     performance:
       baseline_tps: 24.3  # Aggregate frontdoor target (May-4 canonical)

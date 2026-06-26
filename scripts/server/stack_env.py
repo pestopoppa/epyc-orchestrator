@@ -47,6 +47,11 @@ _CANONICAL_OMP_ENV = {
     # warm for back-to-back ops (no perceptible first-token regression), short
     # enough that multi-second request gaps release the cores.
     "KMP_BLOCKTIME": "10",
+    # 2026-06-26 v6 cutover: GGML_IQK=1 gates ik_llama's iqk AVX-512 GEMM kernels,
+    # which are compiled into the production-consolidated-v6 binary but runtime-gated
+    # by this env var. Applied to the canonical OMP stack so EVERY role's
+    # llama-server launch boots with the iqk kernels enabled.
+    "GGML_IQK": "1",
 }
 
 # clang-20's libomp directory — prepended to LD_LIBRARY_PATH for any role that
@@ -63,11 +68,10 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     # MoE Q4 sync-bound (CPU1 stack +1.8% on Coder-30B Q4_K_M tg32, stable).
     # NB: GGML_NUMA_WEIGHTS deliberately excluded — DEPRECATED per CPU21 P3 isolation
     # (unstable, 19-22σ at warmed state). Uses 3-flag stable stack.
-    "worker_general": {
-        "GGML_CCD_POOLS": "1",
-        "GGML_CCD_WORK_DIST": "1",
-        "GGML_BARRIER_LOCAL_BETWEEN_OPS": "1",
-    },
+    # 2026-06-26 v6 cutover: removed GGML_CCD_POOLS / GGML_CCD_WORK_DIST /
+    # GGML_BARRIER_LOCAL_BETWEEN_OPS — CCD code is #ifndef GGML_USE_OPENMP, so the
+    # OpenMP-ON v6 build compiles it out, making these env vars vestigial no-ops.
+    "worker_general": {},
     # MoE Q8 BW-bound frontdoor — EP stack was historically +17% per the original
     # validation (drone+shard, N=2), but verified WRONG by direct A/B 2026-05-11:
     # the GGML_EP_* stack was sitting at 12.6 t/s under sustained single-instance
@@ -95,10 +99,11 @@ _ROLE_ENV_BLOCKS: dict[str, dict[str, str]] = {
     },
     # Hybrid SSM dense (Nemotron-9B-v2-class) — c3 = CPU1 stack + mbind off.
     # Activate when a hybrid_ssm_dense model is rostered.
+    # 2026-06-26 v6 cutover: removed GGML_CCD_POOLS / GGML_CCD_WORK_DIST /
+    # GGML_BARRIER_LOCAL_BETWEEN_OPS — CCD code is #ifndef GGML_USE_OPENMP, so the
+    # OpenMP-ON v6 build compiles it out (vestigial no-ops). GGML_NUMA_REPACK_INTERLEAVE
+    # (not CCD-gated) is retained.
     "hybrid_ssm_dense": {
-        "GGML_CCD_POOLS": "1",
-        "GGML_CCD_WORK_DIST": "1",
-        "GGML_BARRIER_LOCAL_BETWEEN_OPS": "1",
         "GGML_NUMA_REPACK_INTERLEAVE": "0",
     },
     # Hybrid SSM MoE (Qwen3-Next-80B-A3B-class) — default v5 (c3 +1.7% noise floor).

@@ -266,12 +266,14 @@ def _swapped_worker_registry(path: Path, *, throughput: float = 66.2) -> Path:
                     "memory_gb": 30,
                     "throughput": throughput,
                     "benchmark_score": "92%",
+                    # 2026-06-26 v6 cutover: worker consolidated onto canonical
+                    # llama.cpp (v6); ik_llama.cpp deprecated.
                     "runtime_requirements": {
-                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
+                        "binary_dir": "/mnt/raid0/llm/llama.cpp/build/bin",
                         "ld_library_path": [
-                            "/mnt/raid0/llm/ik_llama.cpp/build/src",
-                            "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
-                            "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+                            "/mnt/raid0/llm/llama.cpp/build/src",
+                            "/mnt/raid0/llm/llama.cpp/build/ggml/src",
+                            "/mnt/raid0/llm/llama.cpp/build/examples/mtmd",
                         ],
                     },
                     "numa_instances": 4,
@@ -288,7 +290,8 @@ def _swapped_worker_registry(path: Path, *, throughput: float = 66.2) -> Path:
                         "ctx_max": 16384,
                     },
                     "performance": {"quality_pct": 90, "baseline_tps": throughput},
-                    "acceleration": {"type": "speculative_decoding", "spec_type": "mtp"},
+                    # 2026-06-26 v6 cutover: MTP spec token is now 'draft-mtp'.
+                    "acceleration": {"type": "speculative_decoding", "spec_type": "draft-mtp"},
                     "memory": {"pinned": True, "residency": "hot"},
                 },
                 "worker_math": {
@@ -497,14 +500,16 @@ def _swapped_ingest_registry(path: Path) -> Path:
 def _worker_alias_registry(
     path: Path,
     *,
-    binary_dir: str = "/mnt/raid0/llm/ik_llama.cpp/build/bin",
+    # 2026-06-26 v6 cutover: worker consolidated onto canonical llama.cpp (v6);
+    # ik_llama.cpp deprecated. Default runtime points at the canonical build tree.
+    binary_dir: str = "/mnt/raid0/llm/llama.cpp/build/bin",
     ld_library_path: list[str] | None = None,
 ) -> Path:
     if ld_library_path is None:
         ld_library_path = [
-            "/mnt/raid0/llm/ik_llama.cpp/build/src",
-            "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
-            "/mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd",
+            "/mnt/raid0/llm/llama.cpp/build/src",
+            "/mnt/raid0/llm/llama.cpp/build/ggml/src",
+            "/mnt/raid0/llm/llama.cpp/build/examples/mtmd",
         ]
     return _write_yaml(
         path,
@@ -539,7 +544,8 @@ def _worker_alias_registry(
                         "ctx_max": 16384,
                     },
                     "performance": {"quality_pct": 90, "baseline_tps": 44.7},
-                    "acceleration": {"type": "speculative_decoding", "spec_type": "mtp"},
+                    # 2026-06-26 v6 cutover: MTP spec token is now 'draft-mtp'.
+                    "acceleration": {"type": "speculative_decoding", "spec_type": "draft-mtp"},
                     "memory": {"pinned": True, "residency": "hot"},
                 },
                 "worker_math": {
@@ -1394,9 +1400,10 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
                     "model": "gemma-4-26B-A4B-it-Q4_K_M.gguf",
                     "throughput": 60.7,
                     "memory_gb": 16,
+                    # 2026-06-26 v6 cutover: worker on canonical llama.cpp (v6); ik deprecated.
                     "runtime_requirements": {
-                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
-                        "ld_library_path": ["/mnt/raid0/llm/ik_llama.cpp/build/src"],
+                        "binary_dir": "/mnt/raid0/llm/llama.cpp/build/bin",
+                        "ld_library_path": ["/mnt/raid0/llm/llama.cpp/build/src"],
                     },
                 },
                 "worker_vision": {
@@ -1436,7 +1443,8 @@ def test_simulated_context_kv_and_acceleration_drift_are_rejected(
                 "worker_general": {
                     "model": {"name": "gemma-4-26B-A4B-it-Q4_K_M", "ctx_max": 16384},
                     "performance": {"quality_pct": 90, "baseline_tps": 60.7},
-                    "acceleration": {"type": "speculative_decoding", "spec_type": "mtp"},
+                    # 2026-06-26 v6 cutover: MTP spec token is now 'draft-mtp'.
+                    "acceleration": {"type": "speculative_decoding", "spec_type": "draft-mtp"},
                     "memory": {"residency": "hot"},
                 },
                 "worker_vision": {

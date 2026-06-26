@@ -898,6 +898,77 @@ def _override_kv_args(acceleration: dict[str, Any]) -> list[str]:
     return [f"{override_key}=int:{experts}"]
 
 
+def _role_no_mmap_prior(
+    server_cfg: dict[str, Any] | None,
+    role_cfg: dict[str, Any] | None,
+    *,
+    default: bool,
+) -> bool:
+    """Resolve a role's no_mmap cache prior from its config.
+
+    2026-06-26 v6 cutover: precedence is server_mode -> roles block -> ``default``.
+    A role may set ``no_mmap: true`` directly, or under a ``cache``/``serving``
+    sub-mapping. Absent any explicit setting the caller-supplied ``default`` is
+    used (which preserves the legacy worker_pool+explore canonical-recipe value).
+    """
+    for cfg in (server_cfg, role_cfg):
+        if not isinstance(cfg, dict):
+            continue
+        if isinstance(cfg.get("no_mmap"), bool):
+            return cfg["no_mmap"]
+        for nested_key in ("cache", "serving"):
+            nested = cfg.get(nested_key)
+            if isinstance(nested, dict) and isinstance(nested.get("no_mmap"), bool):
+                return nested["no_mmap"]
+    return default
+
+
+def _resolve_nextn_draft_path(
+    requirements: dict[str, Any],
+    acceleration: dict[str, Any],
+    server_cfg: dict[str, Any] | None,
+    *,
+    models_dir: Any = None,
+) -> str | None:
+    """Resolve the NEXTN self-draft GGUF path for a draft-mtp role.
+
+    2026-06-26 v6 cutover: NEXTN self-draft roles (frontdoor, architect_general)
+    embed the draft head in the base GGUF, so -md == -m. The launcher's
+    default-mode path takes -md ONLY from the compiled spec.draft_model_path, so
+    this must resolve to a non-empty absolute path or the launcher silently drops
+    speculation.
+
+    Sources, in precedence order:
+      1. requirements.draft_model_path (explicit full path, e.g. server_mode override)
+      2. acceleration.draft_model_path (explicit full path on the accel block)
+      3. acceleration.draft_model / server_cfg.draft_model (bare or relative; the
+         registry's NEXTN self-draft pointer == the base file)
+      4. requirements.model_path / server_cfg.model_path (full base path; self-draft)
+      5. server_cfg.model (bare or relative base path)
+    Bare/relative values are resolved against ``models_dir`` when available so the
+    emitted path is absolute.
+    """
+    candidates = [
+        requirements.get("draft_model_path"),
+        acceleration.get("draft_model_path"),
+        acceleration.get("draft_model"),
+        server_cfg.get("draft_model") if isinstance(server_cfg, dict) else None,
+        requirements.get("model_path"),
+        server_cfg.get("model_path") if isinstance(server_cfg, dict) else None,
+        server_cfg.get("model") if isinstance(server_cfg, dict) else None,
+    ]
+    for candidate in candidates:
+        if not isinstance(candidate, str) or not candidate:
+            continue
+        candidate_path = Path(candidate)
+        if candidate_path.is_absolute():
+            return str(candidate_path)
+        if models_dir is not None:
+            return str(Path(models_dir) / candidate)
+        return candidate
+    return None
+
+
 def _launch_runtime_record(
     role: str,
     descriptor: dict[str, Any],
@@ -925,7 +996,13 @@ def _launch_runtime_record(
             WORKER_MTP_UBATCH_TOKENS,
         )
         from scripts.server.stack_numa import MLOCK_ROLES
-        from scripts.server.stack_paths import LLAMA_SERVER, LLAMA_SERVER_V2, SLOT_SAVE_DIR, _V2_ROLES
+        from scripts.server.stack_paths import (
+            LLAMA_SERVER,
+            LLAMA_SERVER_V2,
+            SLOT_SAVE_DIR,
+            _PATHS,
+            _V2_ROLES,
+        )
         from src.roles import Role
     except Exception:
         return {}
@@ -978,17 +1055,59 @@ def _launch_runtime_record(
         "draft_p_min": None,
         "threads_draft": None,
     }
+    # 2026-06-26 v6 cutover: spec_type carries the v6 MTP token 'draft-mtp' (bare
+    # 'mtp' is invalid in v6). It is preserved verbatim from the registry
+    # acceleration block — no normalization/allow-list rejects it here.
+    spec_type_prior = (
+        str(acceleration.get("spec_type"))
+        if isinstance(acceleration.get("spec_type"), str) and acceleration.get("spec_type")
+        else None
+    )
     if mode == "worker_pool" and worker_type == "explore":
         spec.update(
             {
                 "enabled": True,
-                "type": WORKER_MTP_SPEC_TYPE,
+                # 2026-06-26 v6 cutover: prefer the registry spec_type (draft-mtp);
+                # WORKER_MTP_SPEC_TYPE is the manifest fallback (also 'draft-mtp').
+                "type": spec_type_prior or WORKER_MTP_SPEC_TYPE,
                 "draft_model_path": str(requirements.get("draft_model_path"))
                 if requirements.get("draft_model_path")
                 else None,
                 "draft_max": WORKER_MTP_DRAFT_MAX,
                 "draft_p_min": WORKER_MTP_DRAFT_P_MIN,
                 "threads_draft": WORKER_MTP_THREADS_DRAFT,
+            }
+        )
+    elif spec_type_prior == "draft-mtp" and role == primary_role:
+        # 2026-06-26 v6 cutover: emit a NON-NULL draft-mtp spec ONLY for the PRIMARY
+        # role that launches the server (role == primary_role). ALIAS roles
+        # (shared_with_first_n, e.g. coder_escalation / worker_summarize sharing
+        # frontdoor's :8070 process) inherit the host's NEXTN draft at runtime and do
+        # NOT launch their own draft — they fall through to the disabled spec so their
+        # launch record matches the launch manifest (which nulls draft for aliases).
+        # emit a NON-NULL draft-mtp spec for any non-worker
+        # role whose registry acceleration.spec_type == 'draft-mtp' (frontdoor
+        # qwen36_q8_0, architect_general). These are NEXTN self-draft models — the
+        # draft head is embedded in the base GGUF, so the drafter file is the SAME
+        # file as -m (-md == -m). Resolve draft_model_path to the role's own model
+        # path when no explicit draft path is supplied. draft_max carries the n-max
+        # value from the registry (frontdoor=4, architect=4); the launcher renames
+        # the emitted flag to --spec-draft-n-max.
+        nextn_draft_path = _resolve_nextn_draft_path(
+            requirements,
+            acceleration,
+            server_cfg,
+            models_dir=_PATHS.get("models_dir"),
+        )
+        draft_max_prior = acceleration.get("draft_max")
+        spec.update(
+            {
+                "enabled": True,
+                "type": spec_type_prior,
+                "draft_model_path": str(nextn_draft_path) if nextn_draft_path else None,
+                "draft_max": draft_max_prior
+                if isinstance(draft_max_prior, int) and not isinstance(draft_max_prior, bool)
+                else None,
             }
         )
     elif primary_role in NO_SPEC_DECODE_ROLES and (
@@ -1020,7 +1139,16 @@ def _launch_runtime_record(
             "kv_type_k": kv_types[0] if kv_types else None,
             "kv_type_v": kv_types[1] if kv_types else None,
             "kv_hadamard": bool(primary_role in _V2_ROLES and LLAMA_SERVER_V2.exists()),
-            "no_mmap": bool(mode == "worker_pool" and worker_type == "explore"),
+            # 2026-06-26 v6 cutover: no_mmap is no longer hardcoded to worker_pool+explore.
+            # It now flows through from the role's config (server_mode then roles block),
+            # defaulting to False when absent — so non-worker quarter roles (N12 private
+            # quarters) can request no_mmap=True without forcing it globally. The legacy
+            # worker_pool+explore canonical-recipe default is preserved as a fallback.
+            "no_mmap": _role_no_mmap_prior(
+                server_cfg,
+                role_cfg,
+                default=bool(mode == "worker_pool" and worker_type == "explore"),
+            ),
             "mlock": bool(mode == "default" and primary_role in MLOCK_ROLES),
             "slot_save_path": str(SLOT_SAVE_DIR / primary_role) if mode == "default" else None,
         },

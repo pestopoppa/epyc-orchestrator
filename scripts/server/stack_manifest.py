@@ -264,7 +264,8 @@ WORKER_POOL_MODELS = {
     # NB: requires ik_llama.cpp PR #1744 binary (Phase 2 wires runtime_requirements
     # through the launcher; until then this path is informational only — production
     # launcher still uses default LLAMA_SERVER and will fail on gemma4 arch).
-    "explore": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf",
+    # 2026-06-26 v6 cutover: ORIG base GGUF — old gemma-4-26B-A4B-it-Q4_K_M.gguf garbles on v6.
+    "explore": "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf",
     "fast": str(
         _PATHS["model_base"] / "QuantFactory/Qwen2.5-Coder-1.5B-GGUF/Qwen2.5-Coder-1.5B.Q4_K_M.gguf"
     ),
@@ -273,7 +274,8 @@ WORKER_POOL_MODELS = {
 # Draft model for MTP speculative decoding on explore worker.
 # gemma4 assistant Q8 — in-house GGUF converted from google/gemma-4-26B-A4B-it-assistant
 # safetensors (no community GGUF existed). 4-layer drafter, 58% acceptance at draft_max=2.
-EXPLORE_DRAFT_MODEL = "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf"
+# 2026-06-26 v6 cutover: v6 MTP head — old -assistant-Q8_0.gguf is the ik gemma4_mtp format, incompatible with v6.
+EXPLORE_DRAFT_MODEL = "/mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf"
 
 # Vision models (VL) with multimodal projector
 VISION_WORKER_MODEL = str(
@@ -304,7 +306,8 @@ LAUNCH_CONTEXT_TOKENS = {
 
 DEFAULT_UBATCH_TOKENS = 8192
 WORKER_MTP_UBATCH_TOKENS = 512
-WORKER_MTP_SPEC_TYPE = "mtp"
+WORKER_MTP_SPEC_TYPE = "draft-mtp"  # 2026-06-26 v6 cutover: bare 'mtp' invalid in v6; valid MTP token is 'draft-mtp'
+# 2026-06-26 v6 cutover: value 2 unchanged; launcher now emits this as --spec-draft-n-max (v6 removed --draft-max).
 WORKER_MTP_DRAFT_MAX = 2
 WORKER_MTP_DRAFT_P_MIN = 0.0
 WORKER_MTP_THREADS_DRAFT = 16
@@ -322,7 +325,8 @@ LAUNCH_KV_QUANT_CONFIGS = {
     "architect_general": ("q4_0", "f16"),
     "ingest_long_context": ("q4_0", "q4_0"),
 }
-NO_SPEC_DECODE_ROLES = {"architect_general"}
+# 2026-06-26 v6 cutover: architect_general MTP enabled (NEXTN draft-mtp); M-RoPE assertion resolved in v6, smoke-gated at cutover
+NO_SPEC_DECODE_ROLES: set[str] = set()
 KV_HADAMARD_ROLES = set(_V2_ROLES)
 
 DEV_MODEL = "Qwen2.5-Coder-0.5B-Instruct-Q8_0.gguf"

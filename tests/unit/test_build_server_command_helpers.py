@@ -98,10 +98,14 @@ def _command_runtime_signature(cmd: list[str]) -> dict[str, Any]:
             "override_kv": sorted(_all_flag_values(cmd, "--override-kv")),
             "spec": {
                 "enabled": spec_enabled,
+                # 2026-06-26 v6 cutover: --spec-type token is now 'draft-mtp' (the
+                # bare 'mtp' token was removed); flag name itself is unchanged.
                 "type": _flag_value(cmd, "--spec-type") if spec_enabled else None,
                 "draft_model_path": _flag_value(cmd, "-md") if spec_enabled else None,
+                # 2026-06-26 v6 cutover: n-max value now carried by --spec-draft-n-max
+                # (v6 removed --draft-max); same schema field 'draft_max'.
                 "draft_max": (
-                    _optional_int(_flag_value(cmd, "--draft-max")) if spec_enabled else None
+                    _optional_int(_flag_value(cmd, "--spec-draft-n-max")) if spec_enabled else None
                 ),
                 "draft_p_min": (
                     _optional_float(_flag_value(cmd, "--draft-p-min"))
@@ -297,8 +301,10 @@ def test_build_worker_general_command_engages_mtp_path() -> None:
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
     # MTP-specific flags must all be present
-    assert cmd[cmd.index("--spec-type") + 1] == "mtp"
-    assert cmd[cmd.index("--draft-max") + 1] == "2"
+    # 2026-06-26 v6 cutover: --spec-type token is 'draft-mtp' (not bare 'mtp');
+    # n-max value emitted via --spec-draft-n-max (v6 removed --draft-max).
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "2"
     assert cmd[cmd.index("--draft-p-min") + 1] == "0.0"
     assert cmd[cmd.index("--threads-draft") + 1] == "16"
     assert cmd[cmd.index("-ctk") + 1] == "q8_0"
@@ -337,7 +343,9 @@ def test_build_worker_general_command_prefers_stack_prior_runtime(
             "draft_model_path": "/prior/draft.gguf",
         },
         runtime={
-            "binary_path": "/prior/ik/llama-server",
+            # 2026-06-26 v6 cutover: worker now runs on canonical llama.cpp (v6),
+            # not a separate ik build.
+            "binary_path": "/prior/llama.cpp/llama-server",
             "cache": {
                 "context_tokens": 12288,
                 "slots": 1,
@@ -353,7 +361,8 @@ def test_build_worker_general_command_prefers_stack_prior_runtime(
                 "override_kv": [],
                 "spec": {
                     "enabled": True,
-                    "type": "mtp",
+                    # 2026-06-26 v6 cutover: spec type token is now 'draft-mtp'.
+                    "type": "draft-mtp",
                     "draft_model_path": "/prior/draft.gguf",
                     "draft_max": 4,
                     "draft_p_min": 0.25,
@@ -370,10 +379,11 @@ def test_build_worker_general_command_prefers_stack_prior_runtime(
         binary_override=None,
     )
 
-    assert cmd[0] == "/prior/ik/llama-server"
+    assert cmd[0] == "/prior/llama.cpp/llama-server"
     assert _flag_value(cmd, "-m") == "/prior/gemma.gguf"
     assert _flag_value(cmd, "-md") == "/prior/draft.gguf"
-    assert _flag_value(cmd, "--draft-max") == "4"
+    # 2026-06-26 v6 cutover: n-max emitted via --spec-draft-n-max (was --draft-max).
+    assert _flag_value(cmd, "--spec-draft-n-max") == "4"
     assert _flag_value(cmd, "--draft-p-min") == "0.25"
     assert _flag_value(cmd, "--threads-draft") == "8"
     assert _flag_value(cmd, "-ub") == "256"
@@ -397,7 +407,8 @@ def test_build_worker_general_command_rejects_boolean_runtime_numbers(
             "draft_model_path": "/prior/draft.gguf",
         },
         runtime={
-            "binary_path": "/prior/ik/llama-server",
+            # 2026-06-26 v6 cutover: worker on canonical llama.cpp (v6), not ik.
+            "binary_path": "/prior/llama.cpp/llama-server",
             "cache": {
                 "context_tokens": True,
                 "slots": True,
@@ -411,7 +422,8 @@ def test_build_worker_general_command_rejects_boolean_runtime_numbers(
                 "reasoning": "off",
                 "spec": {
                     "enabled": True,
-                    "type": "mtp",
+                    # 2026-06-26 v6 cutover: spec type token is now 'draft-mtp'.
+                    "type": "draft-mtp",
                     "draft_model_path": "/prior/draft.gguf",
                     "draft_max": True,
                     "draft_p_min": True,
@@ -431,17 +443,22 @@ def test_build_worker_general_command_rejects_boolean_runtime_numbers(
     assert _flag_value(cmd, "-np") == "1"
     assert _flag_value(cmd, "-c") == str(oss.LAUNCH_CONTEXT_TOKENS["worker_general"])
     assert _flag_value(cmd, "-ub") == str(oss.WORKER_MTP_UBATCH_TOKENS)
-    assert _flag_value(cmd, "--draft-max") == str(oss.WORKER_MTP_DRAFT_MAX)
+    # 2026-06-26 v6 cutover: n-max emitted via --spec-draft-n-max (was --draft-max);
+    # value still sourced from WORKER_MTP_DRAFT_MAX constant.
+    assert _flag_value(cmd, "--spec-draft-n-max") == str(oss.WORKER_MTP_DRAFT_MAX)
     assert _flag_value(cmd, "--draft-p-min") == str(oss.WORKER_MTP_DRAFT_P_MIN)
     assert _flag_value(cmd, "--threads-draft") == str(oss.WORKER_MTP_THREADS_DRAFT)
 
 
 def test_build_worker_general_command_uses_binary_override_when_set() -> None:
+    # 2026-06-26 v6 cutover: worker runs on canonical llama.cpp (v6); ik_llama.cpp
+    # is deprecated. An explicit binary_override is still honored verbatim — assert
+    # against a v6 llama.cpp path rather than the retired ik build.
     cmd = oss._build_worker_general_command(
         port=8072, model_path="/m/gemma4.gguf",
-        binary_override="/opt/ik_llama.cpp/build/bin/llama-server",
+        binary_override="/opt/llama.cpp/build/bin/llama-server",
     )
-    assert cmd[0] == "/opt/ik_llama.cpp/build/bin/llama-server"
+    assert cmd[0] == "/opt/llama.cpp/build/bin/llama-server"
 
 
 def test_build_worker_general_command_prefers_live_stack_prior_binary() -> None:
@@ -500,7 +517,8 @@ def test_build_worker_explore_command_keeps_compatibility_wrapper() -> None:
     cmd = oss._build_worker_explore_command(
         port=8072, model_path="/m/gemma4.gguf", binary_override=None,
     )
-    assert cmd[cmd.index("--spec-type") + 1] == "mtp"
+    # 2026-06-26 v6 cutover: spec type token is now 'draft-mtp' (bare 'mtp' removed).
+    assert cmd[cmd.index("--spec-type") + 1] == "draft-mtp"
 
 
 # -----------------------------------------------------------------------------
@@ -542,22 +560,26 @@ def test_append_kv_quant_args_noop_for_role_without_config() -> None:
 
 
 def test_apply_numa_spec_overrides_rewrites_draft_max() -> None:
-    cmd = ["--draft-max", "16", "--other", "thing"]
+    # 2026-06-26 v6 cutover: rewrite targets the emitted --spec-draft-n-max flag
+    # (v6 removed --draft-max); the spec_overrides schema key stays 'draft_max'.
+    cmd = ["--spec-draft-n-max", "16", "--other", "thing"]
     numa_cfg = {"spec_overrides": {"draft_max": 2}}
     oss._apply_numa_spec_overrides(cmd, numa_cfg)
-    assert cmd == ["--draft-max", "2", "--other", "thing"]
+    assert cmd == ["--spec-draft-n-max", "2", "--other", "thing"]
 
 
 def test_apply_numa_spec_overrides_noop_without_overrides() -> None:
-    cmd = ["--draft-max", "16"]
+    # 2026-06-26 v6 cutover: --spec-draft-n-max replaces --draft-max.
+    cmd = ["--spec-draft-n-max", "16"]
     oss._apply_numa_spec_overrides(cmd, {"instances": []})
-    assert cmd == ["--draft-max", "16"]
+    assert cmd == ["--spec-draft-n-max", "16"]
 
 
 def test_apply_numa_spec_overrides_noop_when_numa_cfg_none() -> None:
-    cmd = ["--draft-max", "16"]
+    # 2026-06-26 v6 cutover: --spec-draft-n-max replaces --draft-max.
+    cmd = ["--spec-draft-n-max", "16"]
     oss._apply_numa_spec_overrides(cmd, None)
-    assert cmd == ["--draft-max", "16"]
+    assert cmd == ["--spec-draft-n-max", "16"]
 
 
 def test_append_acceleration_args_moe_expert_reduction() -> None:
@@ -572,12 +594,17 @@ def test_append_acceleration_args_moe_expert_reduction() -> None:
     assert cmd == ["--override-kv", "qwen3vlmoe.expert_used_count=int:4"]
 
 
-def test_append_acceleration_args_skips_spec_decode_for_architect_general() -> None:
-    """architect_general is gated out of speculative_decoding per _NO_SPEC_DECODE."""
+def test_append_acceleration_args_architect_general_uses_nextn_self_draft() -> None:
+    """2026-06-26 v6 cutover: architect_general now runs native NEXTN MTP (draft-mtp).
+    It was removed from _NO_SPEC_DECODE (the M-RoPE assertion is resolved on v6), and
+    its draft is the NEXTN self-draft (draft_model == base, -md == -m) resolved by the
+    compiled stack_priors / _append_runtime_spec_args path — NOT via this helper's
+    draft_role branch. So with draft_role=None this helper emits no spec args (and must
+    not crash)."""
     accel = SimpleNamespace(
         type="speculative_decoding",
-        draft_role="some_drafter",
-        k=12,
+        draft_role=None,  # v6 NEXTN self-draft via draft_model; spec emitted from stack_priors
+        k=4,
         experts=None,
         n_layer_exit_draft=None,
     )
@@ -600,7 +627,8 @@ def test_append_acceleration_args_self_speculation_emits_md_and_n_layer() -> Non
     assert "-md" in cmd
     assert cmd[cmd.index("-md") + 1] == "/m/target.gguf"
     assert cmd[cmd.index("--n-layer-exit-draft") + 1] == "4"
-    assert cmd[cmd.index("--draft-max") + 1] == "8"
+    # 2026-06-26 v6 cutover: n-max emitted via --spec-draft-n-max (was --draft-max).
+    assert cmd[cmd.index("--spec-draft-n-max") + 1] == "8"
 
 
 def test_append_acceleration_args_hierarchical_speculation_with_intermediate() -> None:
@@ -704,16 +732,18 @@ def test_dispatcher_routes_worker_fast() -> None:
 
 
 def test_dispatcher_routes_worker_general_with_binary_override() -> None:
+    # 2026-06-26 v6 cutover: worker runs on canonical llama.cpp (v6); ik is
+    # deprecated. This is a pure binary_override pass-through assertion.
     with patch.object(oss, "_build_worker_general_command", return_value=["GEMMA"]) as m:
         out = oss.build_server_command(
             None, 8072, worker_pool_mode=True, worker_type="explore",
-            binary_override="/opt/ik/llama-server",
+            binary_override="/opt/llama.cpp/llama-server",
         )
     assert out == ["GEMMA"]
     m.assert_called_once()
     # signature: (port, model_path, binary_override)
     assert m.call_args.args[0] == 8072
-    assert m.call_args.args[2] == "/opt/ik/llama-server"
+    assert m.call_args.args[2] == "/opt/llama.cpp/llama-server"
 
 
 def test_dispatcher_raises_on_unknown_worker_type() -> None:

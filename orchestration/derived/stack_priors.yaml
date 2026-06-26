@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-22T13:41:34Z'
+compiled_at: '2026-06-26T21:02:10Z'
 status: compiled
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 327cfabdf3a3e31bd446843f37c7855da15c2cc156b01a72cecd42ff26eedff4
-    repo_commit: c4455da1
+    sha256: e80422ef76568ec7abd0d4dbd97a1b4a50b95fcf328a139e756bd5692c341ba0
+    repo_commit: 42e62b11
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: 47c41ebde014a1b0711dab38df3921616214f43622af1e78e047708ab2041e6f
-    repo_commit: c4455da1
+    sha256: c994c1c485f5412a37fd0a353dc53a418d6e3431a428244180d93d01bc539fcc
+    repo_commit: 42e62b11
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
-    sha256: 00c70c304463a1dfd59ea0a4568391de5a0aa1d904af809a8eba511e6d7e1bc9
-    repo_commit: c4455da1
+    sha256: 4face3c19f274265cedcb2be7a5b1c89642d3ba993b774bdd5cc1971eb80a101
+    repo_commit: 42e62b11
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: de2c863a9686eaee69af1ea2b11d3a78dc7e5821ebbe0226ec25e8b518b9d580
-    repo_commit: c4455da1
+    repo_commit: 42e62b11
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: 3384fe5e66bd5e289c62fee40bdfa665d3a0adc04559c9a67c067928b3768801
-    repo_commit: c4455da1
+    sha256: a88cccc6edaee6bdf723422af45d1038a6bd4de001e189e61116dc2e9a5e4638
+    repo_commit: 42e62b11
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: a13a6f5b6cf6ec4f37be1a42083128f38cfba023dbfc45508149572741325648
-    repo_commit: c4455da1
+    repo_commit: 42e62b11
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: c4455da1
+    repo_commit: 42e62b11
 roles:
   architect_general:
     role: architect_general
@@ -133,14 +133,13 @@ roles:
             flash_attn: true
             jinja: false
             reasoning: null
-            override_kv:
-            - qwen35moe.expert_used_count=int:8
+            override_kv: []
             spec:
-              enabled: false
-              type: null
-              disabled_by: no_spec_decode
-              draft_model_path: null
-              draft_max: null
+              enabled: true
+              type: draft-mtp
+              disabled_by: null
+              draft_model_path: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
+              draft_max: 4
               draft_p_min: null
               threads_draft: null
     priors:
@@ -148,9 +147,9 @@ roles:
       quality_overall: 0.8567
       memory_cost: 1.0
     acceleration:
-      spec_type: moe_expert_reduction
+      spec_type: draft-mtp
       draft_compat:
-      - draft_qwen35_0_8b_q8_0
+      - qwen3.5-122b-a10b-ud-q4_k_m
       enable_thinking: false
       thinking_control:
         mode: toggle_off
@@ -158,8 +157,8 @@ roles:
       kv:
         k: null
         v: null
-      draft_max: 24
-      k: 24
+      draft_max: 4
+      k: 4
       p_split: 0
       lookup: false
     model:
@@ -209,8 +208,8 @@ roles:
     role: coder_escalation
     deployment_status: live_stack
     status: compiled
-    model_id: qwen3.6-35b-a3b-q8_0
-    display_name: Qwen3.6-35B-A3B-Q8_0
+    model_id: qwen3.6-35b-a3b-mtp-q8_0
+    display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
       endpoint: http://localhost:8070
       server_role: coder_escalation
@@ -236,7 +235,7 @@ roles:
         modes:
         - default
         requirements:
-          model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -330,8 +329,8 @@ roles:
     role: frontdoor
     deployment_status: live_stack
     status: compiled
-    model_id: qwen3.6-35b-a3b-q8_0
-    display_name: Qwen3.6-35B-A3B-Q8_0
+    model_id: qwen3.6-35b-a3b-mtp-q8_0
+    display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
       endpoint: http://localhost:8070
       server_role: frontdoor
@@ -381,7 +380,7 @@ roles:
         modes:
         - default
         requirements:
-          model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
@@ -405,11 +404,11 @@ roles:
             reasoning: null
             override_kv: []
             spec:
-              enabled: false
-              type: null
+              enabled: true
+              type: draft-mtp
               disabled_by: null
-              draft_model_path: null
-              draft_max: null
+              draft_model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
+              draft_max: 4
               draft_p_min: null
               threads_draft: null
     priors:
@@ -632,9 +631,9 @@ roles:
       quality_overall: 0.8567
       memory_cost: 1.0
     acceleration:
-      spec_type: moe_expert_reduction
+      spec_type: draft-mtp
       draft_compat:
-      - draft_qwen35_0_8b_q8_0
+      - qwen3.5-122b-a10b-ud-q4_k_m
       enable_thinking: false
       thinking_control:
         mode: toggle_off
@@ -642,8 +641,8 @@ roles:
       kv:
         k: null
         v: null
-      draft_max: 24
-      k: 24
+      draft_max: 4
+      k: 4
       p_split: 0
       lookup: false
     model:
@@ -776,8 +775,8 @@ roles:
     role: toolrunner
     deployment_status: live_stack
     status: compiled
-    model_id: gemma4-26b-a4b-q4_k_m
-    display_name: gemma-4-26B-A4B-it-Q4_K_M
+    model_id: gemma4-26b-a4b-it-orig-q4_k_m
+    display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
       endpoint: http://localhost:8072
       server_role: worker
@@ -788,8 +787,8 @@ roles:
       slots: 1
       tier: hot
       effective_context_tokens: 16384
-      binary: ik-pr1744
-      binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
+      binary: llama.cpp
+      binary_dir: null
       numa_policy: 4x48t_quarter_instances
       shared_mmap: true
       launch:
@@ -811,18 +810,15 @@ roles:
         modes:
         - worker_pool
         requirements:
-          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
-          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf
+          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
         runtime:
-          binary_family: ik-pr1744
-          binary_path: /mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
-          ld_library_path:
-          - /mnt/raid0/llm/ik_llama.cpp/build/src
-          - /mnt/raid0/llm/ik_llama.cpp/build/ggml/src
-          - /mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd
-          env_policy: binary_override_strip_ggml
-          kmp_blocktime: 10
+          binary_family: llama.cpp
+          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
+          binary_dir: null
+          ld_library_path: []
+          env_policy: canonical
+          kmp_blocktime: null
           cache:
             context_tokens: 16384
             slots: 1
@@ -840,9 +836,9 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: mtp
+              type: draft-mtp
               disabled_by: null
-              draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
+              draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
               draft_p_min: 0.0
               threads_draft: 16
@@ -851,7 +847,7 @@ roles:
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: mtp
+      spec_type: draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -1064,8 +1060,8 @@ roles:
     role: worker_general
     deployment_status: live_stack
     status: compiled
-    model_id: gemma4-26b-a4b-q4_k_m
-    display_name: gemma-4-26B-A4B-it-Q4_K_M
+    model_id: gemma4-26b-a4b-it-orig-q4_k_m
+    display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
       endpoint: http://localhost:8072
       server_role: worker
@@ -1079,8 +1075,8 @@ roles:
       slots: 1
       tier: hot
       effective_context_tokens: 16384
-      binary: ik-pr1744
-      binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
+      binary: llama.cpp
+      binary_dir: null
       numa_policy: 4x48t_quarter_instances
       shared_mmap: true
       launch:
@@ -1120,18 +1116,15 @@ roles:
         modes:
         - worker_pool
         requirements:
-          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
-          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf
+          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
         runtime:
-          binary_family: ik-pr1744
-          binary_path: /mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
-          ld_library_path:
-          - /mnt/raid0/llm/ik_llama.cpp/build/src
-          - /mnt/raid0/llm/ik_llama.cpp/build/ggml/src
-          - /mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd
-          env_policy: binary_override_strip_ggml
-          kmp_blocktime: 10
+          binary_family: llama.cpp
+          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
+          binary_dir: null
+          ld_library_path: []
+          env_policy: canonical
+          kmp_blocktime: null
           cache:
             context_tokens: 16384
             slots: 1
@@ -1149,9 +1142,9 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: mtp
+              type: draft-mtp
               disabled_by: null
-              draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
+              draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
               draft_p_min: 0.0
               threads_draft: 16
@@ -1160,7 +1153,7 @@ roles:
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: mtp
+      spec_type: draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -1231,8 +1224,8 @@ roles:
     role: worker_math
     deployment_status: live_stack
     status: compiled
-    model_id: gemma4-26b-a4b-q4_k_m
-    display_name: gemma-4-26B-A4B-it-Q4_K_M
+    model_id: gemma4-26b-a4b-it-orig-q4_k_m
+    display_name: gemma-4-26B-A4B-it-ORIG-Q4_K_M
     serving:
       endpoint: http://localhost:8072
       server_role: worker
@@ -1243,8 +1236,8 @@ roles:
       slots: 1
       tier: hot
       effective_context_tokens: 16384
-      binary: ik-pr1744
-      binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
+      binary: llama.cpp
+      binary_dir: null
       numa_policy: 4x48t_quarter_instances
       shared_mmap: true
       launch:
@@ -1266,18 +1259,15 @@ roles:
         modes:
         - worker_pool
         requirements:
-          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
-          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-Q4_K_M.gguf
+          draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf
         runtime:
-          binary_family: ik-pr1744
-          binary_path: /mnt/raid0/llm/ik_llama.cpp/build/bin/llama-server
-          binary_dir: /mnt/raid0/llm/ik_llama.cpp/build/bin
-          ld_library_path:
-          - /mnt/raid0/llm/ik_llama.cpp/build/src
-          - /mnt/raid0/llm/ik_llama.cpp/build/ggml/src
-          - /mnt/raid0/llm/ik_llama.cpp/build/examples/mtmd
-          env_policy: binary_override_strip_ggml
-          kmp_blocktime: 10
+          binary_family: llama.cpp
+          binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server
+          binary_dir: null
+          ld_library_path: []
+          env_policy: canonical
+          kmp_blocktime: null
           cache:
             context_tokens: 16384
             slots: 1
@@ -1295,9 +1285,9 @@ roles:
             override_kv: []
             spec:
               enabled: true
-              type: mtp
+              type: draft-mtp
               disabled_by: null
-              draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-Q8_0.gguf
+              draft_model_path: /mnt/raid0/llm/models/gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf
               draft_max: 2
               draft_p_min: 0.0
               threads_draft: 16
@@ -1306,7 +1296,7 @@ roles:
       quality_overall: 0.9
       memory_cost: 1.0
     acceleration:
-      spec_type: mtp
+      spec_type: draft-mtp
       draft_compat:
       - draft_gemma4_26b_a4b_assistant_q8
       enable_thinking: false
@@ -1377,8 +1367,8 @@ roles:
     role: worker_summarize
     deployment_status: live_stack
     status: compiled
-    model_id: qwen3.6-35b-a3b-q8_0
-    display_name: Qwen3.6-35B-A3B-Q8_0
+    model_id: qwen3.6-35b-a3b-mtp-q8_0
+    display_name: Qwen3.6-35B-A3B-MTP-Q8_0
     serving:
       endpoint: http://localhost:8070
       server_role: frontdoor
@@ -1404,7 +1394,7 @@ roles:
         modes:
         - default
         requirements:
-          model_path: /mnt/raid0/llm/models/Qwen_Qwen3.6-35B-A3B-Q8_0.gguf
+          model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
         runtime:
           binary_family: llama.cpp
           binary_path: /mnt/raid0/llm/llama.cpp/build/bin/llama-server

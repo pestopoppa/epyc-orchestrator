@@ -258,7 +258,9 @@ def _append_runtime_kv_args(cmd: list[str], cache: dict[str, Any]) -> None:
     if isinstance(kv_type_k, str) and isinstance(kv_type_v, str):
         cmd.extend(["-ctk", kv_type_k, "-ctv", kv_type_v])
     if cache.get("kv_hadamard") is True:
-        cmd.append("--kv-hadamard")
+        # 2026-06-26 v6 cutover: --kv-hadamard removed in v6 (no role sets kv_hadamard true today)
+        # cmd.append("--kv-hadamard")
+        pass
 
 
 def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any]) -> None:
@@ -274,7 +276,8 @@ def _append_runtime_spec_args(cmd: list[str], runtime: dict[str, Any]) -> None:
         cmd.extend(["--spec-type", spec_type])
     draft_max = spec.get("draft_max")
     if isinstance(draft_max, int) and not isinstance(draft_max, bool) and draft_max > 0:
-        cmd.extend(["--draft-max", str(draft_max)])
+        # 2026-06-26 v6 cutover: --draft-max renamed to --spec-draft-n-max (same value)
+        cmd.extend(["--spec-draft-n-max", str(draft_max)])
     draft_p_min = spec.get("draft_p_min")
     if isinstance(draft_p_min, (int, float)) and not isinstance(draft_p_min, bool):
         cmd.extend(["--draft-p-min", str(float(draft_p_min))])
@@ -595,7 +598,7 @@ def _build_worker_general_command(
         # Without this, -md is treated as standard spec decode and
         # MTP-arch draft tensors are loaded but never assigned to a
         # backend buffer → "tensor buffer not set" assertion.
-        "--draft-max",
+        "--spec-draft-n-max",  # 2026-06-26 v6 cutover: renamed from --draft-max (same value)
         _runtime_positive_int(spec, "draft_max", WORKER_MTP_DRAFT_MAX),  # MTP recipe: 58% acceptance at k=2 (research-registry tuning)
         "--draft-p-min",
         _runtime_number_string(spec, "draft_p_min", WORKER_MTP_DRAFT_P_MIN),  # greedy: accept top-1 drafts, verifier rejects mismatches
@@ -726,7 +729,9 @@ def _append_kv_quant_args(cmd: list[str], role_name: str) -> None:
     cmd.extend(["-ctk", kv_quant[0], "-ctv", kv_quant[1]])
     # --kv-hadamard: v3 auto-enables (upstream #21038), v2 needs explicit flag
     if role_name in _V2_ROLES and LLAMA_SERVER_V2.exists():
-        cmd.append("--kv-hadamard")
+        # 2026-06-26 v6 cutover: --kv-hadamard removed in v6 (would crash); no role on v2 today
+        # cmd.append("--kv-hadamard")
+        pass
 
 
 def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_path: str) -> None:
@@ -751,7 +756,7 @@ def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_
                 [
                     "-md",
                     draft_config.model.full_path,
-                    "--draft-max",
+                    "--spec-draft-n-max",  # 2026-06-26 v6 cutover: renamed from --draft-max
                     str(accel.k or 16),
                 ]
             )
@@ -769,7 +774,7 @@ def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_
                 [
                     "-md",
                     draft_config.model.full_path,
-                    "--draft-max",
+                    "--spec-draft-n-max",  # 2026-06-26 v6 cutover: renamed from --draft-max
                     str(accel.k or 16),
                 ]
             )
@@ -782,7 +787,7 @@ def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_
                 model_path,
                 "--n-layer-exit-draft",
                 str(accel.n_layer_exit_draft),
-                "--draft-max",
+                "--spec-draft-n-max",  # 2026-06-26 v6 cutover: renamed from --draft-max
                 str(accel.k or 16),
             ]
         )
@@ -796,7 +801,7 @@ def _append_acceleration_args(cmd: list[str], role_name: str, accel: Any, model_
                 "--n-layer-exit-draft",
                 str(accel.n_layer_exit_draft or 0),
                 "--hierarchical-spec",
-                "--draft-max",
+                "--spec-draft-n-max",  # 2026-06-26 v6 cutover: renamed from --draft-max
                 str(accel.k or 16),
             ]
         )
@@ -815,7 +820,8 @@ def _apply_numa_spec_overrides(cmd: list[str], numa_cfg: dict | None) -> None:
     overrides = numa_cfg["spec_overrides"]
     if "draft_max" in overrides:
         for i, arg in enumerate(cmd):
-            if arg == "--draft-max" and i + 1 < len(cmd):
+            # 2026-06-26 v6 cutover: match renamed --spec-draft-n-max (was --draft-max)
+            if arg == "--spec-draft-n-max" and i + 1 < len(cmd):
                 cmd[i + 1] = str(overrides["draft_max"])
                 break
     # Tree-spec (--draft-p-split) and bare --lookup flag both stripped in v5 binary;
@@ -886,6 +892,12 @@ def _build_role_command(role_config: Any, port: int, numa_instance: int = 0) -> 
     # Validated in S2: 30x latency improvement under memory pressure.
     if cache.get("mlock", role_name in MLOCK_ROLES) is True:
         cmd.append("--mlock")
+
+    # 2026-06-26 v6 cutover: honor the per-role no_mmap prior (enables N12 topology).
+    # Mirrors _build_worker_general_command's cache.get("no_mmap", ...) emit. Default
+    # False here so generic-role behavior is unchanged when no_mmap is absent/False.
+    if cache.get("no_mmap", False) is True:
+        cmd.append("--no-mmap")
 
     if runtime:
         for override in flags.get("override_kv") or []:
@@ -1127,7 +1139,10 @@ def start_server(
             # set, triggering "tensor buffer not set" assertion at ggml-backend.cpp:236.
             # Bench launches confirm: gemma4 MTP works with bare OMP env, no GGML_*.
             if binary_override:
-                stripped = [k for k in list(env.keys()) if k.startswith("GGML_")]
+                # 2026-06-26 v6 cutover: never strip GGML_IQK (gates iqk kernels)
+                stripped = [
+                    k for k in list(env.keys()) if k.startswith("GGML_") and k != "GGML_IQK"
+                ]
                 for k in stripped:
                     del env[k]
                 if stripped:
