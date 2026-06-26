@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 # Logit probe output file (append-only JSONL)
 _LOGIT_PROBE_PATH = "/mnt/raid0/llm/epyc-orchestrator/data/logit_probe.jsonl"
 
+# Fixed RNG seed for reproducible decode. Sampling is deterministic for a given
+# (prompt, params, seed); callers may override per-request via request.seed.
+_DETERMINISTIC_SAMPLING_SEED = 42
+
 
 def _empty_generation_failure_after_s() -> float:
     """Seconds after which an empty model response is treated as infrastructure failure."""
@@ -515,11 +519,7 @@ class LlamaServerBackend(ModelBackend):
             "max_tokens": request.n_tokens if request.n_tokens > 0 else 4096,
             "stream": False,
         }
-        temp = role_config.acceleration.temperature
-        if temp is None:
-            temp = request.temperature
-        if temp is not None and temp >= 0:
-            payload["temperature"] = temp
+        self._apply_deterministic_sampling(payload, role_config, request)
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
 
@@ -1006,6 +1006,34 @@ class LlamaServerBackend(ModelBackend):
                 completion_reason="request_error",
             )
 
+    def _apply_deterministic_sampling(
+        self,
+        payload: dict[str, Any],
+        role_config: RoleConfig,
+        request: InferenceRequest,
+    ) -> None:
+        """Pin sampling identically across /completion and /v1/chat/completions.
+
+        Temperature precedence: role acceleration override -> role
+        generation_defaults (the registry's per-role intent, e.g. 0.1-0.3) ->
+        request temperature (default 0.0). A fixed seed makes decode reproducible
+        for a given (prompt, params); callers may override via request.seed.
+        top_k/top_p/repeat_penalty are pinned to identical values on both
+        endpoints so the two paths cannot silently diverge.
+        """
+        temp = role_config.acceleration.temperature
+        if temp is None and role_config.generation_defaults is not None:
+            temp = role_config.generation_defaults.temperature
+        if temp is None:
+            temp = request.temperature
+        if temp is not None and temp >= 0:
+            payload["temperature"] = temp
+        payload["top_k"] = 40
+        payload["top_p"] = 0.95
+        payload["repeat_penalty"] = 1.1
+        seed = getattr(request, "seed", None)
+        payload["seed"] = seed if isinstance(seed, int) else _DETERMINISTIC_SAMPLING_SEED
+
     def _build_payload(
         self,
         role_config: RoleConfig,
@@ -1028,16 +1056,9 @@ class LlamaServerBackend(ModelBackend):
             "cache_prompt": cache_prompt,
         }
 
-        # Temperature
-        temp = role_config.acceleration.temperature
-        if temp is None:
-            temp = request.temperature
-        payload["temperature"] = temp
-
-        # Add sampling parameters
-        payload["top_k"] = 40
-        payload["top_p"] = 0.95
-        payload["repeat_penalty"] = 1.1
+        # Deterministic sampling (temperature honors generation_defaults; pinned
+        # top_k/top_p/repeat_penalty + fixed seed, shared with the chat path).
+        self._apply_deterministic_sampling(payload, role_config, request)
 
         # Forward stop sequences to llama-server
         stop_seqs = getattr(request, "stop_sequences", None)
@@ -1190,11 +1211,7 @@ class LlamaServerBackend(ModelBackend):
             "max_tokens": request.n_tokens if request.n_tokens > 0 else 4096,
             "stream": True,
         }
-        temp = role_config.acceleration.temperature
-        if temp is None:
-            temp = request.temperature
-        if temp is not None and temp >= 0:
-            payload["temperature"] = temp
+        self._apply_deterministic_sampling(payload, role_config, request)
         if request.stop_sequences:
             payload["stop"] = request.stop_sequences
 

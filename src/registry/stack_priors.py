@@ -1154,8 +1154,16 @@ def _launch_runtime_record(
         },
         "flags": {
             "flash_attn": True,
+            # 2026-06-26: architect_general no longer excluded from --jinja. The
+            # 2026-04-15 exclusion (commit 0879ed56) suppressed Qwen3.5-122B hybrid
+            # <think>-loops by falling back to generic ChatML, but that also made the
+            # registry's enable_thinking=false inert (kwarg only applies on the
+            # /v1/chat/completions+jinja path). Enrolling architect into jinja routes
+            # it through chat-completions where nothink fires (frontdoor proves the
+            # same-family draft-mtp+jinja+nothink path). Gated on the J12 think-loop
+            # suppression probe before trusting.
             "jinja": bool(
-                (mode == "default" and primary_role != "architect_general")
+                (mode == "default")
                 or (mode == "worker_pool" and worker_type == "explore")
             ),
             "reasoning": "off" if mode == "worker_pool" and worker_type == "explore" else None,
