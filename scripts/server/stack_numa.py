@@ -98,7 +98,10 @@ NUMA_CONFIG: dict[str, dict] = {
         ],
         "mlock": True,
         "numactl_policy": "interleave=all",  # wraps launch with `numactl --interleave=all --`
-        "spec_overrides": {"draft_max": 24, "p_split": 0},  # sweep-verified
+        # 2026-06-26 v6 cutover: draft_max 24->4. The 24 was sweep-verified for the OLD Qwen3.5-0.8B
+        # EXTERNAL draft; the architect now uses NEXTN self-draft (draft-mtp), whose bench-optimal
+        # n-max is 4 (the +58-89% session bench). 24 over-drafts the NEXTN head (~25% accept, wasteful).
+        "spec_overrides": {"draft_max": 4, "p_split": 0},
     },
     # architect_coding REMOVED 2026-05-06 — REAP-246B Q4KM scored 7/10 (70%) on coder
     # under canonical recipe, WORSE than worker_general (gemma4-26B-A4B Q4_K_M MTP at 96%)

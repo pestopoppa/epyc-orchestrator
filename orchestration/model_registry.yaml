@@ -500,8 +500,8 @@ server_mode:
     agent_file_compression_operating_point: aggressive
     # 2026-06-26 v6 cutover: served model repointed to the NEXTN MTP variant (NEXTN head embedded),
     # was the plain Q4_K_M base + separate 0.8B external draft. NEXTN self-draft: -md == -m.
-    model: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
-    draft_model: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf  # 2026-06-26 v6 cutover: NEXTN self-draft = SAME file as model (was Qwen3.5-0.8B-Q8_0.gguf external draft)
+    model: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
+    draft_model: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf  # 2026-06-26 v6 cutover: NEXTN self-draft = SAME file as model (was Qwen3.5-0.8B-Q8_0.gguf external draft)
     memory_gb: 69
     tier: hot  # promoted from warm — half the RAM, fits NUMA node0
     # acceleration block was REMOVED 2026-05-09 (single source of truth = roles.architect_general.acceleration,
@@ -512,7 +512,7 @@ server_mode:
       type: speculative_decoding
       spec_type: draft-mtp   # → launcher emits --spec-type draft-mtp (NOT bare 'mtp', removed in v6)
       draft_max: 4           # → emitted as --spec-draft-n-max 4 (v6 renamed --draft-max). Architect n-max=4 (was 24 for the 0.8B draft).
-      draft_model: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf  # NEXTN self-draft = SAME file as model
+      draft_model: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf  # NEXTN self-draft = SAME file as model
       lookup: false          # ngram-lookup is the documented zero-RAM fallback if NEXTN MTP regresses
       # 2026-06-26 v6 cutover: dropped moe_expert_reduction (experts:8 + override_key qwen35moe.expert_used_count) —
       # it was a no-op (8 == GGUF default == no reduction).
@@ -913,7 +913,10 @@ roles:
     - general
     - ingest
     acceleration:
-      type: none  # Q8 baseline; expert_reduction sweep deferred
+      type: speculative_decoding  # 2026-06-26 v6 cutover: native NEXTN MTP — matches server_mode.frontdoor (RegistryLoader reads roles.X, so the two must agree)
+      spec_type: draft-mtp
+      draft_max: 4
+      draft_model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf  # NEXTN self-draft = same file as model
       lookup: false
     performance:
       baseline_tps: 24.3  # May-4 canonical baseline aggregate
@@ -1099,7 +1102,7 @@ roles:
       huggingface_id: unsloth/Qwen3.5-122B-A10B-GGUF
       # 2026-06-26 v6 cutover: repointed to the NEXTN MTP variant (NEXTN draft head embedded);
       # was unsloth/Qwen3.5-122B-A10B-GGUF/Q4_K_M/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf.
-      path: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
+      path: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
       quant: Q4_K_M
       size_gb: 69
       split_count: 3
@@ -1121,7 +1124,7 @@ roles:
       # 2026-06-26 v6 cutover: NEXTN self-draft — drafter is the SAME file as `model` (-md == -m).
       # Expressed as a bare `draft_model:` filename (mirroring the worker/frontdoor blocks) rather
       # than `draft_role: draft_qwen35_0_8b_q8_0` (the old external 0.8B draft role, now retired here).
-      draft_model: Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
+      draft_model: /mnt/raid0/llm/models/Qwen3.5-122B-A10B-MTP-GGUF/UD-Q4_K_M/Qwen3.5-122B-A10B-UD-Q4_K_M-00001-of-00003.gguf
       draft_max: 4                                # → emitted as --spec-draft-n-max 4 (v6 renamed --draft-max). Was 24 for the 0.8B draft; NEXTN n-max=4.
       k: 4                                         # alias for draft_max (RegistryLoader)
       p_split: 0                                  # linear only — tree harmful on hybrid
