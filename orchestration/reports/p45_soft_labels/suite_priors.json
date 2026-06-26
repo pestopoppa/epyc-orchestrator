@@ -1,0 +1,301 @@
+{
+  "long_context": {
+    "role_correctness": {
+      "frontdoor": 0.989010989010989
+    },
+    "soft_labels": {
+      "frontdoor": 0.24695247739550927,
+      "coder_escalation": 0.15060950452089814,
+      "worker_general": 0.15060950452089814,
+      "architect_general": 0.15060950452089814,
+      "ingest_long_context": 0.15060950452089814,
+      "worker_vision": 0.15060950452089814
+    },
+    "recommended_role": "frontdoor",
+    "total_questions": 577
+  },
+  "coder": {
+    "role_correctness": {
+      "frontdoor": 0.8666666666666667,
+      "coder_escalation": 0.8181818181818182,
+      "architect_general": 0.7333333333333333
+    },
+    "soft_labels": {
+      "frontdoor": 0.20590582924528897,
+      "coder_escalation": 0.20097419172579692,
+      "worker_general": 0.1334978791704063,
+      "architect_general": 0.1926263415176954,
+      "ingest_long_context": 0.1334978791704063,
+      "worker_vision": 0.1334978791704063
+    },
+    "recommended_role": "frontdoor",
+    "total_questions": 580
+  },
+  "general": {
+    "role_correctness": {
+      "frontdoor": 0.8426395939086294,
+      "coder_escalation": 0.7692307692307693,
+      "architect_general": 0.9791666666666666,
+      "worker_vision": 0.5833333333333334
+    },
+    "soft_labels": {
+      "frontdoor": 0.1913740457108838,
+      "coder_escalation": 0.18447712187947526,
+      "worker_general": 0.12557586407037308,
+      "architect_general": 0.20489412941463983,
+      "ingest_long_context": 0.12557586407037308,
+      "worker_vision": 0.16810297485425502
+    },
+    "recommended_role": "architect_general",
+    "total_questions": 1291
+  },
+  "livecodebench": {
+    "role_correctness": {
+      "frontdoor": 1.0,
+      "architect_general": 1.0
+    },
+    "soft_labels": {
+      "frontdoor": 0.22593138093880302,
+      "coder_escalation": 0.1370343095305985,
+      "worker_general": 0.1370343095305985,
+      "architect_general": 0.22593138093880302,
+      "ingest_long_context": 0.1370343095305985,
+      "worker_vision": 0.1370343095305985
+    },
+    "recommended_role": "frontdoor",
+    "total_questions": 718
+  },
+  "agentic": {
+    "role_correctness": {
+      "frontdoor": 0.7086614173228346,
+      "architect_general": 0.9444444444444444
+    },
+    "soft_labels": {
+      "frontdoor": 0.20277009898971,
+      "coder_escalation": 0.14227219817994957,
+      "worker_general": 0.14227219817994957,
+      "architect_general": 0.2281411082904918,
+      "ingest_long_context": 0.14227219817994957,
+      "worker_vision": 0.14227219817994957
+    },
+    "recommended_role": "architect_general",
+    "total_questions": 575
+  },
+  "debugbench": {
+    "role_correctness": {
+      "frontdoor": 0.795774647887324,
+      "architect_general": 1.0
+    },
+    "soft_labels": {
+      "frontdoor": 0.20857410158717762,
+      "coder_escalation": 0.1401070898148121,
+      "worker_general": 0.1401070898148121,
+      "architect_general": 0.230997539153574,
+      "ingest_long_context": 0.1401070898148121,
+      "worker_vision": 0.1401070898148121
+    },
+    "recommended_role": "architect_general",
+    "total_questions": 605
+  },
+  "instruction_precision": {
+    "role_correctness": {
+      "frontdoor": 0.8982300884955752,
+      "worker_vision": 1.0,
+      "worker_general": 1.0,
+      "ingest_long_context": 1.0
+    },
+    "soft_labels": {
+      "frontdoor": 0.1840606815238843,
+      "coder_escalation": 0.11746617853364323,
+      "worker_general": 0.1936689871362764,
+      "architect_general": 0.11746617853364323,
+      "ingest_long_context": 0.1936689871362764,
+      "worker_vision": 0.1936689871362764
+    },
+    "recommended_role": "worker_general",
+    "total_questions": 587
+  },
+  "math": {
+    "role_correctness": {
+      "worker_general": 0.9775280898876404,
+      "frontdoor": 0.9421052631578948,
+      "coder_escalation": 1.0
+    },
+    "soft_labels": {
+      "frontdoor": 0.20324072382186387,
+      "coder_escalation": 0.20920998835936575,
+      "worker_general": 0.20687247104453504,
+      "architect_general": 0.12689227225807848,
+      "ingest_long_context": 0.12689227225807848,
+      "worker_vision": 0.12689227225807848
+    },
+    "recommended_role": "coder_escalation",
+    "total_questions": 732
+  },
+  "mode_advantage": {
+    "role_correctness": {
+      "frontdoor": 0.6286764705882353,
+      "coder_escalation": 0.8888888888888888,
+      "architect_general": 1.0
+    },
+    "soft_labels": {
+      "frontdoor": 0.18070829634197397,
+      "coder_escalation": 0.20581759552761056,
+      "worker_general": 0.13196620584611263,
+      "architect_general": 0.2175754905920775,
+      "ingest_long_context": 0.13196620584611263,
+      "worker_vision": 0.13196620584611263
+    },
+    "recommended_role": "architect_general",
+    "total_questions": 581
+  },
+  "simpleqa": {
+    "role_correctness": {
+      "worker_general": 0.05787781350482315,
+      "frontdoor": 0.04918032786885246,
+      "worker_vision": 0.1,
+      "ingest_long_context": 0.14285714285714285
+    },
+    "soft_labels": {
+      "frontdoor": 0.16585217475119762,
+      "coder_escalation": 0.16182357751608367,
+      "worker_general": 0.16657499374280726,
+      "architect_general": 0.16182357751608367,
+      "ingest_long_context": 0.17380522671900392,
+      "worker_vision": 0.17012044975482382
+    },
+    "recommended_role": "ingest_long_context",
+    "total_questions": 881
+  },
+  "vl": {
+    "role_correctness": {
+      "worker_vision": 0.6174496644295302
+    },
+    "soft_labels": {
+      "frontdoor": 0.15719099376296097,
+      "coder_escalation": 0.15719099376296097,
+      "worker_general": 0.15719099376296097,
+      "architect_general": 0.15719099376296097,
+      "ingest_long_context": 0.15719099376296097,
+      "worker_vision": 0.21404503118519516
+    },
+    "recommended_role": "worker_vision",
+    "total_questions": 601
+  },
+  "hotpotqa": {
+    "role_correctness": {
+      "worker_general": 0.6446700507614214,
+      "coder_escalation": 0.9922480620155039,
+      "worker_vision": 0.2153846153846154
+    },
+    "soft_labels": {
+      "frontdoor": 0.140126764626974,
+      "coder_escalation": 0.2301362455634631,
+      "worker_general": 0.19342358016757674,
+      "architect_general": 0.140126764626974,
+      "ingest_long_context": 0.140126764626974,
+      "worker_vision": 0.1560598803880381
+    },
+    "recommended_role": "coder_escalation",
+    "total_questions": 1154
+  },
+  "mode_advantage_hard": {
+    "role_correctness": {
+      "frontdoor": 0.2948207171314741,
+      "coder_escalation": 0.0,
+      "worker_vision": 0.13333333333333333
+    },
+    "soft_labels": {
+      "frontdoor": 0.18607457868422733,
+      "coder_escalation": 0.1605711578568641,
+      "worker_general": 0.1605711578568641,
+      "architect_general": 0.1605711578568641,
+      "ingest_long_context": 0.1605711578568641,
+      "worker_vision": 0.17164078988831624
+    },
+    "recommended_role": "frontdoor",
+    "total_questions": 574
+  },
+  "bigcodebench": {
+    "role_correctness": {
+      "coder_escalation": 0.6880733944954128,
+      "frontdoor": 0.32727272727272727,
+      "architect_general": 0.0
+    },
+    "soft_labels": {
+      "frontdoor": 0.1787661690529164,
+      "coder_escalation": 0.2141076588663036,
+      "worker_general": 0.151781543020195,
+      "architect_general": 0.151781543020195,
+      "ingest_long_context": 0.151781543020195,
+      "worker_vision": 0.151781543020195
+    },
+    "recommended_role": "coder_escalation",
+    "total_questions": 583
+  },
+  "gpqa": {
+    "role_correctness": {
+      "frontdoor": 0.3877551020408163,
+      "coder_escalation": 0.6486486486486487
+    },
+    "soft_labels": {
+      "frontdoor": 0.18401389038861413,
+      "coder_escalation": 0.20965388813981106,
+      "worker_general": 0.15158305536789368,
+      "architect_general": 0.15158305536789368,
+      "ingest_long_context": 0.15158305536789368,
+      "worker_vision": 0.15158305536789368
+    },
+    "recommended_role": "coder_escalation",
+    "total_questions": 585
+  },
+  "thinking": {
+    "role_correctness": {
+      "frontdoor": 0.9672131147540983
+    },
+    "soft_labels": {
+      "frontdoor": 0.24493122979126317,
+      "coder_escalation": 0.15101375404174736,
+      "worker_general": 0.15101375404174736,
+      "architect_general": 0.15101375404174736,
+      "ingest_long_context": 0.15101375404174736,
+      "worker_vision": 0.15101375404174736
+    },
+    "recommended_role": "frontdoor",
+    "total_questions": 758
+  },
+  "cruxeval": {
+    "role_correctness": {
+      "worker_general": 0.8723404255319149,
+      "frontdoor": 0.0,
+      "coder_escalation": 0.47297297297297297
+    },
+    "soft_labels": {
+      "frontdoor": 0.14676610092804587,
+      "coder_escalation": 0.18592189308956483,
+      "worker_general": 0.22701370319825165,
+      "architect_general": 0.14676610092804587,
+      "ingest_long_context": 0.14676610092804587,
+      "worker_vision": 0.14676610092804587
+    },
+    "recommended_role": "worker_general",
+    "total_questions": 585
+  },
+  "skill_transfer": {
+    "role_correctness": {
+      "worker_general": 0.3482587064676617,
+      "worker_vision": 0.7567567567567568,
+      "coder_escalation": 0.3333333333333333
+    },
+    "soft_labels": {
+      "frontdoor": 0.1463810541718022,
+      "coder_escalation": 0.17292878259210875,
+      "worker_general": 0.17422412324403944,
+      "architect_general": 0.1463810541718022,
+      "ingest_long_context": 0.1463810541718022,
+      "worker_vision": 0.21370393164844517
+    },
+    "recommended_role": "worker_vision",
+    "total_questions": 583
+  }
+}

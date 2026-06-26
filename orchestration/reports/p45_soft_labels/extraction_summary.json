@@ -1,0 +1,40 @@
+{
+  "trials_with_qr": 141,
+  "unique_qids": 1382,
+  "soft_label_records": 540,
+  "skipped_insufficient": 836,
+  "skipped_no_route": 6,
+  "tau": 2.0,
+  "min_appearances": 5,
+  "suite_distribution": {
+    "general": 40,
+    "hotpotqa": 38,
+    "simpleqa": 34,
+    "thinking": 34,
+    "debugbench": 31,
+    "math": 31,
+    "livecodebench": 30,
+    "instruction_precision": 29,
+    "cruxeval": 29,
+    "coder": 28,
+    "vl": 28,
+    "mode_advantage_hard": 28,
+    "gpqa": 28,
+    "mode_advantage": 27,
+    "skill_transfer": 27,
+    "long_context": 26,
+    "agentic": 26,
+    "bigcodebench": 26
+  },
+  "roles_observed": [
+    "architect_general",
+    "coder_escalation",
+    "frontdoor",
+    "ingest_long_context",
+    "worker_general",
+    "worker_vision"
+  ],
+  "output_dir": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels",
+  "soft_labels_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels/soft_labels.jsonl",
+  "suite_priors_path": "/mnt/raid0/llm/epyc-orchestrator/orchestration/reports/p45_soft_labels/suite_priors.json"
+}
