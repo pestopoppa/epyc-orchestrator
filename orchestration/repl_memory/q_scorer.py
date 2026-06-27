@@ -121,6 +121,10 @@ PRIOR_SOURCE_REGISTRY = "registry"
 PRIOR_SOURCE_DEGRADED_FALLBACK = "degraded_fallback"
 
 
+class QScorerPriorSourceError(RuntimeError):
+    """Live q_scorer priors are missing generated stack-prior provenance."""
+
+
 def _materialize_q_scorer_role_aliases(values: Dict[str, Any]) -> Dict[str, Any]:
     materialized = dict(values)
     for canonical_role, aliases in STACK_PRIOR_SCORER_ROLE_ALIASES.items():
@@ -413,6 +417,15 @@ def validate_live_q_scorer_prior_sources(
                     f"{source}; expected {PRIOR_SOURCE_STACK_PRIORS}"
                 )
     return errors
+
+
+def require_live_q_scorer_stack_priors(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> None:
+    """Raise when live q_scorer priors are not fully stack-prior sourced."""
+    errors = validate_live_q_scorer_prior_sources(stack_priors_path)
+    if errors:
+        raise QScorerPriorSourceError("; ".join(errors))
 
 
 def descriptor_q_scorer_priors_by_role(

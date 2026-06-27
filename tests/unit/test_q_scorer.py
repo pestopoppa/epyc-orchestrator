@@ -45,9 +45,11 @@ from orchestration.repl_memory.q_scorer import (
     PRIOR_SOURCE_DEGRADED_FALLBACK,
     PRIOR_SOURCE_STACK_PRIORS,
     STACK_PRIOR_SCORER_ROLE_ALIASES,
+    QScorerPriorSourceError,
     ScoringConfig,
     QScorer,
     descriptor_q_scorer_priors_by_role,
+    require_live_q_scorer_stack_priors,
     registry_baseline_tps_by_role,
     registry_memory_cost_by_role,
     stack_prior_q_scorer_priors_by_role,
@@ -291,6 +293,8 @@ class TestScoringConfigDefaults:
             "live q_scorer role 'frontdoor' uses throughput source "
             "degraded_fallback; expected stack_priors"
         ]
+        with pytest.raises(QScorerPriorSourceError, match="live q_scorer role 'frontdoor'"):
+            require_live_q_scorer_stack_priors(priors_path)
 
     def test_stack_prior_priors_fall_back_when_artifact_missing(self, tmp_path):
         missing = tmp_path / "missing_stack_priors.yaml"
@@ -311,6 +315,8 @@ class TestScoringConfigDefaults:
         errors = validate_live_q_scorer_prior_sources(missing)
         assert len(errors) == 1
         assert errors[0].startswith("q_scorer stack-priors validation failed:")
+        with pytest.raises(QScorerPriorSourceError, match="validation failed"):
+            require_live_q_scorer_stack_priors(missing)
 
     def test_default_stack_priors_path_exists(self):
         assert DEFAULT_STACK_PRIORS_PATH.exists()

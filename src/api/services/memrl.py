@@ -49,6 +49,13 @@ def _background_scoring_enabled() -> bool:
     return raw not in {"0", "false", "off", "no"}
 
 
+def _require_live_q_scorer_priors() -> None:
+    """Refuse live MemRL scoring when q_scorer priors are degraded."""
+    from orchestration.repl_memory.q_scorer import require_live_q_scorer_stack_priors
+
+    require_live_q_scorer_stack_priors()
+
+
 def load_optional_imports() -> None:
     """Load optional module imports based on feature flags.
 
@@ -376,6 +383,7 @@ def ensure_memrl_initialized(state: "AppState") -> bool:
         return False
 
     try:
+        _require_live_q_scorer_priors()
         state.episodic_store = EpisodicStore()
         embedder = TaskEmbedder()
         reader = ProgressReader()

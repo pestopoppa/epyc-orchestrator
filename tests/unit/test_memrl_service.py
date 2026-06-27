@@ -366,6 +366,61 @@ class TestEnsureMemRLInitialized:
             memrl.TaskEmbedder = original_task_embedder
             memrl.QScorer = original_q_scorer
 
+    def test_ensure_memrl_initialized_rejects_degraded_q_scorer_priors(self):
+        """Test live MemRL init refuses degraded q_scorer priors."""
+        state = AppState()
+        state._memrl_initialized = False
+        state.progress_logger = StubProgressLogger()
+
+        original_vals = (
+            memrl.EpisodicStore,
+            memrl.TaskEmbedder,
+            memrl.QScorer,
+            memrl.ScoringConfig,
+            memrl.TwoPhaseRetriever,
+            memrl.HybridRouter,
+            memrl.RuleBasedRouter,
+            memrl.ProgressReader,
+            memrl.RetrievalConfig,
+        )
+
+        try:
+            memrl.EpisodicStore = StubEpisodicStore
+            memrl.TaskEmbedder = StubTaskEmbedder
+            memrl.QScorer = StubQScorer
+            memrl.ScoringConfig = StubScoringConfig
+            memrl.TwoPhaseRetriever = StubTwoPhaseRetriever
+            memrl.HybridRouter = StubHybridRouter
+            memrl.RuleBasedRouter = StubRuleBasedRouter
+            memrl.ProgressReader = StubProgressReader
+            memrl.RetrievalConfig = StubRetrievalConfig
+
+            with patch("src.api.services.memrl.features") as mock_features, patch(
+                "src.api.services.memrl._require_live_q_scorer_priors",
+                side_effect=RuntimeError("degraded priors"),
+            ):
+                mock_features.return_value = StubFeatures(memrl=True)
+
+                result = memrl.ensure_memrl_initialized(state)
+
+            assert result is False
+            assert state._memrl_initialized is True
+            assert state.q_scorer is None
+            assert state.episodic_store is None
+
+        finally:
+            (
+                memrl.EpisodicStore,
+                memrl.TaskEmbedder,
+                memrl.QScorer,
+                memrl.ScoringConfig,
+                memrl.TwoPhaseRetriever,
+                memrl.HybridRouter,
+                memrl.RuleBasedRouter,
+                memrl.ProgressReader,
+                memrl.RetrievalConfig,
+            ) = original_vals
+
     def test_ensure_memrl_initialized_success(self):
         """Test successful initialization."""
         state = AppState()
