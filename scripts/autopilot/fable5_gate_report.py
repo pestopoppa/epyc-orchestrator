@@ -130,6 +130,12 @@ def phase_section(phase_report: dict[str, Any]) -> GateSection:
             "eval_correct_questions": phase_report.get("eval_correct_questions"),
             "eval_correct_pct": phase_report.get("eval_correct_pct"),
             "eval_concurrency": phase_report.get("eval_concurrency"),
+            "seq_verdict_enabled": phase_report.get("seq_verdict_enabled"),
+            "w6_audit_accrual_enabled": phase_report.get("w6_audit_accrual_enabled"),
+            "w6_audit_shadow_only": phase_report.get("w6_audit_shadow_only"),
+            "w6_audit_n": phase_report.get("w6_audit_n"),
+            "w6_audit_every_n_trials": phase_report.get("w6_audit_every_n_trials"),
+            "autopilot_planner_timeout": phase_report.get("autopilot_planner_timeout"),
         },
     )
 

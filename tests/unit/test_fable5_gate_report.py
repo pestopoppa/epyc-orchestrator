@@ -262,6 +262,12 @@ def test_phase_section_surfaces_eval_progress() -> None:
             "eval_correct_questions": 144,
             "eval_correct_pct": 72.0,
             "eval_concurrency": 1,
+            "seq_verdict_enabled": True,
+            "w6_audit_accrual_enabled": True,
+            "w6_audit_shadow_only": True,
+            "w6_audit_n": "10",
+            "w6_audit_every_n_trials": "1",
+            "autopilot_planner_timeout": "600",
         }
     )
 
@@ -269,6 +275,9 @@ def test_phase_section_surfaces_eval_progress() -> None:
     assert "T2 200/500" in section.summary
     assert section.details["eval_completed_questions"] == 200
     assert section.details["eval_correct_pct"] == 72.0
+    assert section.details["seq_verdict_enabled"] is True
+    assert section.details["w6_audit_accrual_enabled"] is True
+    assert section.details["w6_audit_n"] == "10"
 
 
 def test_xmas_required_policy_hold_points_to_regression_diagnosis(
