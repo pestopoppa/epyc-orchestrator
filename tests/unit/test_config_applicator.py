@@ -77,6 +77,46 @@ def test_restart_role_success_uses_stack_reload(monkeypatch: pytest.MonkeyPatch)
     assert calls[0]["env"]["ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS"] == "768"
 
 
+def test_restart_role_success_journals_restart_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[dict[str, object]] = []
+
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    monkeypatch.setattr(applicator.subprocess, "run", lambda *a, **kw: None)
+
+    result = applicator.restart_role(
+        "frontdoor",
+        env_overrides={"ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS": "768"},
+        journal=FakeJournal(),
+        affected_roles=["frontdoor", "coder_escalation"],
+        trial_id=27,
+        boundary_reason="unit-test restart",
+        actor="unit-test",
+    )
+
+    assert result["status"] == "ok"
+    assert result["restart_boundary_event"]["type"] == "role_restart_boundary"
+    assert events == [
+        {
+            "role": "frontdoor",
+            "affected_roles": ["frontdoor", "coder_escalation"],
+            "env_keys": ["ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS"],
+            "registry_override_keys": [],
+            "status": "ok",
+            "rollback_status": "",
+            "reason": "unit-test restart",
+            "actor": "unit-test",
+            "boundary_trial_id": 27,
+            "command": "orchestrator_stack.py reload frontdoor",
+        }
+    ]
+
+
 def test_restart_role_rolls_back_to_prior_env_on_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -110,6 +150,52 @@ def test_restart_role_rolls_back_to_prior_env_on_failure(
     }
     assert calls[0]["env"]["ORCHESTRATOR_WORKER_CALL_BUDGET_CAP"] == "12"
     assert calls[1]["env"]["ORCHESTRATOR_WORKER_CALL_BUDGET_CAP"] == "8"
+
+
+def test_restart_role_rollback_journals_restart_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[dict[str, object]] = []
+    monkeypatch.setenv("ORCHESTRATOR_WORKER_CALL_BUDGET_CAP", "8")
+
+    class FakeJournal:
+        def append_role_restart_boundary_event(self, **kwargs):
+            events.append(kwargs)
+            return {"type": "role_restart_boundary", **kwargs}
+
+    calls = 0
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+
+    result = applicator.restart_role(
+        "worker_general",
+        env_overrides={"ORCHESTRATOR_WORKER_CALL_BUDGET_CAP": "12"},
+        journal=FakeJournal(),
+        trial_id=28,
+    )
+
+    assert result["status"] == "error"
+    assert result["rollback"]["status"] == "ok"
+    assert events == [
+        {
+            "role": "worker_general",
+            "affected_roles": ["worker_general"],
+            "env_keys": ["ORCHESTRATOR_WORKER_CALL_BUDGET_CAP"],
+            "registry_override_keys": [],
+            "status": "error",
+            "rollback_status": "ok",
+            "reason": "intentional role restart",
+            "actor": "config_applicator.restart_role",
+            "boundary_trial_id": 28,
+            "command": "orchestrator_stack.py reload worker_general",
+        }
+    ]
 
 
 def test_restart_role_rolls_back_by_unsetting_new_env(

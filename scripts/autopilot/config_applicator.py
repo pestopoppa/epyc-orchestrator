@@ -327,6 +327,11 @@ def restart_role(
     env_overrides: dict[str, str] | None = None,
     registry_overrides: dict[str, Any] | None = None,
     url: str = ORCHESTRATOR_URL,
+    journal: Any | None = None,
+    affected_roles: list[str] | None = None,
+    trial_id: int | None = None,
+    boundary_reason: str = "intentional role restart",
+    actor: str = "config_applicator.restart_role",
 ) -> dict[str, Any]:
     """Reload one stack role with rollback to the prior environment on failure.
 
@@ -359,6 +364,17 @@ def restart_role(
         if role == "orchestrator":
             health = health_check(url)
             if health:
+                _attach_restart_boundary_event(
+                    first,
+                    journal=journal,
+                    role=role,
+                    affected_roles=affected_roles,
+                    env_keys=sorted(env_overrides),
+                    registry_override_keys=[],
+                    trial_id=trial_id,
+                    reason=boundary_reason,
+                    actor=actor,
+                )
                 return first
             first.update(
                 {
@@ -368,6 +384,17 @@ def restart_role(
                 }
             )
         else:
+            _attach_restart_boundary_event(
+                first,
+                journal=journal,
+                role=role,
+                affected_roles=affected_roles,
+                env_keys=sorted(env_overrides),
+                registry_override_keys=[],
+                trial_id=trial_id,
+                reason=boundary_reason,
+                actor=actor,
+            )
             return first
 
     rollback_overrides = {
@@ -384,7 +411,54 @@ def restart_role(
         "status": rollback.get("status", "error"),
         "env_keys": sorted(prior_env),
     }
+    _attach_restart_boundary_event(
+        first,
+        journal=journal,
+        role=role,
+        affected_roles=affected_roles,
+        env_keys=sorted(env_overrides),
+        registry_override_keys=[],
+        trial_id=trial_id,
+        reason=boundary_reason,
+        actor=actor,
+    )
     return first
+
+
+def _attach_restart_boundary_event(
+    result: dict[str, Any],
+    *,
+    journal: Any | None,
+    role: str,
+    affected_roles: list[str] | None,
+    env_keys: list[str],
+    registry_override_keys: list[str],
+    trial_id: int | None,
+    reason: str,
+    actor: str,
+) -> None:
+    """Attach an append-only restart-boundary event when a journal is provided."""
+    if journal is None:
+        return
+    append = getattr(journal, "append_role_restart_boundary_event", None)
+    if append is None:
+        result["restart_boundary_error"] = "journal lacks append_role_restart_boundary_event"
+        return
+    try:
+        result["restart_boundary_event"] = append(
+            role=role,
+            affected_roles=list(affected_roles or [role]),
+            env_keys=env_keys,
+            registry_override_keys=registry_override_keys,
+            status=str(result.get("status", "")),
+            rollback_status=str((result.get("rollback") or {}).get("status", "")),
+            reason=reason,
+            actor=actor,
+            boundary_trial_id=trial_id,
+            command=f"orchestrator_stack.py reload {role}",
+        )
+    except Exception as exc:
+        result["restart_boundary_error"] = str(exc)
 
 
 def _reload_role_via_stack(

@@ -92,6 +92,7 @@ TSV_COLUMNS = [
 SUPERSESSION_EVENT_TYPE = "supersession"
 BASELINE_PROMOTION_EVENT_TYPE = "baseline_promotion"
 JOURNAL_SNAPSHOT_EVENT_TYPE = "journal_snapshot"
+ROLE_RESTART_BOUNDARY_EVENT_TYPE = "role_restart_boundary"
 
 
 def has_legacy_scale_failure_analysis(text: str) -> bool:
@@ -252,6 +253,27 @@ class JournalSnapshotEvent:
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
     type: str = JOURNAL_SNAPSHOT_EVENT_TYPE
+
+
+@dataclass
+class RoleRestartBoundaryEvent:
+    """Append-only event recording an intentional role-restart boundary."""
+
+    role: str
+    affected_roles: list[str]
+    env_keys: list[str]
+    registry_override_keys: list[str]
+    status: str
+    rollback_status: str
+    reason: str
+    policy_version: str
+    actor: str
+    boundary_trial_id: int | None = None
+    command: str = ""
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    type: str = ROLE_RESTART_BOUNDARY_EVENT_TYPE
 
 
 def _snapshot_hash(
@@ -480,6 +502,38 @@ class ExperimentJournal:
             )
         ))
 
+    def append_role_restart_boundary_event(
+        self,
+        *,
+        role: str,
+        affected_roles: list[str] | None = None,
+        env_keys: list[str] | None = None,
+        registry_override_keys: list[str] | None = None,
+        status: str,
+        rollback_status: str = "",
+        reason: str,
+        policy_version: str = "role-restart-boundary-v1",
+        actor: str = "config_applicator.restart_role",
+        boundary_trial_id: int | None = None,
+        command: str = "",
+    ) -> dict[str, Any]:
+        """Append an intentional role-restart boundary event."""
+        return self.append_ledger_event(asdict(
+            RoleRestartBoundaryEvent(
+                role=role,
+                affected_roles=list(affected_roles or [role]),
+                env_keys=sorted(env_keys or []),
+                registry_override_keys=sorted(registry_override_keys or []),
+                status=status,
+                rollback_status=rollback_status,
+                reason=reason,
+                policy_version=policy_version,
+                actor=actor,
+                boundary_trial_id=boundary_trial_id,
+                command=command,
+            )
+        ))
+
     # ── queries ──────────────────────────────────────────────────
 
     def recent(self, n: int = 20) -> list[JournalEntry]:
@@ -514,6 +568,10 @@ class ExperimentJournal:
     def journal_snapshot_events(self) -> list[dict[str, Any]]:
         """Return loaded append-only journal snapshot event rows."""
         return self.ledger_events(JOURNAL_SNAPSHOT_EVENT_TYPE)
+
+    def role_restart_boundary_events(self) -> list[dict[str, Any]]:
+        """Return loaded append-only role restart boundary event rows."""
+        return self.ledger_events(ROLE_RESTART_BOUNDARY_EVENT_TYPE)
 
     def latest_journal_snapshot_event(self) -> dict[str, Any] | None:
         """Return the newest snapshot event by ledger order, if any."""

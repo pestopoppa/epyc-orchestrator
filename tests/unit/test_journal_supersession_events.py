@@ -16,6 +16,7 @@ from experiment_journal import (
     ExperimentJournal,
     JOURNAL_SNAPSHOT_EVENT_TYPE,
     JournalEntry,
+    ROLE_RESTART_BOUNDARY_EVENT_TYPE,
 )
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 
@@ -151,6 +152,71 @@ def test_journal_snapshot_event_round_trips_without_counting_as_trial(
     assert reloaded.journal_snapshot_events() == [event]
     assert reloaded.latest_journal_snapshot_event() == event
     assert reloaded.supersession_events() == []
+
+
+def test_role_restart_boundary_event_round_trips_without_counting_as_trial(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(11))
+
+    event = journal.append_role_restart_boundary_event(
+        role="frontdoor",
+        affected_roles=["frontdoor", "coder_escalation"],
+        env_keys=["ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS"],
+        registry_override_keys=[],
+        status="ok",
+        rollback_status="",
+        reason="shadow role restart",
+        actor="unit-test",
+        boundary_trial_id=11,
+        command="orchestrator_stack.py reload frontdoor",
+    )
+
+    assert event["type"] == ROLE_RESTART_BOUNDARY_EVENT_TYPE
+    assert event["role"] == "frontdoor"
+    assert event["affected_roles"] == ["frontdoor", "coder_escalation"]
+    assert event["boundary_trial_id"] == 11
+    assert event["env_keys"] == ["ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS"]
+    assert event["policy_version"] == "role-restart-boundary-v1"
+    assert journal.count() == 1
+    assert journal.next_trial_id() == 12
+
+    reloaded = ExperimentJournal(journal_dir=tmp_path)
+    assert reloaded.count() == 1
+    assert reloaded.next_trial_id() == 12
+    assert reloaded.role_restart_boundary_events() == [event]
+    assert reloaded.ledger_events(ROLE_RESTART_BOUNDARY_EVENT_TYPE) == [event]
+
+
+def test_role_restart_boundary_event_does_not_affect_archive_reconstruction(
+    tmp_path: Path,
+) -> None:
+    journal = ExperimentJournal(journal_dir=tmp_path)
+    journal.record(_entry(1))
+    journal.append_role_restart_boundary_event(
+        role="worker_general",
+        affected_roles=["worker_general"],
+        env_keys=["ORCHESTRATOR_WORKER_CALL_BUDGET_CAP"],
+        registry_override_keys=[],
+        status="error",
+        rollback_status="ok",
+        reason="rollback test",
+        actor="unit-test",
+        boundary_trial_id=1,
+    )
+    rows = [asdict(entry) for entry in journal.all_entries()]
+    rows.extend(journal.ledger_events())
+
+    archive = reconstruct_archive_from_journal_rows(rows, None, current_run_only=False)
+
+    assert archive is not None
+    assert [entry["trial_id"] for entry in archive["all_entries"]] == [1]
+    assert archive["supersessions"] == {
+        "events_applied": 0,
+        "target_trial_ids": [],
+        "field_names": [],
+    }
 
 
 def test_matching_trial_ids_does_not_mutate_entries(tmp_path: Path) -> None:
