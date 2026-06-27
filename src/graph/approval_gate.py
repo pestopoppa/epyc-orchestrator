@@ -31,6 +31,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 log = logging.getLogger(__name__)
@@ -88,19 +89,61 @@ class AutoApproveCallback:
         return ApprovalDecision.APPROVE
 
 
-# High-cost roles that trigger approval (architect tier)
-_HIGH_COST_ROLES = {"architect_general"}
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_STACK_PRIORS_PATH = PROJECT_ROOT / "orchestration" / "derived" / "stack_priors.yaml"
+
+_HIGH_COST_MIN_MODEL_MEM_GB = 60.0
+_DEGRADED_HIGH_COST_ROLES = frozenset({"architect_general"})
+_STACK_PRIOR_HIGH_COST_ROLES_CACHE: frozenset[str] | None = None
+
+
+def high_cost_roles_from_stack_priors(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> frozenset[str] | None:
+    """Return generated live roles that require high-cost approval gates."""
+    try:
+        from src.registry.stack_priors import live_stack_safe_non_stream_roles
+    except Exception:
+        return None
+
+    try:
+        return live_stack_safe_non_stream_roles(
+            stack_priors_path,
+            min_mem_gb=_HIGH_COST_MIN_MODEL_MEM_GB,
+        )
+    except Exception:
+        log.debug("Failed to derive high-cost approval roles from stack priors", exc_info=True)
+        return None
+
+
+def high_cost_roles(
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
+) -> frozenset[str]:
+    """Return high-cost approval roles, falling back only in degraded mode."""
+    global _STACK_PRIOR_HIGH_COST_ROLES_CACHE
+    if stack_priors_path == DEFAULT_STACK_PRIORS_PATH:
+        if _STACK_PRIOR_HIGH_COST_ROLES_CACHE is None:
+            _STACK_PRIOR_HIGH_COST_ROLES_CACHE = high_cost_roles_from_stack_priors(
+                stack_priors_path
+            )
+        derived = _STACK_PRIOR_HIGH_COST_ROLES_CACHE
+    else:
+        derived = high_cost_roles_from_stack_priors(stack_priors_path)
+    return derived if derived is not None else _DEGRADED_HIGH_COST_ROLES
 
 
 def should_halt(
     from_role: str,
     to_role: str,
+    *,
+    stack_priors_path: Path = DEFAULT_STACK_PRIORS_PATH,
 ) -> HaltReason | None:
     """Determine if a transition should trigger an approval gate.
 
     Args:
         from_role: Current role.
         to_role: Target role.
+        stack_priors_path: Generated stack-priors artifact for live high-cost roles.
 
     Returns:
         HaltReason if approval needed, None otherwise.
@@ -119,7 +162,7 @@ def should_halt(
         return HaltReason.ESCALATION
 
     # High-cost invocation
-    if to_role in _HIGH_COST_ROLES:
+    if to_role in high_cost_roles(stack_priors_path):
         return HaltReason.HIGH_COST
 
     return None

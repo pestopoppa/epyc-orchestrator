@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Tests for the approval gate module."""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+import yaml
 
 from src.features import Features, set_features, reset_features
 from src.graph.approval_gate import (
@@ -12,7 +14,6 @@ from src.graph.approval_gate import (
     HaltState,
     should_halt,
     request_approval_for_escalation,
-    InterruptCondition,
     check_interrupt_conditions,
     request_approval_for_interrupt,
 )
@@ -85,6 +86,81 @@ class TestShouldHalt:
         # Coder to architect — both Tier B, so triggers HIGH_COST
         result = should_halt("coder_escalation", "architect_general")
         assert result == HaltReason.HIGH_COST
+
+    def test_generated_stack_priors_drive_high_cost_roles(self, tmp_path):
+        set_features(Features(approval_gates=True))
+        stack_priors = tmp_path / "stack_priors.yaml"
+        stack_priors.write_text(
+            yaml.safe_dump(
+                {
+                    "roles": {
+                        "architect_general": {
+                            "deployment_status": "live_stack",
+                            "model": {"mem_gb": 10.0},
+                        },
+                        "coder_escalation": {
+                            "deployment_status": "live_stack",
+                            "model": {"mem_gb": 70.0},
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert (
+            should_halt(
+                "architect_general",
+                "coder_escalation",
+                stack_priors_path=stack_priors,
+            )
+            == HaltReason.HIGH_COST
+        )
+        assert (
+            should_halt(
+                "coder_escalation",
+                "architect_general",
+                stack_priors_path=stack_priors,
+            )
+            is None
+        )
+
+    def test_missing_stack_priors_use_degraded_high_cost_fallback(self, tmp_path):
+        set_features(Features(approval_gates=True))
+        missing_stack_priors = tmp_path / "missing.yaml"
+
+        result = should_halt(
+            "coder_escalation",
+            "architect_general",
+            stack_priors_path=missing_stack_priors,
+        )
+
+        assert result == HaltReason.HIGH_COST
+
+    def test_valid_stack_priors_without_high_cost_roles_do_not_use_fallback(self, tmp_path):
+        set_features(Features(approval_gates=True))
+        stack_priors = tmp_path / "stack_priors.yaml"
+        stack_priors.write_text(
+            yaml.safe_dump(
+                {
+                    "roles": {
+                        "architect_general": {
+                            "deployment_status": "live_stack",
+                            "model": {"mem_gb": 10.0},
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = should_halt(
+            "coder_escalation",
+            "architect_general",
+            stack_priors_path=stack_priors,
+        )
+
+        assert result is None
 
 
 class TestRequestApproval:
