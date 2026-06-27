@@ -322,6 +322,115 @@ def restart_api(
     return _reload_api_via_stack(env_overrides=None, url=url)
 
 
+def restart_role(
+    role: str,
+    env_overrides: dict[str, str] | None = None,
+    registry_overrides: dict[str, Any] | None = None,
+    url: str = ORCHESTRATOR_URL,
+) -> dict[str, Any]:
+    """Reload one stack role with rollback to the prior environment on failure.
+
+    This is a dormant W3 applicator primitive. Capability promotion remains
+    gated elsewhere; callers must still journal restart boundaries before use.
+    """
+    import os
+
+    role = role.strip()
+    if not role:
+        return {"status": "error", "error": "role is required", "method": "stack_reload"}
+    if registry_overrides:
+        return {
+            "status": "error",
+            "method": "stack_reload",
+            "role": role,
+            "error": "registry_overrides are not yet supported",
+            "registry_override_keys": sorted(registry_overrides.keys()),
+        }
+
+    env_overrides = dict(env_overrides or {})
+    prior_env = {key: os.environ.get(key) for key in env_overrides}
+    first = _reload_role_via_stack(
+        role=role,
+        env_overrides=env_overrides,
+        env_unset=[],
+    )
+    first["role"] = role
+    if first.get("status") == "ok":
+        if role == "orchestrator":
+            health = health_check(url)
+            if health:
+                return first
+            first.update(
+                {
+                    "status": "error",
+                    "error": health.failure_reason,
+                    "detail": health.failure_detail,
+                }
+            )
+        else:
+            return first
+
+    rollback_overrides = {
+        key: value for key, value in prior_env.items() if value is not None
+    }
+    rollback_unset = [key for key, value in prior_env.items() if value is None]
+    rollback = _reload_role_via_stack(
+        role=role,
+        env_overrides=rollback_overrides,
+        env_unset=rollback_unset,
+    )
+    first["rollback"] = {
+        "attempted": True,
+        "status": rollback.get("status", "error"),
+        "env_keys": sorted(prior_env),
+    }
+    return first
+
+
+def _reload_role_via_stack(
+    *,
+    role: str,
+    env_overrides: dict[str, str] | None,
+    env_unset: list[str],
+) -> dict[str, Any]:
+    """Run orchestrator_stack.py reload for a role with an explicit environment."""
+    import os
+
+    stack_script = ORCH_ROOT / "scripts" / "server" / "orchestrator_stack.py"
+    if not stack_script.exists():
+        return {"status": "error", "error": f"Stack script not found: {stack_script}"}
+
+    env = os.environ.copy()
+    for key in env_unset:
+        env.pop(key, None)
+    if env_overrides:
+        env.update(env_overrides)
+
+    try:
+        subprocess.run(
+            [sys.executable, str(stack_script), "reload", role],
+            cwd=str(ORCH_ROOT),
+            env=env,
+            timeout=180,
+            check=True,
+        )
+    except Exception as exc:
+        log.error("Stack role reload failed for %s: %s", role, exc)
+        return {
+            "status": "error",
+            "error": str(exc),
+            "method": "stack_reload",
+            "env_keys": sorted((env_overrides or {}).keys()),
+            "env_unset": sorted(env_unset),
+        }
+    return {
+        "status": "ok",
+        "method": "stack_reload",
+        "env_keys": sorted((env_overrides or {}).keys()),
+        "env_unset": sorted(env_unset),
+    }
+
+
 def _reload_api_via_stack(
     env_overrides: dict[str, str] | None,
     url: str,

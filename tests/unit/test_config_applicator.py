@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -46,6 +47,114 @@ def test_restart_api_with_env_uses_stack_reload(monkeypatch: pytest.MonkeyPatch)
     assert calls[0]["cmd"][-2:] == ["reload", "orchestrator"]
     assert calls[0]["cwd"] == str(ROOT)
     assert calls[0]["env"]["ORCHESTRATOR_THINK_HARDER_MIN_EXPECTED_ROI"] == "0.05"
+
+
+def test_restart_role_success_uses_stack_reload(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({
+            "cmd": cmd,
+            "cwd": cwd,
+            "env": env,
+            "timeout": timeout,
+            "check": check,
+        })
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+
+    result = applicator.restart_role(
+        "frontdoor",
+        env_overrides={"ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS": "768"},
+    )
+
+    assert result["status"] == "ok"
+    assert result["method"] == "stack_reload"
+    assert result["role"] == "frontdoor"
+    assert calls[0]["cmd"][-2:] == ["reload", "frontdoor"]
+    assert calls[0]["cwd"] == str(ROOT)
+    assert calls[0]["timeout"] == 180
+    assert calls[0]["env"]["ORCHESTRATOR_FRONTDOOR_REPL_NON_TOOL_N_TOKENS"] == "768"
+
+
+def test_restart_role_rolls_back_to_prior_env_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("ORCHESTRATOR_WORKER_CALL_BUDGET_CAP", "8")
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({
+            "cmd": cmd,
+            "cwd": cwd,
+            "env": env,
+            "timeout": timeout,
+            "check": check,
+        })
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+
+    result = applicator.restart_role(
+        "worker_general",
+        env_overrides={"ORCHESTRATOR_WORKER_CALL_BUDGET_CAP": "12"},
+    )
+
+    assert result["status"] == "error"
+    assert result["role"] == "worker_general"
+    assert result["rollback"] == {
+        "attempted": True,
+        "status": "ok",
+        "env_keys": ["ORCHESTRATOR_WORKER_CALL_BUDGET_CAP"],
+    }
+    assert calls[0]["env"]["ORCHESTRATOR_WORKER_CALL_BUDGET_CAP"] == "12"
+    assert calls[1]["env"]["ORCHESTRATOR_WORKER_CALL_BUDGET_CAP"] == "8"
+
+
+def test_restart_role_rolls_back_by_unsetting_new_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.delenv("ORCHESTRATOR_MEMRL_RETRIEVAL_SEMANTIC_K", raising=False)
+
+    def fake_run(cmd, *, cwd, env, timeout, check):
+        calls.append({
+            "cmd": cmd,
+            "cwd": cwd,
+            "env": env,
+            "timeout": timeout,
+            "check": check,
+        })
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(applicator.subprocess, "run", fake_run)
+
+    result = applicator.restart_role(
+        "ingest_long_context",
+        env_overrides={"ORCHESTRATOR_MEMRL_RETRIEVAL_SEMANTIC_K": "12"},
+    )
+
+    assert result["status"] == "error"
+    assert result["rollback"]["status"] == "ok"
+    assert calls[0]["env"]["ORCHESTRATOR_MEMRL_RETRIEVAL_SEMANTIC_K"] == "12"
+    assert "ORCHESTRATOR_MEMRL_RETRIEVAL_SEMANTIC_K" not in calls[1]["env"]
+
+
+def test_restart_role_rejects_registry_overrides_until_rollback_record_exists() -> None:
+    result = applicator.restart_role(
+        "frontdoor",
+        registry_overrides={"model_id": "candidate"},
+    )
+
+    assert result == {
+        "status": "error",
+        "method": "stack_reload",
+        "role": "frontdoor",
+        "error": "registry_overrides are not yet supported",
+        "registry_override_keys": ["model_id"],
+    }
 
 
 def test_apply_params_marks_env_restart_failure() -> None:
