@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Within-role placement fan-out probe (bulk-inference Package J / J1-J3).
+"""Placement fan-out probe (bulk-inference Package J / J1-J3).
 
-Fires N concurrent (or serial) /chat requests pinned to a single role and,
+Fires N concurrent (or serial) /chat requests pinned to one or more roles and,
 during the burst, polls /dashboard/api/region_locks to record how many
-DISTINCT instances of that role are simultaneously active. Cross-references
+DISTINCT instances of each role are simultaneously active. Cross-references
 the orchestrator log for the WP-2 `placement queued role=... reason=...`
 line so the operator can confirm a queued (not overlapping) placement.
 
@@ -18,6 +18,10 @@ Usage:
   python scripts/benchmark/placement_fanout_probe.py \
       --role frontdoor --n 4 --mode concurrent \
       --out data/bulk_inference_2026_05_26/j1_concurrent_n4.json
+
+  python scripts/benchmark/placement_fanout_probe.py \
+      --roles frontdoor,ingest_long_context --n 4 --mode concurrent \
+      --out /tmp/step2_cross_role_fanout.json
 """
 from __future__ import annotations
 
@@ -36,6 +40,22 @@ DEFAULT_LOG = "/mnt/raid0/llm/epyc-orchestrator/logs/orchestrator.log"
 QUEUE_MARK = "placement queued role="
 
 
+def parse_roles(role: str, roles: str | None) -> list[str]:
+    """Return the role sequence to probe, preserving --role compatibility."""
+    raw = roles if roles is not None else role
+    parsed = [item.strip() for item in raw.split(",") if item.strip()]
+    if not parsed:
+        raise ValueError("at least one role is required")
+    return parsed
+
+
+def request_roles(roles: list[str], n: int) -> list[str]:
+    """Assign N requests to roles round-robin."""
+    if n <= 0:
+        raise ValueError("--n must be positive")
+    return [roles[idx % len(roles)] for idx in range(n)]
+
+
 def one_request(api: str, role: str, prompt: str, idx: int, timeout: float) -> dict:
     """Single /chat call pinned to `role`. Returns timing + token record."""
     payload = {
@@ -49,8 +69,16 @@ def one_request(api: str, role: str, prompt: str, idx: int, timeout: float) -> d
         "session_id": f"j1-probe-{role}-{idx}-{int(time.time()*1000)}",
     }
     t0 = time.perf_counter()
-    rec = {"idx": idx, "ok": False, "status": None, "latency_s": None,
-           "tokens_generated": 0, "elapsed_seconds": None, "req_tps": None}
+    rec = {
+        "idx": idx,
+        "role": role,
+        "ok": False,
+        "status": None,
+        "latency_s": None,
+        "tokens_generated": 0,
+        "elapsed_seconds": None,
+        "req_tps": None,
+    }
     try:
         with httpx.Client(timeout=timeout) as c:
             r = c.post(f"{api}/chat", json=payload)
@@ -70,15 +98,16 @@ def one_request(api: str, role: str, prompt: str, idx: int, timeout: float) -> d
 
 
 class RegionLockPoller(threading.Thread):
-    """Polls /dashboard/api/region_locks; records active instance idxs for role."""
+    """Polls /dashboard/api/region_locks; records active instance idxs by role."""
 
-    def __init__(self, api: str, role: str, interval: float):
+    def __init__(self, api: str, roles: list[str], interval: float):
         super().__init__(daemon=True)
-        self.api, self.role, self.interval = api, role, interval
+        self.api, self.roles, self.interval = api, roles, interval
         self._stop = threading.Event()
         self.samples: list[dict] = []
-        self.max_active = 0
-        self.observed_idxs: set[int] = set()
+        self.max_active_by_role: dict[str, int] = {role: 0 for role in roles}
+        self.observed_idxs_by_role: dict[str, set[int]] = {role: set() for role in roles}
+        self.max_roles_active_same_sample = 0
         self.enabled_flag = None
 
     def run(self):
@@ -89,11 +118,24 @@ class RegionLockPoller(threading.Thread):
                     d = r.json()
                     if self.enabled_flag is None:
                         self.enabled_flag = d.get("per_region_locks_enabled")
-                    bucket = (d.get("by_role") or {}).get(self.role, {})
-                    active = bucket.get("active_instance_idxs", []) or []
-                    self.samples.append({"t": time.time(), "active": list(active)})
-                    self.max_active = max(self.max_active, len(active))
-                    self.observed_idxs |= set(active)
+                    by_role = d.get("by_role") or {}
+                    sample_roles: dict[str, list[int]] = {}
+                    active_roles = 0
+                    for role in self.roles:
+                        bucket = by_role.get(role, {})
+                        active = bucket.get("active_instance_idxs", []) or []
+                        active_ints = [int(item) for item in active]
+                        sample_roles[role] = active_ints
+                        self.max_active_by_role[role] = max(
+                            self.max_active_by_role[role], len(active_ints)
+                        )
+                        self.observed_idxs_by_role[role] |= set(active_ints)
+                        if active_ints:
+                            active_roles += 1
+                    self.max_roles_active_same_sample = max(
+                        self.max_roles_active_same_sample, active_roles
+                    )
+                    self.samples.append({"t": time.time(), "roles": sample_roles})
                 except Exception:
                     pass
                 self._stop.wait(self.interval)
@@ -127,9 +169,46 @@ def _metrics(recs: list[dict], wall_s: float, mode: str, n: int) -> dict:
     }
 
 
+def _placement_summary(poller: RegionLockPoller | None, primary_role: str) -> dict:
+    """Return placement summary while preserving legacy single-role keys."""
+    if poller is None:
+        by_role = None
+        return {
+            "per_region_locks_enabled": None,
+            "max_distinct_active_instances": None,
+            "observed_active_instance_idxs": None,
+            "n_poll_samples": 0,
+            "max_roles_active_same_sample": None,
+            "by_role": by_role,
+        }
+    by_role = {
+        role: {
+            "max_distinct_active_instances": poller.max_active_by_role.get(role, 0),
+            "observed_active_instance_idxs": sorted(
+                poller.observed_idxs_by_role.get(role, set())
+            ),
+        }
+        for role in poller.roles
+    }
+    primary = by_role.get(primary_role, {})
+    return {
+        "per_region_locks_enabled": poller.enabled_flag,
+        "max_distinct_active_instances": primary.get("max_distinct_active_instances"),
+        "observed_active_instance_idxs": primary.get("observed_active_instance_idxs"),
+        "n_poll_samples": len(poller.samples),
+        "max_roles_active_same_sample": poller.max_roles_active_same_sample,
+        "by_role": by_role,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--role", default="frontdoor")
+    ap.add_argument(
+        "--roles",
+        default=None,
+        help="comma-separated roles to probe round-robin; overrides --role",
+    )
     ap.add_argument("--n", type=int, default=4)
     ap.add_argument("--mode", choices=["serial", "concurrent"], default="concurrent")
     ap.add_argument("--api", default=DEFAULT_API)
@@ -142,6 +221,11 @@ def main() -> int:
     ap.add_argument("--prompt", default="Write a concise 100-word paragraph explaining what a NUMA node is.")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    try:
+        roles = parse_roles(args.role, args.roles)
+        request_plan = request_roles(roles, args.n)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     # Isolate this run's queue-log lines by byte offset.
     log_path = Path(args.log_file)
@@ -149,16 +233,22 @@ def main() -> int:
 
     poller = None
     if args.mode == "concurrent" and not args.no_dashboard:
-        poller = RegionLockPoller(args.api, args.role, args.poll_interval)
+        poller = RegionLockPoller(args.api, roles, args.poll_interval)
         poller.start()
         time.sleep(args.poll_interval * 2)
 
     t0 = time.perf_counter()
     if args.mode == "serial":
-        recs = [one_request(args.api, args.role, args.prompt, i, args.timeout) for i in range(args.n)]
+        recs = [
+            one_request(args.api, role, args.prompt, i, args.timeout)
+            for i, role in enumerate(request_plan)
+        ]
     else:
         with ThreadPoolExecutor(max_workers=args.n) as ex:
-            futs = [ex.submit(one_request, args.api, args.role, args.prompt, i, args.timeout) for i in range(args.n)]
+            futs = [
+                ex.submit(one_request, args.api, role, args.prompt, i, args.timeout)
+                for i, role in enumerate(request_plan)
+            ]
             recs = [f.result() for f in futs]
     wall = time.perf_counter() - t0
 
@@ -173,22 +263,20 @@ def main() -> int:
         with open(log_path, "r", errors="replace") as f:
             f.seek(log_off0)
             for line in f:
-                if QUEUE_MARK in line and f"role={args.role}" in line:
+                if QUEUE_MARK in line and any(f"role={role}" in line for role in roles):
                     queue_lines.append(line.strip())
 
+    placement = _placement_summary(poller, roles[0])
     out = {
         "task": "placement_fanout_probe",
-        "role": args.role,
+        "role": roles[0],
+        "roles": roles,
+        "request_plan": request_plan,
         "mode": args.mode,
         "n": args.n,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "metrics": _metrics(recs, wall, args.mode, args.n),
-        "placement": {
-            "per_region_locks_enabled": poller.enabled_flag if poller else None,
-            "max_distinct_active_instances": poller.max_active if poller else None,
-            "observed_active_instance_idxs": sorted(poller.observed_idxs) if poller else None,
-            "n_poll_samples": len(poller.samples) if poller else 0,
-        },
+        "placement": placement,
         "queue_log_lines": queue_lines,
         "queue_log_count": len(queue_lines),
         "requests": recs,
@@ -200,9 +288,11 @@ def main() -> int:
     # concise stderr-free summary
     m = out["metrics"]
     print(json.dumps({
-        "mode": args.mode, "n": args.n, "n_ok": m["n_ok"],
+        "mode": args.mode, "n": args.n, "roles": roles, "n_ok": m["n_ok"],
         "max_active": out["placement"]["max_distinct_active_instances"],
         "active_idxs": out["placement"]["observed_active_instance_idxs"],
+        "by_role": out["placement"]["by_role"],
+        "max_roles_active_same_sample": out["placement"]["max_roles_active_same_sample"],
         "queue_log_count": out["queue_log_count"],
         "median_req_tps": m["median_request_tps"],
         "aggregate_tps": m["aggregate_batch_tps"],
