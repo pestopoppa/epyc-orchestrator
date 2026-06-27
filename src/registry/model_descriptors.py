@@ -102,6 +102,13 @@ def _as_positive_int(value: Any) -> int | None:
 def _score_fraction(value: Any) -> float | None:
     if value is None:
         return None
+    if isinstance(value, dict):
+        for key in ("pct", "percent", "percentage", "raw"):
+            if key in value:
+                score = _score_fraction(value.get(key))
+                if score is not None:
+                    return score
+        return None
     if isinstance(value, (int, float)):
         number = float(value)
         return number / 100.0 if number > 1.0 else number

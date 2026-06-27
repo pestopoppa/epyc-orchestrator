@@ -503,6 +503,44 @@ def test_compile_uses_role_endpoint_for_dedicated_vision_role(tmp_path: Path) ->
     assert "Missing server_mode binding" not in model["known_gaps"]
 
 
+def test_compile_uses_structured_vl_score_as_quality_prior(tmp_path: Path) -> None:
+    registry_path = _write_yaml(
+        tmp_path / "model_registry.yaml",
+        {
+            "server_mode": {},
+            "roles": {
+                "vision_escalation": {
+                    "port": 8087,
+                    "model": {
+                        "name": "Qwen3-VL-30B-A3B-Instruct",
+                        "quant": "Q4_K_M",
+                        "architecture": "qwen3vlmoe",
+                        "size_gb": 18.0,
+                    },
+                    "candidate_roles": ["vision"],
+                    "server": {"endpoint": "http://localhost:8087"},
+                    "performance": {
+                        "vl_score": {"pct": 92.0, "raw": "11/12"},
+                        "benchmark_date": "2026-03-04",
+                    },
+                }
+            },
+        },
+    )
+
+    compiled = compile_model_descriptors(
+        lean_registry_path=registry_path,
+        research_registry_path=None,
+        active_roles={"vision_escalation"},
+        allow_incomplete=True,
+    )
+
+    model = compiled["models"][0]
+    assert model["quality"]["suite_vector"]["overall"] == 0.92
+    assert model["quality"]["suite_vector"]["vision_language"] == 0.92
+    assert "Missing quality suite_vector evidence" not in model["known_gaps"]
+
+
 def test_compile_marks_qwen_next_as_long_context_modality(tmp_path: Path) -> None:
     registry_path = _write_yaml(
         tmp_path / "model_registry.yaml",

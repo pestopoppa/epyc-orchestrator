@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-26T22:13:29Z'
-status: compiled
+compiled_at: '2026-06-27T10:32:40Z'
+status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: ab9e3a2aaf22e2d2fd43390e5dae477bc3c174a38a325c0e858c71cf42af9c08
-    repo_commit: 46b29ce2
+    sha256: 6fb2500f61d7b58935d51fbb908d15f3d1759cafad7a0f7e78ca921845e81054
+    repo_commit: 14a46002
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: fa6b5f21186e2d8108fbfbd7b2b8a2d109a217c8516d074e987b1f6a086814a3
-    repo_commit: 46b29ce2
+    sha256: f8260acac8eef2c048218d1b349993302370d337d1fb75a6213d25c6bca5e92d
+    repo_commit: 14a46002
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 4face3c19f274265cedcb2be7a5b1c89642d3ba993b774bdd5cc1971eb80a101
-    repo_commit: 46b29ce2
+    repo_commit: 14a46002
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 52f6d919cf8c6a643c2e17958655fa88b80b726624eb4886554b57b7ef27fd06
-    repo_commit: 46b29ce2
+    repo_commit: 14a46002
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
-    sha256: a88cccc6edaee6bdf723422af45d1038a6bd4de001e189e61116dc2e9a5e4638
-    repo_commit: 46b29ce2
+    sha256: b8b865d69ee3834a4b03d19146d36f15af47e81a2c3e898036687ebd956d7dcc
+    repo_commit: 14a46002
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 46b29ce2
+    repo_commit: 14a46002
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 46b29ce2
+    repo_commit: 14a46002
 roles:
   architect_general:
     role: architect_general
@@ -189,8 +189,9 @@ roles:
           moe4_baseline_tps: 3.87
           moe4_spec_tps: 8.21
           full_spec_tps: 6.08
-          optimized_tps: 6.08
-          speedup: 1.15x
+          qwen35_122b_probe_b_tps: 12.19
+          optimized_tps: 12.19
+          speedup: 2.30x
           spec_acceptance_moe4: 54.8%
           spec_acceptance_full: 52.7%
       - date: null
@@ -673,8 +674,9 @@ roles:
           moe4_baseline_tps: 3.87
           moe4_spec_tps: 8.21
           full_spec_tps: 6.08
-          optimized_tps: 6.08
-          speedup: 1.15x
+          qwen35_122b_probe_b_tps: 12.19
+          optimized_tps: 12.19
+          speedup: 2.30x
           spec_acceptance_moe4: 54.8%
           spec_acceptance_full: 52.7%
       - date: null
@@ -687,6 +689,79 @@ roles:
       - date: null
         protocol: server_mode throughput
         value_tps: 12.19
+    known_gaps: []
+  qwen36_q8_0:
+    role: qwen36_q8_0
+    deployment_status: benchmark_or_candidate
+    status: compiled
+    model_id: qwen3.6-35b-a3b-q8_0
+    display_name: Qwen3.6-35B-A3B
+    serving:
+      endpoint: http://localhost:8070
+      server_role: frontdoor
+      binding: server_mode.model_role
+      ports:
+      - 8070
+      - 8080
+      - 8180
+      - 8280
+      - 8380
+      slots: 2
+      tier: hot
+      effective_context_tokens: null
+      binary: llama.cpp
+      binary_dir: null
+      numa_policy: 4x48t_quarter_instances
+      shared_mmap: true
+      launch:
+        entries: []
+        primary_roles: []
+        modes: []
+        requirements: {}
+        runtime: {}
+    priors:
+      throughput_tps: 27.4
+      quality_overall: 0.738
+      memory_cost: 1.0
+    acceleration:
+      spec_type: draft-mtp
+      draft_compat: []
+      enable_thinking: false
+      thinking_control:
+        mode: toggle_off
+        source: model.disable_thinking
+      kv:
+        k: q8_0
+        v: q8_0
+      draft_max: 4
+      lookup: false
+      corpus_retrieval: true
+    model:
+      family: qwen3.6
+      arch: qwen35moe
+      params_b: 35.0
+      active_b: 3.0
+      quant: Q8_0
+      mem_gb: 37.0
+      ctx_max: 262144
+      modalities:
+      - text
+    evidence:
+      precedence:
+        serving: server_mode/stack_manifest outrank roles metadata
+        memory_cost: server_mode.tier
+        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
+      descriptor_server_roles:
+      - frontdoor
+      alias_overrides: []
+      quality:
+      - date: '2026-05-04'
+        protocol: registry benchmark_score
+        value: 170/183 (92.9%)
+      speed:
+      - date: '2026-05-04'
+        protocol: server_mode throughput
+        value_tps: 24.3
     known_gaps: []
   reap_25b_frontdoor:
     role: reap_25b_frontdoor
@@ -917,7 +992,7 @@ roles:
   vision_escalation:
     role: vision_escalation
     deployment_status: live_stack
-    status: compiled
+    status: compiled_with_gaps
     model_id: qwen3-vl-30b-a3b-q4_k_m
     display_name: Qwen3-VL-30B-A3B-Instruct
     serving:
@@ -1009,17 +1084,13 @@ roles:
               threads_draft: null
     priors:
       throughput_tps: 27.6
-      quality_overall: 0.9167
+      quality_overall: 0.92
       memory_cost: 1.0
     acceleration:
       spec_type: moe_expert_reduction
       draft_compat: []
       enable_thinking: null
-      thinking_control:
-        mode: native_no_thinking_toggle
-        effective_mode: native_no_think_tags
-        evidence_strength: model_family_inferred
-        evidence: Qwen3-VL-30B-A3B-Instruct is tracked separately from Qwen3-VL thinking models; no role toggle is declared.
+      thinking_control: null
       kv:
         k: null
         v: null
@@ -1030,7 +1101,7 @@ roles:
       active_b: 3.0
       quant: Q4_K_M
       mem_gb: 18.0
-      ctx_max: 262144
+      ctx_max: null
       modalities:
       - text
       - vision
@@ -1048,14 +1119,18 @@ roles:
           baseline_tps: 19.0
           optimized_tps: 27.6
           speedup: 1.45x
-          vl_score: 11/12 (92%)
+          vl_score:
+            pct: 92.0
+            raw: 11/12
           benchmark_date: '2026-03-04'
       speed:
       - date: '2026-03-04'
         protocol: registry performance block
         baseline_tps: 19.0
         optimized_tps: 27.6
-    known_gaps: []
+    known_gaps:
+    - Missing enable_thinking compatibility evidence
+    - Missing structured ctx_max
   worker_general:
     role: worker_general
     deployment_status: live_stack
@@ -1596,4 +1671,7 @@ roles:
         baseline_tps: 15.28
         optimized_tps: 20.0
     known_gaps: []
-known_global_gaps: {}
+known_global_gaps:
+  vision_escalation:
+  - Missing enable_thinking compatibility evidence
+  - Missing structured ctx_max

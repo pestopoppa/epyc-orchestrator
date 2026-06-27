@@ -1,16 +1,16 @@
 descriptor_version: 3
-compiled_at: '2026-06-26T22:01:44Z'
-status: compiled
+compiled_at: '2026-06-27T10:32:39Z'
+status: compiled_with_gaps
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 897cead2
-    sha256: ab9e3a2aaf22e2d2fd43390e5dae477bc3c174a38a325c0e858c71cf42af9c08
+    repo_commit: 14a46002
+    sha256: 6fb2500f61d7b58935d51fbb908d15f3d1759cafad7a0f7e78ca921845e81054
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
-    repo_commit: 23867f3
-    sha256: 7a4f97cd82acc71f25c07d68514b68e5f69b554f77a2858949ea8b0a15c12092
+    repo_commit: 97c2b1c
+    sha256: c606a2bc80dfd55a39d48e75e57a434b113c0c24abd0d8772b419211da00894c
 model_id_policy:
   canonical_shape: family-params-active-quant
   invariant: model records are keyed by physical model identity, never by role name
@@ -254,7 +254,7 @@ models:
   active_b: 3.0
   quant: Q4_K_M
   mem_gb: 18.0
-  ctx_max: 262144
+  ctx_max: null
   modalities:
   - text
   - vision
@@ -266,8 +266,8 @@ models:
     shared_mmap: false
   quality:
     suite_vector:
-      vision_language: 0.9167
-      overall: 0.9167
+      vision_language: 0.92
+      overall: 0.92
     source: orchestration/model_registry.yaml
     eval_protocol: MEASUREMENT.md#canonical-quality
     measured:
@@ -277,7 +277,9 @@ models:
         baseline_tps: 19.0
         optimized_tps: 27.6
         speedup: 1.45x
-        vl_score: 11/12 (92%)
+        vl_score:
+          pct: 92.0
+          raw: 11/12
         benchmark_date: '2026-03-04'
   speed:
     solo_96t_tps: null
@@ -294,11 +296,7 @@ models:
     spec_type: moe_expert_reduction
     draft_compat: []
     enable_thinking: null
-    thinking_control:
-      mode: native_no_thinking_toggle
-      effective_mode: native_no_think_tags
-      evidence_strength: model_family_inferred
-      evidence: Qwen3-VL-30B-A3B-Instruct is tracked separately from Qwen3-VL thinking models; no role toggle is declared.
+    thinking_control: null
     kv:
       k: null
       v: null
@@ -312,7 +310,9 @@ models:
     server_role: null
     requirements:
       mmproj_path: lmstudio-community/Qwen3-VL-30B-A3B-Instruct-GGUF/mmproj-Qwen3-VL-30B-A3B-Instruct-F16.gguf
-  known_gaps: []
+  known_gaps:
+  - Missing enable_thinking compatibility evidence
+  - Missing structured ctx_max
 - model_id: qwen3.5-122b-a10b-q4_k_m
   display_name: Qwen3.5-122B-A10B
   family: qwen3.5
@@ -346,8 +346,9 @@ models:
         moe4_baseline_tps: 3.87
         moe4_spec_tps: 8.21
         full_spec_tps: 6.08
-        optimized_tps: 6.08
-        speedup: 1.15x
+        qwen35_122b_probe_b_tps: 12.19
+        optimized_tps: 12.19
+        speedup: 2.30x
         spec_acceptance_moe4: 54.8%
         spec_acceptance_full: 52.7%
     - date: null
@@ -360,7 +361,7 @@ models:
     solo_96t_tps: 12.19
     quarter_48t_tps: null
     prefill_tps: null
-    optimized_tps: 6.08
+    optimized_tps: 12.19
     source: orchestration/model_registry.yaml
     measured:
     - date: null
@@ -483,6 +484,70 @@ models:
   architecture:
     attention_layers: 28
     source: registry.model
+- model_id: qwen3.6-35b-a3b-q8_0
+  display_name: Qwen3.6-35B-A3B
+  family: qwen3.6
+  arch: qwen35moe
+  params_b: 35.0
+  active_b: 3.0
+  quant: Q8_0
+  mem_gb: 37.0
+  ctx_max: 262144
+  modalities:
+  - text
+  role_bindings:
+    roles:
+    - qwen36_q8_0
+    server_roles:
+    - frontdoor
+    runtime_aliases: []
+    shared_mmap: true
+  quality:
+    suite_vector:
+      overall: 0.738
+    source: orchestration/model_registry.yaml
+    eval_protocol: MEASUREMENT.md#canonical-quality
+    measured:
+    - date: '2026-05-04'
+      protocol: registry benchmark_score
+      value: 170/183 (92.9%)
+  speed:
+    solo_96t_tps: 25.6
+    quarter_48t_tps: 24.3
+    prefill_tps: null
+    optimized_tps: 27.4
+    source: orchestration/model_registry.yaml
+    measured:
+    - date: '2026-05-04'
+      protocol: server_mode throughput
+      value_tps: 24.3
+  acceleration:
+    spec_type: draft-mtp
+    draft_compat: []
+    enable_thinking: false
+    thinking_control:
+      mode: toggle_off
+      source: model.disable_thinking
+    kv:
+      k: q8_0
+      v: q8_0
+    draft_max: 4
+    lookup: false
+    corpus_retrieval: true
+  serving:
+    binary: llama.cpp
+    binary_dir: null
+    numa_policy: 4x48t_quarter_instances
+    mlock: false
+    ports:
+    - 8070
+    - 8080
+    - 8180
+    - 8280
+    - 8380
+    server_role: frontdoor
+    requirements: {}
+  known_gaps: []
 - model_id: reap-qwen3-coder-25b-a3b-q4_k_m
   display_name: REAP-Qwen3-Coder-25B-A3B-Q4_K_M
   family: reap-qwen3-coder
