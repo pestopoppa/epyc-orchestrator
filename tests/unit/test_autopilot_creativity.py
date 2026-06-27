@@ -322,6 +322,8 @@ def test_action_availability_filters_non_viable_tail_actions(tmp_path: Path) -> 
     assert "`reset_memories`" in availability
     assert "`distill_skillbank`" in availability
     assert "`prompt_mutation`" in availability
+    assert "Capability registry levers (generated):" in availability
+    assert "`edit_transaction_auto_routing`: operator-only" in availability
     assert "slot_compact" not in viable
     assert "train_routing_models" not in viable
     assert "reset_memories" not in viable

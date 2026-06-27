@@ -18,6 +18,9 @@ import yaml
 
 from src.registry.capability_registry import (
     CapabilityRegistryError,
+    build_action_availability_section,
+    build_index_a_by_table,
+    capability_index_rows,
     load_capability_registry,
 )
 
@@ -141,6 +144,63 @@ def test_load_multiple_entries(tmp_path: Path) -> None:
     path = _write_registry(tmp_path, entries)
     caps = load_capability_registry(path)
     assert [c["id"] for c in caps] == ["lever_a", "lever_b", "lever_c"]
+
+
+def test_action_availability_section_is_generated_from_rows(tmp_path: Path) -> None:
+    path = _write_registry(
+        tmp_path,
+        [
+            _minimal_entry(id="operator_lever", actionable_by="operator"),
+            _minimal_entry(
+                id="gated_lever",
+                actionable_by="gated:evidence-plane",
+                promotion_state="candidate",
+            ),
+            _minimal_entry(
+                id="promoted_lever",
+                actionable_by="autopilot",
+                promotion_state="promoted",
+                kill_condition="rollback if quality regresses",
+            ),
+        ],
+    )
+    caps = load_capability_registry(path)
+
+    rendered = build_action_availability_section(caps)
+
+    assert "`promoted_lever`" in rendered
+    assert "Autopilot-actionable:" in rendered
+    assert "`operator_lever`: operator-only" in rendered
+    assert "`gated_lever`: gated on evidence-plane; candidate is not promoted" in rendered
+
+
+def test_index_a_by_table_uses_same_registry_rows(tmp_path: Path) -> None:
+    path = _write_registry(
+        tmp_path,
+        [
+            _minimal_entry(
+                id="edit_transaction_auto_routing",
+                actionable_by="operator",
+                handoff="multi-file-coding-completion-capability.md",
+            )
+        ],
+    )
+    caps = load_capability_registry(path)
+
+    rows = capability_index_rows(caps)
+    table = build_index_a_by_table(caps)
+
+    assert rows == [
+        {
+            "id": "edit_transaction_auto_routing",
+            "a_by": "operator",
+            "promotion_state": "placeholder",
+            "risk": "medium",
+            "reason": "operator-only",
+            "handoff": "multi-file-coding-completion-capability.md",
+        }
+    ]
+    assert "| `edit_transaction_auto_routing` | operator | placeholder |" in table
 
 
 # ──────────────────────────────────────────────────────────────────────────────

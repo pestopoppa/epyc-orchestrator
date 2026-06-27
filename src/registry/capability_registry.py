@@ -1,21 +1,20 @@
-"""Read-only loader and schema validator for the capability registry.
+"""Read-only loader, schema validator, and compiler for the capability registry.
 
 The capability registry (``orchestration/capability_registry.yaml``) declares
 one row per tunable lever. This module loads the registry, validates required
 fields, and rejects malformed entries or duplicate ids.
 
-This module has NO consumers wired at load time — it is a schema scaffold
-only. Consumers (planner Action-Availability compilation, master-index A-by
-column) will be wired in W2 once evidence-plane Phase 1 certifies the
-measurement instrument.
-
 Usage::
 
-    from src.registry.capability_registry import load_capability_registry
+    from src.registry.capability_registry import (
+        build_action_availability_section,
+        load_capability_registry,
+    )
 
     registry = load_capability_registry()
     for cap in registry:
         print(cap["id"], cap["actionable_by"])
+    print(build_action_availability_section(registry))
 
 Spec: fable5-findings-04-impl-plan.md §C.1
 """
@@ -241,3 +240,98 @@ def load_capability_registry(
         )
 
     return list(capabilities)
+
+
+def _capability_gate_reason(entry: dict[str, Any]) -> str:
+    actionable_by = str(entry.get("actionable_by", "")).strip()
+    promotion_state = str(entry.get("promotion_state", "")).strip()
+
+    if promotion_state == "promoted" and actionable_by == "autopilot":
+        return "autopilot-actionable"
+    if actionable_by == "operator":
+        return "operator-only"
+    if actionable_by.startswith("gated:"):
+        gate = actionable_by.removeprefix("gated:").strip()
+        if promotion_state == "placeholder":
+            return f"gated on {gate}; registry row is still placeholder"
+        if promotion_state == "candidate":
+            return f"gated on {gate}; candidate is not promoted"
+        return f"gated on {gate}"
+    if promotion_state != "promoted":
+        return f"not promoted ({promotion_state or 'unknown'})"
+    return actionable_by or "unknown"
+
+
+def capability_index_rows(
+    capabilities: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    """Return generated A-by rows for handoff/index compiler consumers."""
+    caps = capabilities if capabilities is not None else load_capability_registry()
+    rows: list[dict[str, str]] = []
+    for cap in caps:
+        rows.append(
+            {
+                "id": str(cap["id"]),
+                "a_by": str(cap["actionable_by"]),
+                "promotion_state": str(cap["promotion_state"]),
+                "risk": str(cap["risk"]),
+                "reason": _capability_gate_reason(cap),
+                "handoff": str(cap.get("handoff") or ""),
+            }
+        )
+    return rows
+
+
+def build_action_availability_section(
+    capabilities: list[dict[str, Any]] | None = None,
+) -> str:
+    """Compile capability rows into planner Action-Availability markdown."""
+    rows = capability_index_rows(capabilities)
+    actionable = [
+        row
+        for row in rows
+        if row["promotion_state"] == "promoted" and row["a_by"] == "autopilot"
+    ]
+    blocked = [row for row in rows if row not in actionable]
+
+    lines = ["Capability registry levers (generated):"]
+    if actionable:
+        lines.append("- Autopilot-actionable:")
+        for row in sorted(actionable, key=lambda item: item["id"]):
+            lines.append(
+                f"  - `{row['id']}`: risk={row['risk']}; "
+                f"handoff={row['handoff'] or 'n/a'}"
+            )
+    else:
+        lines.append("- Autopilot-actionable: none")
+
+    if blocked:
+        lines.append("- Not autopilot-actionable:")
+        for row in sorted(blocked, key=lambda item: item["id"]):
+            lines.append(
+                f"  - `{row['id']}`: {row['reason']}; risk={row['risk']}; "
+                f"handoff={row['handoff'] or 'n/a'}"
+            )
+    return "\n".join(lines)
+
+
+def build_index_a_by_table(
+    capabilities: list[dict[str, Any]] | None = None,
+) -> str:
+    """Compile registry rows into a markdown table for index A-by sync."""
+    rows = capability_index_rows(capabilities)
+    lines = [
+        "| Capability | A-by | State | Risk | Reason | Handoff |",
+        "|---|---|---|---|---|---|",
+    ]
+    for row in sorted(rows, key=lambda item: item["id"]):
+        lines.append(
+            "| "
+            f"`{row['id']}` | "
+            f"{row['a_by']} | "
+            f"{row['promotion_state']} | "
+            f"{row['risk']} | "
+            f"{row['reason']} | "
+            f"{row['handoff'] or 'n/a'} |"
+        )
+    return "\n".join(lines)

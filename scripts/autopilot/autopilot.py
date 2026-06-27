@@ -50,6 +50,10 @@ sys.path.insert(0, str(ORCH_ROOT))
 import yaml
 
 from src.registry.stack_priors import live_stack_slot_query_ports
+from src.registry.capability_registry import (
+    build_action_availability_section,
+    load_capability_registry,
+)
 from src.autopilot_core.journal_reconstruction import reconstruct_archive_from_journal_rows
 from src.autopilot_core.journal_snapshot_replay import archive_payload_from_verified_snapshot
 from experiment_journal import ExperimentJournal, JournalEntry, scrub_legacy_scale_text
@@ -1646,6 +1650,11 @@ def _build_action_availability(
             lines.append(f"- `{action_type}`: {reason}")
     if not lines:
         lines.append("(no action-specific availability constraints detected)")
+
+    try:
+        lines.append(build_action_availability_section(load_capability_registry()))
+    except Exception as exc:
+        lines.append(f"Capability registry levers (generated): unavailable ({exc})")
 
     viable_tail_actions = [
         action_type
