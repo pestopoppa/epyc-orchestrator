@@ -360,7 +360,7 @@ server_mode:
       enable_thinking: false
     model_role: qwen36_q8_0
     shared_with: []
-    description: Root LM — Qwen3.6-35B-A3B Q8 (quality 93%, May-4 Claude-as-Judge 170/183)
+    description: Root LM — Qwen3.6-35B-A3B MTP Q8 (quality 93%, May-4 Claude-as-Judge 170/183; v6 NEXTN self-draft)
     # 2026-06-26 v6 cutover: served model repointed to the NEXTN MTP variant for native
     # self-draft MTP on production-consolidated-v6 (was the plain Q8 base with acceleration:none).
     model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
@@ -399,7 +399,7 @@ server_mode:
     chat_template_kwargs:
       enable_thinking: false
     model_role: qwen36_q8_0
-    description: Coding escalation — Qwen3.6-35B-A3B Q8 (May-6 swap; shares GGUF with frontdoor; 97% coder vs 77% on Qwen3-Coder-30B-A3B; REAP-246B 70% architect_coding eliminated)
+    description: Coding escalation — Qwen3.6-35B-A3B Q8 (shares frontdoor GGUF; 97% coder vs 77% Qwen3-Coder-30B; absorbs eliminated architect_coding). Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.
     # 2026-06-26 v6 cutover: served model repointed to the same NEXTN MTP variant as frontdoor.
     model: Qwen3.6-35B-A3B-MTP-Q8_0.gguf
     model_path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
@@ -892,6 +892,7 @@ roles:
   frontdoor:
     tier: A
     description: Root LM — Qwen3.6-35B-A3B Q8 (quality 93%, May-4 Claude-as-Judge 170/183)
+    agent_file_compression_operating_point: aggressive
     backend:
       type: local
     model:
@@ -938,7 +939,7 @@ roles:
       Be direct — avoid filler, repetition, and unnecessary preamble.
   coder_escalation:
     tier: B
-    description: Coding escalation — Qwen3.6-35B-A3B Q8 MoE (May-6 swap; same model as frontdoor, shares GGUF mmap; absorbs eliminated architect_coding role)
+    description: Coding escalation — Qwen3.6-35B-A3B Q8 MoE (May-6 swap; same model as frontdoor, shares GGUF mmap; absorbs eliminated architect_coding role). Former Qwen2.5-Coder-32B-Q4 preserved as qwen25_coder_32b_q4km.
     model:
       name: Qwen3.6-35B-A3B-MTP-Q8_0  # 2026-06-26 v6 cutover: NEXTN MTP variant (shared frontdoor :8070 process)
       path: /mnt/raid0/llm/models/Qwen3.6-35B-A3B-MTP-Q8_0.gguf
@@ -1130,20 +1131,21 @@ roles:
       p_split: 0                                  # linear only — tree harmful on hybrid
       lookup: false                               # DISABLED here; ngram-lookup is the documented zero-RAM fallback if NEXTN MTP regresses or must be re-gated off
       notes: >
-        2026-06-26 v6 cutover: native NEXTN/MTP self-draft (draft-mtp, n-max 4) replaces the
-        moe8+external-0.8B-spec path (historically 12.6 t/s; moe8 was a no-op). ngram-lookup is the
-        documented zero-RAM fallback. If launch must gate spec off (e.g. M-RoPE rollback recurs),
-        remove architect_general from _NO_SPEC_DECODE in orchestrator_stack.py to re-enable.
-        Swapped from 235B (133GB) to 122B (69GB) — saves 128GB across 2 instances.
-      benchmarked: 2026-02-13
+        # 2026-06-26 v6 cutover: native draft-mtp on production-consolidated-v6, ik_llama deprecated.
+        Architect MTP via NEXTN-embedded Qwen3.5-122B variant (draft = same GGUF as model).
+        Dropped the no-op moe expert_used_count override (8 == GGUF default == no reduction).
+        moe8+spec historically = 12.6 t/s single-instance. Earlier _NO_SPEC_DECODE gate
+        (M-RoPE rollback bug, pre-v6 build b8957) is superseded by v6 native MTP.
+      benchmarked: 2026-05-04
     performance:
       quality_score: "2.57/3"  # 2026-03-19 architecture eval; structured from description for descriptor projection
       baseline_tps: 5.30
       moe4_baseline_tps: 3.87
       moe4_spec_tps: 8.21
       full_spec_tps: 6.08
-      optimized_tps: 6.08
-      speedup: 1.15x
+      qwen35_122b_probe_b_tps: 12.19
+      optimized_tps: 12.19
+      speedup: 2.30x
       spec_acceptance_moe4: 54.8%
       spec_acceptance_full: 52.7%
     memory:
@@ -1152,7 +1154,7 @@ roles:
     paged_attention:
       recommended: true
       block_size: 64
-      reason: "133GB model is memory-bound, benefits from block prefetching"
+      reason: "69GB model is memory-bound, benefits from block prefetching"
     generation_defaults:
       n_tokens: -1
       temperature: 0.1
