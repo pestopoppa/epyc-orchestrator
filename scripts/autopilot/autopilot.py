@@ -979,8 +979,20 @@ def _maybe_force_frontier_rerun_action(
     marker = state.get("frontier_rerun_required")
     if not (isinstance(marker, dict) and marker.get("required")):
         return action, rationale
+    pending = state.get("frontier_rerun_pending_clear")
+    if isinstance(pending, dict) and pending.get("trial_id") is not None:
+        return action, {
+            **(rationale or {}),
+            "frontier_rerun_pending_clear": True,
+            "frontier_rerun_pending_trial_id": pending.get("trial_id"),
+        }
     if action.get("type") == "numeric_trial":
         state["frontier_rerun_forced"] = None
+        state["frontier_rerun_pending_clear"] = {
+            "trial_id": trial_counter,
+            "action": action,
+            "reason": str(marker.get("reason") or "frontier rerun required"),
+        }
         return action, {
             **(rationale or {}),
             "frontier_rerun_satisfied_by_selected_action": True,
@@ -1016,6 +1028,11 @@ def _maybe_force_frontier_rerun_action(
         "reason": reason,
         "original_action": action,
         "forced_action": forced,
+    }
+    state["frontier_rerun_pending_clear"] = {
+        "trial_id": trial_counter,
+        "action": forced,
+        "reason": reason,
     }
     state.pop("frontier_rerun_blocked", None)
     return (

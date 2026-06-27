@@ -1243,6 +1243,36 @@ def test_frontier_rerun_accepts_selected_numeric_trial() -> None:
     assert action == selected
     assert rationale["frontier_rerun_satisfied_by_selected_action"] is True
     assert state["frontier_rerun_forced"] is None
+    assert state["frontier_rerun_pending_clear"] == {
+        "trial_id": 1,
+        "action": selected,
+        "reason": "v6 kernel era opened",
+    }
+
+
+def test_frontier_rerun_pending_clear_does_not_force_again() -> None:
+    state = {
+        "frontier_rerun_required": {
+            "required": True,
+            "reason": "v6 kernel era opened",
+        },
+        "frontier_rerun_pending_clear": {
+            "trial_id": 7,
+            "action": {"type": "numeric_trial", "surface": "monitor", "params": {}},
+            "reason": "v6 kernel era opened",
+        },
+    }
+    requested = {"type": "structural_prune", "file": "rules.md"}
+    action, rationale = autopilot._maybe_force_frontier_rerun_action(
+        requested,
+        state,
+        rationale={"falsifier": "x"},
+        trial_counter=8,
+    )
+
+    assert action == requested
+    assert rationale["frontier_rerun_pending_clear"] is True
+    assert rationale["frontier_rerun_pending_trial_id"] == 7
 
 
 def test_frontier_rerun_records_block_when_all_numeric_surfaces_blacklisted() -> None:
