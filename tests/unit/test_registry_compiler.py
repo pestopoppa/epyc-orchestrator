@@ -144,3 +144,33 @@ def test_compile_lean_drops_retired_runtime_timeout_aliases(tmp_path: Path) -> N
         "worker_coder": 30,
         "worker_general": 60,
     }
+
+
+def test_compile_lean_preserves_small_registry_metadata_sections(tmp_path: Path) -> None:
+    master = {
+        "runtime_quirks": {"qwen3_vl_30b": {"quirks": [{"issue": "needs mmproj"}]}},
+        "deprecated_models": [{"name": "old-model", "reason": "superseded"}],
+        "optimized_params": {"frontdoor": {"ubatch": 512}},
+        "observations": {"kernel": ["v6"]},
+        "kernel_audits": {"v6": {"status": "current"}},
+        "roles": {
+            "worker_general": {"model": {"path": "worker.gguf"}},
+            "cold_candidate": {"model": {"path": "cold.gguf"}},
+        },
+        "server_mode": {
+            "worker": {"model_role": "worker_general"},
+            "cold_candidate": {"model_role": "cold_candidate"},
+        },
+    }
+    master_path = tmp_path / "model_registry.yaml"
+    master_path.write_text(yaml.safe_dump(master), encoding="utf-8")
+
+    lean = compile_lean(master_path, {"worker_general"})
+
+    assert lean["runtime_quirks"] == master["runtime_quirks"]
+    assert lean["deprecated_models"] == master["deprecated_models"]
+    assert lean["optimized_params"] == master["optimized_params"]
+    assert lean["observations"] == master["observations"]
+    assert lean["kernel_audits"] == master["kernel_audits"]
+    assert "cold_candidate" not in lean["roles"]
+    assert "cold_candidate" not in lean["server_mode"]

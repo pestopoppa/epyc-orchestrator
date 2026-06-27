@@ -8,9 +8,9 @@ was hand-maintained — silent drift was inevitable.
 
 This module compiles a lean view from `(master + active_role_set)` at every
 stack launch. The lean view contains exactly the roles the orchestrator will
-launch plus their transitive dependencies (drafts, aliases). Sections needed
-only for research/benchmarking (deprecated_models, kernel_audits, observations,
-runtime_quirks) are dropped.
+launch plus their transitive dependencies (drafts, aliases). Small registry
+metadata sections used by scripts/procedures are preserved, while bulky
+non-active role/server catalogue records are dropped.
 
 Cache-invalidates by SHA-256 of `(master content + sorted active role names)`.
 If neither side has changed, the cached compile output is reused.
@@ -47,6 +47,11 @@ _KEEP_SECTIONS_FULL = (
     "routing_hints",
     "command_templates",
     "dflash_drafters",
+    "deprecated_models",
+    "observations",
+    "optimized_params",
+    "runtime_quirks",
+    "kernel_audits",
 )
 # Sections that are role-keyed dicts and need filtering.
 _FILTER_ROLE_KEYED = ("server_mode", "roles")
