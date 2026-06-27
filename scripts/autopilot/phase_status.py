@@ -41,6 +41,14 @@ EVAL_PROGRESS_FIELDS = (
     "eval_correct_pct",
     "eval_concurrency",
 )
+AUTOPILOT_ENV_FLAGS = (
+    "AUTOPILOT_SEQ_VERDICT",
+    "AUTOPILOT_W6_AUDIT_BLOCK",
+    "AUTOPILOT_W6_AUDIT_N",
+    "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS",
+    "AUTOPILOT_W6_AUDIT_SHADOW_ONLY",
+    "AUTOPILOT_PLANNER_TIMEOUT",
+)
 
 
 def _json_default(value: Any) -> str:
@@ -239,6 +247,34 @@ def _process_exists(pid: int | None) -> bool | None:
     return True
 
 
+def _read_process_env_flags(pid: int | None) -> dict[str, str] | None:
+    if pid is None or pid < 1:
+        return None
+    env_path = Path("/proc") / str(pid) / "environ"
+    try:
+        raw = env_path.read_bytes()
+    except OSError:
+        return None
+
+    flags: dict[str, str] = {}
+    wanted = set(AUTOPILOT_ENV_FLAGS)
+    for entry in raw.split(b"\0"):
+        if not entry or b"=" not in entry:
+            continue
+        key_raw, value_raw = entry.split(b"=", 1)
+        key = key_raw.decode("utf-8", errors="replace")
+        if key not in wanted:
+            continue
+        flags[key] = value_raw.decode("utf-8", errors="replace")
+    return flags
+
+
+def _env_enabled(value: str | None) -> bool | None:
+    if value is None:
+        return None
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
 def build_phase_health_report(
     *,
     path: Path = PHASE_PATH,
@@ -274,6 +310,7 @@ def build_phase_health_report(
     except (KeyError, TypeError, ValueError):
         pid = None
     pid_alive = _process_exists(pid)
+    env_flags = _read_process_env_flags(pid) if pid_alive else None
     phase_name = payload.get("phase")
     terminal_stopped = phase_name == "stopped"
     stale = heartbeat_age_s is None or heartbeat_age_s > stale_after_s
@@ -305,6 +342,23 @@ def build_phase_health_report(
         "idle_reason": payload.get("idle_reason"),
         "updated_at": payload.get("updated_at"),
         "updated_at_iso": payload.get("updated_at_iso"),
+        "autopilot_env_flags": env_flags,
+        "seq_verdict_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_SEQ_VERDICT")
+        ),
+        "w6_audit_accrual_enabled": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_W6_AUDIT_BLOCK")
+        ),
+        "w6_audit_shadow_only": _env_enabled(
+            None if env_flags is None else env_flags.get("AUTOPILOT_W6_AUDIT_SHADOW_ONLY")
+        ),
+        "w6_audit_n": None if env_flags is None else env_flags.get("AUTOPILOT_W6_AUDIT_N"),
+        "w6_audit_every_n_trials": (
+            None if env_flags is None else env_flags.get("AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS")
+        ),
+        "autopilot_planner_timeout": (
+            None if env_flags is None else env_flags.get("AUTOPILOT_PLANNER_TIMEOUT")
+        ),
         "blockers": blockers,
         "heartbeat": payload,
     }
@@ -351,6 +405,15 @@ def format_phase_health_report(report: dict[str, Any]) -> list[str]:
         f"- Action: {report.get('action_type')}",
         f"- Idle reason: {report.get('idle_reason')}",
         f"- PID: {report.get('pid')} (alive={report.get('pid_alive')})",
+        f"- Seq verdict env: {report.get('seq_verdict_enabled')}",
+        (
+            "- W6 audit env: "
+            f"{report.get('w6_audit_accrual_enabled')} "
+            f"(shadow_only={report.get('w6_audit_shadow_only')}, "
+            f"n={report.get('w6_audit_n')}, "
+            f"every_n={report.get('w6_audit_every_n_trials')})"
+        ),
+        f"- Planner timeout env: {report.get('autopilot_planner_timeout')}",
         f"- Heartbeat age: {report.get('heartbeat_age_s')}",
         f"- Stale threshold: {report.get('stale_after_s')}",
         f"- Updated at: {report.get('updated_at_iso')}",

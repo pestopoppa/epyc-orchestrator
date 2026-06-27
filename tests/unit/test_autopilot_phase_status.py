@@ -60,6 +60,7 @@ def test_phase_health_report_accepts_fresh_alive_heartbeat(tmp_path, monkeypatch
         encoding="utf-8",
     )
     monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+    monkeypatch.setattr("phase_status._read_process_env_flags", lambda pid: {})
 
     report = build_phase_health_report(path=snapshot, now=120.0, stale_after_s=60.0)
 
@@ -70,9 +71,60 @@ def test_phase_health_report_accepts_fresh_alive_heartbeat(tmp_path, monkeypatch
     assert report["trial_id"] == 894
     assert report["eval_completed_questions"] == 200
     assert report["eval_total_questions"] == 500
+    assert report["w6_audit_accrual_enabled"] is None
     formatted = "\n".join(format_phase_health_report(report))
     assert "Status: active" in formatted
     assert "Eval progress: 200/500 (72% correct)" in formatted
+
+
+def test_phase_health_report_exposes_allowlisted_autopilot_env_flags(tmp_path, monkeypatch):
+    snapshot = tmp_path / "phase.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "phase": "dispatch_action",
+                "pid": 123,
+                "trial_id": 983,
+                "action_type": "seed_batch",
+                "updated_at": 100.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("phase_status._process_exists", lambda pid: True)
+    monkeypatch.setattr(
+        "phase_status._read_process_env_flags",
+        lambda pid: {
+            "AUTOPILOT_SEQ_VERDICT": "1",
+            "AUTOPILOT_W6_AUDIT_BLOCK": "1",
+            "AUTOPILOT_W6_AUDIT_N": "10",
+            "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS": "1",
+            "AUTOPILOT_W6_AUDIT_SHADOW_ONLY": "1",
+            "AUTOPILOT_PLANNER_TIMEOUT": "600",
+        },
+    )
+
+    report = build_phase_health_report(path=snapshot, now=120.0, stale_after_s=60.0)
+
+    assert report["ok"] is True
+    assert report["seq_verdict_enabled"] is True
+    assert report["w6_audit_accrual_enabled"] is True
+    assert report["w6_audit_shadow_only"] is True
+    assert report["w6_audit_n"] == "10"
+    assert report["w6_audit_every_n_trials"] == "1"
+    assert report["autopilot_planner_timeout"] == "600"
+    assert set(report["autopilot_env_flags"]) == {
+        "AUTOPILOT_SEQ_VERDICT",
+        "AUTOPILOT_W6_AUDIT_BLOCK",
+        "AUTOPILOT_W6_AUDIT_N",
+        "AUTOPILOT_W6_AUDIT_EVERY_N_TRIALS",
+        "AUTOPILOT_W6_AUDIT_SHADOW_ONLY",
+        "AUTOPILOT_PLANNER_TIMEOUT",
+    }
+    formatted = "\n".join(format_phase_health_report(report))
+    assert "Seq verdict env: True" in formatted
+    assert "W6 audit env: True (shadow_only=True, n=10, every_n=1)" in formatted
+    assert "Planner timeout env: 600" in formatted
 
 
 def test_phase_health_report_tails_eval_progress_when_heartbeat_lacks_counters(
