@@ -11,6 +11,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/orchestrator/seeding_live_a9_source_family_orchestrator_live_seed_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
@@ -30,6 +32,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
@@ -49,6 +53,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites all --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_source_family_seeding_eval_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
@@ -68,6 +74,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 1,
+      "collection_priority_reason": "independent_holdout_suite_blocker",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites general --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_general_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
@@ -87,6 +95,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites hotpotqa --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_hotpotqa_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
@@ -106,6 +116,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
@@ -125,6 +137,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites instruction_precision --roles architect_general frontdoor --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_instruction_precision_architect_general_frontdoor_<YYYYMMDDTHHMMSSZ>.json",
@@ -144,6 +158,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites simpleqa --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_simpleqa_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
@@ -163,6 +179,8 @@
     {
       "can_run_during_active_autopilot": false,
       "checkpoint_note": "seed_specialist_routing.py also writes a seeding_*.jsonl checkpoint under benchmarks/results/eval; use the JSON path above when the target explicitly requires orchestrator_live_seed",
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "command": "uv run python scripts/benchmark/seed_specialist_routing.py --suites thinking --roles architect_general coder_escalation --modes direct --sample-size 20 --dry-run --output /mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
       "dry_run_semantics": "--dry-run still performs scoring/evaluation; it only prevents reward injection into runtime memory.",
       "durable_source_path": "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/eval/seeding_a9_suite_thinking_architect_general_coder_escalation_<YYYYMMDDTHHMMSSZ>.json",
@@ -253,6 +271,8 @@
         "architect_general",
         "frontdoor"
       ],
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
       "current_direction_balance": 0.0,
       "current_rows": 6,
       "matched_candidate_groups": 0,
@@ -277,6 +297,8 @@
         "architect_general",
         "coder_escalation"
       ],
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
       "current_direction_balance": 0.0,
       "current_rows": 2,
       "matched_candidate_groups": 0,
@@ -301,6 +323,8 @@
         "architect_general",
         "frontdoor"
       ],
+      "collection_priority": 0,
+      "collection_priority_reason": "independent_holdout_source_family_blocker",
       "current_direction_balance": 0.0,
       "current_rows": 2,
       "matched_candidate_groups": 0,
@@ -325,6 +349,8 @@
         "architect_general",
         "coder_escalation"
       ],
+      "collection_priority": 1,
+      "collection_priority_reason": "independent_holdout_suite_blocker",
       "current_direction_balance": 0.0,
       "current_rows": 1,
       "matched_candidate_groups": 0,
@@ -349,6 +375,8 @@
         "architect_general",
         "frontdoor"
       ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "current_direction_balance": 0.056,
       "current_rows": 910,
       "matched_candidate_groups": 0,
@@ -374,6 +402,8 @@
         "architect_general",
         "coder_escalation"
       ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "current_direction_balance": 0.1667,
       "current_rows": 6,
       "matched_candidate_groups": 0,
@@ -399,6 +429,8 @@
         "architect_general",
         "frontdoor"
       ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "current_direction_balance": 0.0,
       "current_rows": 3,
       "matched_candidate_groups": 0,
@@ -423,6 +455,8 @@
         "architect_general",
         "coder_escalation"
       ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "current_direction_balance": 0.0,
       "current_rows": 2,
       "matched_candidate_groups": 0,
@@ -447,6 +481,8 @@
         "architect_general",
         "coder_escalation"
       ],
+      "collection_priority": 2,
+      "collection_priority_reason": "direction_balance_cleanup",
       "current_direction_balance": 0.1667,
       "current_rows": 6,
       "matched_candidate_groups": 0,

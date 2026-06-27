@@ -371,6 +371,8 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "matched_candidate_groups": 1,
             "suggested_min_rows": 20,
             "suggested_min_new_source_records": 19,
+            "collection_priority": 0,
+            "collection_priority_reason": "independent_holdout_source_family_blocker",
             "source_record_shape": (
                 "one prompt/reference evaluated by every action in action_pair "
                 "with role_results, rewards, suite, prompt, and expected fields"
@@ -393,6 +395,8 @@ def test_pairwise_holdout_plan_filters_to_audit_collection_targets(tmp_path: Pat
             "roles_argument": ["coder_escalation", "frontdoor"],
             "modes_argument": ["direct"],
             "sample_size": 19,
+            "collection_priority": 0,
+            "collection_priority_reason": "independent_holdout_source_family_blocker",
             "durable_source_path": (
                 "/mnt/raid0/llm/epyc-inference-research/benchmarks/results/"
                 "eval/seeding_a9_source_family_seeding_eval_coder_escalation_frontdoor_"
@@ -510,6 +514,42 @@ def test_pairwise_holdout_plan_rejects_non_matching_audit_collection_targets(
         "architect_general"
     ]
     assert summary["source_record_requirements"][0]["suggested_min_new_source_records"] == 20
+    assert summary["source_record_requirements"][0]["collection_priority"] == 0
+    assert (
+        summary["source_record_requirements"][0]["collection_priority_reason"]
+        == "independent_holdout_source_family_blocker"
+    )
+
+
+def test_pairwise_holdout_collection_batches_prioritize_source_family_blockers() -> None:
+    suite_requirement = {
+        "target": "suite:instruction_precision:architect_general>frontdoor",
+        "stratum_field": "suite",
+        "stratum_value": "instruction_precision",
+        "actions_to_evaluate_on_same_source_record": ["architect_general", "frontdoor"],
+        "suggested_min_new_source_records": 20,
+        "collection_priority": 2,
+        "collection_priority_reason": "direction_balance_cleanup",
+    }
+    source_requirement = {
+        "target": "source_family:seeding_eval:architect_general>frontdoor",
+        "stratum_field": "source_family",
+        "stratum_value": "seeding_eval",
+        "actions_to_evaluate_on_same_source_record": ["architect_general", "frontdoor"],
+        "suggested_min_new_source_records": 20,
+        "collection_priority": 0,
+        "collection_priority_reason": "independent_holdout_source_family_blocker",
+    }
+
+    batches = mod._collection_batches([suite_requirement, source_requirement])
+
+    assert [batch["target"] for batch in batches] == [
+        "source_family:seeding_eval:architect_general>frontdoor",
+        "suite:instruction_precision:architect_general>frontdoor",
+    ]
+    assert batches[0]["collection_priority_reason"] == (
+        "independent_holdout_source_family_blocker"
+    )
 
 
 def test_pairwise_holdout_negative_markdown_lists_source_record_requirements(

@@ -58,6 +58,11 @@ DEFAULT_EXISTING_PAIRWISE = (
 )
 DEFAULT_TARGET_SOURCE_FAMILIES = "seeding_eval"
 DEFAULT_TARGET_SUITES = "thinking"
+DEFAULT_PRIORITY_STRATA = {
+    ("source_family", "orchestrator_live_seed"): (0, "independent_holdout_source_family_blocker"),
+    ("source_family", "seeding_eval"): (0, "independent_holdout_source_family_blocker"),
+    ("suite", "general"): (1, "independent_holdout_suite_blocker"),
+}
 
 
 class PairwiseHoldoutExpansionError(ValueError):
@@ -233,6 +238,10 @@ def _collection_requirements(
             suggested_min_int = 20
         matched = int(matched_collection_target_counts.get(key, 0))
         remaining = max(0, suggested_min_int - matched)
+        priority, priority_reason = DEFAULT_PRIORITY_STRATA.get(
+            (str(target["stratum_field"]), str(target["stratum_value"])),
+            (2, "direction_balance_cleanup"),
+        )
         requirements.append(
             {
                 "target": key,
@@ -248,6 +257,8 @@ def _collection_requirements(
                 "matched_candidate_groups": matched,
                 "suggested_min_rows": suggested_min,
                 "suggested_min_new_source_records": remaining,
+                "collection_priority": priority,
+                "collection_priority_reason": priority_reason,
                 "source_record_shape": (
                     "one prompt/reference evaluated by every action in action_pair "
                     "with role_results, rewards, suite, prompt, and expected fields"
@@ -271,7 +282,15 @@ def _slug(value: str) -> str:
 
 def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
     batches: list[dict[str, Any]] = []
-    for requirement in requirements:
+    ordered_requirements = sorted(
+        requirements,
+        key=lambda requirement: (
+            int(requirement.get("collection_priority") or 0),
+            -int(requirement.get("suggested_min_new_source_records") or 0),
+            str(requirement.get("target") or ""),
+        ),
+    )
+    for requirement in ordered_requirements:
         if int(requirement.get("suggested_min_new_source_records") or 0) <= 0:
             continue
         actions = list(requirement["actions_to_evaluate_on_same_source_record"])
@@ -307,6 +326,10 @@ def _collection_batches(requirements: list[dict[str, Any]]) -> list[dict[str, An
                 "roles_argument": actions,
                 "modes_argument": ["direct"],
                 "sample_size": sample_size,
+                "collection_priority": int(requirement.get("collection_priority") or 0),
+                "collection_priority_reason": str(
+                    requirement.get("collection_priority_reason") or "unknown"
+                ),
                 "durable_source_path": output,
                 "checkpoint_note": (
                     "seed_specialist_routing.py also writes a seeding_*.jsonl "
@@ -787,6 +810,8 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
     for requirement in summary["source_record_requirements"][:20]:
         lines.append(
             f"- `{requirement['target']}`: `{requirement['status']}`, "
+            f"priority `{requirement['collection_priority']}` "
+            f"(`{requirement['collection_priority_reason']}`), "
             f"evaluate `{requirement['actions_to_evaluate_on_same_source_record']}` "
             f"on the same source records; preferred winners "
             f"`{requirement['target_preferred_actions']}`; suggest "
