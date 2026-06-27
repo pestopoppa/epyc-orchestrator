@@ -1,0 +1,161 @@
+{
+  "actions": {
+    "0": "frontdoor",
+    "1": "architect_general",
+    "2": "architect_coding",
+    "3": "coder_escalation",
+    "4": "worker_explore",
+    "5": "worker_math",
+    "6": "worker_vision",
+    "7": "ingest_long_context"
+  },
+  "baseline": {
+    "epochs_run": 80,
+    "history_tail": [
+      {
+        "epoch": 75.0,
+        "train_loss": 0.7715872194766998,
+        "val_acc": 0.691125,
+        "val_loss": 0.7910700440406799
+      },
+      {
+        "epoch": 76.0,
+        "train_loss": 0.7714872229099273,
+        "val_acc": 0.692,
+        "val_loss": 0.7910029888153076
+      },
+      {
+        "epoch": 77.0,
+        "train_loss": 0.7714154424667359,
+        "val_acc": 0.692,
+        "val_loss": 0.790963888168335
+      },
+      {
+        "epoch": 78.0,
+        "train_loss": 0.7713908021450042,
+        "val_acc": 0.692,
+        "val_loss": 0.7909469604492188
+      },
+      {
+        "epoch": 79.0,
+        "train_loss": 0.7713008148670196,
+        "val_acc": 0.692,
+        "val_loss": 0.790942907333374
+      }
+    ],
+    "input_dim": 1031,
+    "per_action": {
+      "architect_general": {
+        "accuracy": 0.5356055995130858,
+        "samples": 1643
+      },
+      "coder_escalation": {
+        "accuracy": 0.6343457943925234,
+        "samples": 1712
+      },
+      "frontdoor": {
+        "accuracy": 0.9268972507284936,
+        "samples": 7893
+      },
+      "ingest_long_context": {
+        "accuracy": 0.6124314442413162,
+        "samples": 2188
+      },
+      "worker_explore": {
+        "accuracy": 0.17550702028081122,
+        "samples": 2564
+      }
+    },
+    "seconds": 41.061,
+    "val_acc": 0.692,
+    "val_loss": 0.790942907333374
+  },
+  "decision_gate": {
+    "decision": "escalate_irt_features",
+    "note": "label-proxy evidence only; observed per-model outcome matrix required for promotion",
+    "promotion_grade": false,
+    "threshold_pp": 1.0
+  },
+  "delta_val_acc_pp": 9.0188,
+  "irt_augmented": {
+    "epochs_run": 80,
+    "history_tail": [
+      {
+        "epoch": 75.0,
+        "train_loss": 0.5776463611125946,
+        "val_acc": 0.7821875,
+        "val_loss": 0.6038361191749573
+      },
+      {
+        "epoch": 76.0,
+        "train_loss": 0.5776819812059403,
+        "val_acc": 0.7821875,
+        "val_loss": 0.6038067936897278
+      },
+      {
+        "epoch": 77.0,
+        "train_loss": 0.5775883291959762,
+        "val_acc": 0.7821875,
+        "val_loss": 0.6037886738777161
+      },
+      {
+        "epoch": 78.0,
+        "train_loss": 0.5776038235425949,
+        "val_acc": 0.7821875,
+        "val_loss": 0.6037807464599609
+      },
+      {
+        "epoch": 79.0,
+        "train_loss": 0.5774976264238357,
+        "val_acc": 0.7821875,
+        "val_loss": 0.6037789583206177
+      }
+    ],
+    "input_dim": 1033,
+    "per_action": {
+      "architect_general": {
+        "accuracy": 0.7218502738892271,
+        "samples": 1643
+      },
+      "coder_escalation": {
+        "accuracy": 0.7038551401869159,
+        "samples": 1712
+      },
+      "frontdoor": {
+        "accuracy": 0.9118206005321171,
+        "samples": 7893
+      },
+      "ingest_long_context": {
+        "accuracy": 0.7189213893967094,
+        "samples": 2188
+      },
+      "worker_explore": {
+        "accuracy": 0.5280811232449298,
+        "samples": 2564
+      }
+    },
+    "seconds": 29.621,
+    "val_acc": 0.7821875,
+    "val_loss": 0.6037789583206177
+  },
+  "irt_metadata": {
+    "embedding_dim": 1024,
+    "platt_intercept": -1.4706203589966576,
+    "platt_slope": 1.2038118772389605,
+    "train_feature_mean": [
+      1.9454108476638794,
+      0.03079046867787838
+    ],
+    "train_feature_scale": [
+      0.0004994088085368276,
+      0.007281949743628502
+    ]
+  },
+  "response_source": "label_proxy_train_split_only",
+  "sampled_rows": 80000,
+  "schema": "epyc.graph_router.irt_feature_ablation.v1",
+  "source": "/mnt/raid0/llm/epyc-orchestrator/orchestration/repl_memory/training_data.npz",
+  "source_rows": 275960,
+  "train_rows": 64000,
+  "val_rows": 16000
+}
