@@ -1,0 +1,46 @@
+{
+  "base_manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_hard_holdout_expansions.jsonl",
+  "expansion_manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_pairwise_audit_target_expansion.jsonl",
+  "manifest_jsonl": "orchestration/reports/offline_reward_oracle_token_coverage_final_labels_20260621/offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl",
+  "privacy": {
+    "commits_private_text": false,
+    "text_represented_by_sha256_and_lengths": true
+  },
+  "role_counts": {
+    "architect_coding:delegated": 2774,
+    "architect_coding:direct": 1,
+    "architect_general": 10,
+    "architect_general:delegated": 3028,
+    "architect_general:direct": 1,
+    "coder_escalation": 45,
+    "coder_escalation:direct": 1,
+    "coder_escalation:repl": 1,
+    "coder_primary": 43,
+    "frontdoor": 43,
+    "frontdoor:direct": 2718,
+    "frontdoor:repl": 3017
+  },
+  "rows": 11682,
+  "schema_version": "offline_reward_feature_manifest_combined_summary.v1",
+  "source_family_counts": {
+    "orchestrator_live_seed": 141,
+    "seeding_eval": 297,
+    "three_way_eval": 11244
+  },
+  "suite_counts": {
+    "agentic": 15,
+    "coder": 1223,
+    "debugbench": 828,
+    "general": 1450,
+    "gpqa": 1656,
+    "hotpotqa": 1254,
+    "instruction_precision": 42,
+    "livecodebench": 922,
+    "long_context": 569,
+    "math": 59,
+    "mode_advantage": 208,
+    "mode_advantage_hard": 812,
+    "simpleqa": 1227,
+    "thinking": 1417
+  }
+}

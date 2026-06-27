@@ -157,6 +157,19 @@ Committed artifacts:
   expansions. This is a negative diagnostic: random split signal remains
   strong, but independent holdout worsens to `5/9` passing, so this artifact is
   not a downstream routing candidate.
+- `offline_reward_pairwise_audit_target_expansion_candidates.jsonl`,
+  `offline_reward_pairwise_audit_target_expansion_labels.jsonl`,
+  `offline_reward_feature_manifest_pairwise_audit_target_expansion.jsonl`, and
+  `offline_reward_feature_manifest_with_pairwise_audit_target_expansions.jsonl`
+  are the prompt-free scoring/export/combined-manifest artifacts for the
+  2026-06-27 direction-audit target follow-up.
+- `offline_reward_pairwise_preference_contract_score_ordered_audit_target_expanded.jsonl`
+  and
+  `offline_reward_pairwise_ranker_score_ordered_audit_target_expanded_summary.json`
+  rebuild the score-ordered pairwise contract/eval after the audit-target
+  expansion. This materially improves independent holdout coverage (`13/16`
+  passing instead of `5/9`) but remains a mixed-holdout diagnostic, not a
+  downstream routing candidate.
 
 Private row data is not committed. The scored row file is:
 
@@ -278,6 +291,20 @@ Result:
   ROC-AUC / ECE means: `0.1793` / `0.8314` / `0.1388`
 - conflict-dropped response-telemetry ECE-targeted temperature/bias decision:
   `not_promotion_grade`
+- audit-target pairwise expansion candidate rows: `8,825`
+- audit-target pairwise expansion labels: `8,825` rows, oracle positives /
+  negatives `4,449` / `4,376`, target agreement `0.9164`
+- audit-target combined feature manifest rows: `11,682`
+- audit-target score-ordered pairwise contract rows: `6,192`
+- audit-target score-ordered pairwise cross-action rows: `4,296`
+- audit-target score-ordered pairwise contrastive groups: `1,937`
+- audit-target pairwise random group-disjoint decision:
+  `pairwise_ranker_signal`
+- audit-target pairwise independent holdout decision:
+  `mixed_holdout_signal`, `13/16` passing
+- remaining audit-target pairwise blockers:
+  `source_family:orchestrator_live_seed`, `source_family:seeding_eval`, and
+  `suite:general`
 
 Interpretation:
 
