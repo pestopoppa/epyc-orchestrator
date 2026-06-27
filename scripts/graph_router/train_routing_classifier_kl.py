@@ -48,7 +48,18 @@ DEFAULT_REPORT = PROJECT_ROOT / "orchestration/reports/p45_soft_labels/kl_ab_rep
 
 def _train_arm(
     X_train, T_train, X_val, T_val,
-    *, n_actions, label_map, epochs, lr, patience, batch_size, seed, arm_name,
+    *,
+    n_actions,
+    label_map,
+    epochs,
+    lr,
+    patience,
+    batch_size,
+    seed,
+    arm_name,
+    role_dropout_rate=0.0,
+    role_dropout_min_roles=1,
+    role_dropout_max_roles=2,
 ):
     """Train one arm against soft target matrix T (N, n_actions).
 
@@ -83,6 +94,13 @@ def _train_arm(
         for start in range(0, len(Xt), batch_size):
             end = min(start + batch_size, len(Xt))
             X_b, T_b = Xt[start:end], Tt[start:end]
+            T_b = _apply_role_dropout_targets(
+                T_b,
+                rng=rng,
+                rate=role_dropout_rate,
+                min_roles=role_dropout_min_roles,
+                max_roles=role_dropout_max_roles,
+            )
             probs, cache = clf.forward(X_b)
             n = X_b.shape[0]
 
@@ -126,6 +144,50 @@ def _train_arm(
     return clf, history
 
 
+def _apply_role_dropout_targets(
+    targets: np.ndarray,
+    *,
+    rng: np.random.Generator,
+    rate: float,
+    min_roles: int = 1,
+    max_roles: int = 2,
+) -> np.ndarray:
+    """Drop secondary positive role mass from soft targets and renormalize.
+
+    One-hot rows are left unchanged by construction because the argmax role is
+    protected. This keeps the hard-label baseline equivalent while allowing
+    P4.6 soft-label training to simulate missing alternate successful roles.
+    """
+    if not 0.0 <= rate <= 1.0:
+        raise ValueError("role dropout rate must be between 0 and 1")
+    if min_roles < 1:
+        raise ValueError("role dropout min_roles must be >= 1")
+    if max_roles < min_roles:
+        raise ValueError("role dropout max_roles must be >= min_roles")
+    if rate == 0.0:
+        return targets
+
+    dropped = targets.copy()
+    for row in dropped:
+        if rng.random() >= rate:
+            continue
+        positive = np.flatnonzero(row > 0.0)
+        if positive.size <= 1:
+            continue
+        protected = int(np.argmax(row))
+        eligible = positive[positive != protected]
+        if eligible.size == 0:
+            continue
+        drop_count = int(rng.integers(min_roles, max_roles + 1))
+        drop_count = min(drop_count, eligible.size)
+        selected = rng.choice(eligible, size=drop_count, replace=False)
+        row[selected] = 0.0
+        total = float(row.sum())
+        if total > 0.0:
+            row /= total
+    return dropped
+
+
 def _role_success_acc(clf, X_val, correctness_val) -> float:
     """Fraction of val questions where the predicted role actually succeeds.
 
@@ -156,6 +218,14 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--val-split", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--role-dropout-rate",
+        type=float,
+        default=0.0,
+        help="P4.6 soft-arm-only probability of dropping secondary positive roles per training row.",
+    )
+    parser.add_argument("--role-dropout-min-roles", type=int, default=1)
+    parser.add_argument("--role-dropout-max-roles", type=int, default=2)
     args = parser.parse_args()
 
     if not args.data.exists():
@@ -192,6 +262,13 @@ def main() -> None:
     hard_onehot_val[np.arange(len(val_idx)), hard_val] = 1.0
 
     logger.info("Dataset: %d train, %d val, %d actions", len(train_idx), len(val_idx), n_actions)
+    if args.role_dropout_rate:
+        logger.info(
+            "P4.6 role dropout enabled for SOFT arm: rate=%.3f roles=%d-%d",
+            args.role_dropout_rate,
+            args.role_dropout_min_roles,
+            args.role_dropout_max_roles,
+        )
 
     logger.info("=== Training HARD (cross-entropy) arm ===")
     clf_hard, _ = _train_arm(
@@ -207,6 +284,9 @@ def main() -> None:
         n_actions=n_actions, label_map=label_map, epochs=args.epochs,
         lr=args.lr, patience=args.patience, batch_size=args.batch_size,
         seed=args.seed, arm_name="soft",
+        role_dropout_rate=args.role_dropout_rate,
+        role_dropout_min_roles=args.role_dropout_min_roles,
+        role_dropout_max_roles=args.role_dropout_max_roles,
     )
 
     # Metrics
@@ -231,6 +311,12 @@ def main() -> None:
         "adopt_soft_labels": bool(adopt),
         "label_map": label_map,
         "seed": args.seed,
+        "role_dropout": {
+            "applied_to": "soft" if args.role_dropout_rate > 0.0 else "disabled",
+            "rate": args.role_dropout_rate,
+            "min_roles": args.role_dropout_min_roles,
+            "max_roles": args.role_dropout_max_roles,
+        },
     }
 
     args.report.parent.mkdir(parents=True, exist_ok=True)
