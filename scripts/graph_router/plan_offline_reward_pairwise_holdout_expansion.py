@@ -630,9 +630,6 @@ def main(argv: list[str] | None = None) -> int:
     except (PairwiseHoldoutExpansionError, OSError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    if not candidates:
-        print("error: no pairwise holdout expansion candidates found", file=sys.stderr)
-        return 2
     write_jsonl(args.candidates_jsonl, candidates)
     write_json(args.summary_json, summary)
     if args.summary_md:

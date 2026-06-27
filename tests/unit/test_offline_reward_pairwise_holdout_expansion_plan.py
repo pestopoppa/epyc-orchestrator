@@ -179,6 +179,69 @@ def test_pairwise_holdout_plan_excludes_existing_pairwise_groups(tmp_path: Path)
     assert summary["skipped_pairwise_overlap_groups"] == 1
 
 
+def test_pairwise_holdout_cli_writes_negative_plan_artifacts(tmp_path: Path) -> None:
+    source = tmp_path / "seeding_20260621_eval.jsonl"
+    _write_jsonl(source, [_result_record()])
+    expected_hash = mod._hash_text("42")
+    prompt_hash = mod._hash_text("Solve task")
+    group_key = mod._record_group_key(
+        source_path=source,
+        offset=0,
+        question_id="q-live",
+        prompt_sha256=prompt_hash,
+        expected_sha256=expected_hash,
+    )
+    manifest = tmp_path / "manifest.jsonl"
+    _write_jsonl(
+        manifest,
+        [
+            _manifest_row(
+                source_path=str(source),
+                role_key="frontdoor:direct",
+                expected_sha256=expected_hash,
+                prompt_sha256=prompt_hash,
+            )
+        ],
+    )
+    pairwise = tmp_path / "pairs.jsonl"
+    _write_jsonl(pairwise, [{"group_key": group_key}])
+    candidates = tmp_path / "candidates.jsonl"
+    summary = tmp_path / "summary.json"
+    summary_md = tmp_path / "summary.md"
+
+    assert (
+        mod.main(
+            [
+                "--input",
+                str(source),
+                "--existing-manifest",
+                str(manifest),
+                "--existing-pairwise-jsonl",
+                str(pairwise),
+                "--candidates-jsonl",
+                str(candidates),
+                "--summary-json",
+                str(summary),
+                "--summary-md",
+                str(summary_md),
+                "--target-source-families",
+                "seeding_eval",
+                "--target-suites",
+                "livecodebench",
+                "--min-cross-action-candidate-groups",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert candidates.read_text(encoding="utf-8") == ""
+    assert payload["decision"]["status"] == "insufficient_non_overlapping_cross_action_candidates"
+    assert payload["candidate_rows"] == 0
+    assert "Candidate rows: `0`" in summary_md.read_text(encoding="utf-8")
+
+
 def test_pairwise_holdout_any_mode_empty_suite_does_not_match_everything(
     tmp_path: Path,
 ) -> None:
