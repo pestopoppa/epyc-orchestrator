@@ -117,7 +117,7 @@ def test_shared_runtime_aliases_do_not_emit_role_server_conflicts() -> None:
     worker = next(
         model
         for model in descriptors["models"]
-        if model["model_id"] == "gemma4-26b-a4b-q4_k_m"
+        if model["model_id"] == "gemma4-26b-a4b-it-orig-q4_k_m"
     )
     assert {"worker_general", "worker_math", "toolrunner"} <= set(
         worker["role_bindings"]["roles"]

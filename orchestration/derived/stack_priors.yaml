@@ -48,39 +48,39 @@ contract:
   - quality_overall
   - memory_cost
   fallback_policy: Consumers may use local fallback values only as explicit degraded mode when this generated contract is missing or invalid.
-compiled_at: '2026-06-27T10:32:40Z'
+compiled_at: '2026-06-27T10:46:27Z'
 status: compiled_with_gaps
 coverage_scope: descriptor_role_bindings
 precedence_spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
 source_artifacts:
   registry:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    sha256: 6fb2500f61d7b58935d51fbb908d15f3d1759cafad7a0f7e78ca921845e81054
-    repo_commit: 14a46002
+    sha256: 18dc9cbeace9cea388b4fceab27f0ba9cf2733fde303977235bac2322ae791e1
+    repo_commit: bb0a2953
   descriptors:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_descriptors.yaml
-    sha256: f8260acac8eef2c048218d1b349993302370d337d1fb75a6213d25c6bca5e92d
-    repo_commit: 14a46002
+    sha256: ecc6c8589cbaacac5293201390c0d8fec68830baedbf49d9d89f226f2ed55b03
+    repo_commit: bb0a2953
   stack_manifest:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_manifest.py
     sha256: 4face3c19f274265cedcb2be7a5b1c89642d3ba993b774bdd5cc1971eb80a101
-    repo_commit: 14a46002
+    repo_commit: bb0a2953
   stack_numa:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_numa.py
     sha256: 52f6d919cf8c6a643c2e17958655fa88b80b726624eb4886554b57b7ef27fd06
-    repo_commit: 14a46002
+    repo_commit: bb0a2953
   orchestrator_stack:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/orchestrator_stack.py
     sha256: b8b865d69ee3834a4b03d19146d36f15af47e81a2c3e898036687ebd956d7dcc
-    repo_commit: 14a46002
+    repo_commit: bb0a2953
   stack_paths:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_paths.py
     sha256: 7eee8576101dbb827ec8e94a228beedb401d7cad80841e1a18aab9c03db4206b
-    repo_commit: 14a46002
+    repo_commit: bb0a2953
   stack_runtime:
     path: /mnt/raid0/llm/epyc-orchestrator/scripts/server/stack_runtime.py
     sha256: f749047dde702b21759f67dcc81bf6cd64f1157e8a1fdf250b317301c1b6d32c
-    repo_commit: 14a46002
+    repo_commit: bb0a2953
 roles:
   architect_general:
     role: architect_general
@@ -184,13 +184,13 @@ roles:
       - date: null
         protocol: registry performance block
         value:
-          quality_score: 2.57/3
           baseline_tps: 5.3
           moe4_baseline_tps: 3.87
           moe4_spec_tps: 8.21
           full_spec_tps: 6.08
           qwen35_122b_probe_b_tps: 12.19
           optimized_tps: 12.19
+          quality_score: 2.57/3
           speedup: 2.30x
           spec_acceptance_moe4: 54.8%
           spec_acceptance_full: 52.7%
@@ -669,13 +669,13 @@ roles:
       - date: null
         protocol: registry performance block
         value:
-          quality_score: 2.57/3
           baseline_tps: 5.3
           moe4_baseline_tps: 3.87
           moe4_spec_tps: 8.21
           full_spec_tps: 6.08
           qwen35_122b_probe_b_tps: 12.19
           optimized_tps: 12.19
+          quality_score: 2.57/3
           speedup: 2.30x
           spec_acceptance_moe4: 54.8%
           spec_acceptance_full: 52.7%
@@ -762,89 +762,6 @@ roles:
       - date: '2026-05-04'
         protocol: server_mode throughput
         value_tps: 24.3
-    known_gaps: []
-  reap_25b_frontdoor:
-    role: reap_25b_frontdoor
-    deployment_status: benchmark_or_candidate
-    status: compiled
-    model_id: reap-qwen3-coder-25b-a3b-q4_k_m
-    display_name: REAP-Qwen3-Coder-25B-A3B-Q4_K_M
-    serving:
-      endpoint: http://localhost:8196
-      server_role: reap_25b
-      binding: server_mode.model_role
-      ports:
-      - 8196
-      slots: 1
-      tier: warm
-      effective_context_tokens: null
-      binary: llama.cpp
-      binary_dir: null
-      numa_policy: server_default
-      shared_mmap: true
-      launch:
-        entries: []
-        primary_roles: []
-        modes: []
-        requirements: {}
-        runtime: {}
-    priors:
-      throughput_tps: 39.6
-      quality_overall: 0.6011
-      memory_cost: 2.0
-    acceleration:
-      spec_type: draft
-      draft_compat:
-      - qwen3-coder-0.75b-q4_0
-      enable_thinking: null
-      thinking_control:
-        mode: family_inferred_no_think_tags
-        effective_mode: native_no_think_tags
-        evidence_strength: family_inferred
-        evidence: REAP-25B is pruned from Qwen3-Coder-30B-A3B; research registry notes Qwen3-Coder does not use think tags.
-      kv:
-        k: null
-        v: null
-      draft_max: 24
-      p_split: 0
-      lookup: true
-    model:
-      family: reap-qwen3-coder
-      arch: moe
-      params_b: 25.0
-      active_b: 3.0
-      quant: Q4_K_M
-      mem_gb: 15.0
-      ctx_max: 262144
-      modalities:
-      - code
-      - text
-    evidence:
-      precedence:
-        serving: server_mode/stack_manifest outrank roles metadata
-        memory_cost: server_mode.tier
-        spec: /mnt/raid0/llm/epyc-orchestrator/docs/reference/stack-truth-precedence.md
-      descriptor_server_roles:
-      - reap_25b
-      alias_overrides: []
-      quality:
-      - date: '2026-03-24'
-        protocol: registry performance block
-        value:
-          quality_score: 110/183 (60%)
-          thinking_suite: 14/30 (47%)
-          general_suite: 21/30 (70%)
-          math_suite: 13/30 (43%)
-          agentic_suite: 26/30 (87%)
-          coder_suite: 18/30 (60%)
-          instruction_precision_suite: 18/33 (55%)
-          baseline_tps: 39.6
-          optimized_tps: 39.6
-          benchmark_date: '2026-03-24'
-      speed:
-      - date: '2026-03-24'
-        protocol: server_mode throughput
-        value_tps: 39.6
     known_gaps: []
   toolrunner:
     role: toolrunner

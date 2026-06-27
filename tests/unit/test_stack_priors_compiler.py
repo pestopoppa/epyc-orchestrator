@@ -355,13 +355,6 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
                     "tier": "hot",
                     "model_role": "worker_general",
                     "throughput": "60.7",
-                    "runtime_requirements": {
-                        "binary_dir": "/mnt/raid0/llm/ik_llama.cpp/build/bin",
-                        "ld_library_path": [
-                            "/mnt/raid0/llm/ik_llama.cpp/build/src",
-                            "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
-                        ],
-                    },
                 }
             },
             "roles": {"worker_general": {"memory": {"residency": "warm"}}},
@@ -377,7 +370,7 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
                     "quality": {"suite_vector": {"overall": 0.9}, "measured": []},
                     "speed": {"quarter_48t_tps": 60.7, "measured": []},
                     "acceleration": {"spec_type": "mtp"},
-                    "serving": {"ports": [8072], "binary": "ik-pr1744"},
+                    "serving": {"ports": [8072], "binary": "llama.cpp"},
                     "known_gaps": [],
                 }
             ]
@@ -398,21 +391,18 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     assert worker["serving"]["launch"]["primary_roles"] == ["worker_general"]
     assert worker["serving"]["launch"]["modes"] == ["worker_pool"]
     assert worker["serving"]["launch"]["requirements"]["model_path"].endswith(
-        "gemma-4-26B-A4B-it-Q4_K_M.gguf"
+        "gemma-4-26B-A4B-it-ORIG-Q4_K_M.gguf"
     )
     assert worker["serving"]["launch"]["requirements"]["draft_model_path"].endswith(
-        "gemma-4-26B-A4B-it-assistant-Q8_0.gguf"
+        "gemma-4-26B-A4B-it-assistant-v6-Q8_0.gguf"
     )
     runtime = worker["serving"]["launch"]["runtime"]
-    assert runtime["binary_family"] == "ik-pr1744"
-    assert runtime["binary_path"].endswith("/ik_llama.cpp/build/bin/llama-server")
-    assert runtime["binary_dir"] == "/mnt/raid0/llm/ik_llama.cpp/build/bin"
-    assert runtime["ld_library_path"] == [
-        "/mnt/raid0/llm/ik_llama.cpp/build/src",
-        "/mnt/raid0/llm/ik_llama.cpp/build/ggml/src",
-    ]
-    assert runtime["env_policy"] == "binary_override_strip_ggml"
-    assert runtime["kmp_blocktime"] == 10
+    assert runtime["binary_family"] == "llama.cpp"
+    assert runtime["binary_path"].endswith("/llama.cpp/build/bin/llama-server")
+    assert runtime["binary_dir"] is None
+    assert runtime["ld_library_path"] == []
+    assert runtime["env_policy"] == "canonical"
+    assert runtime["kmp_blocktime"] is None
     assert runtime["cache"]["context_tokens"] == 16384
     assert runtime["cache"]["slots"] == 1
     assert runtime["cache"]["ubatch"] == 512
@@ -423,7 +413,7 @@ def test_compile_maps_model_role_server_binding(tmp_path: Path) -> None:
     assert runtime["flags"]["jinja"] is True
     assert runtime["flags"]["reasoning"] == "off"
     assert runtime["flags"]["spec"]["enabled"] is True
-    assert runtime["flags"]["spec"]["type"] == "mtp"
+    assert runtime["flags"]["spec"]["type"] == "draft-mtp"
     assert runtime["flags"]["spec"]["draft_max"] == 2
     assert runtime["flags"]["spec"]["draft_p_min"] == 0.0
     assert runtime["flags"]["spec"]["threads_draft"] == 16

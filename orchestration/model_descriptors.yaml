@@ -1,12 +1,12 @@
 descriptor_version: 3
-compiled_at: '2026-06-27T10:32:39Z'
+compiled_at: '2026-06-27T10:46:27Z'
 status: compiled_with_gaps
 coverage_scope: active_roles_from_stack_manifest
 source_registries:
   lean:
     path: /mnt/raid0/llm/epyc-orchestrator/orchestration/model_registry.yaml
-    repo_commit: 14a46002
-    sha256: 6fb2500f61d7b58935d51fbb908d15f3d1759cafad7a0f7e78ca921845e81054
+    repo_commit: bb0a2953
+    sha256: 18dc9cbeace9cea388b4fceab27f0ba9cf2733fde303977235bac2322ae791e1
   research:
     path: /mnt/raid0/llm/epyc-inference-research/orchestration/model_registry.yaml
     repo_commit: 97c2b1c
@@ -341,13 +341,13 @@ models:
     - date: null
       protocol: registry performance block
       value:
-        quality_score: 2.57/3
         baseline_tps: 5.3
         moe4_baseline_tps: 3.87
         moe4_spec_tps: 8.21
         full_spec_tps: 6.08
         qwen35_122b_probe_b_tps: 12.19
         optimized_tps: 12.19
+        quality_score: 2.57/3
         speedup: 2.30x
         spec_acceptance_moe4: 54.8%
         spec_acceptance_full: 52.7%
@@ -546,85 +546,5 @@ models:
     - 8280
     - 8380
     server_role: frontdoor
-    requirements: {}
-  known_gaps: []
-- model_id: reap-qwen3-coder-25b-a3b-q4_k_m
-  display_name: REAP-Qwen3-Coder-25B-A3B-Q4_K_M
-  family: reap-qwen3-coder
-  arch: moe
-  params_b: 25.0
-  active_b: 3.0
-  quant: Q4_K_M
-  mem_gb: 15.0
-  ctx_max: 262144
-  modalities:
-  - code
-  - text
-  role_bindings:
-    roles:
-    - reap_25b_frontdoor
-    server_roles:
-    - reap_25b
-    runtime_aliases: []
-    shared_mmap: true
-  quality:
-    suite_vector:
-      overall: 0.6011
-      thinking: 0.4667
-      general: 0.7
-      math: 0.4333
-      agentic: 0.8667
-      coder: 0.6
-      instruction_precision: 0.5455
-    source: orchestration/model_registry.yaml
-    eval_protocol: MEASUREMENT.md#canonical-quality
-    measured:
-    - date: '2026-03-24'
-      protocol: registry performance block
-      value:
-        quality_score: 110/183 (60%)
-        thinking_suite: 14/30 (47%)
-        general_suite: 21/30 (70%)
-        math_suite: 13/30 (43%)
-        agentic_suite: 26/30 (87%)
-        coder_suite: 18/30 (60%)
-        instruction_precision_suite: 18/33 (55%)
-        baseline_tps: 39.6
-        optimized_tps: 39.6
-        benchmark_date: '2026-03-24'
-  speed:
-    solo_96t_tps: 39.6
-    quarter_48t_tps: null
-    prefill_tps: null
-    optimized_tps: 39.6
-    source: orchestration/model_registry.yaml
-    measured:
-    - date: '2026-03-24'
-      protocol: server_mode throughput
-      value_tps: 39.6
-  acceleration:
-    spec_type: draft
-    draft_compat:
-    - qwen3-coder-0.75b-q4_0
-    enable_thinking: null
-    thinking_control:
-      mode: family_inferred_no_think_tags
-      effective_mode: native_no_think_tags
-      evidence_strength: family_inferred
-      evidence: REAP-25B is pruned from Qwen3-Coder-30B-A3B; research registry notes Qwen3-Coder does not use think tags.
-    kv:
-      k: null
-      v: null
-    draft_max: 24
-    p_split: 0
-    lookup: true
-  serving:
-    binary: llama.cpp
-    binary_dir: null
-    numa_policy: server_default
-    mlock: false
-    ports:
-    - 8196
-    server_role: reap_25b
     requirements: {}
   known_gaps: []
