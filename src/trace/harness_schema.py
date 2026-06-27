@@ -27,10 +27,10 @@ These tables live alongside the `event` table in the same SQLite store
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Iterable
 
 # Bumped only on additive, backward-compatible schema changes.
 SCHEMA_VERSION = 1
@@ -298,6 +298,17 @@ CREATE INDEX IF NOT EXISTS fc_task ON failure_case(task_signature);
 CREATE INDEX IF NOT EXISTS fc_suite ON failure_case(suite);
 CREATE INDEX IF NOT EXISTS fc_error ON failure_case(error_class);
 CREATE INDEX IF NOT EXISTS fc_gov ON failure_case(governance_level);
+CREATE VIRTUAL TABLE IF NOT EXISTS failure_case_fts USING fts5(
+  task_signature,
+  suite,
+  role_path,
+  files_touched,
+  error_class,
+  root_cause_label,
+  avoidance_advice,
+  content='failure_case',
+  content_rowid='id'
+);
 
 CREATE TABLE IF NOT EXISTS working_state (
   id INTEGER PRIMARY KEY,
@@ -321,6 +332,7 @@ CREATE INDEX IF NOT EXISTS ws_state_id ON working_state(state_id);
 def ensure_harness_schema(conn: sqlite3.Connection) -> sqlite3.Connection:
     """Create the harness/memory record tables if absent. Idempotent."""
     conn.executescript(_HARNESS_SCHEMA)
+    conn.execute("INSERT INTO failure_case_fts(failure_case_fts) VALUES('rebuild')")
     conn.commit()
     return conn
 
@@ -403,7 +415,7 @@ def insert_approval_record(conn: sqlite3.Connection, a: ApprovalRecord) -> int:
 def insert_failure_case(conn: sqlite3.Connection, f: FailureCase) -> int:
     if f.governance_level not in GovernanceLevel.ALL:
         raise ValueError(f"invalid governance_level: {f.governance_level!r}")
-    return _insert(
+    row_id = _insert(
         conn,
         "failure_case",
         ["failure_id", "task_signature", "suite", "role_path", "tool_sequence_hash",
@@ -415,6 +427,8 @@ def insert_failure_case(conn: sqlite3.Connection, f: FailureCase) -> int:
          _jdump(f.evidence_event_ids), f.resolved_by_event_id, f.governance_level,
          f.validity_score, f.schema_version, f.created_ts_utc],
     )
+    _index_failure_case_fts(conn, row_id, f)
+    return row_id
 
 
 def set_working_state(conn: sqlite3.Connection, w: WorkingState) -> int:
@@ -451,13 +465,18 @@ def find_failure_cases(
     exclude_deprecated: bool = True,
     limit: int = 10,
 ) -> list[dict]:
-    """EXM-1 cheap first pass: structured lookup of prior failures by task signature.
+    """EXM-1 cheap first pass: retrieve prior failures by exact or lexical task match.
 
-    Ordered by governance trust (approved_baseline first), then recency. Lexical/embedding
-    refinement is layered on top by the caller per the handoff.
+    Ordered by exact match, governance trust (approved_baseline first), then recency.
+    Embedding refinement is layered on top by the caller per the handoff.
     """
-    clauses = ["task_signature = ?"]
+    fts_query = _failure_case_fts_query(task_signature)
+    clauses = ["(task_signature = ?"]
     params: list = [task_signature]
+    if fts_query:
+        clauses[0] += " OR id IN (SELECT rowid FROM failure_case_fts WHERE failure_case_fts MATCH ?)"
+        params.append(fts_query)
+    clauses[0] += ")"
     if suite is not None:
         clauses.append("suite = ?")
         params.append(suite)
@@ -466,17 +485,74 @@ def find_failure_cases(
         params.append(GovernanceLevel.DEPRECATED)
     where = " AND ".join(clauses)
     order = (
+        "CASE WHEN task_signature = ? THEN 1 ELSE 0 END DESC, "
         "CASE governance_level "
         "WHEN 'approved_baseline' THEN 3 WHEN 'human_reviewed' THEN 2 "
         "WHEN 'auto_verified' THEN 1 WHEN 'raw' THEN 0 ELSE -1 END DESC, "
         "created_ts_utc DESC"
     )
+    params.append(task_signature)
     rows = conn.execute(
         f"SELECT * FROM failure_case WHERE {where} ORDER BY {order} LIMIT ?",
         (*params, limit),
     ).fetchall()
     cols = [d[0] for d in conn.execute("SELECT * FROM failure_case LIMIT 0").description]
-    return [dict(zip(cols, r)) for r in rows]
+    return [
+        _annotate_failure_case_match(dict(zip(cols, row)), task_signature)
+        for row in rows
+    ]
+
+
+def _index_failure_case_fts(conn: sqlite3.Connection, row_id: int, f: FailureCase) -> None:
+    conn.execute(
+        "INSERT INTO failure_case_fts("
+        "rowid, task_signature, suite, role_path, files_touched, error_class, "
+        "root_cause_label, avoidance_advice"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            row_id,
+            f.task_signature,
+            f.suite,
+            f.role_path,
+            _jdump(f.files_touched),
+            f.error_class,
+            f.root_cause_label,
+            f.avoidance_advice,
+        ),
+    )
+    conn.commit()
+
+
+def _failure_case_fts_query(task_signature: str) -> str:
+    tokens = _failure_case_match_tokens(task_signature)
+    if not tokens:
+        return ""
+    return " OR ".join(f'"{token}"' for token in tokens[:8])
+
+
+def _annotate_failure_case_match(row: dict, task_signature: str) -> dict:
+    query_terms = set(_failure_case_match_tokens(task_signature))
+    searchable_text = " ".join(
+        str(row.get(field) or "")
+        for field in (
+            "task_signature",
+            "suite",
+            "role_path",
+            "files_touched",
+            "error_class",
+            "root_cause_label",
+            "avoidance_advice",
+        )
+    )
+    row_terms = set(_failure_case_match_tokens(searchable_text))
+    matched_terms = sorted(query_terms & row_terms)
+    row["_match_type"] = "exact" if row.get("task_signature") == task_signature else "lexical"
+    row["_matched_terms"] = matched_terms
+    return row
+
+
+def _failure_case_match_tokens(text: str | None) -> list[str]:
+    return [token.lower() for token in re.findall(r"[A-Za-z0-9_/-]{3,}", text or "")]
 
 
 def get_working_state(

@@ -157,6 +157,72 @@ def test_find_failure_cases_excludes_deprecated_by_default(db_path: Path) -> Non
     conn.close()
 
 
+def test_find_failure_cases_uses_fts_for_similar_signatures(db_path: Path) -> None:
+    conn = ensure_schema(db_path)
+    insert_failure_case(conn, FailureCase(
+        task_signature="autopilot trial timeout while running eval tower",
+        error_class="timeout",
+        root_cause_label="stalled_eval",
+        avoidance_advice="Check eval worker heartbeat before retrying.",
+    ))
+    insert_failure_case(conn, FailureCase(
+        task_signature="unrelated wiki refresh",
+        error_class="lint",
+        avoidance_advice="Unrelated",
+    ))
+
+    hits = find_failure_cases(conn, "eval tower heartbeat timeout")
+
+    assert len(hits) == 1
+    assert hits[0]["root_cause_label"] == "stalled_eval"
+    assert "heartbeat" in hits[0]["avoidance_advice"]
+    assert hits[0]["_match_type"] == "lexical"
+    assert hits[0]["_matched_terms"] == ["eval", "heartbeat", "timeout", "tower"]
+    conn.close()
+
+
+def test_find_failure_cases_prefers_exact_match_before_higher_governed_fuzzy_match(
+    db_path: Path,
+) -> None:
+    conn = ensure_schema(db_path)
+    insert_failure_case(conn, FailureCase(
+        task_signature="eval tower timeout",
+        governance_level=GovernanceLevel.RAW,
+        avoidance_advice="exact note",
+    ))
+    insert_failure_case(conn, FailureCase(
+        task_signature="eval tower timeout on another suite",
+        governance_level=GovernanceLevel.APPROVED_BASELINE,
+        avoidance_advice="fuzzy trusted note",
+    ))
+
+    hits = find_failure_cases(conn, "eval tower timeout")
+
+    assert hits[0]["avoidance_advice"] == "exact note"
+    assert hits[0]["_match_type"] == "exact"
+    assert hits[1]["avoidance_advice"] == "fuzzy trusted note"
+    assert hits[1]["_match_type"] == "lexical"
+    conn.close()
+
+
+def test_ensure_harness_schema_rebuilds_failure_case_fts(db_path: Path) -> None:
+    conn = ensure_schema(db_path)
+    insert_failure_case(conn, FailureCase(
+        task_signature="planner failed after stale state",
+        root_cause_label="stale_state",
+    ))
+    conn.execute("DELETE FROM failure_case_fts")
+    conn.commit()
+
+    assert find_failure_cases(conn, "stale state") == []
+    ensure_harness_schema(conn)
+    hits = find_failure_cases(conn, "stale state")
+
+    assert len(hits) == 1
+    assert hits[0]["root_cause_label"] == "stale_state"
+    conn.close()
+
+
 def test_invalid_governance_level_rejected(db_path: Path) -> None:
     conn = ensure_schema(db_path)
     with pytest.raises(ValueError):
